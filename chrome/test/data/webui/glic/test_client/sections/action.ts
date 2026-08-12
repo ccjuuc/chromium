@@ -2,11 +2,53 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import type {SelectCredentialDialogRequest, Subscriber} from '/glic/glic_api/glic_api.js';
-import {UserGrantedPermissionDuration} from '/glic/glic_api/glic_api.js';
+import type {CreateTaskError, SelectCredentialDialogRequest, Subscriber} from '/glic/glic_api/glic_api.js';
+import {CreateTaskErrorReason, CredentialType, UserGrantedPermissionDuration} from '/glic/glic_api/glic_api.js';
 
 import {client, logMessage} from '../client.js';
 import {$} from '../page_element_types.js';
+
+function credentialTypeAsString(credType: CredentialType): string {
+  switch (credType) {
+    case CredentialType.PASSWORD:
+      return 'Password';
+    case CredentialType.FEDERATED:
+      return 'Federated';
+    default:
+      return 'Unknown type';
+  }
+}
+
+function createTaskErrorReasonAsString(error: any): string {
+  if (error.reasonType === 'createTask') {
+    const createTaskError = error as CreateTaskError;
+    switch (createTaskError.reason) {
+      case CreateTaskErrorReason.TASK_SYSTEM_UNAVAILABLE:
+        return 'TASK_SYSTEM_UNAVAILABLE';
+      case CreateTaskErrorReason.EXISTING_ACTIVE_TASK:
+        return 'EXISTING_ACTIVE_TASK';
+      case CreateTaskErrorReason.BLOCKED_BY_POLICY:
+        return 'BLOCKED_BY_POLICY';
+      case CreateTaskErrorReason.CONVERSATION_NOT_REGISTERED:
+        return 'CONVERSATION_NOT_REGISTERED';
+      default:
+        break;
+    }
+  }
+
+  return `${error}`;
+}
+
+function setIcon(imgElem: HTMLImageElement, getter?: () => Promise<Blob>) {
+  URL.revokeObjectURL(imgElem.src);
+  if (getter) {
+    getter().then((imageBlob) => {
+      imgElem.src = URL.createObjectURL(imageBlob);
+    });
+  } else {
+    imgElem.src = '';
+  }
+}
 
 function convertUint8ArrayToBase64(uint8Array: Uint8Array): string {
   let binaryString = '';
@@ -46,12 +88,32 @@ function initCredentialHandlingIfNeeded() {
 
 $.createActorTask.addEventListener('click', async () => {
   logMessage('Starting Create Actor Task');
+  const taskOptions = {title: `Test task ${(new Date()).toLocaleTimeString()}`};
   try {
-    const taskId = await client!.browser!.createTask!();
+    const taskId = await client!.browser!.createTask!(taskOptions);
     $.actorTaskId.value = taskId.toString();
     $.actionStatus.innerText = `Created task with ID: ${taskId}`;
-  } catch (error) {
-    $.actionStatus.innerText = `Error in Create Actor Task: ${error}`;
+  } catch (error: any) {
+    $.actionStatus.innerText =
+        `Error in Create Actor Task: ${createTaskErrorReasonAsString(error)}`;
+    if (error.reasonType === 'createTask' &&
+        error.reason === CreateTaskErrorReason.CONVERSATION_NOT_REGISTERED) {
+      try {
+        logMessage('Auto registering conversation for actor task testing.');
+        await client!.browser!.registerConversation!({
+          conversationId: 'testActor',
+          conversationTitle: taskOptions.title,
+        });
+        const taskId = await client!.browser!.createTask!(taskOptions);
+        $.actorTaskId.value = taskId.toString();
+        $.actionStatus.innerText =
+            `Registered test conversation and created task with ID: ${taskId}`;
+      } catch (error: any) {
+        $.actionStatus.innerText =
+            `Failed to retry Create Actor Task with conversation: ${
+                createTaskErrorReasonAsString(error)}`;
+      }
+    }
   }
 
   // We only handle credentials when running interactively, which is why we set
@@ -101,6 +163,30 @@ function pickCredential(once: boolean) {
   $.credentialSelection.style.display = 'none';
 }
 
+function updateSelectedCredentialDetails() {
+  if (!lastCredentialRequest) {
+    return;
+  }
+
+  const select = $.selectCredential;
+  const selectedCredential = lastCredentialRequest.credentials.find((cred) => {
+    return `${cred.id}` === select.value;
+  });
+  if (!selectedCredential) {
+    return;
+  }
+
+  $.selectedCredentialUsername.innerText = selectedCredential.username;
+  $.selectedCredentialSource.innerText = selectedCredential.sourceSiteOrApp;
+  $.selectedCredentialRequestOrigin.innerText =
+      selectedCredential.requestOrigin!;
+  setIcon($.selectedCredentialIcon, selectedCredential.getIcon);
+  $.selectedCredentialType.innerText =
+      credentialTypeAsString(selectedCredential.type!);
+  setIcon(
+      $.selectedCredentialAccountPicture, selectedCredential.getAccountPicture);
+}
+
 function showCredentialPicker(request: SelectCredentialDialogRequest) {
   const select = $.selectCredential;
   select.innerHTML = '';
@@ -112,9 +198,16 @@ function showCredentialPicker(request: SelectCredentialDialogRequest) {
   });
 
   lastCredentialRequest = request;
+
+  updateSelectedCredentialDetails();
+
   $.credentialSelection.style.display = 'block';
   client.browser?.interruptActorTask?.(request.taskId);
 }
+
+$.selectCredential.addEventListener('change', () => {
+  updateSelectedCredentialDetails();
+});
 
 $.credentialOnce.addEventListener('click', () => {
   pickCredential(true);

@@ -38,6 +38,7 @@
 #include "third_party/blink/public/common/frame/history_user_activation_state.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_scroll_result.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
@@ -66,12 +67,13 @@ namespace blink {
 class BarProp;
 class CSSStyleDeclaration;
 class CustomElementRegistry;
+class ScrollResult;
 class Document;
 class DocumentInit;
-class DOMSelection;
+class DomSelection;
 class DOMViewport;
 class DOMVisualViewport;
-class CrashReportStorage;
+class CrashReportContext;
 class Element;
 class ExceptionState;
 class External;
@@ -119,6 +121,13 @@ class CORE_EXPORT LocalDOMWindow final : public DOMWindow,
   USING_PRE_FINALIZER(LocalDOMWindow, Dispose);
 
  public:
+  // Size thresholds for network efficiency guardrails policy enforcement.
+  // These are const public for testing purpose.
+  static constexpr size_t kGuardrailsLargeDataThresholdBytes =
+      100 * 1024;  // 100kB
+  static constexpr size_t kGuardrailsLargeImageThresholdBytes =
+      200 * 1024;  // 200kB
+
   class CORE_EXPORT EventListenerObserver : public GarbageCollectedMixin {
    public:
     virtual void DidAddEventListener(LocalDOMWindow*, const AtomicString&) = 0;
@@ -167,7 +176,6 @@ class CORE_EXPORT LocalDOMWindow final : public DOMWindow,
   // ExecutionContext overrides:
   bool IsWindow() const final { return true; }
   bool IsContextThread() const final;
-  bool ShouldInstallV8Extensions() const final;
   ContentSecurityPolicy* GetContentSecurityPolicyForWorld(
       const DOMWrapperWorld* world) final;
   const KURL& Url() const final;
@@ -183,7 +191,9 @@ class CORE_EXPORT LocalDOMWindow final : public DOMWindow,
   void ExceptionThrown(ErrorEvent*) final;
   void AddInspectorIssue(AuditsIssue) final;
   EventTarget* ErrorEventTarget() final { return this; }
-  String OutgoingReferrer() const final;
+  KURL OutgoingReferrerUrl() const final;
+  void SetInitiatorStateToken(
+      const base::UnguessableToken& initiator_state_token) final;
   CoreProbeSink* GetProbeSink() final;
   const BrowserInterfaceBrokerProxy& GetBrowserInterfaceBroker() const final;
   FrameOrWorkerScheduler* GetScheduler() final;
@@ -215,6 +225,11 @@ class CORE_EXPORT LocalDOMWindow final : public DOMWindow,
       const String& source_file = g_empty_string) const final;
   void SetIsInBackForwardCache(bool) final;
   net::StorageAccessApiStatus GetStorageAccessApiStatus() const final;
+  std::optional<mojom::blink::PolicyDisposition> GetGuardrailsPolicyState()
+      const final;
+  bool CheckGuardrailsPolicyForAssetSize(GuardrailPolicyAssetType asset_type,
+                                         size_t bytes,
+                                         const KURL& url) const final;
 
   void AddConsoleMessageImpl(ConsoleMessage*, bool discard_duplicates) final;
 
@@ -315,7 +330,7 @@ class CORE_EXPORT LocalDOMWindow final : public DOMWindow,
   //  90 is when rotated counter clockwise.
   int orientation() const;
 
-  DOMSelection* getSelection();
+  DomSelection* getSelection();
 
   void print(ScriptState*);
   void stop();
@@ -336,15 +351,15 @@ class CORE_EXPORT LocalDOMWindow final : public DOMWindow,
 
   // FIXME: ScrollBehaviorSmooth is currently unsupported in VisualViewport.
   // crbug.com/434497
-  ScriptPromise<IDLUndefined> scrollBy(ScriptState* script_state,
+  ScriptPromise<ScrollResult> scrollBy(ScriptState* script_state,
                                        double x,
                                        double y) const;
-  ScriptPromise<IDLUndefined> scrollBy(ScriptState* script_state,
+  ScriptPromise<ScrollResult> scrollBy(ScriptState* script_state,
                                        const ScrollToOptions*) const;
-  ScriptPromise<IDLUndefined> scrollTo(ScriptState* script_state,
+  ScriptPromise<ScrollResult> scrollTo(ScriptState* script_state,
                                        double x,
                                        double y) const;
-  ScriptPromise<IDLUndefined> scrollTo(ScriptState* script_state,
+  ScriptPromise<ScrollResult> scrollTo(ScriptState* script_state,
                                        const ScrollToOptions*) const;
 
   void scrollByForTesting(double x, double y) const;
@@ -372,6 +387,13 @@ class CORE_EXPORT LocalDOMWindow final : public DOMWindow,
   bool originAgentCluster() const;
 
   // Custom elements
+  //
+  // `window.customElements`. The ScriptState* overload is the web-exposed
+  // accessor and returns nullptr in non-main worlds (window.customElements
+  // only ever exposes the global registry, which is owned by the main
+  // world). See TreeScope::customElementRegistry() for the broader rule
+  // about when to pass ScriptState -- in short, any caller that will hand
+  // the registry to script must pass it.
   CustomElementRegistry* customElements(ScriptState*) const;
   CustomElementRegistry* customElements() const;
   CustomElementRegistry* MaybeCustomElements() const;
@@ -441,12 +463,16 @@ class CORE_EXPORT LocalDOMWindow final : public DOMWindow,
   void EnqueueWindowEvent(Event&, TaskType);
   void EnqueueDocumentEvent(Event&, TaskType);
   void EnqueueNonPersistedPageshowEvent();
-  void EnqueueHashchangeEvent(const String& old_url, const String& new_url);
+  void EnqueueHashchangeEvent(const String& old_url,
+                              const String& new_url,
+                              UserNavigationInvolvement involvement);
   void DispatchPopstateEvent(scoped_refptr<SerializedScriptValue>,
-                             scheduler::TaskAttributionInfo* task_state,
-                             bool has_ua_visual_transition);
+                             bool has_ua_visual_transition,
+                             UserNavigationInvolvement involvement);
   void DispatchWindowLoadEvent();
-  void DocumentWasClosed();
+  // Dispatches the window load event and the non-persisted pageshow event
+  // after the document finishes loading.
+  void DispatchLoadAndPageshowEvents();
 
   void AcceptLanguagesChanged();
 
@@ -491,6 +517,16 @@ class CORE_EXPORT LocalDOMWindow final : public DOMWindow,
   const BlinkStorageKey& GetStorageKey() const { return storage_key_; }
   void SetStorageKey(const BlinkStorageKey& storage_key);
 
+  // Returns a token used to retrieve state associated with this LocalWindow in
+  // the browser process. This should be passed to navigations started from this
+  // LocalWindow. The InitiatorStateToken remains valid as long as:
+  //   - The frame exists and its policies have not changed.
+  //   - Or there is an ongoing navigation started from the frame in the state
+  //   associated with the token.
+  const base::UnguessableToken& GetInitiatorStateToken() const {
+    return initiator_state_token_;
+  }
+
   void DidReceiveUserActivation();
 
   // Returns the state of the |payment_request_token_| in this document.
@@ -512,6 +548,31 @@ class CORE_EXPORT LocalDOMWindow final : public DOMWindow,
   // document.
   bool ConsumeDisplayCaptureRequestToken();
 
+  // Returns the state of the |digital_credentials_create_token_| in this
+  // document.
+  bool IsDigitalCredentialsCreateTokenActive() const;
+
+  // Consumes the |digital_credentials_create_token_| if it was active in this
+  // document.
+  bool ConsumeDigitalCredentialsCreateToken();
+
+  // Activates the |digital_credentials_create_token_| for testing.
+  void ActivateDigitalCredentialsCreateTokenForTesting() {
+    digital_credentials_create_token_.Activate();
+  }
+
+  // Returns the state of the |digital_credentials_get_token_| in this document.
+  bool IsDigitalCredentialsGetTokenActive() const;
+
+  // Consumes the |digital_credentials_get_token_| if it was active in this
+  // document.
+  bool ConsumeDigitalCredentialsGetToken();
+
+  // Activates the |digital_credentials_get_token_| for testing.
+  void ActivateDigitalCredentialsGetTokenForTesting() {
+    digital_credentials_get_token_.Activate();
+  }
+
   // Called when a network request buffered an additional `num_bytes` while this
   // frame is in back-forward cache.
   void DidBufferLoadWhileInBackForwardCache(bool update_process_wide_count,
@@ -524,7 +585,7 @@ class CORE_EXPORT LocalDOMWindow final : public DOMWindow,
 
   Fence* fence();
 
-  CrashReportStorage* crashReport();
+  CrashReportContext* crashReport();
 
   CloseWatcher::WatcherStack* closewatcher_stack() {
     return closewatcher_stack_.Get();
@@ -540,19 +601,9 @@ class CORE_EXPORT LocalDOMWindow final : public DOMWindow,
     is_picture_in_picture_window_ = is_picture_in_picture;
   }
 
-  // This enum represents whether or not a call to `SetStorageAccessApiStatus`
-  // needs to also pass the status back up to the browser.
-  enum class StorageAccessApiNotifyEmbedder {
-    // No notification.
-    kNone,
-    // Notify the browser process.
-    kBrowserProcess,
-  };
-
   // Sets the StorageAccessApiStatus. Calls to this method must not downgrade
   // the status.
-  void SetStorageAccessApiStatus(net::StorageAccessApiStatus status,
-                                 StorageAccessApiNotifyEmbedder notify);
+  void SetStorageAccessApiStatus(net::StorageAccessApiStatus status);
 
   // https://html.spec.whatwg.org/multipage/browsing-the-web.html#has-been-revealed
   bool HasBeenRevealed() const { return has_been_revealed_; }
@@ -630,6 +681,8 @@ class CORE_EXPORT LocalDOMWindow final : public DOMWindow,
   DelegatedCapabilityRequestToken payment_request_token_;
   DelegatedCapabilityRequestToken fullscreen_request_token_;
   DelegatedCapabilityRequestToken display_capture_request_token_;
+  DelegatedCapabilityRequestToken digital_credentials_create_token_;
+  DelegatedCapabilityRequestToken digital_credentials_get_token_;
 
   // https://dom.spec.whatwg.org/#window-current-event
   // We represent the "undefined" value as nullptr.
@@ -668,6 +721,12 @@ class CORE_EXPORT LocalDOMWindow final : public DOMWindow,
   // is detached.
   const LocalFrameToken token_;
 
+  // Token tracking the state of policies in the LocalFrame. Used to find an
+  // InitiatorNavigationState in the browser process for navigations started
+  // from this LocalFrame. This will be updated if the policies of the
+  // LocalFrame change (e.g. Referrer policy, CSP).
+  base::UnguessableToken initiator_state_token_;
+
   // Tracks which document policy violation reports have already been sent in
   // this document, to avoid reporting duplicates. The value stored comes
   // from |DocumentPolicyViolationReport::MatchId()|.
@@ -688,7 +747,7 @@ class CORE_EXPORT LocalDOMWindow final : public DOMWindow,
   // https://github.com/shivanigithub/fenced-frame/issues/14
   Member<Fence> fence_;
 
-  Member<CrashReportStorage> crash_report_storage_;
+  Member<CrashReportContext> crash_report_storage_;
 
   Member<CloseWatcher::WatcherStack> closewatcher_stack_;
 

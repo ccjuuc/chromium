@@ -38,8 +38,11 @@ import org.robolectric.shadows.ShadowPackageManager;
 import org.chromium.base.Callback;
 import org.chromium.base.PackageManagerUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
+import org.chromium.chrome.browser.enterprise.util.DataProtectionBridge;
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.locale.LocaleManager;
 import org.chromium.chrome.browser.locale.LocaleManagerDelegate;
 import org.chromium.chrome.browser.readaloud.ReadAloudController;
@@ -73,6 +76,7 @@ public class ChromeActionModeHandlerUnitTest {
     @Mock private WebContents mWebContents;
     @Mock private WeakReference<Activity> mWeakActivityRef;
     @Mock private Activity mActivity;
+    @Mock private DataProtectionBridge.Natives mDataProtectionBridgeJniMock;
 
     private class TestChromeActionModeCallback
             extends ChromeActionModeHandler.ChromeActionModeCallback {
@@ -97,6 +101,9 @@ public class ChromeActionModeHandlerUnitTest {
 
     @Before
     public void setUp() {
+        DataProtectionBridge.setInstanceForTesting(mDataProtectionBridgeJniMock);
+        Mockito.when(mDataProtectionBridgeJniMock.isSearchWithAllowed(any())).thenReturn(true);
+
         mActionModeCallback =
                 Mockito.spy(new TestChromeActionModeCallback(mTab, mActionModeCallbackHelper));
         Mockito.when(mTab.getWindowAndroid()).thenReturn(mWindowAndroid);
@@ -109,6 +116,7 @@ public class ChromeActionModeHandlerUnitTest {
 
     @After
     public void tearDown() {
+        DataProtectionBridge.setInstanceForTesting(null);
         FirstRunStatus.setFirstRunFlowComplete(false);
     }
 
@@ -125,6 +133,7 @@ public class ChromeActionModeHandlerUnitTest {
     }
 
     @Test
+    @Features.DisableFeatures(ChromeFeatureList.DATA_CONTROLS_SEARCH_WITH)
     public void testOptionsAfterFre() {
         FirstRunStatus.setFirstRunFlowComplete(true);
 
@@ -135,6 +144,20 @@ public class ChromeActionModeHandlerUnitTest {
                         ActionModeCallbackHelper.MENU_ITEM_PROCESS_TEXT
                                 | ActionModeCallbackHelper.MENU_ITEM_SHARE
                                 | ActionModeCallbackHelper.MENU_ITEM_WEB_SEARCH);
+    }
+
+    @Test
+    @Features.EnableFeatures(ChromeFeatureList.DATA_CONTROLS_SEARCH_WITH)
+    public void testOptionsAfterFre_SearchBlocked() {
+        FirstRunStatus.setFirstRunFlowComplete(true);
+        Mockito.when(mDataProtectionBridgeJniMock.isSearchWithAllowed(any())).thenReturn(false);
+
+        mActionModeCallback.onCreateActionMode(mActionMode, mMenu);
+
+        Mockito.verify(mActionModeCallbackHelper)
+                .setAllowedMenuItems(
+                        ActionModeCallbackHelper.MENU_ITEM_PROCESS_TEXT
+                                | ActionModeCallbackHelper.MENU_ITEM_SHARE);
     }
 
     @Test
@@ -260,7 +283,8 @@ public class ChromeActionModeHandlerUnitTest {
         Mockito.when(mControlsState.getTopControlsHeight()).thenReturn(topControlsHeight);
 
         // Set up for the case where top controls are hidden.
-        Mockito.when(mControlsState.getBrowserControlHiddenRatio()).thenReturn(1.f);
+        Mockito.when(mControlsState.getTopControlHiddenRatio()).thenReturn(1.f);
+        Mockito.when(mControlsState.getTopControlOffset()).thenReturn(topControlsHeight);
 
         // If there's enough space between the selected text and the top of the content view for
         // action mode, the content rect is left untouched.
@@ -278,7 +302,7 @@ public class ChromeActionModeHandlerUnitTest {
         Assert.assertEquals(height, outRect.height());
 
         // Set up for the case where top controls are visible.
-        Mockito.when(mControlsState.getBrowserControlHiddenRatio()).thenReturn(0.f);
+        Mockito.when(mControlsState.getTopControlHiddenRatio()).thenReturn(0.f);
 
         // We have enough space for action mode to fit in. The content rect is left untouched.
         top = topControlsHeight * 3;

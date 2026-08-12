@@ -11,6 +11,7 @@
 #include "base/check.h"
 #include "base/containers/span.h"
 #include "base/functional/callback.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/types/pass_key.h"
 #include "sql/sqlite_result_code.h"
 #include "third_party/sqlite/sqlite3.h"
@@ -44,6 +45,12 @@ StreamingBlobHandle& StreamingBlobHandle::operator=(
 
 bool StreamingBlobHandle::Read(int offset, base::span<uint8_t> into) {
   CHECK(blob_handle_);
+  // Early returning when zero size read case. This is because when a zero size
+  // span is passed to sqlite3_blob_read(), SQLite may call memcpy() with NULL.
+  // This causes UBSan failure (http://crbug.com/528258777).
+  if (into.size() == 0) {
+    return offset <= GetSize();
+  }
   int result = sqlite3_blob_read(blob_handle_, into.data(),
                                  base::checked_cast<int>(into.size()), offset);
   if (result != SQLITE_OK) [[unlikely]] {

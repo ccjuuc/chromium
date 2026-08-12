@@ -16,19 +16,27 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.robolectric.ParameterizedRobolectricTestRunner;
+import org.robolectric.ParameterizedRobolectricTestRunner.Parameters;
 
 import org.chromium.base.ActivityState;
 import org.chromium.base.ApplicationStatus;
-import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
+import org.chromium.base.FeatureOverrides;
+import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
+import org.chromium.components.signin.SigninFeatures;
 
-/** Tests {@link FirstActivity} filters touch events from overlay activity. */
-@RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.UNIT_TESTS)
+import java.util.Arrays;
+import java.util.Collection;
+
+/**
+ * TODO(crbug.com/493130564): Revert to regular runner after
+ * MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNT_PART2 launch.
+ */
+@RunWith(ParameterizedRobolectricTestRunner.class)
 @CommandLineFlags.Add({
     ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
     ChromeSwitches.DISABLE_NATIVE_INITIALIZATION,
@@ -38,13 +46,28 @@ import org.chromium.chrome.browser.flags.ChromeSwitches;
     ChromeFeatureList.XPLAT_SYNCED_SETUP
 })
 public class FirstRunFilterTouchUnitTest {
+
+    @Rule(order = Rule.DEFAULT_ORDER - 1)
+    public final BaseRobolectricTestRule mBaseRule = new BaseRobolectricTestRule();
+
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
+    @Parameters(name = "{index}_isIdentityMgrMigration={0}")
+    public static Collection parameters() {
+        return Arrays.asList(true, false);
+    }
+
     @Rule
-    public ActivityScenarioRule<FirstRunActivity> mActivityScenarioRule =
+    public final ActivityScenarioRule<FirstRunActivity> mActivityScenarioRule =
             new ActivityScenarioRule<>(FirstRunActivity.class);
 
     private FirstRunActivity mActivity;
+
+    public FirstRunFilterTouchUnitTest(boolean isIdentityManagerMigrationEnabled) {
+        FeatureOverrides.overrideFlag(
+                SigninFeatures.MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS,
+                isIdentityManagerMigrationEnabled);
+    }
 
     @Before
     public void setUp() throws Exception {

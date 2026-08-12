@@ -2,16 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/gpu/mac/video_toolbox_h265_accelerator.h"
 
 #include <array>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/numerics/byte_conversions.h"
 #include "media/base/media_log.h"
 
@@ -214,7 +210,7 @@ VideoToolboxH265Accelerator::Status VideoToolboxH265Accelerator::SubmitSlice(
   frame_vps_ids_.insert(sps->sps_video_parameter_set_id);
   frame_sps_ids_.insert(pps->pps_seq_parameter_set_id);
   frame_pps_ids_.insert(pps->pps_pic_parameter_set_id);
-  frame_slice_data_.push_back(base::span(data, size));
+  frame_slice_data_.push_back(UNSAFE_TODO(base::span(data, size)));
 
   return Status::kOk;
 }
@@ -277,7 +273,9 @@ VideoToolboxH265Accelerator::Status VideoToolboxH265Accelerator::SubmitDecode(
   // parameter sets vs. creating a new format.
   if (!active_format_ || (combined_nalu_data.size() && frame_is_keyframe_)) {
     combined_nalu_data.clear();
-    CreateFormat(pic);
+    if (!CreateFormat(pic)) {
+      return Status::kFail;
+    }
   }
 
   // Append slice data.

@@ -11,6 +11,7 @@
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/memory/stack_allocated.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/types/to_address.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 
@@ -40,7 +41,8 @@ class CodePointIterator {
     template <typename CharT>
       requires(std::is_integral_v<CharT> && sizeof(CharT) == 2)
     explicit Utf16(base::span<const CharT> span)
-        : Utf16(reinterpret_cast<const UChar*>(span.data()), span.size()) {}
+        : Utf16(reinterpret_cast<const UChar*>(span.data()),
+                base::checked_cast<wtf_size_t>(span.size())) {}
 
     // Constructor for creating a 'begin' iterator from a span of 16-bit
     // characters.
@@ -70,7 +72,7 @@ class CodePointIterator {
 
     // Similar to `std::distance`, but in the code units, not code points.
     wtf_size_t DistanceByCodeUnits(const Utf16& other) const {
-      return data_ - other.data_;
+      return base::checked_cast<wtf_size_t>(data_ - other.data_);
     }
 
    private:
@@ -104,14 +106,20 @@ class CodePointIterator {
   }
 
   UChar32 operator*() const { return is_8bit_ ? *Data() : *utf16_; }
+
+  // PRECONDITIONS: iterator is not equal to CodePointIterator::End().
+  // POSTCONDITION: caller must check the returned value is not equal to
+  // `CodePointIterator::End(<same string>)` before dereferencing.
   void operator++() {
-    is_8bit_
-        ? static_cast<void>(
-              // SAFETY: safe to increment as we're not deref, caller
-              // should check the returned value is not equal to
-              // `CodePointIterator::End(<same string>)` before dereferencing.
-              UNSAFE_BUFFERS(++DataRef()))
-        : ++utf16_;
+    if (is_8bit_) {
+      CHECK_GE(utf16_.length_, 1u);
+      // SAFETY: `length_` >= 1 was checked above, so advancing one byte stays
+      // within the string.
+      UNSAFE_BUFFERS(++DataRef());
+      --utf16_.length_;
+    } else {
+      ++utf16_;
+    }
   }
 
   bool operator==(const CodePointIterator& other) const {
@@ -157,7 +165,7 @@ inline void CodePointIterator::Utf16::AdvanceByCodeUnits(wtf_size_t by) {
 inline void CodePointIterator::Utf16::operator++() {
   if (!code_point_length_) [[unlikely]] {
     // `code_point_length_` is cached by `operator*()`. If not, compute it.
-    // SAFETY: call into icu functions.
+    // SAFETY: call into icu functions which check `length_`.
     UNSAFE_BUFFERS(U16_FWD_1(data_, code_point_length_, length_););
   }
   AdvanceByCodeUnits(code_point_length_);

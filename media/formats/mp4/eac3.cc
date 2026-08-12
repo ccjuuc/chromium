@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/formats/mp4/eac3.h"
 
 #include <algorithm>
@@ -59,7 +54,7 @@ bool EAC3::Parse(const std::vector<uint8_t>& data, MediaLog* media_log) {
   }
 
   // Parse dec3 box using reader.
-  BitReader reader(&data[0], data.size());
+  BitReader reader(data);
 
   // skip data_rate
   RCHECK(reader.SkipBits(13));
@@ -149,8 +144,8 @@ uint32_t EAC3::GetChannelCount() const {
   return channel_count_;
 }
 
-ChannelLayout EAC3::GetChannelLayout() const {
-  return channel_layout_;
+ChannelLayoutConfig EAC3::GetChannelLayout() const {
+  return ChannelLayoutConfig::FromLayout(channel_layout_);
 }
 
 }  // namespace mp4

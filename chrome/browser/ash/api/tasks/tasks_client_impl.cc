@@ -8,7 +8,6 @@
 #include <iterator>
 #include <memory>
 #include <optional>
-#include <set>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -21,16 +20,15 @@
 #include "ash/glanceables/glanceables_metrics.h"
 #include "base/barrier_closure.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
 #include "base/types/expected.h"
-#include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "components/policy/core/browser/url_list/policy_blocklist_service.h"
 #include "components/policy/core/browser/url_list/url_blocklist_manager.h"
 #include "components/prefs/pref_service.h"
+#include "components/services/app_service/public/cpp/app_registry_cache.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "google_apis/common/api_error_codes.h"
 #include "google_apis/common/request_sender.h"
@@ -39,6 +37,7 @@
 #include "google_apis/tasks/tasks_api_requests.h"
 #include "google_apis/tasks/tasks_api_response_types.h"
 #include "google_apis/tasks/tasks_api_task_status.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "ui/base/models/list_model.h"
 
 namespace ash::api {
@@ -131,14 +130,14 @@ TasksClientImpl::TasksFetchState::TasksFetchState() = default;
 TasksClientImpl::TasksFetchState::~TasksFetchState() = default;
 
 TasksClientImpl::TasksClientImpl(
-    PrefService* pref_service,
-    apps::AppServiceProxy* app_service_proxy,
+    const PrefService* pref_service,
+    apps::AppRegistryCache* app_registry_cache,
     PolicyBlocklistService* policy_blocklist_service,
     const TasksClientImpl::CreateRequestSenderCallback&
         create_request_sender_callback,
     net::NetworkTrafficAnnotationTag traffic_annotation_tag)
     : pref_service_(pref_service),
-      app_service_proxy_(app_service_proxy),
+      app_registry_cache_(app_registry_cache),
       policy_blocklist_service_(policy_blocklist_service),
       create_request_sender_callback_(create_request_sender_callback),
       traffic_annotation_tag_(traffic_annotation_tag) {}
@@ -148,9 +147,8 @@ TasksClientImpl::~TasksClientImpl() = default;
 bool TasksClientImpl::IsDisabledByAdmin() const {
   // 1) Check the pref.
   if (!pref_service_ ||
-      !base::Contains(pref_service_->GetList(
-                          prefs::kContextualGoogleIntegrationsConfiguration),
-                      prefs::kGoogleTasksIntegrationName)) {
+      !pref_service_->GetList(prefs::kContextualGoogleIntegrationsConfiguration)
+           .contains(prefs::kGoogleTasksIntegrationName)) {
     RecordContextualGoogleIntegrationStatus(
         prefs::kGoogleTasksIntegrationName,
         ContextualGoogleIntegrationStatus::kDisabledByPolicy);
@@ -158,11 +156,11 @@ bool TasksClientImpl::IsDisabledByAdmin() const {
   }
 
   // 2) Check if the Calendar app (home app for Tasks) is disabled by policy.
-  if (!app_service_proxy_) {
+  if (!app_registry_cache_) {
     return true;
   }
   auto calendar_app_readiness = apps::Readiness::kUnknown;
-  app_service_proxy_->AppRegistryCache().ForOneApp(
+  app_registry_cache_->ForOneApp(
       ash::kGoogleCalendarAppId,
       [&calendar_app_readiness](const apps::AppUpdate& update) {
         calendar_app_readiness = update.Readiness();
@@ -510,7 +508,7 @@ void TasksClientImpl::RunGetTaskListsCallbacks(
 
     // Gather existing cached task lists, and clear the ones that are no longer
     // present in the task list.
-    std::set<std::string> abandoned_task_lists;
+    absl::flat_hash_set<std::string> abandoned_task_lists;
     for (const auto& task_list : tasks_in_task_lists_) {
       abandoned_task_lists.insert(task_list.first);
     }

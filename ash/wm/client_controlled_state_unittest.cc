@@ -69,6 +69,8 @@
 #include "ui/wm/core/window_util.h"
 
 namespace ash {
+
+using chromeos::AppType;
 namespace {
 
 using ::chromeos::WindowStateType;
@@ -271,50 +273,54 @@ class ClientControlledStateTest : public AshTestBase {
   void SetUp() override {
     AshTestBase::SetUp();
 
-    widget_delegate_ = new ClientControlledStateTestWidgetDelegate();
 
     views::Widget::InitParams params(
         views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
     params.parent = Shell::GetPrimaryRootWindow()->GetChildById(
         desks_util::GetActiveDeskContainerId());
     params.bounds = kInitialBounds;
-    params.delegate = widget_delegate_.get();
+    params.delegate = new ClientControlledStateTestWidgetDelegate();
 
     widget_ = std::make_unique<views::Widget>();
     widget_->Init(std::move(params));
     WindowState* window_state = WindowState::Get(window());
     window_state->set_allow_set_bounds_direct(true);
     auto delegate = std::make_unique<TestClientControlledStateDelegate>();
-    state_delegate_ = delegate.get();
     auto state = std::make_unique<ClientControlledState>(std::move(delegate));
-    state_ = state.get();
     window_state->SetStateObject(std::move(state));
     auto window_state_delegate = std::make_unique<FakeWindowStateDelegate>();
-    window_state_delegate_ = window_state_delegate.get();
     window_state->SetDelegate(std::move(window_state_delegate));
     widget_->Show();
   }
 
   void TearDown() override {
-    widget_ = nullptr;
+    widget_.reset();
     AshTestBase::TearDown();
   }
 
   ClientControlledStateTestWidgetDelegate* widget_delegate() {
-    return widget_delegate_;
+    return static_cast<ClientControlledStateTestWidgetDelegate*>(
+        widget_->widget_delegate());
   }
 
  protected:
   aura::Window* window() { return widget_->GetNativeWindow(); }
   WindowState* window_state() { return WindowState::Get(window()); }
-  ClientControlledState* state() { return state_; }
-  TestClientControlledStateDelegate* delegate() { return state_delegate_; }
+  ClientControlledState* state() {
+    return static_cast<ClientControlledState*>(
+        WindowState::TestApi::GetStateImpl(window_state()));
+  }
+  TestClientControlledStateDelegate* delegate() {
+    return static_cast<TestClientControlledStateDelegate*>(
+        state()->delegate_for_testing());
+  }
   views::Widget* widget() { return widget_.get(); }
   ScreenPinningController* GetScreenPinningController() {
     return Shell::Get()->screen_pinning_controller();
   }
   FakeWindowStateDelegate* window_state_delegate() {
-    return window_state_delegate_;
+    return static_cast<FakeWindowStateDelegate*>(
+        WindowState::TestApi::GetWindowStateDelegate(window_state()));
   }
 
   chromeos::HeaderView* GetHeaderView() {
@@ -378,13 +384,6 @@ class ClientControlledStateTest : public AshTestBase {
   }
 
  private:
-  raw_ptr<ClientControlledState, DanglingUntriaged> state_ = nullptr;
-  raw_ptr<TestClientControlledStateDelegate, DanglingUntriaged>
-      state_delegate_ = nullptr;
-  raw_ptr<ClientControlledStateTestWidgetDelegate, DanglingUntriaged>
-      widget_delegate_ = nullptr;  // owned by itself.
-  raw_ptr<FakeWindowStateDelegate, DanglingUntriaged> window_state_delegate_ =
-      nullptr;
   std::unique_ptr<views::Widget> widget_;
 };
 
@@ -660,11 +659,12 @@ TEST_F(SnapGroupClientControlledStateTest, SelectFromOverviewEntryPoint) {
 
   // Set the client-controlled window app type so it can be recognized in
   // `GetActiveDeskAppWindowsInZOrder()`.
-  window()->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::ARC_APP);
+  window()->SetProperty(chromeos::kAppTypeKey, AppType::ARC_APP);
 
   // Create at least 1 other app window so we can start faster splitview.
   widget_delegate()->EnableSnap();
-  auto non_client_controlled_window = CreateAppWindow();
+  auto non_client_controlled_window =
+      CreateWindowWithAppType(AppType::SYSTEM_APP);
 
   // Snap the client-controlled window using a snap action source that can start
   // faster splitview. Note `SnapOneTestWindow()` would not work here since it
@@ -705,7 +705,7 @@ TEST_F(SnapGroupClientControlledStateTest, AutoGroupEntryPoint) {
 
   // Set the client-controlled window app type so it can be recognized in
   // `GetActiveDeskAppWindowsInZOrder()`.
-  window()->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::ARC_APP);
+  window()->SetProperty(chromeos::kAppTypeKey, AppType::ARC_APP);
   widget_delegate()->EnableSnap();
 
   // Snap the client-controlled window. Since it's the only window, we don't
@@ -723,7 +723,8 @@ TEST_F(SnapGroupClientControlledStateTest, AutoGroupEntryPoint) {
   VerifyNotSplitViewOrOverviewSession(window());
 
   // Open a normal window, then snap it to the opposite side of `window()`.
-  auto non_client_controlled_window = CreateAppWindow();
+  auto non_client_controlled_window =
+      CreateWindowWithAppType(AppType::SYSTEM_APP);
   SnapOneTestWindow(non_client_controlled_window.get(),
                     WindowStateType::kSecondarySnapped,
                     chromeos::kDefaultSnapRatio,
@@ -746,7 +747,8 @@ TEST_F(SnapGroupClientControlledStateTest, ResizeViaDivider) {
   UpdateDisplay("900x600");
   // Create a snap group with a client-controlled and normal state window.
   widget_delegate()->EnableSnap();
-  auto non_client_controlled_window = CreateAppWindow();
+  auto non_client_controlled_window =
+      CreateWindowWithAppType(AppType::SYSTEM_APP);
   SnapOneTestWindow(non_client_controlled_window.get(),
                     WindowStateType::kSecondarySnapped,
                     chromeos::kDefaultSnapRatio,
@@ -820,8 +822,8 @@ TEST_F(SnapGroupClientControlledStateTest, ResizeViaDivider) {
 // Tests the basic functionalities of snap-to-replace.
 TEST_F(SnapGroupClientControlledStateTest, SnapToReplace) {
   // Create a snap group with 2 normal windows.
-  auto w1 = CreateAppWindow();
-  auto w2 = CreateAppWindow();
+  auto w1 = CreateWindowWithAppType(AppType::SYSTEM_APP);
+  auto w2 = CreateWindowWithAppType(AppType::SYSTEM_APP);
   SnapOneTestWindow(w1.get(), WindowStateType::kPrimarySnapped,
                     chromeos::kDefaultSnapRatio);
   SnapOneTestWindow(w2.get(), WindowStateType::kSecondarySnapped,
@@ -848,7 +850,8 @@ TEST_F(SnapGroupClientControlledStateTest, SnapToReplace) {
 TEST_F(SnapGroupClientControlledStateTest, DoubleClickToSwap) {
   // Create a snap group.
   widget_delegate()->EnableSnap();
-  auto non_client_controlled_window = CreateAppWindow();
+  auto non_client_controlled_window =
+      CreateWindowWithAppType(AppType::SYSTEM_APP);
   SnapOneTestWindow(non_client_controlled_window.get(),
                     WindowStateType::kSecondarySnapped,
                     chromeos::kDefaultSnapRatio,
@@ -901,7 +904,8 @@ TEST_F(SnapGroupClientControlledStateTest, SnapThenMinimize) {
 
   // Create a snap group with a client-controlled and normal state window.
   widget_delegate()->EnableSnap();
-  auto non_client_controlled_window = CreateAppWindow();
+  auto non_client_controlled_window =
+      CreateWindowWithAppType(AppType::SYSTEM_APP);
   SnapOneTestWindow(non_client_controlled_window.get(),
                     WindowStateType::kSecondarySnapped,
                     chromeos::kDefaultSnapRatio,
@@ -942,7 +946,8 @@ TEST_F(SnapGroupClientControlledStateTest, SnapToOppositeSide) {
 
   // Create a snap group with a client-controlled and normal state window.
   widget_delegate()->EnableSnap();
-  auto non_client_controlled_window = CreateAppWindow();
+  auto non_client_controlled_window =
+      CreateWindowWithAppType(AppType::SYSTEM_APP);
   SnapOneTestWindow(non_client_controlled_window.get(),
                     WindowStateType::kSecondarySnapped,
                     chromeos::kDefaultSnapRatio,
@@ -1232,7 +1237,8 @@ TEST_F(ClientControlledStateTest, AutoSnap) {
 
   // Create a normal (non-client-controlled) window in addition to `window()`
   // (client-controlled window) to fill the one side of the split view.
-  auto non_client_controlled_window = CreateAppWindow();
+  auto non_client_controlled_window =
+      CreateWindowWithAppType(AppType::SYSTEM_APP);
 
   // Snap `non_client_controlled_window` to left.
   const WindowSnapWMEvent snap_primary(WM_EVENT_SNAP_PRIMARY);
@@ -1297,7 +1303,8 @@ TEST_F(ClientControlledStateTest, AutoPartialSnap) {
 
   // Create a normal (non-client-controlled) window in addition to `window()`
   // (client-controlled window) to fill the one side of the split view.
-  auto non_client_controlled_window = CreateAppWindow();
+  auto non_client_controlled_window =
+      CreateWindowWithAppType(AppType::SYSTEM_APP);
 
   // Snap `non_client_controlled_window` to 1/3 left.
   const WindowSnapWMEvent snap_primary(WM_EVENT_SNAP_PRIMARY,
@@ -1459,7 +1466,8 @@ TEST_F(ClientControlledStateTest, ResizeToDismissSplitView) {
 
   // Create a normal (non-client-controlled) window in addition to `window()`
   // (client-controlled window) to fill the one side of the split view.
-  auto non_client_controlled_window = CreateAppWindow();
+  auto non_client_controlled_window =
+      CreateWindowWithAppType(AppType::SYSTEM_APP);
 
   for (const bool resize_to_left : {false, true}) {
     SCOPED_TRACE(::testing::Message()
@@ -1657,7 +1665,8 @@ TEST_F(ClientControlledStateTest, SwapSnappedWindows) {
 
   // Create a normal (non-client-controlled) window in addition to `window()`
   // (client-controlled window) to fill the one side of the split view.
-  auto non_client_controlled_window = CreateAppWindow();
+  auto non_client_controlled_window =
+      CreateWindowWithAppType(AppType::SYSTEM_APP);
   auto* const non_client_controlled_window_state =
       WindowState::Get(non_client_controlled_window.get());
 
@@ -1710,7 +1719,8 @@ TEST_F(ClientControlledStateTest, ClamshellTabletConversionWithSnappedWindow) {
 
   // Create a normal (non-client-controlled) window in addition to `window()`
   // (client-controlled window) to fill the one side of the split view.
-  auto non_client_controlled_window = CreateAppWindow();
+  auto non_client_controlled_window =
+      CreateWindowWithAppType(AppType::SYSTEM_APP);
   auto* const non_client_controlled_window_state =
       WindowState::Get(non_client_controlled_window.get());
 
@@ -2111,9 +2121,9 @@ TEST_P(ClientControlledStateTestClamshellAndTablet,
 }
 
 TEST_F(ClientControlledStateTest, FlingFloatedWindowInTabletMode) {
-  // The AppType must be set to any except `chromeos::AppType::NON_APP` (default
+  // The AppType must be set to any except `AppType::NON_APP` (default
   // value) to make it floatable.
-  window()->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::ARC_APP);
+  window()->SetProperty(chromeos::kAppTypeKey, AppType::ARC_APP);
   widget_delegate()->EnableFloat();
   ASSERT_TRUE(chromeos::wm::CanFloatWindow(window()));
 
@@ -2166,9 +2176,9 @@ TEST_F(ClientControlledStateTest, TuckAndUntuckFloatedWindowInTabletMode) {
 
   auto* const float_controller = Shell::Get()->float_controller();
 
-  // The AppType must be set to any except `chromeos::AppType::NON_APP` (default
+  // The AppType must be set to any except `AppType::NON_APP` (default
   // value) to make it floatable.
-  window()->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::ARC_APP);
+  window()->SetProperty(chromeos::kAppTypeKey, AppType::ARC_APP);
   widget_delegate()->EnableFloat();
   ASSERT_TRUE(chromeos::wm::CanFloatWindow(window()));
 
@@ -2248,9 +2258,9 @@ TEST_F(ClientControlledStateTest, TuckAndUntuckFloatedWindowInTabletMode) {
 }
 
 TEST_P(ClientControlledStateTestClamshellAndTablet, MoveFloatedWindow) {
-  // The AppType must be set to any except `chromeos::AppType::NON_APP` (default
+  // The AppType must be set to any except `AppType::NON_APP` (default
   // value) to make it floatable.
-  window()->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::ARC_APP);
+  window()->SetProperty(chromeos::kAppTypeKey, AppType::ARC_APP);
   if (InTabletMode()) {
     // Resizing must be enabled in tablet mode to float.
     widget_delegate()->EnableFloat();
@@ -2318,9 +2328,9 @@ TEST_P(ClientControlledStateTestClamshellAndTablet, MoveFloatedWindow) {
 }
 
 TEST_P(ClientControlledStateTestClamshellAndTablet, FloatWindow) {
-  // The AppType must be set to any except `chromeos::AppType::NON_APP` (default
+  // The AppType must be set to any except `AppType::NON_APP` (default
   // value) to make it floatable.
-  window()->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::ARC_APP);
+  window()->SetProperty(chromeos::kAppTypeKey, AppType::ARC_APP);
   if (InTabletMode()) {
     // Resizing must be enabled in tablet mode to float.
     widget_delegate()->EnableFloat();
@@ -2399,7 +2409,7 @@ TEST_P(ClientControlledStateTestClamshellAndTablet,
   // Create a fake normal window in addition to `window()` (client-controlled
   // window) because we need at least two windows to keep overview mode active
   // after snapping one of them.
-  auto fake_uninterested_window = CreateAppWindow();
+  auto fake_uninterested_window = CreateWindowWithAppType(AppType::SYSTEM_APP);
 
   // Enter overview.
   ToggleOverview();
@@ -2441,7 +2451,8 @@ TEST_P(ClientControlledStateTestClamshellAndTablet,
 
   // Create a normal (non-client-controlled) window in addition to `window()`
   // (client-controlled window) to fill the one side of the split view.
-  auto non_client_controlled_window = CreateAppWindow();
+  auto non_client_controlled_window =
+      CreateWindowWithAppType(AppType::SYSTEM_APP);
 
   // Enter overview.
   ToggleOverview();
@@ -2503,7 +2514,8 @@ TEST_P(ClientControlledStateTestClamshellAndTablet,
   widget_delegate()->EnableSnap();
 
   // Create a normal (non-client-controlled) window in addition to `window()`.
-  auto non_client_controlled_window = CreateAppWindow();
+  auto non_client_controlled_window =
+      CreateWindowWithAppType(AppType::SYSTEM_APP);
 
   // Enter overview.
   ToggleOverview();
@@ -2593,9 +2605,9 @@ TEST_P(ClientControlledStateTestClamshellAndTablet,
 }
 
 TEST_P(ClientControlledStateTestClamshellAndTablet, SnapFloatedWindow) {
-  // The AppType must be set to any except `chromeos::AppType::NON_APP` (default
+  // The AppType must be set to any except `AppType::NON_APP` (default
   // value) to make it floatable.
-  window()->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::ARC_APP);
+  window()->SetProperty(chromeos::kAppTypeKey, AppType::ARC_APP);
   widget_delegate()->EnableFloat();
   ASSERT_TRUE(chromeos::wm::CanFloatWindow(window()));
 
@@ -2631,9 +2643,9 @@ TEST_P(ClientControlledStateTestClamshellAndTablet, SnapFloatedWindow) {
 // properly without any crash. Regression test for b/322374826.
 TEST_P(ClientControlledStateTestClamshellAndTablet,
        ReplaceFloatedWindowWithFullscreenWindow) {
-  // The AppType must be set to any except `chromeos::AppType::NON_APP` (default
+  // The AppType must be set to any except `AppType::NON_APP` (default
   // value) to make it floatable.
-  window()->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::ARC_APP);
+  window()->SetProperty(chromeos::kAppTypeKey, AppType::ARC_APP);
   widget_delegate()->EnableFloat();
   ASSERT_TRUE(chromeos::wm::CanFloatWindow(window()));
 
@@ -2644,14 +2656,13 @@ TEST_P(ClientControlledStateTestClamshellAndTablet,
   EXPECT_TRUE(widget()->IsFullscreen());
 
   // Create another client-controlled window.
-  auto widget2 =
-      CreateWidgetBuilderWithDelegate()
-          .SetParent(Shell::GetPrimaryRootWindow()->GetChildById(
-              desks_util::GetActiveDeskContainerId()))
-          .SetBounds(kInitialBounds)
-          .SetWindowProperty(chromeos::kAppTypeKey, chromeos::AppType::ARC_APP)
-          .SetShow(false)
-          .BuildOwnsNativeWidget();
+  auto widget2 = CreateWidgetBuilderWithDelegate()
+                     .SetParent(Shell::GetPrimaryRootWindow()->GetChildById(
+                         desks_util::GetActiveDeskContainerId()))
+                     .SetBounds(kInitialBounds)
+                     .SetWindowProperty(chromeos::kAppTypeKey, AppType::ARC_APP)
+                     .SetShow(false)
+                     .BuildOwnsNativeWidget();
   auto* const window_state2 = WindowState::Get(widget2->GetNativeWindow());
   window_state2->set_allow_set_bounds_direct(true);
   auto delegate2 = std::make_unique<TestClientControlledStateDelegate>();

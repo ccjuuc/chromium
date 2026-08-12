@@ -32,6 +32,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisableIf;
@@ -58,6 +59,7 @@ import java.util.concurrent.TimeoutException;
 /** Integration tests for address accessory views. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@Batch(Batch.PER_CLASS)
 @DisableIf.Device(DeviceFormFactor.TABLET_OR_DESKTOP) // crbug.com/463649037
 @Restriction(DeviceRestriction.RESTRICTION_TYPE_NON_AUTO) // crbug.com/463649037
 public class AddressAccessoryIntegrationTest {
@@ -127,7 +129,7 @@ public class AddressAccessoryIntegrationTest {
                                 not(isAssignableFrom(TextView.class))))
                 .perform(click());
         mHelper.waitForKeyboardToDisappear();
-        whenDisplayed(withId(R.id.addresses_sheet), /* atLeast= */ 51);
+        whenDisplayed(withId(R.id.addresses_sheet));
         onView(withText(containsString("No saved addresses"))).check(matches(isDisplayed()));
     }
 

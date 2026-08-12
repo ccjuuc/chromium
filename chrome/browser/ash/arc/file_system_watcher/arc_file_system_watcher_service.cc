@@ -15,7 +15,7 @@
 #include "base/files/file_path_watcher.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/sequence_checker.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
@@ -51,7 +51,7 @@ constexpr base::FilePath::CharType kAndroidStorageDir[] =
 constexpr base::FilePath::CharType kAndroidDownloadDir[] =
     FILE_PATH_LITERAL("/storage/emulated/0/Download/");
 
-// TODO(crbug.com/929031): Move this to arc_volume_mounter_bridge.h.
+// TODO(crbug.com/255484683): Move this to arc_volume_mounter_bridge.h.
 // The MyFiles path inside ARC container. This will be the path that is used in
 // MediaScanner.scanFile request. UUID for the MyFiles volume is taken from
 // chromeos/ash/experiences/arc/volume_mounter/arc_volume_mounter_bridge.cc.
@@ -168,11 +168,12 @@ class ArcFileSystemWatcherServiceFactory
   }
 
   static ArcFileSystemWatcherServiceFactory* GetInstance() {
-    return base::Singleton<ArcFileSystemWatcherServiceFactory>::get();
+    static base::NoDestructor<ArcFileSystemWatcherServiceFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcFileSystemWatcherServiceFactory>;
+  friend base::NoDestructor<ArcFileSystemWatcherServiceFactory>;
   ~ArcFileSystemWatcherServiceFactory() override = default;
 };
 

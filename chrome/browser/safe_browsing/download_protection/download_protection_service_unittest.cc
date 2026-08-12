@@ -47,17 +47,23 @@
 #include "chrome/browser/download/download_core_service.h"
 #include "chrome/browser/download/download_core_service_factory.h"
 #include "chrome/browser/download/download_item_warning_data.h"
+#include "chrome/browser/enterprise/connectors/connectors_service.h"
 #include "chrome/browser/enterprise/connectors/reporting/realtime_reporting_client.h"
+#include "chrome/browser/enterprise/connectors/reporting/realtime_reporting_client_factory.h"
+#include "chrome/browser/enterprise/connectors/test/deep_scanning_test_utils.h"
 #include "chrome/browser/history/history_service_factory.h"
-#include "chrome/browser/password_manager/account_password_store_factory.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/policy/dm_token_utils.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/safe_browsing/advanced_protection_status_manager.h"
 #include "chrome/browser/safe_browsing/advanced_protection_status_manager_factory.h"
+#include "chrome/browser/safe_browsing/cloud_content_scanning/cloud_binary_upload_service_factory.h"
+#include "chrome/browser/safe_browsing/cloud_content_scanning/test_binary_upload_service.h"
 #include "chrome/browser/safe_browsing/download_protection/check_file_system_access_write_request.h"
 #include "chrome/browser/safe_browsing/download_protection/download_protection_unittest_util.h"
 #include "chrome/browser/safe_browsing/download_protection/download_protection_util.h"
+#include "chrome/browser/safe_browsing/download_protection/download_url_sb_client.h"
 #include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager_factory.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
@@ -74,6 +80,8 @@
 #include "components/download/public/common/mock_download_item.h"
 #include "components/enterprise/buildflags/buildflags.h"
 #include "components/enterprise/common/proto/connectors.pb.h"
+#include "components/enterprise/common/proto/synced/browser_events.pb.h"
+#include "components/enterprise/connectors/core/cloud_content_scanning/binary_upload_service.h"
 #include "components/enterprise/connectors/core/cloud_content_scanning/common.h"
 #include "components/enterprise/connectors/core/reporting_constants.h"
 #include "components/history/core/browser/history_service.h"
@@ -83,7 +91,6 @@
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
 #include "components/password_manager/core/common/password_manager_features.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_client.h"
-#include "components/policy/core/common/cloud/realtime_reporting_job_configuration.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
@@ -93,10 +100,12 @@
 #include "components/safe_browsing/core/browser/db/database_manager.h"
 #include "components/safe_browsing/core/browser/db/test_database_manager.h"
 #include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
+#include "components/safe_browsing/core/browser/db/v5_get_hash_protocol_manager.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/safe_browsing/core/common/safebrowsing_switches.h"
+#include "components/security_interstitials/core/unsafe_resource.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -104,9 +113,11 @@
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/test/browser_task_environment.h"
+#include "content/public/test/mock_download_manager.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_utils.h"
 #include "content/public/test/web_contents_tester.h"
+#include "net/base/net_errors.h"
 #include "net/base/url_util.h"
 #include "net/cert/x509_certificate.h"
 #include "net/cert/x509_util.h"
@@ -122,11 +133,9 @@
 #include "third_party/zlib/google/zip.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
-#include "chrome/browser/enterprise/connectors/connectors_service.h"
-#include "chrome/browser/enterprise/connectors/reporting/realtime_reporting_client_factory.h"
-#include "chrome/browser/enterprise/connectors/test/deep_scanning_test_utils.h"
-#endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+#if BUILDFLAG(IS_ANDROID)
+#include "components/enterprise/connectors/core/features.h"
+#endif
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/extensions/api/safe_browsing_private/safe_browsing_private_event_router.h"
@@ -137,12 +146,9 @@
 #endif
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/safe_browsing/cloud_content_scanning/cloud_binary_upload_service_factory.h"
-#include "chrome/browser/safe_browsing/cloud_content_scanning/test_binary_upload_service.h"
 #include "chrome/browser/safe_browsing/download_protection/download_feedback.h"
 #include "chrome/browser/safe_browsing/download_protection/download_feedback_service.h"
 #include "chrome/browser/safe_browsing/incident_reporting/incident_reporting_service.h"
-#include "components/enterprise/connectors/core/cloud_content_scanning/binary_upload_service.h"
 #else
 #include "chrome/browser/safe_browsing/android/download_protection_metrics_data.h"
 #include "chrome/browser/safe_browsing/download_protection/download_protection_delegate_android.h"
@@ -197,6 +203,75 @@ const char kAndroidDownloadProtectionOutcomeHistogram[] =
     "SBClientDownload.Android.DownloadProtectionOutcome";
 #endif
 
+std::string GetFileName(const std::string& full_path) {
+#if BUILDFLAG(IS_CHROMEOS)
+  return base::FilePath(full_path).BaseName().AsUTF8Unsafe();
+#else
+  return full_path;
+#endif  // BUILDFLAG(IS_CHROMEOS)
+}
+
+chrome::cros::reporting::proto::SafeBrowsingDangerousDownloadEvent
+CreateDangerousDownloadEvent(const std::string& profile_identifier,
+                             const std::string& file_name) {
+  chrome::cros::reporting::proto::SafeBrowsingDangerousDownloadEvent event;
+
+  event.set_url("");
+  event.set_tab_url("");
+  event.set_source("");
+  event.set_destination("");
+  event.set_profile_user_name("");
+  event.set_content_size(0);
+  event.set_download_digest_sha256("68617368");
+  event.set_threat_type(
+      chrome::cros::reporting::proto::SafeBrowsingDangerousDownloadEvent::
+          DANGEROUS_FILE_TYPE);
+  event.set_trigger(
+      chrome::cros::reporting::proto::DataTransferEventTrigger::FILE_DOWNLOAD);
+  event.set_event_result(
+      chrome::cros::reporting::proto::EventResult::EVENT_RESULT_BYPASSED);
+  event.set_clicked_through(true);
+  event.set_profile_identifier(profile_identifier);
+  event.set_file_name(GetFileName(file_name));
+
+  chrome::cros::reporting::proto::UrlInfo referrers;
+  *event.add_referrers() = referrers;
+
+  return event;
+}
+
+chrome::cros::reporting::proto::DlpSensitiveDataEvent
+CreateDlpSensitiveDataEvent(
+    const std::string& profile_identifier,
+    const std::string& file_name,
+    chrome::cros::reporting::proto::TriggeredRuleInfo::Action rule_action) {
+  chrome::cros::reporting::proto::DlpSensitiveDataEvent event;
+
+  event.set_url("");
+  event.set_tab_url("");
+  event.set_source("");
+  event.set_destination("");
+  event.set_profile_user_name("");
+  event.set_download_digest_sha_256("68617368");  // Hex for "hash"
+  event.set_content_type("fake/mimetype");
+  event.set_content_size(1234);
+  event.set_trigger(
+      chrome::cros::reporting::proto::DataTransferEventTrigger::FILE_DOWNLOAD);
+  event.set_event_result(
+      chrome::cros::reporting::proto::EventResult::EVENT_RESULT_BYPASSED);
+  event.set_clicked_through(true);
+  event.set_profile_identifier(profile_identifier);
+  event.set_file_name(GetFileName(file_name));
+
+  auto* triggered_rule = event.add_triggered_rule_info();
+  triggered_rule->set_action(rule_action);
+
+  chrome::cros::reporting::proto::UrlInfo referrers;
+  *event.add_referrers() = referrers;
+
+  return event;
+}
+
 // A SafeBrowsingDatabaseManager implementation that returns a fixed result for
 // a given URL.
 class MockSafeBrowsingDatabaseManager : public TestSafeBrowsingDatabaseManager {
@@ -219,12 +294,10 @@ class MockSafeBrowsingDatabaseManager : public TestSafeBrowsingDatabaseManager {
   ~MockSafeBrowsingDatabaseManager() override = default;
 };
 
-#if !BUILDFLAG(IS_ANDROID)
 std::unique_ptr<KeyedService> CreateTestBinaryUploadService(
     content::BrowserContext* browser_context) {
   return std::make_unique<TestBinaryUploadService>();
 }
-#endif
 
 #if !BUILDFLAG(IS_ANDROID)
 class MockDownloadFeedbackService : public DownloadFeedbackService {
@@ -245,10 +318,8 @@ class FakeSafeBrowsingService : public TestSafeBrowsingService {
  public:
   explicit FakeSafeBrowsingService(Profile* profile) {
     services_delegate_ = ServicesDelegate::CreateForTest(this, this);
-#if !BUILDFLAG(IS_ANDROID)
     CloudBinaryUploadServiceFactory::GetInstance()->SetTestingFactory(
         profile, base::BindRepeating(&CreateTestBinaryUploadService));
-#endif
     mock_database_manager_ = new NiceMock<MockSafeBrowsingDatabaseManager>();
   }
   FakeSafeBrowsingService(const FakeSafeBrowsingService&) = delete;
@@ -398,6 +469,8 @@ class DownloadProtectionServiceTestBase
         safe_browsing::kEnhancedFieldsForSecOps};
 #if BUILDFLAG(IS_ANDROID)
     enabled_features.push_back(kMaliciousApkDownloadCheck);
+    enabled_features.push_back(
+        enterprise_connectors::kEnableDownloadEnterpriseScanOnClank);
 #endif
     EnableFeatures(enabled_features);
   }
@@ -473,11 +546,12 @@ class DownloadProtectionServiceTestBase
             base::BindRepeating(&BuildSafeBrowsingPrivateEventRouter));
 #endif
 
-#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
     enterprise_connectors::RealtimeReportingClientFactory::GetInstance()
-        ->SetTestingFactory(profile(),
-                            base::BindRepeating(&BuildRealtimeReportingClient));
-#endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+        ->SetTestingFactory(
+            profile(),
+            base::BindRepeating(
+                &enterprise_connectors::test::BuildRealtimeReportingClient));
+
     client_ = std::make_unique<policy::MockCloudPolicyClient>();
 
     SetDMTokenForTesting(policy::DMToken::CreateValidToken("dm_token"));
@@ -749,6 +823,8 @@ class DownloadProtectionServiceTestBase
     result->sha256_hash = hash_;
     result->size = 100;
     result->frame_url = GURL("https://example.com/foo/bar");
+    result->initiating_frame_id =
+        web_contents()->GetPrimaryMainFrame()->GetGlobalId();
     result->has_user_gesture = true;
     result->web_contents = web_contents()->GetWeakPtr();
     result->browser_context = profile();
@@ -763,6 +839,7 @@ class DownloadProtectionServiceTestBase
     result->sha256_hash = in->sha256_hash;
     result->size = in->size;
     result->frame_url = in->frame_url;
+    result->initiating_frame_id = in->initiating_frame_id;
     result->has_user_gesture = in->has_user_gesture;
     result->web_contents = in->web_contents;
     result->browser_context = in->browser_context;
@@ -2383,21 +2460,26 @@ TEST_F(DownloadProtectionServiceTest, DMGAnalysisEndToEnd) {
   EXPECT_EQ(ClientDownloadRequest_DownloadType_MAC_EXECUTABLE,
             request->download_type());
 
-  ASSERT_EQ(2, request->archived_binary().size());
-  for (const auto& binary : request->archived_binary()) {
+  EXPECT_GT(request->archived_binary_size(), 0);
+  bool found_mach_o = false;
+  for (int i = 0; i < request->archived_binary_size(); ++i) {
+    const auto& binary = request->archived_binary(i);
     EXPECT_FALSE(binary.file_path().empty());
-    EXPECT_EQ(ClientDownloadRequest_DownloadType_MAC_EXECUTABLE,
-              binary.download_type());
     ASSERT_TRUE(binary.has_digests());
     EXPECT_TRUE(binary.digests().has_sha256());
     EXPECT_TRUE(binary.has_length());
-    ASSERT_TRUE(binary.has_image_headers());
-    ASSERT_FALSE(binary.image_headers().mach_o_headers().empty());
+    if (binary.image_headers().mach_o_headers().empty()) {
+      continue;
+    }
+    found_mach_o = true;
+    EXPECT_EQ(ClientDownloadRequest_DownloadType_MAC_EXECUTABLE,
+              binary.download_type());
     EXPECT_FALSE(
         binary.image_headers().mach_o_headers().Get(0).mach_header().empty());
     EXPECT_FALSE(
         binary.image_headers().mach_o_headers().Get(0).load_commands().empty());
   }
+  EXPECT_TRUE(found_mach_o);
 
   ASSERT_EQ(1, request->detached_code_signature().size());
   EXPECT_FALSE(request->detached_code_signature().Get(0).file_name().empty());
@@ -3197,7 +3279,6 @@ TEST_F(DownloadProtectionServiceTest,
   validate_report_contents(/* show_download_in_folder */ true);
 }
 
-#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
 TEST_F(DownloadProtectionServiceTest,
        VerifyBypassReportSentImmediatelyIfVerdictDangerous) {
   enterprise_connectors::RealtimeReportingClientFactory::GetForProfile(
@@ -3220,24 +3301,12 @@ TEST_F(DownloadProtectionServiceTest,
   enterprise_connectors::test::EventReportValidator validator(client_.get());
   base::RunLoop run_loop;
   validator.SetDoneClosure(run_loop.QuitClosure());
-  validator.ExpectDangerousDeepScanningResult(
-      "",                          // URL, not set in this test
-      "",                          // Tab URL, not set in this test
-      "",                          // Source, not set in this test
-      "",                          // Destination, not set in this test
-      final_path_.AsUTF8Unsafe(),  // Full path, including the directory
-      "68617368",                  // SHA256 of the fake download
-      "DANGEROUS_FILE_TYPE",       // expected_threat_type
-      enterprise_connectors::
-          kFileDownloadDataTransferEventTrigger,  // expected_trigger
-      &expected_mimetypes,
-      0,  // expected_content_size
-      enterprise_connectors::EventResultToString(
-          enterprise_connectors::EventResult::BYPASSED),  // expected_result
-      "",                                                 // expected_username
-      profile()->GetPath().AsUTF8Unsafe(),  // expected_profile_identifier
-      std::nullopt                          // scan_id
-  );
+
+  auto expected_event = CreateDangerousDownloadEvent(
+      /*profile_identifier=*/profile()->GetPath().AsUTF8Unsafe(),
+      /*file_name=*/final_path_.AsUTF8Unsafe());
+
+  validator.ExpectDangerousDownloadEvent(std::move(expected_event));
 
   content::DownloadItemUtils::AttachInfoForTesting(&item, profile(), nullptr);
   DownloadProtectionService::SetDownloadProtectionData(
@@ -3295,23 +3364,14 @@ TEST_F(DownloadProtectionServiceTest,
   enterprise_connectors::test::EventReportValidator validator(client_.get());
   base::RunLoop run_loop;
   validator.SetDoneClosure(run_loop.QuitClosure());
-  validator.ExpectSensitiveDataEvent(
-      "",                          // URL, not set in this test
-      "",                          // Tab URL, not set in this test
-      "",                          // source, not used for file downloads.
-      "",                          // destination, not used for file downloads.
-      final_path_.AsUTF8Unsafe(),  // Full path, including the directory
-      "68617368",                  // SHA256 of the fake download
-      enterprise_connectors::
-          kFileDownloadDataTransferEventTrigger,  // expected_trigger
-      response.results()[0], &expected_mimetypes,
-      1234,  // expected_content_size
-      enterprise_connectors::EventResultToString(
-          enterprise_connectors::EventResult::BYPASSED),  // expected_result
-      "",                                                 // expected_username
-      profile()->GetPath().AsUTF8Unsafe(),  // expected_profile_identifier
-      {} /* expected_scan_id */, std::nullopt /* content_transfer_reason */,
-      /*user_justification*/ std::nullopt);
+
+  auto expected_event = CreateDlpSensitiveDataEvent(
+      /*profile_identifier=*/profile()->GetPath().AsUTF8Unsafe(),
+      /*file_name=*/final_path_.AsUTF8Unsafe(),
+      /*rule_action=*/
+      chrome::cros::reporting::proto::TriggeredRuleInfo::WARN);
+
+  validator.ExpectSensitiveDataEvent(std::move(expected_event));
 
   download_service_->MaybeSendDangerousDownloadOpenedReport(&item, false);
   EXPECT_EQ(1, sb_service_->download_report_count());
@@ -3354,24 +3414,12 @@ TEST_F(DownloadProtectionServiceTest,
   enterprise_connectors::test::EventReportValidator validator(client_.get());
   base::RunLoop run_loop;
   validator.SetDoneClosure(run_loop.QuitClosure());
-  validator.ExpectDangerousDeepScanningResult(
-      "",                          // URL, not set in this test
-      "",                          // Tab URL, not set in this test
-      "",                          // Source, not set in this test
-      "",                          // Destination, not set in this test
-      final_path_.AsUTF8Unsafe(),  // Full path, including the directory
-      "68617368",                  // SHA256 of the fake download
-      "DANGEROUS_FILE_TYPE",       // expected_threat_type
-      enterprise_connectors::
-          kFileDownloadDataTransferEventTrigger,  // expected_trigger
-      &expected_mimetypes,
-      0,  // expected_content_size
-      enterprise_connectors::EventResultToString(
-          enterprise_connectors::EventResult::BYPASSED),  // expected_result
-      "",                                                 // expected_username
-      profile()->GetPath().AsUTF8Unsafe(),  // expected_profile_identifier
-      std::nullopt                          // scan_id
-  );
+
+  auto expected_event = CreateDangerousDownloadEvent(
+      /*profile_identifier=*/profile()->GetPath().AsUTF8Unsafe(),
+      /*file_name=*/final_path_.AsUTF8Unsafe());
+
+  validator.ExpectDangerousDownloadEvent(std::move(expected_event));
 
   download_service_->ReportDelayedBypassEvent(
       &item, download::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE);
@@ -3423,23 +3471,14 @@ TEST_F(DownloadProtectionServiceTest,
   enterprise_connectors::test::EventReportValidator validator(client_.get());
   base::RunLoop run_loop;
   validator.SetDoneClosure(run_loop.QuitClosure());
-  validator.ExpectSensitiveDataEvent(
-      "",                          // URL, not set in this test
-      "",                          // Tab URL, not set in this test
-      "",                          // source, not used for file downloads.
-      "",                          // destination, not used for file downloads.
-      final_path_.AsUTF8Unsafe(),  // Full path, including the directory
-      "68617368",                  // SHA256 of the fake download
-      enterprise_connectors::
-          kFileDownloadDataTransferEventTrigger,  // expected_trigger
-      response.results()[0], &expected_mimetypes,
-      1234,  // expected_content_size
-      enterprise_connectors::EventResultToString(
-          enterprise_connectors::EventResult::BYPASSED),  // expected_result
-      "",                                                 // expected_username
-      profile()->GetPath().AsUTF8Unsafe(),  // expected_profile_identifier
-      {} /* expected_scan_id */, std::nullopt /* content_transfer_method */,
-      /*user_justification*/ std::nullopt);
+
+  auto expected_event = CreateDlpSensitiveDataEvent(
+      /*profile_identifier=*/profile()->GetPath().AsUTF8Unsafe(),
+      /*file_name=*/final_path_.AsUTF8Unsafe(),
+      /*rule_action=*/
+      chrome::cros::reporting::proto::TriggeredRuleInfo::WARN);
+
+  validator.ExpectSensitiveDataEvent(std::move(expected_event));
 
   download_service_->ReportDelayedBypassEvent(
       &item, download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_WARNING);
@@ -3491,30 +3530,19 @@ TEST_F(DownloadProtectionServiceTest,
   enterprise_connectors::test::EventReportValidator validator(client_.get());
   base::RunLoop run_loop;
   validator.SetDoneClosure(run_loop.QuitClosure());
-  validator.ExpectSensitiveDataEvent(
-      "",                          // URL, not set in this test
-      "",                          // Tab URL, not set in this test
-      "",                          // source, not used for file downloads.
-      "",                          // destination, not used for file downloads.
-      final_path_.AsUTF8Unsafe(),  // Full path, including the directory
-      "68617368",                  // SHA256 of the fake download
-      enterprise_connectors::
-          kFileDownloadDataTransferEventTrigger,  // expected_trigger
-      response.results()[0], &expected_mimetypes,
-      1234,  // expected_content_size
-      enterprise_connectors::EventResultToString(
-          enterprise_connectors::EventResult::BYPASSED),  // expected_result
-      "",                                                 // expected_username
-      profile()->GetPath().AsUTF8Unsafe(),  // expected_profile_identifier
-      {} /* expected_scan_id */, std::nullopt /* content_transfer_method */,
-      /*user_justification*/ std::nullopt);
+
+  auto expected_event = CreateDlpSensitiveDataEvent(
+      /*profile_identifier=*/profile()->GetPath().AsUTF8Unsafe(),
+      /*file_name=*/final_path_.AsUTF8Unsafe(),
+      /*rule_action=*/
+      chrome::cros::reporting::proto::TriggeredRuleInfo::BLOCK);
+
+  validator.ExpectSensitiveDataEvent(std::move(expected_event));
 
   download_service_->ReportDelayedBypassEvent(
       &item, download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK);
   run_loop.Run();
 }
-
-#endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 TEST_F(DownloadProtectionServiceTest, VerifyDangerousDownloadOpenedAPICall) {
@@ -5776,6 +5804,156 @@ TEST_F(EnterpriseCsdDownloadTest, StillDoesMetadataCheckForLargeFile) {
 }
 #endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
 
+#if BUILDFLAG(IS_ANDROID)
+using EnterpriseDownloadScanOnClankTest = DownloadProtectionServiceTest;
+
+TEST_F(EnterpriseDownloadScanOnClankTest,
+       NonApkTriggersEnterpriseScanOnAndroid) {
+  std::string file_contents = "Normal file contents";
+  base::FilePath file_path;
+  EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &file_path));
+  file_path = temp_dir_.GetPath().AppendASCII("foo.doc");
+
+  // Create the file.
+  base::File file(file_path, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+  file.WriteAtCurrentPos(base::as_byte_span(file_contents));
+
+  NiceMockDownloadItem item;
+  PrepareBasicDownloadItemWithFullPaths(
+      &item, {"http://www.evil.com/foo.doc"},                     // url_chain
+      "http://www.google.com/",                                   // referrer
+      file_path,                                                  // tmp_path
+      temp_dir_.GetPath().Append(FILE_PATH_LITERAL("foo.doc")));  // final_path
+  content::DownloadItemUtils::AttachInfoForTesting(&item, profile(), nullptr);
+  EXPECT_CALL(*sb_service_->mock_database_manager(),
+              MatchDownloadAllowlistUrl(_, _))
+      .WillRepeatedly(
+          [](const GURL& url, base::OnceCallback<void(bool)> callback) {
+            std::move(callback).Run(false);
+          });
+
+  enterprise_connectors::test::SetAnalysisConnector(
+      profile()->GetPrefs(), enterprise_connectors::FILE_DOWNLOADED,
+      R"({
+                            "service_provider": "google",
+                            "enable": [
+                              {
+                                "url_list": ["*"],
+                                "tags": ["malware"]
+                              }
+                            ],
+                            "block_until_verdict": 1
+                          })");
+
+  TestBinaryUploadService* test_upload_service =
+      static_cast<TestBinaryUploadService*>(
+          CloudBinaryUploadServiceFactory::GetForProfile(profile()));
+  test_upload_service->SetResponse(
+      enterprise_connectors::ScanRequestUploadResult::kSuccess,
+      enterprise_connectors::ContentAnalysisResponse());
+
+  RunLoop run_loop;
+  download_service_->MaybeCheckClientDownload(
+      &item,
+      base::BindRepeating(&DownloadProtectionServiceTest::CheckDoneCallback,
+                          base::Unretained(this), run_loop.QuitClosure()));
+  run_loop.Run();
+
+  EXPECT_TRUE(test_upload_service->was_called());
+}
+
+TEST_F(EnterpriseDownloadScanOnClankTest,
+       SkipsUploadWhenEnterpriseScanDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      enterprise_connectors::kEnableDownloadEnterpriseScanOnClank);
+
+  std::string file_contents = "Normal file contents";
+  base::FilePath file_path;
+  EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &file_path));
+  file_path = temp_dir_.GetPath().AppendASCII("foo.apk");
+
+  // Create the file.
+  base::File file(file_path, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+  file.WriteAtCurrentPos(base::as_byte_span(file_contents));
+
+  NiceMockDownloadItem item;
+  PrepareBasicDownloadItemWithFullPaths(
+      &item, {"http://www.evil.com/foo.apk"},                     // url_chain
+      "http://www.google.com/",                                   // referrer
+      file_path,                                                  // tmp_path
+      temp_dir_.GetPath().Append(FILE_PATH_LITERAL("foo.apk")));  // final_path
+  content::DownloadItemUtils::AttachInfoForTesting(&item, profile(), nullptr);
+
+  EXPECT_CALL(*sb_service_->mock_database_manager(),
+              MatchDownloadAllowlistUrl(_, _))
+      .WillRepeatedly(
+          [](const GURL& url, base::OnceCallback<void(bool)> callback) {
+            std::move(callback).Run(false);
+          });
+  EXPECT_CALL(*binary_feature_extractor_.get(), CheckSignature(file_path, _));
+  EXPECT_CALL(*binary_feature_extractor_.get(),
+              ExtractImageFeatures(
+                  file_path, BinaryFeatureExtractor::kDefaultOptions, _, _));
+
+  enterprise_connectors::test::SetAnalysisConnector(
+      profile()->GetPrefs(), enterprise_connectors::FILE_DOWNLOADED, R"(
+                         {
+                           "service_provider": "google",
+                           "enable": [
+                             {"url_list": ["*"], "tags": ["malware"]}
+                           ],
+                           "block_until_verdict": 1
+                         })");
+
+  TestBinaryUploadService* test_upload_service =
+      static_cast<TestBinaryUploadService*>(
+          CloudBinaryUploadServiceFactory::GetForProfile(profile()));
+
+  RunLoop run_loop;
+  download_service_->MaybeCheckClientDownload(
+      &item,
+      base::BindRepeating(&DownloadProtectionServiceTest::CheckDoneCallback,
+                          base::Unretained(this), run_loop.QuitClosure()));
+  run_loop.Run();
+
+  EXPECT_FALSE(test_upload_service->was_called());
+}
+
+TEST_F(EnterpriseDownloadScanOnClankTest,
+       DoesNotReportEnterpriseEventWhenEnterpriseScanDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      enterprise_connectors::kEnableDownloadEnterpriseScanOnClank);
+
+  NiceMockDownloadItem item;
+  std::string file_contents = "Normal file contents";
+  base::FilePath file_path;
+  EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &file_path));
+  file_path = temp_dir_.GetPath().AppendASCII("foo.apk");
+
+  // Create the file.
+  base::File file(file_path, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+  file.WriteAtCurrentPos(base::as_byte_span(file_contents));
+
+  PrepareBasicDownloadItemWithFullPaths(
+      &item, {"http://www.evil.com/foo.apk"},                     // url_chain
+      "http://www.google.com/",                                   // referrer
+      file_path,                                                  // tmp_path
+      temp_dir_.GetPath().Append(FILE_PATH_LITERAL("foo.apk")));  // final_path
+
+  ON_CALL(item, GetDangerType())
+      .WillByDefault(Return(download::DOWNLOAD_DANGER_TYPE_DANGEROUS_CONTENT));
+  ON_CALL(item, IsDangerous()).WillByDefault(Return(true));
+
+  enterprise_connectors::test::EventReportValidator validator(client_.get());
+  validator.ExpectNoReport();
+
+  download_service_->MaybeSendDangerousDownloadOpenedReport(
+      &item, /*show_download_in_folder=*/false);
+}
+#endif  // BUILDFLAG(IS_ANDROID)
+
 // Deep scans, Advanced Protection, and encrypted archives are not supported on
 // Android.
 #if !BUILDFLAG(IS_ANDROID)
@@ -6383,5 +6561,62 @@ TEST_P(AndroidDownloadProtectionTest,
           }));
 }
 #endif  // BUILDFLAG(IS_ANDROID)
+
+namespace {
+
+class V5TestingDatabaseManager : public TestSafeBrowsingDatabaseManager {
+ public:
+  V5TestingDatabaseManager()
+      : TestSafeBrowsingDatabaseManager(content::GetUIThreadTaskRunner({})) {}
+
+  bool CheckDownloadUrl(const std::vector<GURL>& url_chain,
+                        Client* client) override {
+    if (client) {
+      v5_manager_from_client_ = client->GetV5GetHashProtocolManager();
+    }
+    return true;
+  }
+
+  base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+  v5_manager_from_client() const {
+    return v5_manager_from_client_;
+  }
+
+ private:
+  ~V5TestingDatabaseManager() override = default;
+
+  base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+      v5_manager_from_client_;
+};
+
+}  // namespace
+
+TEST_F(DownloadProtectionServiceTest,
+       DownloadUrlSBClientGetV5GetHashProtocolManager) {
+  scoped_refptr<V5TestingDatabaseManager> v5_db_manager =
+      base::MakeRefCounted<V5TestingDatabaseManager>();
+
+  safe_browsing::V5GetHashProtocolManager v5_protocol_manager(
+      /*url_loader_factory=*/nullptr,
+      safe_browsing::V4ProtocolConfig("test", false, "key", "1.0"),
+      /*cache=*/nullptr);
+
+  NiceMockDownloadItem item;
+  PrepareBasicDownloadItem(&item, {"http://www.evil.com/a.exe"},
+                           "http://www.google.com/", FILE_PATH_LITERAL("a.tmp"),
+                           FILE_PATH_LITERAL("a.exe"));
+
+  auto client = base::MakeRefCounted<DownloadUrlSBClient>(
+      &item, download_service_.get(), base::DoNothing(),
+      sb_service_->ui_manager(), v5_db_manager,
+      v5_protocol_manager.GetWeakPtr());
+
+  EXPECT_EQ(client->GetV5GetHashProtocolManager().get(), &v5_protocol_manager);
+
+  client->StartCheck();
+
+  EXPECT_EQ(v5_db_manager->v5_manager_from_client().get(),
+            &v5_protocol_manager);
+}
 
 }  // namespace safe_browsing

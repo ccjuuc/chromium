@@ -11,11 +11,28 @@
 #include "base/apple/bridging.h"
 #include "base/apple/foundation_util.h"
 #include "base/apple/scoped_cftyperef.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/sys_string_conversions.h"
 #include "crypto/apple/keychain_v2.h"
 #include "crypto/features.h"
 
 namespace crypto::apple {
+
+namespace {
+
+#if BUILDFLAG(IS_IOS)
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class KeychainMigrationResult {
+  kNotNeeded = 0,
+  kSuccess = 1,
+  kFailure = 2,
+  kMaxValue = kFailure,
+};
+
+#endif  // BUILDFLAG(IS_IOS)
+
+}  // namespace
 
 #if !BUILDFLAG(IS_IOS)
 bool ExecutableHasKeychainAccessGroupEntitlement(
@@ -81,15 +98,24 @@ bool MigrateKeychainItemAccessibilityIfNeeded(CFDictionaryRef attributes,
     // The item has the old accessibility attribute, so update it.
     base::apple::ScopedCFTypeRef<CFDictionaryRef> attributes_to_update =
         MakeAttributeMigrationQuery();
-    OSStatus status = SecItemUpdate(query, attributes_to_update.get());
-    // The status of the update is intentionally ignored. The goal is to
-    // migrate the item on a best-effort basis. If it fails, the item will
-    // just keep its legacy accessibility attribute.
-    std::ignore = status;
+    OSStatus status =
+        KeychainV2::GetInstance().ItemUpdate(query, attributes_to_update.get());
+    if (status == errSecSuccess) {
+      base::UmaHistogramEnumeration("Security.iOS.KeychainMigration.Result",
+                                    KeychainMigrationResult::kSuccess);
+    } else {
+      base::UmaHistogramEnumeration("Security.iOS.KeychainMigration.Result",
+                                    KeychainMigrationResult::kFailure);
+    }
     return true;
   }
+
+  base::UmaHistogramEnumeration("Security.iOS.KeychainMigration.Result",
+                                KeychainMigrationResult::kNotNeeded);
   return false;
 }
+
+
 
 base::apple::ScopedCFTypeRef<CFDictionaryRef>
 GenerateGenericPasswordUpdateQuery(std::string_view account_name) {

@@ -9,7 +9,6 @@
 #include "base/android/jni_string.h"
 #include "base/functional/bind.h"
 #include "chrome/browser/page_image_service/image_service_factory.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
 #include "components/page_image_service/metrics_util.h"
 #include "components/page_image_service/mojom/page_image_service.mojom.h"
 #include "url/gurl.h"
@@ -35,25 +34,23 @@ void HandleImageUrlResponse(
 
 }  // namespace
 
-static jlong JNI_ImageServiceBridge_Init(JNIEnv* env, Profile* profile) {
+static int64_t JNI_ImageServiceBridge_Init(JNIEnv* env, Profile* profile) {
   DCHECK(!profile->IsOffTheRecord());
   ImageServiceBridge* image_service_bridge = new ImageServiceBridge(
-      page_image_service::ImageServiceFactory::GetForBrowserContext(profile),
-      IdentityManagerFactory::GetForProfile(profile));
+      page_image_service::ImageServiceFactory::GetForBrowserContext(profile));
   return reinterpret_cast<intptr_t>(image_service_bridge);
 }
 
 static std::string JNI_ImageServiceBridge_ClientIdToString(
     JNIEnv* env,
-    const jint client_id) {
+    const int32_t client_id) {
   return page_image_service::ClientIdToString(
       static_cast<page_image_service::mojom::ClientId>(client_id));
 }
 
 ImageServiceBridge::ImageServiceBridge(
-    page_image_service::ImageService* image_service,
-    signin::IdentityManager* identity_manager)
-    : image_service_(image_service), identity_manager_(identity_manager) {}
+    page_image_service::ImageService* image_service)
+    : image_service_(image_service) {}
 
 ImageServiceBridge::~ImageServiceBridge() = default;
 
@@ -63,7 +60,7 @@ void ImageServiceBridge::Destroy(JNIEnv* env) {
 
 void ImageServiceBridge::FetchImageUrlFor(JNIEnv* env,
                                           const bool is_account_data,
-                                          const jint client_id,
+                                          const int32_t client_id,
                                           const GURL& page_url,
                                           const JavaRef<jobject>& j_callback) {
   ScopedJavaGlobalRef<jobject> callback(j_callback);
@@ -86,26 +83,13 @@ void ImageServiceBridge::FetchImageUrlForImpl(
   // The caller must either be (1) syncing or (2) the underlying data-type
   // being fetched for is account-bound. If neither of these conditions are
   // met, then return early with an empty result.
-  if (!HasConsentToFetchImagesImpl(is_account_data)) {
+  if (!is_account_data) {
     std::move(callback).Run(GURL());
     return;
   }
   image_service_->FetchImageFor(client_id, page_url,
                                 page_image_service::mojom::Options(),
                                 std::move(callback));
-}
-
-jboolean ImageServiceBridge::HasConsentToFetchImages(
-    JNIEnv* env,
-    const bool is_account_data) {
-  return HasConsentToFetchImagesImpl(is_account_data);
-}
-
-bool ImageServiceBridge::HasConsentToFetchImagesImpl(
-    const bool is_account_data) {
-  // The basic pre-conditions used before issuing the request to the component.
-  return identity_manager_->HasPrimaryAccount(signin::ConsentLevel::kSync) ||
-         is_account_data;
 }
 
 DEFINE_JNI(ImageServiceBridge)

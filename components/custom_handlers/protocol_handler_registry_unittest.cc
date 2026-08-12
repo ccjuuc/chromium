@@ -36,19 +36,34 @@ using content::BrowserThread;
 
 namespace custom_handlers {
 
-base::Value::Dict GetProtocolHandlerValue(const std::string& protocol,
-                                          const std::string& url) {
-  base::Value::Dict value;
+base::DictValue GetProtocolHandlerValue(
+    const std::string& protocol,
+    const std::string& url,
+    bool is_confirmed = true,
+    std::optional<std::string> app_id = std::nullopt,
+    std::optional<std::string> extension_id = std::nullopt) {
+  base::DictValue value;
   value.Set("protocol", protocol);
   value.Set("url", url);
+  value.Set("is_confirmed", is_confirmed);
+  if (app_id.has_value()) {
+    value.Set("app_id", *app_id);
+  }
+  if (extension_id.has_value()) {
+    value.Set("extension_id", *extension_id);
+  }
   return value;
 }
 
-base::Value::Dict GetProtocolHandlerValueWithDefault(
+base::DictValue GetProtocolHandlerValueWithDefault(
     const std::string& protocol,
     const std::string& url,
-    bool is_default) {
-  base::Value::Dict value = GetProtocolHandlerValue(protocol, url);
+    bool is_default,
+    bool is_confirmed = true,
+    std::optional<std::string> app_id = std::nullopt,
+    std::optional<std::string> extension_id = std::nullopt) {
+  base::DictValue value = GetProtocolHandlerValue(protocol, url, is_confirmed,
+                                                  app_id, extension_id);
   value.Set("default", is_default);
   return value;
 }
@@ -148,9 +163,10 @@ class ProtocolHandlerRegistryTest : public testing::Test {
   ProtocolHandler CreateExtensionProtocolHandler(
       const std::string& protocol,
       const GURL& url,
-      const std::string& extension_id) {
-    return ProtocolHandler::CreateExtensionProtocolHandler(protocol, url,
-                                                           extension_id);
+      const std::string& extension_id,
+      bool is_allowed_in_incognito = false) {
+    return ProtocolHandler::CreateExtensionProtocolHandler(
+        protocol, url, extension_id, is_allowed_in_incognito);
   }
 
   bool ProtocolHandlerCanRegisterProtocol(
@@ -162,13 +178,21 @@ class ProtocolHandlerRegistryTest : public testing::Test {
     return registry()->IsHandledProtocol(protocol);
   }
 
-  void RecreateRegistry(bool initialize) {
+  void RecreateRegistry(bool initialize, bool is_off_the_record = false) {
     TeadDownRegistry();
-    SetUpRegistry(initialize);
+    SetUpRegistry(initialize, is_off_the_record);
+  }
+
+  // Replaces the registry with a freshly constructed OTR one that loads from
+  // the same PrefService. Handlers persisted by the previous (regular)
+  // registry are re-loaded under the insertion guard, so disallowed entries
+  // are filtered out at load time.
+  void SwitchToIncognito() {
+    RecreateRegistry(/*initialize=*/true, /*is_off_the_record=*/true);
   }
 
   int InPrefHandlerCount() {
-    const base::Value::List& in_pref_handlers = GetPrefs()->GetList(
+    const base::ListValue& in_pref_handlers = GetPrefs()->GetList(
         custom_handlers::prefs::kRegisteredProtocolHandlers);
     return static_cast<int>(in_pref_handlers.size());
   }
@@ -182,7 +206,7 @@ class ProtocolHandlerRegistryTest : public testing::Test {
   }
 
   int InPrefIgnoredHandlerCount() {
-    const base::Value::List& in_pref_ignored_handlers =
+    const base::ListValue& in_pref_ignored_handlers =
         GetPrefs()->GetList(custom_handlers::prefs::kIgnoredProtocolHandlers);
     return static_cast<int>(in_pref_ignored_handlers.size());
   }
@@ -197,12 +221,12 @@ class ProtocolHandlerRegistryTest : public testing::Test {
 
   // It creates a new instance of the ProtocolHandlerRegistry class,
   // initializing it if |initialize| is true, for the registry_ member variable.
-  void SetUpRegistry(bool initialize) {
+  void SetUpRegistry(bool initialize, bool is_off_the_record = false) {
     DCHECK(browser_context_);
     auto delegate = std::make_unique<TestProtocolHandlerRegistryDelegate>();
     delegate_ = delegate.get();
-    registry_ = std::make_unique<ProtocolHandlerRegistry>(GetPrefs(),
-                                                          std::move(delegate));
+    registry_ = std::make_unique<ProtocolHandlerRegistry>(
+        GetPrefs(), std::move(delegate), is_off_the_record);
     if (initialize)
       registry_->InitProtocolSettings();
   }
@@ -224,6 +248,10 @@ class ProtocolHandlerRegistryTest : public testing::Test {
   }
 
   void TearDown() override { TeadDownRegistry(); }
+
+  sync_preferences::TestingPrefServiceSyncable& testing_pref_service() {
+    return pref_service_;
+  }
 
  private:
   content::BrowserTaskEnvironment task_environment_;
@@ -305,13 +333,53 @@ TEST_F(ProtocolHandlerRegistryTest, SaveAndLoad) {
 TEST_F(ProtocolHandlerRegistryTest, Encode) {
   base::Time now = base::Time::Now();
   ProtocolHandler handler("news", GURL("https://example.com"), "app_id",
-                          std::nullopt, now,
+                          std::nullopt, now, true, true,
                           blink::ProtocolHandlerSecurityLevel::kStrict);
   auto value = handler.Encode();
   ProtocolHandler recreated = ProtocolHandler::CreateProtocolHandler(value);
   EXPECT_EQ("news", recreated.protocol());
   EXPECT_EQ(GURL("https://example.com"), recreated.url());
   EXPECT_EQ(now, recreated.last_modified());
+}
+
+// CreateProtocolHandler must default is_allowed_in_incognito to false.
+// Incognito access is opt-in; a freshly registered handler must not be
+// silently visible in incognito before the user grants that permission.
+TEST_F(ProtocolHandlerRegistryTest,
+       CreateProtocolHandlerDefaultsToNotAllowedInIncognito) {
+  ProtocolHandler handler =
+      CreateProtocolHandler("news", GURL("https://test.com/%s"));
+  EXPECT_FALSE(handler.is_allowed_in_incognito());
+}
+
+// Encode() followed by CreateProtocolHandler(DictValue) must round-trip
+// is_allowed_in_incognito for all three handler types (plain web, web app,
+// extension).  This guards against deserialization paths that silently drop
+// the flag and fall back to the field initializer.
+TEST_F(ProtocolHandlerRegistryTest, EncodeRoundtripsIsAllowedInIncognito) {
+  base::Time now = base::Time::Now();
+  const blink::ProtocolHandlerSecurityLevel kStrict =
+      blink::ProtocolHandlerSecurityLevel::kStrict;
+
+  struct {
+    std::optional<std::string> app_id;
+    std::optional<std::string> extension_id;
+  } cases[] = {
+      {std::nullopt, std::nullopt},  // plain web handler
+      {"app_id_123", std::nullopt},  // web app handler
+      {std::nullopt, "ext_id_456"},  // extension handler
+  };
+
+  for (const auto& c : cases) {
+    for (bool allowed : {false, true}) {
+      ProtocolHandler handler("news", GURL("https://example.com/%s"), c.app_id,
+                              c.extension_id, now,
+                              /*is_confirmed=*/true, allowed, kStrict);
+      ProtocolHandler recreated =
+          ProtocolHandler::CreateProtocolHandler(handler.Encode());
+      EXPECT_EQ(allowed, recreated.is_allowed_in_incognito());
+    }
+  }
 }
 
 TEST_F(ProtocolHandlerRegistryTest, GetHandlersBetween) {
@@ -394,14 +462,14 @@ TEST_F(ProtocolHandlerRegistryTest, TestExtensionProtocolHandlers) {
   ProtocolHandler ph1 =
       CreateExtensionProtocolHandler("news", GURL("https://test/%s"), kIdFoo);
   registry()->OnAcceptRegisterProtocolHandler(ph1);
-  ASSERT_TRUE(registry()->IsHandledProtocol("news"));
+  ASSERT_TRUE(registry()->HasDefaultHandler("news"));
   ASSERT_TRUE(registry()->IsDefault(ph1));
 
   const std::string kIdBar("barabbbbccccddddeeeeffffgggghhhh");
   ProtocolHandler ph2 =
       CreateExtensionProtocolHandler("mailto", GURL("https://test/%s"), kIdBar);
   registry()->OnAcceptRegisterProtocolHandler(ph2);
-  ASSERT_TRUE(registry()->IsHandledProtocol("mailto"));
+  ASSERT_TRUE(registry()->HasDefaultHandler("mailto"));
   ASSERT_TRUE(registry()->IsDefault(ph2));
 
   {
@@ -845,8 +913,8 @@ TEST_F(ProtocolHandlerRegistryTest, TestInstallDefaultHandler) {
 #define URL_p3u1 "https://p3u1.com/%s"
 
 TEST_F(ProtocolHandlerRegistryTest, TestPrefPolicyOverlapRegister) {
-  base::Value::List handlers_registered_by_pref;
-  base::Value::List handlers_registered_by_policy;
+  base::ListValue handlers_registered_by_pref;
+  base::ListValue handlers_registered_by_policy;
 
   handlers_registered_by_pref.Append(
       GetProtocolHandlerValueWithDefault("news", URL_p1u2, true));
@@ -925,8 +993,8 @@ TEST_F(ProtocolHandlerRegistryTest, TestPrefPolicyOverlapRegister) {
 }
 
 TEST_F(ProtocolHandlerRegistryTest, TestPrefPolicyOverlapIgnore) {
-  base::Value::List handlers_ignored_by_pref;
-  base::Value::List handlers_ignored_by_policy;
+  base::ListValue handlers_ignored_by_pref;
+  base::ListValue handlers_ignored_by_policy;
 
   handlers_ignored_by_pref.Append(GetProtocolHandlerValue("news", URL_p1u1));
   handlers_ignored_by_pref.Append(GetProtocolHandlerValue("news", URL_p1u2));
@@ -1206,6 +1274,62 @@ TEST_F(ProtocolHandlerRegistryTest, ProtocolHandlerSecurityLevels) {
       blink::ProtocolHandlerSecurityLevel::kExtensionFeatures));
 }
 
+TEST_F(ProtocolHandlerRegistryTest, OnlyExtensionHandlersUnconfirmed) {
+  registry()->OnAcceptRegisterProtocolHandler(
+      CreateProtocolHandler("web+play", GURL("https://test/%s")));
+  EXPECT_TRUE(registry()->IsProtocolHandlerConfirmed("web+play"));
+
+  const std::string kIdFoo("fooId");
+  registry()->OnAcceptRegisterProtocolHandler(
+      CreateWebAppProtocolHandler("web+mail", GURL("https://test/%s"), kIdFoo));
+  EXPECT_TRUE(registry()->IsProtocolHandlerConfirmed("web+mail"));
+
+  const std::string kIdBar("barabbbbccccddddeeeeffffgggghhhh");
+  registry()->OnAcceptRegisterProtocolHandler(CreateExtensionProtocolHandler(
+      "web+news", GURL("https://test/%s"), kIdBar));
+  EXPECT_FALSE(registry()->IsProtocolHandlerConfirmed("web+news"));
+}
+
+TEST_F(ProtocolHandlerRegistryTest, ConfirmHandler) {
+  const std::string kIdBar("barabbbbccccddddeeeeffffgggghhhh");
+  registry()->OnAcceptRegisterProtocolHandler(CreateExtensionProtocolHandler(
+      "web+news", GURL("https://test/%s"), kIdBar));
+  EXPECT_FALSE(registry()->IsProtocolHandlerConfirmed("web+news"));
+
+  registry()->ConfirmProtocolHandler("web+news", false /*save*/);
+  EXPECT_TRUE(registry()->IsProtocolHandlerConfirmed("web+news"));
+}
+
+TEST_F(ProtocolHandlerRegistryTest, RestoreUnconfirmedHandlerFromPref) {
+  const std::string kIdBar("barabbbbccccddddeeeeffffgggghhhh");
+  base::ListValue handlers_registered_by_pref;
+
+  handlers_registered_by_pref.Append(GetProtocolHandlerValueWithDefault(
+      "news", URL_p1u1, true, false, std::nullopt, kIdBar));
+
+  GetPrefs()->SetList(custom_handlers::prefs::kRegisteredProtocolHandlers,
+                      std::move(handlers_registered_by_pref));
+  registry()->InitProtocolSettings();
+
+  ASSERT_TRUE(registry()->HasDefaultHandler("news"));
+  EXPECT_FALSE(registry()->IsProtocolHandlerConfirmed("news"));
+}
+
+TEST_F(ProtocolHandlerRegistryTest, ConfirmHandlerAndSave) {
+  const std::string kIdBar("barabbbbccccddddeeeeffffgggghhhh");
+  registry()->OnAcceptRegisterProtocolHandler(CreateExtensionProtocolHandler(
+      "web+news", GURL("https://test/%s"), kIdBar));
+  EXPECT_FALSE(registry()->IsProtocolHandlerConfirmed("web+news"));
+
+  registry()->ConfirmProtocolHandler("web+news", true /*save*/);
+  EXPECT_TRUE(registry()->IsProtocolHandlerConfirmed("web+news"));
+
+  // Restore the registry from prefs.
+  delegate()->Reset();
+  RecreateRegistry(true);
+  EXPECT_TRUE(registry()->IsProtocolHandlerConfirmed("web+news"));
+}
+
 namespace {
 
 enum class ProtocolTestMode {
@@ -1348,6 +1472,530 @@ TEST_F(ProtocolHandlerRegistryTest, CredentialsForNonStandardSchemes) {
   EXPECT_EQ(ph.TranslateUrl(GURL("web+bool://user:password@example/y")),
             GURL("https://example.com/"
                  "url=web%2Bbool%3A%2F%2Fexample%2Fy"));
+}
+
+// ---------------------------------------------------------------------------
+// OTR (Off-The-Record / Incognito) registry tests
+// ---------------------------------------------------------------------------
+
+class ProtocolHandlerRegistryOTRTest : public ProtocolHandlerRegistryTest {
+ protected:
+  void SetUp() override {
+    ProtocolHandlerRegistryTest::SetUp();
+    SetUpOTRRegistry();
+  }
+
+  void TearDown() override {
+    TearDownOTRRegistry();
+    ProtocolHandlerRegistryTest::TearDown();
+  }
+
+  void SetUpOTRRegistry() {
+    // The OTR registry is constructed with a null PrefService, matching the
+    // factory behavior for OTR browser contexts. It is isolated from the
+    // parent profile's prefs and does not persist registrations.
+    auto delegate = std::make_unique<TestProtocolHandlerRegistryDelegate>();
+    otr_delegate_ = delegate.get();
+    otr_registry_ = std::make_unique<ProtocolHandlerRegistry>(
+        /*prefs=*/nullptr, std::move(delegate),
+        /*is_off_the_record=*/true);
+    otr_registry_->InitProtocolSettings();
+  }
+
+  void TearDownOTRRegistry() {
+    otr_delegate_ = nullptr;
+    otr_registry_->Shutdown();
+    otr_registry_.reset();
+  }
+
+  void RecreateOTRRegistry() {
+    TearDownOTRRegistry();
+    SetUpOTRRegistry();
+  }
+
+  ProtocolHandlerRegistry* otr_registry() { return otr_registry_.get(); }
+
+ private:
+  raw_ptr<TestProtocolHandlerRegistryDelegate> otr_delegate_ = nullptr;
+  std::unique_ptr<ProtocolHandlerRegistry> otr_registry_;
+};
+
+// Verify that the OTR profile gets a separate registry instance that is
+// isolated from the regular profile's handlers; including after the OTR
+// registry is re-initialized against fresh parent state.
+TEST_F(ProtocolHandlerRegistryOTRTest, OTRDoesNotInheritHandlersFromRegular) {
+  ProtocolHandler handler =
+      CreateProtocolHandler("web+test", GURL("https://example.com/%s"));
+  registry()->OnAcceptRegisterProtocolHandler(handler);
+  ASSERT_TRUE(registry()->IsHandledProtocol("web+test"));
+
+  RecreateOTRRegistry();
+
+  EXPECT_NE(registry(), otr_registry());
+  EXPECT_FALSE(otr_registry()->IsHandledProtocol("web+test"));
+  EXPECT_TRUE(otr_registry()->GetHandlersFor("web+test").empty());
+}
+
+// Verify that registering a handler in the OTR profile does not affect the
+// parent profile's registry.
+TEST_F(ProtocolHandlerRegistryOTRTest, OTRRegistrationDoesNotLeakToParent) {
+  ASSERT_FALSE(registry()->IsHandledProtocol("web+otrtest"));
+  ASSERT_FALSE(otr_registry()->IsHandledProtocol("web+otrtest"));
+
+  ProtocolHandler handler =
+      CreateProtocolHandler("web+otrtest", GURL("https://example.com/%s"));
+  otr_registry()->OnAcceptRegisterProtocolHandler(handler);
+
+  EXPECT_TRUE(otr_registry()->IsHandledProtocol("web+otrtest"));
+  EXPECT_FALSE(registry()->IsHandledProtocol("web+otrtest"));
+}
+
+// Verify that OTR handlers are ephemeral and vanish when the OTR registry is
+// destroyed and re-created.
+TEST_F(ProtocolHandlerRegistryOTRTest, OTRHandlersDoNotPersistAcrossSessions) {
+  ProtocolHandler handler =
+      CreateProtocolHandler("web+ephemeral", GURL("https://example.com/%s"));
+  otr_registry()->OnAcceptRegisterProtocolHandler(handler);
+  ASSERT_TRUE(otr_registry()->IsHandledProtocol("web+ephemeral"));
+
+  RecreateOTRRegistry();
+
+  EXPECT_FALSE(otr_registry()->IsHandledProtocol("web+ephemeral"));
+}
+
+// OTR registrations stay in-memory on the OTR registry (it has no PrefService)
+// and must never reach the regular profile's persisted prefs.
+TEST_F(ProtocolHandlerRegistryOTRTest,
+       OTRRegistrationDoesNotAffectParentPrefs) {
+  ASSERT_TRUE(GetPrefs()
+                  ->GetList(custom_handlers::prefs::kRegisteredProtocolHandlers)
+                  .empty());
+
+  ProtocolHandler otr_handler =
+      CreateProtocolHandler("web+otrpref", GURL("https://otr.example.com/%s"));
+  otr_registry()->OnAcceptRegisterProtocolHandler(otr_handler);
+
+  EXPECT_EQ(1u, otr_registry()->GetHandlersFor("web+otrpref").size());
+  EXPECT_TRUE(GetPrefs()
+                  ->GetList(custom_handlers::prefs::kRegisteredProtocolHandlers)
+                  .empty());
+
+  // A handler registered in the regular registry does persist.
+  ProtocolHandler regular_handler = CreateProtocolHandler(
+      "web+regular", GURL("https://regular.example.com/%s"));
+  registry()->OnAcceptRegisterProtocolHandler(regular_handler);
+
+  EXPECT_EQ(1u,
+            GetPrefs()
+                ->GetList(custom_handlers::prefs::kRegisteredProtocolHandlers)
+                .size());
+}
+
+// Ignoring a handler in the OTR profile must not affect the regular profile's
+// ignored handler list, either at the registry or pref-store level.
+TEST_F(ProtocolHandlerRegistryOTRTest, OTRIgnoredHandlerDoesNotLeakToParent) {
+  ProtocolHandler handler =
+      CreateProtocolHandler("web+ignored", GURL("https://example.com/%s"));
+
+  ASSERT_TRUE(registry()->GetIgnoredHandlers().empty());
+  ASSERT_TRUE(otr_registry()->GetIgnoredHandlers().empty());
+  ASSERT_TRUE(GetPrefs()
+                  ->GetList(custom_handlers::prefs::kIgnoredProtocolHandlers)
+                  .empty());
+
+  otr_registry()->OnIgnoreRegisterProtocolHandler(handler);
+
+  EXPECT_TRUE(otr_registry()->IsIgnored(handler));
+  EXPECT_EQ(1u, otr_registry()->GetIgnoredHandlers().size());
+
+  EXPECT_FALSE(registry()->IsIgnored(handler));
+  EXPECT_TRUE(registry()->GetIgnoredHandlers().empty());
+  EXPECT_TRUE(GetPrefs()
+                  ->GetList(custom_handlers::prefs::kIgnoredProtocolHandlers)
+                  .empty());
+}
+
+// Disabling the OTR registry must not disable the regular profile's registry.
+TEST_F(ProtocolHandlerRegistryOTRTest, OTRDisableDoesNotAffectRegularProfile) {
+  ASSERT_TRUE(registry()->enabled());
+  ASSERT_TRUE(otr_registry()->enabled());
+
+  otr_registry()->Disable();
+
+  EXPECT_FALSE(otr_registry()->enabled());
+  EXPECT_TRUE(registry()->enabled());
+  EXPECT_TRUE(
+      GetPrefs()->GetBoolean(custom_handlers::prefs::kCustomHandlersEnabled));
+}
+
+// Setting a default handler in the OTR profile must not change the default
+// handler in the regular profile, even when both register handlers for the
+// same scheme.
+TEST_F(ProtocolHandlerRegistryOTRTest, OTRDefaultHandlerDoesNotLeakToParent) {
+  GURL regular_url("https://regular.example.com/%s");
+  GURL otr_url("https://otr.example.com/%s");
+
+  ASSERT_TRUE(registry()->GetHandlersFor("web+default").empty());
+  ASSERT_TRUE(otr_registry()->GetHandlersFor("web+default").empty());
+
+  ProtocolHandler regular_handler =
+      CreateProtocolHandler("web+default", regular_url);
+  registry()->OnAcceptRegisterProtocolHandler(regular_handler);
+
+  ProtocolHandler otr_handler = CreateProtocolHandler("web+default", otr_url);
+  otr_registry()->OnAcceptRegisterProtocolHandler(otr_handler);
+
+  EXPECT_EQ(1u, registry()->GetHandlersFor("web+default").size());
+  EXPECT_EQ(regular_url, registry()->GetHandlerFor("web+default").url());
+  EXPECT_EQ(otr_url, otr_registry()->GetHandlerFor("web+default").url());
+  EXPECT_EQ(1u,
+            GetPrefs()
+                ->GetList(custom_handlers::prefs::kRegisteredProtocolHandlers)
+                .size());
+}
+
+TEST_F(ProtocolHandlerRegistryTest, GetHandlerForNonIncognitoReturnsHandler) {
+  ProtocolHandler handler =
+      CreateProtocolHandler("news", GURL("https://test.com/%s"));
+  handler.set_is_allowed_in_incognito(false);
+  registry()->OnAcceptRegisterProtocolHandler(handler);
+  ASSERT_FALSE(registry()->GetHandlerFor("news").IsEmpty());
+}
+
+TEST_F(ProtocolHandlerRegistryTest, GetHandlerForIncognitoAllowed) {
+  ProtocolHandler handler =
+      CreateProtocolHandler("news", GURL("https://test.com/%s"));
+  handler.set_is_allowed_in_incognito(true);
+  registry()->OnAcceptRegisterProtocolHandler(handler);
+  SwitchToIncognito();
+  ASSERT_FALSE(registry()->GetHandlerFor("news").IsEmpty());
+}
+
+TEST_F(ProtocolHandlerRegistryTest, IsHandledProtocolIncognitoDisallowed) {
+  ProtocolHandler handler =
+      CreateProtocolHandler("news", GURL("https://test.com/%s"));
+  registry()->OnAcceptRegisterProtocolHandler(handler);
+  ASSERT_TRUE(registry()->IsHandledProtocol("news"));
+
+  // After switching to OTR, the insertion guard rejects the pref-loaded
+  // disallowed handler, so IsHandledProtocol returns false.
+  SwitchToIncognito();
+  ASSERT_FALSE(registry()->IsHandledProtocol("news"));
+}
+
+TEST_F(ProtocolHandlerRegistryTest, ExtensionHandlerIncognitoAllowed) {
+  ProtocolHandler handler = CreateExtensionProtocolHandler(
+      "news", GURL("https://example.com/%s"), "ext_id",
+      /*is_allowed_in_incognito=*/true);
+  registry()->OnAcceptRegisterProtocolHandler(handler);
+  SwitchToIncognito();
+  ASSERT_FALSE(registry()->GetHandlerFor("news").IsEmpty());
+}
+
+// Encode/decode must preserve the is_allowed_in_incognito flag so that the
+// insertion guard sees the correct value when pref entries are loaded.
+TEST_F(ProtocolHandlerRegistryTest, SaveLoadPreservesIsAllowedInIncognito) {
+  ProtocolHandler handler = CreateExtensionProtocolHandler(
+      "news", GURL("https://example.com/%s"), "ext_id",
+      /*is_allowed_in_incognito=*/false);
+  registry()->OnAcceptRegisterProtocolHandler(handler);
+  ASSERT_GT(registry()->GetHandlersFor("news").size(), 0u);
+
+  RecreateRegistry(true);
+  const auto loaded = registry()->GetHandlersFor("news");
+  ASSERT_EQ(1u, loaded.size());
+  EXPECT_FALSE(loaded[0].is_allowed_in_incognito());
+}
+
+TEST_F(ProtocolHandlerRegistryTest, NeedsConfirmationNoDefaultHandler) {
+  // No handler registered, so GetHandlerFor returns empty.
+  ASSERT_TRUE(registry()->GetHandlerFor("news").IsEmpty());
+  ASSERT_FALSE(registry()->ProtocolHandlerNeedsConfirmation("news"));
+}
+
+TEST_F(ProtocolHandlerRegistryTest, NeedsConfirmationConfirmedHandler) {
+  ProtocolHandler handler =
+      CreateProtocolHandler("news", GURL("https://test.com/%s"));
+  registry()->OnAcceptRegisterProtocolHandler(handler);
+  // Handler exists and is confirmed.
+  ASSERT_FALSE(registry()->GetHandlerFor("news").IsEmpty());
+  ASSERT_FALSE(registry()->ProtocolHandlerNeedsConfirmation("news"));
+}
+
+TEST_F(ProtocolHandlerRegistryTest,
+       NeedsConfirmationUnconfirmedExtensionHandler) {
+  ProtocolHandler handler = CreateExtensionProtocolHandler(
+      "news", GURL("https://example.com/%s"), "ext_id",
+      /*is_allowed_in_incognito=*/true);
+  registry()->OnAcceptRegisterProtocolHandler(handler);
+  ASSERT_TRUE(registry()->ProtocolHandlerNeedsConfirmation("news"));
+}
+
+TEST_F(ProtocolHandlerRegistryTest, NeedsConfirmationIncognitoDisallowed) {
+  ProtocolHandler handler = CreateExtensionProtocolHandler(
+      "news", GURL("https://example.com/%s"), "ext_id",
+      /*is_allowed_in_incognito=*/false);
+  registry()->OnAcceptRegisterProtocolHandler(handler);
+  ASSERT_TRUE(registry()->ProtocolHandlerNeedsConfirmation("news"));
+
+  // After switching to OTR, the disallowed handler is rejected at pref-load
+  // and never enters storage.
+  SwitchToIncognito();
+  ASSERT_TRUE(registry()->GetHandlerFor("news").IsEmpty());
+  ASSERT_FALSE(registry()->ProtocolHandlerNeedsConfirmation("news"));
+}
+
+TEST_F(ProtocolHandlerRegistryTest, NeedsConfirmationIncognitoAllowed) {
+  ProtocolHandler handler = CreateExtensionProtocolHandler(
+      "news", GURL("https://example.com/%s"), "ext_id",
+      /*is_allowed_in_incognito=*/true);
+  registry()->OnAcceptRegisterProtocolHandler(handler);
+  ASSERT_TRUE(registry()->ProtocolHandlerNeedsConfirmation("news"));
+
+  SwitchToIncognito();
+  ASSERT_TRUE(registry()->ProtocolHandlerNeedsConfirmation("news"));
+}
+
+// Insertion-guard tests. The OTR invariant: RegisterProtocolHandler rejects
+// handlers whose is_allowed_in_incognito is false. All registration paths
+// funnel through that single chokepoint, so an OTR registry cannot store a
+// disallowed handler.
+
+// Extension handler with is_allowed_in_incognito=false must not enter OTR
+// storage. None of the public views of storage should surface it.
+TEST_F(ProtocolHandlerRegistryTest,
+       RegisterProtocolHandlerRejectsDisallowedInIncognito) {
+  SwitchToIncognito();
+
+  ProtocolHandler handler = CreateExtensionProtocolHandler(
+      "news", GURL("https://example.com/%s"), "ext_id",
+      /*is_allowed_in_incognito=*/false);
+  registry()->OnAcceptRegisterProtocolHandler(handler);
+
+  EXPECT_TRUE(registry()->GetHandlerFor("news").IsEmpty());
+  EXPECT_TRUE(registry()->GetHandlersFor("news").empty());
+  EXPECT_FALSE(registry()->IsRegistered(handler));
+  EXPECT_FALSE(registry()->IsRegisteredByUser(handler));
+
+  std::vector<std::string> protocols;
+  registry()->GetRegisteredProtocols(&protocols);
+  EXPECT_TRUE(protocols.empty());
+
+  EXPECT_TRUE(registry()
+                  ->GetUserDefinedHandlers(base::Time(), base::Time::Max())
+                  .empty());
+  EXPECT_TRUE(registry()->GetExtensionProtocolHandlers().empty());
+}
+
+// OnAcceptRegisterProtocolHandler must continue auto-promoting non-extension
+// handlers to is_allowed_in_incognito=true in OTR mode (a user explicitly
+// accepting a registration in incognito wants it usable there). This guards
+// against the insertion guard turning the auto-promote into a regression.
+TEST_F(ProtocolHandlerRegistryTest,
+       OnAcceptInIncognitoStillAutoAllowsNonExtension) {
+  SwitchToIncognito();
+
+  ProtocolHandler handler =
+      CreateProtocolHandler("news", GURL("https://test.com/%s"));
+  ASSERT_FALSE(handler.is_allowed_in_incognito());
+  registry()->OnAcceptRegisterProtocolHandler(handler);
+
+  EXPECT_FALSE(registry()->GetHandlerFor("news").IsEmpty());
+  EXPECT_TRUE(registry()->GetHandlerFor("news").is_allowed_in_incognito());
+}
+
+// OnDenyRegisterProtocolHandler does NOT auto-promote, so a deny in OTR with
+// an unset is_allowed_in_incognito flag must end with the handler absent
+// from storage (rather than silently captured by the deny path).
+TEST_F(ProtocolHandlerRegistryTest,
+       OnDenyInIncognitoDoesNotPersistDisallowedHandler) {
+  SwitchToIncognito();
+
+  ProtocolHandler handler =
+      CreateProtocolHandler("news", GURL("https://test.com/%s"));
+  ASSERT_FALSE(handler.is_allowed_in_incognito());
+  registry()->OnDenyRegisterProtocolHandler(handler);
+
+  EXPECT_FALSE(registry()->IsRegistered(handler));
+  EXPECT_FALSE(registry()->IsRegisteredByUser(handler));
+}
+
+// AttemptReplace must refuse to perform destructive removals when the new
+// handler isn't accessible in the current mode. Without the top-level guard,
+// to-replace candidates would be removed before discovering the new handler
+// couldn't be inserted, leaving the registry with strictly fewer handlers
+// than it started with. Auto-promotion of a flag=false handler is only
+// applied by OnAcceptRegisterProtocolHandler (explicit user acceptance);
+// AttemptReplace's silent path must not fabricate that consent.
+TEST_F(ProtocolHandlerRegistryTest,
+       AttemptReplaceInIncognitoBailsWithoutDestructiveRemoval) {
+  SwitchToIncognito();
+
+  // Pre-register an allowed handler — OnAccept auto-promotes the flag in OTR,
+  // so this lands in storage with is_allowed_in_incognito=true.
+  ProtocolHandler allowed_existing =
+      CreateProtocolHandler("mailto", GURL("https://test.com/%s"));
+  registry()->OnAcceptRegisterProtocolHandler(allowed_existing);
+  ASSERT_FALSE(registry()->GetHandlerFor("mailto").IsEmpty());
+
+  // Construct a disallowed same-origin replacement candidate and call
+  // AttemptReplace directly (no auto-promote in this path).
+  ProtocolHandler disallowed_replacement =
+      CreateProtocolHandler("mailto", GURL("https://test.com/updated/%s"));
+  ASSERT_FALSE(disallowed_replacement.is_allowed_in_incognito());
+
+  EXPECT_FALSE(registry()->AttemptReplace(disallowed_replacement));
+
+  // The pre-registered handler must still be in storage — no destructive
+  // removal happened.
+  EXPECT_FALSE(registry()->GetHandlerFor("mailto").IsEmpty());
+  EXPECT_EQ(allowed_existing.url(), registry()->GetHandlerFor("mailto").url());
+}
+
+// Mixed-operations regression net: in OTR mode, every handler returned by any
+// storage-backed view must satisfy the invariant.
+TEST_F(ProtocolHandlerRegistryTest, StorageInvariantHoldsAcrossMixedOps) {
+  SwitchToIncognito();
+
+  ProtocolHandler allowed_ext = CreateExtensionProtocolHandler(
+      "news", GURL("https://allowed.example/%s"), "ext_a",
+      /*is_allowed_in_incognito=*/true);
+  registry()->OnAcceptRegisterProtocolHandler(allowed_ext);
+
+  ProtocolHandler disallowed_ext = CreateExtensionProtocolHandler(
+      "mail", GURL("https://disallowed.example/%s"), "ext_b",
+      /*is_allowed_in_incognito=*/false);
+  registry()->OnAcceptRegisterProtocolHandler(disallowed_ext);
+
+  ProtocolHandler web_handler =
+      CreateProtocolHandler("im", GURL("https://im.example/%s"));
+  registry()->OnAcceptRegisterProtocolHandler(web_handler);
+
+  std::vector<std::string> protocols;
+  registry()->GetRegisteredProtocols(&protocols);
+  for (const std::string& p : protocols) {
+    auto handlers = registry()->GetHandlersFor(p);
+    EXPECT_FALSE(handlers.empty()) << "scheme=" << p;
+    for (const ProtocolHandler& h : handlers) {
+      EXPECT_TRUE(h.is_allowed_in_incognito())
+          << "scheme=" << p << " leaked a disallowed handler in OTR mode.";
+    }
+  }
+
+  EXPECT_TRUE(registry()->GetHandlersFor("mail").empty());
+  EXPECT_FALSE(registry()->IsRegistered(disallowed_ext));
+  EXPECT_TRUE(registry()->GetExtensionProtocolHandlers("ext_b").empty());
+}
+
+// Pref-load path: when an OTR registry initializes from prefs (e.g. via the
+// OverlayUserPrefStore reading through to regular-profile handlers), the
+// insertion guard must reject disallowed entries before they enter OTR
+// storage.
+TEST_F(ProtocolHandlerRegistryTest, PrefLoadRespectsGuardInIncognito) {
+  ProtocolHandler disallowed_ext = CreateExtensionProtocolHandler(
+      "news", GURL("https://example.com/%s"), "ext_id",
+      /*is_allowed_in_incognito=*/false);
+  registry()->OnAcceptRegisterProtocolHandler(disallowed_ext);
+  ASSERT_FALSE(registry()->GetHandlerFor("news").IsEmpty());
+  ASSERT_GT(InPrefHandlerCount(), 0);
+
+  // Recreate as an OTR registry sharing the same PrefService.
+  // InitProtocolSettings runs the pref-load path under the insertion guard.
+  SwitchToIncognito();
+
+  EXPECT_TRUE(registry()->GetHandlerFor("news").IsEmpty());
+  EXPECT_FALSE(registry()->IsRegistered(disallowed_ext));
+}
+
+// Consequence tests for read methods that iterate storage without filtering.
+// Because of the insertion-time invariant, they return correct results in OTR
+// without per-method filter code.
+
+TEST_F(ProtocolHandlerRegistryTest, GetRegisteredProtocolsCleanInIncognito) {
+  SwitchToIncognito();
+
+  ProtocolHandler allowed = CreateExtensionProtocolHandler(
+      "news", GURL("https://example.com/%s"), "ext_a",
+      /*is_allowed_in_incognito=*/true);
+  ProtocolHandler disallowed = CreateExtensionProtocolHandler(
+      "mail", GURL("https://example.com/%s"), "ext_b",
+      /*is_allowed_in_incognito=*/false);
+  registry()->OnAcceptRegisterProtocolHandler(allowed);
+  registry()->OnAcceptRegisterProtocolHandler(disallowed);
+
+  std::vector<std::string> protocols;
+  registry()->GetRegisteredProtocols(&protocols);
+  EXPECT_EQ(std::vector<std::string>{"news"}, protocols);
+}
+
+TEST_F(ProtocolHandlerRegistryTest, GetUserDefinedHandlersCleanInIncognito) {
+  SwitchToIncognito();
+
+  ProtocolHandler allowed = CreateExtensionProtocolHandler(
+      "news", GURL("https://allowed.example/%s"), "ext_a",
+      /*is_allowed_in_incognito=*/true);
+  ProtocolHandler disallowed = CreateExtensionProtocolHandler(
+      "mail", GURL("https://disallowed.example/%s"), "ext_b",
+      /*is_allowed_in_incognito=*/false);
+  registry()->OnAcceptRegisterProtocolHandler(allowed);
+  registry()->OnAcceptRegisterProtocolHandler(disallowed);
+
+  auto handlers =
+      registry()->GetUserDefinedHandlers(base::Time(), base::Time::Max());
+  ASSERT_EQ(1u, handlers.size());
+  EXPECT_EQ("news", handlers[0].protocol());
+}
+
+TEST_F(ProtocolHandlerRegistryTest,
+       GetExtensionProtocolHandlersCleanInIncognito) {
+  SwitchToIncognito();
+
+  ProtocolHandler allowed = CreateExtensionProtocolHandler(
+      "news", GURL("https://example.com/%s"), "ext_a",
+      /*is_allowed_in_incognito=*/true);
+  ProtocolHandler disallowed = CreateExtensionProtocolHandler(
+      "mail", GURL("https://example.com/%s"), "ext_b",
+      /*is_allowed_in_incognito=*/false);
+  registry()->OnAcceptRegisterProtocolHandler(allowed);
+  registry()->OnAcceptRegisterProtocolHandler(disallowed);
+
+  auto handlers = registry()->GetExtensionProtocolHandlers();
+  ASSERT_EQ(1u, handlers.size());
+  ASSERT_TRUE(handlers[0].extension_id().has_value());
+  EXPECT_EQ("ext_a", *handlers[0].extension_id());
+}
+
+// HasDefaultHandler / IsProtocolHandlerConfirmed use GetHandlerForInternal,
+// which bypasses the runtime filter on purpose. They still return correct
+// results in OTR because the insertion invariant keeps disallowed handlers
+// out of the underlying storage entirely.
+TEST_F(ProtocolHandlerRegistryTest, HasDefaultHandlerCleanInIncognito) {
+  SwitchToIncognito();
+
+  ProtocolHandler disallowed_ext = CreateExtensionProtocolHandler(
+      "mail", GURL("https://example.com/%s"), "ext_b",
+      /*is_allowed_in_incognito=*/false);
+  registry()->OnAcceptRegisterProtocolHandler(disallowed_ext);
+
+  EXPECT_FALSE(registry()->HasDefaultHandler("mail"));
+  EXPECT_TRUE(registry()->GetHandlerFor("mail").IsEmpty());
+}
+
+TEST_F(ProtocolHandlerRegistryTest,
+       IsProtocolHandlerConfirmedCleanInIncognito) {
+  SwitchToIncognito();
+
+  ProtocolHandler ext_handler = CreateExtensionProtocolHandler(
+      "news", GURL("https://example.com/%s"), "ext_id",
+      /*is_allowed_in_incognito=*/true);
+  registry()->OnAcceptRegisterProtocolHandler(ext_handler);
+
+  // Extension handlers are registered unconfirmed.
+  ASSERT_TRUE(registry()->HasDefaultHandler("news"));
+  EXPECT_FALSE(registry()->IsProtocolHandlerConfirmed("news"));
+
+  registry()->ConfirmProtocolHandler("news", /*save=*/false);
+  EXPECT_TRUE(registry()->IsProtocolHandlerConfirmed("news"));
 }
 
 }  // namespace custom_handlers

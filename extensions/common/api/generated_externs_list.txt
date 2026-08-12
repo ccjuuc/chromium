@@ -3,14 +3,14 @@
 # typescript definitions.
 audio.webidl
 bluetooth.webidl
-bluetooth_private.idl
+bluetooth_private.webidl
 clipboard.webidl
 events.json
 extension_types.json
 metrics_private.json
 metrics_private_individual_apis.json
-mojo_private.idl
-networking_private.idl
+mojo_private.webidl
+networking_private.webidl
 runtime.json
 test.json
 virtual_keyboard_private.json

@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/cdm/library_cdm/clear_key_cdm/cdm_video_decoder.h"
 
 #include <memory>
@@ -14,6 +9,7 @@
 #include <utility>
 
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/containers/queue.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -63,8 +59,9 @@ media::VideoDecoderConfig ToClearMediaVideoDecoderConfig(
       VideoDecoderConfig::AlphaMode::kIsOpaque,
       ToMediaColorSpace(config.color_space), kNoTransformation, coded_size,
       gfx::Rect(coded_size), coded_size,
-      std::vector<uint8_t>(config.extra_data,
-                           config.extra_data + config.extra_data_size),
+      std::vector<uint8_t>(
+          config.extra_data,
+          UNSAFE_TODO(config.extra_data + config.extra_data_size)),
       EncryptionScheme::kUnencrypted);
 
   return media_config;
@@ -75,8 +72,8 @@ bool ToCdmVideoFrame(const VideoFrame& video_frame,
                      CdmVideoDecoder::CdmVideoFrame* cdm_video_frame) {
   CHECK(cdm_video_frame);
 
-  if (!video_frame.IsMappable()) {
-    DVLOG(1) << "VideoFrame is not mappable";
+  if (!video_frame.HasDirectCpuAccess()) {
+    DVLOG(1) << "No direct CPU access to VideoFrame";
     return false;
   }
 
@@ -133,7 +130,7 @@ bool ToCdmVideoFrame(const VideoFrame& video_frame,
     cdm_video_frame->SetStride(cdm_plane, row_bytes);
 
     libyuv::CopyPlane(src, src_stride, dst, row_bytes, row_bytes, rows);
-    dst += row_bytes * rows;
+    UNSAFE_TODO(dst += row_bytes * rows);
     offset += row_bytes * rows;
   }
 
@@ -311,7 +308,8 @@ class VideoDecoderAdapter final : public CdmVideoDecoder {
 
 std::unique_ptr<CdmVideoDecoder> CreateVideoDecoder(
     CdmHostProxy* cdm_host_proxy,
-    const cdm::VideoDecoderConfig_3& config) {
+    const cdm::VideoDecoderConfig_3& config,
+    MediaLog* media_log) {
   SetupGlobalEnvironmentIfNeeded();
 
   std::unique_ptr<VideoDecoder> video_decoder;
@@ -323,16 +321,13 @@ std::unique_ptr<CdmVideoDecoder> CreateVideoDecoder(
 
 #if BUILDFLAG(ENABLE_DAV1D_DECODER)
   if (config.codec == cdm::kCodecAv1) {
-    video_decoder =
-        std::make_unique<Dav1dVideoDecoder>(std::make_unique<NullMediaLog>());
+    video_decoder = std::make_unique<Dav1dVideoDecoder>(media_log->Clone());
   }
 #endif
 
 #if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
-  static base::NoDestructor<media::NullMediaLog> null_media_log;
-
   if (!video_decoder)
-    video_decoder = std::make_unique<FFmpegVideoDecoder>(null_media_log.get());
+    video_decoder = std::make_unique<FFmpegVideoDecoder>(media_log->Clone());
 #endif
 
   if (!video_decoder)

@@ -14,6 +14,9 @@
 namespace autofill {
 namespace {
 
+using ::autofill::test::FormFieldDataEq;
+using ::autofill::test::WithoutUnserializedData;
+
 void FillCommonFields(FormFieldData* data) {
   data->set_label(u"label");
   data->set_name(u"name");
@@ -21,7 +24,7 @@ void FillCommonFields(FormFieldData* data) {
   data->set_form_control_type(FormControlType::kInputPassword);
   data->set_autocomplete_attribute("off");
   data->set_max_length(200);
-  data->set_is_autofilled(true);
+  data->set_is_autofilled_according_to_renderer(true);
   data->set_check_status(FormFieldData::CheckStatus::kChecked);
   data->set_is_focusable(true);
   data->set_should_autocomplete(false);
@@ -66,7 +69,7 @@ void WriteSection1(const FormFieldData& data, base::Pickle* pickle) {
   pickle->WriteString(FormControlTypeToString(data.form_control_type()));
   pickle->WriteString(data.autocomplete_attribute());
   pickle->WriteUInt64(data.max_length());
-  pickle->WriteBool(data.is_autofilled());
+  pickle->WriteBool(data.is_autofilled_according_to_renderer());
 }
 
 void WriteSection3(const FormFieldData& data, base::Pickle* pickle) {
@@ -266,9 +269,8 @@ TEST(FormFieldDataTest, SerializeAndDeserialize) {
   FormFieldData actual;
   EXPECT_TRUE(DeserializeFormFieldData(&iter, &actual));
 
-  EXPECT_TRUE(FormFieldData::IdenticalAndEquivalentDomElements(
-      test::WithoutUnserializedData(actual),
-      test::WithoutUnserializedData(data)));
+  EXPECT_THAT(WithoutUnserializedData(actual),
+              FormFieldDataEq(WithoutUnserializedData(data)));
 }
 
 TEST(FormFieldDataTest, DeserializeVersion1) {
@@ -283,9 +285,8 @@ TEST(FormFieldDataTest, DeserializeVersion1) {
   FormFieldData actual;
   EXPECT_TRUE(DeserializeFormFieldData(&iter, &actual));
 
-  EXPECT_TRUE(FormFieldData::IdenticalAndEquivalentDomElements(
-      test::WithoutUnserializedData(actual),
-      test::WithoutUnserializedData(data)));
+  EXPECT_THAT(WithoutUnserializedData(actual),
+              FormFieldDataEq(WithoutUnserializedData(data)));
 }
 
 TEST(FormFieldDataTest, DeserializeVersion2) {
@@ -301,9 +302,8 @@ TEST(FormFieldDataTest, DeserializeVersion2) {
   FormFieldData actual;
   EXPECT_TRUE(DeserializeFormFieldData(&iter, &actual));
 
-  EXPECT_TRUE(FormFieldData::IdenticalAndEquivalentDomElements(
-      test::WithoutUnserializedData(actual),
-      test::WithoutUnserializedData(data)));
+  EXPECT_THAT(WithoutUnserializedData(actual),
+              FormFieldDataEq(WithoutUnserializedData(data)));
 }
 
 TEST(FormFieldDataTest, DeserializeVersion3) {
@@ -320,9 +320,8 @@ TEST(FormFieldDataTest, DeserializeVersion3) {
   FormFieldData actual;
   EXPECT_TRUE(DeserializeFormFieldData(&iter, &actual));
 
-  EXPECT_TRUE(FormFieldData::IdenticalAndEquivalentDomElements(
-      test::WithoutUnserializedData(actual),
-      test::WithoutUnserializedData(data)));
+  EXPECT_THAT(WithoutUnserializedData(actual),
+              FormFieldDataEq(WithoutUnserializedData(data)));
 }
 
 TEST(FormFieldDataTest, DeserializeVersion4) {
@@ -339,9 +338,8 @@ TEST(FormFieldDataTest, DeserializeVersion4) {
   FormFieldData actual;
   EXPECT_TRUE(DeserializeFormFieldData(&iter, &actual));
 
-  EXPECT_TRUE(FormFieldData::IdenticalAndEquivalentDomElements(
-      test::WithoutUnserializedData(actual),
-      test::WithoutUnserializedData(data)));
+  EXPECT_THAT(WithoutUnserializedData(actual),
+              FormFieldDataEq(WithoutUnserializedData(data)));
 }
 
 TEST(FormFieldDataTest, DeserializeVersion5) {
@@ -359,9 +357,8 @@ TEST(FormFieldDataTest, DeserializeVersion5) {
   FormFieldData actual;
   EXPECT_TRUE(DeserializeFormFieldData(&iter, &actual));
 
-  EXPECT_TRUE(FormFieldData::IdenticalAndEquivalentDomElements(
-      test::WithoutUnserializedData(actual),
-      test::WithoutUnserializedData(data)));
+  EXPECT_THAT(WithoutUnserializedData(actual),
+              FormFieldDataEq(WithoutUnserializedData(data)));
 }
 
 TEST(FormFieldDataTest, DeserializeVersion6) {
@@ -380,9 +377,8 @@ TEST(FormFieldDataTest, DeserializeVersion6) {
   FormFieldData actual;
   EXPECT_TRUE(DeserializeFormFieldData(&iter, &actual));
 
-  EXPECT_TRUE(FormFieldData::IdenticalAndEquivalentDomElements(
-      test::WithoutUnserializedData(actual),
-      test::WithoutUnserializedData(data)));
+  EXPECT_THAT(WithoutUnserializedData(actual),
+              FormFieldDataEq(WithoutUnserializedData(data)));
 }
 
 TEST(FormFieldDataTest, DeserializeVersion7) {
@@ -402,9 +398,8 @@ TEST(FormFieldDataTest, DeserializeVersion7) {
   FormFieldData actual;
   EXPECT_TRUE(DeserializeFormFieldData(&iter, &actual));
 
-  EXPECT_TRUE(FormFieldData::IdenticalAndEquivalentDomElements(
-      test::WithoutUnserializedData(actual),
-      test::WithoutUnserializedData(data)));
+  EXPECT_THAT(WithoutUnserializedData(actual),
+              FormFieldDataEq(WithoutUnserializedData(data)));
 }
 
 TEST(FormFieldDataTest, DeserializeVersion8) {
@@ -425,9 +420,8 @@ TEST(FormFieldDataTest, DeserializeVersion8) {
   FormFieldData actual;
   EXPECT_TRUE(DeserializeFormFieldData(&iter, &actual));
 
-  EXPECT_TRUE(FormFieldData::IdenticalAndEquivalentDomElements(
-      test::WithoutUnserializedData(actual),
-      test::WithoutUnserializedData(data)));
+  EXPECT_THAT(WithoutUnserializedData(actual),
+              FormFieldDataEq(WithoutUnserializedData(data)));
 }
 
 TEST(FormFieldDataTest, DeserializeVersion9) {
@@ -448,9 +442,8 @@ TEST(FormFieldDataTest, DeserializeVersion9) {
   FormFieldData actual;
   EXPECT_TRUE(DeserializeFormFieldData(&iter, &actual));
 
-  EXPECT_TRUE(FormFieldData::IdenticalAndEquivalentDomElements(
-      test::WithoutUnserializedData(actual),
-      test::WithoutUnserializedData(data)));
+  EXPECT_THAT(WithoutUnserializedData(actual),
+              FormFieldDataEq(WithoutUnserializedData(data)));
 }
 
 TEST(FormFieldDataTest, DeserializeVersion10) {
@@ -472,9 +465,8 @@ TEST(FormFieldDataTest, DeserializeVersion10) {
   FormFieldData actual;
   EXPECT_TRUE(DeserializeFormFieldData(&iter, &actual));
 
-  EXPECT_TRUE(FormFieldData::IdenticalAndEquivalentDomElements(
-      test::WithoutUnserializedData(actual),
-      test::WithoutUnserializedData(data)));
+  EXPECT_THAT(WithoutUnserializedData(actual),
+              FormFieldDataEq(WithoutUnserializedData(data)));
 }
 
 // Verify that if the data isn't valid, the FormFieldData isn't populated
@@ -489,9 +481,8 @@ TEST(FormFieldDataTest, DeserializeBadData) {
   FormFieldData actual;
   EXPECT_FALSE(DeserializeFormFieldData(&iter, &actual));
   FormFieldData empty;
-  EXPECT_TRUE(FormFieldData::IdenticalAndEquivalentDomElements(
-      test::WithoutUnserializedData(actual),
-      test::WithoutUnserializedData(empty)));
+  EXPECT_THAT(WithoutUnserializedData(actual),
+              FormFieldDataEq(WithoutUnserializedData(empty)));
 }
 
 TEST(FormFieldDataTest, IsTextInputElement) {
@@ -515,29 +506,8 @@ TEST(FormFieldDataTest, IsTextInputElement) {
     SCOPED_TRACE(testing::Message() << test_case.form_control_type);
     FormFieldData data;
     data.set_form_control_type(test_case.form_control_type);
-    EXPECT_EQ(test_case.expected, data.IsTextInputElement());
+    EXPECT_EQ(data.IsTextInputElement(), test_case.expected);
   }
-}
-
-// Tests that FormFieldData::selected_option() finds the first matching option.
-TEST(FormFieldDataTest, SelectedOption) {
-  FormFieldData f;
-  EXPECT_EQ(f.selected_option(), std::nullopt);
-
-  f.set_options({SelectOption{.value = u"value1", .text = u"text1"},
-                 SelectOption{.value = u"value2", .text = u"text2"},
-                 SelectOption{.value = u"value2", .text = u"text3"}});
-
-  f.set_value(u"garbage");
-  EXPECT_EQ(f.selected_option(), std::nullopt);
-
-  f.set_value(u"value1");
-  EXPECT_EQ(f.selected_option().CopyAsOptional(),
-            (SelectOption{.value = u"value1", .text = u"text1"}));
-
-  f.set_value(u"value2");
-  EXPECT_EQ(f.selected_option().CopyAsOptional(),
-            (SelectOption{.value = u"value2", .text = u"text2"}));
 }
 
 }  // namespace

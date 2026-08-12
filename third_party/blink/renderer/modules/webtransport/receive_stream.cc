@@ -18,11 +18,12 @@ namespace {
 
 void ForgetStream(WebTransport* transport,
                   uint32_t stream_id,
-                  std::optional<uint8_t> stop_sending_code) {
+                  std::optional<uint8_t> stop_sending_code,
+                  bool has_received_close) {
   if (stop_sending_code) {
     transport->StopSending(stream_id, *stop_sending_code);
   }
-  transport->ForgetIncomingStream(stream_id);
+  transport->ForgetIncomingStream(stream_id, has_received_close);
 }
 
 }  // namespace
@@ -31,7 +32,8 @@ ReceiveStream::ReceiveStream(ScriptState* script_state,
                              WebTransport* web_transport,
                              uint32_t stream_id,
                              mojo::ScopedDataPipeConsumerHandle handle)
-    : incoming_stream_(MakeGarbageCollected<IncomingStream>(
+    : ReadableStream(script_state),
+      incoming_stream_(MakeGarbageCollected<IncomingStream>(
           script_state,
           BindOnce(ForgetStream, WrapWeakPersistent(web_transport), stream_id),
           std::move(handle))) {}

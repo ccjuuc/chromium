@@ -14,6 +14,7 @@
 #include "base/memory/raw_ref.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/bind_post_task.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/first_run/first_run_internal.h"
@@ -53,7 +54,7 @@ void RecordImportBookmarksResult(FirstRunImportBookmarksResult result) {
 class FirstRunBookmarkImporter {
  public:
   static void Import(Profile& profile,
-                     const base::Value::Dict& bookmarks_dict,
+                     const base::DictValue& bookmarks_dict,
                      bookmarks::BookmarkModel& bookmark_model) {
     FirstRunBookmarkImporter(profile, bookmark_model)
         .BeginImport(bookmarks_dict);
@@ -74,7 +75,7 @@ class FirstRunBookmarkImporter {
     }
   }
 
-  void BeginImport(const base::Value::Dict& bookmarks_to_import) const {
+  void BeginImport(const base::DictValue& bookmarks_to_import) const {
     bookmark_model_->BeginExtensiveChanges();
     absl::Cleanup end_changes = [this] {
       bookmark_model_->EndExtensiveChanges();
@@ -90,9 +91,9 @@ class FirstRunBookmarkImporter {
   // Recursive helper that walks the JSON dictionary and creates matching
   // bookmark nodes.
   void ImportBookmarksAndFoldersRecursively(
-      const base::Value::Dict& folder_node_dict,
+      const base::DictValue& folder_node_dict,
       const bookmarks::BookmarkNode* parent) const {
-    const base::Value::List* children =
+    const base::ListValue* children =
         folder_node_dict.FindList(kImportBookmarksChildrenKey);
     if (!children) {
       return;
@@ -102,7 +103,7 @@ class FirstRunBookmarkImporter {
     size_t index = parent->children().size();
 
     for (const auto& child_value : *children) {
-      const base::Value::Dict* child_dict = child_value.GetIfDict();
+      const base::DictValue* child_dict = child_value.GetIfDict();
       if (!child_dict) {
         continue;
       }
@@ -201,7 +202,7 @@ class FirstRunBookmarkImporter {
 namespace first_run {
 
 void StartBookmarkImportFromDict(Profile* profile,
-                                 base::Value::Dict bookmarks_dict) {
+                                 base::DictValue bookmarks_dict) {
   std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive =
       ScopedProfileKeepAlive::TryAcquire(
           profile,
@@ -211,7 +212,7 @@ void StartBookmarkImportFromDict(Profile* profile,
     return;
   }
 
-  base::Value::Dict* bookmarks_to_import =
+  base::DictValue* bookmarks_to_import =
       bookmarks_dict.FindDictByDottedPath(kImportBookmarksBookmarksKey);
 
   if (!bookmarks_to_import ||
@@ -235,15 +236,19 @@ void StartBookmarkImportFromDict(Profile* profile,
   // importer.
   bookmarks::ScheduleCallbackOnBookmarkModelLoad(
       *bookmark_model,
-      base::BindOnce(
+      // We shouldn't update the bookmark model while handling the
+      // BookmarkModelObserver notifications. Post the task to the sequenced
+      // task runner to ensure that the import is scheduled after the
+      // notification is handled by all observers.
+      base::BindPostTaskToCurrentDefault(base::BindOnce(
           [](std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive,
-             const base::Value::Dict& bookmarks,
+             const base::DictValue& bookmarks,
              bookmarks::BookmarkModel& bookmark_model_arg) {
             FirstRunBookmarkImporter::Import(*profile_keep_alive->profile(),
                                              bookmarks, bookmark_model_arg);
           },
           std::move(profile_keep_alive), std::move(*bookmarks_to_import),
-          std::ref(*bookmark_model)));
+          std::ref(*bookmark_model))));
 }
 
 }  // namespace first_run

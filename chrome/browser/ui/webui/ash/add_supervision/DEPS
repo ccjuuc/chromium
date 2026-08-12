@@ -14,15 +14,19 @@ include_rules = [
   "+chrome/browser/ash/app_list/arc",
   "+chrome/browser/ash/arc/session",
   "+chrome/browser/browser_process.h",
-  "+chrome/browser/lifetime",
   "+chrome/browser/profiles",
   "+chrome/browser/signin",
   "+chrome/browser/supervised_user",
-  "+chrome/browser/ui/browser_dialogs.h",
   "+chrome/browser/ui/browser.h",
+  "+chrome/browser/ui/dialogs/browser_dialogs.h",
   "+chrome/browser/ui/views/chrome_web_dialog_view.h",
   "+chrome/browser/ui/webui/ash/system_web_dialog",
-  "+chrome/common",
   "+chrome/grit",
   "+chrome/test",
 ]
+
+specific_include_rules = {
+  "add_supervision_ui\\.cc": [
+    "+chrome/browser/ui/webui/theme_source.h",
+  ],
+}

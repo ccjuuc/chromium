@@ -64,6 +64,11 @@ std::u16string TypeConverter<std::string_view>::ToString(
   return base::UTF8ToUTF16(source_value);
 }
 
+std::u16string TypeConverter<std::u16string_view>::ToString(
+    std::u16string_view source_value) {
+  return std::u16string(source_value);
+}
+
 std::u16string TypeConverter<GURL>::ToString(const GURL& source_value) {
   return base::ASCIIToUTF16(source_value.possibly_invalid_spec());
 }
@@ -137,8 +142,8 @@ std::u16string TypeConverter<std::string>::ToString(
 }
 
 std::u16string TypeConverter<std::u16string>::ToString(
-    const std::u16string& source_value) {
-  return source_value;
+    std::u16string_view source_value) {
+  return std::u16string(source_value);
 }
 
 std::u16string TypeConverter<ui::ColorVariant>::ToString(
@@ -247,8 +252,7 @@ std::optional<double> TypeConverter<double>::FromString(
 
 std::optional<GURL> ui::metadata::TypeConverter<GURL>::FromString(
     const std::u16string& source_value) {
-  const GURL url =
-      url_formatter::FixupURL(base::UTF16ToUTF8(source_value), std::string());
+  const GURL url = url_formatter::FixupURL(base::UTF16ToUTF8(source_value));
   return url.is_valid() ? std::make_optional(url) : std::nullopt;
 }
 

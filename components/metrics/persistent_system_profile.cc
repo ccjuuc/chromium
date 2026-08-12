@@ -11,7 +11,6 @@
 #include "base/atomicops.h"
 #include "base/bits.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/debug/crash_logging.h"
 #include "base/memory/singleton.h"
@@ -291,7 +290,7 @@ PersistentSystemProfile::~PersistentSystemProfile() = default;
 
 void PersistentSystemProfile::RegisterPersistentAllocator(
     base::PersistentMemoryAllocator* memory_allocator) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // Create and store the allocator. A `min_size` of "1" ensures that a memory
   // block is reserved now.
@@ -302,7 +301,7 @@ void PersistentSystemProfile::RegisterPersistentAllocator(
 
 void PersistentSystemProfile::DeregisterPersistentAllocator(
     base::PersistentMemoryAllocator* memory_allocator) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // This would be more efficient with a std::map but it's not expected that
   // allocators will get deregistered with any frequency, if at all.
@@ -314,7 +313,7 @@ void PersistentSystemProfile::DeregisterPersistentAllocator(
 void PersistentSystemProfile::SetSystemProfile(
     const std::string& serialized_profile,
     bool complete) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (allocators_.empty() || serialized_profile.empty()) {
     return;
@@ -358,7 +357,7 @@ void PersistentSystemProfile::SetSystemProfile(
 
 void PersistentSystemProfile::AddFieldTrial(std::string_view trial,
                                             std::string_view group) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!trial.empty());
 
   base::Pickle pickler;
@@ -369,7 +368,7 @@ void PersistentSystemProfile::AddFieldTrial(std::string_view trial,
 }
 
 void PersistentSystemProfile::RemoveFieldTrial(std::string_view trial) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!trial.empty());
 
   base::Pickle pickler;
@@ -458,9 +457,8 @@ void PersistentSystemProfile::MergeUpdateRecords(
           }
         }
 
-        base::Pickle pickler =
-            base::Pickle::WithUnownedBuffer(base::as_byte_span(record));
-        base::PickleIterator iter(pickler);
+        base::PickleIterator iter =
+            base::PickleIterator::WithData(base::as_byte_span(record));
         std::string_view trial;
         std::string_view group;
         if (iter.ReadStringPiece(&trial) && iter.ReadStringPiece(&group)) {

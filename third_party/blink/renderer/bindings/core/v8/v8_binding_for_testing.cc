@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
@@ -24,9 +25,7 @@ V8TestingScope::V8TestingScope(std::unique_ptr<DummyPageHolder> holder)
       context_(GetScriptState()->GetContext()),
       context_scope_(GetContext()),
       try_catch_(isolate_),
-      microtasks_scope_(isolate_,
-                        ToMicrotaskQueue(GetScriptState()),
-                        v8::MicrotasksScope::kDoNotRunMicrotasks) {
+      microtasks_scope_(GetScriptState()) {
   GetFrame().GetSettings()->SetScriptEnabled(true);
 }
 

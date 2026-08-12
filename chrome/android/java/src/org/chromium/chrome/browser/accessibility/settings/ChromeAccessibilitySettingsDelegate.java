@@ -5,13 +5,14 @@
 package org.chromium.chrome.browser.accessibility.settings;
 
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.dom_distiller.DomDistillerServiceFactory;
 import org.chromium.chrome.browser.image_descriptions.ImageDescriptionsController;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
 import org.chromium.components.browser_ui.accessibility.AccessibilitySettingsDelegate;
 import org.chromium.components.browser_ui.settings.SettingsNavigation;
+import org.chromium.components.dom_distiller.core.DistilledPagePrefs;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.content_public.browser.BrowserContextHandle;
 
@@ -22,8 +23,8 @@ public class ChromeAccessibilitySettingsDelegate implements AccessibilitySetting
             implements IntegerPreferenceDelegate {
         private final BrowserContextHandle mBrowserContextHandle;
 
-        public TextSizeContrastAccessibilityDelegate(BrowserContextHandle mBrowserContextHandle) {
-            this.mBrowserContextHandle = mBrowserContextHandle;
+        public TextSizeContrastAccessibilityDelegate(BrowserContextHandle browserContextHandle) {
+            mBrowserContextHandle = browserContextHandle;
         }
 
         @Override
@@ -44,9 +45,9 @@ public class ChromeAccessibilitySettingsDelegate implements AccessibilitySetting
         private final String mPreferenceKey;
 
         public ChromeBooleanPreferenceDelegate(
-                BrowserContextHandle mBrowserContextHandle, String mPreferenceKey) {
-            this.mBrowserContextHandle = mBrowserContextHandle;
-            this.mPreferenceKey = mPreferenceKey;
+                BrowserContextHandle browserContextHandle, String preferenceKey) {
+            mBrowserContextHandle = browserContextHandle;
+            mPreferenceKey = preferenceKey;
         }
 
         @Override
@@ -110,6 +111,11 @@ public class ChromeAccessibilitySettingsDelegate implements AccessibilitySetting
                 getBrowserContextHandle(), Pref.READER_FOR_ACCESSIBILITY);
     }
 
+    @Override
+    public DistilledPagePrefs getDistilledPagePrefs() {
+        return DomDistillerServiceFactory.getForProfile(mProfile).getDistilledPagePrefs();
+    }
+
     /**
      * Returns whether the material slider should be used for the page zoom preference.
      *
@@ -117,7 +123,7 @@ public class ChromeAccessibilitySettingsDelegate implements AccessibilitySetting
      */
     @Override
     public boolean shouldUseSlider() {
-        return ChromeFeatureList.sAndroidSettingsContainment.isEnabled();
+        return true;
     }
 
     /**
@@ -138,5 +144,10 @@ public class ChromeAccessibilitySettingsDelegate implements AccessibilitySetting
     @Override
     public void setCaretBrowsingEnabled(boolean enabled) {
         AccessibilitySettingsBridge.setCaretBrowsingEnabled(mProfile, enabled);
+    }
+
+    @Override
+    public String getCaretBrowsingPreferenceKey() {
+        return Pref.CARET_BROWSING_ENABLED;
     }
 }

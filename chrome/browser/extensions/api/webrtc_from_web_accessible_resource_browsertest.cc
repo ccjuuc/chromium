@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/command_line.h"
+#include "build/build_config.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/ui/browser.h"
 #include "components/permissions/permission_request_manager.h"
@@ -11,6 +12,11 @@
 #include "extensions/test/result_catcher.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+
+// This test does not run on Android because it is testing getUserMedia(), which
+// is not available in the service-worker-based extension renderers used with
+// manifest v3 (the only manifest version supported on Android).
+static_assert(!BUILDFLAG(IS_ANDROID));
 
 namespace extensions {
 
@@ -51,8 +57,16 @@ class WebRtcFromWebAccessibleResourceTest : public ExtensionApiTest {
 
 // Verify that a chrome-extension:// web accessible URL can successfully access
 // getUserMedia(), even if it is embedded in an insecure context.
+// TODO(crbug.com/538977465): Flaky on Win ASAN.
+#if BUILDFLAG(IS_WIN) && defined(ADDRESS_SANITIZER)
+#define MAYBE_GetUserMediaInWebAccessibleResourceSuccess \
+  DISABLED_GetUserMediaInWebAccessibleResourceSuccess
+#else
+#define MAYBE_GetUserMediaInWebAccessibleResourceSuccess \
+  GetUserMediaInWebAccessibleResourceSuccess
+#endif
 IN_PROC_BROWSER_TEST_F(WebRtcFromWebAccessibleResourceTest,
-                       GetUserMediaInWebAccessibleResourceSuccess) {
+                       MAYBE_GetUserMediaInWebAccessibleResourceSuccess) {
   ASSERT_TRUE(StartEmbeddedTestServer());
 
   LoadTestExtension();

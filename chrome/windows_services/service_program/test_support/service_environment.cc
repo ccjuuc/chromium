@@ -4,15 +4,21 @@
 
 #include "chrome/windows_services/service_program/test_support/service_environment.h"
 
+#include <windows.h>
+
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/base_paths.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/environment.h"
 #include "base/path_service.h"
 #include "chrome/common/env_vars.h"
 #include "chrome/windows_services/service_program/switches.h"
+#include "chrome/windows_services/service_program/test_support/scoped_install_service.h"
+#include "chrome/windows_services/service_program/test_support/scoped_log_grabber.h"
 
 namespace {
 
@@ -30,18 +36,25 @@ void AddUnattendedTestSwitch(base::CommandLine& command_line) {
 ServiceEnvironment::ServiceEnvironment(
     std::wstring_view display_name,
     base::FilePath::StringViewType service_exe_name,
-    std::string_view testing_switch,
+    base::span<const std::string_view> testing_switches,
     const CLSID& clsid,
     const IID& iid) {
   std::wstring service_name(display_name);
   std::erase(service_name, L' ');
+
+  const std::wstring mutex_name =
+      base::StrCat({L"Global\\", service_name, L"Mutex"});
+  mutex_.Set(::CreateMutexW(nullptr, FALSE, mutex_name.c_str()));
+  if (mutex_.is_valid()) {
+    ::WaitForSingleObject(mutex_.get(), INFINITE);
+  }
 
   base::CommandLine service_command(
       base::PathService::CheckedGet(base::DIR_EXE).Append(service_exe_name));
 
   AddUnattendedTestSwitch(service_command);
 
-  if (!testing_switch.empty()) {
+  for (const auto& testing_switch : testing_switches) {
     service_command.AppendSwitch(testing_switch);
   }
   log_grabber_.AddLoggingSwitches(service_command);
@@ -53,7 +66,13 @@ ServiceEnvironment::ServiceEnvironment(
   }
 }
 
-ServiceEnvironment::~ServiceEnvironment() = default;
+ServiceEnvironment::~ServiceEnvironment() {
+  service_.reset();
+  if (mutex_.is_valid()) {
+    ::ReleaseMutex(mutex_.get());
+    mutex_.Close();
+  }
+}
 
 base::Process ServiceEnvironment::GetRunningService() {
   return is_valid() && service_->is_valid() ? service_->GetRunningService()

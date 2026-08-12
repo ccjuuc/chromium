@@ -16,9 +16,8 @@ import type {MessageData, PrintPreviewParams} from './controller.js';
 import {PluginController} from './controller.js';
 import type {ViewerPageIndicatorElement} from './elements/viewer_page_indicator.js';
 import type {ViewerZoomToolbarElement} from './elements/viewer_zoom_toolbar.js';
-import {convertDocumentDimensionsMessage, convertLoadProgressMessage} from './message_converter.js';
-import {deserializeKeyEvent, LoadState, serializeKeyEvent} from './pdf_scripting_api.js';
-import type {KeyEventData} from './pdf_viewer_base.js';
+import {convertDocumentDimensionsMessage, convertLoadProgressMessage, convertSendKeyEventMessage} from './message_converter.js';
+import {LoadState, serializeKeyEvent} from './pdf_scripting_api.js';
 import {PdfViewerBaseElement} from './pdf_viewer_base.js';
 import {getCss} from './pdf_viewer_print.css.js';
 import {getHtml} from './pdf_viewer_print.html.js';
@@ -80,7 +79,7 @@ export class PdfViewerPrintElement extends PdfViewerBaseElement {
               assert(paths.length === 4);
               assert(paths[3] === 'print.pdf');
               // Valid Print Preview UI ID
-              assert(!Number.isNaN(parseInt(paths[1]!)));
+              assert(/^[0-9a-fA-F]{32}$/.test(paths[1]!));
               // Valid page index (can be negative for PDFs).
               assert(!Number.isNaN(parseInt(paths[2]!)));
               return url.toString();
@@ -256,9 +255,7 @@ export class PdfViewerPrintElement extends PdfViewerBaseElement {
         this.pluginController_.resetPrintPreviewMode(printPreviewData);
         return true;
       case 'sendKeyEvent':
-        const keyEvent =
-            deserializeKeyEvent((message.data as KeyEventData).keyEvent);
-        const extendedKeyEvent = keyEvent as ExtendedKeyEvent;
+        const extendedKeyEvent = convertSendKeyEventMessage(message.data);
         extendedKeyEvent.fromScriptingAPI = true;
         this.handleKeyEvent(extendedKeyEvent);
         return true;
@@ -292,7 +289,7 @@ export class PdfViewerPrintElement extends PdfViewerBaseElement {
 
   override handlePluginMessage(e: CustomEvent<MessageData>) {
     const data = e.detail;
-    switch (data.type.toString()) {
+    switch (data.type) {
       case 'documentDimensions':
         this.setDocumentDimensions(convertDocumentDimensionsMessage(data));
         return;
@@ -306,8 +303,7 @@ export class PdfViewerPrintElement extends PdfViewerBaseElement {
         this.handlePrintPreviewLoaded_();
         return;
       case 'sendKeyEvent':
-        const keyEvent = deserializeKeyEvent((data as KeyEventData).keyEvent) as
-            ExtendedKeyEvent;
+        const keyEvent = convertSendKeyEventMessage(data);
         keyEvent.fromPlugin = true;
         this.handleKeyEvent(keyEvent);
         return;

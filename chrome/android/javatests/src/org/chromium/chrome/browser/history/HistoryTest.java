@@ -4,24 +4,25 @@
 
 package org.chromium.chrome.browser.history;
 
-import static androidx.test.espresso.Espresso.onView;
-import static androidx.test.espresso.action.ViewActions.click;
-import static androidx.test.espresso.assertion.ViewAssertions.matches;
+import static androidx.test.espresso.matcher.ViewMatchers.hasDescendant;
+import static androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom;
+import static androidx.test.espresso.matcher.ViewMatchers.isDescendantOfA;
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
+import static androidx.test.espresso.matcher.ViewMatchers.withContentDescription;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
+import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
-import static org.hamcrest.Matchers.not;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import static org.chromium.base.test.transit.ViewFinder.expectNoView;
+import static org.chromium.base.test.transit.ViewFinder.expectView;
+import static org.chromium.base.test.transit.ViewFinder.waitForNoView;
+import static org.chromium.base.test.transit.ViewFinder.waitForView;
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalHistoryUrl;
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeHistoryUrl;
-import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNonNativeHistoryUrl;
-import static org.chromium.ui.test.util.ViewUtils.VIEW_NULL;
-import static org.chromium.ui.test.util.ViewUtils.onViewWaiting;
-import static org.chromium.ui.test.util.ViewUtils.waitForViewCheckingState;
 
 import android.graphics.Bitmap;
 
@@ -30,6 +31,7 @@ import androidx.test.filters.MediumTest;
 import androidx.test.filters.SmallTest;
 import androidx.test.platform.app.InstrumentationRegistry;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -39,9 +41,15 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.base.ui.KeyboardUtils;
+import org.chromium.chrome.R;
+import org.chromium.chrome.browser.browsing_data.BrowsingDataBridge;
+import org.chromium.chrome.browser.browsing_data.BrowsingDataType;
+import org.chromium.chrome.browser.browsing_data.TimePeriod;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
@@ -49,9 +57,8 @@ import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelper;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.util.ActivityTestUtils;
 import org.chromium.chrome.test.util.MenuUtils;
 import org.chromium.chrome.test.util.browser.signin.SigninTestRule;
@@ -88,8 +95,8 @@ public class HistoryTest {
     }
 
     @Rule
-    public FreshCtaTransitTestRule mActivityTestRule =
-            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     @Rule public SigninTestRule mSigninTestRule = new SigninTestRule();
 
@@ -101,8 +108,20 @@ public class HistoryTest {
                 });
     }
 
+    @After
+    public void tearDown() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    BrowsingDataBridge.getForProfile(ProfileManager.getLastUsedRegularProfile())
+                            .clearBrowsingData(
+                                    () -> {},
+                                    new int[] {BrowsingDataType.HISTORY},
+                                    TimePeriod.ALL_TIME);
+                });
+    }
+
     /**
-     * Check that the favicons for {@link getOriginalNonNativeHistoryUrl()} and for {@link
+     * Check that the favicons for {@link getOriginalHistoryUrl()} and for {@link
      * getOriginalNativeHistoryUrl()} are identical.
      */
     @Test
@@ -111,9 +130,13 @@ public class HistoryTest {
         mActivityTestRule.startOnBlankPage();
 
         FaviconHelper helper = ThreadUtils.runOnUiThreadBlocking(FaviconHelper::new);
-        // If the returned favicons are non-null Bitmap#sameAs() should be used.
-        assertNull(getFavicon(helper, new GURL(getOriginalNonNativeHistoryUrl())));
-        assertNull(getFavicon(helper, new GURL(getOriginalNativeHistoryUrl())));
+
+        Bitmap nonNativeFavicon = getFavicon(helper, new GURL(getOriginalHistoryUrl()));
+        Bitmap nativeFavicon = getFavicon(helper, new GURL(getOriginalNativeHistoryUrl()));
+
+        assertNotNull(nonNativeFavicon);
+        assertNotNull(nativeFavicon);
+        assertTrue(nonNativeFavicon.sameAs(nativeFavicon));
     }
 
     public Bitmap getFavicon(FaviconHelper helper, GURL pageUrl) throws TimeoutException {
@@ -121,7 +144,11 @@ public class HistoryTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     helper.getLocalFaviconImageForURL(
-                            ProfileManager.getLastUsedRegularProfile(), pageUrl, 0, waiter);
+                            ProfileManager.getLastUsedRegularProfile(),
+                            pageUrl,
+                            0,
+                            /* fallbackToHost= */ true,
+                            waiter);
                 });
         return waiter.waitForFavicon();
     }
@@ -145,25 +172,24 @@ public class HistoryTest {
         String testUrl = "/chrome/test/data/android/google.html";
         mActivityTestRule.loadUrl(mActivityTestRule.getTestServer().getURL(testUrl));
 
-        mActivityTestRule.loadUrlInNewTab(getOriginalNonNativeHistoryUrl());
+        mActivityTestRule.loadUrlInNewTab(getOriginalHistoryUrl());
 
         // Verify that the promo is shown.
-        onViewWaiting(withId(R.id.signin_promo_view_container));
+        waitForView(withId(R.id.signin_promo_view_container));
         // Click on the promo CTA.
-        onView(withId(R.id.sync_promo_signin_button)).perform(click());
+        expectView(withId(R.id.sync_promo_signin_button)).click();
 
         // Verify that the history sync screen is shown.
-        onViewWaiting(withId(R.id.history_sync_illustration), /* checkRootDialog= */ true)
-                .check(matches(isDisplayed()));
+        waitForView(withId(R.id.history_sync_illustration));
 
         // Opt-in history sync and finish the opt-in activity.
-        onViewWaiting(withId(R.id.button_primary)).perform(click());
+        waitForView(withId(R.id.button_primary)).click();
         SyncTestUtil.waitForHistorySyncEnabled();
 
         // Verify that the content is still shown and the promo is dismissed.
-        waitForViewCheckingState(withId(R.id.signin_promo_view_container), VIEW_NULL);
-        onView(withId(R.id.history_page_recycler_view)).check(matches(isDisplayed()));
-        onView(withId(R.id.empty_state_container)).check(matches(not(isDisplayed())));
+        waitForNoView(withId(R.id.signin_promo_view_container));
+        expectView(withId(R.id.history_page_recycler_view));
+        expectNoView(withId(R.id.empty_state_container));
     }
 
     @Test
@@ -186,24 +212,23 @@ public class HistoryTest {
                 });
         mActivityTestRule.startOnBlankPage();
 
-        mActivityTestRule.loadUrlInNewTab(getOriginalNonNativeHistoryUrl());
+        mActivityTestRule.loadUrlInNewTab(getOriginalHistoryUrl());
 
         // Verify that the promo is shown.
-        onViewWaiting(withId(R.id.signin_promo_view_container));
+        waitForView(withId(R.id.signin_promo_view_container));
         // Click on the promo CTA.
-        onView(withId(R.id.sync_promo_signin_button)).perform(click());
+        expectView(withId(R.id.sync_promo_signin_button)).click();
 
         // Verify that the history sync screen is shown.
-        onViewWaiting(withId(R.id.history_sync_illustration), /* checkRootDialog= */ true)
-                .check(matches(isDisplayed()));
+        waitForView(withId(R.id.history_sync_illustration));
 
         // Opt-in history sync and finish the opt-in activity.
-        onViewWaiting(withId(R.id.button_primary)).perform(click());
+        waitForView(withId(R.id.button_primary)).click();
         SyncTestUtil.waitForHistorySyncEnabled();
 
         // Verify that the empty state is shown when the promo is dismissed.
-        onViewWaiting(withId(R.id.empty_state_container)).check(matches(isDisplayed()));
-        onView(withId(R.id.history_page_recycler_view)).check(matches(not(isDisplayed())));
+        waitForView(withId(R.id.empty_state_container));
+        expectNoView(withId(R.id.history_page_recycler_view));
     }
 
     @MediumTest
@@ -251,5 +276,161 @@ public class HistoryTest {
                 });
 
         historyActivity.finish();
+    }
+
+    @Test
+    @MediumTest
+    @Features.EnableFeatures(ChromeFeatureList.ANDROID_HISTORY_CLUSTERING)
+    public void testHistoryClustering_ExpandCollapse() throws Exception {
+        mActivityTestRule.startOnBlankPage();
+        String urlOne =
+                mActivityTestRule
+                        .getTestServer()
+                        .getURL("/chrome/test/data/android/navigate/one.html");
+        String urlTwo =
+                mActivityTestRule
+                        .getTestServer()
+                        .getURL("/chrome/test/data/android/navigate/two.html");
+        String domain = new GURL(urlOne).getHost();
+
+        mActivityTestRule.loadUrl(urlOne);
+        mActivityTestRule.loadUrl(urlTwo);
+
+        mActivityTestRule.loadUrlInNewTab(getOriginalHistoryUrl());
+
+        waitForView(withId(R.id.history_page_recycler_view));
+        KeyboardUtils.hideAndroidSoftKeyboard(
+                mActivityTestRule.getActivity().getWindow().getDecorView());
+
+        // Initial state: cluster is collapsed. "One" and "Two" should not be displayed.
+        waitForView(withText(domain));
+
+        expectNoView(withText("One"));
+        expectNoView(withText("Two"));
+
+        // Click on the expand button. It has the content description "Expand"
+        expectView(
+                        org.hamcrest.Matchers.allOf(
+                                withContentDescription(
+                                        mActivityTestRule
+                                                .getActivity()
+                                                .getString(R.string.accessibility_expand_section)),
+                                isDisplayed()))
+                .click();
+
+        // Now "One" and "Two" should be displayed.
+        waitForView(withText("One"));
+        waitForView(withText("Two"));
+
+        // Click on the collapse button.
+        expectView(
+                        org.hamcrest.Matchers.allOf(
+                                withContentDescription(
+                                        mActivityTestRule
+                                                .getActivity()
+                                                .getString(
+                                                        R.string.accessibility_collapse_section)),
+                                isDisplayed()))
+                .click();
+
+        // "One" and "Two" should be hidden.
+        waitForNoView(withText("One"));
+        waitForNoView(withText("Two"));
+    }
+
+    @Test
+    @MediumTest
+    @Features.EnableFeatures(ChromeFeatureList.ANDROID_HISTORY_CLUSTERING)
+    // Flaky: crbug.com/493318914
+    @DisableIf.Device(DeviceFormFactor.DESKTOP)
+    public void testHistoryClustering_RemoveItem() throws Exception {
+        mActivityTestRule.startOnBlankPage();
+        String urlOne =
+                mActivityTestRule
+                        .getTestServer()
+                        .getURL("/chrome/test/data/android/navigate/one.html");
+        String urlTwo =
+                mActivityTestRule
+                        .getTestServer()
+                        .getURL("/chrome/test/data/android/navigate/two.html");
+        String domain = new GURL(urlOne).getHost();
+
+        mActivityTestRule.loadUrl(urlOne);
+        mActivityTestRule.loadUrl(urlTwo);
+
+        mActivityTestRule.loadUrlInNewTab(getOriginalHistoryUrl());
+
+        waitForView(withId(R.id.history_page_recycler_view));
+        KeyboardUtils.hideAndroidSoftKeyboard(
+                mActivityTestRule.getActivity().getWindow().getDecorView());
+
+        // Expand the cluster.
+        waitForView(
+                        org.hamcrest.Matchers.allOf(
+                                withContentDescription(
+                                        mActivityTestRule
+                                                .getActivity()
+                                                .getString(R.string.accessibility_expand_section)),
+                                isDisplayed()))
+                .click();
+
+        // Wait for items to be visible.
+        waitForView(withText("One"));
+
+        // Remove "One".
+        expectView(
+                        org.hamcrest.Matchers.allOf(
+                                withId(R.id.end_button),
+                                withContentDescription(R.string.remove),
+                                isDescendantOfA(
+                                        org.hamcrest.Matchers.allOf(
+                                                hasDescendant(withText("One")),
+                                                isAssignableFrom(HistoryItemView.class)))))
+                .click();
+
+        // "One" should disappear.
+        waitForNoView(withText("One"));
+
+        // The cluster should dissolve, so "Two" is visible as a normal item.
+        waitForView(withText("Two"));
+    }
+
+    @Test
+    @MediumTest
+    @Features.EnableFeatures(ChromeFeatureList.ANDROID_HISTORY_CLUSTERING)
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // Flaky on desktop crbug.com/498132516
+    public void testHistoryClustering_RemoveCluster() throws Exception {
+        mActivityTestRule.startOnBlankPage();
+        String urlOne =
+                mActivityTestRule
+                        .getTestServer()
+                        .getURL("/chrome/test/data/android/navigate/one.html");
+        String urlTwo =
+                mActivityTestRule
+                        .getTestServer()
+                        .getURL("/chrome/test/data/android/navigate/two.html");
+        String domain = new GURL(urlOne).getHost();
+
+        mActivityTestRule.loadUrl(urlOne);
+        mActivityTestRule.loadUrl(urlTwo);
+
+        mActivityTestRule.loadUrlInNewTab(getOriginalHistoryUrl());
+
+        waitForView(withId(R.id.history_page_recycler_view));
+        KeyboardUtils.hideAndroidSoftKeyboard(
+                mActivityTestRule.getActivity().getWindow().getDecorView());
+
+        // Verify the cluster is created and select it.
+        waitForView(withText(domain)).longPress();
+
+        // Click delete on the toolbar.
+        waitForView(withId(R.id.selection_mode_delete_menu_id)).click();
+
+        // Ensure "domain" is removed.
+        waitForNoView(withText(domain));
+
+        // Also ensure the items are actually removed (they shouldn't be visible).
+        waitForNoView(withText("One"));
+        waitForNoView(withText("Two"));
     }
 }

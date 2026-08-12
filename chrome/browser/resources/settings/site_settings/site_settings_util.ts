@@ -51,6 +51,8 @@ export function getLocalizationStringForContentType(
       return 'siteSettingsIdleDetectionMidSentence';
     case ContentSettingsTypes.IMAGES:
       return 'siteSettingsImagesMidSentence';
+    case ContentSettingsTypes.INLINE_CUE_MENU:
+      return 'siteSettingsInlineCueMenuMidSentence';
     case ContentSettingsTypes.JAVASCRIPT:
       return 'siteSettingsJavascriptMidSentence';
     case ContentSettingsTypes.JAVASCRIPT_OPTIMIZER:
@@ -59,8 +61,6 @@ export function getLocalizationStringForContentType(
       return 'siteSettingsKeyboardLockMidSentence';
     case ContentSettingsTypes.LOCAL_FONTS:
       return 'siteSettingsFontAccessMidSentence';
-    case ContentSettingsTypes.LOCAL_NETWORK_ACCESS:
-      return 'siteSettingsLocalNetworkAccessMidSentence';
     case ContentSettingsTypes.LOCAL_NETWORK:
       return 'siteSettingsLocalNetworkMidSentence';
     case ContentSettingsTypes.LOOPBACK_NETWORK:
@@ -107,9 +107,7 @@ export function getLocalizationStringForContentType(
     case ContentSettingsTypes.ANTI_ABUSE:
     case ContentSettingsTypes.PDF_DOCUMENTS:
     case ContentSettingsTypes.PERFORMANCE:
-    case ContentSettingsTypes.PRIVATE_NETWORK_DEVICES:
     case ContentSettingsTypes.SITE_DATA:
-    case ContentSettingsTypes.TRACKING_PROTECTION:
     case ContentSettingsTypes.OFFER_WRITING_HELP:
     case ContentSettingsTypes.SMART_CARD_READERS:
       return null;

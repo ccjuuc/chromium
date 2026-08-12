@@ -4,6 +4,7 @@
 
 import("//mojo/public/tools/bindings/mojom.gni")
 
+# TODO(https://crbug.com/544795244): Investigate making this target testonly.
 mojom("test_mojom") {
   sources = [ "browser_test_interfaces.mojom" ]
 
@@ -18,6 +19,10 @@ mojom("test_mojom") {
     {
       types = [
         {
+          mojom = "device_test.mojom.LayerData"
+          cpp = "::device::LayerData"
+        },
+        {
           mojom = "device_test.mojom.ViewData"
           cpp = "::device::ViewData"
         },
@@ -30,18 +35,21 @@ mojom("test_mojom") {
           cpp = "::device::ControllerFrameData"
         },
         {
-          mojom = "device_test.mojom.XRVisibilityMask"
-          cpp = "::device::VisibilityMaskData"
-        },
-        {
           mojom = "device_test.mojom.ControllerRole"
           cpp = "::device::ControllerRole"
         },
       ]
       traits_headers = [
         "//device/vr/public/mojom/test/browser_test_interfaces_mojom_traits.h",
+        "//device/vr/public/mojom/test/controller_frame_data.h",
+        "//device/vr/public/mojom/test/device_config.h",
+        "//device/vr/public/mojom/test/layer_data.h",
+        "//device/vr/public/mojom/test/view_data.h",
       ]
-      traits_public_deps = [ ":vr_public_test_typemaps" ]
+      traits_public_deps = [
+        ":vr_public_test_typemaps",
+        "//device/vr/public/mojom:vr_service",
+      ]
     },
   ]
 }
@@ -56,8 +64,9 @@ component("vr_public_test_typemaps") {
     "controller_frame_data.cc",
     "controller_frame_data.h",
     "device_config.h",
+    "layer_data.cc",
+    "layer_data.h",
     "view_data.h",
-    "visibility_mask.h",
   ]
 
   deps = [
@@ -66,8 +75,5 @@ component("vr_public_test_typemaps") {
     "//ui/gfx/mojom",
   ]
 
-  public_deps = [
-    ":test_mojom_shared",
-    "//device/vr/public/mojom:vr_service_shared",
-  ]
+  public_deps = [ "//device/vr/public/mojom:vr_service" ]
 }

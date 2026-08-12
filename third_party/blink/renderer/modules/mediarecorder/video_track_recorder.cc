@@ -11,6 +11,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/common/task_annotator.h"
 #include "base/task/sequenced_task_runner.h"
@@ -47,7 +48,6 @@
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_component.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/bind_post_task.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier_base.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier_media.h"
@@ -482,7 +482,7 @@ void VideoTrackRecorderImpl::Encoder::StartFrameEncode(
   const bool is_format_supported =
       (video_frame->HasMappableSharedImage() &&
        video_frame->format() == media::PIXEL_FORMAT_NV12) ||
-      (video_frame->IsMappable() &&
+      (video_frame->HasDirectCpuAccess() &&
        (video_frame->format() == media::PIXEL_FORMAT_NV12 ||
         video_frame->format() == media::PIXEL_FORMAT_I420 ||
         video_frame->format() == media::PIXEL_FORMAT_I420A));
@@ -542,7 +542,8 @@ VideoTrackRecorderImpl::Encoder::MaybeProvideEncodableFrame(
   DVLOG(3) << __func__;
   scoped_refptr<media::VideoFrame> frame;
   const bool is_opaque = media::IsOpaque(video_frame->format());
-  if (media::IsRGB(video_frame->format()) && video_frame->IsMappable()) {
+  if (media::IsRGB(video_frame->format()) &&
+      video_frame->HasDirectCpuAccess()) {
     // It's a mapped RGB frame, no readback needed,
     // all we need is to convert RGB to I420
     auto visible_rect = video_frame->visible_rect();
@@ -635,12 +636,12 @@ VideoTrackRecorderImpl::Encoder::MaybeProvideEncodableFrame(
             static_cast<uint8_t*>(pixmap.writable_addr()),
             pixmap.computeByteSize(),
             frame->GetWritableVisibleData(media::VideoFrame::Plane::kY),
-            frame->stride(media::VideoFrame::Plane::kY),
+            static_cast<int>(frame->stride(media::VideoFrame::Plane::kY)),
             frame->GetWritableVisibleData(media::VideoFrame::Plane::kU),
-            frame->stride(media::VideoFrame::Plane::kU),
+            static_cast<int>(frame->stride(media::VideoFrame::Plane::kU)),
             frame->GetWritableVisibleData(media::VideoFrame::Plane::kV),
-            frame->stride(media::VideoFrame::Plane::kV), 0 /* crop_x */,
-            0 /* crop_y */, pixmap.width(), pixmap.height(),
+            static_cast<int>(frame->stride(media::VideoFrame::Plane::kV)),
+            0 /* crop_x */, 0 /* crop_y */, pixmap.width(), pixmap.height(),
             old_visible_size.width(), old_visible_size.height(),
             libyuv::kRotate0, source_pixel_format) != 0) {
       DLOG(ERROR) << "Error converting frame to I420";
@@ -652,8 +653,8 @@ VideoTrackRecorderImpl::Encoder::MaybeProvideEncodableFrame(
           static_cast<uint8_t*>(pixmap.writable_addr()),
           static_cast<int>(pixmap.rowBytes()) /* stride */,
           frame->GetWritableVisibleData(media::VideoFrame::Plane::kA),
-          frame->stride(media::VideoFrame::Plane::kA), pixmap.width(),
-          pixmap.height());
+          static_cast<int>(frame->stride(media::VideoFrame::Plane::kA)),
+          pixmap.width(), pixmap.height());
     }
   }
   return frame;
@@ -683,13 +684,14 @@ VideoTrackRecorderImpl::Encoder::ConvertToI420ForSoftwareEncoder(
       media::VideoPixelFormat::PIXEL_FORMAT_I420, frame->coded_size(),
       frame->visible_rect(), frame->natural_size(), frame->timestamp());
   auto ret = libyuv::NV12ToI420(
-      frame->data(0), frame->stride(0), frame->data(1), frame->stride(1),
+      frame->data(0), static_cast<int>(frame->stride(0)), frame->data(1),
+      static_cast<int>(frame->stride(1)),
       i420_frame->writable_data(media::VideoFrame::Plane::kY),
-      i420_frame->stride(media::VideoFrame::Plane::kY),
+      static_cast<int>(i420_frame->stride(media::VideoFrame::Plane::kY)),
       i420_frame->writable_data(media::VideoFrame::Plane::kU),
-      i420_frame->stride(media::VideoFrame::Plane::kU),
+      static_cast<int>(i420_frame->stride(media::VideoFrame::Plane::kU)),
       i420_frame->writable_data(media::VideoFrame::Plane::kV),
-      i420_frame->stride(media::VideoFrame::Plane::kV),
+      static_cast<int>(i420_frame->stride(media::VideoFrame::Plane::kV)),
       frame->coded_size().width(), frame->coded_size().height());
   if (ret) {
     return frame;
@@ -829,8 +831,9 @@ VideoTrackRecorderImpl::~VideoTrackRecorderImpl() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(main_sequence_checker_);
   DisconnectFromTrack();
 
-  UMA_HISTOGRAM_COUNTS_100("Media.MediaRecorder.TrackTransformationChangeCount",
-                           num_video_transformation_changes_);
+  UMA_HISTOGRAM_COUNTS_100(
+      "Media.MediaRecorder.TrackTransformationChangeCount",
+      base::saturated_cast<int>(num_video_transformation_changes_));
 }
 
 void VideoTrackRecorderImpl::OnEncoderSupportKnown() {

@@ -16,7 +16,8 @@ class WebUIBrowserModalDialogHost
   explicit WebUIBrowserModalDialogHost(WebUIBrowserWindow* window);
   ~WebUIBrowserModalDialogHost() override;
 
-  void NotifyPositionRequiresUpdate();
+  // web_modal::WebContentsModalDialogHost:
+  void NotifyPositionRequiresUpdate() override;
 
   gfx::NativeView GetHostView() const override;
   gfx::Point GetDialogPosition(const gfx::Size& size) override;
@@ -27,7 +28,7 @@ class WebUIBrowserModalDialogHost
   void RemoveObserver(web_modal::ModalDialogHostObserver* observer) override;
 
  private:
-  base::ObserverList<web_modal::ModalDialogHostObserver>::Unchecked observers_;
+  base::ObserverList<web_modal::ModalDialogHostObserver> observers_;
 
   raw_ptr<WebUIBrowserWindow> browser_window_;
 };

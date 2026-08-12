@@ -79,11 +79,23 @@ std::optional<SessionID> TestTabStripModelDelegate::CreateHistoricalTab(
 void TestTabStripModelDelegate::CreateHistoricalGroup(
     const tab_groups::TabGroupId& group) {}
 
+void TestTabStripModelDelegate::CreateHistoricalSplit(
+    const split_tabs::SplitTabId& split_id) {}
+
 void TestTabStripModelDelegate::GroupAdded(
     const tab_groups::TabGroupId& group) {}
 
 void TestTabStripModelDelegate::WillCloseGroup(
     const tab_groups::TabGroupId& group) {}
+
+void TestTabStripModelDelegate::WillCloseSplit(
+    const split_tabs::SplitTabId& split_id) {}
+
+void TestTabStripModelDelegate::SplitClosed(
+    const split_tabs::SplitTabId& split_id) {}
+
+void TestTabStripModelDelegate::SplitCloseStopped(
+    const split_tabs::SplitTabId& split_id) {}
 
 void TestTabStripModelDelegate::GroupCloseStopped(
     const tab_groups::TabGroupId& group) {}
@@ -127,6 +139,7 @@ bool TestTabStripModelDelegate::IsNormalWindow() {
 
 void TestTabStripModelDelegate::NewSplitTab(
     std::vector<int> indices,
+    split_tabs::SplitTabLayout layout,
     split_tabs::SplitTabCreatedSource source) {}
 
 BrowserWindowInterface* TestTabStripModelDelegate::GetBrowserWindowInterface() {
@@ -146,20 +159,10 @@ void TestTabStripModelDelegate::OnRemovingAllTabsFromGroups(
   std::move(callback).Run();
 }
 
-#if BUILDFLAG(ENABLE_GLIC)
-bool TestTabStripModelDelegate::IsTabGlicPinned(tabs::TabHandle tab_handle) {
-  return true;
-}
+void TestTabStripModelDelegate::GlicUnpinTabsFromAllConversations(
+    base::span<const tabs::TabHandle> tab_handles) {}
 
-bool TestTabStripModelDelegate::GlicPinTabs(
-    base::span<const tabs::TabHandle> tab_handles) {
-  return true;
-}
-
-bool TestTabStripModelDelegate::GlicUnpinTabs(
-    base::span<const tabs::TabHandle> tab_handles) {
-  return true;
-}
-
-void TestTabStripModelDelegate::OpenGlicWindowFromSharedTab() {}
-#endif
+void TestTabStripModelDelegate::CloseTab(
+    const tabs::TabInterface* tab,
+    CloseTabSource source,
+    base::OnceCallback<void(CloseTabSource)> on_approved) {}

@@ -18,15 +18,18 @@ source_set("extensions") {
     "//chrome/browser/background",
     "//chrome/browser/extensions",
     "//chrome/browser/profiles:profile_util",
-    "//chrome/browser/startup",
     "//chrome/browser/status_icons",
-    "//chrome/browser/ui:browser_list",
+    "//chrome/browser/ui/browser_window",
     "//components/prefs",
     "//extensions/browser",
   ]
 
   if (!is_android) {
     deps += [ "//components/keep_alive_registry" ]
+  }
+
+  if (is_win) {
+    deps += [ "//chrome/browser/startup" ]
   }
 }
 
@@ -54,18 +57,21 @@ source_set("impl") {
     "//chrome/app/theme:chrome_unscaled_resources_grit",
     "//chrome/browser:browser_process",
     "//chrome/browser:browser_public_dependencies",
-    "//chrome/browser/apps/app_service:constants",
     "//chrome/browser/background",
     "//chrome/browser/extensions",
+    "//chrome/browser/glic",
+    "//chrome/browser/lifetime",
     "//chrome/browser/lifetime:termination_notification",
+    "//chrome/browser/profiles:profile_manager",
     "//chrome/browser/profiles/keep_alive",
-    "//chrome/browser/startup",
     "//chrome/browser/status_icons",
     "//chrome/browser/ui",
+    "//chrome/browser/ui/dialogs",
     "//chrome/browser/ui/extensions",
     "//chrome/browser/ui/profiles",
     "//components/crx_file",
     "//components/prefs",
+    "//components/services/app_service",
     "//components/startup_metric_utils",
     "//content/public/browser",
     "//extensions/browser",
@@ -73,15 +79,18 @@ source_set("impl") {
   ]
 
   if (!is_android) {
-    deps += [ "//components/keep_alive_registry" ]
-  }
-
-  if (enable_glic) {
-    deps += [ "//chrome/browser/glic" ]
+    deps += [
+      "//chrome/browser/ui:chrome_pages",
+      "//components/keep_alive_registry",
+    ]
   }
 
   if (!is_chromeos) {
     deps += [ "//chrome/browser/web_applications/extensions" ]
+  }
+
+  if (is_win) {
+    deps += [ "//chrome/browser/startup" ]
   }
 }
 
@@ -97,7 +106,7 @@ source_set("unit_tests") {
     "//base",
     "//chrome/browser:browser_process",
     "//chrome/browser/background",
-    "//chrome/browser/startup",
+    "//chrome/browser/lifetime",
     "//chrome/browser/status_icons",
     "//chrome/test:test_support",
     "//components/policy/core/common:test_support",
@@ -109,4 +118,8 @@ source_set("unit_tests") {
     "//testing/gtest",
     "//ui/message_center/public/cpp",
   ]
+
+  if (is_win) {
+    deps += [ "//chrome/browser/startup" ]
+  }
 }

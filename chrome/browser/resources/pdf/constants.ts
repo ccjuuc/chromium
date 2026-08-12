@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 // <if expr="enable_pdf_ink2">
+type Typeface = chrome.pdfViewerPrivate.Typeface;
+
 export enum AnnotationMode {
   OFF = 'off',
   DRAW = 'draw',
@@ -14,6 +16,12 @@ export enum AnnotationBrushType {
   ERASER = 'eraser',
   HIGHLIGHTER = 'highlighter',
   PEN = 'pen',
+}
+
+export enum TextAnnotationSource {
+  USER = 'user',
+  UNDO = 'undo',
+  REDO = 'redo',
 }
 
 export interface Color {
@@ -32,35 +40,56 @@ export interface AnnotationBrush {
 
 export interface TextAnnotation {
   id: number;
-  pageNumber: number;
+  // Stored because the backend requires it to be re-sent with every update.
+  // Not used by frontend code.
+  mojoTextInfo: ArrayBuffer;
+  pageIndex: number;
+  // Zoom level at TextAnnotation creation time. Stored for use by the backend
+  // on every update. Not used by frontend code.
+  pdfZoom: number;
   text: string;
   textAttributes: TextAttributes;
   // Location of the text box relative to the top left corner of the page
-  // specified by pageNumber. This rect is in screen coordinates in the UI,
+  // specified by pageIndex. This rect is in screen coordinates in the UI,
   // and is in page coordinates when this annotation is sent or received in
   // a message to/from the plugin.
   textBoxRect: TextBoxRect;
   // Orientation of the text in the box relative to the PDF page, in number of
   // clockwise rotations from 0 to 3.
   textOrientation: number;
+  // Orientation of the viewport when the annotation was committed, in number of
+  // clockwise rotations from 0 to 3.
+  viewportOrientation: number;
 }
 
+export interface TextAnnotationMessageData extends TextAnnotation {
+  isEdited: boolean;
+  // Serialized SkTypeface font data that the backend needs. Only contains
+  // fonts that the backend has never seen before.
+  newTypefaces: Typeface[];
+  source: TextAnnotationSource;
+}
+
+// LINT.IfChange(TextAlignment)
 export enum TextAlignment {
   LEFT = 'left',
   CENTER = 'center',
   RIGHT = 'right',
 }
+// LINT.ThenChange(//pdf/pdf_ink_text.h:TextAlignment)
 
 export enum TextStyle {
   BOLD = 'bold',
   ITALIC = 'italic',
 }
 
+// LINT.IfChange(TextTypeface)
 export enum TextTypeface {
   SANS_SERIF = 'sans-serif',
   SERIF = 'serif',
   MONOSPACE = 'monospace',
 }
+// LINT.ThenChange(//pdf/pdf_ink_text.h:TextTypeface)
 
 export type TextStyles = {
   [key in TextStyle]: boolean

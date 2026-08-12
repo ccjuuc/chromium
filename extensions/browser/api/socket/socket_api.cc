@@ -5,7 +5,6 @@
 #include "extensions/browser/api/socket/socket_api.h"
 
 #include <memory>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -39,6 +38,7 @@
 #include "net/log/net_log_with_source.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "extensions/browser/api/socket/app_firewall_hole_manager.h"
@@ -94,8 +94,18 @@ SocketApiFunction::ScopedWriteQuota::ScopedWriteQuota(SocketApiFunction* owner,
 }
 
 SocketApiFunction::ScopedWriteQuota::~ScopedWriteQuota() {
-  WriteQuotaChecker::Get(owner_->browser_context())
-      ->ReturnBytes(owner_->GetOriginId(), bytes_used_);
+  // Null check `BrowserContext` and `WriteQuotaChecker` since they could be
+  // released before `SocketApiFunction` during shutdown.
+  content::BrowserContext* const context = owner_->browser_context();
+  if (!context) {
+    return;
+  }
+  WriteQuotaChecker* const checker = WriteQuotaChecker::GetIfExists(context);
+  if (!checker) {
+    return;
+  }
+
+  checker->ReturnBytes(owner_->GetOriginId(), bytes_used_);
 }
 
 SocketApiFunction::SocketApiFunction() = default;
@@ -114,7 +124,7 @@ void SocketApiFunction::ReplaceSocket(int api_resource_id, Socket* socket) {
   manager_->Replace(GetOriginId(), api_resource_id, socket);
 }
 
-std::unordered_set<int>* SocketApiFunction::GetSocketIds() {
+absl::flat_hash_set<int>* SocketApiFunction::GetSocketIds() {
   return manager_->GetResourceIds(GetOriginId());
 }
 
@@ -164,7 +174,7 @@ ExtensionFunction::ResponseAction SocketApiFunction::Run() {
 ExtensionFunction::ResponseValue SocketApiFunction::ErrorWithCode(
     int error_code,
     const std::string& error) {
-  base::Value::List args;
+  base::ListValue args;
   args.Append(error_code);
   return ErrorWithArgumentsDoNotUse(std::move(args), error);
 }
@@ -313,7 +323,7 @@ ExtensionFunction::ResponseAction SocketCreateFunction::Work() {
 
   DCHECK(socket);
 
-  base::Value::Dict result;
+  base::DictValue result;
   result.Set(kSocketIdKey, AddSocket(socket));
   return RespondNow(WithArguments(std::move(result)));
 }
@@ -410,7 +420,7 @@ ExtensionFunction::ResponseAction SocketDisconnectFunction::Work() {
     socket->Disconnect(false /* socket_destroying */);
     return RespondNow(WithArguments(base::Value()));
   } else {
-    base::Value::List args;
+    base::ListValue args;
     args.Append(base::Value());
     return RespondNow(
         ErrorWithArgumentsDoNotUse(std::move(args), kSocketNotFoundError));
@@ -546,7 +556,7 @@ void SocketAcceptFunction::OnAccept(
     const std::optional<net::IPEndPoint>& remote_addr,
     mojo::ScopedDataPipeConsumerHandle receive_pipe_handle,
     mojo::ScopedDataPipeProducerHandle send_pipe_handle) {
-  base::Value::Dict result;
+  base::DictValue result;
   result.Set(kResultCodeKey, result_code);
   if (result_code == net::OK) {
     Socket* client_socket =
@@ -582,7 +592,7 @@ ExtensionFunction::ResponseAction SocketReadFunction::Work() {
 void SocketReadFunction::OnCompleted(int bytes_read,
                                      scoped_refptr<net::IOBuffer> io_buffer,
                                      bool socket_destroying) {
-  base::Value::Dict result;
+  base::DictValue result;
   result.Set(kResultCodeKey, bytes_read);
   base::span<const uint8_t> data_span;
   if (bytes_read > 0) {
@@ -629,7 +639,7 @@ ExtensionFunction::ResponseAction SocketWriteFunction::Work() {
 void SocketWriteFunction::OnCompleted(int bytes_written) {
   ReturnWriteQuota();
 
-  base::Value::Dict result;
+  base::DictValue result;
   result.Set(kBytesWrittenKey, bytes_written);
   Respond(WithArguments(std::move(result)));
 }
@@ -662,7 +672,7 @@ void SocketRecvFromFunction::OnCompleted(int bytes_read,
                                          bool socket_destroying,
                                          const std::string& address,
                                          uint16_t port) {
-  base::Value::Dict result;
+  base::DictValue result;
   result.Set(kResultCodeKey, bytes_read);
   base::span<const uint8_t> data_span;
   if (bytes_read > 0) {
@@ -1041,7 +1051,7 @@ ExtensionFunction::ResponseAction SocketGetJoinedGroupsFunction::Work() {
     return RespondNow(ErrorWithCode(-1, kPermissionError));
   }
 
-  base::Value::List values;
+  base::ListValue values;
   auto* udp_socket = static_cast<UDPSocket*>(socket);
   for (const std::string& group : udp_socket->GetJoinedGroups()) {
     values.Append(group);

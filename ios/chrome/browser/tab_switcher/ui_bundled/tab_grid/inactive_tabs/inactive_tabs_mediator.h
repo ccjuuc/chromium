@@ -10,12 +10,13 @@
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/grid_commands.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/grid_toolbars_configuration_provider.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/grid_view_controller_mutator.h"
+#import "ios/chrome/browser/tab_switcher/ui_bundled/tab_switcher_item_snapshot_and_favicon_data_source.h"
 
 @protocol InactiveTabsInfoConsumer;
 @class InactiveTabsMediator;
+class FaviconLoader;
 class PrefService;
-class TabsCloser;
-@protocol SnapshotStorage;
+class SnapshotBrowserAgent;
 @protocol TabCollectionConsumer;
 class WebStateList;
 
@@ -29,9 +30,11 @@ class WebStateList;
 
 // This mediator provides data to the Inactive Tabs grid and handles
 // interactions.
-@interface InactiveTabsMediator : NSObject <GridCommands,
-                                            GridToolbarsConfigurationProvider,
-                                            GridViewControllerMutator>
+@interface InactiveTabsMediator
+    : NSObject <GridCommands,
+                GridToolbarsConfigurationProvider,
+                GridViewControllerMutator,
+                TabSwitcherItemSnapShotAndFaviconDataSource>
 
 // `consumer` receives `webStateList` and Inactive Tabs info updates.
 @property(nonatomic, weak) id<TabCollectionConsumer, InactiveTabsInfoConsumer>
@@ -43,12 +46,12 @@ class WebStateList;
 // Initializer with:
 // - `webStateList`: the list of tabs to observe.
 // - `prefService`: the preference service from the profile.
-// - `snapshotStorage`: the snapshot storage from the inactive browser.
-// - `tabsCloser`: the object used to implement "close all" and "undo".
+// - `faviconLoader`: the favicon loader from the profile.
+// - `snapshotBrowserAgent`: the snapshot browser agent.
 - (instancetype)initWithWebStateList:(WebStateList*)webStateList
                   profilePrefService:(PrefService*)prefService
-                     snapshotStorage:(id<SnapshotStorage>)snapshotStorage
-                          tabsCloser:(std::unique_ptr<TabsCloser>)tabsCloser
+                       faviconLoader:(FaviconLoader*)faviconLoader
+                snapshotBrowserAgent:(SnapshotBrowserAgent*)snapshotBrowserAgent
     NS_DESIGNATED_INITIALIZER;
 
 - (instancetype)init NS_UNAVAILABLE;

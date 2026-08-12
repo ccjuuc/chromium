@@ -15,7 +15,6 @@
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -64,7 +63,7 @@ namespace media {
 namespace {
 
 // Size of the timestamp cache, needs to be large enough for frame-reordering.
-constexpr size_t kTimestampCacheSize = 128;
+constexpr size_t kTimestampCacheSize = 1024;
 
 std::optional<VideoPixelFormat> GetPixelFormatForBitDepth(uint8_t bit_depth) {
   constexpr auto kSupportedBitDepthAndVizFormats =
@@ -72,7 +71,7 @@ std::optional<VideoPixelFormat> GetPixelFormatForBitDepth(uint8_t bit_depth) {
           {8u, viz::MultiPlaneFormat::kNV12},
           {10u, viz::MultiPlaneFormat::kP010},
       });
-  if (!base::Contains(kSupportedBitDepthAndVizFormats, bit_depth)) {
+  if (!kSupportedBitDepthAndVizFormats.contains(bit_depth)) {
     VLOGF(1) << "Unsupported bit depth: " << base::strict_cast<int>(bit_depth);
     return std::nullopt;
   }
@@ -148,6 +147,10 @@ VaapiVideoDecoder::~VaapiVideoDecoder() {
   // Abort all currently scheduled decode tasks.
   ClearDecodeTaskQueue(DecoderStatus::Codes::kAborted);
 
+  if (pending_init_cb_) {
+    std::move(pending_init_cb_).Run(DecoderStatus::Codes::kAborted);
+  }
+
   weak_this_factory_.InvalidateWeakPtrs();
 
   // Notify |decoder_delegate_| of an imminent VAContextID destruction, so it
@@ -179,12 +182,13 @@ void VaapiVideoDecoder::Initialize(const VideoDecoderConfig& config,
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(config.IsValidConfig());
 
+  pending_init_cb_ = std::move(init_cb);
+
   // Reinitializing the decoder is allowed if there are no pending decodes.
   if (current_decode_task_ || !decode_task_queue_.empty() ||
       state_ == State::kExpectingReset) {
-    LOG(ERROR)
-        << "Don't call Initialize() while there are pending decode tasks";
-    std::move(init_cb).Run(DecoderStatus::Codes::kFailed);
+    SetState({DecoderStatus::Codes::kFailed,
+              "Failed to initialize with pending decode tasks in flight."});
     return;
   }
 
@@ -230,13 +234,13 @@ void VaapiVideoDecoder::Initialize(const VideoDecoderConfig& config,
 
   if (config.is_encrypted()) {
 #if !BUILDFLAG(IS_CHROMEOS)
-    SetErrorState("encrypted content is not supported");
-    std::move(init_cb).Run(DecoderStatus::Codes::kUnsupportedEncryptionMode);
+    SetState({DecoderStatus::Codes::kUnsupportedEncryptionMode,
+              "encrypted content is not supported"});
     return;
 #else
     if (!cdm_context || !cdm_context->GetChromeOsCdmContext()) {
-      SetErrorState("cannot support encrypted stream w/out ChromeOsCdmContext");
-      std::move(init_cb).Run(DecoderStatus::Codes::kUnsupportedEncryptionMode);
+      SetState({DecoderStatus::Codes::kUnsupportedEncryptionMode,
+                "ChromeOsCdmContext required for encrypted streams"});
       return;
     }
     bool encrypted_av1_support = false;
@@ -247,10 +251,9 @@ void VaapiVideoDecoder::Initialize(const VideoDecoderConfig& config,
         config.codec() != VideoCodec::kVP9 &&
         (config.codec() != VideoCodec::kAV1 || !encrypted_av1_support) &&
         config.codec() != VideoCodec::kHEVC) {
-      SetErrorState(
-          base::StringPrintf("%s is not supported for encrypted content",
-                             GetCodecName(config.codec()).c_str()));
-      std::move(init_cb).Run(DecoderStatus::Codes::kUnsupportedEncryptionMode);
+      DecoderStatus error = {DecoderStatus::Codes::kUnsupportedEncryptionMode,
+                             "Codec not supported for encrypted content"};
+      SetState(std::move(error).WithData("codec", config.codec()));
       return;
     }
     cdm_event_cb_registration_ = cdm_context->RegisterEventCB(
@@ -280,10 +283,9 @@ void VaapiVideoDecoder::Initialize(const VideoDecoderConfig& config,
     UMA_HISTOGRAM_BOOLEAN("Media.VaapiVideoDecoder.VaapiWrapperCreationSuccess",
                           vaapi_wrapper_or_error.has_value());
     if (!vaapi_wrapper_or_error.has_value()) {
-      SetErrorState(base::StringPrintf(
-          "failed initializing VaapiWrapper for profile %s, ",
-          GetProfileName(profile).c_str()));
-      std::move(init_cb).Run(vaapi_wrapper_or_error.error());
+      SetState(std::move(vaapi_wrapper_or_error)
+                   .error()
+                   .WithData("profile", profile));
       return;
     }
     vaapi_wrapper_ = std::move(vaapi_wrapper_or_error.value());
@@ -291,16 +293,15 @@ void VaapiVideoDecoder::Initialize(const VideoDecoderConfig& config,
 
   profile_ = profile;
   color_space_ = config.color_space_info();
-  hdr_metadata_ = config.hdr_metadata();
+  static_hdr_metadata_ = config.hdr_metadata();
   encryption_scheme_ = transcryption_ ? EncryptionScheme::kUnencrypted
                                       : config.encryption_scheme();
 
   if (!IsConfiguredForTesting()) {
     auto accel_status = CreateAcceleratedVideoDecoder();
-    if (!accel_status.is_ok()) {
-      SetErrorState("failed to create decoder delegate");
-      std::move(init_cb).Run(DecoderStatus(DecoderStatus::Codes::kFailed)
-                                 .AddCause(std::move(accel_status)));
+    if (!accel_status.has_value()) {
+      SetState(
+          {DecoderStatus::Codes::kFailed, std::move(accel_status).error()});
       return;
     }
   }
@@ -309,10 +310,12 @@ void VaapiVideoDecoder::Initialize(const VideoDecoderConfig& config,
 
   output_cb_ = std::move(output_cb);
   waiting_cb_ = std::move(waiting_cb);
+  buffer_id_to_timestamp_.Clear();
+  next_buffer_id_ = 0;
   SetState(State::kWaitingForInput);
 
   // Notify client initialization was successful.
-  std::move(init_cb).Run(DecoderStatus::Codes::kOk);
+  std::move(pending_init_cb_).Run(DecoderStatus::Codes::kOk);
 }
 
 void VaapiVideoDecoder::OnCdmContextEvent(CdmContext::Event event) {
@@ -397,9 +400,11 @@ void VaapiVideoDecoder::HandleDecodeTask() {
     return;
   }
 
-  TRACE_EVENT_BEGIN0("media,gpu", "VaapiVideoDecoder::Decode");
-  AcceleratedVideoDecoder::DecodeResult decode_result = decoder_->Decode();
-  TRACE_EVENT_END0("media,gpu", "VaapiVideoDecoder::Decode");
+  AcceleratedVideoDecoder::DecodeResult decode_result;
+  {
+    TRACE_EVENT("media,gpu", "VaapiVideoDecoder::Decode");
+    decode_result = decoder_->Decode();
+  }
   switch (decode_result) {
     case AcceleratedVideoDecoder::kRanOutOfStreamData:
       // Decoding was successful, notify client and try to schedule the next
@@ -429,7 +434,7 @@ void VaapiVideoDecoder::HandleDecodeTask() {
       break;
     case AcceleratedVideoDecoder::kDecodeError:
       UMA_HISTOGRAM_BOOLEAN("Media.VaapiVideoDecoder.DecodeError", true);
-      SetErrorState("error decoding stream");
+      SetState({DecoderStatus::Codes::kFailed, "error decoding stream"});
       break;
     case AcceleratedVideoDecoder::kTryAgain:
       DVLOG(1) << "Decoder going into the waiting for protected state";
@@ -454,11 +459,13 @@ void VaapiVideoDecoder::HandleDecodeTask() {
           allocated_va_surfaces_.clear();
           const gfx::Size decoder_pic_size = decoder_->GetPicSize();
           if (decoder_pic_size.IsEmpty()) {
-            SetErrorState("|decoder_| returned an empty picture size");
+            SetState({DecoderStatus::Codes::kFailed,
+                      "decode() produced an empty picture size."});
             return;
           }
           if (!vaapi_wrapper_->CreateContext(decoder_pic_size)) {
-            SetErrorState("failed creating VAContext");
+            SetState(
+                {DecoderStatus::Codes::kFailed, "Failed to create VAContext"});
             return;
           }
         }
@@ -511,7 +518,8 @@ std::unique_ptr<VASurfaceHandle> VaapiVideoDecoder::CreateSurface() {
         vaapi_wrapper_->CreateVASurfaceForFrameResource(
             *frame, cdm_context_ref_ || transcryption_);
     if (!va_surface || va_surface->id() == VA_INVALID_ID) {
-      SetErrorState("failed to create VASurface from FrameResource");
+      SetState({DecoderStatus::Codes::kFailed,
+                "Failed to create VASurface from FrameResource"});
       return nullptr;
     }
     const auto result = allocated_va_surfaces_.insert_or_assign(
@@ -542,10 +550,12 @@ std::unique_ptr<VASurfaceHandle> VaapiVideoDecoder::CreateSurface() {
                                            std::move(release_frame_cb));
 }
 
-void VaapiVideoDecoder::SurfaceReady(VASurfaceID va_surface_id,
-                                     int32_t buffer_id,
-                                     const gfx::Rect& visible_rect,
-                                     const VideoColorSpace& color_space) {
+void VaapiVideoDecoder::SurfaceReady(
+    VASurfaceID va_surface_id,
+    int32_t buffer_id,
+    const gfx::Rect& visible_rect,
+    const VideoColorSpace& color_space,
+    const gfx::HDRMetadata& dynamic_hdr_metadata) {
   DVLOGF(4);
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_EQ(state_, State::kDecoding);
@@ -608,9 +618,12 @@ void VaapiVideoDecoder::SurfaceReady(VASurfaceID va_surface_id,
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   const auto gfx_color_space = color_space.ToGfxColorSpace();
-  if (gfx_color_space.IsValid())
+  if (gfx_color_space.IsValid()) {
     frame->set_color_space(gfx_color_space);
-  frame->set_hdr_metadata(hdr_metadata_);
+  }
+  gfx::HDRMetadata hdr_metadata = static_hdr_metadata_;
+  hdr_metadata.MergeMetadataFrom(dynamic_hdr_metadata);
+  frame->set_hdr_metadata(hdr_metadata);
   output_cb_.Run(std::move(frame));
 }
 
@@ -666,7 +679,8 @@ void VaapiVideoDecoder::ApplyResolutionChangeWithScreenSizes(
   const std::optional<VideoPixelFormat> format =
       GetPixelFormatForBitDepth(bit_depth);
   if (!format) {
-    SetErrorState(base::StringPrintf("unsupported bit depth: %d", bit_depth));
+    SetState(DecoderStatus{DecoderStatus::Codes::kFailed,
+                           "Unsupported attribute", "bit_depth", bit_depth});
     return;
   }
 
@@ -683,7 +697,8 @@ void VaapiVideoDecoder::ApplyResolutionChangeWithScreenSizes(
   const gfx::Rect decoder_visible_rect = decoder_->GetVisibleRect();
   const gfx::Size decoder_pic_size = decoder_->GetPicSize();
   if (decoder_pic_size.IsEmpty()) {
-    SetErrorState("|decoder_| returned an empty picture size");
+    SetState({DecoderStatus::Codes::kFailed,
+              "decode() returned an empty picture size"});
     return;
   }
   gfx::Rect output_visible_rect = decoder_visible_rect;
@@ -771,7 +786,8 @@ void VaapiVideoDecoder::ApplyResolutionChangeWithScreenSizes(
                                 "Media.VaapiVideoDecoder.VAAPIError"))
             .value_or(nullptr);
     if (!new_vaapi_wrapper.get()) {
-      SetErrorState("failed (re)creating VaapiWrapper");
+      SetState({DecoderStatus::Codes::kFailed,
+                "Failed to create or set up the vaapi wrapper"});
       return;
     }
     decoder_delegate_->set_vaapi_wrapper(new_vaapi_wrapper.get());
@@ -779,7 +795,7 @@ void VaapiVideoDecoder::ApplyResolutionChangeWithScreenSizes(
   }
 
   if (!vaapi_wrapper_->CreateContext(decoder_pic_size)) {
-    SetErrorState("failed creating VAContext");
+    SetState({DecoderStatus::Codes::kFailed, "Failed to create the VAContext"});
     return;
   }
 
@@ -807,7 +823,8 @@ void VaapiVideoDecoder::ApplyResolutionChangeWithScreenSizes(
       cdm_context_ref_ ? gfx::BufferUsage::PROTECTED_SCANOUT_VDA_WRITE
                        : gfx::BufferUsage::SCANOUT_VDA_WRITE);
   if (!dummy_frame) {
-    SetErrorState("failed to allocate a dummy buffer");
+    SetState(
+        {DecoderStatus::Codes::kFailed, "failed to allocate a dummy buffer"});
     return;
   }
 
@@ -834,8 +851,8 @@ void VaapiVideoDecoder::ApplyResolutionChangeWithScreenSizes(
       DVLOGF(2) << "The frame pool initialization is aborted";
       SetState(State::kExpectingReset);
     } else {
-      // TODO(crbug.com/40139291): don't drop the error on the floor here.
-      SetErrorState("failed Initialize()ing the frame pool");
+      SetState(
+          {DecoderStatus::Codes::kFailed, std::move(status_or_layout).error()});
     }
     return;
   }
@@ -909,16 +926,20 @@ VaapiVideoDecoder::AllocateCustomFrame(VideoPixelFormat format,
 
   if (!surface)
     return CroStatus::Codes::kFailedToCreateVideoFrame;
-  auto pixmap_and_info =
+  auto maybe_pixmap_and_info =
       vaapi_wrapper_->ExportVASurfaceAsNativePixmapDmaBuf(*surface.get());
-  if (!pixmap_and_info)
-    return CroStatus::Codes::kFailedToCreateVideoFrame;
+  if (!maybe_pixmap_and_info.has_value()) {
+    return {CroStatus::Codes::kFailedToCreateVideoFrame,
+            std::move(maybe_pixmap_and_info).error()};
+  }
 
+  auto pixmap_and_info = std::move(maybe_pixmap_and_info).value();
   scoped_refptr<FrameResource> frame = NativePixmapFrameResource::Create(
       visible_rect, natural_size, timestamp,
       gfx::BufferUsage::SCANOUT_VDA_WRITE, std::move(pixmap_and_info->pixmap));
-  if (!frame)
+  if (!frame) {
     return CroStatus::Codes::kFailedToCreateVideoFrame;
+  }
 
   allocated_va_surfaces_.insert_or_assign(frame->tracking_token(),
                                           std::move(surface));
@@ -998,13 +1019,14 @@ void VaapiVideoDecoder::ProtectedSessionUpdate(bool success) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (!success) {
-    SetErrorState("terminating decoding after failed protected update");
+    SetState({DecoderStatus::Codes::kFailed, "Protected update failed"});
     return;
   }
 
   // If we were waiting for a protected update, retry the current decode task.
-  if (state_ != State::kWaitingForProtected)
+  if (state_ != State::kWaitingForProtected) {
     return;
+  }
 
   DCHECK(current_decode_task_);
   SetState(State::kDecoding);
@@ -1024,7 +1046,7 @@ void VaapiVideoDecoder::Flush() {
   // Flush will block until SurfaceReady() has been called for every frame
   // currently decoding.
   if (!decoder_->Flush()) {
-    SetErrorState("failed to flush the decoder delegate");
+    SetState({DecoderStatus::Codes::kFailed, "Failed to flush the decoder"});
     return;
   }
 
@@ -1063,8 +1085,9 @@ void VaapiVideoDecoder::Reset(base::OnceClosure reset_cb) {
     // Also give a chance to |decoder_delegate_| to release its internal data
     // structures.
     decoder_delegate_->OnVAContextDestructionSoon();
-    if (!CreateAcceleratedVideoDecoder().is_ok()) {
-      SetErrorState("failed to (re)create decoder/delegate");
+    auto status = CreateAcceleratedVideoDecoder();
+    if (!status.has_value()) {
+      SetState({DecoderStatus::Codes::kFailed, std::move(status).error()});
       std::move(reset_cb).Run();
       return;
     }
@@ -1084,7 +1107,8 @@ void VaapiVideoDecoder::Reset(base::OnceClosure reset_cb) {
                                 std::move(reset_cb)));
 }
 
-VaapiStatus VaapiVideoDecoder::CreateAcceleratedVideoDecoder() {
+VaapiStatus::Or<std::monostate>
+VaapiVideoDecoder::CreateAcceleratedVideoDecoder() {
   DVLOGF(2);
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(state_ == State::kUninitialized ||
@@ -1148,10 +1172,13 @@ VaapiStatus VaapiVideoDecoder::CreateAcceleratedVideoDecoder() {
     decoder_ = std::make_unique<AV1Decoder>(std::move(accelerator), profile_,
                                             color_space_);
   } else {
-    return VaapiStatus(VaapiStatus::Codes::kUnsupportedProfile)
-        .WithData("profile", profile_);
+    VaapiStatus status = {VaapiStatus::Codes::kUnsupportedProfile,
+                          "unsupported configuration", "profile", profile_};
+    return status;
   }
-  return VaapiStatus::Codes::kOk;
+
+  std::monostate nothing;
+  return nothing;
 }
 
 void VaapiVideoDecoder::ResetDone(base::OnceClosure reset_cb) {
@@ -1161,14 +1188,30 @@ void VaapiVideoDecoder::ResetDone(base::OnceClosure reset_cb) {
   DCHECK(!current_decode_task_);
   DCHECK(decode_task_queue_.empty());
 
+  buffer_id_to_timestamp_.Clear();
+  next_buffer_id_ = 0;
+
   std::move(reset_cb).Run();
   SetState(State::kWaitingForInput);
 }
 
-void VaapiVideoDecoder::SetState(State state) {
+void VaapiVideoDecoder::SetState(DecoderStatus::Or<State> state_or_error) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DVLOGF(3) << static_cast<int>(state)
-            << ", current state: " << static_cast<int>(state_);
+  if (!state_or_error.has_value()) {
+    state_ = State::kError;
+    auto error = std::move(state_or_error).error();
+    if (current_decode_task_ || !decode_task_queue_.empty()) {
+      ClearDecodeTaskQueue(error);
+    }
+    if (pending_init_cb_) {
+      std::move(pending_init_cb_).Run(std::move(error));
+    }
+    return;
+  }
+
+  State state = std::move(state_or_error).value();
+  DVLOGF(3) << "Vaapi State change {" << static_cast<int>(state_) << "} => {"
+            << static_cast<int>(state) << "}";
 
   // Check whether the state change is valid.
   switch (state) {
@@ -1209,18 +1252,11 @@ void VaapiVideoDecoder::SetState(State state) {
       DCHECK_EQ(state_, State::kChangingResolution);
       break;
     case State::kError:
-      ClearDecodeTaskQueue(DecoderStatus::Codes::kFailed);
-      break;
+      // Error should be handled by passing in a DecoderStatus.
+      NOTREACHED();
   }
 
   state_ = state;
-}
-
-void VaapiVideoDecoder::SetErrorState(std::string message) {
-  LOG(ERROR) << message;
-  if (media_log_)
-    MEDIA_LOG(ERROR, media_log_) << "VaapiVideoDecoder: " << message;
-  SetState(State::kError);
 }
 
 }  // namespace media

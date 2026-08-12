@@ -51,6 +51,7 @@ import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.RequiresRestart;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.compositor.layouts.Layout;
 import org.chromium.chrome.browser.compositor.layouts.LayoutManagerChrome;
@@ -69,7 +70,6 @@ import org.chromium.chrome.browser.tabmodel.TabCreator;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.ntp.IncognitoNewTabPageStation;
@@ -87,13 +87,11 @@ import java.util.concurrent.TimeoutException;
 /** Tests for the {@link TabSwitcher} on tablet */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add(ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE)
-@Restriction({Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE, DeviceFormFactor.TABLET_OR_DESKTOP})
+@Restriction(DeviceFormFactor.TABLET_OR_DESKTOP)
 @DisableFeatures({
     ChromeFeatureList.ANDROID_SURFACE_COLOR_UPDATE,
     ChromeFeatureList.GRID_TAB_SWITCHER_SURFACE_COLOR_UPDATE,
-    ChromeFeatureList.GRID_TAB_SWITCHER_UPDATE,
-    ChromeFeatureList.ANDROID_THEME_MODULE,
-    ChromeFeatureList.TAB_STRIP_INCOGNITO_MIGRATION
+    ChromeFeatureList.ANDROID_THEME_MODULE
 })
 @Batch(Batch.PER_CLASS)
 public class TabSwitcherTabletTest {
@@ -116,8 +114,8 @@ public class TabSwitcherTabletTest {
         ChromeTabbedActivity cta = mActivityTestRule.getActivity();
 
         LayoutManagerChrome layoutManager = cta.getLayoutManager();
-        if (layoutManager.isLayoutVisible(LayoutType.TAB_SWITCHER)
-                && !layoutManager.isLayoutStartingToHide(LayoutType.TAB_SWITCHER)) {
+        if (layoutManager.isLayoutVisible(LayoutType.HUB)
+                && !layoutManager.isLayoutStartingToHide(LayoutType.HUB)) {
             TabModelSelector selector = cta.getTabModelSelectorSupplier().get();
             if (getTabCountOnUiThread(selector.getModel(false)) == 0) {
                 ThreadUtils.runOnUiThreadBlocking(
@@ -161,7 +159,7 @@ public class TabSwitcherTabletTest {
         checkTabSwitcherViewHolder(cta, true);
 
         exitSwitcherWithTabClick(0);
-        assertFalse(cta.getLayoutManager().isLayoutVisible(LayoutType.TAB_SWITCHER));
+        assertFalse(cta.getLayoutManager().isLayoutVisible(LayoutType.HUB));
     }
 
     @Test
@@ -189,7 +187,7 @@ public class TabSwitcherTabletTest {
 
     @Test
     @MediumTest
-    @DisableIf.Build(sdk_equals = Build.VERSION_CODES.S_V2, message = "crbug.com/40901097")
+    @DisabledTest(message = "Flaky, crbug.com/40901097")
     public void testTabSwitcherScrim() {
         prepareTabs(1, 1);
         ChromeTabbedActivity cta = mActivityTestRule.getActivity();
@@ -224,7 +222,7 @@ public class TabSwitcherTabletTest {
         ChromeTabUtils.closeAllTabs(
                 InstrumentationRegistry.getInstrumentation(), cta.getTabModelSelectorSupplier());
 
-        LayoutTestUtils.waitForLayout(cta.getLayoutManager(), LayoutType.TAB_SWITCHER);
+        LayoutTestUtils.waitForLayout(cta.getLayoutManager(), LayoutType.HUB);
 
         // Assert the grid tab switcher is shown automatically, since there is no next tab.
         checkTabSwitcherViewHolderVisibility(true);
@@ -269,7 +267,7 @@ public class TabSwitcherTabletTest {
         checkTabSwitcherViewHolderVisibility(true);
     }
 
-    // Regression test for crbug.com/1487114.
+    // Regression test for crbug.com/40073508.
     @Test
     @MediumTest
     @RequiresRestart
@@ -312,7 +310,7 @@ public class TabSwitcherTabletTest {
         // Close the last tab.
         closeTab(false, cta.getCurrentTabModel().getTabAt(0).getId());
 
-        LayoutTestUtils.waitForLayout(cta.getLayoutManager(), LayoutType.TAB_SWITCHER);
+        LayoutTestUtils.waitForLayout(cta.getLayoutManager(), LayoutType.HUB);
 
         // Check whether empty view show up.
         @IdRes int tabSwitcherAncestorId = TabUiTestHelper.getTabSwitcherAncestorId(cta);
@@ -382,13 +380,14 @@ public class TabSwitcherTabletTest {
                     tabModelSelectedCallback.notifyCalled();
                 };
         ThreadUtils.runOnUiThreadBlocking(
-                () ->
-                        mActivityTestRule
-                                .getActivity()
-                                .getTabModelSelectorSupplier()
-                                .get()
-                                .getCurrentTabModelSupplier()
-                                .addObserver(observer));
+                () -> {
+                    return mActivityTestRule
+                            .getActivity()
+                            .getTabModelSelectorSupplier()
+                            .get()
+                            .getCurrentTabModelSupplier()
+                            .addSyncObserverAndPostIfNonNull(observer);
+                });
         StripLayoutHelperManager manager =
                 TabStripUtils.getStripLayoutHelperManager(mActivityTestRule.getActivity());
         TabStripUtils.clickCompositorButton(

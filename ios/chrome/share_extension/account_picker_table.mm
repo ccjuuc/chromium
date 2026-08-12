@@ -16,17 +16,18 @@ CGFloat const kAvatarImageDimension = 30.0;
 }  // namespace
 
 @interface AccountPickerTable () <UITableViewDelegate>
-@property(nonatomic, strong) AccountInfo* selectedAccount;
+@property(nonatomic, strong) ShareExtensionAccountInfo* selectedAccount;
 @end
 
 @implementation AccountPickerTable {
-  NSArray<AccountInfo*>* _accounts;
+  NSArray<ShareExtensionAccountInfo*>* _accounts;
   UITableView* _accountsTable;
-  UITableViewDiffableDataSource<NSString*, AccountInfo*>* _diffableDataSource;
+  UITableViewDiffableDataSource<NSString*, ShareExtensionAccountInfo*>*
+      _diffableDataSource;
 }
 
-- (instancetype)initWithAccounts:(NSArray<AccountInfo*>*)accounts
-                 selectedAccount:(AccountInfo*)selectedAccount {
+- (instancetype)initWithAccounts:(NSArray<ShareExtensionAccountInfo*>*)accounts
+                 selectedAccount:(ShareExtensionAccountInfo*)selectedAccount {
   self = [super initWithNibName:nil bundle:nil];
 
   if (self) {
@@ -52,7 +53,6 @@ CGFloat const kAvatarImageDimension = 30.0;
   self.title = NSLocalizedString(
       @"IDS_IOS_ACCOUNTS_TITLE_SHARE_EXTENSION",
       @"The title of the item representing a signed out user.");
-  ;
   self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc]
       initWithBarButtonSystemItem:UIBarButtonSystemItemDone
                            target:self
@@ -74,7 +74,7 @@ CGFloat const kAvatarImageDimension = 30.0;
 }
 
 #pragma mark - UITableViewDelegate
-- (void)setSelectedAccount:(AccountInfo*)selectedAccount {
+- (void)setSelectedAccount:(ShareExtensionAccountInfo*)selectedAccount {
   if ([selectedAccount.gaiaIDString isEqual:_selectedAccount.gaiaIDString]) {
     return;
   }
@@ -101,7 +101,8 @@ CGFloat const kAvatarImageDimension = 30.0;
 #pragma mark - Private
 
 - (UITableViewCell*)configureAccountCell:(UITableViewCell*)cell
-                             accountInfo:(AccountInfo*)accountInfo {
+                             accountInfo:
+                                 (ShareExtensionAccountInfo*)accountInfo {
   UIListContentConfiguration* content = cell.defaultContentConfiguration;
   if ([accountInfo.gaiaIDString isEqual:app_group::kNoAccount]) {
     content.text = NSLocalizedString(
@@ -113,9 +114,13 @@ CGFloat const kAvatarImageDimension = 30.0;
              renderingMode:UIImageRenderingModeAlwaysOriginal];
 
   } else {
-    content.text = ([accountInfo.fullName length] > 0) ? accountInfo.fullName
-                                                       : accountInfo.email;
-    content.secondaryText = accountInfo.email;
+    NSString* name = accountInfo.fullName;
+    if (name.length > 0) {
+      content.text = name;
+      content.secondaryText = accountInfo.email;
+    } else {
+      content.text = accountInfo.email;
+    }
     content.image = accountInfo.avatar;
     UIListContentImageProperties* imageProperties = content.imageProperties;
     imageProperties.cornerRadius = kAvatarImageDimension / 2.0;
@@ -142,7 +147,7 @@ CGFloat const kAvatarImageDimension = 30.0;
 
 - (UITableViewCell*)cellForIndexPath:(NSIndexPath*)indexPath
                            tableView:(UITableView*)tableView
-                         accountInfo:(AccountInfo*)accountInfo {
+                         accountInfo:(ShareExtensionAccountInfo*)accountInfo {
   NSString* identifier = NSStringFromClass([UITableViewCell class]);
   UITableViewCell* cell =
       [tableView dequeueReusableCellWithIdentifier:identifier
@@ -157,7 +162,7 @@ CGFloat const kAvatarImageDimension = 30.0;
 
   auto cellProvider =
       ^UITableViewCell*(UITableView* tableView, NSIndexPath* indexPath,
-                        AccountInfo* accountInfo) {
+                        ShareExtensionAccountInfo* accountInfo) {
         return [weakSelf cellForIndexPath:indexPath
                                 tableView:tableView
                               accountInfo:accountInfo];
@@ -170,8 +175,8 @@ CGFloat const kAvatarImageDimension = 30.0;
 }
 
 - (void)applySnapshot {
-  NSDiffableDataSourceSnapshot<NSString*, AccountInfo*>* snapshot =
-      [[NSDiffableDataSourceSnapshot alloc] init];
+  NSDiffableDataSourceSnapshot<NSString*, ShareExtensionAccountInfo*>*
+      snapshot = [[NSDiffableDataSourceSnapshot alloc] init];
 
   [snapshot appendSectionsWithIdentifiers:@[ kMainSectionIdentifier ]];
   [snapshot appendItemsWithIdentifiers:_accounts
@@ -192,7 +197,8 @@ CGFloat const kAvatarImageDimension = 30.0;
 - (void)setUpBottomSheetDetents {
   UISheetPresentationController* presentationController =
       self.sheetPresentationController;
-  presentationController.detents = @[ self.customDetent ];
+  presentationController.detents =
+      @[ self.customDetent, UISheetPresentationControllerDetent.largeDetent ];
   presentationController.selectedDetentIdentifier =
       self.customDetent.identifier;
 }

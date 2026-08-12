@@ -30,9 +30,12 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
 #include "third_party/blink/public/mojom/webpreferences/web_preferences.mojom-blink.h"
 #include "third_party/blink/renderer/platform/graphics/deferred_image_decoder.h"
+#include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
+#include "third_party/blink/renderer/platform/graphics/graphics_context.h"
 #include "third_party/blink/renderer/platform/graphics/image.h"
 #include "third_party/blink/renderer/platform/image-decoders/image_animation.h"
 #include "third_party/blink/renderer/platform/timer.h"
@@ -77,6 +80,7 @@ class PLATFORM_EXPORT BitmapImage final : public Image {
   bool HasColorProfile() const;
 
   void ResetAnimation() override;
+  void ResetAnimationSharedTimelineOnly();
   bool MaybeAnimated() override;
 
   void SetAnimationPolicy(mojom::blink::ImageAnimationPolicy) override;
@@ -91,6 +95,7 @@ class PLATFORM_EXPORT BitmapImage final : public Image {
   bool IsLazyDecoded() override;
   size_t FrameCount() override;
   PaintImage PaintImageForCurrentFrame() override;
+  PaintImage PaintImageForCurrentFrameWithInfo(const ImageNodeAnimationInfo*);
   ImageOrientation Orientation() const override;
 
   PaintImage PaintImageForTesting();
@@ -133,7 +138,12 @@ class PLATFORM_EXPORT BitmapImage final : public Image {
             const gfx::RectF& src_rect,
             const ImageDrawOptions&) override;
 
-  PaintImage CreatePaintImage();
+  PaintImage CreatePaintImage(
+      PaintImage::Id paint_id,
+      PaintImage::Id sync_animation_id,
+      PaintImage::AnimationSyncSequence sync_sequence,
+      PaintImage::AnimationSequenceId reset_animation_sequence_id,
+      int image_animation_repetition_count);
   void UpdateSize() const;
 
   // Called to wipe out the entire frame buffer cache and tell the image
@@ -162,7 +172,7 @@ class PLATFORM_EXPORT BitmapImage final : public Image {
   // This caches the PaintImage created with the last updated encoded data to
   // ensure re-use of generated decodes. This is cleared each time the encoded
   // data is updated in DataChanged.
-  PaintImage cached_frame_;
+  HashMap<DOMNodeId, PaintImage> cached_frames_;
 
   // Whether or not we can play animation.
   mojom::blink::ImageAnimationPolicy animation_policy_ =
@@ -186,7 +196,9 @@ class PLATFORM_EXPORT BitmapImage final : public Image {
 
   size_t frame_count_;
 
-  PaintImage::AnimationSequenceId reset_animation_sequence_id_ = 0;
+  PaintImage::AnimationSequenceId reset_animation_own_timeline_sequence_id_ = 0;
+  PaintImage::AnimationSequenceId reset_animation_shared_timeline_sequence_id_ =
+      0;
 };
 
 template <>

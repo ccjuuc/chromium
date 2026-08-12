@@ -25,9 +25,11 @@ import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import type {SettingsDropdownMenuElement} from '../controls/settings_dropdown_menu.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
 import {GeolocationAccessLevel} from '../os_privacy_page/privacy_hub_geolocation_subpage.js';
-import {type Route, routes} from '../router.js';
+import {routes} from '../router.js';
+import type {Route} from '../router.js';
 
-import {DateTimeBrowserProxy, type DateTimePageCallbackRouter, type DateTimePageHandlerRemote} from './date_time_browser_proxy.js';
+import {DateTimeBrowserProxy} from './date_time_browser_proxy.js';
+import type {DateTimePageCallbackRouter, DateTimePageHandlerRemote} from './date_time_browser_proxy.js';
 import {TimeZoneAutoDetectMethod} from './date_time_types.js';
 import type {TimezoneSelectorElement} from './timezone_selector.js';
 import {getTemplate} from './timezone_subpage.html.js';
@@ -88,18 +90,18 @@ export class TimezoneSubpageElement extends TimezoneSubpageElementBase {
     };
   }
 
-  activeTimeZoneDisplayName: string;
+  declare activeTimeZoneDisplayName: string;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
     Setting.kChangeTimeZone,
   ]);
 
-  private canSetSystemTimezone_: boolean;
+  declare private canSetSystemTimezone_: boolean;
   private browserProxy_: DateTimeBrowserProxy;
-  private geolocationWarningText_: string;
-  private showEnableSystemGeolocationDialog_: boolean;
-  private shouldShowGeolocationWarningText_: boolean;
+  declare private geolocationWarningText_: string;
+  declare private showEnableSystemGeolocationDialog_: boolean;
+  declare private shouldShowGeolocationWarningText_: boolean;
 
   /**
    * Returns the browser proxy page handler (to invoke functions).
@@ -156,8 +158,9 @@ export class TimezoneSubpageElement extends TimezoneSubpageElementBase {
       return '';
     }
 
-    if (this.prefs.ash.user.geolocation_access_level.enforcement ===
-        chrome.settingsPrivate.Enforcement.ENFORCED) {
+    if (this.getPref<GeolocationAccessLevel>(
+                'ash.user.geolocation_access_level')
+            .enforcement === chrome.settingsPrivate.Enforcement.ENFORCED) {
       return loadTimeData.getStringF(
           'timeZoneGeolocationManagedWarningText',
           this.activeTimeZoneDisplayName);
@@ -169,10 +172,12 @@ export class TimezoneSubpageElement extends TimezoneSubpageElementBase {
 
   private computeShouldShowGeolocationWarningText_(): boolean {
     return (
-        this.prefs.generated.resolve_timezone_by_geolocation_on_off.value ===
-            true &&
-        this.prefs.ash.user.geolocation_access_level.value ===
-            GeolocationAccessLevel.DISALLOWED);
+        this.getPref<boolean>(
+                'generated.resolve_timezone_by_geolocation_on_off')
+                .value === true &&
+        this.getPref<GeolocationAccessLevel>(
+                'ash.user.geolocation_access_level')
+                .value === GeolocationAccessLevel.DISALLOWED);
   }
 
   /**

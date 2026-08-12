@@ -20,6 +20,7 @@
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/test/browser_task_environment.h"
 #include "mojo/public/cpp/bindings/receiver.h"
+#include "net/base/features.h"
 #include "net/cert/cert_verifier.h"
 #include "net/ssl/ssl_config.h"
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
@@ -61,7 +62,8 @@ class SSLConfigServiceManagerTest : public testing::Test,
   }
 
   // Waits for a single SSLConfigUpdate call. Expected to be called once for
-  // every update, and does not support multple updates occuring between calls.
+  // every update, and does not support multiple updates occurring between
+  // calls.
   void WaitForUpdate() {
     ASSERT_FALSE(run_loop_);
 
@@ -113,7 +115,7 @@ TEST_F(SSLConfigServiceManagerTest, GoodDisabledCipherSuites) {
 
   EXPECT_TRUE(initial_config_->disabled_cipher_suites.empty());
 
-  base::Value::List list;
+  base::ListValue list;
   list.Append("0x0004");
   list.Append("0x0005");
   local_state.SetUserPref(prefs::kCipherSuiteBlacklist, std::move(list));
@@ -140,7 +142,7 @@ TEST_F(SSLConfigServiceManagerTest, BadDisabledCipherSuites) {
 
   EXPECT_TRUE(initial_config_->disabled_cipher_suites.empty());
 
-  base::Value::List list;
+  base::ListValue list;
   list.Append("0x0004");
   list.Append("TLS_NOT_WITH_A_CIPHER_SUITE");
   list.Append("0x0005");
@@ -235,7 +237,7 @@ TEST_F(SSLConfigServiceManagerTest, H2ClientCertCoalescingPref) {
   std::unique_ptr<SSLConfigServiceManager> config_manager =
       SetUpConfigServiceManager(&local_state);
 
-  base::Value::List patterns;
+  base::ListValue patterns;
   // Patterns expected to be canonicalized.
   patterns.Append("canon.example");
   patterns.Append(".NonCanon.example");
@@ -292,6 +294,11 @@ TEST_F(SSLConfigServiceManagerTest,
 // context params: initially from compiled-in root store data, and then from
 // dynamically-configured Trust Anchor IDs when present.
 TEST_F(SSLConfigServiceManagerTest, InitialTrustAnchorIDs) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatureStates({{net::features::kTLSTrustAnchorIDs, true},
+                                      {net::features::kVerifyMTCs, true},
+                                      {net::features::kTestRootStore, false}});
+
   TestingPrefServiceSimple local_state;
   SSLConfigServiceManager::RegisterPrefs(local_state.registry());
 
@@ -301,10 +308,13 @@ TEST_F(SSLConfigServiceManagerTest, InitialTrustAnchorIDs) {
       initial_config_->trust_anchor_ids,
       testing::UnorderedElementsAreArray(
           net::TrustStoreChrome::GetTrustAnchorIDsFromCompiledInRootStore()));
-  EXPECT_TRUE(initial_config_->mtc_trust_anchor_ids.empty());
+  EXPECT_THAT(
+      initial_config_->mtc_trust_anchor_ids,
+      testing::UnorderedElementsAreArray(
+          net::TrustStoreChrome::GetTrustedMtcCaIDsFromCompiledInRootStore()));
 
   // Simulate an update that has an empty set of Trust Anchor IDs.
-  config_manager->UpdateTrustAnchorIDs({}, {});
+  config_manager->UpdateTrustAnchorIDs({}, {}, 0);
   // Wait for the SSLConfigServiceManagerPref to be notified of the Trust Anchor
   // IDs being changed, and for it to notify the test fixture of the change.
   ASSERT_NO_FATAL_FAILURE(WaitForUpdate());
@@ -328,7 +338,7 @@ TEST_F(SSLConfigServiceManagerTest, InitialTrustAnchorIDs) {
   }
 
   // Simulate an update that has a non-empty set of Trust Anchor IDs.
-  config_manager->UpdateTrustAnchorIDs({{0x01, 0x02}, {0x03, 0x04}}, {});
+  config_manager->UpdateTrustAnchorIDs({{0x01, 0x02}, {0x03, 0x04}}, {}, 0);
   // Wait for the SSLConfigServiceManagerPref to be notified of the Trust Anchor
   // IDs being changed, and for it to notify the test fixture of the change.
   ASSERT_NO_FATAL_FAILURE(WaitForUpdate());
@@ -357,7 +367,7 @@ TEST_F(SSLConfigServiceManagerTest, InitialTrustAnchorIDs) {
 
   // Simulate an update that also has a non-empty set of MTC Trust Anchor IDs.
   config_manager->UpdateTrustAnchorIDs({{0x01, 0x03}, {0x03, 0x05}},
-                                       {{0x05, 0x06}, {0x07, 0x08}});
+                                       {{0x05, 0x06}, {0x07, 0x08}}, 0);
   // Wait for the SSLConfigServiceManagerPref to be notified of the Trust Anchor
   // IDs being changed, and for it to notify the test fixture of the change.
   ASSERT_NO_FATAL_FAILURE(WaitForUpdate());
@@ -391,7 +401,7 @@ TEST_F(SSLConfigServiceManagerTest, InitialTrustAnchorIDs) {
 
   // Simulate an update that only has MTC Trust Anchor IDs, but no regular
   // ones.
-  config_manager->UpdateTrustAnchorIDs({}, {{0x05, 0x07}, {0x07, 0x09}});
+  config_manager->UpdateTrustAnchorIDs({}, {{0x05, 0x07}, {0x07, 0x09}}, 0);
   // Wait for the SSLConfigServiceManagerPref to be notified of the Trust Anchor
   // IDs being changed, and for it to notify the test fixture of the change.
   ASSERT_NO_FATAL_FAILURE(WaitForUpdate());
@@ -419,6 +429,46 @@ TEST_F(SSLConfigServiceManagerTest, InitialTrustAnchorIDs) {
   }
 }
 
+TEST_F(SSLConfigServiceManagerTest,
+       InitialTrustAnchorIDsMtcEnabledWithTestRoots) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatureStates({{net::features::kTLSTrustAnchorIDs, true},
+                                      {net::features::kVerifyMTCs, true},
+                                      {net::features::kTestRootStore, true}});
+
+  TestingPrefServiceSimple local_state;
+  SSLConfigServiceManager::RegisterPrefs(local_state.registry());
+
+  std::unique_ptr<SSLConfigServiceManager> config_manager =
+      SetUpConfigServiceManager(&local_state);
+  EXPECT_THAT(
+      initial_config_->trust_anchor_ids,
+      testing::UnorderedElementsAreArray(
+          net::TrustStoreChrome::GetTrustAnchorIDsFromCompiledInRootStore()));
+  EXPECT_THAT(
+      initial_config_->mtc_trust_anchor_ids,
+      testing::UnorderedElementsAreArray(
+          net::TrustStoreChrome::GetTrustedMtcCaIDsFromCompiledInRootStore()));
+}
+
+TEST_F(SSLConfigServiceManagerTest, InitialTrustAnchorIDsMtcDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatureStates({{net::features::kTLSTrustAnchorIDs, true},
+                                      {net::features::kVerifyMTCs, false}});
+
+  TestingPrefServiceSimple local_state;
+  SSLConfigServiceManager::RegisterPrefs(local_state.registry());
+
+  std::unique_ptr<SSLConfigServiceManager> config_manager =
+      SetUpConfigServiceManager(&local_state);
+  EXPECT_THAT(
+      initial_config_->trust_anchor_ids,
+      testing::UnorderedElementsAreArray(
+          net::TrustStoreChrome::GetTrustAnchorIDsFromCompiledInRootStore()));
+  EXPECT_THAT(initial_config_->mtc_trust_anchor_ids,
+              testing::UnorderedElementsAre());
+}
+
 // Tests that Trust Anchor IDs are properly set in new SSLConfigs after pref
 // changes.
 TEST_F(SSLConfigServiceManagerTest, TrustAnchorIDsAfterPrefChange) {
@@ -431,7 +481,7 @@ TEST_F(SSLConfigServiceManagerTest, TrustAnchorIDsAfterPrefChange) {
       SetUpConfigServiceManager(&local_state);
 
   EXPECT_FALSE(initial_config_->rev_checking_required_local_anchors);
-  config_manager->UpdateTrustAnchorIDs({{0x01, 0x01}}, {{0x02, 0x02}});
+  config_manager->UpdateTrustAnchorIDs({{0x01, 0x01}}, {{0x02, 0x02}}, 0);
   ASSERT_NO_FATAL_FAILURE(WaitForUpdate());
   EXPECT_THAT(
       observed_configs_[0]->trust_anchor_ids,
@@ -474,7 +524,7 @@ TEST_F(SSLConfigServiceManagerTest, PrefsPreservedAfterTrustAnchorIDsUpdated) {
 
   // Update Trust Anchor IDs and check that both the existing pref and the new
   // Trust Anchor IDs are reflected in the new config.
-  config_manager->UpdateTrustAnchorIDs({{0x01, 0x01}}, {{0x02, 0x02}});
+  config_manager->UpdateTrustAnchorIDs({{0x01, 0x01}}, {{0x02, 0x02}}, 0);
   ASSERT_NO_FATAL_FAILURE(WaitForUpdate());
   EXPECT_THAT(
       observed_configs_[0]->trust_anchor_ids,

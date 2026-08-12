@@ -8,9 +8,10 @@
 #include "build/build_config.h"
 #include "chrome/browser/sync/test/integration/apps_helper.h"
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/sync/base/user_selectable_type.h"
@@ -20,6 +21,12 @@
 #endif
 
 namespace web_app::integration_tests {
+
+using WebAppIntegration = TwoClientWebAppsIntegrationTestBase;
+INSTANTIATE_TEST_SUITE_P(,
+                         WebAppIntegration,
+                         GetSyncTestModes(),
+                         testing::PrintToStringParamName());
 
 TwoClientWebAppsIntegrationTestBase::TwoClientWebAppsIntegrationTestBase()
     : WebAppsSyncTestBase(TWO_CLIENT),
@@ -33,10 +40,22 @@ TwoClientWebAppsIntegrationTestBase::TwoClientWebAppsIntegrationTestBase()
           ash::MultiUserWindowManager::DisableForTesting()),
 #endif  // BUILDFLAG(IS_CHROMEOS)
       helper_(this) {
+  std::vector<base::test::FeatureRef> enabled_features;
+  std::vector<base::test::FeatureRef> disabled_features;
+  if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
+    enabled_features.push_back(syncer::kReplaceSyncPromosWithSignInPromos);
+  }
+  enabled_features.push_back(features::kWebAppInstallDialog);
+  feature_overrides_.InitWithFeatures(enabled_features, disabled_features);
 }
 
 TwoClientWebAppsIntegrationTestBase::~TwoClientWebAppsIntegrationTestBase() =
     default;
+
+SyncTest::SetupSyncMode TwoClientWebAppsIntegrationTestBase::GetSetupSyncMode()
+    const {
+  return GetParam();
+}
 
 // WebAppIntegrationTestDriver::TestDelegate
 Browser* TwoClientWebAppsIntegrationTestBase::CreateBrowser(Profile* profile) {
@@ -136,6 +155,15 @@ Profile* TwoClientWebAppsIntegrationTestBase::GetProfileClient(
   NOTREACHED();
 }
 
+// static
+void TwoClientWebAppsIntegrationTestBase::SetUpTestSuite() {
+  // TODO(crbug.com/511805630): Fix tests timing out on TSAN
+#if defined(THREAD_SANITIZER)
+  GTEST_SKIP()
+      << "Skipping all WebAppIntegration tests on TSAN due to timeouts.";
+#endif
+}
+
 void TwoClientWebAppsIntegrationTestBase::SetUp() {
   helper_.SetUp();
   WebAppsSyncTestBase::SetUp();
@@ -154,22 +182,36 @@ void TwoClientWebAppsIntegrationTestBase::SetUpOnMainThread() {
       continue;
     }
 
-    ASSERT_TRUE(GetClient(i)->SetupSyncWithCustomSettings(
-        base::BindLambdaForTesting([](syncer::SyncUserSettings* user_settings) {
+    if (GetSetupSyncMode() == SetupSyncMode::kSyncTheFeature) {
+      ASSERT_TRUE(
+          GetClient(i)->SetupSyncWithCustomSettings(base::BindLambdaForTesting(
+              [](syncer::SyncUserSettings* user_settings) {
 #if BUILDFLAG(IS_CHROMEOS)
-          user_settings->SetSelectedTypes(/*sync_everything=*/false,
-                                          /*types=*/{});
-          user_settings->SetSelectedOsTypes(
-              /*sync_everything=*/false,
-              /*types=*/{syncer::UserSelectableOsType::kOsApps});
+                user_settings->SetSelectedTypes(/*sync_everything=*/false,
+                                                /*types=*/{});
+                user_settings->SetSelectedOsTypes(
+                    /*sync_everything=*/false,
+                    /*types=*/{syncer::UserSelectableOsType::kOsApps});
 #else   // BUILDFLAG(IS_CHROMEOS)
-          user_settings->SetSelectedTypes(
-              /*sync_everything=*/false,
-              /*types=*/{syncer::UserSelectableType::kApps});
-          user_settings->SetInitialSyncFeatureSetupComplete(
-              syncer::SyncFirstSetupCompleteSource::ADVANCED_FLOW_CONFIRM);
+                user_settings->SetSelectedTypes(
+                    /*sync_everything=*/false,
+                    /*types=*/{syncer::UserSelectableType::kApps});
+                user_settings->SetInitialSyncFeatureSetupComplete();
 #endif  // BUILDFLAG(IS_CHROMEOS)
-        })));
+              })));
+    } else {
+      ASSERT_TRUE(GetClient(i)->SignInNoWaitForCompletion());
+      ASSERT_TRUE(GetClient(i)->AwaitSyncTransportActive());
+      ASSERT_TRUE(GetClient(i)->DisableAllSelectableTypes());
+#if BUILDFLAG(IS_CHROMEOS)
+      ASSERT_TRUE(GetClient(i)->DisableAllSelectableOsTypes());
+      ASSERT_TRUE(GetClient(i)->EnableSelectableOsType(
+          syncer::UserSelectableOsType::kOsApps));
+#else
+      ASSERT_TRUE(GetClient(i)->EnableSelectableType(
+          syncer::UserSelectableType::kApps));
+#endif  // BUILDFLAG(IS_CHROMEOS)
+    }
   }
 
   helper_.SetUpOnMainThread();
@@ -192,11 +234,13 @@ bool TwoClientWebAppsIntegrationTestBase::SetupClients() {
     // The base SyncTest class creates a Browser window for each profile, but
     // does not create any tabs in that window. Our tests require all Browser
     // windows to always have at least one tab, so create these tabs as needed.
-    Browser* browser =
-        chrome::FindTabbedBrowser(profile, /*match_original_profiles=*/false);
+    BrowserWindowInterface* browser =
+        ProfileBrowserCollection::GetForProfile(profile)->FindTabbedBrowser();
     CHECK(browser);
-    if (!browser->tab_strip_model()->count()) {
-      AddBlankTabAndShow(browser);
+    if (!browser->GetTabStripModel()->count() &&
+        !AddTabAtIndexToBrowser(browser, 0, GURL(url::kAboutBlankURL),
+                                ui::PAGE_TRANSITION_AUTO_TOPLEVEL)) {
+      return false;
     }
   }
   return true;
@@ -205,12 +249,6 @@ bool TwoClientWebAppsIntegrationTestBase::SetupClients() {
 void TwoClientWebAppsIntegrationTestBase::TearDownOnMainThread() {
   helper_.TearDownOnMainThread();
   WebAppsSyncTestBase::TearDownOnMainThread();
-}
-
-void TwoClientWebAppsIntegrationTestBase::SetUpCommandLine(
-    base::CommandLine* command_line) {
-  WebAppsSyncTestBase::SetUpCommandLine(command_line);
-  ASSERT_TRUE(embedded_test_server()->Start());
 }
 
 }  // namespace web_app::integration_tests

@@ -5,6 +5,8 @@
 #ifndef CHROME_BROWSER_POLICY_STATUS_PROVIDER_STATUS_PROVIDER_UTIL_H_
 #define CHROME_BROWSER_POLICY_STATUS_PROVIDER_STATUS_PROVIDER_UTIL_H_
 
+#include <optional>
+
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
@@ -14,23 +16,23 @@ extern const char kUserPolicyStatusDescription[];
 
 // Looks for "username" key in `dict` and sets "domain" key with the
 // domain extracted from username.
-void SetDomainExtractedFromUsername(base::Value::Dict& dict);
+void SetDomainExtractedFromUsername(base::DictValue& dict);
 
 // Adds a new entry to |dict| with the affiliation status of the user associated
 // with |profile|. This method shouldn't be called for device scope status.
-void GetUserAffiliationStatus(base::Value::Dict* dict, Profile* profile);
+void GetUserAffiliationStatus(base::DictValue* dict, Profile* profile);
 
 // Adds a new entry to |dict| with the enterprise profile identifier of the
 // current |profile|.
-void SetProfileId(base::Value::Dict* dict, Profile* profile);
+void SetProfileId(base::DictValue* dict, Profile* profile);
 
 #if BUILDFLAG(IS_CHROMEOS)
-void GetOffHoursStatus(base::Value::Dict* dict);
+std::optional<bool> GetOffHoursStatus();
 
 // Adds a new entry to |dict| with the enterprise domain manager of the user
 // associated with |profile|. This method shouldn't be called for device scope
 // status.
-void GetUserManager(base::Value::Dict* dict, Profile* profile);
+void GetUserManager(base::DictValue* dict, Profile* profile);
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #endif  // CHROME_BROWSER_POLICY_STATUS_PROVIDER_STATUS_PROVIDER_UTIL_H_

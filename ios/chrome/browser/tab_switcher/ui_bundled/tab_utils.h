@@ -28,7 +28,7 @@ typedef NS_ENUM(NSInteger, EmptyThumbnailLayoutType) {
 
 // Returns the aspect ratio (height / width) of an item based on the container
 // `size`.
-CGFloat TabGridItemAspectRatio(CGSize size);
+CGFloat TabGridItemAspectRatio(CGSize size, UIWindowScene* window_scene);
 
 // Returns the number of columns based on based on the container `size` and
 // `content_size_category`.
@@ -52,5 +52,11 @@ bool HasDuplicateIdentifiers(NSArray<TabSwitcherItem*>* items);
 Browser* GetBrowserForTabWithCriteria(BrowserList* browser_list,
                                       WebStateSearchCriteria criteria,
                                       bool is_otr_tab);
+
+// Returns the Web State matching `criteria` from among the `browser_list`.
+// Returns `nullptr` if not found.
+web::WebState* GetWebStateForTabWithCriteria(BrowserList* browser_list,
+                                             WebStateSearchCriteria criteria,
+                                             bool is_otr_tab);
 
 #endif  // IOS_CHROME_BROWSER_TAB_SWITCHER_UI_BUNDLED_TAB_UTILS_H_

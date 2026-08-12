@@ -6,6 +6,7 @@
 #define ASH_SHELL_H_
 
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -23,6 +24,7 @@
 #include "ash/system/input_device_settings/touchscreen_metrics_recorder.h"
 #include "ash/system/toast/system_nudge_pause_manager_impl.h"
 #include "ash/wm/system_modal_container_event_filter_delegate.h"
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -44,7 +46,6 @@ class Window;
 }  // namespace aura
 
 namespace chromeos {
-class ImmersiveContext;
 class SnapController;
 }  // namespace chromeos
 
@@ -61,6 +62,7 @@ class NativeDisplayDelegate;
 }  // namespace display
 
 namespace gfx {
+class ImageSkia;
 class Point;
 }  // namespace gfx
 
@@ -134,7 +136,7 @@ class ColorPaletteController;
 class ControlVHistogramRecorder;
 class CoralController;
 class CoralDelegate;
-class CrosDisplayConfig;
+class CrosDisplayConfigImpl;
 class DarkLightModeControllerImpl;
 class DesksController;
 class DetachableBaseHandler;
@@ -277,7 +279,6 @@ class WindowCycleController;
 class WindowRestoreController;
 class WindowTilingController;
 class WindowTreeHostManager;
-class WmModeController;
 class ArcInputMethodBoundsTracker;
 
 enum class LoginStatus;
@@ -297,6 +298,22 @@ class Mediator;
 namespace curtain {
 class SecurityCurtainController;
 }  // namespace curtain
+
+// Configuration data required to register or update a tray icon in the status
+// area.
+// TODO(b:463430279): Maybe move it to `ash/public`?
+struct ASH_EXPORT TrayIconConfiguration {
+  TrayIconConfiguration();
+
+  TrayIconConfiguration(const TrayIconConfiguration&) = delete;
+  TrayIconConfiguration& operator=(const TrayIconConfiguration&) = delete;
+
+  ~TrayIconConfiguration();
+
+  int64_t id;
+  std::optional<gfx::ImageSkia> image;
+  std::optional<std::u16string> tool_tip;
+};
 
 // Shell is a singleton object that presents the Shell API and implements the
 // RootWindow's delegate interface.
@@ -476,7 +493,7 @@ class ASH_EXPORT Shell : public SessionObserver,
   ColorPaletteController* color_palette_controller() {
     return color_palette_controller_.get();
   }
-  CrosDisplayConfig* cros_display_config() {
+  CrosDisplayConfigImpl* cros_display_config() {
     return cros_display_config_.get();
   }
   ::wm::CursorManager* cursor_manager() { return cursor_manager_.get(); }
@@ -876,6 +893,9 @@ class ASH_EXPORT Shell : public SessionObserver,
   // Sets a custom color for the cursor.
   void SetCursorColor(SkColor cursor_color);
 
+  // Sets whether the cursor should be inverted.
+  void SetCursorInverted(bool inverted);
+
   // Updates cursor compositing on/off. Native cursor is disabled when cursor
   // compositing is enabled, and vice versa.
   void UpdateCursorCompositingEnabled();
@@ -930,6 +950,26 @@ class ASH_EXPORT Shell : public SessionObserver,
   LoginUnlockThroughputRecorder* login_unlock_throughput_recorder() {
     return login_unlock_throughput_recorder_.get();
   }
+
+  // Adds a status tray icon with the specified `configuration` to the status
+  // area on the display identified by `display_id`. The `callback` will be run
+  // when the icon is clicked.
+  // Returns whether the icon was successfully added.
+  bool AddStatusTrayIcon(const TrayIconConfiguration& configuration,
+                         int64_t display_id,
+                         base::RepeatingClosure callback);
+
+  // Updates the visual properties (e.g. image, tooltip) of the status tray icon
+  // identified by |configuration| on the display identified by `display_id`.
+  // Returns whether the icon was found and updated.
+  bool UpdateStatusTrayIcon(const TrayIconConfiguration& configuration,
+                            int64_t display_id);
+
+  // Removes the status tray icon identified by `configuration` from the status
+  // area on the display identified by `display_id`.
+  // Returns whether the icon was found and removed.
+  bool RemoveStatusTrayIcon(const TrayIconConfiguration& configuration,
+                            int64_t display_id);
 
   // Workaround for testing to simulat user sign-out without Chrome process
   // termination, which conflicts with production behavior.
@@ -1039,7 +1079,7 @@ class ASH_EXPORT Shell : public SessionObserver,
   std::unique_ptr<CalendarController> calendar_controller_;
   std::unique_ptr<CameraEffectsController> camera_effects_controller_;
   std::unique_ptr<ColorPaletteController> color_palette_controller_;
-  std::unique_ptr<CrosDisplayConfig> cros_display_config_;
+  std::unique_ptr<CrosDisplayConfigImpl> cros_display_config_;
   std::unique_ptr<curtain::SecurityCurtainController>
       security_curtain_controller_;
   std::unique_ptr<DarkLightModeControllerImpl> dark_light_mode_controller_;
@@ -1071,7 +1111,6 @@ class ASH_EXPORT Shell : public SessionObserver,
   std::unique_ptr<HumanPresenceOrientationController>
       human_presence_orientation_controller_;
   std::unique_ptr<ImeControllerImpl> ime_controller_;
-  std::unique_ptr<chromeos::ImmersiveContext> immersive_context_;
   std::unique_ptr<WebAuthNDialogControllerImpl> webauthn_dialog_controller_;
   std::unique_ptr<KeyboardBacklightColorController>
       keyboard_backlight_color_controller_;
@@ -1251,11 +1290,9 @@ class ASH_EXPORT Shell : public SessionObserver,
 
   std::unique_ptr<chromeos::SnapController> snap_controller_;
 
-  std::unique_ptr<WmModeController> wm_mode_controller_;
-
   // |native_cursor_manager_| is owned by |cursor_manager_|, but we keep a
   // pointer to vend to test code.
-  raw_ptr<NativeCursorManagerAsh, DanglingUntriaged> native_cursor_manager_;
+  raw_ptr<NativeCursorManagerAsh> native_cursor_manager_;
 
   // Cursor may be hidden on certain key events in Chrome OS, whereas we never
   // hide the cursor on Windows.
@@ -1292,6 +1329,8 @@ class ASH_EXPORT Shell : public SessionObserver,
 
   std::unique_ptr<CoralController> coral_controller_;
   std::unique_ptr<CoralDelegate> coral_delegate_;
+
+  bool shutting_down_ = false;
 
   base::WeakPtrFactory<Shell> weak_factory_{this};
 };

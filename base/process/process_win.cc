@@ -7,6 +7,7 @@
 #include <windows.h>
 
 #include "base/clang_profiling_buildflags.h"
+#include "base/features.h"
 #include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/process/kill.h"
@@ -27,6 +28,13 @@ DWORD kBasicProcessAccess =
 }  // namespace
 
 namespace base {
+
+// Sets Eco QoS (Quality of Service) level for background process which would
+// select efficient CPU frequency and schedule the process to efficient cores
+// (available on hybrid CPUs).
+// QoS is a scheduling Win API which indicates the desired performance and power
+// efficiency of a process/thread. EcoQoS is introduced since Windows 11.
+BASE_FEATURE(kUseEcoQoSForBackgroundProcess, FEATURE_ENABLED_BY_DEFAULT);
 
 Process::Process(ProcessHandle handle)
     : process_(handle), is_current_process_(false) {
@@ -169,7 +177,7 @@ bool Process::Terminate(int exit_code, bool wait) const {
       DPLOG(ERROR) << "Unable to terminate process";
     }
     // A non-zero timeout is necessary here for the same reasons as above.
-    if (::WaitForSingleObject(Handle(), kWaitMs) == WAIT_OBJECT_0) {
+    if (wait && ::WaitForSingleObject(Handle(), kWaitMs) == WAIT_OBJECT_0) {
       DWORD actual_exit;
       Exited(::GetExitCodeProcess(Handle(), &actual_exit)
                  ? static_cast<int>(actual_exit)
@@ -255,6 +263,11 @@ Process::Priority Process::GetPriority() const {
     return Priority::kBestEffort;
   }
 
+  // Return Priority::kUserBlocking if ABOVE_NORMAL_PRIORITY_CLASS is used.
+  if (priority == ABOVE_NORMAL_PRIORITY_CLASS) {
+    return Priority::kUserBlocking;
+  }
+
   // Return Priority::kUserVisible if EcoQos is enabled.
   if (win::GetProcessEcoQoSState(Handle()) ==
       win::ProcessPowerState::kEnabled) {
@@ -277,13 +290,29 @@ bool Process::SetPriority(Priority priority) {
   // query the current state using GetProcessInformation. This is needed in
   // GetPriority to determine the current priority. Calls made to
   // SetProcessEcoQoSState before 22H2 are a no-op.
-  win::SetProcessEcoQoSState(Handle(), priority == Priority::kUserBlocking
-                                           ? win::ProcessPowerState::kUnset
-                                           : win::ProcessPowerState::kEnabled);
+  if (FeatureList::IsEnabled(kUseEcoQoSForBackgroundProcess)) {
+    win::SetProcessEcoQoSState(Handle(),
+                               priority == Priority::kUserBlocking
+                                   ? win::ProcessPowerState::kUnset
+                                   : win::ProcessPowerState::kEnabled);
+  }
 
-  return ::SetPriorityClass(Handle(), priority == Priority::kBestEffort
-                                          ? IDLE_PRIORITY_CLASS
-                                          : NORMAL_PRIORITY_CLASS) != 0;
+  DWORD os_priority = NORMAL_PRIORITY_CLASS;
+  switch (priority) {
+    case Priority::kBestEffort:
+      os_priority = IDLE_PRIORITY_CLASS;
+      break;
+    case Priority::kUserVisible:
+      os_priority = NORMAL_PRIORITY_CLASS;
+      break;
+    case Priority::kUserBlocking:
+      os_priority =
+          FeatureList::IsEnabled(features::kUserBlockingAboveNormalPriority)
+              ? ABOVE_NORMAL_PRIORITY_CLASS
+              : NORMAL_PRIORITY_CLASS;
+      break;
+  }
+  return ::SetPriorityClass(Handle(), os_priority) != 0;
 }
 
 int Process::GetOSPriority() const {

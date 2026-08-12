@@ -81,39 +81,39 @@ void YieldCurrentThread() {
 }
 
 String BlinkRootDir() {
-  return FilePathToWebString(BlinkRootFilePath());
+  return FilePathToString(BlinkRootFilePath());
 }
 
 String BlinkWebTestsDir() {
-  return FilePathToWebString(WebTestsFilePath());
+  return FilePathToString(WebTestsFilePath());
 }
 
 String ExecutableDir() {
   base::FilePath path;
   base::PathService::Get(base::DIR_EXE, &path);
-  return FilePathToWebString(base::MakeAbsoluteFilePath(path));
+  return FilePathToString(base::MakeAbsoluteFilePath(path));
 }
 
 String CoreTestDataPath(const String& relative_path) {
-  return FilePathToWebString(
+  return FilePathToString(
       BlinkRootFilePath()
           .Append(FILE_PATH_LITERAL("renderer/core/testing/data"))
-          .Append(WebStringToFilePath(relative_path)));
+          .Append(StringToFilePath(relative_path)));
 }
 
 String PlatformTestDataPath(const String& relative_path) {
-  return FilePathToWebString(
+  return FilePathToString(
       BlinkRootFilePath()
           .Append(FILE_PATH_LITERAL("renderer/platform/testing/data"))
-          .Append(WebStringToFilePath(relative_path)));
+          .Append(StringToFilePath(relative_path)));
 }
 
 String AccessibilityTestDataPath(const String& relative_path) {
-  return FilePathToWebString(
+  return FilePathToString(
       BlinkRootFilePath()
           .Append(
               FILE_PATH_LITERAL("renderer/modules/accessibility/testing/data"))
-          .Append(WebStringToFilePath(relative_path)));
+          .Append(StringToFilePath(relative_path)));
 }
 
 base::FilePath HyphenationDictionaryDir() {
@@ -123,7 +123,7 @@ base::FilePath HyphenationDictionaryDir() {
 }
 
 std::optional<Vector<char>> ReadFromFile(const String& path) {
-  base::FilePath file_path = blink::WebStringToFilePath(path);
+  base::FilePath file_path = blink::StringToFilePath(path);
   std::string buffer;
   if (!base::ReadFileToString(file_path, &buffer)) {
     return std::nullopt;
@@ -132,23 +132,22 @@ std::optional<Vector<char>> ReadFromFile(const String& path) {
 }
 
 String BlinkWebTestsFontsTestDataPath(const String& relative_path) {
-  return FilePathToWebString(
-      WebTestsFilePath()
-          .Append(FILE_PATH_LITERAL("external/wpt/fonts"))
-          .Append(WebStringToFilePath(relative_path)));
+  return FilePathToString(WebTestsFilePath()
+                              .Append(FILE_PATH_LITERAL("external/wpt/fonts"))
+                              .Append(StringToFilePath(relative_path)));
 }
 
 String BlinkWebTestsImagesTestDataPath(const String& relative_path) {
-  return FilePathToWebString(WebTestsFilePath()
-                                 .Append(FILE_PATH_LITERAL("images/resources"))
-                                 .Append(WebStringToFilePath(relative_path)));
+  return FilePathToString(WebTestsFilePath()
+                              .Append(FILE_PATH_LITERAL("images/resources"))
+                              .Append(StringToFilePath(relative_path)));
 }
 
 String StylePerfTestDataPath(const String& relative_path) {
-  return FilePathToWebString(
+  return FilePathToString(
       BlinkRootFilePath()
           .Append(FILE_PATH_LITERAL("renderer/core/css/perftest_data"))
-          .Append(WebStringToFilePath(relative_path)));
+          .Append(StringToFilePath(relative_path)));
 }
 
 LineReader::LineReader(const String& text) : text_(text), index_(0) {}
@@ -157,14 +156,14 @@ bool LineReader::GetNextLine(String* line) {
   if (index_ >= text_.length())
     return false;
 
-  wtf_size_t end_of_line_index = text_.Find("\r\n", index_);
+  wtf_size_t end_of_line_index = text_.find("\r\n", index_);
   if (end_of_line_index == kNotFound) {
-    *line = text_.Substring(index_);
+    *line = text_.substr(index_);
     index_ = text_.length();
     return true;
   }
 
-  *line = text_.Substring(index_, end_of_line_index - index_);
+  *line = text_.substr(index_, end_of_line_index - index_);
   index_ = end_of_line_index + 2;
   return true;
 }

@@ -9,11 +9,14 @@
 
 #include <memory>
 
+#include "base/cfi_buildflags.h"
+#include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_tick_clock.h"
+#include "base/test/test_future.h"
 #include "base/test/test_mock_time_task_runner.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -23,7 +26,6 @@
 #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
 #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_source.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -71,31 +73,29 @@ class FullscreenEventsWaiter : public content::WebContentsObserver {
 
   void MediaEffectivelyFullscreenChanged(bool value) override {
     playing_media_fullscreen_ = value;
-    if (run_loop_) {
-      EXPECT_TRUE(playing_media_fullscreen_expected_value_.has_value());
-      if (playing_media_fullscreen_ ==
-          playing_media_fullscreen_expected_value_.value()) {
-        playing_media_fullscreen_expected_value_.reset();
-        run_loop_->Quit();
-      }
+    if (expected_value_.has_value() && value == *expected_value_) {
+      expected_value_.reset();
+      future_.SetValue();
     }
   }
 
   // Wait for the current media playing fullscreen mode to be equal to
   // |expected_media_fullscreen_mode|.
-  void Wait(bool expected_media_fullscreen_mode) {
+  bool WaitAndClear(bool expected_media_fullscreen_mode) {
     if (expected_media_fullscreen_mode == playing_media_fullscreen_)
-      return;
+      return true;
 
-    playing_media_fullscreen_expected_value_ = expected_media_fullscreen_mode;
-    run_loop_ = std::make_unique<base::RunLoop>();
-    run_loop_->Run();
+    expected_value_ = expected_media_fullscreen_mode;
+    bool success = future_.Wait();
+    future_.Clear();
+    expected_value_.reset();
+    return success;
   }
 
  private:
-  std::unique_ptr<base::RunLoop> run_loop_;
   bool playing_media_fullscreen_ = false;
-  std::optional<bool> playing_media_fullscreen_expected_value_ = false;
+  std::optional<bool> expected_value_;
+  base::test::TestFuture<void> future_;
 };
 
 class MediaWaiter : public content::WebContentsObserver {
@@ -106,37 +106,53 @@ class MediaWaiter : public content::WebContentsObserver {
   void MediaStartedPlaying(const MediaPlayerInfo& video_type,
                            const content::MediaPlayerId& id) override {
     started_media_id_ = id;
-    media_started_playing_loop_.Quit();
+    media_started_playing_future_.SetValue();
   }
   void MediaStoppedPlaying(
       const MediaPlayerInfo& video_type,
       const content::MediaPlayerId& id,
       content::WebContentsObserver::MediaStoppedReason reason) override {
     EXPECT_EQ(id, started_media_id_);
-    media_stopped_playing_loop_.Quit();
+    media_stopped_playing_future_.SetValue();
   }
   void OnAudioStateChanged(bool audible) override {
     if (audible) {
-      audio_started_playing_loop_.Quit();
+      audio_started_playing_future_.SetValue();
     } else {
-      audio_stopped_playing_loop_.Quit();
+      audio_stopped_playing_future_.SetValue();
     }
   }
 
-  void WaitForMediaStartedPlaying() { media_started_playing_loop_.Run(); }
-  void WaitForMediaStoppedPlaying() { media_stopped_playing_loop_.Run(); }
+  bool WaitForMediaStartedPlaying() {
+    bool success = media_started_playing_future_.Wait();
+    media_started_playing_future_.Clear();
+    return success;
+  }
+  bool WaitForMediaStoppedPlaying() {
+    bool success = media_stopped_playing_future_.Wait();
+    media_stopped_playing_future_.Clear();
+    return success;
+  }
 
-  void WaitForAudioStartedPlaying() { audio_started_playing_loop_.Run(); }
-  void WaitForAudioStoppedPlaying() { audio_stopped_playing_loop_.Run(); }
+  bool WaitForAudioStartedPlaying() {
+    bool success = audio_started_playing_future_.Wait();
+    audio_started_playing_future_.Clear();
+    return success;
+  }
+  bool WaitForAudioStoppedPlaying() {
+    bool success = audio_stopped_playing_future_.Wait();
+    audio_stopped_playing_future_.Clear();
+    return success;
+  }
 
  private:
   std::optional<content::MediaPlayerId> started_media_id_;
 
-  base::RunLoop media_started_playing_loop_;
-  base::RunLoop media_stopped_playing_loop_;
+  base::test::TestFuture<void> media_started_playing_future_;
+  base::test::TestFuture<void> media_stopped_playing_future_;
 
-  base::RunLoop audio_started_playing_loop_;
-  base::RunLoop audio_stopped_playing_loop_;
+  base::test::TestFuture<void> audio_started_playing_future_;
+  base::test::TestFuture<void> audio_stopped_playing_future_;
 };
 
 }  // namespace
@@ -466,8 +482,9 @@ IN_PROC_BROWSER_TEST_P(TabUsageScenarioTrackerDiscardBrowserTest, TabDiscard) {
             interval_data.source_id_for_longest_visible_origin_duration);
 }
 
+// TODO(crbug.com/507054999): Flaky on multiple platforms.
 IN_PROC_BROWSER_TEST_P(TabUsageScenarioTrackerDiscardBrowserTest,
-                       VisibleTabVideoDiscarded) {
+                       DISABLED_VisibleTabVideoDiscarded) {
   // Start a video in a tab and discard it while it's playing, ensure that
   // things are tracked properly.
   EXPECT_TRUE(
@@ -484,7 +501,7 @@ IN_PROC_BROWSER_TEST_P(TabUsageScenarioTrackerDiscardBrowserTest,
   MediaWaiter media_waiter(media_contents);
   EXPECT_TRUE(content::ExecJs(
       media_contents, "document.getElementById('long-video-loop').play();"));
-  media_waiter.WaitForMediaStartedPlaying();
+  ASSERT_TRUE(media_waiter.WaitForMediaStartedPlaying());
   EXPECT_TRUE(data_store_.TrackingPlayingVideoInActiveTabForTesting());
 
   auto expected_source_id =
@@ -513,8 +530,9 @@ IN_PROC_BROWSER_TEST_P(TabUsageScenarioTrackerDiscardBrowserTest,
             interval_data.source_id_for_longest_visible_origin_duration);
 }
 
+// TODO(crbug.com/507054999): Flaky on multiple platforms.
 IN_PROC_BROWSER_TEST_P(TabUsageScenarioTrackerDiscardBrowserTest,
-                       FullScreenVideoDiscarded) {
+                       DISABLED_FullScreenVideoDiscarded) {
   // Play full screen video in a tab and discard it while it's playing, ensure
   // that things are tracked properly.
   EXPECT_TRUE(
@@ -531,7 +549,7 @@ IN_PROC_BROWSER_TEST_P(TabUsageScenarioTrackerDiscardBrowserTest,
   FullscreenEventsWaiter fullscreen_waiter(fullscreen_contents);
   EXPECT_TRUE(
       content::ExecJs(fullscreen_contents, "makeFullscreen('small_video')"));
-  fullscreen_waiter.Wait(true);
+  ASSERT_TRUE(fullscreen_waiter.WaitAndClear(true));
   EXPECT_TRUE(
       data_store_.TrackingPlayingFullScreenVideoSingleMonitorForTesting());
 
@@ -568,10 +586,10 @@ IN_PROC_BROWSER_TEST_F(TabUsageScenarioTrackerBrowserTest, FullScreenVideo) {
   EXPECT_TRUE(content::NavigateToURL(
       contents, embedded_test_server()->GetURL("/media/fullscreen.html")));
   EXPECT_TRUE(content::ExecJs(contents, "makeFullscreen('small_video')"));
-  waiter.Wait(true);
+  ASSERT_TRUE(waiter.WaitAndClear(true));
   tick_clock_.Advance(kInterval);
   EXPECT_TRUE(content::ExecJs(contents, "exitFullscreen()"));
-  waiter.Wait(false);
+  ASSERT_TRUE(waiter.WaitAndClear(false));
   auto expected_source_id =
       contents->GetPrimaryMainFrame()->GetPageUkmSourceId();
 
@@ -592,7 +610,19 @@ IN_PROC_BROWSER_TEST_F(TabUsageScenarioTrackerBrowserTest, FullScreenVideo) {
             interval_data.source_id_for_longest_visible_origin_duration);
 }
 
-IN_PROC_BROWSER_TEST_F(TabUsageScenarioTrackerBrowserTest, VisibleTabVideo) {
+// Disabled on Linux ASAN/LSAN/CFI due to test failures.
+// Also disabled on ChromeOS Debug/ASAN/LSAN builds; see crbug.com/476415209.
+#if (BUILDFLAG(IS_LINUX) &&                                                    \
+     (defined(LEAK_SANITIZER) || defined(ADDRESS_SANITIZER) ||                 \
+      BUILDFLAG(CFI_ICALL_CHECK))) ||                                          \
+    (BUILDFLAG(IS_CHROMEOS) && (!defined(NDEBUG) || defined(LEAK_SANITIZER) || \
+                                defined(ADDRESS_SANITIZER)))
+#define MAYBE_VisibleTabVideo DISABLED_VisibleTabVideo
+#else
+#define MAYBE_VisibleTabVideo VisibleTabVideo
+#endif
+IN_PROC_BROWSER_TEST_F(TabUsageScenarioTrackerBrowserTest,
+                       MAYBE_VisibleTabVideo) {
   // Play video in a tab, ensure that things are tracked properly.
   auto* contents = browser()->tab_strip_model()->GetWebContentsAt(0);
   MediaWaiter waiter(contents);
@@ -601,11 +631,11 @@ IN_PROC_BROWSER_TEST_F(TabUsageScenarioTrackerBrowserTest, VisibleTabVideo) {
       embedded_test_server()->GetURL("/media/session/media-session.html")));
   EXPECT_TRUE(content::ExecJs(
       contents, "document.getElementById('long-video-loop').play();"));
-  waiter.WaitForMediaStartedPlaying();
+  ASSERT_TRUE(waiter.WaitForMediaStartedPlaying());
   tick_clock_.Advance(kInterval);
   EXPECT_TRUE(content::ExecJs(
       contents, "document.getElementById('long-video-loop').pause();"));
-  waiter.WaitForMediaStoppedPlaying();
+  ASSERT_TRUE(waiter.WaitForMediaStoppedPlaying());
   auto expected_source_id =
       contents->GetPrimaryMainFrame()->GetPageUkmSourceId();
 
@@ -634,11 +664,11 @@ IN_PROC_BROWSER_TEST_F(TabUsageScenarioTrackerBrowserTest, TabAudio) {
       embedded_test_server()->GetURL("/media/session/media-session.html")));
   EXPECT_TRUE(content::ExecJs(contents,
                               "document.getElementById('long-audio').play();"));
-  waiter.WaitForAudioStartedPlaying();
+  ASSERT_TRUE(waiter.WaitForAudioStartedPlaying());
   tick_clock_.Advance(kInterval);
   EXPECT_TRUE(content::ExecJs(
       contents, "document.getElementById('long-audio').pause();"));
-  waiter.WaitForAudioStoppedPlaying();
+  ASSERT_TRUE(waiter.WaitForAudioStoppedPlaying());
   auto expected_source_id =
       contents->GetPrimaryMainFrame()->GetPageUkmSourceId();
 
@@ -679,7 +709,7 @@ IN_PROC_BROWSER_TEST_F(TabUsageScenarioTrackerBrowserTest,
   auto* contents = browser()->tab_strip_model()->GetWebContentsAt(1);
   FullscreenEventsWaiter waiter(contents);
   EXPECT_TRUE(content::ExecJs(contents, "makeFullscreen('small_video')"));
-  waiter.Wait(true);
+  ASSERT_TRUE(waiter.WaitAndClear(true));
   tick_clock_.Advance(kInterval * 2);
   auto expected_source_id =
       contents->GetPrimaryMainFrame()->GetPageUkmSourceId();
@@ -737,7 +767,7 @@ IN_PROC_BROWSER_TEST_F(TabUsageScenarioTrackerBrowserTest,
       contents, embedded_test_server()->GetURL("/media/fullscreen.html")));
   FullscreenEventsWaiter waiter(contents);
   EXPECT_TRUE(content::ExecJs(contents, "makeFullscreen('small_video')"));
-  waiter.Wait(true);
+  ASSERT_TRUE(waiter.WaitAndClear(true));
   tick_clock_.Advance(kInterval);
   auto expected_source_id =
       contents->GetPrimaryMainFrame()->GetPageUkmSourceId();
@@ -776,8 +806,9 @@ IN_PROC_BROWSER_TEST_F(TabUsageScenarioTrackerBrowserTest,
             interval_data.source_id_for_longest_visible_origin_duration);
 }
 
+// TODO(crbug.com/507054999): Flaky on multiple platforms.
 IN_PROC_BROWSER_TEST_F(TabUsageScenarioTrackerBrowserTest,
-                       InitialVisibleNotification) {
+                       DISABLED_InitialVisibleNotification) {
   // This test causes a WebContents::OnVisibilityChanged(VISIBLE) signal to be
   // emitted for a tab that was already visible when adding it.
   ui_test_utils::BrowserCreatedObserver browser_created_observer;

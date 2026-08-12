@@ -87,14 +87,13 @@ void BeginFrameSourceWebView::ObserveBeginFrameSource(
 }
 
 void BeginFrameSourceWebView::OnNeedsBeginFrames(bool needs_begin_frames) {
+  auto track = perfetto::NamedTrack::FromPointer("NeedsBeginFrames", this);
   if (needs_begin_frames) {
-    TRACE_EVENT_BEGIN("cc,benchmark", "NeedsBeginFrames",
-                      perfetto::Track::FromPointer(this));
+    TRACE_EVENT_BEGIN("cc,benchmark", "NeedsBeginFrames", track);
     if (observed_begin_frame_source_)
       observed_begin_frame_source_->AddObserver(parent_observer_.get());
   } else {
-    TRACE_EVENT_END("cc,benchmark", /*"NeedsBeginFrames"*/
-                    perfetto::Track::FromPointer(this));
+    TRACE_EVENT_END("cc,benchmark", track);
     if (observed_begin_frame_source_)
       observed_begin_frame_source_->RemoveObserver(parent_observer_.get());
   }
@@ -131,7 +130,7 @@ RootBeginFrameSourceWebView::RootBeginFrameSourceWebView()
                           /*requires_align_with_java=*/true),
       j_object_(Java_RootBeginFrameSourceWebView_Constructor(
           jni_zero::AttachCurrentThread(),
-          reinterpret_cast<jlong>(this))) {
+          reinterpret_cast<int64_t>(this))) {
   ObserveBeginFrameSource(&begin_frame_source_);
 }
 

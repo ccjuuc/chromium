@@ -116,6 +116,7 @@ class TestCustomElementDefinition : public CustomElementDefinition {
   bool HasFormResetCallback() const override { return false; }
   bool HasFormDisabledCallback() const override { return false; }
   bool HasFormStateRestoreCallback() const override { return false; }
+  bool HasToolFillCallback() const override { return false; }
 
   void RunConnectedCallback(Element&) override {
     NOTREACHED() << "definition does not have connected callback";
@@ -160,6 +161,10 @@ class TestCustomElementDefinition : public CustomElementDefinition {
     NOTREACHED() << "definition does not have restoreValueCallback";
   }
 
+  void RunToolFillCallback(Element& element, const String& mode) override {
+    NOTREACHED() << "definition does not have toolFillCallback";
+  }
+
  private:
   Member<V8CustomElementConstructor> constructor_;
 };
@@ -201,7 +206,8 @@ class CreateElement {
     NonThrowableExceptionState no_exceptions;
     Element* element = document->CreateElement(
         QualifiedName(g_null_atom, local_name_, namespace_uri_),
-        CreateElementFlags::ByCreateElement(), is_value_, /*registry*/ nullptr);
+        CreateElementFlags::ByCreateElement(), is_value_,
+        CustomElementRegistry::DefaultRegistry(*document));
     for (const auto& attribute : attributes_)
       element->setAttribute(attribute.first, attribute.second);
     return element;

@@ -11,27 +11,28 @@
 #import "ios/chrome/browser/location_bar/ui_bundled/location_bar_consumer.h"
 #import "ios/chrome/browser/orchestrator/ui_bundled/location_bar_animatee.h"
 #import "ios/chrome/browser/shared/public/commands/omnibox_commands.h"
+#import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 
-@class LayoutGuideCenter;
 @protocol ActivityServiceCommands;
-@protocol ApplicationCommands;
 @protocol BadgeViewVisibilityDelegate;
-@protocol IncognitoBadgeViewVisibilityDelegate;
 @protocol BrowserCoordinatorCommands;
-@protocol BWGCommands;
 @protocol ContextualPanelEntrypointVisibilityDelegate;
 @protocol FakeboxButtonsSnapshotProvider;
+@protocol GeminiCommands;
 @protocol HelpCommands;
-@class LocationBarViewController;
+@protocol IncognitoBadgeViewVisibilityDelegate;
+@class LayoutGuideCenter;
 @protocol LensCommands;
 @protocol LensOverlayCommands;
+@protocol LocationBarMutator;
 @protocol LocationBarOffsetProvider;
-@protocol LoadQueryCommands;
+@class LocationBarViewController;
 @protocol PageActionMenuCommands;
 @protocol PageActionMenuEntryPointCommands;
-@protocol ReaderModeChipVisibilityDelegate;
-@protocol TextFieldViewContaining;
 class PrefService;
+@protocol ReaderModeChipVisibilityDelegate;
+@protocol SceneCommands;
+@protocol TextFieldViewContaining;
 namespace feature_engagement {
 class Tracker;
 }
@@ -78,9 +79,15 @@ class Tracker;
 // Decides if AI Hub new badge should show.
 - (BOOL)shouldShowAIHubNewFeatureBadge;
 
-// Edit state required `height` changed.
-- (void)locationBarViewController:(LocationBarViewController*)controller
-         didChangeEditStateHeight:(CGFloat)height;
+// Notifies the delegate about a tap on the Hide Toolbar context menu action.
+- (void)locationBarHideToolbarTapped;
+
+// Returns whether the location bar can send the current tab to other devices.
+- (BOOL)locationBarCanSendTabToSelf;
+
+// Notifies the delegate that the "Send to your device" context menu item was
+// tapped.
+- (void)locationBarSendTabToSelfTapped;
 
 @end
 
@@ -88,9 +95,11 @@ class Tracker;
 // the omnibox - the editing and the non-editing states. In the editing state,
 // the omnibox textfield is displayed; in the non-editing state, the current
 // location is displayed.
-@interface LocationBarViewController : UIViewController <FullscreenUIElement,
-                                                         LocationBarAnimatee,
-                                                         LocationBarConsumer>
+@interface LocationBarViewController
+    : UIViewController <ContextMenuTransitionStateProviding,
+                        FullscreenUIElement,
+                        LocationBarAnimatee,
+                        LocationBarConsumer>
 
 @property(nonatomic, assign) BOOL incognito;
 
@@ -101,22 +110,31 @@ class Tracker;
 
 // The dispatcher for the share button, voice search, and long press actions.
 @property(nonatomic, weak) id<ActivityServiceCommands,
-                              ApplicationCommands,
                               BrowserCoordinatorCommands,
-                              LoadQueryCommands,
                               LensCommands,
                               LensOverlayCommands,
-                              OmniboxCommands>
+                              OmniboxCommands,
+                              SceneCommands>
     dispatcher;
 
 // Delegate for this location bar view controller.
 @property(nonatomic, weak) id<LocationBarViewControllerDelegate> delegate;
+
+// The active context menu interaction animator, if any.
+@property(nonatomic, strong) id<UIContextMenuInteractionAnimating>
+    activeContextMenuAnimator;
+
+// Mutator for this location bar view controller.
+@property(nonatomic, weak) id<LocationBarMutator> mutator;
 
 // The offset provider for the edit/steady transition animation.
 @property(nonatomic, weak) id<LocationBarOffsetProvider> offsetProvider;
 
 // The layout guide center to use to refer to the first suggestion label.
 @property(nonatomic, strong) LayoutGuideCenter* layoutGuideCenter;
+
+// Whether the location bar is currently active.
+@property(nonatomic, assign) BOOL active;
 
 // Feature engagement tracker.
 @property(nonatomic, assign) feature_engagement::Tracker* tracker;
@@ -131,8 +149,8 @@ class Tracker;
 // The page action menu handler.
 @property(nonatomic, weak) id<PageActionMenuCommands> pageActionMenuHandler;
 
-// The BWG command handler.
-@property(nonatomic, weak) id<BWGCommands> BWGHandler;
+// The Gemini command handler.
+@property(nonatomic, weak) id<GeminiCommands> geminiHandler;
 
 // The page action menu entry point handler. Returns the page action menu entry
 // point view for direct communication between a command dispatched and the page
@@ -219,16 +237,17 @@ class Tracker;
 // Records the lens overlay entrypoint availability in the location bar.
 - (void)recordLensOverlayAvailability;
 
+// Updates the visibility of the AI Hub "New" feature badge.
+- (void)updateAIHubNewBadgeVisibility;
+
 // Moves the focus of VoiceOver to the steady view.
 - (void)focusSteadyViewForVoiceOver;
 
 // Creates a visual copy of the location bar steady view.
 - (UIView*)locationBarSteadyViewVisualCopy;
 
-// Updates the text in the OmniboxTextHiddenLabel.
-// See crbug.com/465394669 for rationale.
-// TODO(crbug.com/465030009): Remove the hidden omnibox text label.
-- (void)updateOmniboxTextHiddenLabel:(NSString*)text;
+// Sets the custom leading view visibility, optionally animated.
+- (void)setCustomLeadingViewVisible:(BOOL)visible animated:(BOOL)animated;
 
 @end
 

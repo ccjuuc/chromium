@@ -92,21 +92,10 @@ void RecordAccessibilityModeHistograms(AXHistogramPrefix prefix,
       RecordModeFlag(prefix,
                      AXMode::ModeFlagHistogramValue::UMA_AX_MODE_SCREEN_READER);
     }
-  }
 
-  // Record forms control flag transitioning from unset to set.
-  int new_filter_mode_flags =
-      mode.filter_flags() & (~previous_mode.filter_flags());
-  if (new_filter_mode_flags & AXMode::kFormsAndLabelsOnly) {
-    switch (prefix) {
-      case AXHistogramPrefix::kNone:
-        base::UmaHistogramBoolean(
-            "Accessibility.ExperimentalModeFlag.FormControls", true);
-        break;
-
-      case AXHistogramPrefix::kBlink:
-        base::UmaHistogramBoolean(
-            "Blink.Accessibility.ExperimentalModeFlag.FormControls", true);
+    if (new_mode_flags & AXMode::kNativeAdaptedWebContents) {
+      RecordModeFlag(prefix, AXMode::ModeFlagHistogramValue::
+                                 UMA_AX_MODE_NATIVE_ADAPTED_WEB_CONTENTS);
     }
   }
 

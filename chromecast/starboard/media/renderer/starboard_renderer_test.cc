@@ -21,9 +21,11 @@
 #include <utility>
 
 #include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
+#include "base/test/gtest_util.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
@@ -83,7 +85,7 @@ void RunPendingTasks() {
 ::media::AudioDecoderConfig GetChromiumAudioConfig() {
   return ::media::AudioDecoderConfig(
       ::media::AudioCodec::kAAC, ::media::SampleFormat::kSampleFormatS32,
-      ::media::ChannelLayout::CHANNEL_LAYOUT_STEREO, 48000, /*extra_data=*/{},
+      ::media::ChannelLayoutConfig::Stereo(), 48000, /*extra_data=*/{},
       ::media::EncryptionScheme::kUnencrypted);
 }
 
@@ -174,8 +176,8 @@ class StarboardRendererTest : public ::testing::Test {
     StarboardDrmWrapper::SetSingletonForTesting(&starboard_for_drm_);
 
     ON_CALL(media_resource_, GetAllStreams)
-        .WillByDefault(Return(
-            std::vector<DemuxerStream*>({&audio_stream_, &video_stream_})));
+        .WillByDefault(Return(std::vector<raw_ptr<DemuxerStream>>(
+            {&audio_stream_, &video_stream_})));
     ON_CALL(media_resource_, GetFirstStream(DemuxerStream::Type::AUDIO))
         .WillByDefault(Return(&audio_stream_));
     ON_CALL(media_resource_, GetFirstStream(DemuxerStream::Type::VIDEO))
@@ -647,6 +649,56 @@ TEST_F(StarboardRendererTest, GetMediaTimeReadsCurrentMediaTimeFromStarboard) {
   RunPendingTasks();
 
   EXPECT_EQ(renderer.GetMediaTime(), kMediaTime);
+}
+
+// Regression test for crbug.com/503617302.
+TEST_F(StarboardRendererTest, DoesNotSetSbPlayerOnInitializationFailure) {
+  const gfx::RectF geometry(0, 0, 1920, 1080);
+  const gfx::OverlayTransform transform =
+      gfx::OverlayTransform::OVERLAY_TRANSFORM_NONE;
+
+  // Set up the mock to fail player creation.
+  EXPECT_CALL(*starboard_, CreatePlayer(_, _)).WillOnce(Return(nullptr));
+
+  // The player's bounds should NOT be set after a failed initialization, even
+  // if geometry changes occur.
+  EXPECT_CALL(*starboard_, SetPlayerBounds(_, _, _, _, _, _)).Times(0);
+
+  StarboardRenderer renderer(std::move(starboard_), task_runner_, plane_id_,
+                             /*enable_buffering=*/true,
+                             &geometry_setter_service_, &cast_metrics_helper_);
+  RunPendingTasks();
+
+  EXPECT_CALL(
+      pipeline_status_fn_,
+      Call(HasStatusCode(
+          ::media::PipelineStatusCodes::PIPELINE_ERROR_INITIALIZATION_FAILED)))
+      .Times(1);
+  renderer.Initialize(
+      &media_resource_, &client_,
+      base::BindLambdaForTesting(pipeline_status_fn_.AsStdFunction()));
+  RunPendingTasks();
+
+  // This geometry change should be ignored by the geometry_change_handler_,
+  // which was never initialized with a player.
+  static_cast<mojom::VideoGeometrySetter*>(&geometry_setter_service_)
+      ->SetVideoGeometry(geometry, transform, plane_id_);
+  RunPendingTasks();
+}
+
+TEST_F(StarboardRendererTest, Initialize_Twice_Crashes) {
+  StarboardRenderer renderer(std::move(starboard_), task_runner_, plane_id_,
+                             /*enable_buffering=*/true,
+                             &geometry_setter_service_, &cast_metrics_helper_);
+
+  renderer.Initialize(
+      &media_resource_, &client_,
+      base::BindLambdaForTesting(pipeline_status_fn_.AsStdFunction()));
+  RunPendingTasks();
+
+  EXPECT_CHECK_DEATH(renderer.Initialize(
+      &media_resource_, &client_,
+      base::BindLambdaForTesting(pipeline_status_fn_.AsStdFunction())));
 }
 
 TEST_F(StarboardRendererTest, SetPlaybackRateReportsMetric) {

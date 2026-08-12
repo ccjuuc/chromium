@@ -4,6 +4,8 @@
 
 #import "ios/chrome/browser/intelligence/persist_tab_context/model/persist_tab_context_browser_agent.h"
 
+#import <algorithm>
+
 #import "base/files/file_enumerator.h"
 #import "base/files/file_path.h"
 #import "base/files/file_util.h"
@@ -18,21 +20,26 @@
 #import "base/test/task_environment.h"
 #import "base/test/test_future.h"
 #import "base/time/time.h"
+#import "base/types/expected.h"
 #import "components/optimization_guide/proto/features/common_quality_data.pb.h"
 #import "components/page_content_annotations/core/page_content_annotations_features.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/intelligence/persist_tab_context/metrics/persist_tab_context_metrics.h"
-#import "ios/chrome/browser/intelligence/persist_tab_context/model/page_content_cache_bridge_service.h"
-#import "ios/chrome/browser/intelligence/persist_tab_context/model/page_content_cache_bridge_service_factory.h"
+#import "ios/chrome/browser/intelligence/persist_tab_context/model/page_content_cache_service.h"
+#import "ios/chrome/browser/intelligence/persist_tab_context/model/page_content_cache_service_factory.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
+#import "ios/chrome/browser/shared/model/browser/browser_list.h"
+#import "ios/chrome/browser/shared/model/browser/browser_list_factory.h"
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/paths/paths_internal.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
+#import "ios/web/public/test/fakes/fake_web_state.h"
 #import "ios/web/public/test/web_state_test_util.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "ios/web/public/web_state.h"
+#import "testing/gmock/include/gmock/gmock.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/platform_test.h"
 
@@ -42,6 +49,9 @@ constexpr std::string kPageContextPrefix = "page_context_";
 constexpr std::string kProtoSuffix = ".proto";
 constexpr std::string kPersistedTabContextsDir = "persisted_tab_contexts";
 constexpr base::TimeDelta kPurgeTaskDelay = base::Seconds(3);
+// The delay applied before cleanup tasks are executed
+// after the PageContentCache is initialized.
+constexpr base::TimeDelta kCleanupTaskDelay = base::Seconds(25);
 }  // namespace
 
 class PersistTabContextBrowserAgentTest
@@ -76,8 +86,8 @@ class PersistTabContextBrowserAgentTest
     PersistTabContextBrowserAgent::CreateForBrowser(browser_.get());
     agent_ = PersistTabContextBrowserAgent::FromBrowser(browser_.get());
     if (GetParam() == PersistTabStorageType::kSQLite) {
-      PageContentCacheBridgeService* service =
-          PageContentCacheBridgeServiceFactory::GetForProfile(profile_.get());
+      PageContentCacheService* service =
+          PageContentCacheServiceFactory::GetForProfile(profile_.get());
       ASSERT_TRUE(base::test::RunUntil(
           [&]() { return service->IsCacheInitialized(); }));
     }
@@ -107,8 +117,8 @@ class PersistTabContextBrowserAgentTest
     context.set_url(url_spec);
 
     if (GetParam() == PersistTabStorageType::kSQLite) {
-      PageContentCacheBridgeService* service =
-          PageContentCacheBridgeServiceFactory::GetForProfile(profile_.get());
+      PageContentCacheService* service =
+          PageContentCacheServiceFactory::GetForProfile(profile_.get());
 
       service->CachePageContent(web_state_id.identifier(), GURL(url_spec),
                                 last_modified_time, last_modified_time,
@@ -132,7 +142,7 @@ class PersistTabContextBrowserAgentTest
 
   // Helper to wait for the service's background sequence to process pending
   // tasks.
-  void WaitForServiceSequence(PageContentCacheBridgeService* bridge) {
+  void WaitForServiceSequence(PageContentCacheService* bridge) {
     base::RunLoop run_loop;
     bridge->GetAllTabIds(base::BindOnce(
         [](base::RunLoop* loop, std::vector<int64_t> ignored) { loop->Quit(); },
@@ -140,13 +150,21 @@ class PersistTabContextBrowserAgentTest
     run_loop.Run();
   }
 
-  std::unique_ptr<web::WebState> CreateAndLoadWebState(const std::string& html,
-                                                       const GURL& url) {
-    web::WebState::CreateParams params(profile_.get());
-    std::unique_ptr<web::WebState> web_state = web::WebState::Create(params);
-    web::test::LoadHtml(base::SysUTF8ToNSString(html), url, web_state.get());
+  std::unique_ptr<web::FakeWebState> CreateFakeWebState(
+      const GURL& url,
+      const std::string& mime_type = "text/html") {
+    auto web_state = std::make_unique<web::FakeWebState>();
+    web_state->SetCurrentURL(url);
+    web_state->SetContentsMimeType(mime_type);
     return web_state;
   }
+
+  void CallOnPageContextExtracted(base::WeakPtr<web::WebState> weak_web_state,
+                                  PageContextWrapperCallbackResponse response) {
+    agent_->OnPageContextExtracted(weak_web_state, std::move(response));
+  }
+
+  void RunCacheCleanup() { agent_->RunCacheCleanup(); }
 
   web::WebTaskEnvironment task_environment_;
   base::ScopedTempDir temp_dir_;
@@ -219,6 +237,19 @@ TEST_P(PersistTabContextBrowserAgentTest, TestGetSingleContextAsync_Found) {
   histogram_tester_.ExpectTotalCount(kPersistTabContextReadTimeHistogram, 1);
 }
 
+TEST_P(PersistTabContextBrowserAgentTest, TestStartupMetricEmitted) {
+  if (GetParam() != PersistTabStorageType::kSQLite) {
+    return;
+  }
+  CreateDummyContextFile(test_web_state_id_);
+  // Fast forward to trigger the cleanup task.
+  task_environment_.FastForwardBy(kPurgeTaskDelay + kCleanupTaskDelay +
+                                  base::Seconds(1));
+  // Verify that the histogram contains at least one sample.
+  histogram_tester_.ExpectTotalCount(
+      "OptimizationGuide.PageContentCache.TotalCacheSize", 1);
+}
+
 TEST_P(PersistTabContextBrowserAgentTest, TestGetMultipleContextsAsync) {
   web::WebStateID id1 = web::WebStateID::FromSerializedValue(1);
   web::WebStateID id2 = web::WebStateID::FromSerializedValue(2);
@@ -260,7 +291,7 @@ TEST_P(PersistTabContextBrowserAgentTest, TestPurgeExpiredContexts) {
     return;
   }
 
-  base::TimeDelta test_ttl = base::Days(21);
+  base::TimeDelta test_ttl = base::Days(7);
 
   web::WebStateID id_expired = web::WebStateID::FromSerializedValue(100);
   base::Time expired_time = base::Time::Now() - test_ttl - base::Days(1);
@@ -287,8 +318,8 @@ TEST_P(PersistTabContextBrowserAgentTest, TestPurgeExpiredContexts) {
 TEST_P(PersistTabContextBrowserAgentTest, WasHiddenWithNullWebState) {
   agent_->WasHidden(nullptr);
   if (GetParam() == PersistTabStorageType::kSQLite) {
-    PageContentCacheBridgeService* bridge =
-        PageContentCacheBridgeServiceFactory::GetForProfile(profile_.get());
+    PageContentCacheService* bridge =
+        PageContentCacheServiceFactory::GetForProfile(profile_.get());
 
     base::RunLoop run_loop;
     bridge->GetAllTabIds(base::BindOnce(
@@ -318,7 +349,8 @@ TEST_P(PersistTabContextBrowserAgentTest,
   EXPECT_NO_FATAL_FAILURE(agent_->WasHidden(nullptr));
 }
 
-TEST_P(PersistTabContextBrowserAgentTest, TestMigrationDeletesLegacyFiles) {
+TEST_P(PersistTabContextBrowserAgentTest,
+       TestStorageTypeMigrationDeletesLegacyFilesystemFiles) {
   if (GetParam() != PersistTabStorageType::kSQLite) {
     return;
   }
@@ -336,6 +368,144 @@ TEST_P(PersistTabContextBrowserAgentTest, TestMigrationDeletesLegacyFiles) {
   task_environment_.FastForwardBy(kPurgeTaskDelay + base::Milliseconds(100));
 
   EXPECT_FALSE(base::PathExists(legacy_file));
+}
+
+TEST_P(PersistTabContextBrowserAgentTest,
+       TestStorageTypeMigrationDeletesLegacySqliteDBFiles) {
+  if (GetParam() != PersistTabStorageType::kFileSystem) {
+    return;
+  }
+
+  // We explicitly create an old sqlite DB directory here to test
+  // that the Agent deletes it when it is configured for FileSystem storage.
+  base::FilePath legacy_db_dir =
+      PageContentCacheServiceFactory::GetStoragePathForProfile(profile_.get());
+  ASSERT_TRUE(base::CreateDirectory(legacy_db_dir));
+
+  // Ensure the directory is created effectively mimicking a legacy state.
+  ASSERT_TRUE(base::DirectoryExists(legacy_db_dir));
+
+  // Trigger the task runner to execute the cleanup task.
+  task_environment_.FastForwardBy(kPurgeTaskDelay + base::Milliseconds(100));
+
+  EXPECT_FALSE(base::DirectoryExists(legacy_db_dir));
+}
+
+// Tests that when a tab is hidden and its URL is ineligible for persistence,
+// any existing persisted context for that tab is deleted.
+TEST_P(PersistTabContextBrowserAgentTest,
+       WasHiddenWithIneligibleURLDeletesContext) {
+  std::unique_ptr<web::FakeWebState> web_state =
+      CreateFakeWebState(GURL("chrome://newtab"));
+  web::WebStateID web_state_id = web_state->GetUniqueIdentifier();
+
+  CreateDummyContextFile(web_state_id);
+
+  agent_->WasHidden(web_state.get());
+
+  if (GetParam() == PersistTabStorageType::kSQLite) {
+    PageContentCacheService* service =
+        PageContentCacheServiceFactory::GetForProfile(profile_.get());
+    base::RunLoop run_loop;
+    service->GetAllTabIds(base::BindOnce(
+        [](base::RunLoop* run_loop, web::WebStateID id,
+           std::vector<int64_t> tab_ids) {
+          EXPECT_TRUE(std::find(tab_ids.begin(), tab_ids.end(),
+                                id.identifier()) == tab_ids.end());
+          run_loop->Quit();
+        },
+        &run_loop, web_state_id));
+    run_loop.Run();
+  } else {
+    task_environment_.FastForwardBy(base::Milliseconds(100));
+    EXPECT_FALSE(base::PathExists(GetPathForWebStateIdForTest(web_state_id)));
+  }
+}
+
+// Tests that when page context extraction fails, any existing persisted
+// context for that tab is deleted.
+TEST_P(PersistTabContextBrowserAgentTest,
+       OnPageContextExtractedFailureDeletesContext) {
+  std::unique_ptr<web::FakeWebState> web_state =
+      CreateFakeWebState(GURL("http://example.com"));
+  web::WebStateID web_state_id = web_state->GetUniqueIdentifier();
+
+  CreateDummyContextFile(web_state_id);
+
+  CallOnPageContextExtracted(
+      web_state->GetWeakPtr(),
+      base::unexpected(PageContextWrapperError::kGenericError));
+
+  if (GetParam() == PersistTabStorageType::kSQLite) {
+    PageContentCacheService* service =
+        PageContentCacheServiceFactory::GetForProfile(profile_.get());
+    base::RunLoop run_loop;
+    service->GetAllTabIds(base::BindOnce(
+        [](base::RunLoop* run_loop, web::WebStateID id,
+           std::vector<int64_t> tab_ids) {
+          EXPECT_TRUE(std::find(tab_ids.begin(), tab_ids.end(),
+                                id.identifier()) == tab_ids.end());
+          run_loop->Quit();
+        },
+        &run_loop, web_state_id));
+    run_loop.Run();
+  } else {
+    task_environment_.FastForwardBy(base::Milliseconds(100));
+    EXPECT_FALSE(base::PathExists(GetPathForWebStateIdForTest(web_state_id)));
+  }
+}
+
+// Verifies cleanup removes cache entries whose WebState no longer exists,
+// while preserving contexts for both realized and unrealized WebStates.
+TEST_P(PersistTabContextBrowserAgentTest, TestRunCacheCleanup) {
+  if (GetParam() != PersistTabStorageType::kSQLite) {
+    return;
+  }
+
+  web::WebStateID realized_id = web::WebStateID::FromSerializedValue(101);
+  auto realized = std::make_unique<web::FakeWebState>(realized_id);
+  realized->SetCurrentURL(GURL("https://example.com/realized"));
+  realized->SetIsRealized(true);
+  realized->SetContentsMimeType("text/html");
+  web_state_list_->InsertWebState(std::move(realized));
+  CreateDummyContextFile(realized_id);
+
+  web::WebStateID unrealized_id = web::WebStateID::FromSerializedValue(102);
+  auto unrealized = std::make_unique<web::FakeWebState>(unrealized_id);
+  unrealized->SetCurrentURL(GURL("https://example.com/unrealized"));
+  unrealized->SetIsRealized(false);
+  web_state_list_->InsertWebState(std::move(unrealized));
+  CreateDummyContextFile(unrealized_id);
+
+  // Cache entry with no matching WebState in the list.
+  web::WebStateID stale_id = web::WebStateID::FromSerializedValue(103);
+  CreateDummyContextFile(stale_id);
+
+  PageContentCacheService* service =
+      PageContentCacheServiceFactory::GetForProfile(profile_.get());
+  BrowserListFactory::GetForProfile(profile_.get())->AddBrowser(browser_.get());
+
+  {
+    base::test::TestFuture<std::vector<int64_t>> future;
+    service->GetAllTabIds(future.GetCallback());
+    ASSERT_TRUE(future.Wait());
+    EXPECT_THAT(future.Get(),
+                testing::UnorderedElementsAre(realized_id.identifier(),
+                                              unrealized_id.identifier(),
+                                              stale_id.identifier()));
+  }
+
+  RunCacheCleanup();
+  task_environment_.FastForwardBy(kPurgeTaskDelay + kCleanupTaskDelay +
+                                  base::Seconds(1));
+  WaitForServiceSequence(service);
+
+  base::test::TestFuture<std::vector<int64_t>> future;
+  service->GetAllTabIds(future.GetCallback());
+  ASSERT_TRUE(future.Wait());
+  EXPECT_THAT(future.Get(),
+              testing::UnorderedElementsAre(realized_id.identifier(),
+                                            unrealized_id.identifier()));
 }
 
 class PersistTabContextBrowserAgentDisabledTest : public PlatformTest {
@@ -375,29 +545,38 @@ class PersistTabContextBrowserAgentDisabledTest : public PlatformTest {
   base::test::ScopedFeatureList feature_list_;
 };
 
-TEST_F(PersistTabContextBrowserAgentDisabledTest, TestDirectoryDeleted) {
-  base::FilePath storage_dir = GetExpectedStorageDir(profile_.get());
+TEST_F(PersistTabContextBrowserAgentDisabledTest, TestDirectoriesDeleted) {
+  base::FilePath storage_dir_fs = GetExpectedStorageDir(profile_.get());
+  base::FilePath storage_dir_sql =
+      PageContentCacheServiceFactory::GetStoragePathForProfile(profile_.get());
 
-  // Create a dummy directory and file.
-  ASSERT_TRUE(base::CreateDirectory(storage_dir));
-  base::FilePath dummy_file =
-      storage_dir.Append(FILE_PATH_LITERAL("dummy.proto"));
-  ASSERT_TRUE(base::WriteFile(dummy_file, "dummy content"));
+  // Create dummy directories and files for both.
+  ASSERT_TRUE(base::CreateDirectory(storage_dir_fs));
+  base::FilePath dummy_file_fs =
+      storage_dir_fs.Append(FILE_PATH_LITERAL("dummy_fs.proto"));
+  ASSERT_TRUE(base::WriteFile(dummy_file_fs, "fs"));
+  ASSERT_TRUE(base::DirectoryExists(storage_dir_fs));
 
-  // Verify the directory exists before the agent is created.
-  ASSERT_TRUE(base::DirectoryExists(storage_dir));
+  ASSERT_TRUE(base::CreateDirectory(storage_dir_sql));
+  base::FilePath dummy_file_sql =
+      storage_dir_sql.Append(FILE_PATH_LITERAL("dummy_sql.proto"));
+  ASSERT_TRUE(base::WriteFile(dummy_file_sql, "sql"));
+  ASSERT_TRUE(base::DirectoryExists(storage_dir_sql));
 
-  // Creating the agent should trigger directory deletion when the feature is
-  // disabled.
+  // Creating the agent should trigger directory deletion for both storage
+  // systems when the feature is disabled.
   PersistTabContextBrowserAgent::CreateForBrowser(browser_.get());
   agent_ = PersistTabContextBrowserAgent::FromBrowser(browser_.get());
 
   // Wait for the deletion to complete.
-  ASSERT_TRUE(base::test::RunUntil(
-      [&]() { return !base::DirectoryExists(storage_dir); }));
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return !base::DirectoryExists(storage_dir_fs) &&
+           !base::DirectoryExists(storage_dir_sql);
+  }));
 
-  // Verify the directory is deleted.
-  EXPECT_FALSE(base::DirectoryExists(storage_dir))
-      << "Persisted tab contexts directory was not deleted when feature is "
-         "disabled.";
+  // Verify both directories are deleted.
+  EXPECT_FALSE(base::DirectoryExists(storage_dir_fs))
+      << "Filesystem storage was not deleted when feature is disabled.";
+  EXPECT_FALSE(base::DirectoryExists(storage_dir_sql))
+      << "SQLite storage was not deleted when feature is disabled.";
 }

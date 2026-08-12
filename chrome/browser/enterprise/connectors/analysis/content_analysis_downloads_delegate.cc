@@ -22,7 +22,8 @@ ContentAnalysisDownloadsDelegate::ContentAnalysisDownloadsDelegate(
     base::OnceClosure discard_file_callback,
     download::DownloadItem* download_item,
     const ContentAnalysisResponse::Result::TriggeredRule::CustomRuleMessage&
-        custom_rule_message)
+        custom_rule_message,
+    const std::u16string& base_verdict_text)
     : custom_rule_message_(custom_rule_message),
       filename_(filename),
       custom_message_(custom_message),
@@ -30,7 +31,8 @@ ContentAnalysisDownloadsDelegate::ContentAnalysisDownloadsDelegate(
       bypass_justification_required_(bypass_justification_required),
       open_file_callback_(std::move(open_file_callback)),
       discard_file_callback_(std::move(discard_file_callback)),
-      download_item_(download_item) {
+      download_item_(download_item),
+      base_verdict_text_(base_verdict_text) {
   if (download_item_) {
     download_item_->AddObserver(this);
   }
@@ -88,15 +90,15 @@ ContentAnalysisDownloadsDelegate::GetCustomMessage() const {
       GetCustomRuleString(custom_rule_message_);
   if (!custom_rule_message.empty()) {
     return l10n_util::GetStringFUTF16(
-        IDS_DEEP_SCANNING_DIALOG_DOWNLOADS_CUSTOM_MESSAGE, filename_,
-        custom_rule_message);
+        IDS_DEEP_SCANNING_DIALOG_COMBINED_CUSTOM_MESSAGE,
+        base_verdict_text_, custom_rule_message);
   }
 
   if (custom_message_.empty())
     return std::nullopt;
   return l10n_util::GetStringFUTF16(
-      IDS_DEEP_SCANNING_DIALOG_DOWNLOADS_CUSTOM_MESSAGE, filename_,
-      custom_message_);
+      IDS_DEEP_SCANNING_DIALOG_COMBINED_CUSTOM_MESSAGE,
+      base_verdict_text_, custom_message_);
 }
 
 std::optional<GURL> ContentAnalysisDownloadsDelegate::GetCustomLearnMoreUrl()
@@ -113,8 +115,10 @@ std::optional<GURL> ContentAnalysisDownloadsDelegate::GetCustomLearnMoreUrl()
 std::optional<std::vector<std::pair<gfx::Range, GURL>>>
 ContentAnalysisDownloadsDelegate::GetCustomRuleMessageRanges() const {
   std::vector<size_t> offsets;
-  l10n_util::GetStringFUTF16(IDS_DEEP_SCANNING_DIALOG_DOWNLOADS_CUSTOM_MESSAGE,
-                             {filename_, std::u16string{}}, &offsets);
+
+  l10n_util::GetStringFUTF16(
+      IDS_DEEP_SCANNING_DIALOG_COMBINED_CUSTOM_MESSAGE,
+      {base_verdict_text_, std::u16string{}}, &offsets);
 
   std::vector<std::pair<gfx::Range, GURL>> custom_rule_message_ranges =
       GetCustomRuleStyles(custom_rule_message_, offsets.back());

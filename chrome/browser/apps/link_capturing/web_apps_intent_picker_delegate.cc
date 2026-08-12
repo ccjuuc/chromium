@@ -4,22 +4,19 @@
 
 #include "chrome/browser/apps/link_capturing/web_apps_intent_picker_delegate.h"
 
-#include <map>
 #include <string>
 
 #include "base/containers/flat_map.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/user_metrics.h"
-#include "base/metrics/user_metrics_action.h"
 #include "base/task/bind_post_task.h"
 #include "chrome/browser/apps/link_capturing/apps_intent_picker_delegate.h"
 #include "chrome/browser/apps/link_capturing/enable_link_capturing_infobar_delegate.h"
 #include "chrome/browser/apps/link_capturing/intent_picker_info.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/link_capturing_features.h"
+#include "chrome/browser/web_applications/model/web_app_icon_types.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
-#include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
@@ -106,7 +103,7 @@ void WebAppsIntentPickerDelegate::FindAllAppsForUrl(
   // this.
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::TaskPriority::USER_BLOCKING, base::MayBlock()},
-      base::BindOnce(&FindMacAppForUrl, url, base::span(icon_sizes_in_dep_)),
+      base::BindOnce(&FindMacAppForUrl, url, icon_sizes_in_dep_),
       base::BindOnce(
           &WebAppsIntentPickerDelegate::CacheMacAppInfoAndPostFinalCallback,
           weak_ptr_factory.GetWeakPtr(), std::move(apps_callback),
@@ -148,7 +145,7 @@ void WebAppsIntentPickerDelegate::LoadSingleAppIcon(
 
     // Else read the "closest" icon and resize accordingly.
     auto transform_bitmaps_to_icon_metadata = base::BindOnce(
-        [](std::map<web_app::SquareSizePx, SkBitmap> icons) -> ui::ImageModel {
+        [](web_app::OrderedSizeToBitmap icons) -> ui::ImageModel {
           bool is_valid_icon = !icons.empty();
           if (!is_valid_icon) {
             return ui::ImageModel();
@@ -183,9 +180,6 @@ void WebAppsIntentPickerDelegate::RecordIntentPickerIconEvent(
     apps::IntentPickerIconEvent event) {
   base::UmaHistogramEnumeration("Webapp.Site.Intents.IntentPickerIconEvent",
                                 event);
-  if (event == apps::IntentPickerIconEvent::kIconClicked) {
-    base::RecordAction(base::UserMetricsAction("IntentPickerIconClicked"));
-  }
 }
 
 bool WebAppsIntentPickerDelegate::ShouldLaunchAppDirectly(
@@ -200,13 +194,7 @@ bool WebAppsIntentPickerDelegate::ShouldLaunchAppDirectly(
     return false;
   }
   if (entry_type == PickerEntryType::kWeb) {
-    // Launch app directly only if |url| is in the scope of |app_id|.
-    if (base::FeatureList::IsEnabled(
-            ::features::kPwaNavigationCapturingWithScopeExtensions)) {
-      return provider_->registrar_unsafe().IsUrlInAppExtendedScope(url, app_id);
-    } else {
-      return provider_->registrar_unsafe().IsUrlInAppScope(url, app_id);
-    }
+    return provider_->registrar_unsafe().IsUrlInAppExtendedScope(url, app_id);
   }
 
   // This is only reached on MacOS if there is one app available and the picker
@@ -224,25 +212,6 @@ void WebAppsIntentPickerDelegate::RecordOutputMetrics(
   // supported by the intent filters are PWAs, and the persistence checkbox does
   // not show up on the intent picker bubble for desktop platforms.
   CHECK_EQ(should_persist, false);
-  switch (close_reason) {
-    case IntentPickerCloseReason::OPEN_APP:
-      base::RecordAction(
-          base::UserMetricsAction("IntentPickerViewAcceptLaunchApp"));
-      break;
-    case apps::IntentPickerCloseReason::DIALOG_DEACTIVATED:
-      base::RecordAction(base::UserMetricsAction("IntentPickerViewIgnored"));
-      break;
-    case apps::IntentPickerCloseReason::STAY_IN_CHROME:
-      base::RecordAction(
-          base::UserMetricsAction("IntentPickerViewClosedStayInChrome"));
-      break;
-    case apps::IntentPickerCloseReason::ERROR_BEFORE_PICKER:
-    case apps::IntentPickerCloseReason::ERROR_AFTER_PICKER:
-    case apps::IntentPickerCloseReason::PREFERRED_APP_FOUND:
-      break;
-    default:
-      NOTREACHED();
-  }
 }
 
 // Persisting intent preferences for an app is a no-op, since the checkbox in

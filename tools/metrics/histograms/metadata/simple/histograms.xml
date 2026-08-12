@@ -23,7 +23,7 @@ chromium-metrics-reviews@google.com.
 <histograms>
 
 <histogram name="SimpleGeolocation.Provider.ClientId"
-    enum="SimpleGeolocationClientId" expires_after="2026-06-07">
+    enum="SimpleGeolocationClientId" expires_after="2026-12-06">
   <owner>alvinji@chromium.org</owner>
   <owner>deviceapi-team@google.com</owner>
   <summary>
@@ -35,7 +35,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="SimpleGeolocation.Provider.GeolocationControllerRequestInterval"
-    units="hours" expires_after="2026-05-31">
+    units="hours" expires_after="2027-02-02">
   <owner>alvinji@chromium.org</owner>
   <owner>deviceapi-team@google.com</owner>
   <summary>
@@ -45,8 +45,22 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram
+    name="SimpleGeolocation.Provider.QueryGeolocationCommandRequestInterval"
+    units="hours" expires_after="2026-12-07">
+  <owner>poromov@chromium.org</owner>
+  <owner>alvinji@chromium.org</owner>
+  <owner>deviceapi-team@google.com</owner>
+  <summary>
+    Measures the frequency of geolocation requests from the QueryGeolocation
+    remote command by recording the interval between each request in hour-sized
+    buckets, up to a maximum of 24 hours. The first request after startup is not
+    recorded. We don't remember time intervals across restart cycles.
+  </summary>
+</histogram>
+
 <histogram name="SimpleGeolocation.Provider.TimezoneResolverRequestInterval"
-    units="hours" expires_after="2026-06-07">
+    units="hours" expires_after="2026-12-16">
   <owner>alvinji@chromium.org</owner>
   <owner>deviceapi-team@google.com</owner>
   <summary>
@@ -57,7 +71,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SimpleGeolocation.Provider.WizardControllerRequestInterval"
-    units="hours" expires_after="2026-05-24">
+    units="hours" expires_after="2026-11-24">
   <owner>alvinji@chromium.org</owner>
   <owner>deviceapi-team@google.com</owner>
   <summary>

@@ -8,10 +8,9 @@
 #include <string_view>
 
 #include "ash/constants/web_app_id_constants.h"
-#include "ash/webui/system_apps/public/system_web_app_type.h"
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_map.h"
 #include "chrome/browser/web_applications/policy/web_app_policy_manager.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 
 namespace web_app {
 
@@ -49,7 +48,6 @@ constexpr auto kSystemWebAppsMapping =
          {"firmware_update", ash::SystemWebAppType::FIRMWARE_UPDATE},
          {"os_flags", ash::SystemWebAppType::OS_FLAGS},
          {"vc_background", ash::SystemWebAppType::VC_BACKGROUND},
-         {"print_preview_cros", ash::SystemWebAppType::PRINT_PREVIEW_CROS},
          {"boca", ash::SystemWebAppType::BOCA},
          {"app_mall", ash::SystemWebAppType::MALL},
          {"recorder", ash::SystemWebAppType::RECORDER},
@@ -79,12 +77,12 @@ std::optional<std::string_view> GetPolicyIdForSystemWebAppType(
 }
 
 bool IsArcAppPolicyId(std::string_view policy_id) {
-  return base::Contains(policy_id, '.') &&
+  return policy_id.contains('.') &&
          !WebAppPolicyManager::IsWebAppPolicyId(policy_id);
 }
 
 bool IsSystemWebAppPolicyId(std::string_view policy_id) {
-  return base::Contains(kSystemWebAppsMapping, policy_id);
+  return kSystemWebAppsMapping.contains(policy_id);
 }
 
 }  // namespace web_app

@@ -17,14 +17,12 @@ import {ParentTrustedDocumentProxy} from '../microsoft_auth_frame_connector.js';
 import {ModuleDescriptor} from '../module_descriptor.js';
 import type {MenuItem, ModuleHeaderElement} from '../module_header.js';
 
-import type {FileSuggestionElement} from './file_suggestion.js';
 import {getHtml} from './microsoft_files_module.html.js';
 import {MicrosoftFilesProxyImpl} from './microsoft_files_proxy.js';
 
 export interface MicrosoftFilesModuleElement {
   $: {
-    fileSuggestion: FileSuggestionElement,
-    moduleHeaderElementV2: ModuleHeaderElement,
+    moduleHeader: ModuleHeaderElement,
   };
 }
 
@@ -65,28 +63,36 @@ export class MicrosoftFilesModuleElement extends
 
   protected getMenuItems_(): MenuItem[] {
     return [
-        {
-          action: 'dismiss',
-          icon: 'modules:visibility_off',
-          text: this.i18nRecursive(
-              '', 'modulesDismissForHoursButtonText',
-              'fileSuggestionDismissHours'),
-        },
-        {
-          action: 'disable',
-          icon: 'modules:block',
-          text: this.i18n('modulesMicrosoftFilesDisableButtonText'),
-        },
-        {
-          action: 'signout',
-          icon: 'modules:logout',
-          text: this.i18n('modulesMicrosoftSignOutButtonText'),
-        },
-        {
-          action: 'info',
-          icon: 'modules:info',
-          text: this.i18n('moduleInfoButtonTitle'),
-        },
+      {
+        action: 'dismiss',
+        icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'modules:visibility-off' :
+            'modules:visibility_off-old',
+        text: this.i18nRecursive(
+            '', 'modulesDismissForHoursButtonText',
+            'fileSuggestionDismissHours'),
+      },
+      {
+        action: 'disable',
+        icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'modules:block' :
+            'modules:block-old',
+        text: this.i18n('modulesMicrosoftFilesDisableButtonText'),
+      },
+      {
+        action: 'signout',
+        icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'modules:logout' :
+            'modules:logout-old',
+        text: this.i18n('modulesMicrosoftSignOutButtonText'),
+      },
+      {
+        action: 'info',
+        icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'modules:info' :
+            'modules:info-old',
+        text: this.i18n('moduleInfoButtonTitle'),
+      },
     ];
   }
 
@@ -105,16 +111,12 @@ export class MicrosoftFilesModuleElement extends
 
   protected onDismissButtonClick_() {
     this.handler_.dismissModule();
-    this.dispatchEvent(new CustomEvent('dismiss-module-instance', {
-      bubbles: true,
-      composed: true,
-      detail: {
-        message: loadTimeData.getStringF(
-            'dismissModuleToastMessage',
-            loadTimeData.getString('modulesFilesSentence')),
-        restoreCallback: () => this.handler_.restoreModule(),
-      },
-    }));
+    this.fire('dismiss-module-instance', {
+      message: loadTimeData.getStringF(
+          'dismissModuleToastMessage',
+          loadTimeData.getString('modulesFilesSentence')),
+      restoreCallback: () => this.handler_.restoreModule(),
+    });
   }
 
   protected onInfoButtonClick_() {
@@ -125,7 +127,7 @@ export class MicrosoftFilesModuleElement extends
     this.showInfoDialog_ = false;
   }
 
-  protected onSignOutButtonClick_() {
+  protected onSignoutButtonClick_() {
     ParentTrustedDocumentProxy.getInstance()?.getChildDocument().signOut();
   }
 
@@ -151,6 +153,12 @@ export class MicrosoftFilesModuleElement extends
     recordSmallCount(
         'NewTabPage.MicrosoftFiles.ShownFiles.Trending',
         numOfFiles.get(RecommendationType.kTrending)!);
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'ntp-microsoft-files-module': MicrosoftFilesModuleElement;
   }
 }
 

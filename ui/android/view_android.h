@@ -90,11 +90,7 @@ class UI_ANDROID_EXPORT ViewAndroid {
     const base::android::ScopedJavaLocalRef<jobject> view() const;
 
    private:
-    // TODO(jinsukkim): Following weak refs can be cast to strong refs which
-    //     cannot be garbage-collected and leak memory. Rewrite not to use them.
-    //     see comments in crrev.com/2103243002.
-    JavaObjectWeakGlobalRef view_;
-    JavaObjectWeakGlobalRef delegate_;
+    void TransferViewAndDelegateFrom(ScopedAnchorView& other);
 
     // Default copy/assign disabled by move constructor.
   };
@@ -118,6 +114,10 @@ class UI_ANDROID_EXPORT ViewAndroid {
   void UpdateFrameInfo(const FrameInfo& frame_info);
   // content_offset is in dip.
   float content_offset() const { return frame_info_.content_offset; }
+  float content_offset_x() const { return content_offset_x_; }
+  void set_content_offset_x(float content_offset_x) {
+    content_offset_x_ = content_offset_x;
+  }
   gfx::SizeF viewport_size() const { return frame_info_.viewport_size; }
 
   // Returns the window at the root of this hierarchy, or |null|
@@ -164,10 +164,10 @@ class UI_ANDROID_EXPORT ViewAndroid {
   // |drag_obj_rect_height| is the height of the drag object.
   bool StartDragAndDrop(const base::android::JavaRef<jobject>& jshadow_image,
                         const base::android::JavaRef<jobject>& jdrop_data,
-                        jint cursor_offset_x,
-                        jint cursor_offset_y,
-                        jint drag_obj_rect_width,
-                        jint drag_obj_rect_height);
+                        int32_t cursor_offset_x,
+                        int32_t cursor_offset_y,
+                        int32_t drag_obj_rect_width,
+                        int32_t drag_obj_rect_height);
 
   gfx::Size GetPhysicalBackingSize() const;
   gfx::Size GetSizeDIPs() const;
@@ -221,6 +221,11 @@ class UI_ANDROID_EXPORT ViewAndroid {
   void RequestUnbufferedDispatch(const MotionEventAndroid& event);
 
   void SetTooltip(const std::u16string& text);
+
+  void SetTooltipFromKeyboard(const std::u16string& text,
+                              const gfx::Rect& bounds);
+
+  void ClearTooltipFromKeyboard();
 
   void SetCopyOutputCallback(CopyViewCallback callback);
   // Return the CopyOutputRequest back if view cannot perform readback.
@@ -331,13 +336,12 @@ class UI_ANDROID_EXPORT ViewAndroid {
   // Returns the Java delegate for this view. This is used to delegate work
   // up to the embedding view (or the embedder that can deal with the
   // implementation details).
-  const base::android::ScopedJavaLocalRef<jobject> GetViewAndroidDelegate()
-      const;
+  const base::android::ScopedJavaLocalRef<jobject> GetViewAndroidDelegate(
+      JNIEnv* env) const;
 
   std::list<raw_ptr<ViewAndroid, CtnExperimental>> children_;
   base::ObserverList<ViewAndroidObserver>::Unchecked observer_list_;
   scoped_refptr<cc::slim::Layer> layer_;
-  JavaObjectWeakGlobalRef delegate_;
 
   raw_ptr<EventHandlerAndroid> event_handler_ = nullptr;  // Not owned
 
@@ -354,6 +358,9 @@ class UI_ANDROID_EXPORT ViewAndroid {
   gfx::Size physical_size_;
 
   FrameInfo frame_info_;
+
+  // Left content offset in device pixels.
+  float content_offset_x_ = 0.f;
 
   std::unique_ptr<EventForwarder> event_forwarder_;
 

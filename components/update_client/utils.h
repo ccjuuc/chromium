@@ -25,9 +25,9 @@ namespace update_client {
 
 struct CrxComponent;
 
-extern const char kArchAmd64[];
-extern const char kArchIntel[];
-extern const char kArchArm64[];
+inline constexpr char kArchAmd64[] = "x86_64";
+inline constexpr char kArchIntel[] = "x86";
+inline constexpr char kArchArm64[] = "arm64";
 
 // Defines a name-value pair that represents an installer attribute.
 // Installer attributes are component-specific metadata, which may be serialized
@@ -58,7 +58,7 @@ std::string GetCrxComponentID(const CrxComponent& component);
 std::string GetCrxIdFromPublicKeyHash(base::span<const uint8_t> pk_hash);
 
 // Returns true if the actual SHA-256 hash of the |filepath| matches the
-// |expected_hash|.
+// |expected_hash|. Does not follow symbolic links.
 bool VerifyFileHash256(const base::FilePath& filepath,
                        const std::string& expected_hash);
 
@@ -79,10 +79,9 @@ CrxInstaller::Result InstallFunctionWrapper(
     base::OnceCallback<bool()> callback);
 
 // Deserializes the CRX manifest. The top level must be a dictionary.
-// Returns a base::Value::Dict object of type dictionary on success, or nullopt
+// Returns a base::DictValue object of type dictionary on success, or nullopt
 // on failure.
-std::optional<base::Value::Dict> ReadManifest(
-    const base::FilePath& unpack_path);
+std::optional<base::DictValue> ReadManifest(const base::FilePath& unpack_path);
 
 // Returns a string representation of the processor architecture. Uses
 // `base::win::OSInfo::IsWowX86OnARM64` and
@@ -126,6 +125,12 @@ constexpr std::string StringTypeToUTF8(
   return stringtype;
 }
 #endif  // BUILDFLAG(IS_WIN)
+
+// Perform a best-effort cleanup up of directories under `dir` that match
+// `matcher` and are `older_than`.
+void CleanupDirectoriesOlderThan(const base::FilePath& dir,
+                                 const base::FilePath::StringType& matcher,
+                                 base::TimeDelta older_than);
 
 }  // namespace update_client
 

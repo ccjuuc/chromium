@@ -11,6 +11,7 @@
 #include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "components/value_store/value_store.h"
 #include "components/value_store/value_store_factory_impl.h"
 #include "content/public/browser/browser_context.h"
@@ -19,7 +20,12 @@
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/api/storage/settings_namespace.h"
 #include "extensions/browser/api/storage/settings_test_util.h"
+#include "extensions/browser/api/storage/storage_area_namespace.h"
+#include "extensions/browser/api/storage/storage_frontend.h"
+#include "extensions/browser/event_listener_map.h"
+#include "extensions/browser/event_router.h"
 #include "extensions/browser/extensions_test.h"
+#include "extensions/common/mojom/context_type.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using value_store::ValueStore;
@@ -82,6 +88,99 @@ TEST_F(ExtensionSettingsFrontendTest, Basics) {
   // Invalid storage areas are not available.
   EXPECT_FALSE(frontend_->IsStorageEnabled(settings::INVALID));
   EXPECT_FALSE(frontend_->GetValueStoreCache(settings::INVALID));
+}
+
+namespace {
+
+class EventRestrictionObserver : public EventRouter::TestObserver {
+ public:
+  struct DispatchedEvent {
+    std::string name;
+    std::optional<mojom::ContextType> restrict_to_context_type;
+  };
+
+  void OnWillDispatchEvent(const Event& event) override {
+    dispatched_events_.push_back(
+        {event.event_name, event.restrict_to_context_type});
+  }
+
+  void OnDidDispatchEventToProcess(const Event& event,
+                                   int process_id) override {}
+
+  const std::vector<DispatchedEvent>& events() const {
+    return dispatched_events_;
+  }
+
+  void Clear() { dispatched_events_.clear(); }
+
+ private:
+  std::vector<DispatchedEvent> dispatched_events_;
+};
+
+}  // namespace
+
+TEST_F(ExtensionSettingsFrontendTest, OnSettingsChanged_RestrictToContextType) {
+  EventRestrictionObserver observer;
+  EventRouter* event_router = EventRouter::Get(browser_context());
+  event_router->AddObserverForTesting(&observer);
+
+  const std::string id = "ext";
+  scoped_refptr<const Extension> extension =
+      settings_test_util::AddExtensionWithId(browser_context(), id,
+                                             Manifest::Type::kExtension);
+
+  event_router->listeners().AddListener(EventListener::CreateLazyListener(
+      "storage.session.onChanged", id, browser_context(), false, GURL(),
+      std::nullopt));
+  event_router->listeners().AddListener(EventListener::CreateLazyListener(
+      "storage.sync.onChanged", id, browser_context(), false, GURL(),
+      std::nullopt));
+  event_router->listeners().AddListener(EventListener::CreateLazyListener(
+      "storage.managed.onChanged", id, browser_context(), false, GURL(),
+      std::nullopt));
+  event_router->listeners().AddListener(EventListener::CreateLazyListener(
+      "storage.onChanged", id, browser_context(), false, GURL(), std::nullopt));
+
+  SettingsChangedCallback callback = frontend_->GetObserver();
+
+  // Test with session storage. Default should be restricted to privileged
+  // contexts.
+  callback.Run(id, StorageAreaNamespace::kSession, std::nullopt,
+               base::Value(true));
+
+  ASSERT_EQ(observer.events().size(), 2u);
+  EXPECT_EQ(observer.events()[0].name, "storage.session.onChanged");
+  EXPECT_EQ(observer.events()[0].restrict_to_context_type,
+            mojom::ContextType::kPrivilegedExtension);
+  EXPECT_EQ(observer.events()[1].name, "storage.onChanged");
+  EXPECT_EQ(observer.events()[1].restrict_to_context_type,
+            mojom::ContextType::kPrivilegedExtension);
+
+  observer.Clear();
+
+  // Test with sync storage. Default should NOT be restricted.
+  callback.Run(id, StorageAreaNamespace::kSync, std::nullopt,
+               base::Value(true));
+
+  ASSERT_EQ(observer.events().size(), 2u);
+  EXPECT_EQ(observer.events()[0].name, "storage.sync.onChanged");
+  EXPECT_EQ(observer.events()[0].restrict_to_context_type, std::nullopt);
+  EXPECT_EQ(observer.events()[1].name, "storage.onChanged");
+  EXPECT_EQ(observer.events()[1].restrict_to_context_type, std::nullopt);
+
+  observer.Clear();
+
+  // Test with managed storage. Default should NOT be restricted.
+  callback.Run(id, StorageAreaNamespace::kManaged, std::nullopt,
+               base::Value(true));
+
+  ASSERT_EQ(observer.events().size(), 2u);
+  EXPECT_EQ(observer.events()[0].name, "storage.managed.onChanged");
+  EXPECT_EQ(observer.events()[0].restrict_to_context_type, std::nullopt);
+  EXPECT_EQ(observer.events()[1].name, "storage.onChanged");
+  EXPECT_EQ(observer.events()[1].restrict_to_context_type, std::nullopt);
+
+  event_router->RemoveObserverForTesting(&observer);
 }
 
 TEST_F(ExtensionSettingsFrontendTest, SettingsPreservedAcrossReconstruction) {
@@ -180,7 +279,7 @@ TEST_F(ExtensionSettingsFrontendTest, LeveldbDatabaseDeletedFromDiskOnClear) {
   // EXPECT_FALSE(base::PathExists(temp_dir_.GetPath()));
 }
 
-// Disabled (slow), http://crbug.com/322751 .
+// Disabled (slow), http://crbug.com/40342579 .
 TEST_F(ExtensionSettingsFrontendTest,
        DISABLED_QuotaLimitsEnforcedCorrectlyForSyncAndLocal) {
   const std::string id = "ext";
@@ -218,6 +317,79 @@ TEST_F(ExtensionSettingsFrontendTest,
 
   EXPECT_FALSE(
       local_storage->Set(DEFAULTS, "WillError", megabyte).status().ok());
+}
+
+// Tests that a successful extension storage operation correctly emits success
+// metrics for the underlying database status.
+TEST_F(ExtensionSettingsFrontendTest, EmitUmaLevelDBMetrics) {
+  base::HistogramTester histogram_tester;
+
+  const std::string id = "ext";
+  scoped_refptr<const Extension> extension =
+      settings_test_util::AddExtensionWithId(browser_context(), id,
+                                             Manifest::Type::kExtension);
+
+  base::RunLoop run_loop;
+  base::DictValue values;
+  values.Set("foo", "bar");
+
+  frontend_->Set(extension, StorageAreaNamespace::kLocal, std::move(values),
+                 base::BindOnce(
+                     [](base::OnceClosure quit_closure,
+                        StorageFrontend::ResultStatus status) {
+                       EXPECT_TRUE(status.success);
+                       std::move(quit_closure).Run();
+                     },
+                     run_loop.QuitClosure()));
+  run_loop.Run();
+
+  // The Set operation should have succeeded and emitted LevelDB UMA.
+  histogram_tester.ExpectUniqueSample(
+      "Extensions.Database.Local.StatusCodeByOperation.set",
+      /*sample=*/value_store::ValueStore::StatusCode::OK,
+      /*expected_bucket_count=*/1);
+}
+
+// Tests that a failed extension storage operation (e.g., due to exceeding the
+// quota limit) correctly emits an error metric for the high-level operation
+// that failed.
+TEST_F(ExtensionSettingsFrontendTest, SettingsQuotaExceededEmitsErrorMetric) {
+  base::HistogramTester histogram_tester;
+
+  const std::string id = "ext";
+  scoped_refptr<const Extension> extension =
+      settings_test_util::AddExtensionWithId(browser_context(), id,
+                                             Manifest::Type::kExtension);
+
+  base::RunLoop run_loop;
+  base::DictValue values;
+  // Local quota is 10MB. Setting 11MB should fail.
+  base::ListValue megabytes;
+  base::Value megabyte = settings_test_util::CreateMegabyte();
+  for (int i = 0; i < 11; ++i) {
+    megabytes.Append(megabyte.Clone());
+  }
+  values.Set("too_big", megabytes.Clone());
+
+  frontend_->Set(extension, StorageAreaNamespace::kLocal, std::move(values),
+                 base::BindOnce(
+                     [](base::OnceClosure quit_closure,
+                        StorageFrontend::ResultStatus status) {
+                       EXPECT_FALSE(status.success);
+                       std::move(quit_closure).Run();
+                     },
+                     run_loop.QuitClosure()));
+  run_loop.Run();
+
+  // The Set operation should have failed and emitted error metrics.
+  histogram_tester.ExpectUniqueSample(
+      "Extensions.Database.Local.ErrorByOperation",
+      /*sample=*/StorageFrontend::ExtensionsDatabaseOperation::kSet,
+      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectUniqueSample(
+      "Extensions.Database.Local.StatusCodeByOperation.set",
+      /*sample=*/value_store::ValueStore::StatusCode::QUOTA_EXCEEDED,
+      /*expected_bucket_count=*/1);
 }
 
 }  // namespace extensions

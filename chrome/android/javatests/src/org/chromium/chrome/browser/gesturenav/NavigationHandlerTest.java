@@ -64,7 +64,7 @@ import java.util.concurrent.TimeoutException;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @DisableIf.Build(
         sdk_is_greater_than = Build.VERSION_CODES.Q,
-        message = "crbug.com/1276402 crbug.com/345352689 crbug.com/40899221")
+        message = "crbug.com/40808869 crbug.com/345352689 crbug.com/40899221")
 @Batch(Batch.PER_CLASS)
 public class NavigationHandlerTest {
     private static final String RENDERED_PAGE = "/chrome/test/data/android/navigate/simple.html";
@@ -141,7 +141,7 @@ public class NavigationHandlerTest {
      */
     private void setTabSwitcherModeAndWait(boolean inSwitcher) {
         LayoutManager layoutManager = mActivityTestRule.getActivity().getLayoutManager();
-        @LayoutType int layout = inSwitcher ? LayoutType.TAB_SWITCHER : LayoutType.BROWSING;
+        @LayoutType int layout = inSwitcher ? LayoutType.HUB : LayoutType.BROWSING;
         LayoutTestUtils.startShowingAndWaitForLayout(layoutManager, layout, false);
     }
 
@@ -301,7 +301,7 @@ public class NavigationHandlerTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "crbug.com/1426201")
+    @DisabledTest(message = "crbug.com/40899221")
     public void testLeftEdgeSwipeClosesTabLaunchedFromLink() {
         Tab oldTab = currentTab();
         TabCreator tabCreator =

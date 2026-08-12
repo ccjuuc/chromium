@@ -5,8 +5,8 @@
 #include "chrome/browser/media/router/discovery/mdns/cast_media_sink_service_impl.h"
 
 #include <algorithm>
+#include <string_view>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/rand_util.h"
@@ -57,7 +57,7 @@ MediaSinkInternal CreateCastSinkFromDialSink(
   return MediaSinkInternal(sink, extra_data);
 }
 
-std::string EnumToString(MediaRouterChannelError error) {
+std::string_view EnumToString(MediaRouterChannelError error) {
   switch (error) {
     case MediaRouterChannelError::UNKNOWN:
       return "UNKNOWN";
@@ -86,7 +86,7 @@ MediaRouterChannelError RecordError(cast_channel::ChannelError channel_error,
 
   switch (channel_error) {
     // TODO(crbug.com/41345758): Add in errors for transient socket and timeout
-    // errors, but only after X number of occurences.
+    // errors, but only after X number of occurrences.
     case cast_channel::ChannelError::UNKNOWN:
       error_code = MediaRouterChannelError::UNKNOWN;
       break;
@@ -161,7 +161,7 @@ constexpr int kMaxLivenessTimeoutInSeconds = 60;
 // Max failure count allowed for a Cast channel.
 constexpr int kMaxFailureCount = 100;
 
-bool IsNetworkIdUnknownOrDisconnected(const std::string& network_id) {
+bool IsNetworkIdUnknownOrDisconnected(std::string_view network_id) {
   return network_id == DiscoveryNetworkMonitor::kNetworkIdUnknown ||
          network_id == DiscoveryNetworkMonitor::kNetworkIdDisconnected;
 }
@@ -186,18 +186,18 @@ constexpr int CastMediaSinkServiceImpl::kMaxDialSinkFailureCount;
 
 // static
 MediaSink::Id CastMediaSinkServiceImpl::GetCastSinkIdFromDial(
-    const MediaSink::Id& dial_sink_id) {
+    MediaSink::IdView dial_sink_id) {
   DCHECK_EQ("dial:", dial_sink_id.substr(0, 5));
   // Replace the "dial:" prefix with "cast:".
-  return "cast:" + dial_sink_id.substr(5);
+  return base::StrCat({"cast:", dial_sink_id.substr(5)});
 }
 
 // static
 MediaSink::Id CastMediaSinkServiceImpl::GetDialSinkIdFromCast(
-    const MediaSink::Id& cast_sink_id) {
+    const MediaSink::IdView cast_sink_id) {
   DCHECK_EQ("cast:", cast_sink_id.substr(0, 5));
   // Replace the "cast:" prefix with "dial:".
-  return "dial:" + cast_sink_id.substr(5);
+  return base::StrCat({"dial:", cast_sink_id.substr(5)});
 }
 
 CastMediaSinkServiceImpl::CastMediaSinkServiceImpl(
@@ -404,7 +404,7 @@ void CastMediaSinkServiceImpl::OnNetworksChanged(
   if (network_id == current_network_id_) {
     return;
   }
-  std::string last_network_id = current_network_id_;
+  std::string last_network_id = std::move(current_network_id_);
   current_network_id_ = network_id;
   dial_sink_failure_count_.clear();
   if (!IsNetworkIdUnknownOrDisconnected(last_network_id)) {
@@ -478,14 +478,16 @@ void CastMediaSinkServiceImpl::OpenChannel(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   const net::IPEndPoint& ip_endpoint = cast_sink.cast_data().ip_endpoint;
-  if (!allow_all_ips_ && ip_endpoint.address().IsPubliclyRoutable()) {
+  if (!allow_all_ips_ && (ip_endpoint.address().IsPubliclyRoutable() ||
+                          ip_endpoint.address().IsLoopback())) {
     LoggerList::GetInstance()->Log(
         LoggerImpl::Severity::kWarning, mojom::LogCategory::kDiscovery,
         kLoggerComponent,
         base::StrCat({"Did not open a channel to the IP endpoint: ",
-                      ip_endpoint.ToString(),
-                      " because it is publicly "
-                      "routable."}),
+                      ip_endpoint.ToString(), " because it is ",
+                      ip_endpoint.address().IsPubliclyRoutable()
+                          ? "publicly routable."
+                          : "a loopback address."}),
         cast_sink.sink().id(), "", "");
     if (callback) {
       std::move(callback).Run(false);
@@ -771,7 +773,7 @@ void CastMediaSinkServiceImpl::SetCastAllowAllIPs(bool allow_all_ips) {
 }
 
 bool CastMediaSinkServiceImpl::HasSink(const MediaSink::Id& sink_id) {
-  return base::Contains(GetSinks(), sink_id);
+  return GetSinks().contains(sink_id);
 }
 
 void CastMediaSinkServiceImpl::DisconnectAndRemoveSink(
@@ -792,7 +794,7 @@ void CastMediaSinkServiceImpl::DisconnectAndRemoveSink(
 
 bool CastMediaSinkServiceImpl::HasSinkWithIPAddress(
     const net::IPAddress& ip_address) const {
-  return base::Contains(GetSinks(), ip_address, [](const auto& sink) {
+  return std::ranges::contains(GetSinks(), ip_address, [](const auto& sink) {
     return sink.second.cast_data().ip_endpoint.address();
   });
 }

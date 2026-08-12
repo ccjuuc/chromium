@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "base/component_export.h"
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/types/expected.h"
@@ -29,14 +30,14 @@ namespace web_app {
 // from Isolated Web Apps. Usually, the implementations of this interface
 // should be constructed via the `IsolatedWebAppResponseReaderFactory`, which
 // will take care of the necessary validation and verification steps.
-class IsolatedWebAppResponseReader {
+class COMPONENT_EXPORT(ISOLATED_WEB_APPS) IsolatedWebAppResponseReader {
  public:
   // A `Response` object contains the response head, as well as a `ReadBody`
   // function to read the response's body. It holds weakly onto a
   // `SignedWebBundleReader` for reading the response body. This reference will
   // remain valid until the reader is evicted from the cache of the
   // `IsolatedWebAppReaderRegistry`.
-  class Response {
+  class COMPONENT_EXPORT(ISOLATED_WEB_APPS) Response {
    public:
     Response(web_package::mojom::BundleResponsePtr head,
              base::WeakPtr<SignedWebBundleReader> reader);
@@ -65,7 +66,7 @@ class IsolatedWebAppResponseReader {
     base::WeakPtr<SignedWebBundleReader> reader_;
   };
 
-  struct Error {
+  struct COMPONENT_EXPORT(ISOLATED_WEB_APPS) Error {
     enum class Type {
       kParserInternalError,
       kFormatError,
@@ -75,10 +76,6 @@ class IsolatedWebAppResponseReader {
 
     static Error FromSignedWebBundleReaderError(
         const SignedWebBundleReader::ReadResponseError& error);
-    // Returns `base::ok` if the trust checker result indicates success. Returns
-    // an error otherwise.
-    static base::expected<void, Error> FromTrustCheckerResult(
-        base::expected<void, std::string> result);
 
     Type type;
     std::string message;
@@ -102,13 +99,12 @@ class IsolatedWebAppResponseReader {
 // The implementation of the IWA response reader. It is constructed from
 // a `SignedWebBundleReader` instance, which must have already
 // read and validated integrity block and metadata.
-class IsolatedWebAppResponseReaderImpl : public IsolatedWebAppResponseReader {
+class COMPONENT_EXPORT(ISOLATED_WEB_APPS) IsolatedWebAppResponseReaderImpl
+    : public IsolatedWebAppResponseReader {
  public:
   explicit IsolatedWebAppResponseReaderImpl(
       std::unique_ptr<SignedWebBundleReader> reader,
-      content::BrowserContext* browser_context,
-      const web_package::SignedWebBundleId& web_bundle_id,
-      bool dev_mode);
+      content::BrowserContext* browser_context);
   ~IsolatedWebAppResponseReaderImpl() override;
 
   web_package::SignedWebBundleIntegrityBlock GetIntegrityBlock() override;
@@ -125,8 +121,6 @@ class IsolatedWebAppResponseReaderImpl : public IsolatedWebAppResponseReader {
 
   std::unique_ptr<SignedWebBundleReader> reader_;
   const raw_ref<content::BrowserContext> browser_context_;
-  const web_package::SignedWebBundleId web_bundle_id_;
-  const bool dev_mode_ = false;
 };
 
 }  // namespace web_app

@@ -19,6 +19,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/string_util.h"
+#include "base/task/single_thread_task_executor.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/common/constants.h"
 #include "gpu/command_buffer/common/context_creation_attribs.h"
@@ -233,10 +234,8 @@ struct Config {
 #if defined(GPU_FUZZER_USE_RASTER_DECODER)
     context_type = CONTEXT_TYPE_OPENGLES2;
 #else
-    bool es31 = it.GetBit();
     if (es3) {
-      context_type =
-          es31 ? CONTEXT_TYPE_OPENGLES31_FOR_TESTING : CONTEXT_TYPE_OPENGLES3;
+      context_type = CONTEXT_TYPE_OPENGLES3;
     } else {
       context_type = CONTEXT_TYPE_OPENGLES2;
     }
@@ -268,14 +267,15 @@ struct Config {
     !defined(GPU_FUZZER_USE_RASTER_DECODER)
     gl_context_attribs.webgl_compatibility_context =
         IsWebGLContextType(context_type);
+    gl_context_attribs.hardened_context =
+        !gl_context_attribs.webgl_compatibility_context;
     gl_context_attribs.global_texture_share_group = true;
     gl_context_attribs.robust_resource_initialization = true;
     gl_context_attribs.robust_buffer_access = true;
     gl_context_attribs.allow_client_arrays = false;
     gl_context_attribs.client_major_es_version =
         IsWebGL2OrES3OrHigherContextType(context_type) ? 3 : 2;
-    gl_context_attribs.client_minor_es_version =
-        IsES31ForTestingContextType(context_type) ? 1 : 0;
+    gl_context_attribs.client_minor_es_version = 0;
 #endif
 
     return it.consumed_bytes();
@@ -302,6 +302,9 @@ class CommandBufferSetup {
  public:
   CommandBufferSetup()
       : at_exit_manager_(),
+#if BUILDFLAG(IS_MAC)
+        task_executor_(base::MessagePumpType::NS_RUNLOOP),
+#endif
         gpu_preferences_(GetGpuPreferences()),
         share_group_(new gl::GLShareGroup),
         translator_cache_(gpu_preferences_) {
@@ -368,8 +371,6 @@ class CommandBufferSetup {
     gpu_feature_info.status_values[GPU_FEATURE_TYPE_GPU_TILE_RASTERIZATION] =
         kGpuFeatureStatusEnabled;
 #endif
-    auto feature_info = base::MakeRefCounted<gles2::FeatureInfo>(
-        config_.workarounds, gpu_feature_info);
     command_buffer_.reset(new CommandBufferDirect());
 
     if (gpu_preferences_.use_passthrough_cmd_decoder) {
@@ -390,7 +391,8 @@ class CommandBufferSetup {
         config_.workarounds.use_virtualized_gl_contexts, base::DoNothing(),
         gpu_preferences_.gr_context_type);
     context_state_->InitializeSkia(gpu_preferences_, config_.workarounds);
-    context_state_->InitializeGL(gpu_preferences_, feature_info);
+    context_state_->InitializeGL(gpu_preferences_, config_.workarounds,
+                                 gpu_feature_info);
 
     shared_image_manager_ = std::make_unique<SharedImageManager>();
     shared_image_factory_ = std::make_unique<SharedImageFactory>(
@@ -414,10 +416,12 @@ class CommandBufferSetup {
       viz::SharedImageFormat si_format = viz::SinglePlaneFormat::kRGBA_8888;
 
       shared_image_factory_->CreateSharedImage(
-          mailbox, si_format, gfx::Size(256, 256),
-          gfx::ColorSpace::CreateSRGB(), kTopLeft_GrSurfaceOrigin,
-          kPremul_SkAlphaType, gpu::kNullSurfaceHandle,
-          SharedImageUsageSet(usage), "TestLabel");
+          mailbox,
+          SharedImageInfo(si_format, gfx::Size(256, 256),
+                          gfx::ColorSpace::CreateSRGB(),
+                          kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType,
+                          SharedImageUsageSet(usage), "TestLabel"),
+          gpu::kNullSurfaceHandle);
     }
 
 #if defined(GPU_FUZZER_USE_RASTER_DECODER)
@@ -624,6 +628,12 @@ class CommandBufferSetup {
   }
 
   base::AtExitManager at_exit_manager_;
+
+#if BUILDFLAG(IS_MAC)
+  // b/513273428, b/514834448 - For Mac only. |task_executor_| with
+  // base::MessagePumpType::DEFAULT causes a ASAN crash on ChromeOS.
+  base::SingleThreadTaskExecutor task_executor_;
+#endif
 
   GpuPreferences gpu_preferences_;
 

@@ -6,12 +6,10 @@
 
 #import "base/functional/bind.h"
 #import "base/functional/callback.h"
-#import "components/signin/internal/identity_manager/account_capabilities_constants.h"
 #import "google_apis/gaia/gaia_id.h"
 
 namespace {
 
-using CapabilityResult = SystemIdentityManager::CapabilityResult;
 using DismissViewCallback = SystemIdentityManager::DismissViewCallback;
 
 }  // anonymous namespace
@@ -126,3 +124,4 @@ bool SystemIdentityManager::IsScopeLimitedError(
     id<RefreshAccessTokenError> error) {
   return false;
 }
+

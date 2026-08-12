@@ -17,7 +17,10 @@
 #include "base/strings/strcat_win.h"
 #include "base/strings/string_number_conversions_win.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/win/access_token.h"
 #include "base/win/scoped_handle.h"
+#include "base/win/security_descriptor.h"
+#include "base/win/sid.h"
 #include "base/win/windows_version.h"
 
 namespace mojo {
@@ -32,6 +35,42 @@ namespace {
 // OW = OWNER_RIGHTS
 constexpr wchar_t kDefaultSecurityDescriptor[] =
     L"D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)";
+
+bool IsPrivilegedPipeOwner(HANDLE pipe_handle) {
+  auto sd = base::win::SecurityDescriptor::FromHandle(
+      pipe_handle, base::win::SecurityObjectType::kFile,
+      OWNER_SECURITY_INFORMATION);
+  return sd && sd->owner() &&
+         (*sd->owner() ==
+              base::win::Sid(base::win::WellKnownSid::kLocalSystem) ||
+          *sd->owner() ==
+              base::win::Sid(base::win::WellKnownSid::kBuiltinAdministrators));
+}
+
+bool VerifyServerPrivilege(HANDLE pipe_handle) {
+  DWORD pid = 0;
+  if (!GetNamedPipeServerProcessId(pipe_handle, &pid)) {
+    return false;
+  }
+
+  base::win::ScopedHandle process(
+      OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
+  if (!process.is_valid()) {
+    // A medium-integrity client can't OpenProcess a SYSTEM server
+    // (ERROR_ACCESS_DENIED). Fall back to verify if the pipe's owner is
+    // privileged.
+    return IsPrivilegedPipeOwner(pipe_handle);
+  }
+
+  auto server_token = base::win::AccessToken::FromProcess(process.get());
+  auto client_token = base::win::AccessToken::FromCurrentProcess();
+
+  if (!server_token || !client_token) {
+    return false;
+  }
+
+  return server_token->IntegrityLevel() >= client_token->IntegrityLevel();
+}
 
 }  // namespace
 
@@ -133,6 +172,14 @@ PlatformChannelEndpoint NamedPlatformChannel::CreateClientEndpoint(
   DPLOG_IF(ERROR, !handle.is_valid())
       << "Named pipe " << pipe_name
       << " could not be opened after WaitNamedPipe succeeded";
+
+  if (handle.is_valid() && options.verify_server_privilege) {
+    if (!VerifyServerPrivilege(handle.GetHandle().Get())) {
+      DLOG(ERROR) << "Server privilege check failed.";
+      return PlatformChannelEndpoint();
+    }
+  }
+
   return PlatformChannelEndpoint(std::move(handle));
 }
 

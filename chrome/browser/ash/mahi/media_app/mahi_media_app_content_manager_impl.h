@@ -9,7 +9,6 @@
 
 #include "base/functional/callback_forward.h"
 #include "base/no_destructor.h"
-#include "base/scoped_multi_source_observation.h"
 #include "base/unguessable_token.h"
 #include "chrome/browser/ash/mahi/media_app/mahi_media_app_client.h"
 #include "chromeos/components/mahi/public/cpp/mahi_media_app_content_manager.h"
@@ -42,7 +41,7 @@ class MahiMediaAppContentManagerImpl
   std::optional<std::string> GetFileName(
       const base::UnguessableToken client_id) override;
   void GetContent(base::UnguessableToken client_id,
-                  chromeos::GetMediaAppContentCallback callback) override;
+                  chromeos::MahiGetContentCallback callback) override;
   void OnMahiContextMenuClicked(int64_t display_id,
                                 chromeos::mahi::ButtonType button_type,
                                 std::u16string_view question,

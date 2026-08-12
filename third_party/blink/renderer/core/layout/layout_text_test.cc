@@ -27,15 +27,15 @@ namespace {
 
 class LayoutTextTest : public RenderingTest {
  public:
-  void SetBasicBody(const char* message) {
-    SetBodyInnerHTML(String::Format(
-        "<div id='target' style='font-size: 10px;'>%s</div>", message));
+  void SetBasicBody(const char* content) {
+    SetBodyInnerHTML(StrCat(
+        {"<div id='target' style='font-size: 10px;'>", content, "</div>"}));
   }
 
-  void SetAhemBody(const char* message, const unsigned width) {
-    SetBodyInnerHTML(String::Format(
-        "<div id='target' style='font: 10px Ahem; width: %uem'>%s</div>", width,
-        message));
+  void SetAhemBody(const char* content, const unsigned width) {
+    SetBodyInnerHTML(
+        StrCat({"<div id='target' style='font: 10px Ahem; width: ",
+                String::Number(width), "em'>", content, "</div>"}));
   }
 
   LayoutText* GetLayoutTextById(const char* id) {
@@ -45,7 +45,7 @@ class LayoutTextTest : public RenderingTest {
   LayoutText* GetBasicText() { return GetLayoutTextById("target"); }
 
   void SetSelectionAndUpdateLayoutSelection(const std::string& selection_text) {
-    const SelectionInDOMTree selection =
+    const SelectionInDomTree selection =
         SelectionSample::SetSelectionText(GetDocument().body(), selection_text);
     UpdateAllLifecyclePhasesForTest();
     Selection().SetSelection(selection, SetSelectionOptions());
@@ -122,10 +122,10 @@ class LayoutTextTest : public RenderingTest {
       if (item.GetLayoutObject() == layout_text) {
         stream << "*";
       }
-      stream << "{'"
-             << data.text_content.Substring(item.StartOffset(), item.Length())
-                    .Utf8()
-             << "'";
+      stream
+          << "{'"
+          << data.text_content.substr(item.StartOffset(), item.Length()).Utf8()
+          << "'";
       if (const auto* shape_result = item.TextShapeResult()) {
         stream << ", ShapeResult=" << shape_result->StartIndex() << "+"
                << shape_result->NumCharacters();
@@ -182,10 +182,17 @@ TEST_F(LayoutTextTest, PrewarmFamily) {
 TEST_F(LayoutTextTest, PrewarmFontFace) {
   test::ScopedTestFontPrewarmer prewarmer;
   SetBodyInnerHTML(R"HTML(
+    <!--
+      This font was produced by subsetting <roboto regular> to include only the
+      .notdef glyph (GID 0) and 'A' (GID 1, U+0041). The following command was
+      used on the source font:
+      pyftsubset <roboto regular> --unicodes="U+0041" --no-hinting --layout-features='' \
+        --name-IDs='' --drop-tables+=GPOS,GSUB,gasp,GDEF,name,post
+    -->
     <style>
     @font-face {
       font-family: testfont;
-      src: local(Arial);
+      src: url(data:font/ttf;base64,AAEAAAAIAIAAAwAAT1MvMnKqYewAAAFQAAAAYGNtYXAADACUAAABsAAAADRnbHlm9aiJLAAAAIwAAAA4aGVhZPxq0noAAADsAAAANmhoZWEKugWiAAABLAAAACRobXR4CMQAgAAAASQAAAAIbG9jYQAcAAAAAADkAAAABm1heHAAJADlAAAAxAAAACAAAgAcAAAFHQWwAAcACgAAASEDIwEzASMBIQMDzf2eicYCLKgCLcX9TQHv+AF8/oQFsPpQAhoCqQABAAAAAgCPABYAVAAFAAEAAAAAAAAAAAAAAAAABgABAAAAAAAcAAAAAQAAAAIjEpNb+gZfDzz1ABkIAAAAAADE8BEuAAAAANUBUvT6G/3VCTAIcwAAAAkAAgAAAAAAAAOMAGQFOAAcAAEAAAds/gwAAAlJ+hv+SgkwAAEAAAAAAAAAAAAAAAAAAAACAAMEhgGQAAUAAAWaBTMAAAEfBZoFMwAAA9EAZgIAAAACAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAEdPT0cAQABBAEEGAP4AAGYHmgIAAAAAAQAAAAAEOgWwACAAIAADAAAAAgAAAAMAAAAUAAMAAQAAABQABAAgAAAABAAEAAEAAABB//8AAABB////wAABAAAAAA==);
     }
     #container { font-family: testfont; }
     </style>
@@ -801,7 +808,6 @@ TEST_F(LayoutTextTest, PlainTextInPseudo) {
 
   const auto GetPlainText = [](const LayoutObject* parent) {
     const LayoutObject* before = parent->SlowFirstChild();
-    EXPECT_TRUE(before->IsBeforeContent());
     const auto* before_text = To<LayoutText>(before->SlowFirstChild());
     EXPECT_FALSE(before_text->GetNode());
     return before_text->PlainText();

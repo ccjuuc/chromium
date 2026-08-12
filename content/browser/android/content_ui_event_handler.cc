@@ -4,10 +4,11 @@
 
 #include "content/browser/android/content_ui_event_handler.h"
 
-#include "base/metrics/histogram_macros.h"
+#include "base/time/time.h"
 #include "content/browser/renderer_host/render_widget_host_view_android.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/browser/web_contents/web_contents_view_android.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/android/window_android.h"
 #include "ui/events/android/event_handler_android.h"
 #include "ui/events/android/gesture_event_android.h"
@@ -19,6 +20,7 @@
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/event_utils.h"
+#include "ui/events/features.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "content/public/android/content_jni_headers/ContentUiEventHandler_jni.h"
@@ -29,10 +31,15 @@ using base::android::ScopedJavaLocalRef;
 
 namespace content {
 
-ContentUiEventHandler::ContentUiEventHandler(JNIEnv* env,
-                                             const JavaRef<jobject>& obj,
-                                             WebContentsImpl* web_contents)
-    : java_ref_(env, obj), web_contents_(web_contents) {}
+ContentUiEventHandler::ContentUiEventHandler(WebContentsImpl* web_contents)
+    : web_contents_(web_contents) {}
+
+ContentUiEventHandler::~ContentUiEventHandler() = default;
+
+ScopedJavaLocalRef<jobject> ContentUiEventHandler::GetJavaObject() {
+  JNIEnv* env = AttachCurrentThread();
+  return Java_ContentUiEventHandler_getFromWebContents(env, web_contents_);
+}
 
 RenderWidgetHostViewAndroid* ContentUiEventHandler::GetRenderWidgetHostView() {
   RenderWidgetHostView* rwhv = web_contents_->GetRenderWidgetHostView();
@@ -41,8 +48,8 @@ RenderWidgetHostViewAndroid* ContentUiEventHandler::GetRenderWidgetHostView() {
 
 bool ContentUiEventHandler::OnGenericMotionEvent(
     const ui::MotionEventAndroid& event) {
-  JNIEnv* env = base::android::AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> j_obj = java_ref_.get(env);
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> j_obj = GetJavaObject();
   if (!j_obj.is_null()) {
     return Java_ContentUiEventHandler_onGenericMotionEvent(
         env, j_obj, event.GetJavaObject());
@@ -51,8 +58,8 @@ bool ContentUiEventHandler::OnGenericMotionEvent(
 }
 
 bool ContentUiEventHandler::OnKeyUp(const ui::KeyEventAndroid& event) {
-  JNIEnv* env = base::android::AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> j_obj = java_ref_.get(env);
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> j_obj = GetJavaObject();
   if (!j_obj.is_null()) {
     return Java_ContentUiEventHandler_onKeyUp(env, j_obj, event);
   }
@@ -60,8 +67,8 @@ bool ContentUiEventHandler::OnKeyUp(const ui::KeyEventAndroid& event) {
 }
 
 bool ContentUiEventHandler::DispatchKeyEvent(const ui::KeyEventAndroid& event) {
-  JNIEnv* env = base::android::AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> j_obj = java_ref_.get(env);
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> j_obj = GetJavaObject();
   if (!j_obj.is_null()) {
     return Java_ContentUiEventHandler_dispatchKeyEvent(env, j_obj, event);
   }
@@ -69,8 +76,8 @@ bool ContentUiEventHandler::DispatchKeyEvent(const ui::KeyEventAndroid& event) {
 }
 
 bool ContentUiEventHandler::ScrollBy(float delta_x, float delta_y) {
-  JNIEnv* env = base::android::AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> j_obj = java_ref_.get(env);
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> j_obj = GetJavaObject();
   if (!j_obj.is_null()) {
     Java_ContentUiEventHandler_scrollBy(env, j_obj, delta_x, delta_y);
   }
@@ -78,8 +85,8 @@ bool ContentUiEventHandler::ScrollBy(float delta_x, float delta_y) {
 }
 
 bool ContentUiEventHandler::ScrollTo(float x, float y) {
-  JNIEnv* env = base::android::AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> j_obj = java_ref_.get(env);
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> j_obj = GetJavaObject();
   if (!j_obj.is_null()) {
     Java_ContentUiEventHandler_scrollTo(env, j_obj, x, y);
   }
@@ -89,7 +96,7 @@ bool ContentUiEventHandler::ScrollTo(float x, float y) {
 void ContentUiEventHandler::SendMouseWheelEvent(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& motion_event,
-    jlong time_ns) {
+    int64_t time_ns) {
   auto* event_handler = GetRenderWidgetHostView();
   if (!event_handler)
     return;
@@ -100,12 +107,17 @@ void ContentUiEventHandler::SendMouseWheelEvent(
   ComputeEventLatencyOS(ui::EventType::kMousewheel, event_time, current_time);
 
   auto source = ui::MotionEventAndroidSourceJava::Create(motion_event, false);
+  int tool_type =
+      base::FeatureList::IsEnabled(ui::kAndroidTouchpadDetection)
+          ? ui::MotionEventAndroid::GetAndroidToolType(source->GetToolType(0))
+          : 0;
   ui::MotionEventAndroid::Pointer pointer(
       /*id=*/0, /*pos_x_pixels=*/source->GetXPix(0),
       /*pos_y_pixels=*/source->GetYPix(0),
       /*touch_major_pixels=*/0.0f,
       /*touch_minor_pixels=*/0.0f, /*pressure=*/0.0f, /*orientation_rad=*/0.0f,
-      /*tilt_rad=*/0.0f, /*tool_type=*/0);
+      /*tilt_rad=*/0.0f,
+      /*tool_type=*/tool_type);
 
   auto* view = web_contents_->GetNativeView();
   auto* window = view->GetWindowAndroid();
@@ -119,7 +131,7 @@ void ContentUiEventHandler::SendMouseWheelEvent(
       /*ticks_y=*/source->GetAxisVscroll(0),
       /*tick_multiplier=*/pixels_per_tick,
       /*oldest_event_time=*/base::TimeTicks::FromJavaNanoTime(time_ns),
-      /*android_action=*/0,
+      /*android_action=*/source->GetActionMasked(),
       /*pointer_count=*/1,
       /*history_size=*/0,
       /*action_index=*/0,
@@ -137,9 +149,9 @@ void ContentUiEventHandler::SendMouseWheelEvent(
 void ContentUiEventHandler::SendMouseEvent(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& motion_event,
-    jlong time_ns,
-    jint android_action_button,
-    jint android_tool_type) {
+    int64_t time_ns,
+    int32_t android_action_button,
+    int32_t android_tool_type) {
   auto* event_handler = GetRenderWidgetHostView();
   if (!event_handler)
     return;
@@ -178,9 +190,9 @@ void ContentUiEventHandler::SendMouseEvent(
 }
 
 void ContentUiEventHandler::SendScrollEvent(JNIEnv* env,
-                                            jlong time_ms,
-                                            jfloat delta_x,
-                                            jfloat delta_y) {
+                                            int64_t time_ms,
+                                            float delta_x,
+                                            float delta_y) {
   auto* event_handler = GetRenderWidgetHostView();
   if (!event_handler)
     return;
@@ -204,7 +216,7 @@ void ContentUiEventHandler::SendScrollEvent(JNIEnv* env,
       0, target_viewport, synthetic_scroll, prevent_boosting));
 }
 
-void ContentUiEventHandler::CancelFling(JNIEnv* env, jlong time_ms) {
+void ContentUiEventHandler::CancelFling(JNIEnv* env, int64_t time_ms) {
   auto* event_handler = GetRenderWidgetHostView();
   if (!event_handler)
     return;
@@ -215,18 +227,15 @@ void ContentUiEventHandler::CancelFling(JNIEnv* env, jlong time_ms) {
       /*synthetic_scroll*/ false, true));
 }
 
-static jlong JNI_ContentUiEventHandler_Init(
-    JNIEnv* env,
-    const JavaRef<jobject>& obj,
-    const JavaRef<jobject>& jweb_contents) {
-  WebContentsImpl* web_contents = static_cast<WebContentsImpl*>(
-      WebContents::FromJavaWebContents(jweb_contents));
-  CHECK(web_contents)
+static int64_t JNI_ContentUiEventHandler_Init(JNIEnv* env,
+                                              WebContents* web_contents) {
+  WebContentsImpl* web_contents_impl =
+      static_cast<WebContentsImpl*>(web_contents);
+  CHECK(web_contents_impl)
       << "A ContentUiEventHandler should be created with a valid WebContents.";
-  auto handler =
-      std::make_unique<ContentUiEventHandler>(env, obj, web_contents);
+  auto handler = std::make_unique<ContentUiEventHandler>(web_contents_impl);
   auto* handler_ptr = handler.get();
-  static_cast<WebContentsViewAndroid*>(web_contents->GetView())
+  static_cast<WebContentsViewAndroid*>(web_contents_impl->GetView())
       ->SetContentUiEventHandler(std::move(handler));
   return reinterpret_cast<intptr_t>(handler_ptr);
 }

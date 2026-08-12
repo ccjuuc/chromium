@@ -22,6 +22,7 @@
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/to_string.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -32,7 +33,7 @@
 #include "base/timer/timer.h"
 #include "base/types/expected_macros.h"
 #include "chrome/browser/web_applications/file_utils_wrapper.h"
-#include "chrome/browser/web_applications/web_app_install_info.h"
+#include "chrome/browser/web_applications/model/web_app_icon_types.h"
 #include "chrome/browser/web_applications/web_app_install_utils.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "chrome/common/chrome_features.h"
@@ -112,8 +113,10 @@ void RotateLogFileBlocking(scoped_refptr<FileUtilsWrapper> utils,
     return;
   }
   std::optional<base::FilePath> rotated_filename;
-  std::string date_str =
-      base::UnlocalizedTimeFormatWithPattern(clock->Now(), "y-MM-dd");
+  base::Time::Exploded exploded;
+  clock->Now().LocalExplode(&exploded);
+  std::string date_str = base::StringPrintf(
+      "%04d-%02d-%02d", exploded.year, exploded.month, exploded.day_of_month);
   for (int free_index = -1; free_index < kMaxRotatedLogFileIndex;
        ++free_index) {
     std::string suffix = date_str;
@@ -251,10 +254,8 @@ PersistableLog::~PersistableLog() {
 }
 
 void PersistableLog::Append(base::DictValue object) {
-  if (!object.contains("timestamp_ms")) {
-    object.Set("timestamp_ms",
-               base::saturated_cast<int>(
-                   clock_->Now().ToDeltaSinceWindowsEpoch().InMilliseconds()));
+  if (!object.contains("timestamp")) {
+    object.Set("timestamp", base::TimeFormatAsIso8601(clock_->Now()));
   }
 #if DCHECK_IS_ON()
   // This is wrapped with DCHECK_IS_ON() to prevent calling DebugString() in
@@ -358,7 +359,7 @@ base::DictValue LogDownloadedIconsErrors(
   base::DictValue icon_errors;
   {
     // Reports errors only, omits successful entries.
-    base::Value::List icons_http_errors;
+    base::ListValue icons_http_errors;
 
     for (const auto& url_and_http_code : icons_http_results) {
       const GURL& icon_url = url_and_http_code.first.url;

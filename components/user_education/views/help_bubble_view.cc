@@ -12,6 +12,7 @@
 
 #include "base/callback_list.h"
 #include "base/functional/bind.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/user_metrics.h"
 #include "base/notreached.h"
@@ -25,13 +26,13 @@
 #include "components/user_education/views/help_bubble_factory_views.h"
 #include "components/user_education/views/help_bubble_views.h"
 #include "components/variations/variations_associated_data.h"
-#include "components/vector_icons/vector_icons.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_palette.h"
@@ -168,10 +169,12 @@ class ClosePromoButton : public views::ImageButton {
     SetTooltipText(accessible_name);
 
     constexpr int kIconSize = 16;
-    SetImageModel(views::ImageButton::STATE_NORMAL,
-                  ui::ImageModel::FromVectorIcon(
-                      views::kIcCloseIcon,
-                      delegate_->GetHelpBubbleForegroundColorId(), kIconSize));
+    SetImageModel(
+        views::ImageButton::STATE_NORMAL,
+        ui::ImageModel::FromVectorIcon(
+            features::IsRoundedIconsEnabled() ? views::kCloseIcon
+                                              : views::kIcCloseOldIcon,
+            delegate_->GetHelpBubbleForegroundColorId(), kIconSize));
 
     constexpr float kCloseButtonFocusRingHaloThickness = 1.25f;
     views::FocusRing::Get(this)->SetHaloThickness(
@@ -319,6 +322,26 @@ class HelpBubbleView::AnchorViewObserver : public views::ViewObserver {
   const raw_ptr<HelpBubbleView> help_bubble_;
   base::ScopedObservation<View, ViewObserver> observation_{this};
 };
+
+// static
+HelpBubbleViewInfo HelpBubbleView::Create(
+    const HelpBubbleDelegate* delegate,
+    const internal::HelpBubbleAnchorParams& anchor,
+    HelpBubbleParams params,
+    std::unique_ptr<HelpBubbleEventRelay> event_relay) {
+  const bool visible_arrow =
+      anchor.show_arrow && params.arrow != HelpBubbleArrow::kNone;
+  const bool show_active =
+      params.focus_on_show_hint.value_or(!params.buttons.empty()) &&
+      !event_relay;
+  auto bubble = base::WrapUnique(new HelpBubbleView(
+      delegate, anchor, std::move(params), std::move(event_relay)));
+  auto* const bubble_ptr = bubble.get();
+  std::unique_ptr<views::Widget> widget =
+      views::BubbleDialogDelegate::CreateBubble(std::move(bubble).release());
+  bubble_ptr->InitializeAndShow(visible_arrow, show_active);
+  return HelpBubbleViewInfo(std::move(widget), bubble_ptr);
+}
 
 HelpBubbleView::HelpBubbleView(
     const HelpBubbleDelegate* delegate,
@@ -666,35 +689,33 @@ HelpBubbleView::HelpBubbleView(
   }
 
   SetProperty(views::kElementIdentifierKey, kHelpBubbleElementIdForTesting);
-  set_margins(gfx::Insets());
-  set_title_margins(gfx::Insets());
+  set_frame_margins({.contents = gfx::Insets(), .title = gfx::Insets()});
   SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   set_close_on_deactivate(false);
   set_focus_traversable_from_anchor_view(false);
 
-  const bool suppress_events =
-      event_relay_ && !event_relay_->ShouldHelpBubbleProcessEvents();
-  if (suppress_events) {
+  if (event_relay_ && !event_relay_->ShouldHelpBubbleProcessEvents()) {
     CHECK_LE(params.buttons.size(), 1U)
         << "Help bubbles that cannot activate cannot have multiple interactive "
            "buttons due to accessibility constraints.";
     SetCanActivate(false);
     set_accept_events(false);
   }
+}
 
-  views::Widget* widget = views::BubbleDialogDelegateView::CreateBubble(this);
+void HelpBubbleView::InitializeAndShow(bool visible_arrow, bool show_active) {
+  views::Widget* const widget = GetWidget();
 
   // This gets reset to the platform default when we call CreateBubble(), so we
   // have to change it afterwards:
   set_adjust_if_offscreen(true);
   auto* const frame_view = GetBubbleFrameView();
-  frame_view->SetDisplayVisibleArrow(anchor.show_arrow &&
-                                     params.arrow != HelpBubbleArrow::kNone);
+  frame_view->SetDisplayVisibleArrow(visible_arrow);
 
   // If the primary window widget is not the anchor widget, do not use the
   // window anchor bounds.
   if (anchor_widget()->GetPrimaryWindowWidget() != anchor_widget()) {
-    frame_view->set_use_anchor_window_bounds(false);
+    SetUseAnchorWindowBounds(false);
   }
 
   // Bubbles get a 1-dip border that's either light or dark depending on system
@@ -707,7 +728,7 @@ HelpBubbleView::HelpBubbleView(
   InvalidateLayout();
 
   // Setup that should happen after the widget is constructed:
-  if (suppress_events) {
+  if (event_relay_ && !event_relay_->ShouldHelpBubbleProcessEvents()) {
     // This is required on Windows because of the way events are routed.
     GetBubbleFrameView()->set_hit_test_transparent(true);
   }
@@ -719,9 +740,6 @@ HelpBubbleView::HelpBubbleView(
   }
 
   // Most help bubbles with buttons take focus when they show.
-  const bool show_active =
-      params.focus_on_show_hint.value_or(!params.buttons.empty()) &&
-      !event_relay_;
   if (show_active) {
     widget->Show();
   } else {
@@ -751,10 +769,15 @@ void HelpBubbleView::MaybeStartAutoCloseTimer() {
 }
 
 void HelpBubbleView::OnTimeout() {
+  // The callback could destroy the widget, so grab a weak pointer.
+  base::WeakPtr<views::Widget> widget =
+      GetWidget() ? GetWidget()->GetWeakPtr() : nullptr;
   if (timeout_callback_) {
     std::move(timeout_callback_).Run();
   }
-  GetWidget()->Close();
+  if (widget) {
+    widget->Close();
+  }
 }
 
 std::u16string HelpBubbleView::GetAccessibleWindowTitle() const {

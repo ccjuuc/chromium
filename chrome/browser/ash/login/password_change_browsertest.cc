@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/public/cpp/login_screen_test_api.h"
 #include "ash/public/cpp/reauth_reason.h"
 #include "ash/shell.h"
@@ -17,7 +18,9 @@
 #include "base/json/values_util.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/reauth_stats.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
@@ -26,7 +29,6 @@
 #include "chrome/browser/ash/login/signin/token_handle_util.h"
 #include "chrome/browser/ash/login/test/auth_ui_utils.h"
 #include "chrome/browser/ash/login/test/cryptohome_mixin.h"
-#include "chrome/browser/ash/login/test/local_state_mixin.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
 #include "chrome/browser/ash/login/test/oobe_window_visibility_waiter.h"
@@ -41,7 +43,6 @@
 #include "chrome/browser/ui/webui/ash/login/gaia_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/oobe_ui.h"
 #include "chrome/test/base/fake_gaia_mixin.h"
-#include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/userdataauth/fake_userdataauth_client.h"
@@ -65,6 +66,11 @@ constexpr GaiaId::Literal kGaiaID("111111");
 constexpr char kTokenHandle[] = "test_token_handle";
 constexpr char kTestingFileName[] = "testing-file.txt";
 constexpr char kTokenHandleLastCheckedPref[] = "TokenHandleLastChecked";
+constexpr char kTokenHandlePref[] = "PasswordTokenHandle";
+constexpr char kTokenHandleStatusPref[] = "TokenHandleStatus";
+constexpr char kTokenHandleStatusStale[] = "stale";
+
+constexpr char kTestTokenHandle[] = "test-token-handle";
 
 using AuthOp = FakeUserDataAuthClient::Operation;
 
@@ -333,6 +339,104 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeTest, ClosePasswordChangedDialog) {
   test::CreateOldPasswordEnterPageWaiter()->Wait();
 }
 
+// Verifies that AutoWipe is triggered when the
+// `kDeviceOnlinePasswordMismatchBehavior` pref is set to 1.
+IN_PROC_BROWSER_TEST_F(PasswordChangeTest,
+                       DeviceOnlinePasswordMismatchBehavior_AutoWipe) {
+  CreateTestingFile();
+  OpenGaiaDialog(test_account_id_);
+
+  // Set the AutoWipe behavior in Local State.
+  g_browser_process->local_state()->SetInteger(
+      ash::prefs::kDeviceOnlinePasswordMismatchBehavior,
+      static_cast<int>(DeviceOnlinePasswordMismatchBehavior::kAutoWipe));
+
+  // Mark the test user as enterprise managed so the AutoWipe policy triggers.
+  user_manager::KnownUser known_user(g_browser_process->local_state());
+  known_user.SetIsEnterpriseManaged(test_account_id_, true);
+
+  // Skip post-login screens to reach ACTIVE session state immediately after
+  // wipe.
+  login_mixin_.SkipPostLoginScreens();
+
+  SetGaiaScreenCredentials(test_account_id_, test::kNewPassword);
+
+  // Wait for the cryptohome removal to be triggered asynchronously.
+  {
+    base::RunLoop run_loop;
+    base::RepeatingTimer timer;
+    timer.Start(
+        FROM_HERE, base::Milliseconds(100),
+        base::BindRepeating(
+            [](base::RunLoop* run_loop) {
+              if (FakeUserDataAuthClient::Get()->WasCalled<AuthOp::kRemove>()) {
+                run_loop->Quit();
+              }
+            },
+            &run_loop));
+    // Fail the test if wipe doesn't happen within 10 seconds.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, run_loop.QuitClosure(), base::Seconds(10));
+    run_loop.Run();
+  }
+
+  // Verify that the cryptohome was actually removed.
+  EXPECT_TRUE(FakeUserDataAuthClient::Get()->WasCalled<AuthOp::kRemove>());
+  EXPECT_FALSE(TestingFileExists());
+
+  // Wait for active session to fully stabilize before concluding the test to
+  // avoid dangling profile pointers during teardown.
+  login_mixin_.WaitForActiveSession();
+}
+
+// Verifies that recovery/enter-old-password screen is shown when the
+// `kDeviceOnlinePasswordMismatchBehavior` pref is set to 0 (default).
+IN_PROC_BROWSER_TEST_F(PasswordChangeTest,
+                       DeviceOnlinePasswordMismatchBehavior_Default) {
+  CreateTestingFile();
+  OpenGaiaDialog(test_account_id_);
+
+  // Set the default behavior in Local State.
+  g_browser_process->local_state()->SetInteger(
+      ash::prefs::kDeviceOnlinePasswordMismatchBehavior,
+      static_cast<int>(DeviceOnlinePasswordMismatchBehavior::kDefault));
+
+  SetGaiaScreenCredentials(test_account_id_, test::kNewPassword);
+
+  // Verify that we land on the Enter Old Password screen.
+  test::CreateOldPasswordEnterPageWaiter()->Wait();
+
+  // Verify that the cryptohome was NOT removed.
+  EXPECT_FALSE(FakeUserDataAuthClient::Get()->WasCalled<AuthOp::kRemove>());
+  EXPECT_TRUE(TestingFileExists());
+}
+
+// Verifies that AutoWipe is NOT triggered when the user is a consumer,
+// even if the `kDeviceOnlinePasswordMismatchBehavior` pref is set to 1.
+IN_PROC_BROWSER_TEST_F(PasswordChangeTest,
+                       DeviceOnlinePasswordMismatchBehavior_AutoWipe_Consumer) {
+  CreateTestingFile();
+  OpenGaiaDialog(test_account_id_);
+
+  // Set the AutoWipe behavior in Local State.
+  g_browser_process->local_state()->SetInteger(
+      ash::prefs::kDeviceOnlinePasswordMismatchBehavior,
+      static_cast<int>(DeviceOnlinePasswordMismatchBehavior::kAutoWipe));
+
+  // Explicitly ensure the test user is marked as a consumer.
+  user_manager::KnownUser known_user(g_browser_process->local_state());
+  known_user.SetIsEnterpriseManaged(test_account_id_, false);
+
+  SetGaiaScreenCredentials(test_account_id_, test::kNewPassword);
+
+  // Verify that we land on the Enter Old Password screen instead of wiping.
+  test::CreateOldPasswordEnterPageWaiter()->Wait();
+
+  // Verify that the cryptohome was NOT removed.
+  EXPECT_FALSE(FakeUserDataAuthClient::Get()->WasCalled<AuthOp::kRemove>());
+  EXPECT_TRUE(TestingFileExists());
+}
+
 class PasswordChangeTokenCheck : public PasswordChangeTest {
  public:
   PasswordChangeTokenCheck() {
@@ -377,6 +481,59 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeTokenCheck, LoginScreenPasswordChange) {
   base::HistogramTester histogram_tester;
 
   SetGaiaScreenCredentials(user_with_invalid_token_, test::kNewPassword);
+
+  test::CreateOldPasswordEnterPageWaiter()->Wait();
+
+  histogram_tester.ExpectBucketCount("Login.PasswordChanged.ReauthReason",
+                                     ReauthReason::kInvalidTokenHandle, 1);
+}
+
+class PasswordChangeTokenCheckStaleToken : public PasswordChangeTest {
+ public:
+  PasswordChangeTokenCheckStaleToken() {
+    // Disable feature to trigger old code path.
+    scoped_feature_list_.InitAndDisableFeature(features::kUseTokenHandleStore);
+    login_mixin_.AppendRegularUsers(1);
+    user_with_stale_token_ = login_mixin_.users().back().account_id;
+    ignore_sync_errors_for_test_ =
+        SigninErrorNotifier::IgnoreSyncErrorsForTesting();
+    UserDataAuthClient::InitializeFake();
+  }
+
+ protected:
+  // PasswordChangeTest:
+  void SetUpOnMainThread() override {
+    PasswordChangeTest::SetUpOnMainThread();
+    user_manager::KnownUser known_user(g_browser_process->local_state());
+
+    known_user.SetStringPref(user_with_stale_token_, kTokenHandlePref,
+                             kTestTokenHandle);
+    known_user.SetStringPref(user_with_stale_token_, kTokenHandleStatusPref,
+                             kTokenHandleStatusStale);
+  }
+
+  void TearDownOnMainThread() override {
+    LoginManagerTest::TearDownOnMainThread();
+  }
+
+  AccountId user_with_stale_token_;
+  std::unique_ptr<base::AutoReset<bool>> ignore_sync_errors_for_test_;
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(PasswordChangeTokenCheckStaleToken,
+                       LoginScreenPasswordChange) {
+  EXPECT_FALSE(
+      LoginScreenTestApi::IsForcedOnlineSignin(user_with_stale_token_));
+  // Focus triggers token check.
+  LoginScreenTestApi::FocusUser(user_with_stale_token_);
+  EXPECT_TRUE(LoginScreenTestApi::IsForcedOnlineSignin(user_with_stale_token_));
+
+  OpenGaiaDialog(user_with_stale_token_);
+
+  base::HistogramTester histogram_tester;
+
+  SetGaiaScreenCredentials(user_with_stale_token_, test::kNewPassword);
 
   test::CreateOldPasswordEnterPageWaiter()->Wait();
 
@@ -567,7 +724,6 @@ IN_PROC_BROWSER_TEST_F(TokenAfterCrash, ValidToken) {
 
 class IgnoreOldTokenTest
     : public LoginManagerTest,
-      public LocalStateMixin::Delegate,
       public ::testing::WithParamInterface<bool> /* isManagedUser */ {
  public:
   IgnoreOldTokenTest() {
@@ -580,17 +736,14 @@ class IgnoreOldTokenTest
     UserDataAuthClient::InitializeFake();
   }
 
-  // LocalStateMixin::Delegate:
-  void SetUpLocalState() override {
+  void PreRunTestOnMainThread() override {
+    // Token is used in some set up done in PreRunTestOnMainThread(),
+    // so set it up earlier than the timing.
     token_handle_store_ = TokenHandleStoreFactory::Get()->GetTokenHandleStore();
     token_handle_store_->StoreTokenHandle(account_id_, kTokenHandle);
     token_handle_store_->SetInvalidTokenForTesting(kTokenHandle);
 
-    if (content::IsPreTest()) {
-      // Keep `TokenHandleRotated` flag to disable logic of neglecting not
-      // rotated token.
-      return;
-    }
+    LoginManagerTest::PreRunTestOnMainThread();
   }
 
   void TearDownOnMainThread() override {
@@ -606,7 +759,6 @@ class IgnoreOldTokenTest
   AccountId account_id_;
 
   raw_ptr<TokenHandleStore> token_handle_store_;
-  LocalStateMixin local_state_mixin_{&mixin_host_, this};
 };
 
 // Verify case when a user got token invalidated on a pre-rotated version and

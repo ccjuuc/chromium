@@ -67,12 +67,22 @@ NSString* const kInactiveTabsDemoMode = @"InactiveTabsDemoMode";
 NSString* const kInactiveTabsTestMode = @"InactiveTabsTestMode";
 NSString* const kAsyncStartupOverrideResponse = @"AsyncStartupOverrideResponse";
 NSString* const kLensResultPanelGwsURL = @"LensResultPanelGwsURL";
+NSString* const kCobrowseGwsURL = @"CobrowseGwsURL";
 NSString* const kForceDisableAIMEligibility = @"ForceDisableAIMEligibility";
 NSString* const kForceDisableCreateImagesEligibility =
     @"ForceDisableCreateImagesEligibility";
+NSString* const kForceDisableCanvasEligibility =
+    @"ForceDisableCanvasEligibility";
+NSString* const kForceDisableDeepSearchEligibility =
+    @"ForceDisableDeepSearchEligibility";
 NSString* const kForceDisablePdfUploadEligibility =
     @"ForceDisablePdfUploadEligibility";
 NSString* const kShowCatalogItems = @"ShowCatalogItems";
+NSString* const kForceMultiProfileForcedMigrationDone =
+    @"ForceMultiProfileForcedMigrationDone";
+NSString* const kShowBackendPromoDebugTools = @"ShowBackendPromoDebugTools";
+NSString* const kForcedPushNotificationType = @"ForcedPushNotificationType";
+NSString* const kForcedPushNotificationDelay = @"ForcedPushNotificationDelay";
 }  // namespace
 
 namespace experimental_flags {
@@ -212,6 +222,10 @@ base::TimeDelta GetReturnToHomeSurfaceDuration() {
       integerForKey:kHomeSurfaceDuration];
   if (duration == 0) {
     return base::Hours(4);
+  }
+  if (duration == -1) {
+    // if set to -1 the duration will be instant.
+    return base::Seconds(0);
   }
   return base::Seconds(duration);
 }
@@ -360,6 +374,10 @@ NSString* GetLensResultPanelGwsURL() {
       stringForKey:kLensResultPanelGwsURL];
 }
 
+NSString* GetCobrowseGwsURL() {
+  return [[NSUserDefaults standardUserDefaults] stringForKey:kCobrowseGwsURL];
+}
+
 bool ShouldForceDisableComposeboxAIM() {
   return [[NSUserDefaults standardUserDefaults]
       boolForKey:kForceDisableAIMEligibility];
@@ -368,6 +386,16 @@ bool ShouldForceDisableComposeboxAIM() {
 bool ShouldForceDisableComposeboxCreateImages() {
   return [[NSUserDefaults standardUserDefaults]
       boolForKey:kForceDisableCreateImagesEligibility];
+}
+
+bool ShouldForceDisableComposeboxCanvas() {
+  return [[NSUserDefaults standardUserDefaults]
+      boolForKey:kForceDisableCanvasEligibility];
+}
+
+bool ShouldForceDisableComposeboxDeepSearch() {
+  return [[NSUserDefaults standardUserDefaults]
+      boolForKey:kForceDisableDeepSearchEligibility];
 }
 
 bool ShouldForceDisableComposeboxPdfUpload() {
@@ -382,6 +410,25 @@ bool ShouldShowCatalogItems() {
 #else
   return [[NSUserDefaults standardUserDefaults] boolForKey:kShowCatalogItems];
 #endif
+}
+
+bool ShouldForceMultiProfileForcedMigrationDone() {
+  return [[NSUserDefaults standardUserDefaults]
+      boolForKey:kForceMultiProfileForcedMigrationDone];
+}
+
+bool ShouldShowBackendPromoDebugTools() {
+  return [[NSUserDefaults standardUserDefaults]
+      boolForKey:kShowBackendPromoDebugTools];
+}
+int GetForcedPushNotificationType() {
+  return [[NSUserDefaults standardUserDefaults]
+      integerForKey:kForcedPushNotificationType];
+}
+
+int GetForcedPushNotificationDelay() {
+  return [[NSUserDefaults standardUserDefaults]
+      integerForKey:kForcedPushNotificationDelay];
 }
 
 }  // namespace experimental_flags

@@ -10,7 +10,6 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
-#include "build/branding_buildflags.h"
 #include "chrome/browser/ui/passwords/passwords_leak_dialog_delegate.h"
 #include "components/password_manager/core/browser/manage_passwords_referrer.h"
 #include "components/password_manager/core/browser/ui/password_check_referrer.h"
@@ -215,6 +214,18 @@ class PasswordsModelDelegate {
 
   // Called when the mouse exits the bubble view.
   virtual void OnMouseExited() = 0;
+
+  // Model observes the changes of the password manager's error state. By
+  // calling this method we instruct the model to save the password after the
+  // trusted vault error state is fixed.
+  virtual void SavePasswordAfterTrustedVaultErrorResolution() = 0;
+
+  // Starts the UI flow for fixing the trusted vault error.
+  virtual void StartTrustedVaultErrorResolutionFlow() = 0;
+
+  // Returns true if only a trusted vault error prevents from saving the
+  // password.
+  virtual bool IsSavingBlockedByTrustedVaultError() const = 0;
 
  protected:
   virtual ~PasswordsModelDelegate() = default;

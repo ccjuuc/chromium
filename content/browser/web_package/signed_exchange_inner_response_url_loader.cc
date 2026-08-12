@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 
+#include "base/byte_size.h"
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -90,7 +91,7 @@ SignedExchangeInnerResponseURLLoader::SignedExchangeInnerResponseURLLoader(
 
   if (network::cors::ShouldCheckCors(request.url, request.request_initiator,
                                      request.mode)) {
-    const auto result = network::cors::CheckAccessAndReportMetrics(
+    const auto result = network::cors::CheckAccess(
         request.url,
         GetHeaderString(*response_,
                         network::cors::header_names::kAccessControlAllowOrigin),
@@ -165,9 +166,7 @@ void SignedExchangeInnerResponseURLLoader::
 }
 
 void SignedExchangeInnerResponseURLLoader::FollowRedirect(
-    const std::vector<std::string>& removed_headers,
-    const net::HttpRequestHeaders& modified_headers,
-    const net::HttpRequestHeaders& modified_cors_exempt_headers,
+    network::HttpRequestHeadersUpdateParams headers_update_params,
     const std::optional<GURL>& new_url) {
   NOTREACHED();
 }
@@ -213,7 +212,7 @@ void SignedExchangeInnerResponseURLLoader::BlobReaderComplete(
     status = completion_status_;
     status.exists_in_cache = true;
     status.completion_time = base::TimeTicks::Now();
-    status.encoded_data_length = 0;
+    status.encoded_data_length = base::ByteSize(0);
   } else {
     status = network::URLLoaderCompletionStatus(status);
   }

@@ -14,24 +14,17 @@ per-file fake_speech_recognition_manager*=file://ui/accessibility/OWNERS
 # For Attribution Reporting API.
 per-file attribution_*=file://content/browser/attribution_reporting/OWNERS
 
-# For Aggregation Service testing tool.
-per-file test_aggregation_service*=file://content/browser/aggregation_service/OWNERS
-
-# For Topics API.
-per-file browsing_topics_*=file://components/browsing_topics/OWNERS
-
-# For Shared Storage API.
-per-file shared_storage_*=file://third_party/blink/renderer/modules/shared_storage/OWNERS
-per-file test_shared_storage_*=file://third_party/blink/renderer/modules/shared_storage/OWNERS
-
 # Network Service
 per-file network_service_test_helper.*=file://services/network/OWNERS
+
+# For Direct Sockets multicast test helpers.
+per-file direct_sockets*=file://content/browser/direct_sockets/OWNERS
 
 # DevTools-specific changes
 per-file *devtools*=file://content/browser/devtools/OWNERS
 
 # For BackForwardCache.
-per-file back_forward_cache*=file://content/browser/BACK_FORWARD_CACHE_OWNERS
+per-file back_forward_cache*=file://content/browser/back_forward_cache/OWNERS
 
 # For file system changes.
 per-file *file_system*=file://content/browser/file_system_access/OWNERS
@@ -59,3 +52,9 @@ per-file mock_browsing_data_remover_delegate.*=file://content/browser/browsing_d
 per-file *captured_surface_controller*=eladalon@chromium.org
 per-file *captured_surface_controller*=guidou@chromium.org
 per-file *captured_surface_controller*=tovep@chromium.org
+
+# For Memory Coordinator
+per-file *memory_coordinator_browsertest_util.cc=file://base/memory_coordinator/OWNERS
+
+# For Web UI.
+per-file *web_ui*=file://ui/webui/PLATFORM_OWNERS

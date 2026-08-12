@@ -180,16 +180,18 @@ export class Viewport {
     this.setZoomManager(new InactiveZoomManager(this.getZoom.bind(this), 1));
 
     // Print Preview
-    if (this.window_ === document.documentElement ||
-        // Necessary check since during testing a fake DOM element is used.
-        !(this.window_ instanceof HTMLElement)) {
+    if (this.window_ === document.documentElement) {
       window.addEventListener('scroll', this.updateViewport_.bind(this));
       this.scrollContent_.setEventTarget(window);
+      window.addEventListener('resize', this.resizeWrapper_.bind(this));
+    } else if (!(this.window_ instanceof HTMLElement)) {
+      // Test case (fake DOM element / MockElement)
+      this.scrollContent_.setEventTarget(
+          this.window_ as unknown as EventTarget);
       // The following line is only used in tests, since they expect
       // |scrollCallback| to be called on the mock |window_| object (legacy).
       (this.window_ as HtmlElementWithExtras).scrollCallback =
           this.updateViewport_.bind(this);
-      window.addEventListener('resize', this.resizeWrapper_.bind(this));
       // The following line is only used in tests, since they expect
       // |resizeCallback| to be called on the mock |window_| object (legacy).
       (this.window_ as HtmlElementWithExtras).resizeCallback =
@@ -375,7 +377,7 @@ export class Viewport {
   private getViewportRect_(): ViewportRect {
     const zoom = this.getZoom();
     // Zoom can be 0 in the case of a PDF that is in a hidden iframe. Avoid
-    // returning undefined values in this case. See https://crbug.com/1202725.
+    // returning undefined values in this case. See https://crbug.com/40763077.
     if (zoom === 0) {
       return {
         x: 0,

@@ -32,7 +32,7 @@ class TestNetworkContext : public network::TestNetworkContext {
            const std::string& group,
            const GURL& url,
            const net::NetworkAnonymizationKey& network_anonymization_key,
-           base::Value::Dict body)
+           base::DictValue body)
         : type(type),
           group(group),
           url(url),
@@ -43,7 +43,7 @@ class TestNetworkContext : public network::TestNetworkContext {
     std::string group;
     GURL url;
     net::NetworkAnonymizationKey network_anonymization_key;
-    base::Value::Dict body;
+    base::DictValue body;
   };
 
   void QueueReport(
@@ -52,7 +52,7 @@ class TestNetworkContext : public network::TestNetworkContext {
       const GURL& url,
       const std::optional<base::UnguessableToken>& reporting_source,
       const net::NetworkAnonymizationKey& network_anonymization_key,
-      base::Value::Dict body) override {
+      base::DictValue body) override {
     reports_.emplace_back(type, group, url, network_anonymization_key,
                           std::move(body));
   }
@@ -97,10 +97,10 @@ class DocumentIsolationPolicyReporterTest : public testing::Test {
   }
   void InvalidateWeakPtrs() { storage_partition_.InvalidateWeakPtrs(); }
   const TestNetworkContext& network_context() const { return network_context_; }
-  base::Value::Dict CreateBodyForCorp(std::string_view blocked_url,
-                                      RequestDestination destination,
-                                      std::string_view disposition) const {
-    base::Value::Dict dict;
+  base::DictValue CreateBodyForCorp(std::string_view blocked_url,
+                                    RequestDestination destination,
+                                    std::string_view disposition) const {
+    base::DictValue dict;
     for (const auto& pair :
          CreateBodyForCorpInternal(blocked_url, destination, disposition)) {
       dict.Set(std::move(pair.first), std::move(pair.second));
@@ -178,7 +178,7 @@ TEST_F(DocumentIsolationPolicyReporterTest, BasicCorp) {
   EXPECT_EQ(r1.group, "e1");
   EXPECT_EQ(r1.url, kContextUrl);
   EXPECT_EQ(r1.network_anonymization_key, kNetworkIsolationKey);
-  EXPECT_EQ(r1.body, CreateBodyForCorp("https://www1.example.com/x#foo?bar=baz",
+  EXPECT_EQ(r1.body, CreateBodyForCorp("https://www1.example.com/x",
                                        RequestDestination::kScript, "enforce"));
   EXPECT_EQ(r2.type, "dip");
   EXPECT_EQ(r2.group, "e2");
@@ -195,12 +195,14 @@ TEST_F(DocumentIsolationPolicyReporterTest, UserAndPassForCorp) {
       GetStoragePartition(), kContextUrl, "e1", "e2",
       base::UnguessableToken::Create(), net::NetworkAnonymizationKey());
 
-  reporter.QueueCorpViolationReport(GURL("https://u:p@www1.example.com/x"),
-                                    RequestDestination::kImage,
-                                    /*report_only=*/false);
-  reporter.QueueCorpViolationReport(GURL("https://u:p@www2.example.com/y"),
-                                    RequestDestination::kScript,
-                                    /*report_only=*/true);
+  reporter.QueueCorpViolationReport(
+      GURL("https://u:p@www1.example.com/x#fragment"),
+      RequestDestination::kImage,
+      /*report_only=*/false);
+  reporter.QueueCorpViolationReport(
+      GURL("https://u:p@www2.example.com/y#fragment"),
+      RequestDestination::kScript,
+      /*report_only=*/true);
 
   ASSERT_EQ(2u, network_context().reports().size());
   const Report& r1 = network_context().reports()[0];

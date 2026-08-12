@@ -6,20 +6,15 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/numerics/safe_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/media/webrtc/desktop_media_list_layout_config.h"
-#include "chrome/browser/ui/color/chrome_color_id.h"
-#include "chrome/browser/ui/views/desktop_capture/desktop_media_picker_views.h"
 #include "chrome/grit/generated_resources.h"
-#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/color/color_provider.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -30,7 +25,6 @@
 #include "ui/views/controls/table/table_view_observer.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
-#include "ui/views/layout/layout_provider.h"
 #include "ui/views/view.h"
 
 using content::BrowserThread;
@@ -251,6 +245,8 @@ std::unique_ptr<views::View> DesktopMediaTabList::BuildUI(
     std::unique_ptr<views::TableView> table) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   auto preview_wrapper = std::make_unique<views::View>();
+  preview_wrapper->SetBackground(
+      views::CreateRoundedRectBackground(ui::kColorSysTonalContainer, 8));
   preview_wrapper->SetPreferredSize(desktopcapture::kPreviewSize);
 
   auto preview = std::make_unique<views::ImageView>();
@@ -266,6 +262,10 @@ std::unique_ptr<views::View> DesktopMediaTabList::BuildUI(
   empty_preview_label->SetMultiLine(true);
   empty_preview_label->SetPreferredSize(desktopcapture::kPreviewSize);
   empty_preview_label->SetSize(desktopcapture::kPreviewSize);
+  empty_preview_label->SetEnabledColor(ui::kColorSysOnTonalContainer);
+  empty_preview_label->SetBackground(
+      views::CreateRoundedRectBackground(ui::kColorSysTonalContainer, 8));
+  empty_preview_label->SetBackgroundColor(ui::kColorSysTonalContainer);
   empty_preview_label_ =
       preview_wrapper->AddChildView(std::move(empty_preview_label));
 
@@ -289,6 +289,8 @@ std::unique_ptr<views::View> DesktopMediaTabList::BuildUI(
 
   scroll_view_ =
       full_panel->AddChildView(CreateScrollViewWithTable(std::move(table)));
+  scroll_view_->SetBackground(
+      views::CreateRoundedRectBackground(ui::kColorSysSurface4, 8));
   scroll_view_->SetPreferredSize(gfx::Size(kListWidth, 0));
   full_panel->AddChildView(std::move(preview_sidebar));
 
@@ -335,19 +337,8 @@ gfx::Size DesktopMediaTabList::CalculatePreferredSize(
 
 void DesktopMediaTabList::OnThemeChanged() {
   DesktopMediaListController::ListView::OnThemeChanged();
-
-  const ui::ColorProvider* const color_provider = GetColorProvider();
-  table_->SetBorder(nullptr);
-
-  scroll_view_->SetBackground(views::CreateRoundedRectBackground(
-      GetColorProvider()->GetColor(ui::kColorSysSurface4), 8));
-  const SkColor background_color =
-      color_provider->GetColor(ui::kColorSysTonalContainer);
-  preview_wrapper_->SetBackground(
-      views::CreateRoundedRectBackground(background_color, 8));
-  empty_preview_label_->SetBackground(
-      views::CreateRoundedRectBackground(background_color, 8));
-  empty_preview_label_->SetBackgroundColor(background_color);
+  scroll_view_->SetBackground(
+      views::CreateRoundedRectBackground(ui::kColorSysSurface4, 8));
 }
 
 std::optional<content::DesktopMediaID> DesktopMediaTabList::GetSelection() {

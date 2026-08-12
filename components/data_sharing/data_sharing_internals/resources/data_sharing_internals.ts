@@ -116,7 +116,7 @@ function addMemberToGroup(member: GroupMember, group: HTMLUListElement) {
   appendTextChildToList(member.displayName, memberItem);
   appendTextChildToList(member.email, memberItem);
   appendTextChildToList(roleTypeToString(member.role), memberItem);
-  appendTextChildToList(member.avatarUrl.url, memberItem);
+  appendTextChildToList(member.avatarUrl, memberItem);
   appendTextChildToList(member.givenName, memberItem);
   memberlistItem.appendChild(memberItem);
   group.appendChild(memberlistItem);
@@ -172,8 +172,7 @@ function initialize() {
       .addEventListener('click', onLogMessagesDump);
 
   getProxy().getCallbackRouter().onLogMessageAdded.addListener(
-      (eventTime: Time, logSource: number, sourceFile: string,
-       sourceLine: number, message: string) => {
+      (eventTime, logSource, sourceFile, sourceLine, message) => {
         const eventTimeStr = convertMojoTimeToJS(eventTime).toISOString();
         const logSourceStr = logSourceToString(logSource);
         logMessages.push({

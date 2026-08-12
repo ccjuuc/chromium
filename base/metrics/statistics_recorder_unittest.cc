@@ -15,8 +15,8 @@
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
+#include "base/metrics/histogram.h"
 #include "base/metrics/histogram_base.h"
-#include "base/metrics/histogram_flattener.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/histogram_snapshot_manager.h"
 #include "base/metrics/metrics_hashes.h"
@@ -134,7 +134,8 @@ class StatisticsRecorderTest : public testing::TestWithParam<bool> {
     Histogram::InitializeBucketRanges(min, max, ranges);
     const BucketRanges* registered_ranges =
         StatisticsRecorder::RegisterOrDeleteDuplicateRanges(ranges);
-    return new Histogram(durable_name, registered_ranges);
+    return new Histogram(durable_name, HashMetricName(durable_name.value()),
+                         registered_ranges);
   }
 
   template <size_t N>
@@ -422,26 +423,26 @@ TEST_P(StatisticsRecorderTest, ToJSON) {
   std::optional<Value> root =
       JSONReader::Read(json, JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(root);
-  Value::Dict* root_dict = root->GetIfDict();
+  DictValue* root_dict = root->GetIfDict();
   ASSERT_TRUE(root_dict);
 
   // No query should be set.
   ASSERT_FALSE(root_dict->Find("query"));
 
-  const Value::List* histogram_list = root_dict->FindList("histograms");
+  const ListValue* histogram_list = root_dict->FindList("histograms");
 
   ASSERT_TRUE(histogram_list);
   ASSERT_EQ(2u, histogram_list->size());
 
   // Examine the first histogram.
-  const Value::Dict* histogram_dict = (*histogram_list)[0].GetIfDict();
+  const DictValue* histogram_dict = (*histogram_list)[0].GetIfDict();
   ASSERT_TRUE(histogram_dict);
 
   auto sample_count = histogram_dict->FindInt("count");
   ASSERT_TRUE(sample_count);
   EXPECT_EQ(2, *sample_count);
 
-  const Value::List* buckets_list = histogram_dict->FindList("buckets");
+  const ListValue* buckets_list = histogram_dict->FindList("buckets");
   ASSERT_TRUE(buckets_list);
   EXPECT_EQ(2u, buckets_list->size());
 }
@@ -462,18 +463,18 @@ TEST_P(StatisticsRecorderTest, ToJSONOmitBuckets) {
   std::optional<Value> root =
       JSONReader::Read(json, JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(root);
-  Value::Dict* root_dict = root->GetIfDict();
+  DictValue* root_dict = root->GetIfDict();
   ASSERT_TRUE(root_dict);
-  const Value::List* histogram_list = root_dict->FindList("histograms");
+  const ListValue* histogram_list = root_dict->FindList("histograms");
   ASSERT_TRUE(histogram_list);
 
   ASSERT_EQ(2u, histogram_list->size());
-  const Value::Dict* histogram_dict2 = (*histogram_list)[0].GetIfDict();
+  const DictValue* histogram_dict2 = (*histogram_list)[0].GetIfDict();
   ASSERT_TRUE(histogram_dict2);
   auto sample_count = histogram_dict2->FindInt("count");
   ASSERT_TRUE(sample_count);
   EXPECT_EQ(2, *sample_count);
-  const Value::List* buckets_list = histogram_dict2->FindList("buckets");
+  const ListValue* buckets_list = histogram_dict2->FindList("buckets");
   // Bucket information should be omitted.
   ASSERT_FALSE(buckets_list);
 }
@@ -912,7 +913,7 @@ class TestHistogramProvider : public StatisticsRecorder::HistogramProvider {
       if (!histogram) {
         break;
       }
-      allocator_->MergeHistogramDeltaToStatisticsRecorder(histogram.get());
+      allocator_->MergeHistogramDeltaToStatisticsRecorder(histogram.get(), "");
     }
     std::move(done_callback).Run();
   }
@@ -1035,10 +1036,10 @@ TEST_P(StatisticsRecorderTest, GetHistogramsExcludeFlags) {
               UnorderedElementsAre(histograms[0]));
 }
 
-class MockHistogramFlattener : public base::HistogramFlattener {
+class MockHistogramSnapshotManager : public base::HistogramSnapshotManager {
  public:
-  MockHistogramFlattener() = default;
-  ~MockHistogramFlattener() override = default;
+  MockHistogramSnapshotManager() = default;
+  ~MockHistogramSnapshotManager() override = default;
 
   MOCK_METHOD(void,
               RecordDelta,
@@ -1061,10 +1062,9 @@ TEST_P(StatisticsRecorderTest, PrepareDeltasDoesNotExcludeHistograms) {
   EXPECT_EQ(histogram,
             StatisticsRecorder::RegisterOrDeleteDuplicate(histogram));
 
-  MockHistogramFlattener flattener;
-  HistogramSnapshotManager histogram_manager(&flattener);
+  MockHistogramSnapshotManager histogram_manager;
 
-  EXPECT_CALL(flattener, RecordDelta(_, _)).Times(1);
+  EXPECT_CALL(histogram_manager, RecordDelta(_, _)).Times(1);
 
   StatisticsRecorder::PrepareDeltas(
       true, HistogramBase::Flags::kNoFlags,

@@ -8,19 +8,21 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
+#include "base/test/scoped_feature_list.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/site_info.h"
 #include "content/browser/site_instance_impl.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/common/url_schemes.h"
 #include "content/public/browser/child_process_host.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/test_browser_context.h"
+#include "content/public/test/test_content_client.h"
 #include "content/public/test/test_utils.h"
-#include "content/test/test_content_client.h"
 #include "services/network/public/mojom/cross_origin_embedder_policy.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -49,8 +51,9 @@ class SiteInstanceRenderProcessHostFactory : public RenderProcessHostFactory {
       BrowserContext* browser_context,
       SiteInstance* site_instance) override {
     processes_.push_back(std::make_unique<MockRenderProcessHost>(
-        browser_context, site_instance->GetStoragePartitionConfig(),
-        site_instance->IsGuest()));
+        browser_context,
+        site_instance->GetSecurityPrincipal().GetStoragePartitionConfig(),
+        site_instance->GetSecurityPrincipal().IsGuest()));
 
     // A spare RenderProcessHost is created with a null SiteInstance.
     if (site_instance)
@@ -72,17 +75,35 @@ class SiteInstanceRenderProcessHostFactory : public RenderProcessHostFactory {
 
 class ServiceWorkerProcessManagerTest : public testing::Test {
  public:
-  ServiceWorkerProcessManagerTest() = default;
+  ServiceWorkerProcessManagerTest() {
+    // These tests manually simulate site removal on MockRenderProcessHosts that
+    // have zero registered frames. The kTrackEmptyRendererProcessesForReuse
+    // feature enforces a safety check that the frame count is non-zero during
+    // removal, which these tests violate. We disable the feature to bypass this
+    // check.
+    //
+    // TODO(crbug.com/479203591): Refactor these tests to work with
+    // kTrackEmptyRendererProcessesForReuse. This likely involves setting up a
+    // proper process that the ServiceWorker can reuse (e.g. using
+    // NavigationSimulator) instead of manually calling
+    // RenderProcessHostImpl::AddFrameWithSite without a corresponding frame.
+    scoped_feature_list_.InitAndDisableFeature(
+        features::kTrackEmptyRendererProcessesForReuse);
+  }
 
   ServiceWorkerProcessManagerTest(const ServiceWorkerProcessManagerTest&) =
       delete;
   ServiceWorkerProcessManagerTest& operator=(
       const ServiceWorkerProcessManagerTest&) = delete;
 
+  void SetStoragePartition(StoragePartitionImpl* storage_partition) {
+    process_manager_->set_storage_partition(storage_partition);
+  }
+
   void SetUp() override {
     browser_context_ = std::make_unique<TestBrowserContext>();
     process_manager_ = std::make_unique<ServiceWorkerProcessManager>();
-    process_manager_->set_storage_partition(static_cast<StoragePartitionImpl*>(
+    SetStoragePartition(static_cast<StoragePartitionImpl*>(
         browser_context_->GetDefaultStoragePartition()));
     script_url_ = GURL("http://www.example.com/sw.js");
     render_process_host_factory_ =
@@ -113,6 +134,9 @@ class ServiceWorkerProcessManagerTest : public testing::Test {
   GURL script_url_;
   std::unique_ptr<SiteInstanceRenderProcessHostFactory>
       render_process_host_factory_;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(ServiceWorkerProcessManagerTest,
@@ -143,7 +167,7 @@ TEST_F(ServiceWorkerProcessManagerTest,
 
   // An existing process should be allocated to the worker.
   EXPECT_EQ(blink::ServiceWorkerStatusCode::kOk, status);
-  EXPECT_EQ(host->GetDeprecatedID(), process_info.process_id);
+  EXPECT_EQ(host->GetID(), process_info.process_id);
   EXPECT_EQ(ServiceWorkerMetrics::StartSituation::EXISTING_UNREADY_PROCESS,
             process_info.start_situation);
   EXPECT_EQ(1u, host->GetWorkerRefCount());
@@ -188,7 +212,7 @@ TEST_F(ServiceWorkerProcessManagerTest,
 
   // A new process should be allocated to the worker.
   EXPECT_EQ(blink::ServiceWorkerStatusCode::kOk, status);
-  EXPECT_NE(host->GetDeprecatedID(), process_info.process_id);
+  EXPECT_NE(host->GetID(), process_info.process_id);
   EXPECT_EQ(ServiceWorkerMetrics::StartSituation::NEW_PROCESS,
             process_info.start_situation);
   EXPECT_EQ(0u, host->GetWorkerRefCount());
@@ -218,7 +242,7 @@ TEST_F(ServiceWorkerProcessManagerTest, AllocateWorkerProcess_InShutdown) {
 
   // Allocating a process in shutdown should abort.
   EXPECT_EQ(blink::ServiceWorkerStatusCode::kErrorAbort, status);
-  EXPECT_EQ(ChildProcessHost::kInvalidUniqueID, process_info.process_id);
+  EXPECT_FALSE(process_info.process_id);
   EXPECT_EQ(ServiceWorkerMetrics::StartSituation::UNKNOWN,
             process_info.start_situation);
   EXPECT_TRUE(worker_process_map().empty());
@@ -241,11 +265,13 @@ TEST_F(ServiceWorkerProcessManagerTest,
             true /* can_use_existing_process */,
             AncestorFrameType::kNormalFrame, &process_info);
     EXPECT_EQ(blink::ServiceWorkerStatusCode::kOk, status);
-    EXPECT_EQ(
-        GURL("http://example.com"),
-        render_process_host_factory_->last_site_instance_used()->GetSiteURL());
-    EXPECT_FALSE(
-        render_process_host_factory_->last_site_instance_used()->IsGuest());
+    EXPECT_EQ(GURL("http://example.com"),
+              render_process_host_factory_->last_site_instance_used()
+                  ->GetSecurityPrincipal()
+                  .GetDeprecatedSiteURL());
+    EXPECT_FALSE(render_process_host_factory_->last_site_instance_used()
+                     ->GetSecurityPrincipal()
+                     .IsGuest());
     auto* rph = RenderProcessHost::FromID(process_info.process_id);
     ASSERT_TRUE(rph);
     auto* storage_partition =
@@ -266,11 +292,11 @@ TEST_F(ServiceWorkerProcessManagerTest,
   scoped_refptr<SiteInstanceImpl> guest_site_instance =
       SiteInstanceImpl::CreateForGuest(browser_context_.get(),
                                        kGuestPartitionConfig);
-  EXPECT_TRUE(guest_site_instance->IsGuest());
+  EXPECT_TRUE(guest_site_instance->GetSecurityPrincipal().IsGuest());
   StoragePartitionImpl* storage_partition = static_cast<StoragePartitionImpl*>(
       browser_context_->GetStoragePartition(kGuestPartitionConfig));
   storage_partition->set_is_guest();
-  process_manager_->set_storage_partition(storage_partition);
+  SetStoragePartition(storage_partition);
 
   // Allocate a process to a worker. It should be in the guest's
   // StoragePartition.
@@ -284,11 +310,14 @@ TEST_F(ServiceWorkerProcessManagerTest,
             true /* can_use_existing_process */,
             AncestorFrameType::kNormalFrame, &process_info);
     EXPECT_EQ(blink::ServiceWorkerStatusCode::kOk, status);
-    EXPECT_EQ(guest_site_instance->GetStoragePartitionConfig(),
-              render_process_host_factory_->last_site_instance_used()
-                  ->GetStoragePartitionConfig());
-    EXPECT_TRUE(
-        render_process_host_factory_->last_site_instance_used()->IsGuest());
+    EXPECT_EQ(
+        guest_site_instance->GetSecurityPrincipal().GetStoragePartitionConfig(),
+        render_process_host_factory_->last_site_instance_used()
+            ->GetSecurityPrincipal()
+            .GetStoragePartitionConfig());
+    EXPECT_TRUE(render_process_host_factory_->last_site_instance_used()
+                    ->GetSecurityPrincipal()
+                    .IsGuest());
     auto* rph = RenderProcessHost::FromID(process_info.process_id);
     ASSERT_TRUE(rph);
     EXPECT_EQ(rph->GetStoragePartition(), storage_partition);
@@ -377,8 +406,9 @@ TEST_F(ServiceWorkerProcessManagerNonWebSchemeTest,
             process_info.start_situation);
 
   // The process should not have access to its script's origin by default.
+  // TODO(crbug.com/379869738) Remove GetUnsafeValue.
   EXPECT_FALSE(ChildProcessSecurityPolicyImpl::GetInstance()->CanRequestURL(
-      process_info.process_id, kUnknownNonWebSchemeUrl));
+      process_info.process_id.GetUnsafeValue(), kUnknownNonWebSchemeUrl));
 
   // Release the process.
   process_manager_->ReleaseWorkerProcess(kEmbeddedWorkerId);
@@ -410,8 +440,9 @@ TEST_F(ServiceWorkerProcessManagerNonWebSchemeTest,
 
   // ScopedCustomSchemeContentBrowserClient should have granted the new
   // process access to the script's origin.
+  // TODO(crbug.com/379869738) Remove GetUnsafeValue.
   EXPECT_TRUE(ChildProcessSecurityPolicyImpl::GetInstance()->CanRequestURL(
-      process_info.process_id, kNonWebSchemeUrl));
+      process_info.process_id.GetUnsafeValue(), kNonWebSchemeUrl));
 
   // Release the process.
   process_manager_->ReleaseWorkerProcess(kEmbeddedWorkerId);

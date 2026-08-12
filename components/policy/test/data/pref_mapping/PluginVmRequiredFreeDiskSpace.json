@@ -1,19 +1,5 @@
 [
   {
-    "os": [
-      "chromeos"
-    ],
-    "policy_pref_mapping_tests": [
-      {
-        "policies": {
-          "PluginVmRequiredFreeDiskSpace": 25
-        },
-        "prefs": {
-          "plugin_vm.required_free_disk_space": {
-            "value": 25
-          }
-        }
-      }
-    ]
+    "reason_for_missing_test": "Policy was deprecated in M152."
   }
 ]

@@ -26,6 +26,7 @@ proto_library("proto") {
     "mux.proto",
     "remote_open_url.proto",
     "remote_webauthn.proto",
+    "security_key.proto",
     "test_data_channel_manager.proto",
     "url_forwarder_control.proto",
     "video.proto",
@@ -53,6 +54,7 @@ source_set("internal_structs") {
   ]
   deps = [
     "//base",
+    "//remoting/base:authentication_method",
     "//remoting/base:errors",
     "//remoting/base:session_policies",
   ]

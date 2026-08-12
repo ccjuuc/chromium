@@ -13,7 +13,9 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -47,7 +49,6 @@
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/simple_message_box.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
@@ -138,7 +139,7 @@ bool g_disallow_for_testing = false;
 // during test runs. Doesn't affect public session.
 bool g_arc_blocked_due_to_incompatible_filesystem_for_testing = false;
 
-// TODO(kinaba): Temporary workaround for crbug.com/729034.
+// TODO(kinaba): Temporary workaround for crbug.com/41322910.
 //
 // Some type of accounts don't have user prefs. As a short-term workaround,
 // store the compatibility info from them on memory, ignoring the defect that
@@ -276,7 +277,7 @@ ArcStatus GetArcStatusForProfile(const Profile* profile,
   // Play Store requires an appropriate application install mechanism. Normal
   // users do this through GAIA, but Kiosk users use a different application
   // install mechanism. ARC is not allowed otherwise (e.g. in public sessions,
-  // as described in crbug.com/605545).
+  // as described in crbug.com/40466164).
   const user_manager::User* user =
       ash::ProfileHelper::Get()->GetUserByProfile(profile);
   if (!IsArcAllowedForUser(user)) {
@@ -561,7 +562,8 @@ bool AreArcAllOptInPreferencesIgnorableForProfile(const Profile* profile) {
   if (ash::features::IsCrosPrivacyHubLocationEnabled()) {
     // When PH is enabled, location toggle is no longer ARC specific (applies to
     // entire ChromeOS);
-    return prefs->IsManagedPreference(prefs::kArcBackupRestoreEnabled);
+    return prefs->IsManagedPreference(prefs::kArcBackupRestoreEnabled) &&
+           prefs->IsManagedPreference(ash::prefs::kUserGeolocationAccessLevel);
   } else {
     return prefs->IsManagedPreference(prefs::kArcBackupRestoreEnabled) &&
            prefs->IsManagedPreference(prefs::kArcLocationServiceEnabled);
@@ -614,7 +616,7 @@ bool IsArcOobeOptInConfigurationBased() {
 bool IsArcTermsOfServiceNegotiationNeeded(const Profile* profile) {
   DCHECK(profile);
   // Don't show in session ARC OptIn dialog for managed user.
-  // For more info see crbug/950013.
+  // For more info see crbug.com/40621882.
   // Skip to show UI asking users to set up ARC OptIn preferences, if all of
   // them are managed by the admin policy. Note that the ToS agreement is anyway
   // not shown in the case of the managed ARC.

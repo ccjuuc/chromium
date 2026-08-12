@@ -34,19 +34,20 @@ import androidx.test.filters.SmallTest;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadow.api.Shadow;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.DisableFeatures;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.blink.mojom.Authenticator.GetCredential_Response;
 import org.chromium.blink.mojom.Authenticator.MakeCredential_Response;
 import org.chromium.blink.mojom.AuthenticatorStatus;
@@ -69,6 +70,7 @@ import org.chromium.components.webauthn.cred_man.CredManMetricsHelper.CredManPre
 import org.chromium.content_public.browser.RenderFrameHost;
 import org.chromium.content_public.browser.WebContentsStatics;
 import org.chromium.mojo_base.mojom.String16;
+import org.chromium.ui.test.util.MockitoHelper;
 
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(
@@ -88,11 +90,9 @@ import org.chromium.mojo_base.mojom.String16;
             ShadowGetCredentialResponse.class,
             ShadowPrepareGetCredentialResponse.class
         })
-@DisableFeatures({
-    WebauthnFeatures.WEBAUTHN_ANDROID_CRED_MAN_FOR_DEV,
-    WebauthnFeatures.WEBAUTHN_ANDROID_CRED_MAN_REQUEST_EXTRA_BUNDLE
-})
+@DisableFeatures({WebauthnFeatures.WEBAUTHN_ANDROID_CRED_MAN_FOR_DEV})
 public class CredManHelperRobolectricTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     private CredManHelper mCredManHelper;
     private PublicKeyCredentialCreationOptions mCreationOptions;
     private GetCredentialOptions mRequestOptions;
@@ -127,7 +127,6 @@ public class CredManHelperRobolectricTest {
 
     @Before
     public void setUp() throws Exception {
-        MockitoAnnotations.openMocks(this);
         WebContentsStatics.setWebContentsForTesting(null);
 
         mCreationOptions = Fido2ApiTestHelper.createDefaultMakeCredentialOptions();
@@ -151,6 +150,7 @@ public class CredManHelperRobolectricTest {
         when(mAuthenticationContextProviderMock.getIntentSender()).thenReturn(null);
         when(mAuthenticationContextProviderMock.getContext()).thenReturn(mContext);
         when(mAuthenticationContextProviderMock.getRenderFrameHost()).thenReturn(mFrameHost);
+        when(mBrowserBridge.isInitialized()).thenReturn(true);
         mCredManHelper =
                 new CredManHelper(
                         mAuthenticationContextProviderMock,
@@ -167,7 +167,6 @@ public class CredManHelperRobolectricTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(WebauthnFeatures.WEBAUTHN_ANDROID_CRED_MAN_REQUEST_EXTRA_BUNDLE)
     public void testGetBrowserAssistedLoginType_GPM() {
         Bundle bundle = new Bundle();
         bundle.putString(CredManHelper.CREDENTIAL_SOURCE_KEY, CredManHelper.GPM_SOURCE);
@@ -179,7 +178,6 @@ public class CredManHelperRobolectricTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(WebauthnFeatures.WEBAUTHN_ANDROID_CRED_MAN_REQUEST_EXTRA_BUNDLE)
     public void testGetBrowserAssistedLoginType_Remote() {
         Bundle bundle = new Bundle();
         bundle.putString(CredManHelper.CREDENTIAL_SOURCE_KEY, CredManHelper.REMOTE_SOURCE);
@@ -192,7 +190,6 @@ public class CredManHelperRobolectricTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(WebauthnFeatures.WEBAUTHN_ANDROID_CRED_MAN_REQUEST_EXTRA_BUNDLE)
     public void testGetBrowserAssistedLoginType_Null() {
         Integer loginType = CredManHelper.getBrowserAssistedLoginType(new Bundle());
 
@@ -366,6 +363,7 @@ public class CredManHelperRobolectricTest {
 
         verify(mGetCredentialResponseCallback).call(any());
         verify(mBrowserBridge, times(1)).onCredManUiClosed(any(), anyBoolean());
+        verify(mBrowserBridge, times(1)).cleanupRequest(any());
         verify(mMetricsHelper, times(1))
                 .reportGetCredentialMetrics(eq(CredManGetRequestEnum.SENT_REQUEST), anyInt());
         verify(mMetricsHelper, times(1))
@@ -422,6 +420,7 @@ public class CredManHelperRobolectricTest {
         shadowCredentialManager.getGetCredentialCallback().onError(exception);
         verify(noCredentialsFallback, times(1)).run();
         verify(mBrowserBridge, times(1)).onCredManUiClosed(any(), anyBoolean());
+        verify(mBrowserBridge, never()).cleanupRequest(any());
     }
 
     @Test
@@ -445,6 +444,7 @@ public class CredManHelperRobolectricTest {
                 new GetCredentialException(GetCredentialException.TYPE_NO_CREDENTIAL, "Message");
         shadowCredentialManager.getGetCredentialCallback().onError(exception);
         verify(mGetCredentialResponseCallback).call(any());
+        verify(mBrowserBridge, times(1)).cleanupRequest(any());
     }
 
     @Test
@@ -470,6 +470,7 @@ public class CredManHelperRobolectricTest {
 
         verify(mGetCredentialResponseCallback).call(any());
         verify(mBrowserBridge, times(1)).onCredManUiClosed(any(), anyBoolean());
+        verify(mBrowserBridge, times(1)).cleanupRequest(any());
         verify(mMetricsHelper, times(1))
                 .reportGetCredentialMetrics(eq(CredManGetRequestEnum.CANCELLED), anyInt());
     }
@@ -497,6 +498,7 @@ public class CredManHelperRobolectricTest {
 
         verify(mGetCredentialResponseCallback).call(any());
         verify(mBrowserBridge, times(1)).onCredManUiClosed(any(), anyBoolean());
+        verify(mBrowserBridge, times(1)).cleanupRequest(any());
         verify(mMetricsHelper, times(1))
                 .reportGetCredentialMetrics(eq(CredManGetRequestEnum.FAILURE), anyInt());
     }
@@ -620,7 +622,7 @@ public class CredManHelperRobolectricTest {
     @SmallTest
     public void
             testStartGetRequestAfterStartPrefetchRequest_userCancelWhileWaitingForSelection_doesNotCancelConditionalRequest() {
-        ArgumentCaptor<Callback<Boolean>> callbackCaptor = ArgumentCaptor.forClass(Callback.class);
+        ArgumentCaptor<Callback<Boolean>> callbackCaptor = MockitoHelper.callbackCaptor();
         mRequestOptions.mediation = Mediation.CONDITIONAL;
         mRequestCallback =
                 WebauthnRequestCallback.forGetCredential(mGetCredentialResponseCallback, null);
@@ -675,7 +677,7 @@ public class CredManHelperRobolectricTest {
     @SmallTest
     public void
             testStartGetRequestAfterStartPrefetchRequest_userSelectsPassword_canHavePasswordResponse() {
-        ArgumentCaptor<Callback<Boolean>> callbackCaptor = ArgumentCaptor.forClass(Callback.class);
+        ArgumentCaptor<Callback<Boolean>> callbackCaptor = MockitoHelper.callbackCaptor();
         mRequestOptions.mediation = Mediation.CONDITIONAL;
         mRequestCallback =
                 WebauthnRequestCallback.forGetCredential(mGetCredentialResponseCallback, null);
@@ -841,6 +843,7 @@ public class CredManHelperRobolectricTest {
 
         verify(mBrowserBridge, never()).onCredManUiClosed(any(), anyBoolean());
         verify(mBrowserBridge, never()).onPasswordCredentialReceived(any(), any(), any());
+        verify(mBrowserBridge, times(1)).cleanupRequest(any());
 
         ArgumentCaptor<org.chromium.blink.mojom.GetCredentialResponse> responseCaptor =
                 ArgumentCaptor.forClass(org.chromium.blink.mojom.GetCredentialResponse.class);

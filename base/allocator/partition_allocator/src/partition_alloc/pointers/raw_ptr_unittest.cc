@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "partition_alloc/pointers/raw_ptr.h"
 
 #include <climits>
@@ -32,6 +27,7 @@
 #include "partition_alloc/build_config.h"
 #include "partition_alloc/buildflags.h"
 #include "partition_alloc/dangling_raw_ptr_checks.h"
+#include "partition_alloc/internal/partition_root_internal.h"  // nogncheck
 #include "partition_alloc/partition_alloc-inl.h"
 #include "partition_alloc/partition_alloc.h"
 #include "partition_alloc/partition_alloc_base/cpu.h"
@@ -40,7 +36,6 @@
 #include "partition_alloc/partition_alloc_config.h"
 #include "partition_alloc/partition_alloc_constants.h"
 #include "partition_alloc/partition_alloc_hooks.h"
-#include "partition_alloc/partition_root.h"
 #include "partition_alloc/pointers/instance_tracer.h"
 #include "partition_alloc/pointers/raw_ptr_counting_impl_for_test.h"
 #include "partition_alloc/pointers/raw_ptr_test_support.h"
@@ -172,20 +167,20 @@ static_assert([]() constexpr {
     Int* array = new Int[4]();
     {
       raw_ptr<Int, base::RawPtrTraits::kAllowPtrArithmetic> ra(array);
-      ++ra;                                    // operator++()
-      --ra;                                    // operator--()
-      ra++;                                    // operator++(int)
-      ra--;                                    // operator--(int)
-      ra += 1u;                                // operator+=()
-      ra -= 1u;                                // operator-=()
-      ra = ra + 1;                             // operator+(raw_ptr,int)
-      ra = 1 + ra;                             // operator+(int,raw_ptr)
-      ra = ra - 2;                             // operator-(raw_ptr,int)
+      PA_UNSAFE_TODO(++ra);                    // operator++()
+      PA_UNSAFE_TODO(--ra);                    // operator--()
+      PA_UNSAFE_TODO(ra++);                    // operator++(int)
+      PA_UNSAFE_TODO(ra--);                    // operator--(int)
+      PA_UNSAFE_TODO(ra += 1u);                // operator+=()
+      PA_UNSAFE_TODO(ra -= 1u);                // operator-=()
+      PA_UNSAFE_TODO(ra = ra + 1);             // operator+(raw_ptr,int)
+      PA_UNSAFE_TODO(ra = 1 + ra);             // operator+(int,raw_ptr)
+      PA_UNSAFE_TODO(ra = ra - 2);             // operator-(raw_ptr,int)
       [[maybe_unused]] ptrdiff_t d = ra - ra;  // operator-(raw_ptr,raw_ptr)
       d = ra - array;                          // operator-(raw_ptr,T*)
       d = array - ra;                          // operator-(T*,raw_ptr)
 
-      ra[0] = ra[1];  // operator[]()
+      PA_UNSAFE_TODO(ra[0] = ra[1]);  // operator[]()
 
       b = ra < ra;      // operator<(raw_ptr,raw_ptr)
       b = ra < array;   // operator<(raw_ptr,T*)
@@ -270,6 +265,18 @@ using CountingRawPtrUninitialized =
 // Ensure that the `kUseCountingImplForTest` flag selects the test impl.
 static_assert(
     std::is_same_v<CountingRawPtrUninitialized<int>::Impl, RawPtrCountingImpl>);
+
+template <typename T>
+using CountingRawPtrUnprotectedInRelease =
+    raw_ptr<T,
+            base::RawPtrTraits::kUseCountingImplForTest |
+                base::RawPtrTraits::kAllowPtrArithmetic |
+                base::RawPtrTraits::kIsUnprotectedInRelease>;
+
+// Ensure that the `kUseCountingImplForTest` flag selects the test impl even in
+// the presence of `kIsUnprotectedInRelease`.
+static_assert(std::is_same_v<CountingRawPtrUnprotectedInRelease<int>::Impl,
+                             RawPtrCountingImpl>);
 
 struct MyStruct {
   int x;
@@ -963,7 +970,7 @@ TEST_F(RawPtrTest, PostIncrementOperator) {
   std::vector<int> foo({42, 43, 44, 45});
   CountingRawPtr<int> ptr = &foo[0];
   for (int i = 0; i < 4; ++i) {
-    ASSERT_EQ(*ptr++, 42 + i);
+    ASSERT_EQ(PA_UNSAFE_TODO(*ptr++), 42 + i);
   }
   EXPECT_THAT((CountingRawPtrExpectations{
                   .get_for_dereference_cnt = 4,
@@ -978,7 +985,7 @@ TEST_F(RawPtrTest, PostDecrementOperator) {
   CountingRawPtr<int> ptr = &foo[3];
   // Avoid decrementing out of the slot holding the vector's backing store.
   for (int i = 3; i > 0; --i) {
-    ASSERT_EQ(*ptr--, 42 + i);
+    ASSERT_EQ(PA_UNSAFE_TODO(*ptr--), 42 + i);
   }
   ASSERT_EQ(*ptr, 42);
   EXPECT_THAT((CountingRawPtrExpectations{
@@ -992,7 +999,7 @@ TEST_F(RawPtrTest, PostDecrementOperator) {
 TEST_F(RawPtrTest, PreIncrementOperator) {
   std::vector<int> foo({42, 43, 44, 45});
   CountingRawPtr<int> ptr = &foo[0];
-  for (int i = 0; i < 4; ++i, ++ptr) {
+  for (int i = 0; i < 4; ++i, PA_UNSAFE_TODO(++ptr)) {
     ASSERT_EQ(*ptr, 42 + i);
   }
   EXPECT_THAT((CountingRawPtrExpectations{
@@ -1007,7 +1014,7 @@ TEST_F(RawPtrTest, PreDecrementOperator) {
   std::vector<int> foo({42, 43, 44, 45});
   CountingRawPtr<int> ptr = &foo[3];
   // Avoid decrementing out of the slot holding the vector's backing store.
-  for (int i = 3; i > 0; --i, --ptr) {
+  for (int i = 3; i > 0; --i, PA_UNSAFE_TODO(--ptr)) {
     ASSERT_EQ(*ptr, 42 + i);
   }
   ASSERT_EQ(*ptr, 42);
@@ -1022,7 +1029,7 @@ TEST_F(RawPtrTest, PreDecrementOperator) {
 TEST_F(RawPtrTest, PlusEqualOperator) {
   std::vector<int> foo({42, 43, 44, 45});
   CountingRawPtr<int> ptr = &foo[0];
-  for (int i = 0; i < 4; i += 2, ptr += 2) {
+  for (int i = 0; i < 4; i += 2, PA_UNSAFE_TODO(ptr += 2)) {
     ASSERT_EQ(*ptr, 42 + i);
   }
   EXPECT_THAT((CountingRawPtrExpectations{
@@ -1037,13 +1044,13 @@ TEST_F(RawPtrTest, PlusEqualOperatorTypes) {
   std::vector<int> foo({42, 43, 44, 45});
   CountingRawPtr<int> ptr = &foo[0];
   ASSERT_EQ(*ptr, 42);
-  ptr += 2;  // Positive literal.
+  PA_UNSAFE_TODO(ptr += 2);  // Positive literal.
   ASSERT_EQ(*ptr, 44);
-  ptr -= 2;  // Negative literal.
+  PA_UNSAFE_TODO(ptr -= 2);  // Negative literal.
   ASSERT_EQ(*ptr, 42);
-  ptr += ptrdiff_t{1};  // ptrdiff_t.
+  PA_UNSAFE_TODO(ptr += ptrdiff_t{1});  // ptrdiff_t.
   ASSERT_EQ(*ptr, 43);
-  ptr += size_t{2};  // size_t.
+  PA_UNSAFE_TODO(ptr += size_t{2});  // size_t.
   ASSERT_EQ(*ptr, 45);
 }
 
@@ -1051,7 +1058,7 @@ TEST_F(RawPtrTest, MinusEqualOperator) {
   std::vector<int> foo({42, 43, 44, 45});
   CountingRawPtr<int> ptr = &foo[3];
   ASSERT_EQ(*ptr, 45);
-  ptr -= 2;
+  PA_UNSAFE_TODO(ptr -= 2);
   ASSERT_EQ(*ptr, 43);
   EXPECT_THAT((CountingRawPtrExpectations{
                   .get_for_dereference_cnt = 2,
@@ -1065,13 +1072,13 @@ TEST_F(RawPtrTest, MinusEqualOperatorTypes) {
   int foo[] = {42, 43, 44, 45};
   CountingRawPtr<int> ptr = &foo[3];
   ASSERT_EQ(*ptr, 45);
-  ptr -= 2;  // Positive literal.
+  PA_UNSAFE_TODO(ptr -= 2);  // Positive literal.
   ASSERT_EQ(*ptr, 43);
-  ptr -= -2;  // Negative literal.
+  PA_UNSAFE_TODO(ptr -= -2);  // Negative literal.
   ASSERT_EQ(*ptr, 45);
-  ptr -= ptrdiff_t{2};  // ptrdiff_t.
+  PA_UNSAFE_TODO(ptr -= ptrdiff_t{2});  // ptrdiff_t.
   ASSERT_EQ(*ptr, 43);
-  ptr -= size_t{1};  // size_t.
+  PA_UNSAFE_TODO(ptr -= size_t{1});  // size_t.
   ASSERT_EQ(*ptr, 42);
 }
 
@@ -1079,7 +1086,7 @@ TEST_F(RawPtrTest, PlusOperator) {
   int foo[] = {42, 43, 44, 45};
   CountingRawPtr<int> ptr = foo;
   for (int i = 0; i < 4; ++i) {
-    ASSERT_EQ(*(ptr + i), 42 + i);
+    ASSERT_EQ(PA_UNSAFE_TODO(*(ptr + i)), 42 + i);
   }
   EXPECT_THAT((CountingRawPtrExpectations{
                   .get_for_dereference_cnt = 4,
@@ -1091,9 +1098,9 @@ TEST_F(RawPtrTest, PlusOperator) {
 
 TEST_F(RawPtrTest, MinusOperator) {
   int foo[] = {42, 43, 44, 45};
-  CountingRawPtr<int> ptr = &foo[4];
+  CountingRawPtr<int> ptr = PA_UNSAFE_TODO(&foo[4]);
   for (int i = 1; i <= 4; ++i) {
-    ASSERT_EQ(*(ptr - i), 46 - i);
+    ASSERT_EQ(PA_UNSAFE_TODO(*(ptr - i)), 46 - i);
   }
   EXPECT_THAT((CountingRawPtrExpectations{
                   .get_for_dereference_cnt = 4,
@@ -1105,12 +1112,14 @@ TEST_F(RawPtrTest, MinusOperator) {
 
 TEST_F(RawPtrTest, MinusDeltaOperator) {
   int foo[] = {42, 43, 44, 45};
-  CountingRawPtr<int> ptrs[] = {&foo[0], &foo[1], &foo[2], &foo[3], &foo[4]};
+  CountingRawPtr<int> ptrs[] = {
+      PA_UNSAFE_TODO(&foo[0]), PA_UNSAFE_TODO(&foo[1]), PA_UNSAFE_TODO(&foo[2]),
+      PA_UNSAFE_TODO(&foo[3]), PA_UNSAFE_TODO(&foo[4])};
   for (int i = 0; i <= 4; ++i) {
     for (int j = 0; j <= 4; ++j) {
-      ASSERT_EQ(ptrs[i] - ptrs[j], i - j);
-      ASSERT_EQ(ptrs[i] - &foo[j], i - j);
-      ASSERT_EQ(&foo[i] - ptrs[j], i - j);
+      ASSERT_EQ(PA_UNSAFE_TODO(ptrs[i] - ptrs[j]), i - j);
+      ASSERT_EQ(PA_UNSAFE_TODO(ptrs[i] - &foo[j]), i - j);
+      ASSERT_EQ(PA_UNSAFE_TODO(&foo[i] - ptrs[j]), i - j);
     }
   }
   EXPECT_THAT((CountingRawPtrExpectations{
@@ -1125,8 +1134,8 @@ TEST_F(RawPtrTest, AdvanceString) {
   const char kChars[] = "Hello";
   std::string str = kChars;
   CountingRawPtr<const char> ptr = str.c_str();
-  for (size_t i = 0; i < str.size(); ++i, ++ptr) {
-    ASSERT_EQ(*ptr, kChars[i]);
+  for (size_t i = 0; i < str.size(); ++i, PA_UNSAFE_TODO(++ptr)) {
+    ASSERT_EQ(*ptr, PA_UNSAFE_TODO(kChars[i]));
   }
   EXPECT_THAT((CountingRawPtrExpectations{
                   .get_for_dereference_cnt = 5,
@@ -1622,7 +1631,7 @@ TEST_F(RawPtrTest, AllowUninitialized) {
 namespace base::internal {
 
 #if PA_BUILDFLAG(USE_RAW_PTR_BACKUP_REF_IMPL) && \
-    !defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+    !PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)
 
 void HandleOOM(size_t unused_size) {
   PA_LOG(FATAL) << "Out of memory";
@@ -1720,7 +1729,8 @@ TEST_F(BackupRefPtrTest, EndPointer) {
     // Creating a raw_ptr from an address right past the end of an allocation
     // should not result in a crash or corrupt the free list.
     char* raw_ptr1 = reinterpret_cast<char*>(allocator_.root()->Alloc(size));
-    raw_ptr<char, AllowPtrArithmetic> wrapped_ptr = raw_ptr1 + size;
+    raw_ptr<char, AllowPtrArithmetic> wrapped_ptr =
+        PA_UNSAFE_TODO(raw_ptr1 + size);
     wrapped_ptr = nullptr;
     // We need to make two more allocations to turn the possible free list
     // corruption into an observable crash.
@@ -1730,7 +1740,7 @@ TEST_F(BackupRefPtrTest, EndPointer) {
     // Similarly for operator+=.
     char* raw_ptr4 = reinterpret_cast<char*>(allocator_.root()->Alloc(size));
     wrapped_ptr = raw_ptr4;
-    wrapped_ptr += size;
+    PA_UNSAFE_TODO(wrapped_ptr += size);
     wrapped_ptr = nullptr;
     char* raw_ptr5 = reinterpret_cast<char*>(allocator_.root()->Alloc(size));
     char* raw_ptr6 = reinterpret_cast<char*>(allocator_.root()->Alloc(size));
@@ -1751,7 +1761,7 @@ TEST_F(BackupRefPtrTest, QuarantinedBytes) {
   EXPECT_EQ(allocator_.root()->total_size_of_brp_quarantined_bytes.load(
                 std::memory_order_relaxed),
             0U);
-  EXPECT_EQ(allocator_.root()->total_count_of_brp_quarantined_slots.load(
+  EXPECT_EQ(allocator_.root()->total_count_of_brp_quarantined_slots_.load(
                 std::memory_order_relaxed),
             0U);
 
@@ -1760,7 +1770,7 @@ TEST_F(BackupRefPtrTest, QuarantinedBytes) {
   EXPECT_GT(allocator_.root()->total_size_of_brp_quarantined_bytes.load(
                 std::memory_order_relaxed),
             0U);
-  EXPECT_EQ(allocator_.root()->total_count_of_brp_quarantined_slots.load(
+  EXPECT_EQ(allocator_.root()->total_count_of_brp_quarantined_slots_.load(
                 std::memory_order_relaxed),
             1U);
 
@@ -1773,7 +1783,7 @@ TEST_F(BackupRefPtrTest, QuarantinedBytes) {
   EXPECT_EQ(allocator_.root()->total_size_of_brp_quarantined_bytes.load(
                 std::memory_order_relaxed),
             0U);
-  EXPECT_EQ(allocator_.root()->total_count_of_brp_quarantined_slots.load(
+  EXPECT_EQ(allocator_.root()->total_count_of_brp_quarantined_slots_.load(
                 std::memory_order_relaxed),
             0U);
 }
@@ -1782,13 +1792,13 @@ TEST_F(BackupRefPtrTest, SameSlotAssignmentWhenDangling) {
   uint64_t* ptr = reinterpret_cast<uint64_t*>(
       allocator_.root()->Alloc(sizeof(uint64_t), ""));
   raw_ptr<uint64_t, DisableDanglingPtrDetection> wrapped_ptr = ptr;
-  ASSERT_EQ(allocator_.root()->total_count_of_brp_quarantined_slots.load(
+  ASSERT_EQ(allocator_.root()->total_count_of_brp_quarantined_slots_.load(
                 std::memory_order_relaxed),
             0U);
 
   // Make the pointer dangle. Memory will get quarantined.
   allocator_.root()->Free(ptr);
-  ASSERT_EQ(allocator_.root()->total_count_of_brp_quarantined_slots.load(
+  ASSERT_EQ(allocator_.root()->total_count_of_brp_quarantined_slots_.load(
                 std::memory_order_relaxed),
             1U);
 
@@ -1800,7 +1810,7 @@ TEST_F(BackupRefPtrTest, SameSlotAssignmentWhenDangling) {
   // Many things may go wrong after the above instruction (particularly on
   // DCHECK builds), but just in case check that memory continues to be
   // quarantined.
-  EXPECT_EQ(allocator_.root()->total_count_of_brp_quarantined_slots.load(
+  EXPECT_EQ(allocator_.root()->total_count_of_brp_quarantined_slots_.load(
                 std::memory_order_relaxed),
             1U);
 }
@@ -1811,34 +1821,36 @@ void RunBackupRefPtrImplAdvanceTest(
 #if PA_BUILDFLAG(BACKUP_REF_PTR_EXTRA_OOB_CHECKS)
   char* ptr = static_cast<char*>(allocator.root()->Alloc(requested_size));
   raw_ptr<char, AllowPtrArithmetic> protected_ptr = ptr;
-  protected_ptr += 123;
-  protected_ptr -= 123;
-  protected_ptr = protected_ptr + 123;
-  protected_ptr = protected_ptr - 123;
-  protected_ptr += requested_size / 2;
+  PA_UNSAFE_TODO(protected_ptr += 123);
+  PA_UNSAFE_TODO(protected_ptr -= 123);
+  PA_UNSAFE_TODO(protected_ptr = protected_ptr + 123);
+  PA_UNSAFE_TODO(protected_ptr = protected_ptr - 123);
+  PA_UNSAFE_TODO(protected_ptr += requested_size / 2);
   // end-of-allocation address should not cause an error immediately, but it may
   // result in the pointer being poisoned.
-  protected_ptr = protected_ptr + (requested_size + 1) / 2;
+  PA_UNSAFE_TODO(protected_ptr = protected_ptr + (requested_size + 1) / 2);
 #if PA_BUILDFLAG(BACKUP_REF_PTR_POISON_OOB_PTR)
   EXPECT_DEATH_IF_SUPPORTED(*protected_ptr = ' ', "");
-  protected_ptr -= 1;  // This brings the pointer back within
-                       // bounds, which causes the poison to be removed.
+  PA_UNSAFE_TODO(protected_ptr -= 1);  // This brings the pointer back within
+                                       // bounds, which causes the poison to be
+                                       // removed.
   *protected_ptr = ' ';
-  protected_ptr += 1;  // Reposition pointer back past end of allocation.
+  PA_UNSAFE_TODO(protected_ptr += 1);  // Reposition pointer back past end of
+                                       // allocation.
 #endif
-  EXPECT_CHECK_DEATH(protected_ptr = protected_ptr + 1);
-  EXPECT_CHECK_DEATH(protected_ptr += 1);
-  EXPECT_CHECK_DEATH(++protected_ptr);
+  EXPECT_CHECK_DEATH(protected_ptr = PA_UNSAFE_TODO(protected_ptr + 1));
+  EXPECT_CHECK_DEATH(PA_UNSAFE_TODO(protected_ptr += 1));
+  EXPECT_CHECK_DEATH(PA_UNSAFE_TODO(++protected_ptr));
 
   // Even though |protected_ptr| is already pointing to the end of the
   // allocation, assign it explicitly to make sure the underlying implementation
   // doesn't "switch" to the next slot.
-  protected_ptr = ptr + requested_size;
-  protected_ptr -= (requested_size + 1) / 2;
-  protected_ptr = protected_ptr - requested_size / 2;
-  EXPECT_CHECK_DEATH(protected_ptr = protected_ptr - 1);
-  EXPECT_CHECK_DEATH(protected_ptr -= 1);
-  EXPECT_CHECK_DEATH(--protected_ptr);
+  protected_ptr = PA_UNSAFE_TODO(ptr + requested_size);
+  PA_UNSAFE_TODO(protected_ptr -= (requested_size + 1) / 2);
+  protected_ptr = PA_UNSAFE_TODO(protected_ptr - requested_size / 2);
+  EXPECT_CHECK_DEATH(protected_ptr = PA_UNSAFE_TODO(protected_ptr - 1));
+  EXPECT_CHECK_DEATH(PA_UNSAFE_TODO(protected_ptr -= 1));
+  EXPECT_CHECK_DEATH(PA_UNSAFE_TODO(--protected_ptr));
 
 #if PA_BUILDFLAG(BACKUP_REF_PTR_POISON_OOB_PTR)
   // An array of a size that doesn't cleanly fit into the allocation. This is to
@@ -1894,14 +1906,14 @@ TEST_F(BackupRefPtrTest, AdvanceAcrossPools) {
   raw_ptr<char, AllowPtrArithmetic> protected_ptr = array1;
   // Nothing bad happens. Both pointers are outside of the BRP pool, so no
   // checks are triggered.
-  protected_ptr += (array2 - array1);
+  PA_UNSAFE_TODO(protected_ptr += (array2 - array1));
   // A pointer is shifted from outside of the BRP pool into the BRP pool. This
   // should trigger death to avoid
-  EXPECT_CHECK_DEATH(protected_ptr += (in_pool_ptr - array2));
+  EXPECT_CHECK_DEATH(PA_UNSAFE_TODO(protected_ptr += (in_pool_ptr - array2)));
 
   protected_ptr = in_pool_ptr;
   // Same when a pointer is shifted from inside the BRP pool out of it.
-  EXPECT_CHECK_DEATH(protected_ptr += (array1 - in_pool_ptr));
+  EXPECT_CHECK_DEATH(PA_UNSAFE_TODO(protected_ptr += (array1 - in_pool_ptr)));
 
   protected_ptr = nullptr;
   allocator_.root()->Free(in_pool_ptr);
@@ -1915,12 +1927,13 @@ TEST_F(BackupRefPtrTest, GetDeltaElems) {
             partition_alloc::UntagPtr(
                 ptr2));  // There should be a ref-count between slots.
   raw_ptr<char, AllowPtrArithmetic> protected_ptr1 = ptr1;
-  raw_ptr<char, AllowPtrArithmetic> protected_ptr1_2 = ptr1 + 1;
+  raw_ptr<char, AllowPtrArithmetic> protected_ptr1_2 = PA_UNSAFE_TODO(ptr1 + 1);
   raw_ptr<char, AllowPtrArithmetic> protected_ptr1_3 =
-      ptr1 + requested_size - 1;
-  raw_ptr<char, AllowPtrArithmetic> protected_ptr1_4 = ptr1 + requested_size;
+      PA_UNSAFE_TODO(ptr1 + requested_size - 1);
+  raw_ptr<char, AllowPtrArithmetic> protected_ptr1_4 =
+      PA_UNSAFE_TODO(ptr1 + requested_size);
   raw_ptr<char, AllowPtrArithmetic> protected_ptr2 = ptr2;
-  raw_ptr<char, AllowPtrArithmetic> protected_ptr2_2 = ptr2 + 1;
+  raw_ptr<char, AllowPtrArithmetic> protected_ptr2_2 = PA_UNSAFE_TODO(ptr2 + 1);
 
   EXPECT_EQ(protected_ptr1_2 - protected_ptr1, 1);
   EXPECT_EQ(protected_ptr1 - protected_ptr1_2, -1);
@@ -1964,10 +1977,10 @@ TEST_F(BackupRefPtrTest, IndexOperator) {
   char* ptr = static_cast<char*>(allocator_.root()->Alloc(requested_size));
   {
     raw_ptr<char, AllowPtrArithmetic> array = ptr;
-    std::ignore = array[0];
-    std::ignore = array[requested_size - 1];
-    EXPECT_CHECK_DEATH(std::ignore = array[-1]);
-    EXPECT_CHECK_DEATH(std::ignore = array[requested_size + 1]);
+    std::ignore = PA_UNSAFE_TODO(array[0]);
+    std::ignore = PA_UNSAFE_TODO(array[requested_size - 1]);
+    EXPECT_CHECK_DEATH(std::ignore = PA_UNSAFE_TODO(array[-1]));
+    EXPECT_CHECK_DEATH(std::ignore = PA_UNSAFE_TODO(array[requested_size + 1]));
 #if PA_BUILDFLAG(BACKUP_REF_PTR_POISON_OOB_PTR)
     EXPECT_DEATH_IF_SUPPORTED(g_volatile_char_to_ignore = array[requested_size],
                               "");
@@ -2276,10 +2289,11 @@ TEST_F(BackupRefPtrTest, SpatialAlgoCompat) {
 
   uint32_t* ptr =
       reinterpret_cast<uint32_t*>(allocator_.root()->Alloc(requested_size));
-  uint32_t* ptr_end = ptr + requested_elements;
+  uint32_t* ptr_end = PA_UNSAFE_TODO(ptr + requested_elements);
 
   CountingRawPtr<uint32_t> counting_ptr = ptr;
-  CountingRawPtr<uint32_t> counting_ptr_end = counting_ptr + requested_elements;
+  CountingRawPtr<uint32_t> counting_ptr_end =
+      PA_UNSAFE_TODO(counting_ptr + requested_elements);
 
   RawPtrCountingImpl::ClearCounters();
 
@@ -2299,7 +2313,7 @@ TEST_F(BackupRefPtrTest, SpatialAlgoCompat) {
   RawPtrCountingImpl::ClearCounters();
 
   for (CountingRawPtr<uint32_t> counting_ptr_i = counting_ptr;
-       counting_ptr_i < counting_ptr_end; counting_ptr_i++) {
+       counting_ptr_i < counting_ptr_end; PA_UNSAFE_TODO(counting_ptr_i++)) {
     *counting_ptr_i ^= *counting_ptr_i + 1;
   }
 
@@ -2313,7 +2327,7 @@ TEST_F(BackupRefPtrTest, SpatialAlgoCompat) {
   RawPtrCountingImpl::ClearCounters();
 
   for (CountingRawPtr<uint32_t> counting_ptr_i = counting_ptr;
-       counting_ptr_i < ptr_end; counting_ptr_i++) {
+       counting_ptr_i < ptr_end; PA_UNSAFE_TODO(counting_ptr_i++)) {
     *counting_ptr_i ^= *counting_ptr_i + 1;
   }
 
@@ -2326,7 +2340,8 @@ TEST_F(BackupRefPtrTest, SpatialAlgoCompat) {
 
   RawPtrCountingImpl::ClearCounters();
 
-  for (uint32_t* ptr_i = ptr; ptr_i < counting_ptr_end; ptr_i++) {
+  for (uint32_t* ptr_i = ptr; ptr_i < counting_ptr_end;
+       PA_UNSAFE_TODO(ptr_i++)) {
     *ptr_i ^= *ptr_i + 1;
   }
 
@@ -2341,7 +2356,7 @@ TEST_F(BackupRefPtrTest, SpatialAlgoCompat) {
 
   size_t iter_cnt = 0;
   for (uint32_t *ptr_i = counting_ptr, *ptr_i_end = counting_ptr_end;
-       ptr_i < ptr_i_end; ptr_i++) {
+       ptr_i < ptr_i_end; PA_UNSAFE_TODO(ptr_i++)) {
     *ptr_i ^= *ptr_i + 1;
     iter_cnt++;
   }
@@ -2445,7 +2460,7 @@ TEST_F(BackupRefPtrTest, QuarantineHook) {
 }
 
 #endif  // PA_BUILDFLAG(USE_RAW_PTR_BACKUP_REF_IMPL) &&
-        // !defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+        // !PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)
 
 #if PA_BUILDFLAG(USE_RAW_PTR_HOOKABLE_IMPL)
 
@@ -2559,7 +2574,7 @@ TEST_F(HookableRawPtrImplTest, Advance) {
   {
     int* ptr = new int[10];
     raw_ptr<int, AllowPtrArithmetic> interesting_ptr = ptr;
-    interesting_ptr += 1;
+    PA_UNSAFE_TODO(interesting_ptr += 1);
     delete[] ptr;
   }
   EXPECT_EQ(CountingHooks::Get()->advance_count, 1u);
@@ -2626,6 +2641,15 @@ TEST(DanglingPtrTest, DetectAndDestructor) {
   }
   EXPECT_EQ(instrumentation->dangling_ptr_detected(), 1u);
   EXPECT_EQ(instrumentation->dangling_ptr_released(), 1u);
+}
+
+TEST(DanglingPtrTest, ReportIfDanglingOnNoOpImpl) {
+  // Ensure ReportIfDangling compiles cleanly when RawPtrNoOpImpl is selected,
+  // such as for UnprotectedInRelease on non-BRP release builds.
+  int x = 42;
+  raw_ptr<int, base::RawPtrTraits::kNoOpImpl> no_op_ptr = &x;
+  no_op_ptr.ReportIfDangling();
+  EXPECT_EQ(no_op_ptr.get(), &x);
 }
 
 TEST(DanglingPtrTest, DetectResetAndDestructor) {
@@ -2973,5 +2997,39 @@ TEST(RawPtrInstanceTracerTest, MoveConversionAssignment) {
 }
 #endif  // PA_BUILDFLAG(ENABLE_BACKUP_REF_PTR_INSTANCE_TRACER) &&
         // PA_BUILDFLAG(USE_RAW_PTR_BACKUP_REF_IMPL)
+
+// Check that RawPtrIfPtrT distinguishes both pointers and scalars, as this
+// helps where an API may be conditionally-smuggling pointers.
+static_assert(std::is_same_v<uintptr_t, RawPtrIfPtrT<uintptr_t>>);
+static_assert(std::is_same_v<raw_ptr<char>, RawPtrIfPtrT<char*>>);
+static_assert(std::is_same_v<raw_ptr<char>, RawPtrIfPtrT<raw_ptr<char>>>);
+
+// Check that RawPtrIfPtrT allows const for both pointers and scalars.
+static_assert(std::is_same_v<const uintptr_t, RawPtrIfPtrT<const uintptr_t>>);
+static_assert(std::is_same_v<raw_ptr<const char>, RawPtrIfPtrT<const char*>>);
+static_assert(
+    std::is_same_v<raw_ptr<const char>, RawPtrIfPtrT<raw_ptr<const char>>>);
+
+// Check that RawPtrIfPtrT allows traits for both pointers and scalars.
+static_assert(
+    std::is_same_v<uintptr_t, RawPtrIfPtrT<uintptr_t, DanglingUntriaged>>);
+static_assert(std::is_same_v<raw_ptr<char, DanglingUntriaged>,
+                             RawPtrIfPtrT<char*, DanglingUntriaged>>);
+static_assert(std::is_same_v<raw_ptr<char, DanglingUntriaged>,
+                             RawPtrIfPtrT<raw_ptr<char>, DanglingUntriaged>>);
+
+// Check that  RawPtrIfPtrT allows combinations of traits   for both pointers
+// and scalars.
+static_assert(
+    std::is_same_v<
+        uintptr_t,
+        RawPtrIfPtrT<uintptr_t, AllowPtrArithmetic | UnprotectedInRelease>>);
+static_assert(std::is_same_v<
+              raw_ptr<char, AllowPtrArithmetic | UnprotectedInRelease>,
+              RawPtrIfPtrT<char*, AllowPtrArithmetic | UnprotectedInRelease>>);
+static_assert(
+    std::is_same_v<raw_ptr<char, AllowPtrArithmetic | UnprotectedInRelease>,
+                   RawPtrIfPtrT<raw_ptr<char>,
+                                AllowPtrArithmetic | UnprotectedInRelease>>);
 
 }  // namespace base::internal

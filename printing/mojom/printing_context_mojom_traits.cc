@@ -23,10 +23,6 @@
 #include "mojo/public/mojom/base/values.mojom.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS)
-#include "printing/printing_features.h"
-#endif
-
 namespace mojo {
 
 namespace {
@@ -37,9 +33,7 @@ bool IsCustomOrPrecomputedMargins(printing::mojom::MarginType margin_type) {
   }
 #if BUILDFLAG(IS_CHROMEOS)
   if (margin_type ==
-          printing::mojom::MarginType::kPrecomputedMarginsForBackend &&
-      base::FeatureList::IsEnabled(
-          printing::features::kApiPrintingMarginsAndScale)) {
+      printing::mojom::MarginType::kPrecomputedMarginsForBackend) {
     return true;
   }
 #endif
@@ -51,9 +45,7 @@ void SetMarginsToPrintSettings(printing::mojom::MarginType margin_type,
                                printing::PrintSettings* settings) {
 #if BUILDFLAG(IS_CHROMEOS)
   if (margin_type ==
-          printing::mojom::MarginType::kPrecomputedMarginsForBackend &&
-      base::FeatureList::IsEnabled(
-          printing::features::kApiPrintingMarginsAndScale)) {
+      printing::mojom::MarginType::kPrecomputedMarginsForBackend) {
     settings->SetCustomMarginsForBackend(margins);
     return;
   }
@@ -137,8 +129,6 @@ bool StructTraits<
   bool must_set_margin_type = true;
 #if BUILDFLAG(IS_CHROMEOS)
   must_set_margin_type =
-      !base::FeatureList::IsEnabled(
-          printing::features::kApiPrintingMarginsAndScale) ||
       data.margin_type() !=
           printing::mojom::MarginType::kPrecomputedMarginsForBackend;
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -237,7 +227,7 @@ bool StructTraits<
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(ENABLE_OOP_PRINTING_NO_OOP_BASIC_PRINT_DIALOG)
-  base::Value::Dict system_print_dialog_data;
+  base::DictValue system_print_dialog_data;
   if (!data.ReadSystemPrintDialogData(&system_print_dialog_data)) {
     return false;
   }

@@ -409,7 +409,7 @@ chromium-metrics-reviews@google.com.
   <int value="1" label="Testing"/>
   <int value="2" label="Chrome"/>
   <int value="3" label="Android"/>
-  <int value="4" label="PluginVM"/>
+  <int value="4" label="DEPRECATED: PluginVM"/>
   <int value="5" label="AshChrome"/>
   <int value="6" label="DEPRECATED: LacrosChrome"/>
 </enum>
@@ -434,14 +434,6 @@ chromium-metrics-reviews@google.com.
   <int value="0" label="Back"/>
   <int value="1" label="Front"/>
   <int value="2" label="External"/>
-</enum>
-
-<enum name="ChromeOSChannel">
-  <int value="0" label="Unknown"/>
-  <int value="1" label="Canary"/>
-  <int value="2" label="Dev"/>
-  <int value="3" label="Beta"/>
-  <int value="4" label="Stable"/>
 </enum>
 
 <!-- LINT.IfChange(ChromeOSFallbackCountry) -->
@@ -517,12 +509,6 @@ chromium-metrics-reviews@google.com.
 <enum name="ChromeOSJankinessTriggerStatus">
   <int value="0" label="CollectionAttempted"/>
   <int value="1" label="Throttled"/>
-</enum>
-
-<enum name="ChromeOSMachineIdReason">
-  <int value="0" label="Unknown"/>
-  <int value="1" label="Network"/>
-  <int value="2" label="Periodic"/>
 </enum>
 
 <enum name="ChromeOSMessageCenterScrollActionReason">
@@ -932,11 +918,6 @@ chromium-metrics-reviews@google.com.
   <int value="1" label="Click"/>
 </enum>
 
-<enum name="CrosSystemTrayToggleExpanded">
-  <int value="0" label="Toggled by button"/>
-  <int value="1" label="Toggled by gesture"/>
-</enum>
-
 <enum name="CustomizableButton">
   <int value="0" label="Left"/>
   <int value="1" label="Right"/>
@@ -992,12 +973,6 @@ chromium-metrics-reviews@google.com.
   <int value="1"
       label="Failed because DLC Service returned an error code (see separate
              DLC error code histogram)"/>
-</enum>
-
-<enum name="DpSuccessMetric">
-  <int value="0" label="Success with HotPlug Detect(HPD)"/>
-  <int value="1" label="Success without HotPlug Detect(HPD)"/>
-  <int value="2" label="Failure"/>
 </enum>
 
 <enum name="ExtendedFkeysModifier">
@@ -1810,14 +1785,6 @@ chromeos/ash/components/language/language_packs/language_pack_manager.h -->
 <enum name="PrivacyHubNavigationOrigin">
   <int value="0" label="System settings"/>
   <int value="1" label="Notification"/>
-</enum>
-
-<enum name="PrivacyHubSensorSubpageUserAction">
-  <int value="0" label="Subpage opened"/>
-  <int value="1" label="System access changed"/>
-  <int value="2" label="App permission changed"/>
-  <int value="3" label="Android settings link clicked"/>
-  <int value="4" label="Website permission link clicked"/>
 </enum>
 
 <enum name="RgbKeyboardBacklightChangeType">

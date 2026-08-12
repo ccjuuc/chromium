@@ -25,7 +25,6 @@
 #include "chrome/browser/web_applications/web_app_install_params.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
-#include "chrome/common/chrome_features.h"
 #include "components/webapps/browser/install_result_code.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -175,7 +174,7 @@ TEST_F(UninstallationViaOsSettingsSubManagerTest, UninstallApp) {
 #endif  // BUILDFLAG(IS_WIN)
 }
 
-// Testing crbug.com/1434577, that OS states can be cleaned up even after
+// Testing crbug.com/40904294, that OS states can be cleaned up even after
 // the app has been uninstalled.
 TEST_F(UninstallationViaOsSettingsSubManagerTest,
        OsStatesCleanupAfterAppUninstallation) {

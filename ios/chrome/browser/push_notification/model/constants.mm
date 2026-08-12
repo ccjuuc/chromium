@@ -35,13 +35,19 @@ const char kNAUHistogramName[] =
 const char kContentNotificationActionHistogramName[] =
     "ContentNotifications.Notification.Action";
 
-const int kDeliveredNAUMaxSendsPerSession = 30;
+NSString* const kDesktopToMobilePromoTypeKey = @"DesktopToMobilePromoType";
 
 NSString* const kPushNotificationClientIdKey = @"push_notification_client_id";
 
 NSString* const kOriginatingProfileNameKey = @"originating_profile_name";
 
 NSString* const kOriginatingGaiaIDKey = @"SenderGaiaId";
+
+NSString* const kSerializedChimePayloadKey = @"$";
+
+NSString* const kChimeNotificationGaiaIDKey = @"u";
+
+NSString* const kChimeNotificationClientIdKey = @"n";
 
 std::string PushNotificationClientIdToString(
     PushNotificationClientId client_id) {

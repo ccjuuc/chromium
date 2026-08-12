@@ -18,6 +18,7 @@
 #include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "pdf/buildflags.h"
 #include "pdf/page_orientation.h"
 #include "pdf/ui/thumbnail.h"
@@ -56,25 +57,45 @@ struct AccessibilityTextRunInfo;
 // Wrapper around a page from the document.
 class PDFiumPage {
  public:
-  class ScopedUnloadPreventer {
+  // Prevents FPDF_PAGE unloading.
+  class ScopedPageUnloadPreventer {
    public:
-    explicit ScopedUnloadPreventer(PDFiumPage* page);
-    ScopedUnloadPreventer(const ScopedUnloadPreventer& that);
-    ScopedUnloadPreventer& operator=(const ScopedUnloadPreventer& that);
-    ~ScopedUnloadPreventer();
+    explicit ScopedPageUnloadPreventer(PDFiumPage* page);
+    ScopedPageUnloadPreventer(const ScopedPageUnloadPreventer& that);
+    ScopedPageUnloadPreventer& operator=(const ScopedPageUnloadPreventer& that);
+    ~ScopedPageUnloadPreventer();
 
    private:
     raw_ptr<PDFiumPage> page_;
   };
 
+  // Prevents FPDF_TEXTPAGE unloading.
+  class ScopedTextPageUnloadPreventer {
+   public:
+    explicit ScopedTextPageUnloadPreventer(PDFiumPage* page);
+    ScopedTextPageUnloadPreventer(const ScopedTextPageUnloadPreventer&) =
+        delete;
+    ScopedTextPageUnloadPreventer& operator=(
+        const ScopedTextPageUnloadPreventer&) = delete;
+    ~ScopedTextPageUnloadPreventer();
+
+   private:
+    const raw_ptr<PDFiumPage> page_;
+  };
+
   PDFiumPage(PDFiumEngine* engine, uint32_t i);
   PDFiumPage(const PDFiumPage&) = delete;
   PDFiumPage& operator=(const PDFiumPage&) = delete;
-  PDFiumPage(PDFiumPage&& that);
+  PDFiumPage(PDFiumPage&& that) = delete;
+  PDFiumPage& operator=(PDFiumPage&& that) = delete;
   ~PDFiumPage();
 
-  // Unloads the PDFium data for this page from memory.
-  void Unload();
+  base::WeakPtr<PDFiumPage> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
+  void InvalidateWeakPtrs() { weak_factory_.InvalidateWeakPtrs(); }
+
+  // Unloads the PDFium data for this page from memory. Returns true if the
+  // unload happened, or false if an unload preventer blocked it.
+  bool Unload();
 
   // Gets the FPDF_PAGE for this page, loading and parsing it if necessary.
   FPDF_PAGE GetPage();
@@ -82,7 +103,7 @@ class PDFiumPage {
   // Returns FPDF_TEXTPAGE for the page, loading and parsing it if necessary.
   FPDF_TEXTPAGE GetTextPage();
 
-  // Gets the number of characters in the page.
+  // Gets the number of characters in the page. Returns -1 on error.
   int GetCharCount();
 
   // Resets loaded text and loads it again.
@@ -152,8 +173,8 @@ class PDFiumPage {
   // any text to the page or not.
   bool IsPageSearchified() const;
 
-  // Returns if the page can be unloaded.
-  bool PageCanBeUnloaded() const;
+  // Returns if it is safe to call `ReloadTextPage()`.
+  bool CanReloadTextPage() const;
 #endif  // BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
 
   // For all the highlights on the page, get their underlying text ranges and
@@ -326,6 +347,12 @@ class PDFiumPage {
   //      tree.
   // Value: Index of the image in the `images_` vector.
   using MarkedContentIdToImageMap = std::map<int, size_t>;
+
+  // Track which text run indices have been associated with a structured node in
+  // order to discover which text runs are unassociated with structured
+  // elements. This information is used to determine how to interleave
+  // structured and unstructured content in the final AXTree.
+  std::set<size_t> associated_text_run_indices_;
 
   struct Link {
     Link();
@@ -514,7 +541,8 @@ class PDFiumPage {
   ScopedFPDFPage page_;
   ScopedFPDFTextPage text_page_;
   uint32_t index_;
-  int preventing_unload_count_ = 0;
+  int preventing_page_unload_count_ = 0;
+  int preventing_text_page_unload_count_ = 0;
   gfx::Rect rect_;
   bool calculated_text_runs_ = false;
   MarkedContentIdToTextRunInfoMap marked_content_id_to_text_runs_map_;
@@ -542,6 +570,8 @@ class PDFiumPage {
   // this page has never been Searchified, then this is null.
   std::optional<bool> has_searchify_added_text_;
 #endif
+
+  base::WeakPtrFactory<PDFiumPage> weak_factory_{this};
 };
 
 constexpr uint32_t MakeARGB(unsigned int a,

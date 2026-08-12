@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ash/app_mode/auto_sleep/device_weekly_scheduled_suspend_policy_handler.h"
 
-#include "chrome/common/pref_names.h"
+#include "ash/constants/ash_pref_names.h"
 #include "components/policy/core/browser/policy_error_map.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/schema.h"
@@ -26,7 +26,9 @@ DeviceWeeklyScheduledSuspendPolicyHandler::
 // static
 void DeviceWeeklyScheduledSuspendPolicyHandler::RegisterLocalStatePrefs(
     PrefRegistrySimple* registry) {
-  registry->RegisterListPref(::prefs::kDeviceWeeklyScheduledSuspend);
+  registry->RegisterListPref(ash::prefs::kDeviceWeeklyScheduledSuspend);
+  registry->RegisterIntegerPref(
+      ash::prefs::kDeviceWeeklyScheduledResuspendDelayMs, /*default_value=*/-1);
 }
 
 // ConfigurationPolicyHandler methods:
@@ -47,12 +49,9 @@ void DeviceWeeklyScheduledSuspendPolicyHandler::ApplyPolicySettings(
     PrefValueMap* prefs) {
   const policy::PolicyMap::Entry* policy =
       policies.Get(key::kDeviceWeeklyScheduledSuspend);
-  if (!policy) {
-    return;
-  }
-
-  if (const base::Value* value = policy->value_unsafe(); value) {
-    prefs->SetValue(::prefs::kDeviceWeeklyScheduledSuspend, value->Clone());
+  if (policy && policy->value_unsafe()) {
+    prefs->SetValue(ash::prefs::kDeviceWeeklyScheduledSuspend,
+                    policy->value_unsafe()->Clone());
   }
 }
 

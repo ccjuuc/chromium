@@ -19,7 +19,7 @@
 #include "components/commerce/core/commerce_heuristics_data.h"
 #include "components/component_updater/component_updater_paths.h"
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/new_tab_page/new_tab_page_util.h"
+#include "chrome/browser/new_tab_page/new_tab_page_util.h"  // nogncheck crbug.com/40147906
 #include "components/search/ntp_features.h"
 #else
 #include "components/commerce/core/commerce_feature_list.h"
@@ -138,7 +138,7 @@ bool CommerceHeuristicsInstallerPolicy::RequiresNetworkEncryption() const {
 
 update_client::CrxInstaller::Result
 CommerceHeuristicsInstallerPolicy::OnCustomInstall(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(0);  // Nothing custom here.
 }
@@ -148,7 +148,7 @@ void CommerceHeuristicsInstallerPolicy::OnCustomUninstall() {}
 void CommerceHeuristicsInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    base::Value::Dict manifest) {
+    base::DictValue manifest) {
   VLOG(1) << "Component ready, version " << version.GetString() << " in "
           << install_dir.value();
 
@@ -159,7 +159,7 @@ void CommerceHeuristicsInstallerPolicy::ComponentReady(
 
 // Called during startup and installation before ComponentReady().
 bool CommerceHeuristicsInstallerPolicy::VerifyInstallation(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
   return base::PathExists(
              GetCommerceGlobalHeuristicsInstalledPath(install_dir)) &&
@@ -188,10 +188,11 @@ CommerceHeuristicsInstallerPolicy::GetInstallerAttributes() const {
 
 void RegisterCommerceHeuristicsComponent(
     component_updater::ComponentUpdateService* cus) {
+  bool is_cart_module_enabled = true;
 #if !BUILDFLAG(IS_ANDROID)
-  if (IsCartModuleEnabled())
+  is_cart_module_enabled = IsCartModuleEnabled();
 #endif
-  {
+  if (is_cart_module_enabled) {
     VLOG(1) << "Registering Commerce Heuristics component.";
     auto installer = base::MakeRefCounted<ComponentInstaller>(
         std::make_unique<CommerceHeuristicsInstallerPolicy>());

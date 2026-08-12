@@ -9,7 +9,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/ui/views/global_media_controls/media_item_ui_helper.h"
-#include "chrome/browser/ui/views/global_media_controls/media_notification_device_entry_ui.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/global_media_controls/public/views/media_item_ui_updated_view.h"
 #include "components/media_router/browser/media_router_metrics.h"
@@ -19,6 +18,7 @@
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/background.h"
@@ -153,8 +153,10 @@ CastDeviceSelectorView::CastDeviceSelectorView(
                               base::Unretained(this)),
           global_media_controls::kEmptyMediaActionButtonId,
           IDS_GLOBAL_MEDIA_CONTROLS_CLOSE_DEVICE_LIST_TEXT,
-          kCloseButtonIconSize, vector_icons::kCloseSmallIcon, kCloseButtonSize,
-          media_color_theme_.secondary_foreground_color_id,
+          kCloseButtonIconSize,
+          features::IsRoundedIconsEnabled() ? vector_icons::kCloseSmallIcon
+                                            : vector_icons::kCloseSmallOldIcon,
+          kCloseButtonSize, media_color_theme_.secondary_foreground_color_id,
           media_color_theme_.secondary_foreground_color_id,
           media_color_theme_.focus_ring_color_id);
   close_button_ = cast_header_row->AddChildView(std::move(close_button));

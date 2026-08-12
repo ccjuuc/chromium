@@ -17,8 +17,8 @@ import androidx.annotation.VisibleForTesting;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanel;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanel.PanelState;
+import org.chromium.chrome.browser.compositor.overlay_panel.OverlayPanel;
+import org.chromium.chrome.browser.overlay_panel.PanelState;
 import org.chromium.components.browser_ui.widget.gesture.SwipeGestureListener;
 import org.chromium.content_public.browser.WebContents;
 
@@ -372,7 +372,7 @@ public class OverlayPanelEventFilter extends MotionEventFilter {
             // method {@link OverlayPanelEventFilter#lockEventHorizontallty} will always
             // return an event with a single pointer, which is necessary to prevent
             // the app from crashing when the motion involves multiple pointers.
-            // See: crbug.com/486901
+            // See: crbug.com/40417735
             event =
                     MotionEvent.obtain(
                             e.getDownTime(),
@@ -404,7 +404,7 @@ public class OverlayPanelEventFilter extends MotionEventFilter {
             // NOTE(pedrosimonetti): If the ACTION_DOWN event was synthetic and the distance
             // between it and the ACTION_UP event was short, then we should synthesize an
             // ACTION_CANCEL event to prevent a Tap gesture from being triggered on the
-            // Content View. See crbug.com/408654
+            // Content View. See crbug.com/41128898
             if (!isDistanceGreaterThanTouchSlop(deltaX, deltaY)) {
                 event.setAction(MotionEvent.ACTION_CANCEL);
                 if (containerView != null) containerView.dispatchTouchEvent(event);

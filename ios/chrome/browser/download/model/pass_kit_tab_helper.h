@@ -13,14 +13,18 @@
 #import "base/containers/unique_ptr_adapters.h"
 #import "base/memory/raw_ptr.h"
 #import "base/memory/weak_ptr.h"
+#import "base/scoped_observation.h"
 #import "ios/chrome/browser/shared/model/utils/rust_unzipper.h"
 #import "ios/web/public/download/download_task_observer.h"
-#import "ios/web/public/lazy_web_state_user_data.h"
+#import "ios/web/public/web_state_observer.h"
+#import "ios/web/public/web_state_user_data.h"
 
+@class PKPass;
 @class RustUnzipper;
 @protocol WebContentCommands;
 namespace web {
 class DownloadTask;
+class NavigationContext;
 class WebState;
 }  // namespace web
 
@@ -54,8 +58,9 @@ enum class DownloadPassKitResult {
 
 // TabHelper which downloads pkpass file, constructs PKPass object and passes
 // that PKPass to the delegate.
-class PassKitTabHelper : public web::LazyWebStateUserData<PassKitTabHelper>,
-                         public web::DownloadTaskObserver {
+class PassKitTabHelper : public web::WebStateUserData<PassKitTabHelper>,
+                         public web::DownloadTaskObserver,
+                         public web::WebStateObserver {
  public:
   PassKitTabHelper(const PassKitTabHelper&) = delete;
   PassKitTabHelper& operator=(const PassKitTabHelper&) = delete;
@@ -74,7 +79,12 @@ class PassKitTabHelper : public web::LazyWebStateUserData<PassKitTabHelper>,
   explicit PassKitTabHelper(web::WebState* web_state);
 
  private:
-  friend class web::LazyWebStateUserData<PassKitTabHelper>;
+  friend class web::WebStateUserData<PassKitTabHelper>;
+
+  // web::WebStateObserver overrides:
+  void WasShown(web::WebState* web_state) override;
+  void DidStartNavigation(web::WebState* web_state,
+                          web::NavigationContext* navigation_context) override;
 
   // web::DownloadTaskObserver overrides:
   void OnDownloadUpdated(web::DownloadTask* task) override;
@@ -103,6 +113,12 @@ class PassKitTabHelper : public web::LazyWebStateUserData<PassKitTabHelper>,
 
   // Util used for unzipping through Rust.
   RustUnzipper* unzipper_;
+
+  // The passes downloaded while the tab was hidden.
+  NSArray<PKPass*>* pending_passes_ = nil;
+
+  base::ScopedObservation<web::WebState, web::WebStateObserver>
+      web_state_observation_{this};
 
   base::WeakPtrFactory<PassKitTabHelper> weak_factory_{this};
 };

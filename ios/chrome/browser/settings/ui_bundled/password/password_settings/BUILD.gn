@@ -5,7 +5,6 @@
 source_set("password_settings") {
   sources = [
     "password_bulk_move_handler.h",
-    "password_export_handler.h",
     "password_settings_coordinator.h",
     "password_settings_coordinator.mm",
     "password_settings_coordinator_delegate.h",
@@ -14,28 +13,39 @@ source_set("password_settings") {
     "password_settings_metrics_utils.h",
   ]
   deps = [
-    ":common",
     ":password_settings_constants",
     ":password_settings_ui",
+    "//base",
+    "//base:i18n",
     "//components/application_locale_storage",
     "//components/google/core/common",
-    "//components/password_manager/core/browser/features:password_features",
+    "//components/keyed_service/core",
+    "//components/password_manager/core/browser:metrics_util",
+    "//components/password_manager/core/browser/features:utils",
+    "//components/password_manager/core/browser/ui",
+    "//components/password_manager/core/browser/ui:credential_ui_entry",
     "//components/password_manager/core/common",
     "//components/prefs",
     "//components/prefs/ios",
     "//components/signin/public/identity_manager/objc",
     "//components/strings",
-    "//components/webauthn/core/browser:passkey_model",
+    "//components/sync/base",
+    "//components/sync/service",
+    "//components/webauthn/ios:passkey_types",
     "//ios/chrome/app/strings",
     "//ios/chrome/browser/affiliations/model",
     "//ios/chrome/browser/credential_exchange/coordinator:export_coordinator",
     "//ios/chrome/browser/credential_provider/model:features",
+    "//ios/chrome/browser/device_reauth/model",
     "//ios/chrome/browser/passwords/model",
+    "//ios/chrome/browser/passwords/model:store_factory",
     "//ios/chrome/browser/passwords/model/metrics",
+    "//ios/chrome/browser/passwords/password_exporter/coordinator",
+    "//ios/chrome/browser/settings/ui_bundled:settings_root",
     "//ios/chrome/browser/settings/ui_bundled/elements:enterprise_info_popover_view_controller",
     "//ios/chrome/browser/settings/ui_bundled/password:common",
+    "//ios/chrome/browser/settings/ui_bundled/password:password_utils",
     "//ios/chrome/browser/settings/ui_bundled/password:title_view",
-    "//ios/chrome/browser/settings/ui_bundled/password:ui",
     "//ios/chrome/browser/settings/ui_bundled/password/passwords_in_other_apps",
     "//ios/chrome/browser/settings/ui_bundled/password/reauthentication",
     "//ios/chrome/browser/settings/ui_bundled/password/reauthentication:reauthentication_delegate",
@@ -52,15 +62,15 @@ source_set("password_settings") {
     "//ios/chrome/browser/signin/model:authentication_service",
     "//ios/chrome/browser/signin/model:authentication_service_factory",
     "//ios/chrome/browser/signin/model:system_identity",
-    "//ios/chrome/browser/signin/model:trusted_vault",
-    "//ios/chrome/browser/signin/model:trusted_vault_factory",
+    "//ios/chrome/browser/signin/model/trusted_vault",
+    "//ios/chrome/browser/signin/model/trusted_vault:trusted_vault_factory",
     "//ios/chrome/browser/sync/model",
     "//ios/chrome/browser/webauthn/model",
     "//ios/chrome/common/credential_provider",
     "//ios/chrome/common/ui/elements:branded_navigation_item_title_view",
     "//ios/chrome/common/ui/reauthentication",
+    "//net",
     "//ui/base",
-    "//url",
   ]
 }
 
@@ -102,17 +112,6 @@ source_set("password_settings_constants") {
   deps = [ "//ios/chrome/browser/shared/ui/list_model" ]
 }
 
-source_set("common") {
-  sources = [
-    "scoped_password_settings_reauth_module_override.h",
-    "scoped_password_settings_reauth_module_override.mm",
-  ]
-  deps = [
-    "//base",
-    "//ios/chrome/common/ui/reauthentication",
-  ]
-}
-
 source_set("unit_tests") {
   testonly = true
   sources = [
@@ -121,7 +120,6 @@ source_set("unit_tests") {
     "password_settings_view_controller_unittest.mm",
   ]
   deps = [
-    ":common",
     ":password_settings",
     ":password_settings_constants",
     ":password_settings_ui",
@@ -134,6 +132,8 @@ source_set("unit_tests") {
     "//components/webauthn/core/browser:test_support",
     "//ios/chrome/app/strings",
     "//ios/chrome/browser/credential_provider/model:features",
+    "//ios/chrome/browser/device_reauth/model",
+    "//ios/chrome/browser/device_reauth/model:fake_reauthentication_service",
     "//ios/chrome/browser/passwords/model:store_factory",
     "//ios/chrome/browser/passwords/model/metrics",
     "//ios/chrome/browser/settings/ui_bundled/password:features",
@@ -153,9 +153,10 @@ source_set("unit_tests") {
     "//ios/chrome/browser/signin/model:fake_system_identity",
     "//ios/chrome/browser/signin/model:fake_system_identity_manager",
     "//ios/chrome/browser/signin/model:test_support",
-    "//ios/chrome/browser/signin/model:trusted_vault",
-    "//ios/chrome/browser/signin/model:trusted_vault_factory",
+    "//ios/chrome/browser/signin/model/trusted_vault",
+    "//ios/chrome/browser/signin/model/trusted_vault:trusted_vault_factory",
     "//ios/chrome/browser/sync/model",
+    "//ios/chrome/browser/sync/model:test_support",
     "//ios/chrome/browser/webauthn/model",
     "//ios/chrome/common/ui/reauthentication",
     "//ios/chrome/common/ui/reauthentication:mock_reauthentication_module",

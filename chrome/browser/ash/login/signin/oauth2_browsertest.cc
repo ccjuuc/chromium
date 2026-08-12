@@ -40,6 +40,7 @@
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/ash/login/gaia_screen_handler.h"
@@ -223,6 +224,7 @@ class RequestDeferrer {
 
     signal_ = std::make_unique<base::test::TestFuture<void>>();
     EXPECT_TRUE(signal_->Wait());
+    signal_.reset();
   }
 
   void InterceptRequest(const HttpRequest& request) {
@@ -263,7 +265,7 @@ class OAuth2Test : public OobeBaseTest {
     base::PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir_);
 
     // Disable sync since we don't really need this for these tests and it also
-    // makes OAuth2Test.MergeSession test flaky http://crbug.com/408867.
+    // makes OAuth2Test.MergeSession test flaky http://crbug.com/41129041.
     command_line->AppendSwitch(syncer::kDisableSync);
     // Skip post login screens.
     command_line->AppendSwitch(switches::kOobeSkipPostLogin);
@@ -364,7 +366,7 @@ class OAuth2Test : public OobeBaseTest {
   user_manager::User::OAuthTokenStatus GetOAuthStatusFromLocalState(
       const std::string& email) const {
     PrefService* local_state = g_browser_process->local_state();
-    const base::Value::Dict& prefs_oauth_status =
+    const base::DictValue& prefs_oauth_status =
         local_state->GetDict("OAuthTokenStatus");
 
     std::optional<int> oauth_token_status = prefs_oauth_status.FindInt(email);
@@ -627,7 +629,7 @@ IN_PROC_BROWSER_TEST_F(OAuth2Test, DISABLED_OverlappingContinueSessionRestore) {
   SimulateNetworkOnline();
 
   // Blocks database thread to control TokenService::LoadCredentials timing.
-  // TODO(achuith): Fix this. crbug.com/753615.
+  // TODO(achuith): Fix this. crbug.com/260078930.
   auto thread_blocker = std::make_unique<ThreadBlocker>(nullptr);
 
   // Signs in as the existing user created in pre test.
@@ -659,7 +661,7 @@ IN_PROC_BROWSER_TEST_F(OAuth2Test, DISABLED_OverlappingContinueSessionRestore) {
 
 // Tests that user session is terminated if merge session fails for an online
 // sign-in. This is necessary to prevent policy exploit.
-// See http://crbug.com/677312
+// See http://crbug.com/41292933
 IN_PROC_BROWSER_TEST_F(OAuth2Test, TerminateOnBadMergeSessionAfterOnlineAuth) {
   SimulateNetworkOnline();
   WaitForGaiaPageLoad();
@@ -909,11 +911,12 @@ class MergeSessionTest : public OAuth2Test,
   GURL non_google_page_url_;
 };
 
-Browser* FindOrCreateVisibleBrowser(Profile* profile) {
+BrowserWindowInterface* FindOrCreateVisibleBrowser(Profile* profile) {
   chrome::ScopedTabbedBrowserDisplayer displayer(profile);
-  Browser* browser = displayer.browser();
-  if (browser->tab_strip_model()->count() == 0)
+  BrowserWindowInterface* browser = displayer.browser_window_interface();
+  if (browser->GetTabStripModel()->count() == 0) {
     chrome::AddTabAt(browser, GURL(), -1, true);
+  }
   return browser;
 }
 
@@ -922,14 +925,14 @@ IN_PROC_BROWSER_TEST_P(MergeSessionTest, PageThrottle) {
                       /*is_under_advanced_protection=*/false);
 
   // Try to open a page from google.com.
-  Browser* browser = FindOrCreateVisibleBrowser(GetProfile());
+  BrowserWindowInterface* browser = FindOrCreateVisibleBrowser(GetProfile());
   ui_test_utils::NavigateToURLWithDisposition(
       browser, fake_google_page_url_, WindowOpenDisposition::CURRENT_TAB,
       ui_test_utils::BROWSER_TEST_NO_WAIT);
 
   // JavaScript dialog wait setup.
   content::WebContents* tab =
-      browser->tab_strip_model()->GetActiveWebContents();
+      browser->GetTabStripModel()->GetActiveWebContents();
   auto* js_dialog_manager =
       javascript_dialogs::TabModalDialogManager::FromWebContents(tab);
   base::test::TestFuture<void> dialog_wait;

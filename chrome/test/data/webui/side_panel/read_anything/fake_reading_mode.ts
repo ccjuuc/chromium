@@ -10,6 +10,7 @@ export class FakeReadingMode {
   startOffset: number = 0;
   endNodeId: number = 0;
   endOffset: number = 0;
+  hasValidSelection: boolean = true;
 
   // Items in the ReadAnythingTheme struct, see read_anything.mojom for info.
   fontName: string = 'MyFont';
@@ -28,8 +29,11 @@ export class FakeReadingMode {
   speechRate: number = 1;
   highlightGranularity: number = 0;
 
-  // Current line focus value.
-  lineFocus: number = 0;
+  // The last line focus value used when it was on.
+  lastNonDisabledLineFocus: number = 0;
+  // Whether line focus is currently on. i.e. it is in a mode other than off.
+  // The feature flag check is separate under isLineFocusEnabled.
+  isLineFocusOn: boolean = false;
 
   // Enum values for various visual theme changes.
   standardLineSpacing: number = 0;
@@ -44,9 +48,8 @@ export class FakeReadingMode {
   yellowTheme: number = 9;
   blueTheme: number = 10;
   highContrastTheme: number = 11;
-  lowContrastTheme: number = 12;
-  sepiaLightTheme: number = 13;
-  sepiaDarkTheme: number = 14;
+  lowContrastLightTheme: number = 12;
+  lowContrastDarkTheme: number = 13;
 
   // Enum values for highlight granularity.
   autoHighlighting: number = 0;
@@ -65,24 +68,59 @@ export class FakeReadingMode {
 
   // Enum values for line focus modes.
   lineFocusOff: number = 50;
-  lineFocusOneLineWindow: number = 51;
-  lineFocusThreeLineWindow: number = 52;
-  lineFocusFiveLineWindow: number = 53;
-  lineFocusStaticLine: number = 54;
-  lineFocusCursorLine: number = 55;
+  lineFocusSmallStaticWindow: number = 51;
+  lineFocusMediumStaticWindow: number = 52;
+  lineFocusLargeStaticWindow: number = 53;
+  lineFocusSmallCursorWindow: number = 54;
+  lineFocusMediumCursorWindow: number = 55;
+  lineFocusLargeCursorWindow: number = 56;
+  lineFocusStaticLine: number = 57;
+  lineFocusCursorLine: number = 58;
+  // Enum values for presentation states.
+  inHiddenPresentationState: number = 1;
+  inSidePanelPresentationState: number = 2;
+  inImmersiveOverlayPresentationState: number = 3;
 
-  // Whether the Read Aloud feature flag is enabled.
-  isReadAloudEnabled: boolean = true;
-  imagesFeatureEnabled: boolean = false;
+  // The active presentation state of Reading mode.
+  activePresentationState: number = 1;
+
+  // Current Read Anything distilled values.
+  htmlContent: string = '';
+  title: string = '';
+
+  // The constant value representing the Screen2x (AXTree) distillation method.
+  distillationTypeScreen2x: number = 0;
+
+  // The constant value representing the Readability (HTML string) distillation
+  // method.
+  distillationTypeReadability: number = 1;
+
+  documentUrl: string = 'https://www.google.com';
+  htmlIds: Map<number, string> = new Map();
 
   // Whether the Immersive Read Anything feature flag is enabled.
   isImmersiveEnabled: boolean = false;
 
+  // Whether the Read Anything Translate Entry Point feature flag is enabled.
+  isReadAnythingTranslateEntryPointEnabled: boolean = false;
+
   // Whether the line focus feature flag is enabled.
   isLineFocusEnabled: boolean = false;
 
+  // Whether the Read Anything Improved UI feature flag is enabled.
+  isReadAnythingImprovedUiEnabled: boolean = false;
+
+  // Whether the readability feature flag is enabled.
+  isReadabilityEnabled: boolean = false;
+
+  // Whether the select text for readability feature flag is enabled.
+  isReadabilitySelectTextEnabled: boolean = false;
+
   // Returns true if the webpage corresponds to a Google Doc.
   isGoogleDocs: boolean = false;
+
+  // Returns true if the webpage corresponds to a PDF.
+  isPdf: boolean = false;
 
   // Fonts supported by the browser's preferred language.
   supportedFonts: string[] = ['roboto'];
@@ -100,6 +138,12 @@ export class FakeReadingMode {
 
   // If the speech tree has been initialized.
   isSpeechTreeInitialized: boolean = false;
+
+  // Defines the distillation method used (screen2x maps to 0).
+  distillationMethod: number = 0;
+
+  // The active distillation method currently showing in page content.
+  activeDistillationMethod: number = 0;
 
   requiresDistillation: boolean = false;
 
@@ -125,12 +169,6 @@ export class FakeReadingMode {
   // contained within the selection.
   getChildren(nodeId: number): number[] {
     return (nodeId > this.maxNodeId) ? [] : [nodeId + 1];
-  }
-
-  // Returns content of "data-font-css" html attribute. This is needed for
-  // rendering content from annotated canvas in Google Docs.
-  getDataFontCss(_nodeId: number): string {
-    return '400 14.6667px "Courier New"';
   }
 
   // Returns the HTML tag of the AXNode for the provided AXNodeID. For testing,
@@ -166,6 +204,10 @@ export class FakeReadingMode {
     return 'foo';
   }
 
+  getHtmlId(nodeId: number): string {
+    return this.htmlIds.get(nodeId) || '';
+  }
+
   // Returns the alt text of the AXNode for the provided AXNodeID.
   getAltText(_nodeId: number): string {
     return 'foo';
@@ -186,9 +228,22 @@ export class FakeReadingMode {
     return nodeId === this.maxNodeId;
   }
 
+  // Returns true if the original page has a section with key points.
+  maybeHasKeyPointsSection(): boolean {
+    return false;
+  }
+
+  getKeyPointsRegex(): string {
+    return 'key points|summary|the bottom line|why it matters';
+  }
+
   // Connects to the browser process. Called by ts when the read anything
   // element is added to the document.
   onConnected() {}
+
+  // Called when the main frame undergoes a same document navigation (such as
+  // a fragment navigation).
+  onMainFrameSameDocumentNavigation(_url: string) {}
 
   // Called when a user tries to copy text from reading mode with keyboard
   // shortcuts.
@@ -228,8 +283,8 @@ export class FakeReadingMode {
   }
 
   // Called when the line focus mode is changed via the webui toolbar.
-  onLineFocusChanged(value: number) {
-    this.lineFocus = value;
+  onLineFocusChanged(_value: number, lastNonDisabledLineFocus: number) {
+    this.lastNonDisabledLineFocus = lastNonDisabledLineFocus;
   }
 
   // Called when a user toggles a switch in the language menu
@@ -249,6 +304,9 @@ export class FakeReadingMode {
   onLinksEnabledToggled() {
     this.linksEnabled = !this.linksEnabled;
   }
+
+  // Called when a user requests translation via the webui toolbar.
+  onTranslationRequested() {}
 
   // Called when a user toggles images via the webui toolbar.
   onImagesEnabledToggled() {
@@ -327,7 +385,7 @@ export class FakeReadingMode {
   // Returns the actual spacing value to use based on the given lineSpacing
   // category.
   getLineSpacingValue(lineSpacing: number): number {
-    return lineSpacing;
+    return lineSpacing + 1;
   }
 
   // Returns the actual spacing value to use based on the given letterSpacing
@@ -360,6 +418,10 @@ export class FakeReadingMode {
   // Called when distillation completes with the word count.
   onDistilled(_wordCount: number) {}
 
+  // Called by the Read Anything app to provide the rendered text blocks from
+  // the distilled content for AXTree mapping.
+  onRenderedTextBlocksAvailable(_blocks: string[]) {}
+
   sendGetVoicePackInfoRequest(_: string) {}
 
   // Sends an async request to install a Natural voice pack for a
@@ -367,6 +429,9 @@ export class FakeReadingMode {
   // updateVoicePackStatus()
   // TODO(crbug.com/377697173) Rename `VoicePack` to `Voice`
   sendInstallVoicePackRequest(_language: string) {}
+
+  // Called to get the pin state from the browser.
+  sendPinStateRequest() {}
 
   // Sends an async request to uninstall a Natural voice for a specific
   // language.
@@ -392,12 +457,9 @@ export class FakeReadingMode {
   setContentForTesting(_snapshotLite: Object, contentNodeIds: number[]) {
     this.isSpeechTreeInitialized = contentNodeIds.length > 0;
   }
-
-  // Set the theme. Used by tests only.
-  setThemeForTesting(
-      _fontName: string, _fontSize: number, _linksEnabled: boolean,
-      _foregroundColor: number, _backgroundColor: number, _lineSpacing: number,
-      _letterSpacing: number) {}
+  // Sets the same structure as setContentForTesting but forces
+  // the processing of the AX Tree Anchors.
+  setAnchorsForTesting(_snapshotLite: Object, _contentNodeIds: number[]) {}
 
   // Sets the language. Used by tests only.
   setLanguageForTesting(_code: string) {}
@@ -424,6 +486,9 @@ export class FakeReadingMode {
 
   // Display a loading screen to tell the user we are distilling the page.
   showLoading() {}
+
+  // Inform that Read Aloud should be played on open.
+  setPlayOnOpen(_playOnOpen: boolean) {}
 
   // Display the empty state page to tell the user we can't distill the page.
   showEmpty() {}
@@ -537,4 +602,24 @@ export class FakeReadingMode {
   // Called by the Read Anything app to toggle between Side Panel and Immersive
   // Mode.
   togglePresentation() {}
+
+  // There has been a long delay between starting speech and speech
+  // playing.
+  onSpeechEngineStalled() {}
+  onSpeechEngineFirstStall() {}
+
+  // Called after the ReadAnythingAppController maps the readability text blocks
+  // to the AXTree.
+  onRenderedTextMappingReady() {}
+
+  // Returns the AXTree mapping segments for the distilled block at the given
+  // index. A segment links a character range within the block to its AXnode.
+  getAxMapping(_index: number):
+      Array<{axNodeId: number, start: number, end: number}> {
+    return [];
+  }
+
+  requestShouldShowLineFocusNewBadge() {}
+  onShouldShowLineFocusNewBadgeResponse() {}
+  onLineFocusFeatureUsed() {}
 }

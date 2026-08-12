@@ -8,6 +8,7 @@
 
 #include <utility>
 
+#include "ash/constants/ash_extension_constants.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
@@ -21,7 +22,6 @@
 #include "chrome/browser/ash/file_system_provider/registry_interface.h"
 #include "chrome/browser/ash/file_system_provider/service_factory.h"
 #include "chrome/browser/ash/file_system_provider/throttled_file_system.h"
-#include "chrome/common/extensions/extension_constants.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
@@ -394,7 +394,7 @@ void Service::RestoreFileSystems(const ProviderId& provider_id) {
   for (const auto& restored_file_system : *restored_file_systems) {
     // Remove unsupported smbprovider shares and drop a log so we can verify
     // whether this correlates with fixing the bug in the field.
-    // See https://crbug.com/1254611
+    // See https://crbug.com/40794444
     if (is_smb_provider) {
       LOG(WARNING) << "Removing unsupported smbprovider share";
       registry_->ForgetFileSystem(restored_file_system.provider_id,

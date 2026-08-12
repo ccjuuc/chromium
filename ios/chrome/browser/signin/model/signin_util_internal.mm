@@ -120,7 +120,7 @@ const base::FilePath::CharType kSentinelThatIsNotBackedUp[] =
     FILE_PATH_LITERAL("NotBackedUpSentinel");
 
 // Computes the full path for a sentinel file with name `sentinel_name`.
-// This method can return an emtpy string if failed.
+// This method can return an empty string if failed.
 base::FilePath PathForSentinel(const base::FilePath::CharType* sentinel_name) {
   base::FilePath user_data_path;
   if (!base::PathService::Get(ios::DIR_USER_DATA, &user_data_path)) {
@@ -148,12 +148,11 @@ signin::RestoreData LoadDeviceRestoreDataInternal(
     return restore_data;
   }
   if (ShouldSimulatePostDeviceRestore()) {
-    // This simulate a device restore. This setting is accessible only in the
-    // experimental flags in Chrome settings. Therefore this should be avaible
+    // This simulates a device restore. This setting is accessible only in the
+    // experimental flags in Chrome settings. Therefore this should be available
     // only in canary and dev.
     auto current_channel = GetChannel();
-    CHECK(current_channel != version_info::Channel::STABLE,
-          base::NotFatalUntil::M140);
+    CHECK(current_channel != version_info::Channel::STABLE);
     DeleteFile(not_backed_up_sentinel_path);
   }
   bool does_backed_up_sentinel_file_exist =
@@ -199,7 +198,7 @@ signin::RestoreData LoadDeviceRestoreDataInternal(
         GetFileInfo(backed_up_sentinel_path, &backed_up_sentinel_info);
     if (file_info_valid && (backed_up_sentinel_info.creation_time <
                             not_backed_up_sentinel_info.creation_time)) {
-      // If the not backed up sentinel was created before the backed up sentinel
+      // If the backed up sentinel was created before the not backed up sentinel
       // file, a device restore happened in a previous run.
       restore_data.last_restore_timestamp =
           not_backed_up_sentinel_info.creation_time;

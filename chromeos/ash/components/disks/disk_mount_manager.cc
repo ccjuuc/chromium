@@ -19,7 +19,6 @@
 #include <vector>
 
 #include "base/barrier_closure.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_file.h"
 #include "base/functional/bind.h"
@@ -30,6 +29,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/observer_list.h"
 #include "base/posix/eintr_wrapper.h"
+#include "base/scoped_observation.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/system/sys_info.h"
@@ -240,12 +240,14 @@ void FixPermissions(const std::string_view path) {
 class DiskMountManagerImpl : public DiskMountManager,
                              public CrosDisksClient::Observer {
  public:
-  DiskMountManagerImpl() { cros_disks_client_->AddObserver(this); }
+  DiskMountManagerImpl() {
+    cros_disks_client_observation_.Observe(cros_disks_client_);
+  }
 
   DiskMountManagerImpl(const DiskMountManagerImpl&) = delete;
   DiskMountManagerImpl& operator=(const DiskMountManagerImpl&) = delete;
 
-  ~DiskMountManagerImpl() override { cros_disks_client_->RemoveObserver(this); }
+  ~DiskMountManagerImpl() override = default;
 
  private:
   using DiskMountManager::Observer;
@@ -1297,7 +1299,7 @@ class DiskMountManagerImpl : public DiskMountManager,
   }
 
   bool IsPendingPartitioningDisk(const std::string& device_path) {
-    if (base::Contains(pending_partitioning_disks_, device_path)) {
+    if (pending_partitioning_disks_.contains(device_path)) {
       return true;
     }
 
@@ -1311,7 +1313,13 @@ class DiskMountManagerImpl : public DiskMountManager,
   }
 
   // Mount event change observers.
-  base::ObserverList<Observer> observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/false,
+      /*reentrancy=*/
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers_;
 
   const raw_ptr<CrosDisksClient> cros_disks_client_ = CrosDisksClient::Get();
 
@@ -1336,6 +1344,9 @@ class DiskMountManagerImpl : public DiskMountManager,
   std::vector<EnsureMountInfoRefreshedCallback> refresh_callbacks_;
 
   SuspendUnmountManager suspend_unmount_manager_{this};
+
+  base::ScopedObservation<CrosDisksClient, CrosDisksClient::Observer>
+      cros_disks_client_observation_{this};
 
   base::WeakPtrFactory<DiskMountManagerImpl> weak_ptr_factory_{this};
 };

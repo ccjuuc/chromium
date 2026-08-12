@@ -20,10 +20,10 @@ EnumTraits<mojo_base::mojom::ThreadType, base::ThreadType>::ToMojom(
       return mojo_base::mojom::ThreadType::kUtility;
     case base::ThreadType::kDefault:
       return mojo_base::mojom::ThreadType::kDefault;
-    case base::ThreadType::kDisplayCritical:
-      return mojo_base::mojom::ThreadType::kDisplayCritical;
-    case base::ThreadType::kInteractive:
-      return mojo_base::mojom::ThreadType::kInteractive;
+    case base::ThreadType::kPresentation:
+      return mojo_base::mojom::ThreadType::kPresentation;
+    case base::ThreadType::kAudioProcessing:
+      return mojo_base::mojom::ThreadType::kAudioProcessing;
     case base::ThreadType::kRealtimeAudio:
       return mojo_base::mojom::ThreadType::kRealtimeAudio;
   }
@@ -31,30 +31,24 @@ EnumTraits<mojo_base::mojom::ThreadType, base::ThreadType>::ToMojom(
 }
 
 // static
-bool EnumTraits<mojo_base::mojom::ThreadType, base::ThreadType>::FromMojom(
-    mojo_base::mojom::ThreadType input,
-    base::ThreadType* out) {
+base::ThreadType
+EnumTraits<mojo_base::mojom::ThreadType, base::ThreadType>::FromMojom(
+    mojo_base::mojom::ThreadType input) {
   switch (input) {
     case mojo_base::mojom::ThreadType::kBackground:
-      *out = base::ThreadType::kBackground;
-      return true;
+      return base::ThreadType::kBackground;
     case mojo_base::mojom::ThreadType::kUtility:
-      *out = base::ThreadType::kUtility;
-      return true;
+      return base::ThreadType::kUtility;
     case mojo_base::mojom::ThreadType::kDefault:
-      *out = base::ThreadType::kDefault;
-      return true;
-    case mojo_base::mojom::ThreadType::kDisplayCritical:
-      *out = base::ThreadType::kDisplayCritical;
-      return true;
-    case mojo_base::mojom::ThreadType::kInteractive:
-      *out = base::ThreadType::kInteractive;
-      return true;
+      return base::ThreadType::kDefault;
+    case mojo_base::mojom::ThreadType::kPresentation:
+      return base::ThreadType::kPresentation;
+    case mojo_base::mojom::ThreadType::kAudioProcessing:
+      return base::ThreadType::kAudioProcessing;
     case mojo_base::mojom::ThreadType::kRealtimeAudio:
-      *out = base::ThreadType::kRealtimeAudio;
-      return true;
+      return base::ThreadType::kRealtimeAudio;
   }
-  return false;
+  NOTREACHED();
 }
 
 }  // namespace mojo

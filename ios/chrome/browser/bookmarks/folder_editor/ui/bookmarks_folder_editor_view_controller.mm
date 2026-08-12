@@ -31,7 +31,6 @@
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
-#import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_styler.h"
 #import "ios/chrome/browser/shared/ui/table_view/table_view_utils.h"
 #import "ios/chrome/browser/shared/ui/util/rtl_geometry.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
@@ -160,16 +159,14 @@ typedef NS_ENUM(NSInteger, ItemType) {
       addItemWithTitle:l10n_util::GetNSString(
                            IDS_IOS_VIEW_CONTROLLER_DISMISS_SAVE_CHANGES)
                 action:^{
-                  [weakSelf saveFolder];
-                  [weakSelf dismissActionSheetCoordinator];
+                  [weakSelf saveChangesAction];
                 }
                  style:UIAlertActionStyleDefault];
   [_actionSheetCoordinator
       addItemWithTitle:l10n_util::GetNSString(
                            IDS_IOS_VIEW_CONTROLLER_DISMISS_DISCARD_CHANGES)
                 action:^{
-                  [weakSelf dismiss];
-                  [weakSelf dismissActionSheetCoordinator];
+                  [weakSelf saveChangesDismiss];
                 }
                  style:UIAlertActionStyleDestructive];
   // IDS_IOS_NAVIGATION_BAR_CANCEL_BUTTON
@@ -177,9 +174,7 @@ typedef NS_ENUM(NSInteger, ItemType) {
       addItemWithTitle:l10n_util::GetNSString(
                            IDS_IOS_VIEW_CONTROLLER_DISMISS_CANCEL_CHANGES)
                 action:^{
-                  weakSelf.navigationItem.leftBarButtonItem.enabled = YES;
-                  weakSelf.navigationItem.rightBarButtonItem.enabled = YES;
-                  [weakSelf dismissActionSheetCoordinator];
+                  [weakSelf saveChangesCancel];
                 }
                  style:UIAlertActionStyleCancel];
 
@@ -204,7 +199,8 @@ typedef NS_ENUM(NSInteger, ItemType) {
 
 - (void)viewDidLoad {
   [super viewDidLoad];
-  self.tableView.backgroundColor = self.styler.tableViewBackgroundColor;
+  self.tableView.backgroundColor =
+      [UIColor colorNamed:kGroupedPrimaryBackgroundColor];
   self.tableView.estimatedRowHeight = 150.0;
   self.tableView.rowHeight = UITableViewAutomaticDimension;
   self.tableView.sectionHeaderHeight = 0;
@@ -265,6 +261,10 @@ typedef NS_ENUM(NSInteger, ItemType) {
 #pragma mark - Actions
 
 - (void)dismiss {
+  if (self.UIDisabled) {
+    return;
+  }
+  self.UIDisabled = YES;
   base::RecordAction(
       base::UserMetricsAction("MobileBookmarksFolderEditorCanceled"));
   [self.view endEditing:YES];
@@ -272,6 +272,10 @@ typedef NS_ENUM(NSInteger, ItemType) {
 }
 
 - (void)deleteFolder {
+  if (self.UIDisabled) {
+    return;
+  }
+  self.UIDisabled = YES;
   CHECK(_editingExistingFolder, base::NotFatalUntil::M152);
   CHECK(_folder, base::NotFatalUntil::M152);
   base::RecordAction(
@@ -286,6 +290,10 @@ typedef NS_ENUM(NSInteger, ItemType) {
 }
 
 - (void)saveFolder {
+  if (self.UIDisabled) {
+    return;
+  }
+  self.UIDisabled = YES;
   CHECK(_parentFolder, base::NotFatalUntil::M152);
   base::RecordAction(
       base::UserMetricsAction("MobileBookmarksFolderEditorSaved"));
@@ -330,14 +338,17 @@ typedef NS_ENUM(NSInteger, ItemType) {
 }
 
 - (void)changeParentFolder {
+  if (self.UIDisabled) {
+    return;
+  }
   base::RecordAction(base::UserMetricsAction(
       "MobileBookmarksFolderEditorOpenedFolderChooser"));
-  std::set<const BookmarkNode*> hiddenNodes;
+  std::set<raw_ptr<const bookmarks::BookmarkNode>> editedNodes;
   if (_folder) {
-    hiddenNodes.insert(_folder);
+    editedNodes.insert(_folder);
   }
   [self.delegate showBookmarksFolderChooserWithParentFolder:_parentFolder
-                                                hiddenNodes:hiddenNodes];
+                                                editedNodes:editedNodes];
 }
 
 #pragma mark - BookmarkModelBridgeObserver
@@ -442,6 +453,10 @@ typedef NS_ENUM(NSInteger, ItemType) {
 - (void)tableView:(UITableView*)tableView
     didSelectRowAtIndexPath:(NSIndexPath*)indexPath {
   CHECK_EQ(tableView, self.tableView, base::NotFatalUntil::M152);
+  [tableView deselectRowAtIndexPath:indexPath animated:YES];
+  if (self.UIDisabled) {
+    return;
+  }
   if ([self.tableViewModel itemTypeForIndexPath:indexPath] ==
       ItemTypeParentFolder) {
     [self changeParentFolder];
@@ -449,6 +464,22 @@ typedef NS_ENUM(NSInteger, ItemType) {
 }
 
 #pragma mark - Private
+
+- (void)saveChangesAction {
+  [self saveFolder];
+  [self dismissActionSheetCoordinator];
+}
+
+- (void)saveChangesDismiss {
+  [self dismiss];
+  [self dismissActionSheetCoordinator];
+}
+
+- (void)saveChangesCancel {
+  self.navigationItem.leftBarButtonItem.enabled = YES;
+  self.navigationItem.rightBarButtonItem.enabled = YES;
+  [self dismissActionSheetCoordinator];
+}
 
 // Returns the profile.
 - (ProfileIOS*)profile {

@@ -10,6 +10,7 @@
 #include <stddef.h>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/numerics/safe_conversions.h"
@@ -55,8 +56,7 @@ BOOL WINAPI DuplicateHandleHook(HANDLE source_process,
 
 }  // namespace
 
-namespace base {
-namespace debug {
+namespace base::debug {
 
 namespace {
 
@@ -160,6 +160,28 @@ void EATPatch(HMODULE module,
 }
 #endif  // defined(ARCH_CPU_32_BITS)
 
+// Implementation function because a function with __try cannot have object
+// unwinding: https://crbug.com/481661206.
+void IATPatchImpl(HMODULE module,
+                  const char* function_name,
+                  void* new_function,
+                  std::unique_ptr<base::win::IATPatchFunction>& patch) {
+  __try {
+    // There is no guarantee that |module| is still loaded at this point.
+    if (patch->PatchFromModule(module, "kernel32.dll", function_name,
+                               new_function)) {
+      patch.reset();
+    }
+  } __except ((GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ||
+               GetExceptionCode() == EXCEPTION_GUARD_PAGE ||
+               GetExceptionCode() == EXCEPTION_IN_PAGE_ERROR)
+                  ? EXCEPTION_EXECUTE_HANDLER
+                  : EXCEPTION_CONTINUE_SEARCH) {
+    // Leak the patch.
+    std::ignore = patch.release();
+  }
+}
+
 // Performs an IAT interception.
 std::unique_ptr<base::win::IATPatchFunction> IATPatch(HMODULE module,
                                                       const char* function_name,
@@ -170,19 +192,8 @@ std::unique_ptr<base::win::IATPatchFunction> IATPatch(HMODULE module,
   }
 
   auto patch = std::make_unique<base::win::IATPatchFunction>();
-  __try {
-    // There is no guarantee that |module| is still loaded at this point.
-    if (patch->PatchFromModule(module, "kernel32.dll", function_name,
-                               new_function)) {
-      return nullptr;
-    }
-  } __except ((GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ||
-               GetExceptionCode() == EXCEPTION_GUARD_PAGE ||
-               GetExceptionCode() == EXCEPTION_IN_PAGE_ERROR)
-                  ? EXCEPTION_EXECUTE_HANDLER
-                  : EXCEPTION_CONTINUE_SEARCH) {
-    // Leak the patch.
-    std::ignore = patch.release();
+  IATPatchImpl(module, function_name, new_function, patch);
+  if (!patch) {
     return nullptr;
   }
 
@@ -243,13 +254,14 @@ void HandleHooks::PatchLoadedModules() {
                             kSize * sizeof(HMODULE), &returned)) {
     return;
   }
-  returned /= sizeof(HMODULE);
-  returned = std::min(kSize, returned);
-
-  for (DWORD current = 0; current < returned; current++) {
-    AddIATPatch(UNSAFE_TODO(modules[current]));
+  const size_t modules_count =
+      std::min<size_t>(kSize, returned / sizeof(HMODULE));
+  // SAFETY: Trust that ::EnumProcessModules returns the number of bytes it said
+  // it did, and that `modules_count` is calculated correctly.
+  auto modules_span = UNSAFE_BUFFERS(base::span(modules.get(), modules_count));
+  for (DWORD current = 0; current < modules_count; current++) {
+    AddIATPatch(modules_span[current]);
   }
 }
 
-}  // namespace debug
-}  // namespace base
+}  // namespace base::debug

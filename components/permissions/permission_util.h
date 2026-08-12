@@ -6,13 +6,16 @@
 #define COMPONENTS_PERMISSIONS_PERMISSION_UTIL_H_
 
 #include <string>
+#include <vector>
 
+#include "base/memory/safe_ref.h"
 #include "build/build_config.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/permission_decision.h"
 #include "components/permissions/permission_prompt.h"
-#include "components/permissions/permission_uma_util.h"
+#include "components/permissions/permission_request_data.h"
+#include "components/permissions/permission_uma_constants.h"
 #include "content/public/browser/permission_result.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-forward.h"
 #include "third_party/blink/public/mojom/permissions/permission_status.mojom.h"
@@ -32,19 +35,6 @@ namespace permissions {
 class PermissionRequest;
 struct PermissionRequestData;
 
-// This enum backs a UMA histogram, so it must be treated as append-only.
-enum class PermissionAction {
-  GRANTED = 0,
-  DENIED = 1,
-  DISMISSED = 2,
-  IGNORED = 3,
-  REVOKED = 4,
-  GRANTED_ONCE = 5,
-
-  // Always keep this at the end.
-  NUM,
-};
-
 enum PermissionPromptViewID {
   VIEW_ID_PERMISSION_PROMPT_NONE = 0,
   VIEW_ID_PERMISSION_PROMPT_EXTRA_TEXT,
@@ -62,14 +52,27 @@ class PermissionUtil {
   static std::string GetPermissionString(ContentSettingsType);
 
   // Returns the request type uma value for the given permissions.
+  template <typename T>
+    requires std::is_same_v<std::unique_ptr<PermissionRequest>, T> ||
+             std::is_same_v<base::SafeRef<PermissionRequest>, T>
   static RequestTypeForUma GetUmaValueForRequests(
-      const std::vector<std::unique_ptr<PermissionRequest>>& requests);
+      const std::vector<T>& requests) {
+    CHECK(!requests.empty());
+    if (requests.size() == 1) {
+      return GetUmaValueForRequest(*requests[0]);
+    }
+    return GetUmaValueForMultipleRequests(requests[0]->request_type());
+  }
 
-  static RequestTypeForUma GetUmaValueForRequests(
-      const std::vector<base::WeakPtr<PermissionRequest>>& requests);
+  // Returns the request type uma value for the given request.
+  static RequestTypeForUma GetUmaValueForRequest(
+      const PermissionRequest& request);
 
   // Returns the request type uma value for the given request type.
-  static RequestTypeForUma GetUmaValueForRequestType(RequestType request_type);
+  static RequestTypeForUma GetUmaValueForRequestType(
+      RequestType request_type,
+      std::optional<GeolocationPromptType> geolocation_prompt_type =
+          std::nullopt);
 
   // Returns the gesture type corresponding to whether a permission request is
   // made with or without a user gesture.
@@ -104,6 +107,15 @@ class PermissionUtil {
   // - The request type is permission element supported type.
   static bool ShouldCurrentRequestUsePermissionElementSecondaryUI(
       PermissionPrompt::Delegate* delegate);
+
+  // Performs the same checks as
+  // `ShouldCurrentRequestUsePermissionElementSecondaryUI(
+  // PermissionPrompt::Delegate* delegate)`, but also returns true early if it
+  // is a trusted internal surface like omnibox popup, new tab page, contextual
+  // tasks, AND the searchbox embedded permission prompt flag is be enabled.
+  static bool ShouldCurrentRequestUsePermissionElementSecondaryUI(
+      PermissionPrompt::Delegate* delegate,
+      content::WebContents* web_contents);
 
   // Checks whether the given ContentSettingsType is a guard content setting,
   // meaning it does not support allow setting and toggles between "ask" and
@@ -194,13 +206,19 @@ class PermissionUtil {
 
   static bool CanPermissionRequestIgnoreStatus(
       const std::unique_ptr<PermissionRequestData>& request,
-      content::PermissionStatusSource source);
+      content::PermissionStatusSource source,
+      blink::mojom::PermissionStatus status,
+      content::WebContents* web_contents);
 
   // Returns `true` if the current platform support permission chips.
   static bool DoesPlatformSupportChip();
 
   // Returns the content settings type used by the Geolocation permission.
   static ContentSettingsType GetGeolocationType();
+
+ private:
+  static RequestTypeForUma GetUmaValueForMultipleRequests(
+      const RequestType first_request);
 };
 
 }  // namespace permissions

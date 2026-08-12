@@ -11,7 +11,7 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/native_ui_types.h"
 
-class Browser;
+class BrowserWindowInterface;
 class GURL;
 class Profile;
 
@@ -115,10 +115,12 @@ bool IsSwipeTrackingFromScrollEventsEnabled();
 gfx::NativeWindow GetActiveWindow();
 #endif
 
+#if BUILDFLAG(IS_CHROMEOS)
 // Returns true if the given browser window is in locked fullscreen mode
 // (a special type of fullscreen where the user is locked into one browser
 // window).
-bool IsBrowserLockedFullscreen(const Browser* browser);
+bool IsBrowserLockedFullscreen(const BrowserWindowInterface* browser);
+#endif
 
 }  // namespace platform_util
 

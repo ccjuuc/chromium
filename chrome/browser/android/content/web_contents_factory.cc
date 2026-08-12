@@ -6,6 +6,7 @@
 #include "chrome/browser/android/content/web_contents_factory_data_deleter.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/storage_partition_config.h"
 #include "content/public/browser/web_contents.h"
@@ -19,16 +20,16 @@ using base::android::ScopedJavaLocalRef;
 static ScopedJavaLocalRef<jobject> JNI_WebContentsFactory_CreateWebContents(
     JNIEnv* env,
     Profile* profile,
-    jboolean initially_hidden,
-    jboolean initialize_renderer,
-    jboolean uses_platform_autofill,
-    jlong j_target_network,
+    bool initially_hidden,
+    bool initialize_renderer,
+    bool uses_platform_autofill,
+    int64_t j_target_network,
     const JavaRef<jthrowable>& j_creator_location) {
   content::WebContents::CreateParams params(profile);
-  params.initially_hidden = static_cast<bool>(initially_hidden);
+  params.initially_hidden = initially_hidden;
   params.initially_use_platform_autofill = uses_platform_autofill;
   params.desired_renderer_state =
-      static_cast<bool>(initialize_renderer)
+      initialize_renderer
           ? content::WebContents::CreateParams::
                 kInitializeAndWarmupRendererProcess
           : content::WebContents::CreateParams::kOkayToHaveRendererProcess;
@@ -72,9 +73,10 @@ JNI_WebContentsFactory_CreateWebContentsWithSeparateStoragePartitionForExperimen
 
   // WebContentsFactoryDataDeleter owns itself and is also bound to
   // `web_contents` lifetime by observing WebContentsDestroyed().
-  new WebContentsFactoryDataDeleter(
-      web_contents.get(),
-      web_contents->GetSiteInstance()->GetStoragePartitionConfig());
+  new WebContentsFactoryDataDeleter(web_contents.get(),
+                                    web_contents->GetSiteInstance()
+                                        ->GetSecurityPrincipal()
+                                        .GetStoragePartitionConfig());
 
   return web_contents.release()->GetJavaWebContents();
 }

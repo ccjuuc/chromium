@@ -24,7 +24,6 @@ found in the LICENSE file.
     <item type="id" name="tab_list_editor_share_menu_item" />
     <item type="id" name="tab_list_editor_select_tabs_menu_item" />
     <item type="id" name="tab_list_editor_pin_menu_item" />
-    <item type="id" name="tab_list_editor_tinker_tank_menu_item" />
     <item type="id" name="tab_list_editor_restore_all_archived_tabs_menu_item" />
     <item type="id" name="tab_list_editor_restore_archived_tabs_menu_item" />
     <item type="id" name="tab_list_editor_select_archived_tabs_menu_item" />
@@ -33,4 +32,13 @@ found in the LICENSE file.
 
     <!-- Tab Switcher Context Menu. -->
     <item type="id" name="edit_bookmark" />
+    <item type="id" name="send_tab_to_self" />
+
+    <!-- Tab group color picker. -->
+    <item type="id" name="tag_original_shape_appearance" />
+    <item type="id" name="tag_unchecked_shape" />
+    <item type="id" name="tag_checked_shape" />
+
+    <!-- Vertical Tabs Animations. -->
+    <item type="id" name="tab_clip_from_top" />
 </resources>

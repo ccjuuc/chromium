@@ -90,7 +90,7 @@ using EventList = std::vector<ThreadEvent>;
 class CaptureToEventList : public Thread {
  public:
   // This Thread pushes events into the vector |event_list| to show
-  // the order they occured in. |event_list| must remain valid for the
+  // the order they occurred in. |event_list| must remain valid for the
   // lifetime of this thread.
   explicit CaptureToEventList(EventList* event_list)
       : Thread("none"), event_list_(event_list) {}
@@ -150,7 +150,14 @@ TEST_F(ThreadTest, StartWithOptions_StackSize) {
   // Ensure that the thread can work with a small stack and still process a
   // message. On a 32-bit system, a release build should be able to work with
   // 12 KiB.
+#if BUILDFLAG(IS_FUCHSIA) && defined(ARCH_CPU_ARM64) && \
+    !defined(__OPTIMIZE_SIZE__)
+  // PGO (combined with speed optimization) increases stack overhead due to
+  // aggressive inlining, requiring a larger stack.
+  size_t num_slots = 16 * 1024 / 4;
+#else
   size_t num_slots = 12 * 1024 / 4;
+#endif
   size_t slot_size = sizeof(char*);
   int additional_space = 0;
 #if !defined(NDEBUG)
@@ -184,48 +191,6 @@ TEST_F(ThreadTest, StartWithOptions_StackSize) {
       FROM_HERE, BindOnce(&WaitableEvent::Signal, Unretained(&event)));
   event.Wait();
 }
-
-// Intentional test-only race for otherwise untestable code, won't fix.
-// https://crbug.com/634383
-#if !defined(THREAD_SANITIZER)
-TEST_F(ThreadTest, StartWithOptions_NonJoinable) {
-  Thread* a = new Thread("StartNonJoinable");
-  // Non-joinable threads have to be leaked for now (see
-  // Thread::Options::joinable for details).
-  ANNOTATE_LEAKING_OBJECT_PTR(a);
-
-  Thread::Options options;
-  options.joinable = false;
-  EXPECT_TRUE(a->StartWithOptions(std::move(options)));
-  EXPECT_TRUE(a->task_runner());
-  EXPECT_TRUE(a->IsRunning());
-
-  // Without this call this test is racy. The above IsRunning() succeeds because
-  // of an early-return condition while between Start() and StopSoon(), after
-  // invoking StopSoon() below this early-return condition is no longer
-  // satisfied and the real |is_running_| bit has to be checked. It could still
-  // be false if the message loop hasn't started for real in practice. This is
-  // only a requirement for this test because the non-joinable property forces
-  // it to use StopSoon() and not wait for a complete Stop().
-  EXPECT_TRUE(a->WaitUntilThreadStarted());
-
-  // Make the thread block until |block_event| is signaled.
-  WaitableEvent block_event(WaitableEvent::ResetPolicy::AUTOMATIC,
-                            WaitableEvent::InitialState::NOT_SIGNALED);
-  a->task_runner()->PostTask(
-      FROM_HERE, BindOnce(&WaitableEvent::Wait, Unretained(&block_event)));
-
-  a->StopSoon();
-  EXPECT_TRUE(a->IsRunning());
-
-  // Unblock the task and give a bit of extra time to unwind QuitWhenIdle().
-  block_event.Signal();
-  PlatformThread::Sleep(Milliseconds(20));
-
-  // The thread should now have stopped on its own.
-  EXPECT_FALSE(a->IsRunning());
-}
-#endif
 
 TEST_F(ThreadTest, TwoTasksOnJoinableThread) {
   bool was_invoked = false;
@@ -343,6 +308,29 @@ TEST_F(ThreadTest, TransferOwnershipAndStop) {
 }
 
 TEST_F(ThreadTest, StartTwice) {
+  Thread a("StartTwice", Thread::Restartable{});
+
+  EXPECT_FALSE(a.task_runner());
+  EXPECT_FALSE(a.IsRunning());
+
+  EXPECT_TRUE(a.Start());
+  EXPECT_TRUE(a.task_runner());
+  EXPECT_TRUE(a.IsRunning());
+
+  a.Stop();
+  EXPECT_FALSE(a.task_runner());
+  EXPECT_FALSE(a.IsRunning());
+
+  EXPECT_TRUE(a.Start());
+  EXPECT_TRUE(a.task_runner());
+  EXPECT_TRUE(a.IsRunning());
+
+  a.Stop();
+  EXPECT_FALSE(a.task_runner());
+  EXPECT_FALSE(a.IsRunning());
+}
+
+TEST_F(ThreadTest, StartTwiceNonRestartable) {
   Thread a("StartTwice");
 
   EXPECT_FALSE(a.task_runner());
@@ -356,13 +344,8 @@ TEST_F(ThreadTest, StartTwice) {
   EXPECT_FALSE(a.task_runner());
   EXPECT_FALSE(a.IsRunning());
 
-  EXPECT_TRUE(a.Start());
-  EXPECT_TRUE(a.task_runner());
-  EXPECT_TRUE(a.IsRunning());
-
-  a.Stop();
-  EXPECT_FALSE(a.task_runner());
-  EXPECT_FALSE(a.IsRunning());
+  // Restarting it should not be allowed.
+  EXPECT_DCHECK_DEATH(a.Start());
 }
 
 // Intentional test-only race for otherwise untestable code, won't fix.
@@ -394,10 +377,6 @@ TEST_F(ThreadTest, StartTwiceNonJoinableNotAllowed) {
   PlatformThread::YieldCurrentThread();
   last_task_event.Wait();
   PlatformThread::Sleep(Milliseconds(20));
-
-  // This test assumes that the above was sufficient to let the thread fully
-  // stop.
-  ASSERT_FALSE(a->IsRunning());
 
   // Restarting it should not be allowed.
   EXPECT_DCHECK_DEATH(a->Start());
@@ -440,8 +419,8 @@ TEST_F(ThreadTest, ThreadId) {
 }
 
 TEST_F(ThreadTest, ThreadIdWithRestart) {
-  Thread a("ThreadIdWithRestart");
-  PlatformThreadId previous_id = kInvalidThreadId;
+  Thread a("ThreadIdWithRestart", Thread::Restartable{});
+  PlatformThreadId previous_id = base::kInvalidThreadId;
 
   for (size_t i = 0; i < 16; ++i) {
     EXPECT_TRUE(a.Start());
@@ -548,7 +527,7 @@ class SequenceManagerThreadDelegate : public Thread::Delegate {
       : sequence_manager_(sequence_manager::CreateUnboundSequenceManager()),
         task_queue_(sequence_manager_->CreateTaskQueue(
             TaskQueue::Spec(sequence_manager::QueueName::DEFAULT_TQ))) {
-    sequence_manager_->SetDefaultTaskRunner(GetDefaultTaskRunner());
+    sequence_manager_->SetDefaultTaskQueue(task_queue_.get());
   }
 
   SequenceManagerThreadDelegate(const SequenceManagerThreadDelegate&) = delete;
@@ -568,10 +547,6 @@ class SequenceManagerThreadDelegate : public Thread::Delegate {
         MessagePump::Create(MessagePumpType::DEFAULT));
   }
 
-  void AddTaskObserver(TaskObserver* observer) override {
-    sequence_manager_->AddTaskObserver(observer);
-  }
-
  private:
   std::unique_ptr<sequence_manager::SequenceManager> sequence_manager_;
   TaskQueue::Handle task_queue_;
@@ -580,13 +555,13 @@ class SequenceManagerThreadDelegate : public Thread::Delegate {
 }  // namespace
 
 TEST_F(ThreadTest, ProvidedThreadDelegate) {
-  Thread thread("ThreadDelegate");
-  Thread::Options options;
-  options.delegate = std::make_unique<SequenceManagerThreadDelegate>();
+  auto delegate = std::make_unique<SequenceManagerThreadDelegate>();
 
-  scoped_refptr<SingleThreadTaskRunner> task_runner =
-      options.delegate->GetDefaultTaskRunner();
-  thread.StartWithOptions(std::move(options));
+  scoped_refptr<base::SingleThreadTaskRunner> task_runner =
+      delegate->GetDefaultTaskRunner();
+
+  Thread thread("ThreadDelegate", std::move(delegate));
+  thread.Start();
 
   WaitableEvent event;
   task_runner->PostTask(FROM_HERE,

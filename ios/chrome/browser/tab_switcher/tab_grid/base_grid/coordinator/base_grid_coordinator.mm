@@ -16,6 +16,8 @@
 #import "ios/chrome/browser/collaboration/model/ios_collaboration_controller_delegate.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/menu/ui_bundled/tab_context_menu_delegate.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/tab_grid_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/tab_group.h"
@@ -37,7 +39,6 @@
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_groups/recent_activity_coordinator.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_groups/tab_group_coordinator.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_groups/tab_group_view_controller.h"
-#import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/transitions/legacy_grid_transition_layout.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_group_action_type.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_group_confirmation_coordinator.h"
 #import "ios/chrome/grit/ios_strings.h"
@@ -51,7 +52,7 @@ using ResultCallback =
     collaboration::CollaborationControllerDelegate::ResultCallback;
 using collaboration::CollaborationControllerDelegate;
 
-@interface BaseGridCoordinator ()
+@interface BaseGridCoordinator () <TabGroupsCommands>
 
 // Callback invoked upon confirming leaving or deleting a shared group.
 @property(nonatomic, copy) void (^leaveOrDeleteCompletion)
@@ -117,10 +118,6 @@ using collaboration::CollaborationControllerDelegate;
       [GridItemIdentifier groupIdentifier:tabGroup];
   [self.gridViewController bringItemIntoView:groupIdentifier animated:animated];
   return YES;
-}
-
-- (LegacyGridTransitionLayout*)legacyTransitionLayout {
-  NOTREACHED() << "This should be implemented in subclasses.";
 }
 
 - (TabGridTransitionLayout*)transitionLayout {
@@ -219,38 +216,6 @@ using collaboration::CollaborationControllerDelegate;
   return _tabGroupCoordinator;
 }
 
-- (LegacyGridTransitionLayout*)
-    combineTransitionLayout:(LegacyGridTransitionLayout*)primaryLayout
-       withTransitionLayout:(LegacyGridTransitionLayout*)secondaryLayout {
-  NSArray<LegacyGridTransitionItem*>* primaryInactiveItems =
-      primaryLayout.inactiveItems;
-  NSArray<LegacyGridTransitionItem*>* secondaryInactiveItems =
-      secondaryLayout.inactiveItems;
-
-  NSArray<LegacyGridTransitionItem*>* inactiveItems =
-      [self combineInactiveItems:primaryInactiveItems
-               withInactiveItems:secondaryInactiveItems];
-
-  LegacyGridTransitionActiveItem* primaryActiveItem = primaryLayout.activeItem;
-  LegacyGridTransitionActiveItem* secondaryActiveItem =
-      secondaryLayout.activeItem;
-
-  // Prefer primary active item.
-  LegacyGridTransitionActiveItem* activeItem =
-      primaryActiveItem ? primaryActiveItem : secondaryActiveItem;
-
-  LegacyGridTransitionItem* primarySelectionItem = primaryLayout.selectionItem;
-  LegacyGridTransitionItem* secondarySelectionItem =
-      secondaryLayout.selectionItem;
-
-  // Prefer primary selection item.
-  LegacyGridTransitionItem* selectionItem =
-      primarySelectionItem ? primarySelectionItem : secondarySelectionItem;
-
-  return [LegacyGridTransitionLayout layoutWithInactiveItems:inactiveItems
-                                                  activeItem:activeItem
-                                               selectionItem:selectionItem];
-}
 
 #pragma mark - ChromeCoordinator
 
@@ -303,6 +268,8 @@ using collaboration::CollaborationControllerDelegate;
   // regular grid view controller.
   self.gridViewController.gridScrollsToTopEnabled = YES;
 
+  self.browser->GetSceneState().tabGridState.visibleTabGroup = nullptr;
+
   [_tabGroupCoordinator stop];
   _tabGroupCoordinator = nil;
   self.mediator.baseDelegate = nil;
@@ -323,9 +290,12 @@ using collaboration::CollaborationControllerDelegate;
 }
 
 - (void)showTabGroupCreationWithoutTabs {
-  CHECK(!_tabGroupCreator)
-      << "There is an attempt to create a tab group when a "
-         "creation process is still running.";
+  if (_tabGroupCreator) {
+    // Gracefully exit the creation flow if a creation process already exists.
+    // This method is called by persistent entry points that can create
+    // reentrancy issues, leading to duplicate creation processes being started.
+    return;
+  }
 
   _tabGroupCreator = [[CreateTabGroupCoordinator alloc]
       initEmptyTabGroupCreationWithBaseViewController:self.baseViewController
@@ -341,10 +311,12 @@ using collaboration::CollaborationControllerDelegate;
   _tabGroupCreator = nil;
 }
 
-- (void)showTabGroupEditionForGroup:(const TabGroup*)tabGroup {
+- (void)showTabGroupEditionForGroup:(base::WeakPtr<const TabGroup>)tabGroup {
   CHECK(!_tabGroupCreator) << "There is an attempt to edit a tab group when a "
                               "creation process is still running.";
-  CHECK(tabGroup) << "To edit a tab group you should pass a group.";
+  if (!tabGroup) {
+    return;
+  }
 
   UIViewController* backgroundView = _tabGroupCoordinator
                                          ? _tabGroupCoordinator.viewController
@@ -352,7 +324,7 @@ using collaboration::CollaborationControllerDelegate;
   _tabGroupCreator = [[CreateTabGroupCoordinator alloc]
       initTabGroupEditionWithBaseViewController:backgroundView
                                         browser:self.browser
-                                       tabGroup:tabGroup];
+                                       tabGroup:tabGroup.get()];
   _tabGroupCreator.delegate = self;
   [_tabGroupCreator start];
 }
@@ -486,6 +458,8 @@ using collaboration::CollaborationControllerDelegate;
     return;
   }
 
+  self.browser->GetSceneState().tabGridState.visibleTabGroup = tabGroup;
+
   // TODO(crbug.com/40942154): Replace base view controller by view controller
   // when the base grid coordinator will have access to the grid view
   // controller.
@@ -504,21 +478,6 @@ using collaboration::CollaborationControllerDelegate;
   self.mediator.baseDelegate = _tabGroupCoordinator;
 }
 
-// Combines two arrays of inactive items into one. The `primaryInactiveItems`
-// (if any) would be placed in the front of the resulting array, whether the
-// `secondaryInactiveItems` would be placed in the back.
-- (NSArray<LegacyGridTransitionItem*>*)
-    combineInactiveItems:
-        (NSArray<LegacyGridTransitionItem*>*)primaryInactiveItems
-       withInactiveItems:
-           (NSArray<LegacyGridTransitionItem*>*)secondaryInactiveItems {
-  if (primaryInactiveItems == nil) {
-    primaryInactiveItems = @[];
-  }
-
-  return [primaryInactiveItems
-      arrayByAddingObjectsFromArray:secondaryInactiveItems];
-}
 
 // Helper method to execute a corresponded action to `actionType` and dismiss
 // the confirmation coordinator.

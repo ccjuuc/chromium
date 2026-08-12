@@ -92,6 +92,15 @@ class BluetoothNotificationControllerTest : public AshTestBase {
     toast_manager_ = Shell::Get()->toast_manager();
   }
 
+  void TearDown() override {
+    toast_manager_ = nullptr;
+    bluetooth_device_2_.reset();
+    bluetooth_device_1_.reset();
+    system_tray_client_ = nullptr;
+    notification_controller_.reset();
+    AshTestBase::TearDown();
+  }
+
   void VerifyDiscoverableToastVisibility(bool visible) {
     if (visible) {
       ToastOverlay* overlay = GetCurrentOverlay();
@@ -105,10 +114,13 @@ class BluetoothNotificationControllerTest : public AshTestBase {
     }
   }
 
-  void VerifyPairingNotificationVisibility(bool visible) {
+  void VerifyPairingNotificationVisibility(device::MockBluetoothDevice* device,
+                                           bool visible) {
+    const std::string notification_id =
+        BluetoothNotificationController::GetPairingNotificationId(
+            device->GetAddress());
     EXPECT_EQ(test_message_center_.FindVisibleNotificationById(
-                  BluetoothNotificationController::
-                      kBluetoothDevicePairingNotificationId) != nullptr,
+                  notification_id) != nullptr,
               visible);
   }
 
@@ -145,10 +157,10 @@ class BluetoothNotificationControllerTest : public AshTestBase {
   TestMessageCenter test_message_center_;
   scoped_refptr<device::MockBluetoothAdapter> mock_adapter_;
   std::unique_ptr<BluetoothNotificationController> notification_controller_;
-  raw_ptr<TestSystemTrayClient, DanglingUntriaged> system_tray_client_;
+  raw_ptr<TestSystemTrayClient> system_tray_client_;
   std::unique_ptr<device::MockBluetoothDevice> bluetooth_device_1_;
   std::unique_ptr<device::MockBluetoothDevice> bluetooth_device_2_;
-  raw_ptr<ToastManagerImpl, DanglingUntriaged> toast_manager_ = nullptr;
+  raw_ptr<ToastManagerImpl> toast_manager_ = nullptr;
 };
 
 TEST_F(BluetoothNotificationControllerTest, DiscoverableToast) {
@@ -196,23 +208,83 @@ TEST_F(BluetoothNotificationControllerTest,
 }
 
 TEST_F(BluetoothNotificationControllerTest, PairingNotification) {
-  VerifyPairingNotificationVisibility(/*visible=*/false);
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/false);
 
   ShowPairingNotification(notification_controller_.get(),
                           bluetooth_device_1_.get());
-  VerifyPairingNotificationVisibility(/*visible=*/true);
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/true);
 
   // Simulate the device being paired. This should not remove the pairing
   // notification.
   SimulateDevicePaired(notification_controller_.get(),
                        bluetooth_device_1_.get());
-  VerifyPairingNotificationVisibility(/*visible=*/true);
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/true);
 
   // Simulate the device being bonded. This should remove the pairing
   // notification.
   SimulateDeviceBonded(notification_controller_.get(),
                        bluetooth_device_1_.get());
-  VerifyPairingNotificationVisibility(/*visible=*/false);
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/false);
+}
+
+TEST_F(BluetoothNotificationControllerTest, MultiplePairingNotifications) {
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/false);
+  VerifyPairingNotificationVisibility(bluetooth_device_2_.get(),
+                                      /*visible=*/false);
+
+  // Show pairing notification for device 1.
+  ShowPairingNotification(notification_controller_.get(),
+                          bluetooth_device_1_.get());
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/true);
+  VerifyPairingNotificationVisibility(bluetooth_device_2_.get(),
+                                      /*visible=*/false);
+
+  // Show pairing notification for device 2 while device 1 notification is
+  // active.
+  ShowPairingNotification(notification_controller_.get(),
+                          bluetooth_device_2_.get());
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/true);
+  VerifyPairingNotificationVisibility(bluetooth_device_2_.get(),
+                                      /*visible=*/true);
+
+  // Bonding device 1 dismisses only device 1's notification.
+  SimulateDeviceBonded(notification_controller_.get(),
+                       bluetooth_device_1_.get());
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/false);
+  VerifyPairingNotificationVisibility(bluetooth_device_2_.get(),
+                                      /*visible=*/true);
+
+  // Bonding device 2 dismisses device 2's notification.
+  SimulateDeviceBonded(notification_controller_.get(),
+                       bluetooth_device_2_.get());
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/false);
+  VerifyPairingNotificationVisibility(bluetooth_device_2_.get(),
+                                      /*visible=*/false);
+}
+
+TEST_F(BluetoothNotificationControllerTest, PairingNotification_DeviceRemoved) {
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/false);
+
+  ShowPairingNotification(notification_controller_.get(),
+                          bluetooth_device_1_.get());
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/true);
+
+  // Device removal should immediately clear its pairing notification.
+  notification_controller_->DeviceRemoved(mock_adapter_.get(),
+                                          bluetooth_device_1_.get());
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/false);
 }
 
 }  // namespace ash

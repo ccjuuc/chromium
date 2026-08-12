@@ -31,8 +31,8 @@ template("browserkit_extension") {
         [ "//content/app/ios/appex/${_process_target}.appex.entitlements" ]
   }
 
-  # We don't use ios_appex_bundle here because we don't want to mess with multiple
-  # toolkits as the core framework is built with the default toolkit.
+  # We don't use ios_appex_bundle here because we don't want to mess with
+  # multiple toolkits as the core framework is built with the default toolkit.
   ios_app_bundle(target_name) {
     forward_variables_from(invoker,
                            "*",
@@ -51,7 +51,6 @@ template("browserkit_extension") {
     deps = [
       "//content/app/ios/appex:${_process_target}",
       "//content/public/app",
-      "//content/public/app",
       "//content/public/common",
       "//content/shell:content_shell_app",
       "//content/shell:content_shell_lib",
@@ -64,8 +63,10 @@ template("browserkit_extension") {
       ldflags = []
     }
 
+    if (use_lld) {
+      ldflags += [ "-Wl,--ignore-auto-link-option=CoreAudioTypes" ]
+    }
     ldflags += [
-      "-Wl,--ignore-auto-link-option=CoreAudioTypes",
       "-Wl,-no_application_extension",
       "-Wl,-rpath,@executable_path/../../Frameworks",
     ]

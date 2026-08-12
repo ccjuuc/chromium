@@ -15,7 +15,7 @@
 namespace autofill {
 
 struct AutofillErrorDialogContext;
-enum class AutofillProgressDialogType;
+enum class AutofillProgressUiType;
 class BnplIssuer;
 class BnplTosControllerImpl;
 class ContentAutofillClient;
@@ -39,17 +39,22 @@ class DesktopBnplUiDelegate : public BnplUiDelegate {
   void ShowSelectBnplIssuerUi(
       std::vector<BnplIssuerContext> bnpl_issuer_context,
       std::string app_locale,
-      base::OnceCallback<void(BnplIssuer)> selected_issuer_callback,
+      base::RepeatingCallback<void(BnplIssuer)> selected_issuer_callback,
       base::OnceClosure cancel_callback,
       bool has_seen_ai_terms) override;
-  void UpdateBnplIssuerDialogUi(
-      std::vector<BnplIssuerContext> issuer_contexts) override;
+  void UpdateBnplIssuerUi(
+      std::vector<BnplIssuerContext> issuer_contexts,
+      std::optional<int64_t> extracted_amount,
+      bool is_amount_supported_by_any_issuer,
+      const std::optional<std::string>& app_locale,
+      base::OnceCallback<void(BnplIssuer)> selected_issuer_callback,
+      base::OnceClosure cancel_callback) override;
   void RemoveSelectBnplIssuerOrProgressUi() override;
   void ShowBnplTosUi(BnplTosModel bnpl_tos_model,
                      base::OnceClosure accept_callback,
                      base::OnceClosure cancel_callback) override;
   void RemoveBnplTosOrProgressUi() override;
-  void ShowProgressUi(AutofillProgressDialogType autofill_progress_dialog_type,
+  void ShowProgressUi(AutofillProgressUiType autofill_progress_dialog_type,
                       base::OnceClosure cancel_callback) override;
   void CloseProgressUi(bool credit_card_fetched_successfully) override;
   void ShowAutofillErrorUi(AutofillErrorDialogContext context) override;

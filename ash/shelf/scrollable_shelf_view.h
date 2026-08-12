@@ -152,6 +152,7 @@ class ASH_EXPORT ScrollableShelfView : public views::AccessiblePaneView,
   bool IsPageFlipTimerBusyForTest() const;
 
   ShelfView* shelf_view() { return shelf_view_; }
+  const ShelfView* shelf_view() const { return shelf_view_; }
   ShelfContainerView* shelf_container_view() { return shelf_container_view_; }
   const ShelfContainerView* shelf_container_view() const {
     return shelf_container_view_;
@@ -522,8 +523,6 @@ class ASH_EXPORT ScrollableShelfView : public views::AccessiblePaneView,
   gfx::Vector2dF scroll_offset_before_main_axis_scrolling_;
   LayoutStrategy layout_strategy_before_main_axis_scrolling_ =
       kNotShowArrowButtons;
-
-  std::unique_ptr<views::FocusSearch> focus_search_;
 
   // The index of the first/last tappable app index.
   std::optional<size_t> first_tappable_app_index_ = std::nullopt;

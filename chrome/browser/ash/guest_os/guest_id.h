@@ -26,7 +26,7 @@ struct GuestId {
   explicit GuestId(const base::Value&) noexcept;
 
   base::flat_map<std::string, std::string> ToMap() const;
-  base::Value::Dict ToDictValue() const;
+  base::DictValue ToDictValue() const;
   std::string Serialize() const;
 
   VmType vm_type;
@@ -51,7 +51,7 @@ bool MatchContainerDict(const base::Value& dict, const GuestId& container_id);
 // Add a new container to the kGuestOsContainers pref
 void AddContainerToPrefs(Profile* profile,
                          const GuestId& container_id,
-                         base::Value::Dict properties);
+                         base::DictValue properties);
 
 // Remove a deleted container from the kGuestOsContainers pref.
 void RemoveContainerFromPrefs(Profile* profile, const GuestId& container_id);
@@ -76,11 +76,20 @@ void UpdateContainerPref(Profile* profile,
 void MergeContainerPref(Profile* profile,
                         const GuestId& container_id,
                         const std::string& key,
-                        base::Value::Dict dict);
+                        base::DictValue dict);
 
 // Get "vm_type" int from pref and convert to VmType using TERMINA(0) as default
 // if field is not present.
 VmType VmTypeFromPref(const base::Value& pref);
+
+// Look up vm_type for a container with the given vm_name.
+std::optional<int> GetContainerVmType(Profile* profile,
+                                      std::string_view vm_name);
+
+// Updates the vm_type for a container with the given vm_name.
+bool UpdateContainerVmType(Profile* profile,
+                           int vm_type,
+                           std::string_view vm_name);
 
 }  // namespace guest_os
 

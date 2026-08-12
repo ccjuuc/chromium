@@ -49,7 +49,6 @@ bool StructTraits<blink::mojom::IDBDatabaseMetadataDataView,
     DCHECK(!out->object_stores.Contains(key));
     out->object_stores.insert(key, object_store);
   }
-  out->was_cold_open = data.was_cold_open();
   out->is_sqlite = data.is_sqlite();
   return true;
 }
@@ -242,12 +241,12 @@ bool StructTraits<blink::mojom::IDBValueDataView,
         // TODO(crbug.com/40529364): remove the UUID parameter from WebBlobInfo.
         if (info->file) {
           value_blob_info.emplace_back(
-              blink::CreateCanonicalUUIDString(), info->file->name,
+              blink::CreateCanonicalUuidString(), info->file->name,
               info->mime_type,
               blink::NullableTimeToOptionalTime(info->file->last_modified),
               info->size, std::move(info->blob));
         } else {
-          value_blob_info.emplace_back(blink::CreateCanonicalUUIDString(),
+          value_blob_info.emplace_back(blink::CreateCanonicalUuidString(),
                                        info->mime_type, info->size,
                                        std::move(info->blob));
         }

@@ -32,9 +32,9 @@ export class LocalWebApprovalsAfter extends LocalWebApprovalsAfterBase {
     };
   }
 
-  childName: string;
-  url: string;
-  favicon: string;
+  declare childName: string;
+  declare url: string;
+  declare favicon: string;
 
   override ready() {
     super.ready();
@@ -56,7 +56,7 @@ export class LocalWebApprovalsAfter extends LocalWebApprovalsAfterBase {
    */
   private renderDetails(params: WebApprovalsParams) {
     this.childName = params.childDisplayName;
-    this.url = params.url.url;
+    this.url = params.url;
     this.favicon = getBase64EncodedSrcForPng(params.faviconPngBytes);
   }
 }

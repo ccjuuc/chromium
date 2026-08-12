@@ -163,14 +163,14 @@ ListMarker::MarkerTextType ListMarker::MarkerText(
   DCHECK_EQ(Get(&marker), this);
   if (!marker.StyleRef().ContentBehavesAsNormal())
     return kNotText;
-  if (IsMarkerImage(marker)) {
+  LayoutObject* list_item = ListItem(marker);
+  const ComputedStyle& style = list_item->StyleRef();
+  if (style.GeneratesMarkerImage()) {
     if (format == kWithPrefixSuffix)
       text->Append(' ');
     return kNotText;
   }
 
-  LayoutObject* list_item = ListItem(marker);
-  const ComputedStyle& style = list_item->StyleRef();
   switch (GetListStyleCategory(marker.GetDocument(), style)) {
     case ListStyleCategory::kNone:
       return kNotText;
@@ -275,7 +275,7 @@ void ListMarker::UpdateMarkerContentIfNeeded(LayoutObject& marker) {
   LayoutObject* child = GetContentChild(marker);
 
   const ComputedStyle& style = ListItem(marker)->StyleRef();
-  if (IsMarkerImage(marker)) {
+  if (style.GeneratesMarkerImage()) {
     StyleImage* list_style_image = style.ListStyleImage();
     if (child) {
       // If the url of `list-style-image` changed, create a new LayoutImage.
@@ -292,7 +292,7 @@ void ListMarker::UpdateMarkerContentIfNeeded(LayoutObject& marker) {
     }
     if (!child) {
       LayoutListMarkerImage* image =
-          LayoutListMarkerImage::CreateAnonymous(&marker.GetDocument());
+          LayoutListMarkerImage::CreateAnonymous(marker.GetDocument());
       const ComputedStyle* image_style =
           marker.GetDocument()
               .GetStyleResolver()
@@ -342,12 +342,6 @@ LayoutObject* ListMarker::SymbolMarkerLayoutText(
   return GetContentChild(marker);
 }
 
-bool ListMarker::IsMarkerImage(const LayoutObject& marker) const {
-  DCHECK_EQ(Get(&marker), this);
-  return marker.StyleRef().ContentBehavesAsNormal() &&
-         ListItem(marker)->StyleRef().GeneratesMarkerImage();
-}
-
 LayoutUnit ListMarker::WidthOfSymbol(const ComputedStyle& style,
                                      const AtomicString& list_style) {
   const Font* font = style.GetFont();
@@ -377,10 +371,7 @@ std::pair<LayoutUnit, LayoutUnit> ListMarker::InlineMarginsForInside(
     return {LayoutUnit(), LayoutUnit(kCMarkerPaddingPx)};
   switch (GetListStyleCategory(document, list_item_style)) {
     case ListStyleCategory::kSymbol: {
-      const AtomicString& name =
-          list_item_style.ListStyleType()->GetCounterStyleName();
-      if (name == keywords::kDisclosureOpen ||
-          name == keywords::kDisclosureClosed) {
+      if (GetCounterStyle(document, list_item_style).IsDisclosureMarker()) {
         return {LayoutUnit(),
                 LayoutUnit(
                     kClosureMarkerMarginEm *
@@ -419,12 +410,10 @@ std::pair<LayoutUnit, LayoutUnit> ListMarker::InlineMarginsForOutside(
         if (!font_data)
           return {};
         const FontMetrics& font_metrics = font_data->GetFontMetrics();
-        const AtomicString& name =
-            list_item_style.ListStyleType()->GetCounterStyleName();
-        LayoutUnit offset = (name == keywords::kDisclosureOpen ||
-                             name == keywords::kDisclosureClosed)
-                                ? DisclosureSymbolSize(marker_style)
-                                : LayoutUnit(font_metrics.Ascent() * 2 / 3);
+        LayoutUnit offset =
+            GetCounterStyle(document, list_item_style).IsDisclosureMarker()
+                ? DisclosureSymbolSize(marker_style)
+                : LayoutUnit(font_metrics.Ascent() * 2 / 3);
         margin_start = -offset - kCMarkerPaddingPx - 1;
         margin_end = offset + kCMarkerPaddingPx + 1 - marker_inline_size;
         break;
@@ -486,9 +475,11 @@ ListMarker::ListStyleCategory ListMarker::GetListStyleCategory(
   if (list_style->IsString())
     return ListStyleCategory::kStaticString;
   DCHECK(list_style->IsCounterStyle());
-  return GetCounterStyle(document, style).IsPredefinedSymbolMarker()
-             ? ListStyleCategory::kSymbol
-             : ListStyleCategory::kLanguage;
+  const CounterStyle& counter_style = GetCounterStyle(document, style);
+  if (counter_style.RendersAsSymbolMarker()) {
+    return ListStyleCategory::kSymbol;
+  }
+  return ListStyleCategory::kLanguage;
 }
 
 }  // namespace blink

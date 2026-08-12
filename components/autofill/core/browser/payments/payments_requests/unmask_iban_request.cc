@@ -4,11 +4,19 @@
 
 #include "components/autofill/core/browser/payments/payments_requests/unmask_iban_request.h"
 
+#include <string>
+#include <utility>
+
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
+#include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 
 namespace autofill::payments {
 
@@ -41,10 +49,9 @@ std::string UnmaskIbanRequest::GetRequestContentType() {
 }
 
 std::string UnmaskIbanRequest::GetRequestContent() {
-  base::Value::Dict request_dict;
-  base::Value::Dict context;
-  context.Set("billable_service",
-              payments::kUnmaskPaymentMethodBillableServiceNumber);
+  base::DictValue request_dict;
+  base::DictValue context;
+  context.Set("billable_service", kUnmaskPaymentMethodBillableServiceNumber);
   if (request_details_.billing_customer_number != 0) {
     context.Set("customer_context",
                 BuildCustomerContextDictionary(
@@ -52,7 +59,7 @@ std::string UnmaskIbanRequest::GetRequestContent() {
   }
   request_dict.Set("context", std::move(context));
 
-  base::Value::Dict chrome_user_context;
+  base::DictValue chrome_user_context;
   chrome_user_context.Set("full_sync_enabled", full_sync_enabled_);
 
   request_dict.Set("chrome_user_context", std::move(chrome_user_context));
@@ -61,18 +68,17 @@ std::string UnmaskIbanRequest::GetRequestContent() {
 
   // iban_info must always be set, even if blank, so that the Payments server
   // knows this is an UnmaskIbanRequest.
-  base::Value::Dict iban_info;
+  base::DictValue iban_info;
   request_dict.Set("iban_info", std::move(iban_info));
 
   std::string json_request = base::WriteJson(request_dict).value();
   std::string request_content = base::StringPrintf(
-      kUnmaskIbanRequestFormat,
-      base::EscapeUrlEncodedData(json_request, true).c_str());
+      kUnmaskIbanRequestFormat, base::EscapeUrlEncodedData(json_request, true));
   return request_content;
 }
 
-void UnmaskIbanRequest::ParseResponse(const base::Value::Dict& response) {
-  if (const base::Value::Dict* iban_info = response.FindDict("iban_info")) {
+void UnmaskIbanRequest::ParseResponse(const base::DictValue& response) {
+  if (const base::DictValue* iban_info = response.FindDict("iban_info")) {
     if (const std::string* value = iban_info->FindString("value")) {
       value_ = base::UTF8ToUTF16(*value);
     }

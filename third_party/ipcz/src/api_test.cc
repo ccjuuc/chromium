@@ -9,15 +9,103 @@
 #include "reference_drivers/single_process_reference_driver_base.h"
 #include "reference_drivers/sync_reference_driver.h"
 #include "test/test.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 #include "util/unsafe_buffers.h"
 
 namespace ipcz {
 namespace {
 
-const IpczDriver& kDefaultDriver = reference_drivers::kSyncReferenceDriver;
+const IpczDriver& GetDefaultDriver() {
+  return reference_drivers::GetSyncReferenceDriver();
+}
 
 using APITest = test::Test;
+
+// A scoped object to hold mock functions for boxed application objects. Since
+// GMock can't mock free functions or static methods, the test must create a
+// single MockApplicationObject instance. Calls to
+// MockApplicationObject::Serializer and MockApplicationObject::Destructor will
+// call the MockSerializer and MockDestructor methods of that object.
+class MockApplicationObject {
+ public:
+  MockApplicationObject() { SetCurrentPtr(this, nullptr); }
+
+  ~MockApplicationObject() { SetCurrentPtr(nullptr, this); }
+
+  MockApplicationObject(const MockApplicationObject&) = delete;
+  MockApplicationObject& operator=(const MockApplicationObject&) = delete;
+
+  // IpczApplicationObjectSerializer
+  MOCK_METHOD(IpczResult,
+              MockSerializer,
+              (uintptr_t object,
+               uint32_t flags,
+               const void* options,
+               volatile void* data,
+               size_t* num_bytes,
+               IpczHandle* handles,
+               size_t* num_handles));
+
+  static IpczResult Serializer(uintptr_t object,
+                               uint32_t flags,
+                               const void* options,
+                               volatile void* data,
+                               size_t* num_bytes,
+                               IpczHandle* handles,
+                               size_t* num_handles);
+
+  // IpczApplicationObjectDestructor
+  MOCK_METHOD(void,
+              MockDestructor,
+              (uintptr_t object, uint32_t flags, const void* options));
+
+  static void Destructor(uintptr_t object, uint32_t flags, const void* options);
+
+ private:
+  // Asserts that `current_` matches `expected_ptr`, and updates it to `new_ptr`
+  // if so. This is a helper function because the constructor can't use
+  // ASSERT_EQ directly.
+  static void SetCurrentPtr(MockApplicationObject* new_ptr,
+                            MockApplicationObject* expected_ptr) {
+    ASSERT_EQ(current_, expected_ptr);
+    current_ = new_ptr;
+  }
+
+  static MockApplicationObject* current_;
+};
+
+MockApplicationObject* MockApplicationObject::current_ = nullptr;
+
+// static
+IpczResult MockApplicationObject::Serializer(uintptr_t object,
+                                             uint32_t flags,
+                                             const void* options,
+                                             volatile void* data,
+                                             size_t* num_bytes,
+                                             IpczHandle* handles,
+                                             size_t* num_handles) {
+  if (!current_) {
+    ADD_FAILURE() << "MockApplicationObject::Serializer called with no "
+                     "MockApplicationObject in scope";
+    return IPCZ_RESULT_FAILED_PRECONDITION;
+  }
+  return current_->MockSerializer(object, flags, options, data, num_bytes,
+                                  handles, num_handles);
+}
+
+// static
+void MockApplicationObject::Destructor(uintptr_t object,
+                                       uint32_t flags,
+                                       const void* options) {
+  if (!current_) {
+    ADD_FAILURE() << "MockApplicationObject::Destructor called with no "
+                     "MockApplicationObject in scope";
+    return;
+  }
+  current_->MockDestructor(object, flags, options);
+}
 
 std::string_view StringFromData(const volatile void* data, size_t size) {
   return std::string_view{
@@ -39,21 +127,48 @@ TEST_F(APITest, CreateNodeInvalid) {
   // Null output handle.
   EXPECT_EQ(
       IPCZ_RESULT_INVALID_ARGUMENT,
-      ipcz().CreateNode(&kDefaultDriver, IPCZ_NO_FLAGS, nullptr, nullptr));
+      ipcz().CreateNode(&GetDefaultDriver(), IPCZ_NO_FLAGS, nullptr, nullptr));
+
+  // Malformed options.
+  IpczCreateNodeOptions options{.size = 0};
+  EXPECT_EQ(
+      IPCZ_RESULT_INVALID_ARGUMENT,
+      ipcz().CreateNode(&GetDefaultDriver(), IPCZ_NO_FLAGS, &options, &node));
 }
 
 TEST_F(APITest, CreateNode) {
   IpczHandle node;
-  EXPECT_EQ(IPCZ_RESULT_OK,
-            ipcz().CreateNode(&kDefaultDriver, IPCZ_NO_FLAGS, nullptr, &node));
+  ASSERT_EQ(IPCZ_RESULT_OK, ipcz().CreateNode(&GetDefaultDriver(),
+                                              IPCZ_NO_FLAGS, nullptr, &node));
+  EXPECT_EQ(IPCZ_RESULT_OK, ipcz().Close(node, IPCZ_NO_FLAGS, nullptr));
+
+  // With flags.
+  ASSERT_EQ(IPCZ_RESULT_OK,
+            ipcz().CreateNode(&GetDefaultDriver(), IPCZ_CREATE_NODE_AS_BROKER,
+                              nullptr, &node));
+  EXPECT_EQ(IPCZ_RESULT_OK, ipcz().Close(node, IPCZ_NO_FLAGS, nullptr));
+
+  // With options.
+  IpczCreateNodeOptions options{
+      .size = sizeof(IpczCreateNodeOptions),
+      .memory_flags = IPCZ_MEMORY_FIXED_PARCEL_CAPACITY,
+  };
+  ASSERT_EQ(IPCZ_RESULT_OK, ipcz().CreateNode(&GetDefaultDriver(),
+                                              IPCZ_NO_FLAGS, &options, &node));
+  EXPECT_EQ(IPCZ_RESULT_OK, ipcz().Close(node, IPCZ_NO_FLAGS, nullptr));
+
+  // With flags and options.
+  ASSERT_EQ(IPCZ_RESULT_OK,
+            ipcz().CreateNode(&GetDefaultDriver(), IPCZ_CREATE_NODE_AS_BROKER,
+                              &options, &node));
   EXPECT_EQ(IPCZ_RESULT_OK, ipcz().Close(node, IPCZ_NO_FLAGS, nullptr));
 }
 
 TEST_F(APITest, ConnectNodeInvalid) {
-  IpczHandle node = CreateNode(kDefaultDriver);
+  IpczHandle node = CreateNode(GetDefaultDriver());
   IpczDriverHandle transport0, transport1;
   ASSERT_EQ(IPCZ_RESULT_OK,
-            kDefaultDriver.CreateTransports(
+            GetDefaultDriver().CreateTransports(
                 IPCZ_INVALID_DRIVER_HANDLE, IPCZ_INVALID_DRIVER_HANDLE,
                 IPCZ_NO_FLAGS, nullptr, &transport0, &transport1));
 
@@ -87,15 +202,15 @@ TEST_F(APITest, ConnectNodeInvalid) {
       ipcz().ConnectNode(node, transport0, 0, IPCZ_NO_FLAGS, nullptr, nullptr));
 
   EXPECT_EQ(IPCZ_RESULT_OK,
-            kDefaultDriver.Close(transport0, IPCZ_NO_FLAGS, nullptr));
+            GetDefaultDriver().Close(transport0, IPCZ_NO_FLAGS, nullptr));
   EXPECT_EQ(IPCZ_RESULT_OK,
-            kDefaultDriver.Close(transport1, IPCZ_NO_FLAGS, nullptr));
+            GetDefaultDriver().Close(transport1, IPCZ_NO_FLAGS, nullptr));
 
   Close(node);
 }
 
 TEST_F(APITest, OpenPortalsInvalid) {
-  IpczHandle node = CreateNode(kDefaultDriver);
+  IpczHandle node = CreateNode(GetDefaultDriver());
 
   IpczHandle a, b;
 
@@ -116,7 +231,7 @@ TEST_F(APITest, OpenPortalsInvalid) {
 }
 
 TEST_F(APITest, OpenPortals) {
-  IpczHandle node = CreateNode(kDefaultDriver);
+  IpczHandle node = CreateNode(GetDefaultDriver());
 
   IpczHandle a, b;
   EXPECT_EQ(IPCZ_RESULT_OK,
@@ -126,7 +241,7 @@ TEST_F(APITest, OpenPortals) {
 }
 
 TEST_F(APITest, QueryPortalStatusInvalid) {
-  IpczHandle node = CreateNode(kDefaultDriver);
+  IpczHandle node = CreateNode(GetDefaultDriver());
   auto [a, b] = OpenPortals(node);
 
   // Null portal.
@@ -152,7 +267,7 @@ TEST_F(APITest, QueryPortalStatusInvalid) {
 }
 
 TEST_F(APITest, QueryPortalStatus) {
-  IpczHandle node = CreateNode(kDefaultDriver);
+  IpczHandle node = CreateNode(GetDefaultDriver());
   auto [a, b] = OpenPortals(node);
 
   IpczPortalStatus status = {.size = sizeof(status)};
@@ -174,7 +289,7 @@ TEST_F(APITest, QueryPortalStatus) {
 }
 
 TEST_F(APITest, MergePortalsFailure) {
-  const IpczHandle node = CreateNode(kDefaultDriver);
+  const IpczHandle node = CreateNode(GetDefaultDriver());
   auto [a, b] = OpenPortals(node);
 
   // Invalid portal handles.
@@ -213,7 +328,7 @@ TEST_F(APITest, MergePortalsFailure) {
 }
 
 TEST_F(APITest, MergePortals) {
-  const IpczHandle node = CreateNode(kDefaultDriver);
+  const IpczHandle node = CreateNode(GetDefaultDriver());
   auto [a, b] = OpenPortals(node);
   auto [c, d] = OpenPortals(node);
 
@@ -230,7 +345,7 @@ TEST_F(APITest, MergePortals) {
 }
 
 TEST_F(APITest, PutGet) {
-  const IpczHandle node = CreateNode(kDefaultDriver);
+  const IpczHandle node = CreateNode(GetDefaultDriver());
   auto [a, b] = OpenPortals(node);
 
   // Get from an empty portal.
@@ -327,7 +442,7 @@ TEST_F(APITest, PutGet) {
 }
 
 TEST_F(APITest, BeginEndPutFailure) {
-  const IpczHandle node = CreateNode(kDefaultDriver);
+  const IpczHandle node = CreateNode(GetDefaultDriver());
   auto [a, b] = OpenPortals(node);
 
   // Invalid portal.
@@ -381,7 +496,7 @@ TEST_F(APITest, BeginEndPutFailure) {
 }
 
 TEST_F(APITest, BeginEndGetFailure) {
-  const IpczHandle node = CreateNode(kDefaultDriver);
+  const IpczHandle node = CreateNode(GetDefaultDriver());
   auto [a, b] = OpenPortals(node);
 
   // Invalid portal.
@@ -436,7 +551,7 @@ TEST_F(APITest, BeginEndGetFailure) {
 }
 
 TEST_F(APITest, TwoPhasePutGet) {
-  const IpczHandle node = CreateNode(kDefaultDriver);
+  const IpczHandle node = CreateNode(GetDefaultDriver());
   auto [a, b] = OpenPortals(node);
 
   constexpr std::string_view kMessage = "ipcz!";
@@ -481,7 +596,7 @@ TEST_F(APITest, TwoPhasePutGet) {
 }
 
 TEST_F(APITest, OverlappedTwoPhasePuts) {
-  const IpczHandle node = CreateNode(kDefaultDriver);
+  const IpczHandle node = CreateNode(GetDefaultDriver());
   auto [a, b] = OpenPortals(node);
 
   constexpr std::string_view kMessage1 = "Hello.";
@@ -555,7 +670,7 @@ TEST_F(APITest, OverlappedTwoPhasePuts) {
 }
 
 TEST_F(APITest, TrapInvalid) {
-  const IpczHandle node = CreateNode(kDefaultDriver);
+  const IpczHandle node = CreateNode(GetDefaultDriver());
   auto [a, b] = OpenPortals(node);
 
   const auto handler = [](const IpczTrapEvent* event) {};
@@ -598,7 +713,7 @@ TEST_F(APITest, RejectInvalid) {
   EXPECT_EQ(IPCZ_RESULT_INVALID_ARGUMENT,
             ipcz().Reject(IPCZ_INVALID_HANDLE, 0, IPCZ_NO_FLAGS, nullptr));
 
-  const IpczHandle node = CreateNode(kDefaultDriver);
+  const IpczHandle node = CreateNode(GetDefaultDriver());
   auto [a, b] = OpenPortals(node);
   EXPECT_EQ(IPCZ_RESULT_INVALID_ARGUMENT,
             ipcz().Reject(a, 0, IPCZ_NO_FLAGS, nullptr));
@@ -606,7 +721,7 @@ TEST_F(APITest, RejectInvalid) {
 }
 
 TEST_F(APITest, RejectLocal) {
-  const IpczHandle node = CreateNode(kDefaultDriver);
+  const IpczHandle node = CreateNode(GetDefaultDriver());
   auto [a, b] = OpenPortals(node);
   Put(a, "!");
 
@@ -625,11 +740,11 @@ TEST_F(APITest, RejectLocal) {
 
 TEST_F(APITest, RejectRemote) {
   const IpczHandle node_a =
-      CreateNode(kDefaultDriver, IPCZ_CREATE_NODE_AS_BROKER);
-  const IpczHandle node_b = CreateNode(kDefaultDriver);
+      CreateNode(GetDefaultDriver(), IPCZ_CREATE_NODE_AS_BROKER);
+  const IpczHandle node_b = CreateNode(GetDefaultDriver());
   IpczDriverHandle transport0, transport1;
   ASSERT_EQ(IPCZ_RESULT_OK,
-            kDefaultDriver.CreateTransports(
+            GetDefaultDriver().CreateTransports(
                 IPCZ_INVALID_DRIVER_HANDLE, IPCZ_INVALID_DRIVER_HANDLE,
                 IPCZ_NO_FLAGS, nullptr, &transport0, &transport1));
 
@@ -669,13 +784,24 @@ TEST_F(APITest, RejectRemote) {
 TEST_F(APITest, BoxInvalid) {
   IpczDriverHandle transport0, transport1;
   ASSERT_EQ(IPCZ_RESULT_OK,
-            kDefaultDriver.CreateTransports(
+            GetDefaultDriver().CreateTransports(
                 IPCZ_INVALID_DRIVER_HANDLE, IPCZ_INVALID_DRIVER_HANDLE,
                 IPCZ_NO_FLAGS, nullptr, &transport0, &transport1));
   EXPECT_EQ(IPCZ_RESULT_OK,
-            kDefaultDriver.Close(transport1, IPCZ_NO_FLAGS, nullptr));
+            GetDefaultDriver().Close(transport1, IPCZ_NO_FLAGS, nullptr));
 
-  IpczHandle node = CreateNode(kDefaultDriver);
+  IpczHandle node = CreateNode(GetDefaultDriver());
+  absl::Cleanup cleanup = [&] {
+    EXPECT_EQ(IPCZ_RESULT_OK,
+              GetDefaultDriver().Close(transport0, IPCZ_NO_FLAGS, nullptr));
+    Close(node);
+  };
+
+  IpczBoxContents contents = {
+      .size = sizeof(IpczBoxContents),
+      .type = IPCZ_BOX_TYPE_DRIVER_OBJECT,
+      .object = {.driver_object = transport0},
+  };
 
   IpczHandle box;
 
@@ -683,50 +809,62 @@ TEST_F(APITest, BoxInvalid) {
   EXPECT_EQ(IPCZ_RESULT_INVALID_ARGUMENT,
             ipcz().Box(node, nullptr, IPCZ_NO_FLAGS, nullptr, &box));
 
-  // Malformed contents structure.
-  IpczBoxContents contents = {.size = 0};
-  EXPECT_EQ(IPCZ_RESULT_INVALID_ARGUMENT,
-            ipcz().Box(node, &contents, IPCZ_NO_FLAGS, nullptr, &box));
-
   // Invalid node handle.
-  contents.type = IPCZ_BOX_TYPE_DRIVER_OBJECT;
-  contents.object.driver_object = transport0;
   EXPECT_EQ(
       IPCZ_RESULT_INVALID_ARGUMENT,
       ipcz().Box(IPCZ_INVALID_HANDLE, &contents, IPCZ_NO_FLAGS, nullptr, &box));
+
+  // Null output handle.
+  EXPECT_EQ(IPCZ_RESULT_INVALID_ARGUMENT,
+            ipcz().Box(node, &contents, IPCZ_NO_FLAGS, nullptr, nullptr));
+
+  // Malformed contents structure.
+  contents.size = 0;
+  EXPECT_EQ(IPCZ_RESULT_INVALID_ARGUMENT,
+            ipcz().Box(node, &contents, IPCZ_NO_FLAGS, nullptr, &box));
+  contents.size = sizeof(IpczBoxContents);
 
   // Invalid driver object.
   contents.object.driver_object = IPCZ_INVALID_DRIVER_HANDLE;
   EXPECT_EQ(IPCZ_RESULT_INVALID_ARGUMENT,
             ipcz().Box(node, &contents, IPCZ_NO_FLAGS, nullptr, &box));
+  contents.object.driver_object = transport0;
 
-  // Null output handle.
+  // Invalid object type.
+  contents.type = IPCZ_BOX_TYPE_SUBPARCEL;
+  EXPECT_EQ(IPCZ_RESULT_UNIMPLEMENTED,
+            ipcz().Box(node, &contents, IPCZ_NO_FLAGS, nullptr, &box));
   contents.type = IPCZ_BOX_TYPE_DRIVER_OBJECT;
-  EXPECT_EQ(IPCZ_RESULT_INVALID_ARGUMENT,
-            ipcz().Box(node, &contents, IPCZ_NO_FLAGS, nullptr, nullptr));
-
-  EXPECT_EQ(IPCZ_RESULT_OK,
-            kDefaultDriver.Close(transport0, IPCZ_NO_FLAGS, nullptr));
-
-  Close(node);
 }
 
 TEST_F(APITest, UnboxInvalid) {
   IpczDriverHandle transport0, transport1;
   ASSERT_EQ(IPCZ_RESULT_OK,
-            kDefaultDriver.CreateTransports(
+            GetDefaultDriver().CreateTransports(
                 IPCZ_INVALID_DRIVER_HANDLE, IPCZ_INVALID_DRIVER_HANDLE,
                 IPCZ_NO_FLAGS, nullptr, &transport0, &transport1));
   EXPECT_EQ(IPCZ_RESULT_OK,
-            kDefaultDriver.Close(transport1, IPCZ_NO_FLAGS, nullptr));
+            GetDefaultDriver().Close(transport1, IPCZ_NO_FLAGS, nullptr));
 
-  IpczHandle node = CreateNode(kDefaultDriver);
-  IpczHandle box;
+  IpczHandle node = CreateNode(GetDefaultDriver());
+  IpczHandle box = IPCZ_INVALID_HANDLE;
+  absl::Cleanup cleanup = [&] {
+    if (box != IPCZ_INVALID_HANDLE) {
+      // Don't close `transport0` because `box` owns it.
+      Close(box);
+    } else {
+      EXPECT_EQ(IPCZ_RESULT_OK,
+                GetDefaultDriver().Close(transport0, IPCZ_NO_FLAGS, nullptr));
+    }
+    Close(node);
+  };
+
   IpczBoxContents contents = {.size = sizeof(contents),
                               .type = IPCZ_BOX_TYPE_DRIVER_OBJECT,
                               .object = {.driver_object = transport0}};
-  EXPECT_EQ(IPCZ_RESULT_OK,
+  ASSERT_EQ(IPCZ_RESULT_OK,
             ipcz().Box(node, &contents, IPCZ_NO_FLAGS, nullptr, &box));
+  EXPECT_NE(box, IPCZ_INVALID_HANDLE);
 
   // Null box handle.
   EXPECT_EQ(
@@ -738,10 +876,131 @@ TEST_F(APITest, UnboxInvalid) {
             ipcz().Unbox(node, IPCZ_NO_FLAGS, nullptr, &contents));
 
   // Null output contents.
-  EXPECT_EQ(IPCZ_RESULT_INVALID_ARGUMENT,
-            ipcz().Unbox(box, IPCZ_NO_FLAGS, nullptr, nullptr));
+  IpczResult unbox_result = ipcz().Unbox(box, IPCZ_NO_FLAGS, nullptr, nullptr);
+  if (unbox_result == IPCZ_RESULT_OK) {
+    // Oops, successfully unboxed which dropped ownership of `box`.
+    box = IPCZ_INVALID_HANDLE;
+  }
+  ASSERT_EQ(IPCZ_RESULT_INVALID_ARGUMENT, unbox_result);
 
-  CloseAll({box, node});
+  // Malformed output contents.
+  contents.size = 0;
+  unbox_result = ipcz().Unbox(box, IPCZ_NO_FLAGS, nullptr, &contents);
+  if (unbox_result == IPCZ_RESULT_OK) {
+    // Oops, successfully unboxed which dropped ownership of `box`.
+    box = IPCZ_INVALID_HANDLE;
+  }
+  ASSERT_EQ(IPCZ_RESULT_INVALID_ARGUMENT, unbox_result);
+}
+
+TEST_F(APITest, BoxAndUnbox) {
+  IpczDriverHandle transport0, transport1;
+  ASSERT_EQ(IPCZ_RESULT_OK,
+            GetDefaultDriver().CreateTransports(
+                IPCZ_INVALID_DRIVER_HANDLE, IPCZ_INVALID_DRIVER_HANDLE,
+                IPCZ_NO_FLAGS, nullptr, &transport0, &transport1));
+  EXPECT_EQ(IPCZ_RESULT_OK,
+            GetDefaultDriver().Close(transport1, IPCZ_NO_FLAGS, nullptr));
+
+  IpczHandle node = CreateNode(GetDefaultDriver());
+  IpczHandle driver_box = IPCZ_INVALID_HANDLE;
+  IpczHandle app_box = IPCZ_INVALID_HANDLE;
+  absl::Cleanup cleanup = [&] {
+    if (driver_box != IPCZ_INVALID_HANDLE) {
+      // Don't close `transport0` because `box` owns it.
+      Close(driver_box);
+    } else {
+      EXPECT_EQ(IPCZ_RESULT_OK,
+                GetDefaultDriver().Close(transport0, IPCZ_NO_FLAGS, nullptr));
+    }
+    if (app_box != IPCZ_INVALID_HANDLE) {
+      Close(app_box);
+    }
+    Close(node);
+  };
+
+  // Driver object.
+  {
+    IpczBoxContents contents = {
+        .size = sizeof(contents),
+        .type = IPCZ_BOX_TYPE_DRIVER_OBJECT,
+        .object = {.driver_object = transport0},
+    };
+    ASSERT_EQ(IPCZ_RESULT_OK,
+              ipcz().Box(node, &contents, IPCZ_NO_FLAGS, nullptr, &driver_box));
+    EXPECT_NE(driver_box, IPCZ_INVALID_HANDLE);
+
+    IpczBoxContents out_contents = {.size = sizeof(IpczBoxContents)};
+    ASSERT_EQ(IPCZ_RESULT_OK,
+              ipcz().Unbox(driver_box, IPCZ_NO_FLAGS, nullptr, &out_contents));
+
+    // Successfully unboxed which dropped ownership of `driver_box`.
+    driver_box = IPCZ_INVALID_HANDLE;
+
+    EXPECT_EQ(out_contents.type, contents.type);
+    EXPECT_EQ(out_contents.object.driver_object, contents.object.driver_object);
+  }
+
+  {
+    // Application object.
+    MockApplicationObject mock_object;
+    IpczBoxContents contents = {
+        .size = sizeof(contents),
+        .type = IPCZ_BOX_TYPE_APPLICATION_OBJECT,
+        .object = {.application_object = 1u},
+        .serializer = &MockApplicationObject::Serializer,
+        .destructor = &MockApplicationObject::Destructor,
+    };
+    ASSERT_EQ(IPCZ_RESULT_OK,
+              ipcz().Box(node, &contents, IPCZ_NO_FLAGS, nullptr, &app_box));
+    EXPECT_NE(app_box, IPCZ_INVALID_HANDLE);
+
+    IpczBoxContents out_contents = {.size = sizeof(IpczBoxContents)};
+    ASSERT_EQ(IPCZ_RESULT_OK,
+              ipcz().Unbox(app_box, IPCZ_NO_FLAGS, nullptr, &out_contents));
+
+    // Successfully unboxed which dropped ownership of `app_box`.
+    app_box = IPCZ_INVALID_HANDLE;
+
+    EXPECT_EQ(out_contents.type, contents.type);
+    EXPECT_EQ(out_contents.object.application_object,
+              contents.object.application_object);
+    EXPECT_EQ(out_contents.serializer, contents.serializer);
+    EXPECT_EQ(out_contents.destructor, contents.destructor);
+  }
+}
+
+TEST_F(APITest, BoxDestructor) {
+  ::testing::StrictMock<MockApplicationObject> mock_object;
+
+  IpczHandle node = CreateNode(GetDefaultDriver());
+  absl::Cleanup cleanup = [&] { Close(node); };
+
+  constexpr uintptr_t kObjectId = 123;
+  IpczBoxContents contents = {
+      .size = sizeof(contents),
+      .type = IPCZ_BOX_TYPE_APPLICATION_OBJECT,
+      .object = {.application_object = kObjectId},
+      .serializer = &MockApplicationObject::Serializer,
+      .destructor = &MockApplicationObject::Destructor,
+  };
+
+  IpczHandle box;
+  ASSERT_EQ(IPCZ_RESULT_OK,
+            ipcz().Box(node, &contents, IPCZ_NO_FLAGS, nullptr, &box));
+  ASSERT_NE(box, IPCZ_INVALID_HANDLE);
+
+  // Closing the box should invoke the destructor.
+  EXPECT_CALL(mock_object, MockDestructor(kObjectId, IPCZ_NO_FLAGS, nullptr));
+  EXPECT_EQ(IPCZ_RESULT_OK, ipcz().Close(box, IPCZ_NO_FLAGS, nullptr));
+  ::testing::Mock::VerifyAndClear(&mock_object);
+
+  // A box with no destructor is valid. Closing it safely calls nothing.
+  contents.destructor = nullptr;
+  ASSERT_EQ(IPCZ_RESULT_OK,
+            ipcz().Box(node, &contents, IPCZ_NO_FLAGS, nullptr, &box));
+  ASSERT_NE(box, IPCZ_INVALID_HANDLE);
+  EXPECT_EQ(IPCZ_RESULT_OK, ipcz().Close(box, IPCZ_NO_FLAGS, nullptr));
 }
 
 }  // namespace

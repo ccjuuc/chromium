@@ -6,6 +6,7 @@
 #define GOOGLE_APIS_DEFAULT_API_KEYS_H_
 
 #include "build/build_config.h"
+#include "google_apis/buildflags.h"
 
 namespace google_apis {
 
@@ -19,9 +20,13 @@ struct DefaultApiKeys {
 
   bool allow_unset_values;
   bool allow_override_via_environment;
+  bool is_using_google_chrome_keys;
 
   const char* google_api_key;
   const char* google_metrics_signing_key;
+#if BUILDFLAG(SUPPORT_CDM_SERVER_CERTIFICATE)
+  const char* google_cdm_server_certificate;
+#endif
 #if BUILDFLAG(IS_ANDROID)
   const char* google_api_key_android_non_stable;
 #else
@@ -29,6 +34,7 @@ struct DefaultApiKeys {
 #endif  // BUILDFLAG(IS_ANDROID)
   const char* google_api_key_remoting;
   const char* google_api_key_soda;
+  const char* google_api_key_partial_translate;
 #if BUILDFLAG(IS_CHROMEOS)
   const char* google_api_key_sharing;
   const char* google_api_key_read_aloud;

@@ -7,8 +7,11 @@
 #include "base/test/scoped_feature_list.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/features.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
+
+using testing::VariantWith;
 
 namespace content_settings {
 
@@ -25,7 +28,7 @@ class GeolocationSettingDelegateTest : public testing::Test {
 
 TEST_F(GeolocationSettingDelegateTest, ParseGeolocationSetting) {
   auto geo_result = delegate().FromValue(base::Value(
-      base::Value::Dict()
+      base::DictValue()
           .Set("approximate", static_cast<int>(PermissionOption::kAllowed))
           .Set("precise", static_cast<int>(PermissionOption::kDenied))));
   GeolocationSetting setting;
@@ -37,12 +40,12 @@ TEST_F(GeolocationSettingDelegateTest, ParseGeolocationSetting) {
 TEST_F(GeolocationSettingDelegateTest, ParseInvalidGeolocationSetting) {
   EXPECT_FALSE(delegate().FromValue(
       base::Value(static_cast<int>(PermissionOption::kAllowed))));
-  EXPECT_FALSE(delegate().FromValue(base::Value(base::Value::Dict().Set(
+  EXPECT_FALSE(delegate().FromValue(base::Value(base::DictValue().Set(
       "approximate", static_cast<int>(PermissionOption::kDenied)))));
-  EXPECT_FALSE(delegate().FromValue(base::Value(base::Value::Dict().Set(
+  EXPECT_FALSE(delegate().FromValue(base::Value(base::DictValue().Set(
       "precise", static_cast<int>(PermissionOption::kDenied)))));
   EXPECT_FALSE(delegate().FromValue(base::Value(
-      base::Value::Dict()
+      base::DictValue()
           .Set("approximate", 999)
           .Set("precise", static_cast<int>(PermissionOption::kDenied)))));
 }
@@ -176,6 +179,57 @@ TEST_F(GeolocationSettingDelegateTest, ApplyPermissionEmbargo) {
             PermissionOption::kAllowed, PermissionOption::kAllowed)));
     EXPECT_EQ(embargoed, GeolocationSetting(PermissionOption::kAllowed,
                                             PermissionOption::kAllowed));
+  }
+}
+
+TEST_F(GeolocationSettingDelegateTest,
+       RemoveBlockedPermissionsForEphemeralGrant) {
+  // 1. No changes when ephemeral setting is not allowed.
+  {
+    PermissionSetting setting = GeolocationSetting(PermissionOption::kDenied,
+                                                   PermissionOption::kDenied);
+    PermissionSetting ephemeral =
+        GeolocationSetting(PermissionOption::kAsk, PermissionOption::kAsk);
+    EXPECT_EQ(delegate().RemoveBlockedPermissionsForEphemeralGrant(setting,
+                                                                   ephemeral),
+              setting);
+  }
+
+  // 2. Changes approximate from kDenied to kAsk when ephemeral approximate is
+  // kAllowed.
+  {
+    PermissionSetting setting = GeolocationSetting(PermissionOption::kDenied,
+                                                   PermissionOption::kDenied);
+    PermissionSetting ephemeral = GeolocationSetting(PermissionOption::kAllowed,
+                                                     PermissionOption::kDenied);
+    EXPECT_THAT(delegate().RemoveBlockedPermissionsForEphemeralGrant(setting,
+                                                                     ephemeral),
+                VariantWith<GeolocationSetting>(GeolocationSetting(
+                    PermissionOption::kAsk, PermissionOption::kDenied)));
+  }
+
+  // 3. Changes both approximate and precise from kDenied to kAsk when ephemeral
+  // is fully allowed.
+  {
+    PermissionSetting setting = GeolocationSetting(PermissionOption::kDenied,
+                                                   PermissionOption::kDenied);
+    PermissionSetting ephemeral = GeolocationSetting(
+        PermissionOption::kAllowed, PermissionOption::kAllowed);
+    EXPECT_THAT(delegate().RemoveBlockedPermissionsForEphemeralGrant(setting,
+                                                                     ephemeral),
+                VariantWith<GeolocationSetting>(GeolocationSetting(
+                    PermissionOption::kAsk, PermissionOption::kAsk)));
+  }
+
+  // 4. No changes when persistent is already kAllowed or kAsk.
+  {
+    PermissionSetting setting = GeolocationSetting(PermissionOption::kAllowed,
+                                                   PermissionOption::kAllowed);
+    PermissionSetting ephemeral = GeolocationSetting(
+        PermissionOption::kAllowed, PermissionOption::kAllowed);
+    EXPECT_EQ(delegate().RemoveBlockedPermissionsForEphemeralGrant(setting,
+                                                                   ephemeral),
+              setting);
   }
 }
 

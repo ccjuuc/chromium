@@ -8,6 +8,7 @@
 
 #include "base/callback_list.h"
 #include "base/functional/bind.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/os_crypt/async/browser/os_crypt_async.h"
@@ -25,21 +26,22 @@ class TestOSCryptAsync : public OSCryptAsync {
         encryptor_(GetTestEncryptorForTesting()),
         is_sync_for_unittests_(is_sync_for_unittests) {}
 
-  void GetInstance(InitCallback callback, Encryptor::Option option) override {
+  void GetInstance(InitCallback callback) override {
     if (is_sync_for_unittests_) {
-      std::move(callback).Run(encryptor_.Clone(option));
+      std::move(callback).Run(encryptor_);
       return;
     }
 
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(
-                       [](Encryptor encryptor, InitCallback callback) {
-                         std::move(callback).Run(std::move(encryptor));
-                       },
-                       encryptor_.Clone(option), std::move(callback)));
+        FROM_HERE,
+        base::BindOnce(
+            [](scoped_refptr<Encryptor> encryptor, InitCallback callback) {
+              std::move(callback).Run(std::move(encryptor));
+            },
+            encryptor_, std::move(callback)));
   }
 
-  static TestEncryptor GetTestEncryptorForTesting() {
+  static scoped_refptr<TestEncryptor> GetTestEncryptorForTesting() {
     Encryptor::KeyRing keys;
     keys.emplace(kDefaultTestKeyPrefix,
                  Encryptor::Key(crypto::RandBytesAsVector(
@@ -49,17 +51,16 @@ class TestOSCryptAsync : public OSCryptAsync {
         crypto::RandBytesAsVector(Encryptor::Key::kAES256GCMKeySize),
         mojom::Algorithm::kAES256GCM);
     keys.emplace(kOsCryptSyncCompatibleTestKeyPrefix, std::move(key));
-    TestEncryptor encryptor(std::move(keys), kDefaultTestKeyPrefix,
-                            kOsCryptSyncCompatibleTestKeyPrefix);
-    return encryptor;
+    return base::WrapRefCounted(
+        new TestEncryptor(std::move(keys), kDefaultTestKeyPrefix));
   }
 
-  static TestEncryptor CloneEncryptorForTesting(Encryptor::Option option) {
-    return GetTestEncryptorForTesting().Clone(option);
+  static scoped_refptr<TestEncryptor> GetTestEncryptorWithoutKeysForTesting() {
+    return base::WrapRefCounted(new TestEncryptor());
   }
 
  private:
-  TestEncryptor encryptor_;
+  scoped_refptr<TestEncryptor> encryptor_;
   const bool is_sync_for_unittests_;
 };
 
@@ -68,8 +69,12 @@ std::unique_ptr<OSCryptAsync> GetTestOSCryptAsyncForTesting(
   return std::make_unique<TestOSCryptAsync>(is_sync_for_unittests);
 }
 
-TestEncryptor GetTestEncryptorForTesting(Encryptor::Option option) {
-  return TestOSCryptAsync::CloneEncryptorForTesting(option);
+scoped_refptr<TestEncryptor> GetTestEncryptorForTesting() {
+  return TestOSCryptAsync::GetTestEncryptorForTesting();
+}
+
+scoped_refptr<TestEncryptor> GetTestEncryptorWithoutKeysForTesting() {
+  return TestOSCryptAsync::GetTestEncryptorWithoutKeysForTesting();
 }
 
 }  // namespace os_crypt_async

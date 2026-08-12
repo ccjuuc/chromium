@@ -13,9 +13,12 @@
 
 extern NSString* const kAimInputItemTopBackgroundColor;
 extern NSString* const kAimComposeboxButtonBackgroundColor;
+extern NSString* const kAppBarColor;
+extern NSString* const kAppBarIncognitoColor;
 extern NSString* const kBackgroundColor;
 extern NSString* const kCloseButtonColor;
 extern NSString* const kDisabledTintColor;
+extern NSString* const kDestinationHighlightColor;
 // Background color used in the rounded squares behind favicons.
 extern NSString* const kFaviconBackgroundColor;
 // Primary grouped background color.
@@ -122,6 +125,7 @@ extern NSString* const kBlue900Color;
 // Static blue palette (same color for light and dark modes).
 extern NSString* const kStaticBlueColor;
 extern NSString* const kStaticBlue400Color;
+extern NSString* const kStaticBlue600Color;
 
 // Standard green color.
 extern NSString* const kGreenColor;
@@ -188,6 +192,7 @@ extern NSString* const kStaticGrey50Color;
 extern NSString* const kStaticGrey300Color;
 extern NSString* const kStaticGrey400Color;
 extern NSString* const kStaticGrey600Color;
+extern NSString* const kStaticGrey700Color;
 extern NSString* const kStaticGrey900Color;
 
 // **********************

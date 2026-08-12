@@ -68,7 +68,7 @@ void LastErrorGetter(v8::Local<v8::Name> property,
                      const v8::PropertyCallbackInfo<v8::Value>& info) {
   v8::Isolate* isolate = info.GetIsolate();
   v8::HandleScope handle_scope(isolate);
-  v8::Local<v8::Object> holder = info.HolderV2();
+  v8::Local<v8::Object> holder = info.Holder();
   v8::Local<v8::Context> context = holder->GetCreationContextChecked(isolate);
 
   v8::Local<v8::Value> last_error;
@@ -104,10 +104,10 @@ void LastErrorGetter(v8::Local<v8::Name> property,
 // Allow script to set the last error property.
 void LastErrorSetter(v8::Local<v8::Name> property,
                      v8::Local<v8::Value> value,
-                     const v8::PropertyCallbackInfo<void>& info) {
+                     const v8::PropertyCallbackInfo<v8::Boolean>& info) {
   v8::Isolate* isolate = info.GetIsolate();
   v8::HandleScope handle_scope(isolate);
-  v8::Local<v8::Object> holder = info.HolderV2();
+  v8::Local<v8::Object> holder = info.Holder();
   v8::Local<v8::Context> context = holder->GetCreationContextChecked(isolate);
 
   v8::Local<v8::Private> script_value_key = v8::Private::ForApi(

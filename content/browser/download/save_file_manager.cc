@@ -7,7 +7,6 @@
 #include <string_view>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
@@ -15,7 +14,6 @@
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
 #include "components/download/public/common/download_task_runner.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/data_url_loader_factory.h"
 #include "content/browser/download/save_file.h"
 #include "content/browser/download/save_package.h"
@@ -23,6 +21,7 @@
 #include "content/browser/loader/file_url_loader_factory.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/browser_context.h"
@@ -71,7 +70,7 @@ class SaveFileManager::SimpleURLLoaderHelper
       const net::NetworkTrafficAnnotationTag& annotation_tag,
       network::mojom::URLLoaderFactory* url_loader_factory,
       SaveFileManager* save_file_manager,
-      base::OnceClosure quarantine_callback,
+      base::OnceCallback<void(const GURL&)> quarantine_callback,
       URLLoaderCompleteCallback on_complete_cb) {
     return std::unique_ptr<SimpleURLLoaderHelper>(new SimpleURLLoaderHelper(
         std::move(resource_request), save_item_id, save_package_id,
@@ -95,7 +94,7 @@ class SaveFileManager::SimpleURLLoaderHelper
       const net::NetworkTrafficAnnotationTag& annotation_tag,
       network::mojom::URLLoaderFactory* url_loader_factory,
       SaveFileManager* save_file_manager,
-      base::OnceClosure quarantine_callback,
+      base::OnceCallback<void(const GURL&)> quarantine_callback,
       URLLoaderCompleteCallback on_complete_cb)
       : save_file_manager_(save_file_manager),
         save_item_id_(save_item_id),
@@ -160,7 +159,7 @@ class SaveFileManager::SimpleURLLoaderHelper
   SaveItemId save_item_id_;
   SavePackageId save_package_id_;
   std::unique_ptr<network::SimpleURLLoader> url_loader_;
-  base::OnceClosure quarantine_callback_;
+  base::OnceCallback<void(const GURL&)> quarantine_callback_;
   URLLoaderCompleteCallback on_complete_cb_;
 };
 
@@ -230,14 +229,13 @@ void SaveFileManager::SaveURL(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   // Insert started saving job to tracking list.
-  DCHECK(!base::Contains(packages_, save_item_id));
+  DCHECK(!packages_.contains(save_item_id));
   packages_[save_item_id] = save_package;
 
-  base::OnceClosure quarantine_callback = base::BindOnce(
+  base::OnceCallback<void(const GURL&)> quarantine_callback = base::BindOnce(
       &SaveFileManager::QuarantineItem, this, save_item_id, save_package->id(),
-      context->IsOffTheRecord() ? GURL() : url,
       context->IsOffTheRecord() ? GURL() : referrer.url, client_guid,
-      std::move(remote_quarantine));
+      std::move(remote_quarantine), context->IsOffTheRecord());
 
   // Register a saving job.
   if (save_source == SaveFileCreateInfo::SAVE_FILE_FROM_NET) {
@@ -395,16 +393,18 @@ void SaveFileManager::SendCancelRequest(SaveItemId save_item_id) {
 void SaveFileManager::QuarantineItem(
     SaveItemId save_item_id,
     SavePackageId save_package_id,
-    const GURL& url,
     const GURL& referrer_url,
     const std::string& client_guid,
-    mojo::PendingRemote<quarantine::mojom::Quarantine> remote_quarantine) {
+    mojo::PendingRemote<quarantine::mojom::Quarantine> remote_quarantine,
+    bool is_off_the_record,
+    const GURL& url) {
   DCHECK(download::GetDownloadTaskRunner()->RunsTasksInCurrentSequence());
   SaveFile* save_file = LookupSaveFile(save_item_id);
   CHECK(save_file);
 
   save_file->AnnotateWithSourceInformation(
-      client_guid, url, referrer_url, std::move(remote_quarantine),
+      client_guid, is_off_the_record ? GURL() : url, referrer_url,
+      std::move(remote_quarantine),
       base::BindOnce(&SaveFileManager::OnQuarantineComplete, this, save_item_id,
                      save_package_id));
 }

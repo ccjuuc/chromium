@@ -51,7 +51,7 @@ TEST_F(ContentAnalysisDownloadsDelegateTest, TestOpenFile) {
                      base::Unretained(this)),
       base::BindOnce(&ContentAnalysisDownloadsDelegateTest::DiscardCallback,
                      base::Unretained(this)),
-      &mock_download_item, CreateSampleCustomRuleMessage(u"", ""));
+      &mock_download_item, CreateSampleCustomRuleMessage(u"", ""), u"");
 
   delegate.BypassWarnings(u"User's justification");
   EXPECT_EQ(1, times_open_called_);
@@ -78,7 +78,7 @@ TEST_F(ContentAnalysisDownloadsDelegateTest, TestDiscardFileWarning) {
                      base::Unretained(this)),
       base::BindOnce(&ContentAnalysisDownloadsDelegateTest::DiscardCallback,
                      base::Unretained(this)),
-      &mock_download_item, CreateSampleCustomRuleMessage(u"", ""));
+      &mock_download_item, CreateSampleCustomRuleMessage(u"", ""), u"");
 
   delegate.Cancel(true);
   EXPECT_EQ(0, times_open_called_);
@@ -105,7 +105,7 @@ TEST_F(ContentAnalysisDownloadsDelegateTest, TestDiscardFileBlock) {
                      base::Unretained(this)),
       base::BindOnce(&ContentAnalysisDownloadsDelegateTest::DiscardCallback,
                      base::Unretained(this)),
-      &mock_download_item, CreateSampleCustomRuleMessage(u"", ""));
+      &mock_download_item, CreateSampleCustomRuleMessage(u"", ""), u"");
 
   delegate.Cancel(false);
   EXPECT_EQ(0, times_open_called_);
@@ -132,7 +132,7 @@ TEST_F(ContentAnalysisDownloadsDelegateTest, TestNoMessageOrUrlReturnsNullOpt) {
                      base::Unretained(this)),
       base::BindOnce(&ContentAnalysisDownloadsDelegateTest::DiscardCallback,
                      base::Unretained(this)),
-      &mock_download_item, CreateSampleCustomRuleMessage(u"", ""));
+      &mock_download_item, CreateSampleCustomRuleMessage(u"", ""), u"");
 
   EXPECT_FALSE(delegate.GetCustomMessage());
   EXPECT_FALSE(delegate.GetCustomLearnMoreUrl());
@@ -147,7 +147,8 @@ TEST_F(ContentAnalysisDownloadsDelegateTest, TestGetMessageAndUrl) {
                      base::Unretained(this)),
       base::BindOnce(&ContentAnalysisDownloadsDelegateTest::DiscardCallback,
                      base::Unretained(this)),
-      nullptr, empty_custom_rule_msg);
+      nullptr, empty_custom_rule_msg,
+      u"foo.txt has sensitive or dangerous data");
 
   EXPECT_TRUE(delegate.GetCustomMessage());
   EXPECT_TRUE(delegate.GetCustomLearnMoreUrl());
@@ -168,7 +169,8 @@ TEST_F(ContentAnalysisDownloadsDelegateTest,
                      base::Unretained(this)),
       base::BindOnce(&ContentAnalysisDownloadsDelegateTest::DiscardCallback,
                      base::Unretained(this)),
-      nullptr, CreateSampleCustomRuleMessage(kTestMessage2, kTestUrl2));
+      nullptr, CreateSampleCustomRuleMessage(kTestMessage2, kTestUrl2),
+      u"foo.txt has sensitive or dangerous data");
 
   EXPECT_TRUE(delegate.GetCustomMessage());
   EXPECT_FALSE(delegate.GetCustomLearnMoreUrl());
@@ -182,6 +184,30 @@ TEST_F(ContentAnalysisDownloadsDelegateTest,
 }
 
 TEST_F(ContentAnalysisDownloadsDelegateTest,
+       TestCustomRuleMessageAndCustomMessageForceSaveToCloud) {
+  ContentAnalysisDownloadsDelegate delegate(
+      kTestFile, kTestMessage, GURL(kTestUrl), true,
+      base::BindOnce(&ContentAnalysisDownloadsDelegateTest::OpenCallback,
+                     base::Unretained(this)),
+      base::BindOnce(&ContentAnalysisDownloadsDelegateTest::DiscardCallback,
+                     base::Unretained(this)),
+      nullptr, CreateSampleCustomRuleMessage(kTestMessage2, kTestUrl2),
+      u"foo.txt has sensitive data. Your organization will let you save it "
+      u"to cloud storage or discard it");
+
+  EXPECT_TRUE(delegate.GetCustomMessage());
+  EXPECT_FALSE(delegate.GetCustomLearnMoreUrl());
+  EXPECT_TRUE(delegate.GetCustomRuleMessageRanges());
+
+  EXPECT_EQ(base::StrCat({kTestFile,
+                          u" has sensitive data. Your organization will "
+                          u"let you save it to cloud storage or discard it. "
+                          u"Your administrator says: \"",
+                          kTestMessage2, u"\""}),
+            *(delegate.GetCustomMessage()));
+}
+
+TEST_F(ContentAnalysisDownloadsDelegateTest,
        TestCustomRuleMessageAndCustomMessageInvalidUrl) {
   ContentAnalysisDownloadsDelegate delegate(
       u"foo.txt", kTestMessage, GURL(kTestUrl), true,
@@ -189,7 +215,8 @@ TEST_F(ContentAnalysisDownloadsDelegateTest,
                      base::Unretained(this)),
       base::BindOnce(&ContentAnalysisDownloadsDelegateTest::DiscardCallback,
                      base::Unretained(this)),
-      nullptr, CreateSampleCustomRuleMessage(kTestMessage2, kTestInvalidUrl));
+      nullptr, CreateSampleCustomRuleMessage(kTestMessage2, kTestInvalidUrl),
+      u"foo.txt has sensitive or dangerous data");
 
   EXPECT_TRUE(delegate.GetCustomMessage());
   EXPECT_FALSE(delegate.GetCustomLearnMoreUrl());
@@ -210,7 +237,8 @@ TEST_F(ContentAnalysisDownloadsDelegateTest, TestFilenameNulloptIfEmpty) {
                      base::Unretained(this)),
       base::BindOnce(&ContentAnalysisDownloadsDelegateTest::DiscardCallback,
                      base::Unretained(this)),
-      nullptr, CreateSampleCustomRuleMessage(kTestMessage2, kTestInvalidUrl));
+      nullptr, CreateSampleCustomRuleMessage(kTestMessage2, kTestInvalidUrl),
+      u"");
 
   EXPECT_EQ(delegate.GetFilename(), std::nullopt);
 }

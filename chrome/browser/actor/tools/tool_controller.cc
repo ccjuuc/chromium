@@ -13,14 +13,14 @@
 #include "base/state_transitions.h"
 #include "chrome/browser/actor/actor_tab_data.h"
 #include "chrome/browser/actor/actor_task.h"
-#include "chrome/browser/actor/aggregated_journal.h"
 #include "chrome/browser/actor/tools/tool.h"
 #include "chrome/browser/actor/tools/tool_callbacks.h"
 #include "chrome/browser/actor/tools/tool_request.h"
 #include "chrome/common/actor.mojom-forward.h"
 #include "chrome/common/actor/action_result.h"
-#include "chrome/common/actor/journal_details_builder.h"
 #include "chrome/common/chrome_features.h"
+#include "components/actor/core/aggregated_journal.h"
+#include "components/actor/core/journal_details_builder.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/abseil-cpp/absl/strings/str_format.h"
@@ -213,6 +213,12 @@ void ToolController::Invoke(ResultCallback result_callback) {
       tool.GetObservationDelayer(observation_page_stability_config_);
   tool.Invoke(base::BindOnce(&ToolController::DidFinishToolInvoke,
                              weak_ptr_factory_.GetWeakPtr()));
+}
+
+void ToolController::Pause() {
+  if (active_state_ && state_ == State::kInvoking) {
+    active_state_->tool->NotifyPaused();
+  }
 }
 
 void ToolController::Cancel() {

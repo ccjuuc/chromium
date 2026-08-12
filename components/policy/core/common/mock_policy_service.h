@@ -5,7 +5,9 @@
 #ifndef COMPONENTS_POLICY_CORE_COMMON_MOCK_POLICY_SERVICE_H_
 #define COMPONENTS_POLICY_CORE_COMMON_MOCK_POLICY_SERVICE_H_
 
-#include "absl/container/flat_hash_map.h"
+#include <optional>
+#include <string_view>
+
 #include "build/build_config.h"
 #include "components/policy/core/common/policy_service.h"
 #include "components/policy/core/common/policy_types.h"

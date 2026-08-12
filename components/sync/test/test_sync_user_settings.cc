@@ -6,7 +6,7 @@
 
 #include "components/sync/base/passphrase_enums.h"
 #include "components/sync/base/user_selectable_type.h"
-#include "components/sync/engine/nigori/nigori.h"
+#include "components/sync/model/crypto/nigori.h"
 #include "components/sync/service/sync_prefs.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_user_settings_impl.h"
@@ -48,12 +48,9 @@ bool TestSyncUserSettings::IsInitialSyncFeatureSetupComplete() const {
   return initial_sync_feature_setup_complete_;
 }
 
-#if !BUILDFLAG(IS_CHROMEOS)
-void TestSyncUserSettings::SetInitialSyncFeatureSetupComplete(
-    SyncFirstSetupCompleteSource source) {
-  SetInitialSyncFeatureSetupComplete();
+void TestSyncUserSettings::SetInitialSyncFeatureSetupComplete() {
+  initial_sync_feature_setup_complete_ = true;
 }
-#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 bool TestSyncUserSettings::IsSyncEverythingEnabled() const {
   return sync_everything_enabled_;
@@ -96,9 +93,12 @@ void TestSyncUserSettings::KeepAccountSettingsPrefsOnlyForUsers(
     const std::vector<GaiaId>& available_gaia_ids) {}
 
 UserSelectableTypeSet TestSyncUserSettings::GetSelectedTypes() const {
-  if (service_->GetAccountInfo().IsEmpty()) {
+  if (service_->GetAccountInfo().IsEmpty() && !service_->IsLocalSyncEnabled()) {
     return {};
   }
+
+  // TODO(crbug.com/350494796): remove data types that are not available for
+  // local sync.
   return selected_types_;
 }
 
@@ -132,6 +132,9 @@ DataTypeSet TestSyncUserSettings::GetPreferredDataTypes() const {
   types.PutAll(UserSelectableOsTypesToDataTypes(GetSelectedOsTypes()));
 #endif
   types.PutAll(ControlTypes());
+  if (service_->IsLocalSyncEnabled()) {
+    types.RetainAll(LocalSyncSupportedTypes());
+  }
   return types;
 }
 
@@ -228,6 +231,10 @@ bool TestSyncUserSettings::IsTrustedVaultKeyRequired() const {
   return trusted_vault_key_required_;
 }
 
+bool TestSyncUserSettings::IsKeystoreKeyRequiredForTesting() const {
+  return false;
+}
+
 bool TestSyncUserSettings::IsTrustedVaultKeyRequiredForPreferredDataTypes()
     const {
   return IsTrustedVaultKeyRequired() && IsEncryptedDatatypePreferred();
@@ -269,10 +276,6 @@ void TestSyncUserSettings::SetRegisteredSelectableTypes(
     UserSelectableTypeSet types) {
   registered_selectable_types_ = types;
   selected_types_ = Intersection(selected_types_, types);
-}
-
-void TestSyncUserSettings::SetInitialSyncFeatureSetupComplete() {
-  initial_sync_feature_setup_complete_ = true;
 }
 
 void TestSyncUserSettings::ClearInitialSyncFeatureSetupComplete() {

@@ -11,10 +11,10 @@
 #include <compare>
 #include <memory>
 
-#include "base/byte_count.h"
-#include "base/containers/variant_map.h"
+#include "base/byte_size.h"
 #include "base/functional/callback_forward.h"
 #include "components/performance_manager/public/resource_attribution/process_context.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace performance_manager {
 class Graph;
@@ -35,11 +35,11 @@ class MemoryMeasurementDelegate {
   //
   // MemoryMeasurementProvider will wrap this in a full MemorySummaryResult.
   struct MemorySummaryMeasurement {
-    base::ByteCount resident_set_size;
-    base::ByteCount private_footprint;
+    base::ByteSize resident_set_size;
+    base::ByteSize private_footprint;
 
     // Only populated by default on Linux, ChromeOS and Android.
-    base::ByteCount private_swap;
+    base::ByteSize private_swap;
 
     // Division operator required by SplitResourceAmongFramesAndWorkers().
     constexpr MemorySummaryMeasurement operator/(size_t divisor) {
@@ -56,10 +56,8 @@ class MemoryMeasurementDelegate {
                                      const MemorySummaryMeasurement&) = default;
   };
 
-  // TODO(crbug.com/433462519): Replace this with a concrete map type after
-  // using VariantMap to measure the performance of various impls.
   using MemorySummaryMap =
-      base::VariantMap<ProcessContext, MemorySummaryMeasurement>;
+      absl::flat_hash_map<ProcessContext, MemorySummaryMeasurement>;
 
   // The given `factory` will be used to create a MemoryMeasurementDelegate to
   // measure ProcessNodes in `graph`. The factory object must outlive the graph.
@@ -77,11 +75,6 @@ class MemoryMeasurementDelegate {
   // with the results, or an empty map on error.
   virtual void RequestMemorySummary(
       base::OnceCallback<void(MemorySummaryMap)>) = 0;
-
- protected:
-  // Allow implementations to use MemoryMeasurementDelegate's passkey to create
-  // MemorySummaryMaps.
-  static MemorySummaryMap CreateMemorySummaryMap();
 };
 
 class MemoryMeasurementDelegate::Factory {

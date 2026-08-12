@@ -150,7 +150,8 @@ sync_pb::EntitySpecifics BookmarkEntityBuilder::CreateBaseEntitySpecifics(
 
   if (parent_id_.empty() && !parent_guid_.is_valid()) {
     parent_id_ =
-        LoopbackServerEntity::CreateId(syncer::BOOKMARKS, "bookmark_bar");
+        LoopbackServerEntity::CreateId(syncer::BOOKMARKS, "bookmark_bar",
+                                       /*migration_version=*/0);
     parent_guid_ = base::Uuid::ParseLowercase(bookmarks::kBookmarkBarNodeUuid);
   }
 
@@ -182,26 +183,25 @@ std::unique_ptr<LoopbackServerEntity> BookmarkEntityBuilder::Build(
     bool is_folder) {
   if (id_.empty()) {
     id_ = LoopbackServerEntity::CreateId(
-        syncer::BOOKMARKS, base::Uuid::GenerateRandomV4().AsLowercaseString());
+        syncer::BOOKMARKS, base::Uuid::GenerateRandomV4().AsLowercaseString(),
+        /*migration_version=*/0);
   }
 
   if (use_client_tag_hash_) {
-    return base::WrapUnique<LoopbackServerEntity>(
-        new syncer::PersistentBookmarkEntity(
-            id_, kUnusedVersion, title_, /*originator_cache_guid=*/"",
-            /*originator_client_item_id=*/"",
-            syncer::ClientTagHash::FromUnhashed(syncer::BOOKMARKS,
-                                                uuid_.AsLowercaseString())
-                .value(),
-            GetUniquePosition(), entity_specifics, is_folder, parent_id_,
-            kDefaultTime, kDefaultTime));
+    return std::make_unique<syncer::PersistentBookmarkEntity>(
+        id_, kUnusedVersion, title_, /*originator_cache_guid=*/"",
+        /*originator_client_item_id=*/"",
+        syncer::ClientTagHash::FromUnhashed(syncer::BOOKMARKS,
+                                            uuid_.AsLowercaseString())
+            .value(),
+        GetUniquePosition(), entity_specifics, is_folder, parent_id_,
+        kDefaultTime, kDefaultTime);
   } else {
-    return base::WrapUnique<LoopbackServerEntity>(
-        new syncer::PersistentBookmarkEntity(
-            id_, kUnusedVersion, title_, originator_cache_guid_,
-            /*originator_client_item_id=*/originator_client_item_id_,
-            /*client_tag_hash=*/"", GetUniquePosition(), entity_specifics,
-            is_folder, parent_id_, kDefaultTime, kDefaultTime));
+    return std::make_unique<syncer::PersistentBookmarkEntity>(
+        id_, kUnusedVersion, title_, originator_cache_guid_,
+        /*originator_client_item_id=*/originator_client_item_id_,
+        /*client_tag_hash=*/"", GetUniquePosition(), entity_specifics,
+        is_folder, parent_id_, kDefaultTime, kDefaultTime);
   }
 }
 

@@ -59,7 +59,7 @@ class CORE_EXPORT MediaVideoVisibilityTracker final
     PhysicalRect video_element_rect;
   };
 
-  // Indicates if the |ReportVisibilityCb| should be executed, or not.
+  // Indicates if the |ReportContinuousVisibilityCb| should be executed, or not.
   enum class ShouldReportVisibility {
     kNo,
     kYes,
@@ -68,22 +68,28 @@ class CORE_EXPORT MediaVideoVisibilityTracker final
   static constexpr base::TimeDelta kMinimumAllowedHitTestInterval =
       base::Milliseconds(500);
 
-  using ReportVisibilityCb = base::RepeatingCallback<void(bool)>;
+  // Callback to continuously report whether the video meets the visibility
+  // threshold (`visibility_threshold_`).
+  using ReportContinuousVisibilityCb = base::RepeatingCallback<void(bool)>;
   using TrackerAttachedToDocument = WeakMember<Document>;
   using ClientIdsSet = HashSet<DisplayItemClientId>;
 
-  // `RequestVisibilityCallback` is used to enable computing video visibility
-  // on-demand, in response to calls to the MediaPlayer interface
+  // `OnDemandRequestVisibilityCb` is used to enable computing video
+  // visibility on-demand, in response to calls to the MediaPlayer interface
   // `RequestVisibility` method.
   //
   // The boolean parameter represents whether a video element meets
   // `visibility_threshold_`.
-  using RequestVisibilityCallback = base::OnceCallback<void(bool)>;
+  using OnDemandRequestVisibilityCb = base::OnceCallback<void(bool)>;
+
+  // Callback for reporting the visibility ratio (0.0 to 1.0). This is a one-off
+  // visibility ratio calculation.
+  using OnDemandRequestVisibilityRatioCb = base::OnceCallback<void(double)>;
 
   MediaVideoVisibilityTracker(
       HTMLVideoElement& video,
       int visibility_threshold,
-      ReportVisibilityCb report_visibility_cb,
+      ReportContinuousVisibilityCb report_continuous_visibility_cb,
       base::TimeDelta hit_test_interval = kMinimumAllowedHitTestInterval);
   ~MediaVideoVisibilityTracker() override;
 
@@ -102,13 +108,22 @@ class CORE_EXPORT MediaVideoVisibilityTracker final
   void MaybeAddFullscreenEventListeners();
   void MaybeRemoveFullscreenEventListeners();
 
-  // Takes the `RequestVisibilityCallback` and either computes visibility
+  // Takes the `OnDemandRequestVisibilityCb` and either computes visibility
   // immediately, or schedules the computation for later, depending on the the
   // document lifecycle state.
   //
   // If this method is called multiple times in a row, the newest callback
   // always takes precedence. Previous ones are immediately run with `false`.
-  void RequestVisibility(RequestVisibilityCallback request_visibility_callback);
+  void RequestVisibility(
+      OnDemandRequestVisibilityCb request_visibility_callback);
+
+  // Triggers a one-off visibility ratio computation. The result is provided
+  // via the callback.
+  void RequestVisibilityRatio(OnDemandRequestVisibilityRatioCb callback);
+
+  // Returns true if there are any active continuous reporting callbacks or
+  // pending one-off visibility requests.
+  bool HasActiveVisibilityRequests() const;
 
   void Trace(Visitor*) const override;
 
@@ -138,11 +153,14 @@ class CORE_EXPORT MediaVideoVisibilityTracker final
       DisplayItemClientId start_after_display_item_client_id) const;
 
   ListBasedHitTestBehavior ComputeOcclusion(const ClientIdsSet& client_ids_set,
-                                            Metrics&,
-                                            const Node& node,
-                                            DOMNodeId node_id);
-  bool MeetsVisibilityThreshold(Metrics& counters, const PhysicalRect& rect);
-  void ReportVisibility(bool meets_visibility_threshold);
+                                            Metrics& counts,
+                                            const Node& node);
+
+  bool MeetsVisibilityThreshold(Metrics& counts, const PhysicalRect& rect);
+
+  // Computes the current visibility ratio of the video element (0.0 to 1.0).
+  double ComputeVisibilityRatio();
+
   bool ComputeVisibility();
 
   // Resets the various member variables used by `ComputeOcclusion()`.
@@ -159,8 +177,19 @@ class CORE_EXPORT MediaVideoVisibilityTracker final
   // `DidFinishLifecycleUpdate`.
   void MaybeComputeVisibility(ShouldReportVisibility should_report_visibility);
 
+  // Computes and reports the visibility ratio if requested. This will detach
+  // the tracker if no further tracking is needed.
+  void MaybeComputeVisibilityRatio();
+
   // LocalFrameView::LifecycleNotificationObserver
   void DidFinishLifecycleUpdate(const LocalFrameView&) override;
+
+  // Returns true if the tracker has a valid frame and layout object to compute
+  // visibility.
+  bool HasValidFrameAndLayout() const;
+
+  // Returns true if the document lifecycle is in the PaintClean state.
+  bool IsPaintClean() const;
 
   // `video_element_` creates |this|.
   Member<HTMLVideoElement> video_element_;
@@ -175,11 +204,27 @@ class CORE_EXPORT MediaVideoVisibilityTracker final
   // considered sufficiently visible.
   const int visibility_threshold_;
   OcclusionState occlusion_state_;
-  ReportVisibilityCb report_visibility_cb_;
-  RequestVisibilityCallback request_visibility_callback_;
+
+  // Continuous visibility reporting. If set, this callback is fired repeatedly
+  // whenever the video's visibility changes (e.g., from meeting the threshold
+  // to not meeting it). Used by features like Auto-PiP.
+  ReportContinuousVisibilityCb report_continuous_visibility_cb_;
+
+  // Pending one-shot visibility request. If set, this callback is fired once
+  // during the next lifecycle update with a boolean indicating if the video
+  // currently meets the visibility threshold. This answers on-demand Mojo
+  // requests from the browser process (e.g., via the MediaPlayer interface).
+  OnDemandRequestVisibilityCb on_demand_visibility_cb_;
+
+  // Pending one-shot occlusion ratio request. If set, this callback is fired
+  // once during the next lifecycle update with the exact visible fraction of
+  // the video (0.0 to 1.0). Used by Encrypted Media Occlusion Tracking.
+  OnDemandRequestVisibilityRatioCb on_demand_visibility_ratio_cb_;
+
   base::TimeTicks last_hit_test_timestamp_;
   const base::TimeDelta hit_test_interval_;
   bool meets_visibility_threshold_ = false;
+  double last_visibility_ratio_ = 0.0;
 
   // Keeps track of the |Document| to which the tracker has registered for
   // lifecycle notifications.

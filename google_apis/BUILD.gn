@@ -52,14 +52,20 @@ if (use_official_google_api_keys == "") {
 # Official API keys should always be used for Chrome-branded builds except on
 # iOS (see https://crbug.com/1183709) and Fuchsia (see the description of
 # https://crbug.com/1171510 for background).
+# Note, fuchsia builds with both current_os == "fuchsia" and
+# target_os == "fuchsia". current_os can be "linux" when building
+# //chrome/test/chromedriver
 assert(use_official_google_api_keys || !is_internal_chrome_branded || is_ios ||
-       is_fuchsia)
+       is_fuchsia || target_os == "fuchsia")
 
 declare_args() {
   # Whether the SetAPIKey() method is defined.
   # iOS and Fuchsia builds that do not use the built-in key use this.
   support_external_google_api_key =
       is_ios || (is_fuchsia && !use_official_google_api_keys)
+
+  # Whether to support the CDM Server Certificate.
+  support_cdm_server_certificate = is_mac || is_linux || is_win
 }
 
 # internal:generate_metrics_key_header must be a deps when
@@ -72,7 +78,10 @@ _use_official_google_keys_and_generate_metrics_key_header =
 
 buildflag_header("buildflags") {
   header = "buildflags.h"
-  flags = [ "SUPPORT_EXTERNAL_GOOGLE_API_KEY=$support_external_google_api_key" ]
+  flags = [
+    "SUPPORT_EXTERNAL_GOOGLE_API_KEY=$support_external_google_api_key",
+    "SUPPORT_CDM_SERVER_CERTIFICATE=$support_cdm_server_certificate",
+  ]
 }
 
 config("key_defines") {
@@ -103,6 +112,8 @@ component("google_apis") {
     "default_api_keys.h",
     "gaia/core_account_id.cc",
     "gaia/core_account_id.h",
+    "gaia/device_management_error_details.cc",
+    "gaia/device_management_error_details.h",
     "gaia/gaia_access_token_fetcher.cc",
     "gaia/gaia_access_token_fetcher.h",
     "gaia/gaia_auth_consumer.cc",
@@ -113,7 +124,6 @@ component("google_apis") {
     "gaia/gaia_auth_util.h",
     "gaia/gaia_config.cc",
     "gaia/gaia_config.h",
-    "gaia/gaia_constants.cc",
     "gaia/gaia_constants.h",
     "gaia/gaia_features.cc",
     "gaia/gaia_features.h",
@@ -210,6 +220,8 @@ proto_library("proto") {
 static_library("test_support") {
   testonly = true
   sources = [
+    "gaia/fake_device_management_error_details.cc",
+    "gaia/fake_device_management_error_details.h",
     "gaia/fake_gaia.cc",
     "gaia/fake_gaia.h",
     "gaia/fake_oauth2_access_token_manager.cc",
@@ -337,6 +349,7 @@ bundle_data("google_apis_unittest_bundle_data") {
     "test/data/calendar/events.json",
     "test/data/calendar/invalid_events.json",
     "test/data/gaia/all_base_urls.json",
+    "test/data/gaia/all_flags.json",
     "test/data/gaia/all_urls.json",
     "test/data/gaia/api_keys.json",
     "test/data/gaia/bad_url.json",

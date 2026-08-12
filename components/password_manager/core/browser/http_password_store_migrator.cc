@@ -14,6 +14,7 @@
 #include "base/strings/strcat.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/password_manager_util.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/password_manager/core/browser/password_store/smart_bubble_stats_store.h"
 #include "url/gurl.h"
@@ -87,14 +88,19 @@ PasswordForm HttpPasswordStoreMigrator::MigrateHttpFormToHttps(
   https_form.form_data = autofill::FormData();
   https_form.generation_upload_status =
       PasswordForm::GenerationUploadStatus::kNoSignalSent;
-  https_form.skip_zero_click = false;
+  if (https_form.type != PasswordForm::Type::kReceivedViaSharing) {
+    https_form.skip_zero_click = false;
+  }
   return https_form;
 }
 
-void HttpPasswordStoreMigrator::OnGetPasswordStoreResults(
-    std::vector<std::unique_ptr<PasswordForm>> results) {
+void HttpPasswordStoreMigrator::OnGetPasswordStoreResultsOrErrorFrom(
+    PasswordStoreInterface* store,
+    LoginsResultOrError results_or_error) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  results_ = std::move(results);
+if (auto* logins = std::get_if<LoginsResult>(&results_or_error)) {
+    results_ = ToPasswordForms(std::move(*logins));
+  }
   got_password_store_results_ = true;
 
   if (got_hsts_query_result_) {
@@ -122,22 +128,22 @@ void HttpPasswordStoreMigrator::OnHSTSQueryResult(HSTSResult is_hsts) {
 
 void HttpPasswordStoreMigrator::ProcessPasswordStoreResults() {
   // Ignore PSL, affiliated, grouped and other matches.
-  std::erase_if(results_, [](const std::unique_ptr<PasswordForm>& form) {
-    return password_manager_util::GetMatchType(*form) !=
+  std::erase_if(results_, [](const PasswordForm& form) {
+    return password_manager_util::GetMatchType(form) !=
            password_manager_util::GetLoginMatchType::kExact;
   });
 
   // Add the new credentials to the password store. The HTTP forms are
   // removed iff |mode_| == MigrationMode::MOVE.
-  for (const auto& form : results_) {
+  for (auto& form : results_) {
     PasswordForm new_form =
-        HttpPasswordStoreMigrator::MigrateHttpFormToHttps(*form);
-    store_->AddLogin(new_form);
+        HttpPasswordStoreMigrator::MigrateHttpFormToHttps(form);
+    store_->AddLogin(password_manager::FromPasswordForm(new_form));
 
     if (mode_ == HttpPasswordMigrationMode::kMove) {
-      store_->RemoveLogin(FROM_HERE, *form);
+      store_->RemoveLogin(FROM_HERE, password_manager::FromPasswordForm(form));
     }
-    *form = std::move(new_form);
+    form = std::move(new_form);
   }
 
   // Only log data if there was at least one migrated password.

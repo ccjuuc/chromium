@@ -11,13 +11,12 @@
 #import "ios/chrome/browser/infobars/model/infobar_metrics_recorder.h"
 #import "ios/chrome/browser/infobars/ui_bundled/modals/infobar_modal_constants.h"
 #import "ios/chrome/browser/infobars/ui_bundled/modals/infobar_password_modal_delegate.h"
-#import "ios/chrome/browser/passwords/model/ios_chrome_password_infobar_metrics_recorder.h"
+#import "ios/chrome/browser/passwords/infobars/public/ios_chrome_password_infobar_metrics_recorder.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_detail_text_item.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_text_button_item.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_text_edit_item.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_text_edit_item_delegate.h"
-#import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_styler.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/table_view/table_view_cells_constants.h"
@@ -39,8 +38,8 @@ typedef NS_ENUM(NSInteger, ItemType) {
 const CGFloat kSymbolSize = 15;
 }  // namespace
 
-@interface InfobarPasswordTableViewController () <UITextFieldDelegate,
-                                                  TableViewTextEditItemDelegate>
+@interface InfobarPasswordTableViewController () <TableViewTextEditItemDelegate,
+                                                  UITextFieldDelegate>
 // Properties backing InfobarPasswordModalConsumer interface.
 @property(nonatomic, copy) NSString* originalUsername;
 @property(nonatomic, copy) NSString* maskedPassword;
@@ -130,7 +129,7 @@ const CGFloat kSymbolSize = 15;
       l10n_util::GetNSString(IDS_IOS_SHOW_PASSWORD_VIEW_PASSWORD);
   self.passwordItem.textFieldValue = self.maskedPassword;
   self.passwordItem.identifyingIcon =
-      DefaultSymbolWithPointSize(kShowActionSymbol, kSymbolSize);
+      SymbolWithPointSize(SymbolShowAction, kSymbolSize);
   self.passwordItem.identifyingIconEnabled = YES;
   self.passwordItem.hideIcon = YES;
   self.passwordItem.identifyingIconAccessibilityLabel = l10n_util::GetNSString(
@@ -262,7 +261,7 @@ const CGFloat kSymbolSize = 15;
   self.passwordMasked = !self.passwordMasked;
   if (self.passwordMasked) {
     self.passwordItem.identifyingIcon =
-        DefaultSymbolWithPointSize(kShowActionSymbol, kSymbolSize);
+        SymbolWithPointSize(SymbolShowAction, kSymbolSize);
     self.passwordItem.textFieldValue = self.maskedPassword;
     self.passwordItem.identifyingIconAccessibilityLabel =
         l10n_util::GetNSString(
@@ -271,7 +270,7 @@ const CGFloat kSymbolSize = 15;
         recordModalEvent:MobileMessagesPasswordsModalEvent::MaskedPassword];
   } else {
     self.passwordItem.identifyingIcon =
-        DefaultSymbolWithPointSize(kHideActionSymbol, kSymbolSize);
+        SymbolWithPointSize(SymbolHideAction, kSymbolSize);
     self.passwordItem.textFieldValue = self.unmaskedPassword;
     self.passwordItem.identifyingIconAccessibilityLabel =
         l10n_util::GetNSString(

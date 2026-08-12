@@ -75,7 +75,10 @@ class ACCELERATED_WIDGET_MAC_EXPORT CALayerTreeCoordinator {
 
   virtual ~CALayerTreeCoordinator();
 
-  CALayer* root_ca_layer() const { return root_ca_layer_; }
+  CALayer* root_ca_layer() {
+    EnsureCAContextAndRootLayer();
+    return root_ca_layer_;
+  }
 
   // Set the composited frame's size.
   void Resize(const gfx::Size& pixel_size, float scale_factor);
@@ -109,10 +112,16 @@ class ACCELERATED_WIDGET_MAC_EXPORT CALayerTreeCoordinator {
       std::vector<gfx::MTLSharedEventFence> metal_fences);
 
  private:
+  void EnsureCAContextAndRootLayer();
+
   const bool allow_remote_layers_ = true;
   const bool allow_av_sample_buffer_display_layer_ = true;
   gfx::Size pixel_size_;
   float scale_factor_ = 1;
+#if BUILDFLAG(IS_MAC)
+  bool has_resized_since_last_swap_ = false;
+#endif  // BUILDFLAG(IS_MAC)
+
   gfx::CALayerResult ca_layer_error_code_ = gfx::kCALayerSuccess;
 
   // The max number of CARendererLayerTree allowed at the same time. It includes

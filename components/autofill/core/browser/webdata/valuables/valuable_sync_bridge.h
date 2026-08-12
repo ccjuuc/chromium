@@ -8,12 +8,17 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
 #include "base/supports_user_data.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
+#include "components/autofill/core/browser/data_model/valuables/loyalty_card.h"
 #include "components/autofill/core/browser/webdata/autofill_ai/entity_table.h"
+#include "components/autofill/core/browser/webdata/autofill_change.h"
 #include "components/autofill/core/browser/webdata/autofill_sync_metadata_table.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_backend.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service_observer.h"
@@ -25,6 +30,7 @@
 #include "components/sync/model/metadata_change_list.h"
 #include "components/sync/model/model_error.h"
 #include "components/sync/model/mutable_data_batch.h"
+#include "components/sync/protocol/autofill_valuable_specifics.pb.h"
 #include "components/sync/protocol/entity_data.h"
 
 namespace autofill {
@@ -125,6 +131,12 @@ class ValuableSyncBridge : public AutofillWebDataServiceObserverOnDBSequence,
   // These cards are converted to their `AutofillLoyaltyCardSpecifics`
   // representation and returned as a `syncer::MutableDataBatch`.
   std::unique_ptr<syncer::MutableDataBatch> GetData();
+
+  // If available, returns cached possibly trimmed
+  // `AutofillValuableSpecifics` for given `storage_key`. By default,
+  // empty `AutofillValuableSpecifics` is returned.
+  const sync_pb::AutofillValuableSpecifics& GetPossiblyTrimmedValuableSpecifics(
+      std::string_view storage_key);
 
   base::ScopedObservation<AutofillWebDataBackend,
                           AutofillWebDataServiceObserverOnDBSequence>

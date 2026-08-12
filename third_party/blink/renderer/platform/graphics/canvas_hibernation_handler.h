@@ -6,10 +6,14 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_CANVAS_HIBERNATION_HANDLER_H_
 
 #include "base/feature_list.h"
+#include "base/memory/post_delayed_memory_reduction_task.h"
 #include "base/memory/raw_ref.h"
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "base/trace_event/memory_dump_provider.h"
+#include "cc/paint/paint_record.h"
+#include "third_party/blink/renderer/platform/graphics/flush_reason.h"
 #include "third_party/blink/renderer/platform/graphics/memory_managed_paint_recorder.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_canvas.h"
 #include "third_party/blink/renderer/platform/instrumentation/histogram.h"
@@ -19,7 +23,7 @@
 
 namespace blink {
 
-class CanvasResourceProvider;
+class Canvas2DResourceProvider;
 
 inline constexpr char kCanvasHibernationEventHistogramName[] =
     "Blink.Canvas.HibernationEvents2";
@@ -33,12 +37,14 @@ class PLATFORM_EXPORT CanvasHibernationHandler {
    public:
     virtual ~Delegate() = default;
 
-    virtual CanvasResourceProvider* GetResourceProvider() const = 0;
+    virtual Canvas2DResourceProvider* GetSharedImageProvider() const = 0;
+    virtual bool HasResourceProvider() const = 0;
     virtual bool IsPageVisible() const = 0;
     virtual bool IsContextLost() const = 0;
     virtual void ResetResourceProvider() = 0;
     virtual void SetNeedsCompositingUpdate() = 0;
     virtual void ClearCanvas2DLayerTexture() {}
+    virtual std::optional<cc::PaintRecord> FlushCanvas(FlushReason reason) = 0;
   };
 
   // The values of the enum entries must not change because they are used for
@@ -59,7 +65,8 @@ class PLATFORM_EXPORT CanvasHibernationHandler {
     kHibernationEndedWithTeardown = 11,
     kHibernationAbortedBecauseNoSurface = 12,
     kHibernationEndedOnReset = 13,
-    kMaxValue = kHibernationEndedOnReset,
+    kHibernationAbortedDueToEpochMismatch = 14,
+    kMaxValue = kHibernationAbortedDueToEpochMismatch,
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:CanvasHibernationEvent)
 
@@ -78,11 +85,17 @@ class PLATFORM_EXPORT CanvasHibernationHandler {
   // and a minimal impact on tab switching latency (and on needless
   // compression).
   static constexpr base::TimeDelta kBeforeCompressionDelay = base::Minutes(5);
+  // Semi-arbitrary threshold, chosen to be a bit shorter than tile discard, and
+  // shorter than compression above. Actual delay is random, and the compression
+  // delay includes this one.
+  static constexpr base::TimeDelta kMaxHibernationDelay = base::Minutes(4);
 
   void InitiateHibernationIfNecessary();
 
   void SaveForHibernation(sk_sp<SkImage>&& image,
-                          std::unique_ptr<MemoryManagedPaintRecorder> recorder);
+                          std::unique_ptr<MemoryManagedPaintRecorder> recorder,
+                          base::MemoryReductionTaskContext context,
+                          base::TimeDelta delay);
   // Returns the uncompressed image for this hibernation image. Does not
   // invalidate the hibernated image. Must call `Clear()` if invalidation is
   // required.
@@ -147,12 +160,15 @@ class PLATFORM_EXPORT CanvasHibernationHandler {
   void OnEncoded(
       std::unique_ptr<CanvasHibernationHandler::BackgroundTaskParams> params,
       sk_sp<SkData> encoded);
-  scoped_refptr<base::SingleThreadTaskRunner> GetMainThreadTaskRunner() const;
   static size_t ImageMemorySize(const SkImage& image);
   static void HibernateOrLogFailure(
       base::WeakPtr<CanvasHibernationHandler> handler,
-      base::TimeTicks /*idleDeadline*/);
-  void Hibernate();
+      uint64_t epoch,
+      base::TimeDelta delay,
+      base::MemoryReductionTaskContext context);
+  void Hibernate(base::MemoryReductionTaskContext context,
+                 base::TimeDelta delay);
+  static scoped_refptr<base::SingleThreadTaskRunner> GetMainThreadTaskRunner();
 
   // Incremented each time the canvas is hibernated.
   uint64_t epoch_ = 0;
@@ -168,7 +184,6 @@ class PLATFORM_EXPORT CanvasHibernationHandler {
   int height_;
   int bytes_per_pixel_;
 
-  bool hibernation_scheduled_ = false;
   const base::raw_ref<Delegate> delegate_;
   base::WeakPtrFactory<CanvasHibernationHandler> weak_ptr_factory_{this};
 };

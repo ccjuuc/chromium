@@ -60,6 +60,14 @@ EncryptionResult LoginDatabase::DecryptedString(
                 : EncryptionResult::kServiceFailure;
 }
 
+EncryptionResult LoginDatabase::DecryptedString(
+    const std::string& cipher_text,
+    PasswordString* decrypted_text) const {
+  return DecryptStringToPasswordString(cipher_text, decrypted_text)
+             ? EncryptionResult::kSuccess
+             : EncryptionResult::kServiceFailure;
+}
+
 bool CreateKeychainIdentifier(const std::u16string& plain_text,
                               std::string* keychain_identifier) {
   if (plain_text.size() == 0) {
@@ -164,9 +172,7 @@ void DeleteEncryptedPasswordFromKeychain(
   // We are using the account attribute to store item references.
   CFDictionarySetValue(query.get(), kSecAttrAccount, item_ref.get());
 
-  OSStatus status = SecItemDelete(query.get());
-  base::UmaHistogramSparse("PasswordManager.LoginDatabase.DeleteFromKeychain",
-                           static_cast<int>(status));
+  std::ignore = SecItemDelete(query.get());
 
   // Delete the temporary passwords directory, since there might be leftover
   // temporary files used for password export that contain the password being

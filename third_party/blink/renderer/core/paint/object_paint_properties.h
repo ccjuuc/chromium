@@ -9,6 +9,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/dcheck_is_on.h"
 #include "base/functional/function_ref.h"
 #include "base/memory/ptr_util.h"
@@ -127,45 +128,49 @@ class CORE_EXPORT ObjectPaintProperties
     kTransform = 7,
     kLastCSSTransform = kTransform,
     // End of Transform nodes for CSS transform operations.
-    kPerspective = 8,
-    kReplacedContentTransform = 9,
-    kScrollTranslation = 10,
-    kLastTransform = kScrollTranslation,
-    kTransformAlias = 11,
+    kContentTranslation = 8,
+    kPerspective = 9,
+    kReplacedContentTransform = 10,
+    kScrollTranslation = 11,
+    kUnboundedWrapperTransform = 12,
+    kUnboundedInnerTransform = 13,
+    kLastTransform = kUnboundedInnerTransform,
+    kTransformAlias = 14,
 
-    kScroll = 12,
+    kScroll = 15,
     kFirstScroll = kScroll,
     kLastScroll = kScroll,
 
     // Effects
-    kFirstEffect = 13,
+    kFirstEffect = 16,
     kElementCaptureEffect = kFirstEffect,
-    kViewTransitionScopeRootEffect = 14,
-    kViewTransitionEffect = 15,
-    kEffect = 16,
-    kFilter = 17,
-    kMask = 18,
-    kClipPathMask = 19,
-    kVerticalScrollbarEffect = 20,
-    kHorizontalScrollbarEffect = 21,
-    kScrollCornerEffect = 22,
+    kViewTransitionScopeRootEffect = 17,
+    kViewTransitionEffect = 18,
+    kUnboundedWrapperEffect = 19,
+    kEffect = 20,
+    kFilter = 21,
+    kMask = 22,
+    kClipPathMask = 23,
+    kVerticalScrollbarEffect = 24,
+    kHorizontalScrollbarEffect = 25,
+    kScrollCornerEffect = 26,
     kLastEffect = kScrollCornerEffect,
-    kEffectAlias = 23,
+    kEffectAlias = 27,
 
     // Clips
-    kFirstClip = 24,
+    kFirstClip = 28,
     kClipPathClip = kFirstClip,
-    kMaskClip = 25,
-    kCssClip = 26,
-    kOverflowControlsClip = 27,
-    kBackgroundClip = 28,
-    kPixelMovingFilterClipExpander = 29,
-    kInnerBorderRadiusClip = 30,
-    kOverflowClip = 31,
-    kCssClipFixedPosition = 32,
-    kInnerBorderShapeClip = 33,
+    kMaskClip = 29,
+    kCssClip = 30,
+    kOverflowControlsClip = 31,
+    kBackgroundClip = 32,
+    kPixelMovingFilterClipExpander = 33,
+    kInnerBorderRadiusClip = 34,
+    kOverflowClip = 35,
+    kCssClipFixedPosition = 36,
+    kInnerBorderShapeClip = 37,
     kLastClip = kInnerBorderShapeClip,
-    kClipAlias = 34,
+    kClipAlias = 38,
 
     // Should be updated whenever a higher value NodeType is added.
     kNumFields = kClipAlias + 1,
@@ -213,36 +218,43 @@ class CORE_EXPORT ObjectPaintProperties
   // |
   // +-[ Transform ]
   //   |   The transform from CSS 'transform' (including the effects of
-  //   |   'transform-origin').
-  //   |
-  //   |   For SVG, this also includes 'translate', 'rotate', 'scale',
-  //   |   'offset-*' (instead of the nodes above) and the effects of
-  //   |   some characteristics of the SVG viewport and the "SVG
-  //   |   additional translation" (for the x and y attributes on
-  //   |   svg:use).
-  //   |
-  //   |   This is the local border box space (see
-  //   |   FragmentData::LocalBorderBoxProperties); the nodes below influence
-  //   |   the transform for the children but not the LayoutObject itself.
-  //   |
-  //   +-[ Perspective ]
-  //     |   The space created by CSS perspective.
-  //     +-[ ReplacedContentTransform ]
-  //         Additional transform for replaced elements to implement object-fit.
-  //         (Replaced elements don't scroll.)
-  //     OR
-  //     +-[ ScrollTranslation ]
-  //         The space created by overflow clip. The translation equals the
-  //         offset between the scrolling contents and the scrollable area of
-  //         the container, both originated from the top-left corner, so it is
-  //         the scroll position (instead of scroll offset) of the
-  //         ScrollableArea.
+  //  /    'transform-origin').
+  // |
+  // |     For SVG, this also includes 'translate', 'rotate', 'scale',
+  // |     'offset-*' (instead of the nodes above) and the effects of
+  // |     some characteristics of the SVG viewport and the "SVG
+  // |     additional translation" (for the x and y attributes on
+  // |     svg:use).
+  // |
+  // |     This is the local border box space (see
+  // |     FragmentData::LocalBorderBoxProperties); the nodes below influence
+  // |     the transform for the children but not the LayoutObject itself.
+  // |
+  // +-[ ContentTranslation ]
+  //   | Translation to account for the scroll origin of containing
+  //  /  non-overlay ::overscroll-area-parent pseudo-element
+  // |   ScrollTranslation nodes in the transform tree.
+  // |
+  // +-[ Perspective ]
+  //   |   The space created by CSS perspective.
+  //  /
+  // |
+  // +-[ ReplacedContentTransform ]
+  //     Additional transform for replaced elements to implement object-fit.
+  //     (Replaced elements don't scroll.)
+  //  OR
+  // +-[ ScrollTranslation ]
+  //     The space created by overflow clip. The translation equals the
+  //     offset between the scrolling contents and the scrollable area of
+  //     the container, both originated from the top-left corner, so it is
+  //     the scroll position (instead of scroll offset) of the
+  //     ScrollableArea.
   //
-  // ... +-[ TransformIsolationNode ]
-  //         This serves as a parent to subtree transforms on an element with
-  //         paint containment. It induces a PaintOffsetTranslation node and
-  //         is the deepest child of any transform tree on the contain: paint
-  //         element.
+  // +-[ TransformIsolationNode ]
+  //     This serves as a parent to subtree transforms on an element with
+  //     paint containment. It induces a PaintOffsetTranslation node and
+  //     is the deepest child of any transform tree on the contain: paint
+  //     element.
   //
   // This hierarchy is related to the order of transform operations in
   // https://drafts.csswg.org/css-transforms-2/#accumulated-3d-transformation-matrix-computation
@@ -250,9 +262,36 @@ class CORE_EXPORT ObjectPaintProperties
     return nodes_.HasFieldInRange(NodeId::kFirstCSSTransform,
                                   NodeId::kLastCSSTransform);
   }
-  std::array<const TransformPaintPropertyNode*, 5>
-  AllCSSTransformPropertiesOutsideToInside() const {
-    return {Translate(), Rotate(), Scale(), Offset(), Transform()};
+
+  // Existing CSS transform property nodes (Translate, Rotate, Scale, Offset,
+  // Transform) in outside-to-inside order, skipping absent nodes.
+  class CSSTransformRange {
+    STACK_ALLOCATED();
+
+   public:
+    CSSTransformRange() = default;
+    explicit CSSTransformRange(
+        const std::array<const TransformPaintPropertyNode*, 5>& nodes) {
+      for (const auto* node : nodes) {
+        if (node) {
+          nodes_[count_++] = node;
+        }
+      }
+    }
+    auto begin() const { return base::span(nodes_).first(count_).begin(); }
+    auto end() const { return base::span(nodes_).first(count_).end(); }
+
+   private:
+    std::array<const TransformPaintPropertyNode*, 5> nodes_ = {nullptr};
+    unsigned count_ = 0;
+  };
+
+  CSSTransformRange CSSTransformPropertiesOutsideToInside() const {
+    if (!HasCSSTransformPropertyNode()) [[likely]] {
+      return CSSTransformRange();
+    }
+    return CSSTransformRange(
+        {Translate(), Rotate(), Scale(), Offset(), Transform()});
   }
 
   ADD_TRANSFORM(PaintOffsetTranslation, NodeId::kPaintOffsetTranslation)
@@ -264,13 +303,19 @@ class CORE_EXPORT ObjectPaintProperties
   ADD_TRANSFORM(Scale, NodeId::kScale)
   ADD_TRANSFORM(Offset, NodeId::kOffset)
   ADD_TRANSFORM(Transform, NodeId::kTransform)
+  ADD_TRANSFORM(ContentTranslation, NodeId::kContentTranslation)
   ADD_TRANSFORM(Perspective, NodeId::kPerspective)
   ADD_TRANSFORM(ReplacedContentTransform, NodeId::kReplacedContentTransform)
   ADD_TRANSFORM(ScrollTranslation, NodeId::kScrollTranslation)
+  ADD_TRANSFORM(UnboundedWrapperTransform, NodeId::kUnboundedWrapperTransform)
+  ADD_TRANSFORM(UnboundedInnerTransform, NodeId::kUnboundedInnerTransform)
   using ScrollPaintPropertyNodeOrAlias = ScrollPaintPropertyNode;
   ADD_ALIAS_NODE(Transform, TransformIsolationNode, NodeId::kTransformAlias)
 
   ADD_NODE(Scroll, Scroll, NodeId::kScroll)
+  ScrollPaintPropertyNode* MutableScroll() {
+    return GetNode<ScrollPaintPropertyNode>(NodeId::kScroll);
+  }
 
   // Effect node method declarations.
   //
@@ -320,6 +365,7 @@ class CORE_EXPORT ObjectPaintProperties
   ADD_EFFECT(ViewTransitionScopeRootEffect,
              NodeId::kViewTransitionScopeRootEffect)
   ADD_EFFECT(ViewTransitionEffect, NodeId::kViewTransitionEffect)
+  ADD_EFFECT(UnboundedWrapperEffect, NodeId::kUnboundedWrapperEffect)
   ADD_EFFECT(Effect, NodeId::kEffect)
   ADD_EFFECT(Filter, NodeId::kFilter)
   ADD_EFFECT(Mask, NodeId::kMask)

@@ -18,9 +18,10 @@ import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 import type {FilePath} from '//resources/mojo/mojo/public/mojom/base/file_path.mojom-webui.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 
-import {BrowserProxy} from './browser_proxy.js';
-import type {AudioData, Capabilities, InputPiece, ResponseChunk, ResponseSummary} from './on_device_model.mojom-webui.js';
-import {LoadModelResult, OnDeviceModelRemote, PerformanceClass, SessionRemote, StreamingResponderCallbackRouter, Token} from './on_device_model.mojom-webui.js';
+import {browserProxyFactory} from './on_device_internals_page.mojom-webui.js';
+import type {BrowserProxy} from './on_device_internals_page.mojom-webui.js';
+import {InputSource, LoadModelResult, OnDeviceModelRemote, PerformanceClass, SessionRemote, StreamingResponderCallbackRouter, Token} from './on_device_model.mojom-webui.js';
+import type {AudioData, Capabilities, InputPiece} from './on_device_model.mojom-webui.js';
 import {ModelPerformanceHint} from './on_device_model_service.mojom-webui.js';
 import {getCss} from './tools.css.js';
 import {getHtml} from './tools.html.js';
@@ -132,6 +133,7 @@ class OnDeviceInternalsToolsElement extends CrLitElement {
       audioError_: {type: String},
       performanceHint_: {type: String},
       loadedPerformanceHint_: {type: Number},
+      showPlatformModelCheckbox_: {type: Boolean},
     };
   }
 
@@ -147,7 +149,7 @@ class OnDeviceInternalsToolsElement extends CrLitElement {
   private accessor modelPath_: string = '';
   protected accessor model_: OnDeviceModelRemote|null = null;
   protected accessor performanceClassText_: string = 'Loading...';
-  protected showPlatformModelCheckbox_: boolean =
+  protected accessor showPlatformModelCheckbox_: boolean =
       loadTimeData.getBoolean('useChromeOSModelService');
   protected accessor usePlatformModel_: boolean = false;
   protected accessor responses_: Response[] = [];
@@ -161,9 +163,11 @@ class OnDeviceInternalsToolsElement extends CrLitElement {
   private accessor loadedPerformanceHint_: ModelPerformanceHint|null = null;
 
   private session_: SessionRemote|null = null;
-  private proxy_: BrowserProxy = BrowserProxy.getInstance();
+  private proxy_: BrowserProxy = browserProxyFactory.getInstance();
   private responseRouter_: StreamingResponderCallbackRouter =
       new StreamingResponderCallbackRouter();
+  private sessionTemperature_: number = 0;
+  private sessionTopK_: number = 1;
 
   override firstUpdated() {
     this.getPerformanceClass_();
@@ -329,13 +333,18 @@ class OnDeviceInternalsToolsElement extends CrLitElement {
         {
           maxTokens: 0,
           input: {pieces: textToInputPieces(this.contextText_)},
+          inputSource: InputSource.kUserInput,
         },
         null);
     this.contextLength_ += this.contextText_.split(/(\s+)/).length;
     this.contextText_ = '';
   }
 
-  protected startNewSession_() {
+  protected onStartNewSessionClick_() {
+    this.startNewSession_();
+  }
+
+  private startNewSession_() {
     if (this.model_ === null) {
       return;
     }
@@ -350,6 +359,8 @@ class OnDeviceInternalsToolsElement extends CrLitElement {
         audioInput: this.audioEnabled_(),
       },
     });
+    this.sessionTopK_ = this.topK_;
+    this.sessionTemperature_ = this.temperature_;
   }
 
   protected onCancelClick_() {
@@ -419,6 +430,10 @@ class OnDeviceInternalsToolsElement extends CrLitElement {
     if (!this.$.temperatureInput.validate()) {
       return;
     }
+    if (this.topK_ !== this.sessionTopK_ ||
+        this.temperature_ !== this.sessionTemperature_) {
+      this.startNewSession_();
+    }
     const pieces = textToInputPieces(this.text_);
     if (this.imageFile_ !== null) {
       const bitmap = await this.decodeBitmap_();
@@ -446,27 +461,27 @@ class OnDeviceInternalsToolsElement extends CrLitElement {
         {
           maxTokens: 0,
           input: {pieces: pieces},
+          inputSource: InputSource.kUserInput,
         },
         null);
     clonedSession.generate(
         {
           maxOutputTokens: 0,
           constraint: null,
+          addOutputTokensToContext: false,
         },
         this.responseRouter_.$.bindNewPipeAndPassRemote());
-    const onResponseId =
-        this.responseRouter_.onResponse.addListener((chunk: ResponseChunk) => {
-          assert(this.currentResponse_);
-          this.currentResponse_.response =
-              (this.currentResponse_?.response + chunk.text).trimStart();
-          this.requestUpdate();
-        });
-    const onCompleteId =
-        this.responseRouter_.onComplete.addListener((_: ResponseSummary) => {
-          this.addResponse_();
-          this.responseRouter_.removeListener(onResponseId);
-          this.responseRouter_.removeListener(onCompleteId);
-        });
+    const onResponseId = this.responseRouter_.onResponse.addListener(chunk => {
+      assert(this.currentResponse_);
+      this.currentResponse_.response =
+          (this.currentResponse_?.response + chunk.text).trimStart();
+      this.requestUpdate();
+    });
+    const onCompleteId = this.responseRouter_.onComplete.addListener(_ => {
+      this.addResponse_();
+      this.responseRouter_.removeListener(onResponseId);
+      this.responseRouter_.removeListener(onCompleteId);
+    });
     this.currentResponse_ = {
       text: this.text_,
       response: '',
@@ -524,23 +539,24 @@ class OnDeviceInternalsToolsElement extends CrLitElement {
     this.contextExpanded_ = e.detail.value;
   }
 
-  protected onContextTextChanged_(e: CustomEvent<{value: string}>) {
+  protected onContextTextValueChanged_(e: CustomEvent<{value: string}>) {
     this.contextText_ = e.detail.value;
   }
 
-  protected onTextChanged_(e: CustomEvent<{value: string}>) {
+  protected onTextValueChanged_(e: CustomEvent<{value: string}>) {
     this.text_ = e.detail.value;
   }
 
-  protected onTopKChanged_(e: CustomEvent<{value: number}>) {
-    this.topK_ = e.detail.value;
+  protected onTopKValueChanged_(e: CustomEvent<{value: string}>) {
+    this.topK_ = Number(e.detail.value);
   }
 
-  protected onTemperatureChanged_(e: CustomEvent<{value: number}>) {
-    this.temperature_ = e.detail.value;
+  protected onTemperatureValueChanged_(e: CustomEvent<{value: string}>) {
+    this.temperature_ = Number(e.detail.value);
   }
 
-  protected onUsePlatformModelChanged_(e: CustomEvent<{value: boolean}>) {
+  protected onUsePlatformModelCheckedChanged_(
+      e: CustomEvent<{value: boolean}>) {
     this.usePlatformModel_ = e.detail.value;
   }
 }

@@ -7,6 +7,7 @@
 #include <memory>
 #include <string_view>
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -17,9 +18,7 @@
 #include "base/version.h"
 #include "chrome/browser/apps/app_service/chrome_app_deprecation/proto/chrome_app_deprecation.pb.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
-#include "chrome/browser/extensions/crx_installer.h"
 #include "chrome/browser/extensions/extension_service_test_base.h"
-#include "chrome/common/pref_names.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/extension_builder.h"
@@ -27,7 +26,6 @@
 #include "extensions/test/test_extension_dir.h"
 
 using extensions::ChromeTestExtensionLoader;
-using extensions::CrxInstaller;
 using extensions::Extension;
 using extensions::ExtensionBuilder;
 using extensions::ExtensionRegistry;
@@ -62,15 +60,15 @@ class ChromeAppDeprecationTest : public extensions::ExtensionServiceTestBase {
 
   scoped_refptr<const Extension> InstallTestApp(Profile* profile) {
     // Build a simple Chrome App.
-    base::Value::Dict manifest =
-        base::Value::Dict()
+    base::DictValue manifest =
+        base::DictValue()
             .Set("name", "Test app")
             .Set("version", "1.0.0")
             .Set("manifest_version", 3)
             .Set("description", "an extension")
-            .Set("app", base::Value::Dict().Set(
-                            "launch", base::Value::Dict().Set("local_path",
-                                                              "test.html")));
+            .Set("app", base::DictValue().Set(
+                            "launch",
+                            base::DictValue().Set("local_path", "test.html")));
 
     TestExtensionDir good_extension_dir;
     good_extension_dir.WriteManifest(manifest);
@@ -235,8 +233,8 @@ TEST_F(ChromeAppDeprecationKioskTest, EnabledFeatureFlag) {
 TEST_F(ChromeAppDeprecationKioskTest, DisabledFeatureFlagDefaultPolicy) {
   scoped_feature_list_.InitAndDisableFeature(kAllowChromeAppsInKioskSessions);
   ASSERT_FALSE(base::FeatureList::IsEnabled(kAllowChromeAppsInKioskSessions));
-  ASSERT_FALSE(
-      profile()->GetPrefs()->GetBoolean(prefs::kKioskChromeAppsForceAllowed));
+  ASSERT_FALSE(profile()->GetPrefs()->GetBoolean(
+      ash::prefs::kKioskChromeAppsForceAllowed));
 
   EXPECT_EQ(HandleDeprecation(app_->id(), profile()),
             DeprecationStatus::kLaunchBlocked);
@@ -246,13 +244,34 @@ TEST_F(ChromeAppDeprecationKioskTest, DisabledFeatureFlagDefaultPolicy) {
                   /*DeprecationCheckOutcome::kKioskModeBlocked*/ 6, 1)));
 }
 
-TEST_F(ChromeAppDeprecationKioskTest, DisabledFeatureFlagOverridenByPolicy) {
+TEST_F(ChromeAppDeprecationKioskTest, DisabledFeatureFlagEnabledPolicy) {
   scoped_feature_list_.InitAndDisableFeature(kAllowChromeAppsInKioskSessions);
   ASSERT_FALSE(base::FeatureList::IsEnabled(kAllowChromeAppsInKioskSessions));
 
-  profile()->GetPrefs()->SetBoolean(prefs::kKioskChromeAppsForceAllowed, true);
-  ASSERT_TRUE(
-      profile()->GetPrefs()->GetBoolean(prefs::kKioskChromeAppsForceAllowed));
+  profile()->GetPrefs()->SetBoolean(ash::prefs::kKioskChromeAppsForceAllowed,
+                                    true);
+  ASSERT_TRUE(profile()->GetPrefs()->GetBoolean(
+      ash::prefs::kKioskChromeAppsForceAllowed));
+
+  ScopedSkipSystemDialogForTesting skip_system_dialog;
+  EXPECT_EQ(HandleDeprecation(app_->id(), profile()),
+            DeprecationStatus::kLaunchBlocked);
+
+  EXPECT_THAT(
+      histogram_tester_.GetAllSamples(kHistogram),
+      BucketsAre(base::Bucket(
+          /*DeprecationCheckOutcome::kKioskModeBlockedButAllowedByAdminPolicy*/
+          14, 1)));
+}
+
+TEST_F(ChromeAppDeprecationKioskTest, EnabledFeatureFlagAndPolicy) {
+  scoped_feature_list_.InitAndEnableFeature(kAllowChromeAppsInKioskSessions);
+  ASSERT_TRUE(base::FeatureList::IsEnabled(kAllowChromeAppsInKioskSessions));
+
+  profile()->GetPrefs()->SetBoolean(ash::prefs::kKioskChromeAppsForceAllowed,
+                                    true);
+  ASSERT_TRUE(profile()->GetPrefs()->GetBoolean(
+      ash::prefs::kKioskChromeAppsForceAllowed));
 
   EXPECT_EQ(HandleDeprecation(app_->id(), profile()),
             DeprecationStatus::kLaunchAllowed);

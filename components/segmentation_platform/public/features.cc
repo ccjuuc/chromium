@@ -93,13 +93,6 @@ BASE_FEATURE(kSegmentationPlatformPasswordManagerUser,
 BASE_FEATURE(kSegmentationPlatformTabResumptionRanker,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kSegmentationPlatformIosModuleRanker,
-#if BUILDFLAG(IS_IOS)
-             base::FEATURE_ENABLED_BY_DEFAULT);
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT);
-#endif
-
 BASE_FEATURE(kSegmentationPlatformAndroidHomeModuleRanker,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -121,14 +114,7 @@ BASE_FEATURE(kSegmentationPlatformComposePromotion,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSegmentationPlatformUmaFromSqlDb,
-#if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_IOS)
-             base::FEATURE_ENABLED_BY_DEFAULT);
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT);
-#endif
-
-BASE_FEATURE(kSegmentationPlatformIosModuleRankerSplitBySurface,
-#if BUILDFLAG(IS_IOS)
+#if !BUILDFLAG(IS_CHROMEOS)
              base::FEATURE_ENABLED_BY_DEFAULT);
 #else
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -157,35 +143,6 @@ BASE_FEATURE(kSegmentationPlatformEphemeralCardRanker,
              base::FEATURE_DISABLED_BY_DEFAULT);
 #endif
 
-// Feature flag for enabling the Tips Emphemeral Card.
-BASE_FEATURE(kSegmentationPlatformTipsEphemeralCard,
-#if BUILDFLAG(IS_IOS)
-             base::FEATURE_ENABLED_BY_DEFAULT);
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT);
-#endif
-
-const char kTipsEphemeralCardExperimentTrainParam[] =
-    "TipsEphemeralCardExperimentTrainParam";
-
-std::string TipsExperimentTrainEnabled() {
-  return base::GetFieldTrialParamByFeatureAsString(
-      segmentation_platform::features::kSegmentationPlatformTipsEphemeralCard,
-      kTipsEphemeralCardExperimentTrainParam,
-      /*default_value=*/
-      base::StrCat({kLensEphemeralModuleSearchVariation, ",",
-                    kEnhancedSafeBrowsingEphemeralModule}));
-}
-
-const char kTipsEphemeralCardModuleMaxImpressionCount[] =
-    "TipsEphemeralCardModuleMaxImpressionCount";
-
-int GetTipsEphemeralCardModuleMaxImpressionCount() {
-  return base::GetFieldTrialParamByFeatureAsInt(
-      segmentation_platform::features::kSegmentationPlatformTipsEphemeralCard,
-      kTipsEphemeralCardModuleMaxImpressionCount, /*default_value=*/3);
-}
-
 BASE_FEATURE(kSegmentationSurveyPage,
 #if BUILDFLAG(IS_ANDROID)
              base::FEATURE_ENABLED_BY_DEFAULT);
@@ -195,8 +152,6 @@ BASE_FEATURE(kSegmentationSurveyPage,
 
 constexpr base::FeatureParam<bool> kSegmentationSurveyInternalsPage{
     &kSegmentationSurveyPage, "survey_internals_page", /*default_value=*/true};
-
-BASE_FEATURE(kEducationalTipModule, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kAndroidAppIntegrationModule, base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -213,29 +168,9 @@ BASE_FEATURE(kSegmentationPlatformFedCmUser, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kDefaultBrowserPromoPropensityModel,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kAppBundlePromoEphemeralCard,
-#if BUILDFLAG(IS_IOS)
-             base::FEATURE_DISABLED_BY_DEFAULT);
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT);
-#endif
-
-constexpr base::FeatureParam<int> kMaxAppBundlePromoImpressions{
-    &kAppBundlePromoEphemeralCard, "max_app_bundle_promo_impressions",
-    /*default_value=*/3};
-
-constexpr base::FeatureParam<int> kMaxAppBundleAppsInstalled{
-    &kAppBundlePromoEphemeralCard, "max_app_bundle_apps_installed",
-    /*default_value=*/4};
-
-bool IsAppBundlePromoEphemeralCardEnabled() {
-  return base::FeatureList::IsEnabled(
-      segmentation_platform::features::kAppBundlePromoEphemeralCard);
-}
-
 BASE_FEATURE(kDefaultBrowserMagicStackIos,
 #if BUILDFLAG(IS_IOS)
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 #else
              base::FEATURE_DISABLED_BY_DEFAULT);
 #endif
@@ -244,11 +179,6 @@ constexpr base::FeatureParam<int> kMaxDefaultBrowserMagicStackIosImpressions{
     &kDefaultBrowserMagicStackIos,
     "max_default_browser_magic_stack_ios_impressions",
     /*default_value=*/6};
-
-bool IsDefaultBrowserMagicStackEnabled() {
-  return base::FeatureList::IsEnabled(
-      segmentation_platform::features::kDefaultBrowserMagicStackIos);
-}
 
 BASE_FEATURE(kAndroidTipsNotifications, base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -271,5 +201,69 @@ constexpr base::FeatureParam<int> kStartTimeMinutes{&kAndroidTipsNotifications,
 constexpr base::FeatureParam<int> kWindowTimeMinutes{&kAndroidTipsNotifications,
                                                      "window_time_minutes",
                                                      /*default_value=*/120};
+
+constexpr base::FeatureParam<bool> kEnableEnhancedSafeBrowsingTip{
+    &kAndroidTipsNotifications, "enable_enhanced_safe_browsing_tip",
+    /*default_value=*/true};
+
+constexpr base::FeatureParam<bool> kEnableQuickDeleteTip{
+    &kAndroidTipsNotifications, "enable_quick_delete_tip",
+    /*default_value=*/true};
+
+constexpr base::FeatureParam<bool> kEnableGoogleLensTip{
+    &kAndroidTipsNotifications, "enable_google_lens_tip",
+    /*default_value=*/true};
+
+constexpr base::FeatureParam<bool> kEnableBottomOmniboxTip{
+    &kAndroidTipsNotifications, "enable_bottom_omnibox_tip",
+    /*default_value=*/true};
+
+BASE_FEATURE(kAndroidTipsNotificationsV2, base::FEATURE_DISABLED_BY_DEFAULT);
+
+constexpr base::FeatureParam<bool> kEcosystemLockIn{
+    &kAndroidTipsNotificationsV2, "ecosystem_lock_in",
+    /*default_value=*/false};
+
+constexpr base::FeatureParam<bool> kUtilityAndOrganization{
+    &kAndroidTipsNotificationsV2, "utility_and_organization",
+    /*default_value=*/false};
+
+constexpr base::FeatureParam<bool> kEnablePasswordAutofillTip{
+    &kAndroidTipsNotificationsV2, "enable_password_autofill_tip",
+    /*default_value=*/true};
+
+constexpr base::FeatureParam<bool> kEnableSigninTip{
+    &kAndroidTipsNotificationsV2, "enable_signin_tip",
+    /*default_value=*/true};
+
+constexpr base::FeatureParam<bool> kEnableCreateTabGroupsTip{
+    &kAndroidTipsNotificationsV2, "enable_create_tab_groups_tip",
+    /*default_value=*/true};
+
+constexpr base::FeatureParam<bool> kEnableCustomizeMVTTip{
+    &kAndroidTipsNotificationsV2, "enable_customize_mvt_tip",
+    /*default_value=*/true};
+
+constexpr base::FeatureParam<bool> kEnableRecentTabsTip{
+    &kAndroidTipsNotificationsV2, "enable_recent_tabs_tip",
+    /*default_value=*/true};
+
+BASE_FEATURE(kNewTabPageCustomizationV2, base::FEATURE_ENABLED_BY_DEFAULT);
+constexpr base::FeatureParam<bool> kNewTabPageCustomizationV2ShowPromo{
+    &kNewTabPageCustomizationV2, "show_promo",
+    /*default_value=*/true};
+constexpr base::FeatureParam<int>
+    kNewTabPageCustomizationV2PromoDisplayIntervalDays{
+        &kNewTabPageCustomizationV2, "promo_display_interval_days",
+        /*default_value=*/7};
+
+constexpr base::FeatureParam<int> kNewTabPageCustomizationV2IphMaxImpression{
+    &kNewTabPageCustomizationV2, "iph_max_impression",
+    /*default_value=*/3};
+
+constexpr base::FeatureParam<int>
+    kNewTabPageCustomizationV2IphDisplayIntervalDays{
+        &kNewTabPageCustomizationV2, "iph_display_interval_days",
+        /*default_value=*/7};
 
 }  // namespace segmentation_platform::features

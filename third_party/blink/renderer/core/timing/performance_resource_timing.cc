@@ -98,7 +98,7 @@ PerformanceResourceTiming::PerformanceResourceTiming(
     base::TimeTicks time_origin,
     bool cross_origin_isolated_capability,
     ExecutionContext* context,
-    uint32_t navigation_id)
+    uint64_t navigation_id)
     : PerformanceEntry(
           info->name.IsNull() ? g_empty_atom : AtomicString(info->name),
           Performance::MonotonicTimeToDOMHighResTimeStamp(
@@ -121,6 +121,16 @@ PerformanceResourceTiming::PerformanceResourceTiming(
       info_(std::move(info)) {
   if (!server_timing_.empty()) {
     UseCounter::Count(context, WebFeature::kPerformanceServerTiming);
+  }
+  if (info_->service_worker_router_info) {
+    if (info_->service_worker_router_info->matched_source_type) {
+      UseCounter::Count(context,
+                        WebFeature::kResourceTimingWorkerMatchedSourceType);
+    }
+    if (info_->service_worker_router_info->actual_source_type) {
+      UseCounter::Count(context,
+                        WebFeature::kResourceTimingWorkerFinalSourceType);
+    }
   }
 }
 
@@ -518,16 +528,10 @@ void PerformanceResourceTiming::BuildJSONValue(V8ObjectBuilder& builder) const {
   builder.AddString("initiatorType", initiatorType());
   builder.AddString("deliveryType", deliveryType());
   builder.AddString("nextHopProtocol", nextHopProtocol());
-  if (RuntimeEnabledFeatures::RenderBlockingStatusEnabled()) {
-    builder.AddString("renderBlockingStatus",
-                      renderBlockingStatus().AsStringView());
-  }
-  if (RuntimeEnabledFeatures::ResourceTimingContentTypeEnabled()) {
-    builder.AddString("contentType", contentType());
-  }
-  if (RuntimeEnabledFeatures::ResourceTimingContentEncodingEnabled()) {
-    builder.AddString("contentEncoding", contentEncoding());
-  }
+  builder.AddString("renderBlockingStatus",
+                    renderBlockingStatus().AsStringView());
+  builder.AddString("contentType", contentType());
+  builder.AddString("contentEncoding", contentEncoding());
   builder.AddNumber("workerStart", workerStart());
   if (RuntimeEnabledFeatures::ServiceWorkerStaticRouterTimingInfoEnabled(
           ExecutionContext::From(builder.GetScriptState()))) {

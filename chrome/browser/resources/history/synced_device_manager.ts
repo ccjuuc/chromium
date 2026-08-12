@@ -8,6 +8,7 @@ import 'chrome://resources/cr_elements/cr_lazy_render/cr_lazy_render_lit.js';
 import './synced_device_card.js';
 import '/strings.m.js';
 
+import {browserProxyFactory} from 'chrome://resources/cr_components/history/foreign_sessions.mojom-webui.js';
 // <if expr="not is_chromeos">
 import type {AccountInfo} from 'chrome://resources/cr_components/history/history.mojom-webui.js';
 // </if>
@@ -21,7 +22,7 @@ import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
-import {BrowserServiceImpl} from './browser_service.js';
+import {BrowserProxyImpl} from './browser_proxy.js';
 import {HistorySignInState, SYNCED_TABS_HISTOGRAM_NAME, SyncedTabsHistogram, SyncState} from './constants.js';
 import type {ForeignSession, ForeignSessionTab, HistoryIdentityState} from './externs.js';
 import type {HistorySyncedDeviceCardElement} from './synced_device_card.js';
@@ -47,9 +48,9 @@ declare global {
 
 export interface HistorySyncedDeviceManagerElement {
   $: {
-    'menu': CrLazyRenderLitElement<CrActionMenuElement>,
-    'no-synced-tabs': HTMLElement,
-    'sign-in-guide': HTMLElement,
+    menu: CrLazyRenderLitElement<CrActionMenuElement>,
+    noSyncedTabs: HTMLElement,
+    signInGuide: HTMLElement,
   };
 }
 
@@ -120,11 +121,50 @@ export class HistorySyncedDeviceManagerElement extends
     historySync: SyncState.TURNED_OFF,
   };
   accessor searchTerm: string = '';
-  accessor sessionList: ForeignSession[] = [];
+  accessor sessionList: ForeignSession[]|null = null;
 
-  override firstUpdated() {
-    this.addEventListener('synced-device-card-open-menu', this.onOpenMenu_);
-    this.addEventListener('update-focus-grid', this.updateFocusGrid_);
+  override connectedCallback() {
+    super.connectedCallback();
+    this.focusGrid_ = new FocusGrid();
+
+    // Update the sign in state.
+    BrowserProxyImpl.getInstance().otherDevicesInitialized();
+    BrowserProxyImpl.getInstance().recordHistogram(
+        SYNCED_TABS_HISTOGRAM_NAME, SyncedTabsHistogram.INITIALIZED,
+        SyncedTabsHistogram.LIMIT);
+
+    BrowserProxyImpl.getInstance().getInitialIdentityState().then(
+        (identityState: HistoryIdentityState) => {
+          this.historyIdentityState_ = identityState;
+        });
+
+    this.addWebUiListener(
+        'history-identity-state-changed',
+        (identityState: HistoryIdentityState) => this.historyIdentityState_ =
+            identityState);
+
+    // <if expr="not is_chromeos">
+    this.onAccountInfoDataReceivedListenerId_ =
+        BrowserProxyImpl.getInstance()
+            .callbackRouter.sendAccountInfo.addListener(
+                this.handleAccountInfoChanged_.bind(this));
+
+    BrowserProxyImpl.getInstance().handler.requestAccountInfo().then(
+        ({accountInfo}) => this.handleAccountInfoChanged_(accountInfo));
+    // </if>
+  }
+
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    this.focusGrid_!.destroy();
+
+    // <if expr="not is_chromeos">
+    if (this.onAccountInfoDataReceivedListenerId_ !== null) {
+      BrowserProxyImpl.getInstance().callbackRouter.removeListener(
+          this.onAccountInfoDataReceivedListenerId_);
+      this.onAccountInfoDataReceivedListenerId_ = null;
+    }
+    // </if>
   }
 
   override willUpdate(changedProperties: PropertyValues<this>) {
@@ -147,47 +187,9 @@ export class HistorySyncedDeviceManagerElement extends
     }
   }
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.focusGrid_ = new FocusGrid();
-
-    // Update the sign in state.
-    BrowserServiceImpl.getInstance().otherDevicesInitialized();
-    BrowserServiceImpl.getInstance().recordHistogram(
-        SYNCED_TABS_HISTOGRAM_NAME, SyncedTabsHistogram.INITIALIZED,
-        SyncedTabsHistogram.LIMIT);
-
-    BrowserServiceImpl.getInstance().getInitialIdentityState().then(
-        (identityState: HistoryIdentityState) => {
-          this.historyIdentityState_ = identityState;
-        });
-
-    this.addWebUiListener(
-        'history-identity-state-changed',
-        (identityState: HistoryIdentityState) => this.historyIdentityState_ =
-            identityState);
-
-    // <if expr="not is_chromeos">
-    this.onAccountInfoDataReceivedListenerId_ =
-        BrowserServiceImpl.getInstance()
-            .callbackRouter.sendAccountInfo.addListener(
-                this.handleAccountInfoChanged_.bind(this));
-
-    BrowserServiceImpl.getInstance().handler.requestAccountInfo().then(
-        ({accountInfo}) => this.handleAccountInfoChanged_(accountInfo));
-    // </if>
-  }
-
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    this.focusGrid_!.destroy();
-
-    // <if expr="not is_chromeos">
-    assert(this.onAccountInfoDataReceivedListenerId_);
-    BrowserServiceImpl.getInstance().callbackRouter.removeListener(
-        this.onAccountInfoDataReceivedListenerId_);
-    this.onAccountInfoDataReceivedListenerId_ = null;
-    // </if>
+  override firstUpdated() {
+    this.addEventListener('synced-device-card-open-menu', this.onOpenMenu_);
+    this.addEventListener('update-focus-grid', this.updateFocusGrid_);
   }
 
   configureSignInForTest(data: {
@@ -203,8 +205,8 @@ export class HistorySyncedDeviceManagerElement extends
     let tabs: ForeignSessionTab[] = [];
     const separatorIndexes = [];
     for (let i = 0; i < session.windows.length; i++) {
-      const windowId = session.windows[i].sessionId;
-      const newTabs = session.windows[i].tabs;
+      const windowId = session.windows[i]!.sessionId;
+      const newTabs = session.windows[i]!.tabs;
       if (newTabs.length === 0) {
         continue;
       }
@@ -221,7 +223,7 @@ export class HistorySyncedDeviceManagerElement extends
       } else {
         const searchText = this.searchTerm.toLowerCase();
         for (let j = 0; j < newTabs.length; j++) {
-          const tab = newTabs[j];
+          const tab = newTabs[j]!;
           if (tab.title.toLowerCase().indexOf(searchText) !== -1) {
             tabs.push(tab);
             windowAdded = true;
@@ -244,12 +246,12 @@ export class HistorySyncedDeviceManagerElement extends
   }
 
   protected onTurnOnSyncClick_() {
-    BrowserServiceImpl.getInstance().startTurnOnSyncFlow();
+    BrowserProxyImpl.getInstance().startTurnOnSyncFlow();
   }
 
   // <if expr="not is_chromeos">
   protected onTurnOnHistorySyncClick_() {
-    BrowserServiceImpl.getInstance().handler.turnOnHistorySync();
+    BrowserProxyImpl.getInstance().handler.turnOnHistorySync();
   }
 
   private handleAccountInfoChanged_(accountInfo: AccountInfo) {
@@ -260,7 +262,7 @@ export class HistorySyncedDeviceManagerElement extends
   private onOpenMenu_(e: CustomEvent<{tag: string, target: HTMLElement}>) {
     this.actionMenuModel_ = e.detail.tag;
     this.$.menu.get().showAt(e.detail.target);
-    BrowserServiceImpl.getInstance().recordHistogram(
+    BrowserProxyImpl.getInstance().recordHistogram(
         SYNCED_TABS_HISTOGRAM_NAME, SyncedTabsHistogram.SHOW_SESSION_MENU,
         SyncedTabsHistogram.LIMIT);
   }
@@ -268,12 +270,12 @@ export class HistorySyncedDeviceManagerElement extends
   protected onOpenAllClick_() {
     const menu = this.$.menu.getIfExists();
     assert(menu);
-    const browserService = BrowserServiceImpl.getInstance();
-    browserService.recordHistogram(
+    BrowserProxyImpl.getInstance().recordHistogram(
         SYNCED_TABS_HISTOGRAM_NAME, SyncedTabsHistogram.OPEN_ALL,
         SyncedTabsHistogram.LIMIT);
     assert(this.actionMenuModel_);
-    browserService.openForeignSessionAllTabs(this.actionMenuModel_);
+    browserProxyFactory.getInstance().handler.openForeignSessionAllTabs(
+        this.actionMenuModel_);
     this.actionMenuModel_ = null;
     menu.close();
   }
@@ -307,12 +309,12 @@ export class HistorySyncedDeviceManagerElement extends
   protected onDeleteSessionClick_() {
     const menu = this.$.menu.getIfExists();
     assert(menu);
-    const browserService = BrowserServiceImpl.getInstance();
-    browserService.recordHistogram(
+    BrowserProxyImpl.getInstance().recordHistogram(
         SYNCED_TABS_HISTOGRAM_NAME, SyncedTabsHistogram.HIDE_FOR_NOW,
         SyncedTabsHistogram.LIMIT);
     assert(this.actionMenuModel_);
-    browserService.deleteForeignSession(this.actionMenuModel_);
+    browserProxyFactory.getInstance().handler.deleteForeignSession(
+        this.actionMenuModel_);
     this.actionMenuModel_ = null;
     menu.close();
   }
@@ -365,7 +367,7 @@ export class HistorySyncedDeviceManagerElement extends
     const show = this.isSignInState_(HistorySignInState.SIGNED_OUT) &&
         !this.guestSession_ && this.signInAllowed_;
     if (show) {
-      BrowserServiceImpl.getInstance().recordAction(
+      BrowserProxyImpl.getInstance().recordAction(
           'Signin_Impression_FromRecentTabs');
     }
 
@@ -392,15 +394,17 @@ export class HistorySyncedDeviceManagerElement extends
    * this approach seems to have acceptable performance.
    */
   private updateSyncedDevices_() {
-    this.fetchingSyncedTabs_ = false;
-
-    if (!this.sessionList) {
+    // If the session list is null, the fetching is not done yet (otherwise it
+    // would be an empty array)
+    if (this.sessionList === null) {
       return;
     }
 
+    this.fetchingSyncedTabs_ = false;
+
     if (this.sessionList.length > 0 && !this.hasSeenForeignData_) {
       this.hasSeenForeignData_ = true;
-      BrowserServiceImpl.getInstance().recordHistogram(
+      BrowserProxyImpl.getInstance().recordHistogram(
           SYNCED_TABS_HISTOGRAM_NAME, SyncedTabsHistogram.HAS_FOREIGN_DATA,
           SyncedTabsHistogram.LIMIT);
     }
@@ -428,8 +432,7 @@ export class HistorySyncedDeviceManagerElement extends
       return;
     }
 
-    this.dispatchEvent(new CustomEvent(
-        'history-view-changed', {bubbles: true, composed: true}));
+    this.fire('history-view-changed');
 
     if (this.replaceSyncPromosWithSignInPromos_) {
       // User signed out, syncing without tabs, or disabled sync in general =>
@@ -437,17 +440,21 @@ export class HistorySyncedDeviceManagerElement extends
       if (this.isSignInState_(HistorySignInState.SIGNED_OUT) ||
           this.isTabsSyncDisabled_()) {
         this.clearDisplayedSyncedDevices_();
+        this.sessionList = null;
         return;
       }
     } else if (this.isSignInState_(HistorySignInState.SIGNED_OUT)) {
       // User signed out, clear synced device list and show the sign in promo.
       this.clearDisplayedSyncedDevices_();
+      this.sessionList = null;
       return;
     }
+    // If the session list is null, the fetching is not done yet. Set
+    // fetchingSyncedTabs_ to true to show the loading message when querying.
+    if (this.sessionList === null) {
+      this.fetchingSyncedTabs_ = true;
+    }
     this.updateSyncedDevices_();
-    // User signed in, show the loading message when querying for synced
-    // devices.
-    this.fetchingSyncedTabs_ = true;
   }
 
   private maybeRecordSigninPendingOffered_() {
@@ -466,7 +473,7 @@ export class HistorySyncedDeviceManagerElement extends
       return;
     }
 
-    BrowserServiceImpl.getInstance().recordSigninPendingOffered();
+    BrowserProxyImpl.getInstance().recordSigninPendingOffered();
     this.signinPausedImpressionRecorded_ = true;
   }
 
@@ -478,7 +485,7 @@ export class HistorySyncedDeviceManagerElement extends
   protected onCardOpenedChanged_(e: CustomEvent<{value: boolean}>) {
     const currentTarget = e.currentTarget as HTMLElement;
     const index = Number(currentTarget.dataset['index']);
-    const device = this.syncedDevices_[index];
+    const device = this.syncedDevices_[index]!;
     device.opened = e.detail.value;
     this.requestUpdate();
   }

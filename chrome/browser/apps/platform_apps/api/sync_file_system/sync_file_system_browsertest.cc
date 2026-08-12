@@ -111,7 +111,7 @@ class SyncFileSystemTest : public extensions::PlatformAppBrowserTest,
   void OnNewChangeAvailable() override {}
 
   SyncFileSystemService* sync_file_system_service() {
-    return SyncFileSystemServiceFactory::GetForProfile(browser()->profile());
+    return SyncFileSystemServiceFactory::GetForProfile(browser()->GetProfile());
   }
 
   drive_backend::SyncEngine* sync_engine() {
@@ -200,7 +200,7 @@ IN_PROC_BROWSER_TEST_F(SyncFileSystemTest, AuthorizationTest) {
                                     identity_manager()->GetPrimaryAccountInfo(
                                         signin::ConsentLevel::kSync),
                                     signin::ConsentLevel::kSync),
-                                signin_metrics::AccessPoint::kUnknown));
+                                signin_metrics::AccessPoint::kStartPage));
   WaitUntilIdle();
 
   bar_created.Reply("resume");

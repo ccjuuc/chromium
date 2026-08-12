@@ -34,6 +34,7 @@
 #include "components/search_engines/search_host_to_urls_map.h"
 #include "components/search_engines/search_terms_data.h"
 #include "components/search_engines/template_url.h"
+#include "components/search_engines/template_url_starter_pack_data.h"
 #include "components/sync/model/sync_change.h"
 #include "components/sync/model/syncable_service.h"
 #include "components/sync/protocol/search_engine_specifics.pb.h"
@@ -110,13 +111,11 @@ class TemplateURLService final : public WebDataServiceConsumer,
   using OwnedTemplateURLDataVector =
       EnterpriseSearchManager::OwnedTemplateURLDataVector;
 
-  static constexpr char kSearchPolicyConflictCountHistogramName[] =
-      "Search.SearchPolicyConflict.NumberOfSearchEngines";
-  static constexpr char kSearchPolicyHasConflictWithFeaturedHistogramName[] =
-      "Search.SearchPolicyConflict.HasConflictWith.WithFeatured";
-  static constexpr char kSearchPolicyHasConflictWithNonFeaturedHistogramName[] =
-      "Search.SearchPolicyConflict.HasConflictWith.WithNonFeatured";
   static constexpr char kKeywordCountHistogramName[] = "Omnibox.KeywordCount";
+  static constexpr char kLensOverlaySuggestPathPlaceholder[] =
+      "lensoverlayplaceholder";
+  static constexpr char kSuggestPath[] = "search";
+  static constexpr char kShortSuggestPath[] = "s";
 
   // Struct used for initializing the data store with fake data.
   // Each initializer is mapped to a TemplateURL.
@@ -138,19 +137,50 @@ class TemplateURLService final : public WebDataServiceConsumer,
     std::u16string search_terms;
   };
 
+  // Container for categorized search engine metadata. It groups TemplateURLs
+  // into specific buckets based on their type (e.g., prepopulated, starter
+  // pack, or custom) and their active state. This structure is primarily used
+  // to pass organized lists from the `TemplateURLService` to the WebUI settings
+  // page.
+  struct CategorizedTemplateUrls {
+    CategorizedTemplateUrls();
+    ~CategorizedTemplateUrls();
+    CategorizedTemplateUrls(const CategorizedTemplateUrls& other);
+
+    // All prepopulated engines retrieved from `GetPrepopulatedEngines()`, and
+    // custom shortcuts that are currently active. This always includes the
+    // current default search engine.
+    TemplateURLVector active_site_shortcuts;
+    // Custom shortcuts that are currently active.
+    TemplateURLVector inactive_site_shortcuts;
+    // Shortcuts with a starter pack id and extensions that are currently
+    // active.
+    TemplateURLVector active_feature_shortcuts;
+    // Shortcuts with a starter pack id and extensions that are currently
+    // inactive.
+    TemplateURLVector inactive_feature_shortcuts;
+  };
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  struct PrepopulatedAndRecentlyVisitedTemplateUrls {
+    PrepopulatedAndRecentlyVisitedTemplateUrls();
+    ~PrepopulatedAndRecentlyVisitedTemplateUrls();
+    PrepopulatedAndRecentlyVisitedTemplateUrls(
+        const PrepopulatedAndRecentlyVisitedTemplateUrls& other);
+
+    // All prepopulated engines retrieved from `GetPrepopulatedEngines()`. This
+    // always includes the current default search engine.
+    TemplateURLVector prepopulated_urls;
+    // A limited number of recently visited URLs, defined and sorted through
+    // `SortAndFilterRecentlyVisitedURLs()`
+    TemplateURLVector recently_visited_urls;
+  };
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+
   // Values for an enumerated histogram used to track keyword conflicts between
   // search engines created by policy and search engines the user manually
   // edited. Keep in sync with `SearchPolicyConflictType` in
   // tools/metrics/histograms/enums.xml.
-
-  // LINT.IfChange(SearchPolicyConflictType)
-  enum class SearchPolicyConflictType {
-    kNone = 0,
-    kWithFeatured = 1,
-    kWithNonFeatured = 2,
-    kMaxValue = kWithNonFeatured,
-  };
-  // LINT.ThenChange(//tools/metrics/histograms/metadata/search/enums.xml:SearchPolicyConflictType)
 
   TemplateURLService(
       PrefService& prefs,
@@ -236,7 +266,8 @@ class TemplateURLService final : public WebDataServiceConsumer,
   const TemplateURL* GetTemplateURLForHost(const std::string& host) const;
 
   // Returns the `TemplateURL` corresponding to `starter_pack_id`, if any.
-  TemplateURL* FindStarterPackTemplateURL(int starter_pack_id);
+  TemplateURL* FindStarterPackTemplateURL(
+      template_url_starter_pack_data::StarterPackId starter_pack_id);
 
   // Returns the `TemplateURL` associated with `extension_id`, if any.
   TemplateURL* FindTemplateURLForExtension(const std::string& extension_id,
@@ -410,6 +441,35 @@ class TemplateURLService final : public WebDataServiceConsumer,
   //       2.) The default search engine is disabled by policy.
   const TemplateURL* GetDefaultSearchProvider() const;
 
+  // Returns a CategorizedTemplateUrls object containing all TemplateURLs
+  // categorized into specific buckets (active/inactive site shortcuts and
+  // feature shortcuts).
+  //
+  // The ordering of `active_site_shortcuts` is specifically handled to ensure
+  // that prepopulated engines appear first, maintaining the natural order
+  // defined by the prepopulate_data_resolver. User-added (custom) engines
+  // are appended to the end of this list and sorted alphabetically.
+  //
+  // `disabled_starter_pack_ids` contains all `starter_pack_id`s that should not
+  // be included in either of the lists.
+  const CategorizedTemplateUrls GetCategorizedTemplateURLs(
+      template_url_starter_pack_data::StarterPackIdSet
+          disabled_starter_pack_ids =
+              template_url_starter_pack_data::StarterPackIdSet());
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  // Returns an object containing two lists. The first one contains engines that
+  // are prepopulated (in the order defined by the prepopulate_data_resolver,
+  // created by policy or the default search engine. The second one contains
+  // recently visited engines.
+  // In contrast to `GetCategorizedTemplateURLs()`, this only creates these two
+  // lists and omits any extension or starter pack shortcuts. Additionally, as
+  // there is no way to activate/deactivate engines on platforms that use this
+  // function, there is no notion of "active" here.
+  PrepopulatedAndRecentlyVisitedTemplateUrls
+  GetPrepopulatedAndRecentlyVisitedTemplateURLs();
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+
   // Returns the Origin of the user's default search engine. If a default search
   // engine is set and its URL is valid, the Origin of that URL is returned.
   // Otherwise, an opaque Origin with a unique nonce is returned.
@@ -469,6 +529,11 @@ class TemplateURLService final : public WebDataServiceConsumer,
   // added.  Unlike `RepairPrepopulatedSearchEngines()`, this does not modify
   // the default search engine entry.
   void RepairStarterPackEngines();
+
+  // Removes all user-added and auto-generated search engines from the model and
+  // database. Does not remove prepopulated engines, starter pack engines,
+  // policy engines, or extension-controlled engines.
+  void RemoveUserAddedTemplateURLs();
 
   // Observers used to listen for changes to the model.
   // TemplateURLService does NOT delete the observers when deleted.
@@ -653,7 +718,7 @@ class TemplateURLService final : public WebDataServiceConsumer,
       TemplateURLServiceSyncTestWithSeparateLocalAndAccountSearchEngines,
       MergeInSyncTemplateURL);
   FRIEND_TEST_ALL_PREFIXES(
-      TemplateURLServiceSyncTestWithAvoidFaviconOnlyCommits,
+      TemplateURLServiceSyncTestWithSeparateLocalAndAccountSearchEngines,
       ShouldNotCommitFaviconOnlyChanges);
 
   friend class InstantUnitTestBase;
@@ -889,11 +954,6 @@ class TemplateURLService final : public WebDataServiceConsumer,
   // Calls `EnterpriseSearchManager::AddOverriddenKeyword` and adds the keyword
   // of the `template_url` to the overridden keyword pref list.
   void AddOverriddenKeywordForTemplateURL(const TemplateURL* template_url);
-
-  // Logs a histogram to track keyword conflicts between search engines created
-  // by policy and search engines the user manually edited.
-  void LogSearchPolicyConflict(
-      const OwnedTemplateURLVector& policy_search_engines);
 
   const std::optional<regional_capabilities::CountryIdHolder>&
   initial_keywords_database_country() {

@@ -11,7 +11,6 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/types/pass_key.h"
 #include "chrome/browser/password_manager/password_manager_test_util.h"
-#include "chrome/browser/plus_addresses/plus_address_service_factory.h"
 #include "chrome/browser/ui/android/passwords/all_passwords_bottom_sheet_view.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-forward.h"
@@ -20,14 +19,11 @@
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/origin_credential_store.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
 #include "components/password_manager/core/browser/stub_password_manager_client.h"
 #include "components/password_manager/core/browser/stub_password_manager_driver.h"
 #include "components/password_manager/core/common/password_manager_features.h"
-#include "components/plus_addresses/core/browser/fake_plus_address_service.h"
-#include "components/plus_addresses/core/browser/plus_address_service.h"
-#include "components/plus_addresses/core/browser/plus_address_test_utils.h"
-#include "components/plus_addresses/core/common/features.h"
 #include "components/safe_browsing/core/browser/password_protection/stub_password_reuse_detection_manager_client.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "content/public/test/browser_task_environment.h"
@@ -48,7 +44,6 @@ using device_reauth::MockDeviceAuthenticator;
 using password_manager::PasswordForm;
 using password_manager::TestPasswordStore;
 using password_manager::UiCredential;
-using plus_addresses::FakePlusAddressService;
 
 using CallbackFunctionMock = testing::MockFunction<void()>;
 
@@ -79,7 +74,7 @@ class MockAllPasswordsBottomSheetView : public AllPasswordsBottomSheetView {
  public:
   MOCK_METHOD(void,
               Show,
-              (const std::vector<std::unique_ptr<PasswordForm>>&,
+              (const std::vector<password_manager::PasswordForm>&,
                FocusedFieldType),
               (override));
 };
@@ -129,24 +124,15 @@ class AllPasswordsBottomSheetControllerTest
     : public ChromeRenderViewHostTestHarness {
  protected:
   AllPasswordsBottomSheetControllerTest() {
-    // Make sure that the `kPlusAddressesEnabled` feature is known to be
-    // enabled, such that `PlusAddressServiceFactory` doesn't bail early with a
-    // null return.
     scoped_feature_list_.InitWithFeatures(
-        {password_manager::features::kBiometricTouchToFill,
-         plus_addresses::features::kPlusAddressesEnabled},
-        {});
+        {password_manager::features::kBiometricTouchToFill}, {});
   }
 
   void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
-    PlusAddressServiceFactory::GetInstance()->SetTestingFactory(
-        browser_context(),
-        base::BindRepeating(&AllPasswordsBottomSheetControllerTest::
-                                PlusAddressServiceTestFactory,
-                            base::Unretained(this)));
+
     profile_store_ = CreateAndUseTestPasswordStore(profile());
-    profile_store_->Init(/*affiliated_match_helper=*/nullptr);
+    profile_store_->Init();
     createAllPasswordsController(FocusedFieldType::kFillablePasswordField);
   }
 
@@ -163,11 +149,6 @@ class AllPasswordsBottomSheetControllerTest
             dissmissal_callback_.Get(), focused_field_type,
             mock_pwd_manager_client_.get(),
             mock_pwd_reuse_detection_manager_client_.get());
-  }
-
-  std::unique_ptr<KeyedService> PlusAddressServiceTestFactory(
-      content::BrowserContext* context) {
-    return std::make_unique<FakePlusAddressService>();
   }
 
   void TearDown() override {
@@ -224,18 +205,19 @@ TEST_F(AllPasswordsBottomSheetControllerTest, Show) {
   auto form3 = MakeSavedPassword(kExampleOrg, kUsername1);
   auto form4 = MakeSavedPassword(kExampleOrg, kUsername2);
 
-  profile_store().AddLogin(form1);
-  profile_store().AddLogin(form2);
-  profile_store().AddLogin(form3);
-  profile_store().AddLogin(form4);
+  profile_store().AddLogin(password_manager::FromPasswordForm(form1));
+  profile_store().AddLogin(password_manager::FromPasswordForm(form2));
+  profile_store().AddLogin(password_manager::FromPasswordForm(form3));
+  profile_store().AddLogin(password_manager::FromPasswordForm(form4));
   // Exceptions are not shown. Sites where saving is disabled still show pwds.
-  profile_store().AddLogin(MakePasswordException(kExampleDe));
-  profile_store().AddLogin(MakePasswordException(kExampleCom));
+  profile_store().AddLogin(
+      password_manager::FromPasswordForm(MakePasswordException(kExampleDe)));
+  profile_store().AddLogin(
+      password_manager::FromPasswordForm(MakePasswordException(kExampleCom)));
 
-  EXPECT_CALL(view(),
-              Show(UnorderedElementsAre(Pointee(Eq(form1)), Pointee(Eq(form2)),
-                                        Pointee(Eq(form3)), Pointee(Eq(form4))),
-                   FocusedFieldType::kFillablePasswordField));
+  EXPECT_CALL(view(), Show(UnorderedElementsAre(Eq(form1), Eq(form2), Eq(form3),
+                                                Eq(form4)),
+                           FocusedFieldType::kFillablePasswordField));
   all_passwords_controller()->Show();
 
   // Show method uses the store which has async work.
@@ -247,12 +229,11 @@ TEST_F(AllPasswordsBottomSheetControllerTest,
   auto form1 = MakeSavedPassword(kExampleCom, kUsername1);
   auto form2 = MakeSavedPassword(kExampleCom, kUsername2);
 
-  profile_store().AddLogin(form1);
-  profile_store().AddLogin(form2);
+  profile_store().AddLogin(password_manager::FromPasswordForm(form1));
+  profile_store().AddLogin(password_manager::FromPasswordForm(form2));
 
-  EXPECT_CALL(view(),
-              Show(UnorderedElementsAre(Pointee(Eq(form1)), Pointee(Eq(form2))),
-                   FocusedFieldType::kFillablePasswordField))
+  EXPECT_CALL(view(), Show(UnorderedElementsAre(Eq(form1), Eq(form2)),
+                           FocusedFieldType::kFillablePasswordField))
       .Times(1);
   all_passwords_controller()->Show();
   all_passwords_controller()->Show();
@@ -404,27 +385,14 @@ TEST_F(AllPasswordsBottomSheetControllerTest,
       kUsername1, kPassword, RequestsToFillPassword(true));
 }
 
-TEST_F(AllPasswordsBottomSheetControllerTest, IsPlusAddress) {
-  scoped_feature_list_.Reset();
-  scoped_feature_list_.InitWithFeatures(
-      {password_manager::features::kBiometricTouchToFill,
-       plus_addresses::features::kPlusAddressesEnabled},
-      {});
-
-  // Not a plus address according to the `FakePlusAddressService`.
-  EXPECT_FALSE(all_passwords_controller()->IsPlusAddress("exampe@gmail.com"));
-  EXPECT_TRUE(all_passwords_controller()->IsPlusAddress(
-      plus_addresses::test::kFakePlusAddress));
-}
-
 class AllPasswordsBottomSheetControllerAccountStoreTest
     : public AllPasswordsBottomSheetControllerTest {
   void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
     profile_store_ = CreateAndUseTestPasswordStore(profile());
-    profile_store_->Init(/*affiliated_match_helper=*/nullptr);
+    profile_store_->Init();
     account_store_ = CreateAndUseTestAccountPasswordStore(profile());
-    account_store_->Init(/*affiliated_match_helper=*/nullptr);
+    account_store_->Init();
     createAllPasswordsController(FocusedFieldType::kFillablePasswordField);
   }
 };
@@ -436,21 +404,22 @@ TEST_F(AllPasswordsBottomSheetControllerAccountStoreTest,
   auto form3 = MakeSavedPassword(kExampleOrg, kUsername1);
   auto form4 = MakeSavedPassword(kExampleOrg, kUsername2);
 
-  profile_store().AddLogin(form1);
-  account_store().AddLogin(form2);
-  account_store().AddLogin(form3);
-  profile_store().AddLogin(form4);
+  profile_store().AddLogin(password_manager::FromPasswordForm(form1));
+  account_store().AddLogin(password_manager::FromPasswordForm(form2));
+  account_store().AddLogin(password_manager::FromPasswordForm(form3));
+  profile_store().AddLogin(password_manager::FromPasswordForm(form4));
   // Exceptions are not shown.
-  profile_store().AddLogin(MakePasswordException(kExampleCom));
-  account_store().AddLogin(MakePasswordException(kExampleCom));
+  profile_store().AddLogin(
+      password_manager::FromPasswordForm(MakePasswordException(kExampleCom)));
+  account_store().AddLogin(
+      password_manager::FromPasswordForm(MakePasswordException(kExampleCom)));
 
   form2.in_store = password_manager::PasswordForm::Store::kAccountStore;
   form3.in_store = password_manager::PasswordForm::Store::kAccountStore;
 
-  EXPECT_CALL(view(),
-              Show(UnorderedElementsAre(Pointee(Eq(form1)), Pointee(Eq(form2)),
-                                        Pointee(Eq(form3)), Pointee(Eq(form4))),
-                   FocusedFieldType::kFillablePasswordField));
+  EXPECT_CALL(view(), Show(UnorderedElementsAre(Eq(form1), Eq(form2), Eq(form3),
+                                                Eq(form4)),
+                           FocusedFieldType::kFillablePasswordField));
   all_passwords_controller()->Show();
 
   // Show method uses the store which has async work.
@@ -462,17 +431,17 @@ TEST_F(AllPasswordsBottomSheetControllerAccountStoreTest,
   auto form1 = MakeSavedPassword(kExampleCom, kUsername1);
   auto form2 = MakeSavedPassword(kExampleCom, kUsername2);
 
-  account_store().AddLogin(form1);
-  account_store().AddLogin(form2);
+  account_store().AddLogin(password_manager::FromPasswordForm(form1));
+  account_store().AddLogin(password_manager::FromPasswordForm(form2));
   // Exceptions are not shown.
-  account_store().AddLogin(MakePasswordException(kExampleCom));
+  account_store().AddLogin(
+      password_manager::FromPasswordForm(MakePasswordException(kExampleCom)));
 
   form1.in_store = password_manager::PasswordForm::Store::kAccountStore;
   form2.in_store = password_manager::PasswordForm::Store::kAccountStore;
 
-  EXPECT_CALL(view(),
-              Show(UnorderedElementsAre(Pointee(Eq(form1)), Pointee(Eq(form2))),
-                   FocusedFieldType::kFillablePasswordField));
+  EXPECT_CALL(view(), Show(UnorderedElementsAre(Eq(form1), Eq(form2)),
+                           FocusedFieldType::kFillablePasswordField));
   all_passwords_controller()->Show();
 
   // Show method uses the store which has async work.

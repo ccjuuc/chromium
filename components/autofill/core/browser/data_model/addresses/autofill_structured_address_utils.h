@@ -5,6 +5,8 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_ADDRESSES_AUTOFILL_STRUCTURED_ADDRESS_UTILS_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_ADDRESSES_AUTOFILL_STRUCTURED_ADDRESS_UTILS_H_
 
+#include <functional>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <optional>
@@ -16,10 +18,7 @@
 #include "base/no_destructor.h"
 #include "base/synchronization/lock.h"
 #include "components/autofill/core/browser/autofill_type.h"
-#include "components/autofill/core/browser/country_type.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_constants.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/browser/geo/address_rewriter.h"
 #include "third_party/re2/src/re2/re2.h"
 
 namespace autofill {
@@ -248,12 +247,6 @@ std::string CaptureTypeWithPatternOptional(const FieldType& type,
 std::string CaptureTypeWithPatternOptional(
     const FieldType& type,
     std::initializer_list<std::string_view> pattern_span_initializer_list);
-
-// Normalizes and rewrites `text` using the rules for `country_code`.
-// If `country_code` is empty, it defaults to US.
-std::u16string NormalizeAndRewrite(const AddressCountryCode& country_code,
-                                   const std::u16string& text,
-                                   bool keep_white_space);
 
 // Determines the 2-letter country code from a given value.
 // This function handles two cases:

@@ -183,6 +183,15 @@ chromium-metrics-reviews@google.com.
   <int value="1" label="Got Response"/>
 </enum>
 
+<!-- LINT.IfChange(ServiceWorkerFetchHandlerInitiatorType) -->
+
+<enum name="ServiceWorkerFetchHandlerInitiatorType">
+  <int value="0" label="kFetchHandler"/>
+  <int value="1" label="kRaceNetworkAndFetchHandler"/>
+</enum>
+
+<!-- LINT.ThenChange(//content/browser/service_worker/service_worker_main_resource_loader.cc:ServiceWorkerFetchHandlerInitiatorType) -->
+
 <enum name="ServiceWorkerFetchHandlerSkipReason">
   <int value="0" label="No Fetch Handler"/>
   <int value="1" label="Not Skipped"/>
@@ -223,6 +232,22 @@ chromium-metrics-reviews@google.com.
 </enum>
 
 <!-- LINT.ThenChange(//components/services/storage/service_worker/service_worker_database.cc:ServiceWorkerIPAddressSpace) -->
+
+<enum name="ServiceWorkerMainScriptUrlValidationResult">
+  <int value="0" label="OK"/>
+  <int value="1" label="Forged URL"/>
+  <int value="2" label="Forged Destination"/>
+  <int value="3" label="Forged Mode"/>
+</enum>
+
+<!-- LINT.IfChange(ServiceWorkerMessageDispatchContextValidationResult) -->
+
+<enum name="ServiceWorkerMessageDispatchContextValidationResult">
+  <int value="0" label="Allowed"/>
+  <int value="1" label="Disallowed"/>
+</enum>
+
+<!-- LINT.ThenChange(//content/browser/service_worker/service_worker_metrics.h:ServiceWorkerMessageDispatchContextValidationResult) -->
 
 <enum name="ServiceWorkerMetrics.EventType">
   <int value="0" label="ACTIVATE"/>
@@ -304,6 +329,17 @@ chromium-metrics-reviews@google.com.
   <int value="10" label="kFetchSourceWithoutFetchHandler"/>
 </enum>
 
+<!-- LINT.IfChange(ServiceWorkerStartWorkerContextValidationDifference) -->
+
+<enum name="ServiceWorkerStartWorkerContextValidationDifference">
+  <int value="0" label="Both Allowed"/>
+  <int value="1" label="Old Allowed, New Disallowed"/>
+  <int value="2" label="Old Disallowed, New Allowed"/>
+  <int value="3" label="Both Disallowed"/>
+</enum>
+
+<!-- LINT.ThenChange(//content/browser/service_worker/service_worker_metrics.h:ServiceWorkerStartWorkerContextValidationDifference) -->
+
 <enum name="ServiceWorkerWriteResponseResult">
   <int value="0" label="OK"/>
   <int value="1" label="Write headers error"/>
@@ -326,6 +362,7 @@ chromium-metrics-reviews@google.com.
   <int value="0" label="Eligible"/>
   <int value="1" label="NotEligibleByReload"/>
   <int value="2" label="NotEligibleByNoHeaderStored"/>
+  <int value="3" label="NotEligibleByIntercepted"/>
 </enum>
 
 <!-- LINT.ThenChange(//content/browser/service_worker/service_worker_metrics.h:SyntheticResponseEligibility) -->
@@ -336,6 +373,7 @@ chromium-metrics-reviews@google.com.
   <int value="0" label="CachedResponseHeadCleared"/>
   <int value="1" label="HeaderInconsistent"/>
   <int value="2" label="Redirect"/>
+  <int value="3" label="Intercepted"/>
 </enum>
 
 <!-- LINT.ThenChange(//content/browser/service_worker/service_worker_synthetic_response_manager.cc:SyntheticResponseReloadReason) -->

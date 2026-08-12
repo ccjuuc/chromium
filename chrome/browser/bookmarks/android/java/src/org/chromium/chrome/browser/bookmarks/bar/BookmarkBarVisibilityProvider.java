@@ -8,13 +8,12 @@ import android.app.Activity;
 import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
 import android.content.res.Configuration;
 
-import androidx.annotation.NonNull;
-
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.DeviceInfo;
 import org.chromium.base.ObserverList;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.bookmarks.R;
@@ -61,9 +60,11 @@ public class BookmarkBarVisibilityProvider {
     private final Activity mActivity;
     private final ActivityLifecycleDispatcher mActivityLifecycleDispatcher;
     private final ConfigurationChangedObserver mConfigurationChangedListener;
-    private final ObservableSupplier<Profile> mProfileSupplier;
+    private final MonotonicObservableSupplier<Profile> mProfileSupplier;
     private final Callback<Profile> mProfileSupplierObserver;
     private final ObserverList<BookmarkBarVisibilityObserver> mObservers;
+    private final NonNullObservableSupplier<Boolean> mXrSpaceModeObservableSupplier;
+    private final Callback<Boolean> mXrSpaceModeObserver = this::processXrSpaceModeChange;
 
     private @Nullable PrefChangeRegistrar mPrefChangeRegistrar;
     private @Nullable OnSharedPreferenceChangeListener mDevicePrefsListener;
@@ -74,14 +75,17 @@ public class BookmarkBarVisibilityProvider {
      * @param activity The activity in which the bookmark bar is hosted.
      * @param activityLifecycleDispatcher The lifecycle dispatcher for the host activity.
      * @param profileSupplier The supplier of the profile for which to observe the user setting.
+     * @param xrSpaceModeObservableSupplier The supplier for the XR space mode state.
      */
     public BookmarkBarVisibilityProvider(
-            @NonNull Activity activity,
-            @NonNull ActivityLifecycleDispatcher activityLifecycleDispatcher,
-            @NonNull ObservableSupplier<Profile> profileSupplier) {
+            Activity activity,
+            ActivityLifecycleDispatcher activityLifecycleDispatcher,
+            MonotonicObservableSupplier<Profile> profileSupplier,
+            NonNullObservableSupplier<Boolean> xrSpaceModeObservableSupplier) {
         mActivity = activity;
         mActivityLifecycleDispatcher = activityLifecycleDispatcher;
         mProfileSupplier = profileSupplier;
+        mXrSpaceModeObservableSupplier = xrSpaceModeObservableSupplier;
 
         mObservers = new ObserverList<>();
 
@@ -89,7 +93,9 @@ public class BookmarkBarVisibilityProvider {
         mActivityLifecycleDispatcher.register(mConfigurationChangedListener);
 
         mProfileSupplierObserver = this::processProfileChange;
-        mProfileSupplier.addObserver(mProfileSupplierObserver);
+        mProfileSupplier.addSyncObserverAndPostIfNonNull(mProfileSupplierObserver);
+
+        mXrSpaceModeObservableSupplier.addSyncObserverAndPostIfNonNull(mXrSpaceModeObserver);
 
         // On tablets we use local device prefs.
         if (!DeviceInfo.isDesktop()) {
@@ -129,6 +135,7 @@ public class BookmarkBarVisibilityProvider {
     public void destroy() {
         mActivityLifecycleDispatcher.unregister(mConfigurationChangedListener);
         mProfileSupplier.removeObserver(mProfileSupplierObserver);
+        mXrSpaceModeObservableSupplier.removeObserver(mXrSpaceModeObserver);
         destroyPrefChangeRegistrar();
         destroySharedPrefListener();
         mObservers.clear();
@@ -136,10 +143,16 @@ public class BookmarkBarVisibilityProvider {
 
     private void notifyVisibilityChange() {
         boolean visibility =
-                BookmarkBarUtils.isBookmarkBarVisible(mActivity, mProfileSupplier.get());
+                BookmarkBarUtils.isBookmarkBarVisible(
+                        mActivity, mProfileSupplier.get(), mXrSpaceModeObservableSupplier.get());
         for (BookmarkBarVisibilityObserver observer : mObservers) {
             observer.onVisibilityChanged(visibility);
         }
+    }
+
+    private void processXrSpaceModeChange(boolean isXrSpaceMode) {
+        // When entering FSM for XR, browser UI must be manually hidden to show hub UI.
+        notifyVisibilityChange();
     }
 
     private void processConfigurationChange(Configuration configuration) {
@@ -155,16 +168,14 @@ public class BookmarkBarVisibilityProvider {
         notifyVisibilityChange();
     }
 
-    private void processProfileChange(@Nullable Profile profile) {
+    private void processProfileChange(Profile profile) {
         // On a profile change, we may have either received a profile for the first time, or we
         // have received a new profile, in which case we want to destroy the previous pref change
         // registrar and create a new one.
         destroyPrefChangeRegistrar();
 
-        if (profile != null) {
-            mPrefChangeRegistrar = PrefServiceUtil.createFor(profile);
-            mPrefChangeRegistrar.addObserver(Pref.SHOW_BOOKMARK_BAR, this::processPrefChange);
-        }
+        mPrefChangeRegistrar = PrefServiceUtil.createFor(profile);
+        mPrefChangeRegistrar.addObserver(Pref.SHOW_BOOKMARK_BAR, this::processPrefChange);
 
         // Profile changes can also result in visibility changes (e.g. different setting prefs).
         notifyVisibilityChange();
@@ -192,11 +203,6 @@ public class BookmarkBarVisibilityProvider {
     }
 
     @Nullable PrefObserver getPrefObserverForTesting() {
-        return new PrefObserver() {
-            @Override
-            public void onPreferenceChange() {
-                processPrefChange();
-            }
-        };
+        return this::processPrefChange;
     }
 }

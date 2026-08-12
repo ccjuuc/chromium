@@ -39,8 +39,7 @@ public class AutofillManagerWrapper {
     // NOTE: As a result of the above, the tag below still references the name of this class from
     // when it was originally developed specifically for Android WebView.
     public static final String TAG = "AwAutofillManager";
-    private static final String AWG_COMPONENT_NAME =
-            "com.google.android.gms/com.google.android.gms.autofill.service.AutofillService";
+    private static final String AWG_PACKAGE_NAME = "com.google.android.gms";
 
     /** The observer of suggestion window. */
     public interface InputUiObserver {
@@ -122,8 +121,7 @@ public class AutofillManagerWrapper {
             ComponentName componentName = getAutofillServiceComponentName(mAutofillManager);
             if (componentName != null) {
                 mPackageName = componentName.getPackageName();
-                mIsAwGCurrentAutofillService =
-                        AWG_COMPONENT_NAME.equals(componentName.flattenToString());
+                mIsAwGCurrentAutofillService = AWG_PACKAGE_NAME.equals(mPackageName);
                 AutofillProviderUMA.logCurrentProvider(mPackageName);
             } else {
                 mPackageName = "";
@@ -365,6 +363,6 @@ public class AutofillManagerWrapper {
         // Use 'setprop log.tag.AwAutofillManager DEBUG' to enable the log at runtime.
         // NOTE: See the comment on TAG above for why this is still AwAutofillManager.
         // Check the system setting directly.
-        sIsLoggable = android.util.Log.isLoggable(TAG, Log.DEBUG);
+        sIsLoggable = Log.isLoggable(TAG, Log.DEBUG);
     }
 }

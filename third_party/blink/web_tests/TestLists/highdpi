@@ -14,7 +14,6 @@ animations/responsive/interpolation/transform-responsive.html
 animations/responsive/responsive-neutral-keyframes.html
 animations/responsive/stacked-visibility-animations-responsive.html
 animations/responsive/zoom-responsive-transform-animation-001.html
-animations/stability/font-builder-crash.html
 animations/state-at-end-event.html
 animations/svg/animated-filter-svg-element.html
 animations/web-animations/KeyframeEffect-animation.html
@@ -33,7 +32,6 @@ compositing/background-color/background-color-change-to-transparent.html
 compositing/background-color/background-color-container.html
 compositing/background-color/background-color-content-clip.html
 compositing/background-color/background-color-text-change.html
-compositing/background-color/background-color-text-clip.html
 compositing/background-color/view-blending-base-background.html
 compositing/backgrounds/fixed-backgrounds.html
 compositing/backgrounds/local-background.html
@@ -282,6 +280,7 @@ external/wpt/css/css-align/gaps/gap-normal-used-001.html
 external/wpt/css/css-align/parsing/column-gap-invalid.html
 external/wpt/css/css-align/self-alignment/parse-justify-self-001.html
 external/wpt/css/css-animations/animation-important-002.html
+external/wpt/css/css-animations/crashtests/font-builder-crash.html
 external/wpt/css/css-animations/crashtests/replace-keyframes-animating-filter-001.html
 external/wpt/css/css-animations/parsing/animation-invalid.html
 external/wpt/css/css-animations/responsive/column-width-001.html
@@ -289,6 +288,7 @@ external/wpt/css/css-backgrounds/animations/background-color-transition-currentc
 external/wpt/css/css-backgrounds/animations/background-position-composition.html
 external/wpt/css/css-backgrounds/animations/invalidation/background-color-transition-with-initially-transparent.html
 external/wpt/css/css-backgrounds/background-attachment-local/attachment-local-clipping-image-6.html
+external/wpt/css/css-backgrounds/background-clip/clip-text-composited-descendant-with-bg-color.html
 external/wpt/css/css-backgrounds/background-position/subpixel-position-center.tentative.html
 external/wpt/css/css-backgrounds/background-size-008.html
 external/wpt/css/css-backgrounds/background-size/background-size-near-zero-png.html
@@ -458,7 +458,6 @@ external/wpt/css/css-properties-values-api/at-property-non-matching-media-crash.
 external/wpt/css/css-pseudo/marker-text-emphasis.html
 external/wpt/css/css-pseudo/parsing/tree-abiding-pseudo-elements.html
 external/wpt/css/css-ruby/parsing/ruby-merge-invalid.html
-external/wpt/css/css-scoping/css-scoping-shadow-host-functional-rule.html
 external/wpt/css/css-scroll-anchoring/basic.html
 external/wpt/css/css-scroll-anchoring/parsing/overflow-anchor-invalid.html
 external/wpt/css/css-scroll-snap/parsing/scroll-snap-type-valid.html
@@ -466,7 +465,8 @@ external/wpt/css/css-scroll-snap/scroll-target-padding-001.html
 external/wpt/css/css-scroll-snap/snap-after-initial-layout/writing-mode-horizontal-tb.html
 external/wpt/css/css-scroll-snap/snap-after-relayout/changing-scroll-snap-type.html
 external/wpt/css/css-scrollbars/scrollbar-width-004.html
-external/wpt/css/css-shadow-parts/invalidation-complex-selector.html
+external/wpt/css/css-shadow/css-scoping-shadow-host-functional-rule.html
+external/wpt/css/css-shadow/part/invalidation-complex-selector.html
 external/wpt/css/css-shapes/parsing/shape-image-threshold-valid.html
 external/wpt/css/css-shapes/shape-outside-invalid-ellipse-002.html
 external/wpt/css/css-shapes/shape-outside/assorted/float-should-push.html
@@ -1256,7 +1256,6 @@ fast/table/percent-widths-stretch-vertical.html
 fast/table/percent-widths-stretch.html
 fast/table/tbody-background-image-fills-tbody.html
 fast/table/tbody-background-image-repeat-y.html
-fast/text-autosizing/
 fast/writing-mode/english-lr-text.html
 fonts/default.html
 fragmentation/multi-line-cells.html
@@ -1313,8 +1312,6 @@ http/tests/images/png-partial-load-as-document.html
 http/tests/inspector-protocol/page/page-captureScreenshot-clip.js
 http/tests/media/video-buffered-range-contains-currentTime.html
 http/tests/misc/destroy-middle-click-locked-target-crash.html
-http/tests/text-autosizing/narrow-iframe.html
-http/tests/text-autosizing/wide-iframe.html
 http/tests/webfont/popup-menu-load-webfont-after-open.html
 ietestcenter/css3/bordersbackgrounds/background-color-border-box.htm
 ietestcenter/css3/flexbox/flexbox-align-baseline-001.htm
@@ -1532,7 +1529,6 @@ tables/mozilla/bugs/bug4527.html
 transforms/2d/transform-borderbox.html
 transforms/3d/general/perspective-units.html
 transforms/3d/hit-testing/backface-hit-test.html
-transforms/3d/point-mapping/3d-point-mapping-preserve-3d.html
 transforms/combine-transforms-properties-transform.html
 transforms/perspective-fixed-pos-descendant.html
 transforms/svg-vs-css.xhtml

@@ -139,10 +139,9 @@ class BrowserTaskEnvironment : public base::test::TaskEnvironment {
   // remove this.
   static constexpr MainThreadType IO_MAINLOOP = MainThreadType::IO;
 
-  struct ValidTraits {
-    ValidTraits(TaskEnvironment::ValidTraits);
-    ValidTraits(Options);
-  };
+  using ValidTraits =
+      base::ConcatParameterPacks<base::test::TaskEnvironment::ValidTraits,
+                                 base::ParameterPack<Options>>;
 
   // Constructor which accepts zero or more traits to configure the
   // TaskEnvironment and optionally request a real IO thread. Unlike
@@ -167,6 +166,11 @@ class BrowserTaskEnvironment : public base::test::TaskEnvironment {
   // have a REAL_IO_THREAD. As with TaskEnvironment::RunUntilIdle() prefer using
   // RunLoop+QuitClosure() to await an async condition.
   void RunIOThreadUntilIdle();
+
+  // Winds down the BrowserTaskExecutor. After this no tasks posted to browser
+  // task queues will be executed. This is normally handled by the destructor,
+  // but tests can call this early to test shutdown behaviour.
+  void ShutdownBrowserTaskExecutor();
 
   BrowserTaskEnvironment(const BrowserTaskEnvironment&) = delete;
   BrowserTaskEnvironment& operator=(const BrowserTaskEnvironment&) = delete;

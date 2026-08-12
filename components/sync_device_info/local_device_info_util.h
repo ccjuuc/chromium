@@ -10,10 +10,6 @@
 #include "base/functional/callback_forward.h"
 #include "components/sync_device_info/device_info.h"
 
-namespace sync_pb {
-enum SyncEnums_DeviceType : int;
-}  // namespace sync_pb
-
 namespace syncer {
 
 // Contains device specific names to be used by DeviceInfo. These are specific
@@ -36,9 +32,11 @@ struct LocalDeviceNameInfo {
   // Unique hardware class string which details the
   // HW combination of a CrOS device. Empty on non-CrOS devices.
   std::string full_hardware_class;
+  // The android.os.Build.FINGERPRINT. Populated on Android.
+  std::optional<std::string> android_build_fingerprint;
 };
 
-sync_pb::SyncEnums_DeviceType GetLocalDeviceType();
+DeviceInfo::DeviceType GetLocalDeviceType();
 
 DeviceInfo::OsType GetLocalDeviceOSType();
 
@@ -46,6 +44,9 @@ DeviceInfo::FormFactor GetLocalDeviceFormFactor();
 
 // Returns the personalizable device name. This may contain
 // personally-identifiable information - e.g. Alex's MacbookPro.
+// Note that this may not actually be a personalized name on all platforms
+// (e.g. Android and iOS may return the model name or a generic string due to
+// privacy or permission restrictions).
 std::string GetPersonalizableDeviceNameBlocking();
 
 void GetLocalDeviceNameInfo(

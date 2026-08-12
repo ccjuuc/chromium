@@ -5,10 +5,12 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_QUALITY_AUTOFILL_DATA_UTIL_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_QUALITY_AUTOFILL_DATA_UTIL_H_
 
+#include <stdint.h>
+
 #include <string>
 #include <string_view>
-#include <vector>
 
+#include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/field_types.h"
 
 namespace autofill {
@@ -64,7 +66,7 @@ uint32_t DetermineGroups(const FieldTypeSet& types);
 bool IsSupportedFormType(uint32_t groups);
 
 // Returns the histogram suffix corresponding to the given `bitmask`.
-std::string GetSuffixForProfileFormType(uint32_t bitmask);
+std::string_view GetSuffixForProfileFormType(uint32_t bitmask);
 
 // Truncates a string to the nearest UTF-8 character that will leave
 // the string less than or equal to the specified byte size.
@@ -112,10 +114,6 @@ const PaymentRequestData& GetPaymentRequestData(
 const char* GetIssuerNetworkForBasicCardIssuerNetwork(
     std::string_view basic_card_issuer_network);
 
-// Returns whether the specified `basic_card_issuer_network` is a valid basic
-// card network or not. Note that 'generic' is not considered valid.
-bool IsValidBasicCardIssuerNetwork(std::string_view basic_card_issuer_network);
-
 // Returns whether the specified `country_code` is a valid country code.
 bool IsValidCountryCode(std::string_view country_code);
 bool IsValidCountryCode(std::u16string_view country_code);
@@ -125,6 +123,11 @@ bool IsValidCountryCode(std::u16string_view country_code);
 // associated with `app_locale` is used as a fallback.
 std::string GetCountryCodeWithFallback(const AutofillProfile& profile,
                                        std::string_view app_locale);
+
+// Returns true if `country_code1` and `country_code2` are the same, or if at
+// least one of them is invalid.
+bool HaveNonConflictingCountryCodes(const AddressCountryCode& country_code1,
+                                    const AddressCountryCode& country_code2);
 
 }  // namespace data_util
 }  // namespace autofill

@@ -15,61 +15,28 @@
 #import "ios/chrome/app/profile/profile_init_stage.h"
 #import "ios/chrome/app/profile/profile_state.h"
 #import "ios/chrome/app/profile/profile_state_observer.h"
-#import "ios/chrome/browser/content_suggestions/magic_stack/ui/magic_stack_module.h"
 #import "ios/chrome/browser/content_suggestions/public/content_suggestions_constants.h"
 #import "ios/chrome/browser/content_suggestions/safety_check/coordinator/safety_check_magic_stack_mediator_delegate.h"
 #import "ios/chrome/browser/content_suggestions/safety_check/model/safety_check_prefs.h"
 #import "ios/chrome/browser/content_suggestions/safety_check/model/safety_check_utils.h"
 #import "ios/chrome/browser/content_suggestions/safety_check/public/safety_check_constants.h"
 #import "ios/chrome/browser/content_suggestions/safety_check/ui/safety_check_audience.h"
-#import "ios/chrome/browser/content_suggestions/safety_check/ui/safety_check_consumer_source.h"
-#import "ios/chrome/browser/content_suggestions/safety_check/ui/safety_check_magic_stack_consumer.h"
-#import "ios/chrome/browser/content_suggestions/safety_check/ui/safety_check_state.h"
+#import "ios/chrome/browser/content_suggestions/safety_check/ui/safety_check_config.h"
+#import "ios/chrome/browser/content_suggestions/safety_check/ui/safety_check_item_type.h"
 #import "ios/chrome/browser/content_suggestions/ui/content_suggestions_consumer.h"
 #import "ios/chrome/browser/content_suggestions/ui/content_suggestions_view_controller_audience.h"
 #import "ios/chrome/browser/passwords/model/password_checkup_utils.h"
-#import "ios/chrome/browser/push_notification/model/push_notification_client_id.h"
-#import "ios/chrome/browser/push_notification/model/push_notification_settings_util.h"
 #import "ios/chrome/browser/safety_check/model/ios_chrome_safety_check_manager.h"
 #import "ios/chrome/browser/safety_check/model/ios_chrome_safety_check_manager_constants.h"
 #import "ios/chrome/browser/safety_check/model/ios_chrome_safety_check_manager_observer_bridge.h"
-#import "ios/chrome/browser/settings/ui_bundled/notifications/notifications_settings_observer.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/public/features/system_flags.h"
 
-namespace {
-
-// Returns the number of times the Safety Check module with the
-// notifications opt-in button has been shown to the user in the Magic Stack.
-//
-// If `only_include_top_module` is `true`, only impressions where the module
-// was shown at the top of the Magic Stack are counted.
-int ImpressionsCount(const base::Value::List& impressions,
-                     bool only_include_top_module) {
-  int count = 0;
-
-  for (const base::Value& impression : impressions) {
-    std::optional<int> index = impression.GetIfInt();
-
-    if (index.has_value() && (!only_include_top_module || index.value() == 0)) {
-      count++;
-    }
-  }
-
-  return count;
-}
-
-}  // namespace
-
-@interface SafetyCheckMagicStackMediator () <
-    ProfileStateObserver,
-    MagicStackModuleDelegate,
-    NotificationsSettingsObserverDelegate,
-    PrefObserverDelegate,
-    SafetyCheckAudience,
-    SafetyCheckConsumerSource,
-    SafetyCheckManagerObserver>
+@interface SafetyCheckMagicStackMediator () <PrefObserverDelegate,
+                                             ProfileStateObserver,
+                                             SafetyCheckAudience,
+                                             SafetyCheckManagerObserver>
 @end
 
 @implementation SafetyCheckMagicStackMediator {
@@ -89,11 +56,7 @@ int ImpressionsCount(const base::Value::List& impressions,
   ProfileState* _profileState;
   // Used by the Safety Check (Magic Stack) module for the current Safety Check
   // state.
-  SafetyCheckState* _safetyCheckState;
-  id<SafetyCheckMagicStackConsumer> _safetyCheckConsumer;
-  // An observer that tracks whether push notification permission settings have
-  // been modified.
-  NotificationsSettingsObserver* _notificationsObserver;
+  SafetyCheckConfig* _safetyCheckConfig;
 }
 
 - (instancetype)initWithSafetyCheckManager:
@@ -101,21 +64,12 @@ int ImpressionsCount(const base::Value::List& impressions,
                                 localState:(PrefService*)localState
                                  userState:(PrefService*)userState
                               profileState:(ProfileState*)profileState {
-  self = [super init];
-  if (self) {
+  if ((self = [super init])) {
     _safetyCheckManager = safetyCheckManager;
     _localState = localState;
     _userState = userState;
     _profileState = profileState;
     [_profileState addObserver:self];
-
-    if (IsSafetyCheckNotificationsEnabled()) {
-      _notificationsObserver = [[NotificationsSettingsObserver alloc]
-          initWithPrefService:userState
-                   localState:localState];
-
-      _notificationsObserver.delegate = self;
-    }
 
     if (!safety_check_prefs::IsSafetyCheckInMagicStackDisabled(_userState)) {
       if (!_prefObserverBridge) {
@@ -140,12 +94,10 @@ int ImpressionsCount(const base::Value::List& impressions,
           safety_check::prefs::kSafetyCheckHomeModuleEnabled,
           &_userPrefChangeRegistrar);
 
-      _safetyCheckState = [self initialSafetyCheckState];
-
-      _safetyCheckState.delegate = self;
+      _safetyCheckConfig = [self initialSafetyCheckState];
 
       if (ShouldHideSafetyCheckModuleIfNoIssues()) {
-        [self updateIssueCount:[_safetyCheckState numberOfIssues]];
+        [self updateIssueCount:[_safetyCheckConfig numberOfIssues]];
       }
 
       _safetyCheckManagerObserver =
@@ -153,7 +105,8 @@ int ImpressionsCount(const base::Value::List& impressions,
 
       if (_profileState.initStage > ProfileInitStage::kUIReady &&
           _profileState.firstSceneHasInitializedUI &&
-          _safetyCheckState.runningState == RunningSafetyCheckState::kRunning) {
+          _safetyCheckConfig.runningState ==
+              RunningSafetyCheckState::kRunning) {
         // When the Safety Check Manager can automatically trigger Safety
         // Checks, the Magic Stack should never initiate a Safety Check run.
         //
@@ -170,15 +123,7 @@ int ImpressionsCount(const base::Value::List& impressions,
 }
 
 - (void)disconnect {
-  _notificationsObserver.delegate = nil;
-  [_notificationsObserver disconnect];
-  _notificationsObserver = nil;
-
-  _safetyCheckConsumer = nil;
-
-  _safetyCheckState.delegate = nil;
-  _safetyCheckState.audience = nil;
-  _safetyCheckState.safetyCheckConsumerSource = nil;
+  _safetyCheckConfig.audience = nil;
 
   _safetyCheckManagerObserver.reset();
 
@@ -192,8 +137,8 @@ int ImpressionsCount(const base::Value::List& impressions,
   _profileState = nil;
 }
 
-- (SafetyCheckState*)safetyCheckState {
-  return _safetyCheckState;
+- (SafetyCheckConfig*)safetyCheckConfig {
+  return _safetyCheckConfig;
 }
 
 - (void)disableModule {
@@ -201,26 +146,12 @@ int ImpressionsCount(const base::Value::List& impressions,
 }
 
 - (void)reset {
-  _safetyCheckState = [[SafetyCheckState alloc]
+  _safetyCheckConfig = [[SafetyCheckConfig alloc]
       initWithUpdateChromeState:UpdateChromeSafetyCheckState::kDefault
                   passwordState:PasswordSafetyCheckState::kDefault
               safeBrowsingState:SafeBrowsingSafetyCheckState::kDefault
                    runningState:RunningSafetyCheckState::kDefault];
-
-  if (IsSafetyCheckNotificationsEnabled()) {
-    _safetyCheckState.showNotificationsOptIn =
-        [self shouldShowNotificationsOptIn];
-  }
-
-  _safetyCheckState.delegate = self;
-  _safetyCheckState.audience = self;
-  _safetyCheckState.safetyCheckConsumerSource = self;
-}
-
-#pragma mark - SafetyCheckConsumerSource
-
-- (void)addConsumer:(id<SafetyCheckMagicStackConsumer>)consumer {
-  _safetyCheckConsumer = consumer;
+  _safetyCheckConfig.audience = self;
 }
 
 #pragma mark - SafetyCheckAudience
@@ -235,27 +166,28 @@ int ImpressionsCount(const base::Value::List& impressions,
 - (void)passwordCheckStateChanged:(PasswordSafetyCheckState)state
            insecurePasswordCounts:(password_manager::InsecurePasswordCounts)
                                       insecurePasswordCounts {
-  _safetyCheckState.passwordState = state;
-  _safetyCheckState.weakPasswordsCount = insecurePasswordCounts.weak_count;
-  _safetyCheckState.reusedPasswordsCount = insecurePasswordCounts.reused_count;
-  _safetyCheckState.compromisedPasswordsCount =
+  _safetyCheckConfig.passwordState = state;
+  _safetyCheckConfig.weakPasswordsCount = insecurePasswordCounts.weak_count;
+  _safetyCheckConfig.reusedPasswordsCount = insecurePasswordCounts.reused_count;
+  _safetyCheckConfig.compromisedPasswordsCount =
       insecurePasswordCounts.compromised_count;
 }
 
 - (void)safeBrowsingCheckStateChanged:(SafeBrowsingSafetyCheckState)state {
-  _safetyCheckState.safeBrowsingState = state;
+  _safetyCheckConfig.safeBrowsingState = state;
 }
 
 - (void)updateChromeCheckStateChanged:(UpdateChromeSafetyCheckState)state {
-  _safetyCheckState.updateChromeState = state;
+  _safetyCheckConfig.updateChromeState = state;
 }
 
 - (void)runningStateChanged:(RunningSafetyCheckState)state {
-  _safetyCheckState.runningState = state;
-  _safetyCheckState.shouldShowSeeMore = [_safetyCheckState numberOfIssues] > 2;
+  _safetyCheckConfig.runningState = state;
+  _safetyCheckConfig.shouldShowSeeMore =
+      [_safetyCheckConfig numberOfIssues] > 2;
 
   if (ShouldHideSafetyCheckModuleIfNoIssues()) {
-    [self updateIssueCount:[_safetyCheckState numberOfIssues]];
+    [self updateIssueCount:[_safetyCheckConfig numberOfIssues]];
   }
 
   if (safety_check_prefs::IsSafetyCheckInMagicStackDisabled(_userState)) {
@@ -265,11 +197,11 @@ int ImpressionsCount(const base::Value::List& impressions,
     return;
   }
 
-  // Ensures the consumer gets the latest Safety Check state only when the
-  // running state changes; this avoids calling the consumer every time an
+  // Ensures the delegate gets the latest Safety Check state only when the
+  // running state changes; this avoids calling the delegate every time an
   // individual check state changes.
-  _safetyCheckState.audience = self;
-  [_safetyCheckConsumer safetyCheckStateDidChange:_safetyCheckState];
+  _safetyCheckConfig.audience = self;
+  [self safetyCheckStateDidChange:_safetyCheckConfig];
 }
 
 - (void)safetyCheckManagerWillShutdown {
@@ -289,7 +221,7 @@ int ImpressionsCount(const base::Value::List& impressions,
   if (!safety_check_prefs::IsSafetyCheckInMagicStackDisabled(_userState) &&
       nextInitStage == ProfileInitStage::kFinal &&
       profileState.firstSceneHasInitializedUI &&
-      _safetyCheckState.runningState == RunningSafetyCheckState::kRunning) {
+      _safetyCheckConfig.runningState == RunningSafetyCheckState::kRunning) {
     // When the Safety Check Manager can automatically trigger Safety Checks,
     // the Magic Stack should never initiate a Safety Check run.
     //
@@ -302,65 +234,22 @@ int ImpressionsCount(const base::Value::List& impressions,
   }
 }
 
-#pragma mark - MagicStackModuleDelegate
-
-// Stores the index at which the Safety Check module (with notifications
-// opt-in button) was displayed in the Magic Stack. This is used to track
-// impressions for the Safety Check Notifications feature.
-- (void)magicStackModule:(MagicStackModule*)magicStackModule
-     wasDisplayedAtIndex:(NSUInteger)index {
-  if (magicStackModule.type != ContentSuggestionsModuleType::kSafetyCheck ||
-      !magicStackModule.showNotificationsOptIn) {
-    return;
-  }
-
-  if (IsSafetyCheckNotificationsEnabled()) {
-    CHECK(_localState);
-
-    base::Value::List impressions =
-        _localState->GetList(prefs::kMagicStackSafetyCheckNotificationsShown)
-            .Clone();
-
-    impressions.Append(static_cast<int>(index));
-
-    _localState->SetList(prefs::kMagicStackSafetyCheckNotificationsShown,
-                         std::move(impressions));
-  }
-}
-
-#pragma mark - NotificationsSettingsObserverDelegate
-
-- (void)notificationsSettingsDidChangeForClient:
-    (PushNotificationClientId)clientID {
-  CHECK(IsSafetyCheckNotificationsEnabled());
-
-  if (clientID == PushNotificationClientId::kSafetyCheck) {
-    // When Safety Check notification permissions change, refresh the Magic
-    // Stack module. This ensures the Safety Check container accurately reflects
-    // the user's notification settings.
-    _safetyCheckState.showNotificationsOptIn =
-        [self shouldShowNotificationsOptIn];
-
-    [_safetyCheckConsumer safetyCheckStateDidChange:_safetyCheckState];
-  }
-}
-
 #pragma mark - PrefObserverDelegate
 
 - (void)onPreferenceChanged:(const std::string&)preferenceName {
   if (preferenceName == prefs::kIosSettingsSafetyCheckLastRunTime ||
       preferenceName == prefs::kIosSafetyCheckManagerSafeBrowsingCheckResult) {
-    _safetyCheckState.lastRunTime = [self latestSafetyCheckRunTimestamp];
+    _safetyCheckConfig.lastRunTime = [self latestSafetyCheckRunTimestamp];
 
-    _safetyCheckState.safeBrowsingState =
+    _safetyCheckConfig.safeBrowsingState =
         SafeBrowsingSafetyCheckStateForName(
             _localState->GetString(
                 prefs::kIosSafetyCheckManagerSafeBrowsingCheckResult))
-            .value_or(_safetyCheckState.safeBrowsingState);
+            .value_or(_safetyCheckConfig.safeBrowsingState);
 
     // Trigger a module update when the Last Run Time, or Safe Browsing state,
     // has changed.
-    [self runningStateChanged:_safetyCheckState.runningState];
+    [self runningStateChanged:_safetyCheckConfig.runningState];
   } else if (preferenceName ==
                  safety_check::prefs::kSafetyCheckHomeModuleEnabled &&
              !_userState->GetBoolean(
@@ -371,11 +260,11 @@ int ImpressionsCount(const base::Value::List& impressions,
 
 #pragma mark - Private
 
-// Creates the initial `SafetyCheckState` based on the previous check states
+// Creates the initial `SafetyCheckConfig` based on the previous check states
 // stored in Prefs, or (for development builds) the overridden check states via
 // Experimental settings.
-- (SafetyCheckState*)initialSafetyCheckState {
-  SafetyCheckState* state = [[SafetyCheckState alloc]
+- (SafetyCheckConfig*)initialSafetyCheckState {
+  SafetyCheckConfig* config = [[SafetyCheckConfig alloc]
       initWithUpdateChromeState:UpdateChromeSafetyCheckState::kDefault
                   passwordState:PasswordSafetyCheckState::kDefault
               safeBrowsingState:SafeBrowsingSafetyCheckState::kDefault
@@ -385,21 +274,21 @@ int ImpressionsCount(const base::Value::List& impressions,
   std::optional<UpdateChromeSafetyCheckState> overrideUpdateChromeState =
       experimental_flags::GetUpdateChromeSafetyCheckState();
 
-  state.updateChromeState = overrideUpdateChromeState.value_or(
+  config.updateChromeState = overrideUpdateChromeState.value_or(
       _safetyCheckManager->GetUpdateChromeCheckState());
 
   // Password check.
   std::optional<PasswordSafetyCheckState> overridePasswordState =
       experimental_flags::GetPasswordSafetyCheckState();
 
-  state.passwordState = overridePasswordState.value_or(
+  config.passwordState = overridePasswordState.value_or(
       _safetyCheckManager->GetPasswordCheckState());
 
   // Safe Browsing check.
   std::optional<SafeBrowsingSafetyCheckState> overrideSafeBrowsingState =
       experimental_flags::GetSafeBrowsingSafetyCheckState();
 
-  state.safeBrowsingState = overrideSafeBrowsingState.value_or(
+  config.safeBrowsingState = overrideSafeBrowsingState.value_or(
       _safetyCheckManager->GetSafeBrowsingCheckState());
 
   // Insecure credentials.
@@ -416,12 +305,12 @@ int ImpressionsCount(const base::Value::List& impressions,
                                 overrideReusedPasswordsCount.has_value() ||
                                 overrideCompromisedPasswordsCount.has_value();
 
-  // NOTE: If any password counts are overriden via Experimental
-  // settings, all password counts will be considered overriden.
+  // NOTE: If any password counts are overridden via Experimental
+  // settings, all password counts will be considered overridden.
   if (passwordCountsOverride) {
-    state.weakPasswordsCount = overrideWeakPasswordsCount.value_or(0);
-    state.reusedPasswordsCount = overrideReusedPasswordsCount.value_or(0);
-    state.compromisedPasswordsCount =
+    config.weakPasswordsCount = overrideWeakPasswordsCount.value_or(0);
+    config.reusedPasswordsCount = overrideReusedPasswordsCount.value_or(0);
+    config.compromisedPasswordsCount =
         overrideCompromisedPasswordsCount.value_or(0);
   } else {
     std::vector<password_manager::CredentialUIEntry> insecureCredentials =
@@ -431,25 +320,20 @@ int ImpressionsCount(const base::Value::List& impressions,
         password_manager::CountInsecurePasswordsPerInsecureType(
             insecureCredentials);
 
-    state.weakPasswordsCount = counts.weak_count;
-    state.reusedPasswordsCount = counts.reused_count;
-    state.compromisedPasswordsCount = counts.compromised_count;
+    config.weakPasswordsCount = counts.weak_count;
+    config.reusedPasswordsCount = counts.reused_count;
+    config.compromisedPasswordsCount = counts.compromised_count;
   }
 
-  state.lastRunTime = [self latestSafetyCheckRunTimestamp];
+  config.lastRunTime = [self latestSafetyCheckRunTimestamp];
+  config.runningState = CanRunSafetyCheck(config.lastRunTime)
+                            ? RunningSafetyCheckState::kRunning
+                            : RunningSafetyCheckState::kDefault;
+  config.audience = self;
+  config.itemType = [config isRunning] ? SafetyCheckItemType::kRunning
+                                       : SafetyCheckItemType::kDefault;
 
-  state.runningState = CanRunSafetyCheck(state.lastRunTime)
-                           ? RunningSafetyCheckState::kRunning
-                           : RunningSafetyCheckState::kDefault;
-
-  if (IsSafetyCheckNotificationsEnabled()) {
-    state.showNotificationsOptIn = [self shouldShowNotificationsOptIn];
-  }
-
-  state.audience = self;
-  state.safetyCheckConsumerSource = self;
-
-  return state;
+  return config;
 }
 
 // Returns the last run time of the Safety Check, regardless if the check was
@@ -487,32 +371,10 @@ int ImpressionsCount(const base::Value::List& impressions,
       prefs::kHomeCustomizationMagicStackSafetyCheckIssuesCount, issuesCount);
 }
 
-// Returns `YES` if the notifications opt-in button should be displayed.
-- (BOOL)shouldShowNotificationsOptIn {
-  CHECK(IsSafetyCheckNotificationsEnabled());
-
-  BOOL isOptedIn = push_notification_settings::
-      GetMobileNotificationPermissionStatusForClient(
-          PushNotificationClientId::kSafetyCheck, GaiaId());
-
-  if (isOptedIn) {
-    return NO;
-  }
-
-  base::Value::List impressions =
-      _localState->GetList(prefs::kMagicStackSafetyCheckNotificationsShown)
-          .Clone();
-
-  SafetyCheckNotificationsImpressionTrigger trigger =
-      SafetyCheckNotificationsImpressionTriggerEnabled();
-
-  int impressionsCount = ImpressionsCount(
-      impressions,
-      trigger == SafetyCheckNotificationsImpressionTrigger::kOnlyWhenTopModule);
-
-  int impressionsLimit = SafetyCheckNotificationsImpressionLimit();
-
-  return impressionsCount < impressionsLimit;
+// Informs this mediator's delegate that the Safety Check state did change.
+- (void)safetyCheckStateDidChange:(SafetyCheckConfig*)config {
+  (void)config;
+  [self.delegate safetyCheckMagicStackMediatorDidReconfigureItem];
 }
 
 @end

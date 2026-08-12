@@ -7,10 +7,13 @@
 #include <stddef.h>
 
 #include <memory>
+#include <optional>
+#include <string_view>
 #include <utility>
 
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
@@ -22,12 +25,16 @@
 #include "build/build_config.h"
 #include "ipc/ipc_channel_proxy.h"
 #include "remoting/base/capabilities.h"
-#include "remoting/host/client_session.h"
+#include "remoting/base/fifo_buffer.h"
+#include "remoting/base/ipc_fifo_buffer.h"
+#include "remoting/host/audio_injector.h"
 #include "remoting/host/client_session_control.h"
+#include "remoting/host/client_session_events.h"
 #include "remoting/host/crash_process.h"
 #include "remoting/host/desktop_session_connector.h"
 #include "remoting/host/ipc_action_executor.h"
 #include "remoting/host/ipc_audio_capturer.h"
+#include "remoting/host/ipc_audio_injector.h"
 #include "remoting/host/ipc_input_injector.h"
 #include "remoting/host/ipc_keyboard_layout_monitor.h"
 #include "remoting/host/ipc_mouse_cursor_monitor.h"
@@ -40,7 +47,9 @@
 #include "remoting/proto/audio.pb.h"
 #include "remoting/proto/control.pb.h"
 #include "remoting/proto/event.pb.h"
+#include "remoting/protocol/audio_sample_info.h"
 #include "remoting/protocol/capability_names.h"
+#include "remoting/protocol/desktop_capturer_proxy.h"
 #include "third_party/webrtc/modules/desktop_capture/mouse_cursor.h"
 
 namespace remoting {
@@ -49,7 +58,6 @@ using SetUpUrlForwarderResponse =
     protocol::UrlForwarderControl::SetUpUrlForwarderResponse;
 
 DesktopSessionProxy::DesktopSessionProxy(
-    scoped_refptr<base::SingleThreadTaskRunner> audio_capture_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
     base::WeakPtr<ClientSessionControl> client_session_control,
     base::WeakPtr<ClientSessionEvents> client_session_events,
@@ -57,7 +65,7 @@ DesktopSessionProxy::DesktopSessionProxy(
     const DesktopEnvironmentOptions& options)
     : base::RefCountedDeleteOnSequence<DesktopSessionProxy>(
           base::SequencedTaskRunner::GetCurrentDefault()),
-      audio_capture_task_runner_(audio_capture_task_runner),
+      main_task_runner_(base::SequencedTaskRunner::GetCurrentDefault()),
       io_task_runner_(io_task_runner),
       client_session_control_(client_session_control),
       client_session_events_(client_session_events),
@@ -117,7 +125,13 @@ std::unique_ptr<DesktopCapturer> DesktopSessionProxy::CreateVideoCapturer(
     RequestMojoVideoCapturer(id, capturer_weakptr);
   }
 
-  return video_capturer;
+  // WebrtcVideoStream accesses the capturer on a dedicated thread, while IPC
+  // is handled on the current thread, so we need to wrap it with a capturer
+  // proxy.
+  auto capturer_proxy = std::make_unique<DesktopCapturerProxy>(
+      base::SequencedTaskRunner::GetCurrentDefault());
+  capturer_proxy->set_capturer(std::move(video_capturer));
+  return capturer_proxy;
 }
 
 std::unique_ptr<protocol::MouseCursorMonitor>
@@ -154,6 +168,17 @@ DesktopSessionProxy::CreateRemoteWebAuthnStateChangeNotifier() {
       base::BindRepeating(&DesktopSessionProxy::SignalWebAuthnExtension, this));
 }
 
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+void DesktopSessionProxy::OnSessionServicesClientConnected(
+    mojo::PendingReceiver<mojom::ChromotingSessionServices> receiver) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (client_session_events_) {
+    client_session_events_->OnSessionServicesClientConnected(
+        std::move(receiver));
+  }
+}
+#endif
+
 std::string DesktopSessionProxy::GetCapabilities() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
@@ -181,6 +206,16 @@ std::string DesktopSessionProxy::GetCapabilities() const {
   if (options_.enable_remote_webauthn()) {
     result += " ";
     result += protocol::kRemoteWebAuthnCapability;
+  }
+
+#if BUILDFLAG(IS_LINUX)
+  result += " ";
+  result += protocol::kClientControlledLayoutCapability;
+#endif
+
+  if (AudioInjector::IsSupported()) {
+    result += " ";
+    result += protocol::kMicrophoneRemotingCapability;
   }
 
   return result;
@@ -266,8 +301,7 @@ void DesktopSessionProxy::OnAssociatedInterfaceRequest(
 }
 
 bool DesktopSessionProxy::AttachToDesktop(
-    mojo::ScopedMessagePipeHandle desktop_pipe,
-    int session_id) {
+    mojo::ScopedMessagePipeHandle desktop_pipe) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!desktop_channel_);
 
@@ -278,7 +312,7 @@ bool DesktopSessionProxy::AttachToDesktop(
 
   // Connect to the desktop process.
   desktop_channel_ = IPC::ChannelProxy::Create(
-      desktop_pipe.release(), IPC::Channel::MODE_CLIENT, this,
+      std::move(desktop_pipe), IPC::Channel::MODE_CLIENT, this,
       io_task_runner_.get(), base::SingleThreadTaskRunner::GetCurrentDefault());
 
   // Reset the associated remote to allow us to connect to the new desktop
@@ -287,8 +321,6 @@ bool DesktopSessionProxy::AttachToDesktop(
   // process since DetachFromDesktop() will not be called.
   desktop_session_agent_.reset();
   desktop_channel_->GetRemoteAssociatedInterface(&desktop_session_agent_);
-
-  desktop_session_id_ = session_id;
 
   return true;
 }
@@ -301,11 +333,13 @@ void DesktopSessionProxy::DetachFromDesktop() {
   desktop_session_control_.reset();
   desktop_session_event_handler_.reset();
   desktop_session_state_handler_.reset();
-  desktop_session_id_ = UINT32_MAX;
 
   current_url_forwarder_state_ = mojom::UrlForwarderState::kUnknown;
   // We don't reset |is_url_forwarder_set_up_callback_| here since the request
   // can come in before the DetachFromDesktop-AttachToDesktop sequence.
+
+  should_start_audio_injector_ = false;
+  pending_audio_reader_.reset();
 
   // Notify interested folks that the IPC has been disconnected.
   disconnect_handlers_.Notify();
@@ -339,16 +373,39 @@ void DesktopSessionProxy::OnDesktopSessionAgentStarted(
     desktop_session_control_->SetHostCursorRenderedByClient();
   }
 
+  if (should_start_audio_injector_) {
+    DoStartAudioInjector();
+  }
+
+  if (pending_audio_sample_info_) {
+    base::OnceCallback<void(bool)> done =
+        pending_audio_format_ack_callback_
+            ? std::move(pending_audio_format_ack_callback_)
+            : base::DoNothing();
+    desktop_session_control_->SetAudioInjectorSampleInfo(
+        *pending_audio_sample_info_, std::move(done));
+    pending_audio_sample_info_.reset();
+  }
+
   if (client_session_events_) {
-    client_session_events_->OnDesktopAttached(desktop_session_id_);
+    client_session_events_->OnDesktopAttached();
   }
 }
 
 void DesktopSessionProxy::SetAudioCapturer(
     const base::WeakPtr<IpcAudioCapturer>& audio_capturer) {
-  DCHECK(audio_capture_task_runner_->BelongsToCurrentThread());
-
   audio_capturer_ = audio_capturer;
+  main_task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(&DesktopSessionProxy::SetAudioCaptureTaskRunner, this,
+                     base::SequencedTaskRunner::GetCurrentDefault()));
+}
+
+void DesktopSessionProxy::SetAudioCaptureTaskRunner(
+    scoped_refptr<base::SequencedTaskRunner> audio_capture_task_runner) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK(!audio_capture_task_runner_);
+  audio_capture_task_runner_ = audio_capture_task_runner;
 }
 
 void DesktopSessionProxy::SetMouseCursorMonitor(
@@ -464,7 +521,8 @@ void DesktopSessionProxy::StartInputInjector(
 }
 
 void DesktopSessionProxy::SetScreenResolution(
-    const ScreenResolution& resolution) {
+    const ScreenResolution& resolution,
+    std::optional<webrtc::ScreenId> screen_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   screen_resolution_ = resolution;
@@ -493,7 +551,19 @@ void DesktopSessionProxy::SetScreenResolution(
   // Passing an empty |screen_resolution_| value to the desktop process
   // indicates that the original resolution, if one exists, should be restored.
   if (desktop_session_control_) {
-    desktop_session_control_->SetScreenResolution(screen_resolution_);
+    desktop_session_control_->SetScreenResolution(screen_resolution_,
+                                                  screen_id);
+  }
+}
+
+void DesktopSessionProxy::SetVideoLayout(const protocol::VideoLayout& layout) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // Currently only the Linux host supports setting the video layout. It is
+  // always done by the desktop process, so there is no need to pass it to
+  // `desktop_session_connector_`.
+  if (desktop_session_control_) {
+    desktop_session_control_->SetVideoLayout(layout);
   }
 }
 
@@ -514,6 +584,41 @@ void DesktopSessionProxy::ExecuteAction(
       break;
     default:
       LOG(WARNING) << "Unknown action requested: " << request.action();
+  }
+}
+
+void DesktopSessionProxy::StartAudioInjector(
+    std::unique_ptr<IpcFifoBufferReader> audio_reader) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  pending_audio_reader_ = std::move(audio_reader);
+  should_start_audio_injector_ = true;
+  if (desktop_session_control_) {
+    DoStartAudioInjector();
+  }
+}
+
+void DesktopSessionProxy::DoStartAudioInjector() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK(desktop_session_control_);
+  DCHECK(pending_audio_reader_);
+
+  desktop_session_control_->StartAudioInjector(
+      std::move(pending_audio_reader_));
+}
+
+void DesktopSessionProxy::SetAudioInjectorSampleInfo(
+    const protocol::AudioSampleInfo& info,
+    base::OnceCallback<void(bool)> done) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (desktop_session_control_) {
+    desktop_session_control_->SetAudioInjectorSampleInfo(info, std::move(done));
+  } else {
+    if (pending_audio_format_ack_callback_) {
+      std::move(pending_audio_format_ack_callback_).Run(false);
+    }
+    pending_audio_sample_info_ = info;
+    pending_audio_format_ack_callback_ = std::move(done);
   }
 }
 
@@ -593,6 +698,13 @@ void DesktopSessionProxy::SetUpUrlForwarder(
   desktop_session_control_->SetUpUrlForwarder();
 }
 
+std::string_view DesktopSessionProxy::client_jid() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  return client_session_control_ ? client_session_control_->client_jid()
+                                 : std::string_view{};
+}
+
 void DesktopSessionProxy::OnUrlForwarderStateChange(
     mojom::UrlForwarderState state) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -644,10 +756,21 @@ void DesktopSessionProxy::OnAudioPacket(
     std::unique_ptr<AudioPacket> audio_packet) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  // Pass the captured audio packet to |audio_capturer_|.
-  audio_capture_task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(&IpcAudioCapturer::OnAudioPacket,
-                                audio_capturer_, std::move(audio_packet)));
+  if (audio_capture_task_runner_) {
+    audio_capture_task_runner_->PostTask(
+        FROM_HERE,
+        base::BindOnce(&DesktopSessionProxy::DispatchAudioPacketOnAudioSequence,
+                       this, std::move(audio_packet)));
+  }
+}
+
+void DesktopSessionProxy::DispatchAudioPacketOnAudioSequence(
+    std::unique_ptr<AudioPacket> packet) {
+  DCHECK(audio_capture_task_runner_->RunsTasksInCurrentSequence());
+  // Pass the captured audio packet to `audio_capturer_`.
+  if (audio_capturer_) {
+    audio_capturer_->OnAudioPacket(std::move(packet));
+  }
 }
 
 void DesktopSessionProxy::OnDesktopDisplayChanged(
@@ -734,6 +857,24 @@ void DesktopSessionProxy::OnLocalKeyboardInputDetected(int32_t usb_keycode) {
 
   if (client_session_control_) {
     client_session_control_->OnLocalKeyPressed(usb_keycode);
+  }
+}
+
+void DesktopSessionProxy::OnSecurityKeyConnection(
+    mojo::PendingReceiver<mojom::SecurityKeyForwarder> receiver) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (client_session_events_) {
+    client_session_events_->OnSecurityKeyConnection(std::move(receiver));
+  }
+}
+
+void DesktopSessionProxy::OnMicrophoneControl(
+    const protocol::MicrophoneControl& control) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (client_session_control_) {
+    client_session_control_->OnMicrophoneControl(control);
   }
 }
 

@@ -11,7 +11,6 @@
 #include "base/dcheck_is_on.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/raw_ptr_exclusion.h"
 #include "base/task/sequenced_task_runner.h"
 
 namespace blink::scheduler {
@@ -20,6 +19,7 @@ class MainThreadSchedulerImpl;
 
 namespace base::sequence_manager::internal {
 class CurrentDefaultHandleOverrideForRunOrPostTask;
+class ThreadControllerWithMessagePumpImpl;
 }
 
 namespace base {
@@ -69,23 +69,6 @@ class BASE_EXPORT SingleThreadTaskRunner : public SequencedTaskRunner {
   // the current thread.
   [[nodiscard]] static bool HasCurrentDefault();
 
-  // Returns a SingleThreadTaskRunner for the current thread. If possible, the
-  // task runner will schedule tasks with BEST_EFFORT TaskPriority.
-  // On threads that service multiple task queues, this returns the
-  // lowest-priority task queue. On other threads, it returns the same value as
-  // GetCurrentDefault().
-  //
-  // CHECKs if the current thread isn't servicing a SingleThreadTaskRunner.
-  [[nodiscard]] static scoped_refptr<SingleThreadTaskRunner>
-  GetCurrentBestEffort();
-
-  // Returns true if the current thread supports multiple task queues, one of
-  // which uses BEST_EFFORT TaskPriority.
-  //
-  // If this returns false and HasCurrentDefault() returns true,
-  // GetCurrentBestEffort() will return the same value as GetCurrentDefault().
-  [[nodiscard]] static bool HasCurrentBestEffort();
-
   // Returns the default SingleThreadTaskRunner for the main thread.
   //
   // CHECKs if the main thread task runner hasn't yet been initialized.
@@ -96,25 +79,11 @@ class BASE_EXPORT SingleThreadTaskRunner : public SequencedTaskRunner {
   // the main thread.
   [[nodiscard]] static bool HasMainThreadDefault();
 
-  // Returns a SingleThreadTaskRunner for the main thread. If possible, the
-  // task runner will schedule tasks with BEST_EFFORT TaskPriority. If no
-  // BEST_EFFORT task queue exists for the main threead, this returns the same
-  // value is GetMainThreadDefault().
-  //
-  // CHECKs if the main thread task runner hasn't yet been initialized.
-  [[nodiscard]] static scoped_refptr<SingleThreadTaskRunner>
-  GetMainThreadBestEffort();
-
-  // Returns true if the main thread has a BEST_EFFORT task queue.
-  //
-  // If this returns false and HasMainThreadDefault() returns true,
-  // GetMainThreadBestEffort() will return the same value as
-  // GetMainThreadDefault().
-  [[nodiscard]] static bool HasMainThreadBestEffort();
-
   class CurrentHandleOverrideForTesting;
 
   class BASE_EXPORT CurrentDefaultHandle {
+    struct MayAlreadyExist {};
+
    public:
     // Sets the value returned by `SingleThreadTaskRunner::GetCurrentDefault()`
     // and `SequencedTaskRunner::GetCurrentDefault()` to `task_runner` within
@@ -128,6 +97,11 @@ class BASE_EXPORT SingleThreadTaskRunner : public SequencedTaskRunner {
 
     ~CurrentDefaultHandle();
 
+    // Same as the public constructor, but there may already be a current
+    // default `SingleThreadTaskRunner` on this thread.
+    CurrentDefaultHandle(scoped_refptr<SingleThreadTaskRunner> task_runner,
+                         MayAlreadyExist);
+
    private:
     friend class SingleThreadTaskRunner;
 
@@ -140,6 +114,10 @@ class BASE_EXPORT SingleThreadTaskRunner : public SequencedTaskRunner {
     friend class CurrentHandleOverrideForTesting;
     friend class sequence_manager::internal::
         CurrentDefaultHandleOverrideForRunOrPostTask;
+    friend class sequence_manager::internal::
+        ThreadControllerWithMessagePumpImpl;
+    friend class ScopedMockTimeMessageLoopTaskRunner;
+    friend class ScopedMockTimeMessageLoopTaskRunnerTest;
     FRIEND_TEST_ALL_PREFIXES(SingleThreadTaskRunnerCurrentDefaultHandleTest,
                              NestedRunLoopAllowedUnderHandleOverride);
     FRIEND_TEST_ALL_PREFIXES(SingleThreadTaskRunnerCurrentDefaultHandleTest,
@@ -149,17 +127,11 @@ class BASE_EXPORT SingleThreadTaskRunner : public SequencedTaskRunner {
     FRIEND_TEST_ALL_PREFIXES(SingleThreadTaskRunnerCurrentDefaultHandleTest,
                              OverrideWithNonNull);
 
-    struct MayAlreadyExist {};
-
-    // Same as the public constructor, but there may already be a current
-    // default `SingleThreadTaskRunner` on this thread.
-    CurrentDefaultHandle(scoped_refptr<SingleThreadTaskRunner> task_runner,
-                         MayAlreadyExist);
-
     scoped_refptr<SingleThreadTaskRunner> task_runner_;
-    // RAW_PTR_EXCLUSION: Performance reasons (based on analysis of
+    // Uses UnprotectedInRelease: Performance reasons (based on analysis of
     // speedometer3).
-    RAW_PTR_EXCLUSION CurrentDefaultHandle* previous_handle_ = nullptr;
+    raw_ptr<CurrentDefaultHandle, UnprotectedInRelease> previous_handle_ =
+        nullptr;
     SequencedTaskRunner::CurrentDefaultHandle sequenced_handle_;
   };
 
@@ -183,7 +155,11 @@ class BASE_EXPORT SingleThreadTaskRunner : public SequencedTaskRunner {
   };
 
   class BASE_EXPORT MainThreadDefaultHandle {
+    struct MayAlreadyExist {};
+
    public:
+    ~MainThreadDefaultHandle();
+
     // Sets the value returned by
     // `SingleThreadTaskRunner::GetMainThreadDefault()` to `task_runner` within
     // its scope. `task_runner` must belong to the current thread. There must
@@ -192,30 +168,21 @@ class BASE_EXPORT SingleThreadTaskRunner : public SequencedTaskRunner {
     // ScopedCanOverrideMainThreadDefaultHandle.
     explicit MainThreadDefaultHandle(
         scoped_refptr<SingleThreadTaskRunner> task_runner);
-
-    ~MainThreadDefaultHandle();
+    explicit MainThreadDefaultHandle(
+        scoped_refptr<SingleThreadTaskRunner> task_runner,
+        MayAlreadyExist);
 
    private:
     friend class SingleThreadTaskRunner;
+    friend class ScopedMockTimeMessageLoopTaskRunner;
+    FRIEND_TEST_ALL_PREFIXES(SingleThreadTaskRunnerMainThreadDefaultHandleTest,
+                             NestedRunLoopAllowedUnderHandleOverride);
 
     scoped_refptr<SingleThreadTaskRunner> task_runner_;
-
-    // An associated BEST_EFFORT task runner, or nullptr if there is none.
-    scoped_refptr<SingleThreadTaskRunner> best_effort_task_runner_;
 
     // Some tests requires the ability to override the `previous_handle_`.
     // TODO(pmonette): Remove this when this is no longer the case.
     raw_ptr<MainThreadDefaultHandle> previous_handle_ = nullptr;
-  };
-
-  // Allows overriding the main thread default handle in some test
-  // configuration. Callers must be friended to avoid spreading its usage.
-  class BASE_EXPORT ScopedCanOverrideMainThreadDefaultHandle {
-   private:
-    friend class ScopedMockTimeMessageLoopTaskRunner;
-
-    ScopedCanOverrideMainThreadDefaultHandle();
-    ~ScopedCanOverrideMainThreadDefaultHandle();
   };
 
  protected:

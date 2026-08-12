@@ -37,6 +37,7 @@ import org.chromium.components.download.DownloadDangerType;
 import org.chromium.components.messages.DismissReason;
 import org.chromium.components.messages.MessageBannerProperties;
 import org.chromium.components.messages.MessageDispatcher;
+import org.chromium.components.messages.MessageDispatcherProvider;
 import org.chromium.components.messages.MessageIdentifier;
 import org.chromium.components.messages.PrimaryActionClickBehavior;
 import org.chromium.components.offline_items_collection.ContentId;
@@ -46,6 +47,7 @@ import org.chromium.components.offline_items_collection.OfflineContentProvider;
 import org.chromium.components.offline_items_collection.OfflineItem;
 import org.chromium.components.offline_items_collection.OfflineItemState;
 import org.chromium.components.offline_items_collection.UpdateDelta;
+import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.url.GURL;
 
@@ -69,7 +71,7 @@ public class DownloadMessageUiControllerImpl implements DownloadMessageUiControl
     private static final long DURATION_SHOW_RESULT_IN_MS = 6000;
 
     // The description can be an extremely long data url, whose length can cause a low memory
-    // error when applied to a text view. https://crbug.com/1250423
+    // error when applied to a text view. https://crbug.com/40197985
     private static final int MAX_DESCRIPTION_LENGTH = 200;
 
     // Keep this in sync with the DownloadInfoBar.ShownState enum in enums.xml.
@@ -186,7 +188,7 @@ public class DownloadMessageUiControllerImpl implements DownloadMessageUiControl
     }
 
     /** Represents the data required to show UI elements of the message. */
-    public static class DownloadProgressMessageUiData {
+    static class DownloadProgressMessageUiData {
         public @Nullable ContentId id;
 
         public String message;
@@ -252,7 +254,7 @@ public class DownloadMessageUiControllerImpl implements DownloadMessageUiControl
     }
 
     /** An utility class to count the number of downloads at different states at any given time. */
-    private static class DownloadCount {
+    static class DownloadCount {
         public int inProgress;
         public int pending;
         public int failed;
@@ -377,9 +379,20 @@ public class DownloadMessageUiControllerImpl implements DownloadMessageUiControl
 
     @Override
     public void showIncognitoDownloadMessage(Callback<Boolean> callback) {
+        showIncognitoDownloadMessage(/* window= */ null, callback);
+    }
+
+    @Override
+    public void showIncognitoDownloadMessage(
+            @Nullable WindowAndroid window, Callback<Boolean> callback) {
         Context context = ContextUtils.getApplicationContext();
 
-        MessageDispatcher dispatcher = getMessageDispatcher();
+        if (window == null) {
+            mDelegate.maybeSwitchToFocusedActivity();
+        }
+
+        MessageDispatcher dispatcher =
+                window != null ? MessageDispatcherProvider.from(window) : getMessageDispatcher();
         // TODO(crbug.com/40234025): Fix the issue with dispatcher
         //                                  being Null and remove the following if clause
         if (dispatcher == null) {
@@ -550,11 +563,13 @@ public class DownloadMessageUiControllerImpl implements DownloadMessageUiControl
             return false;
         }
 
-        // Some downloads are displayed as dangerous here due to a warning from Safe Browsing. Note
-        // that this is different from {@link OfflineItem#isDangerous} and the equivalent concept of
+        // Some downloads are displayed as dangerous here due to a warning from Safe Browsing or
+        // because the file is blocked by enterprise policy. Note that this is different from
+        // {@link OfflineItem#isDangerous} and the equivalent concept of
         // `DownloadItemImpl::IsDangerous()` in native, which is a broader category and should not
         // generally be visible in this UI.
-        if (shouldDisplayItemAsDangerousInMessage(offlineItem)) {
+        if (shouldDisplayItemAsDangerousInMessage(offlineItem)
+                || shouldDisplayItemAsBlockedSensitiveInMessage(offlineItem)) {
             return true;
         } else if (offlineItem.isDangerous) {
             return false;
@@ -798,8 +813,7 @@ public class DownloadMessageUiControllerImpl implements DownloadMessageUiControl
                     getContext().getResources().getQuantityString(stringRes, itemCount, itemCount);
             if (singleDownloadCompleted) {
                 String bytesString =
-                        org.chromium.components.browser_ui.util.DownloadUtils.getStringForBytes(
-                                getContext(), itemToShow.totalSizeBytes);
+                        DownloadUtils.getStringForBytes(getContext(), itemToShow.totalSizeBytes);
                 // Try to display the download domain/origin if possible. Otherwise, omit it.
                 String displayUrl =
                         DownloadUtils.formatUrlForDisplayInNotification(
@@ -997,8 +1011,7 @@ public class DownloadMessageUiControllerImpl implements DownloadMessageUiControl
                 && info.iconType != IconType.ANIMATED_VECTOR_DRAWABLE) {
             mPropertyModel.set(
                     MessageBannerProperties.ICON_TINT_COLOR,
-                    AppCompatResources.getColorStateList(getContext(), info.iconColorTintList)
-                            .getDefaultColor());
+                    getContext().getColorStateList(info.iconColorTintList).getDefaultColor());
         }
         mPropertyModel.set(MessageBannerProperties.TITLE, info.message);
 
@@ -1027,7 +1040,10 @@ public class DownloadMessageUiControllerImpl implements DownloadMessageUiControl
 
     @VisibleForTesting
     protected void closePreviousMessage() {
-        if (mDismissRunnable != null) mDismissRunnable.run();
+        if (mDismissRunnable != null) {
+            mDismissRunnable.run();
+            mDismissRunnable = null;
+        }
         mPropertyModel = null;
     }
 
@@ -1186,6 +1202,7 @@ public class DownloadMessageUiControllerImpl implements DownloadMessageUiControl
 
     private void onMessageDismissed(Integer dismissReason) {
         mPropertyModel = null;
+        mDismissRunnable = null;
         if (dismissReason == DismissReason.GESTURE) {
             computeNextStepForUpdate(null, false, true, false);
         }
@@ -1262,6 +1279,17 @@ public class DownloadMessageUiControllerImpl implements DownloadMessageUiControl
     private static void recordIncognitoDownloadMessage(@IncognitoMessageEvent int event) {
         RecordHistogram.recordEnumeratedHistogram(
                 "Download.Incognito.Message", event, IncognitoMessageEvent.NUM_ENTRIES);
+    }
+
+    /**
+     * Whether the item is a sensitive blocked download that should be displayed in the download
+     * message.
+     */
+    private static boolean shouldDisplayItemAsBlockedSensitiveInMessage(
+            @Nullable OfflineItem item) {
+        if (item == null) return false;
+        return ChromeFeatureList.isEnabled(ChromeFeatureList.SHOW_BLOCKED_SENSITIVE_DOWNLOAD)
+                && DownloadUtils.isBlockedSensitiveDownload(item);
     }
 
     /**

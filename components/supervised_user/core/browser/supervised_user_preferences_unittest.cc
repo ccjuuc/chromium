@@ -6,11 +6,13 @@
 
 #include <memory>
 
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/supervised_user/core/browser/supervised_user_test_environment.h"
 #include "components/supervised_user/core/browser/supervised_user_utils.h"
+#include "components/supervised_user/core/common/features.h"
 #include "components/supervised_user/core/common/pref_names.h"
 #include "components/supervised_user/core/common/supervised_user_constants.h"
 #include "components/supervised_user/test_support/kids_chrome_management_test_utils.h"
@@ -131,25 +133,6 @@ TEST_F(SupervisedUserPreferencesTest, FieldsAreClearedForNonChildAccounts) {
   }
 }
 
-TEST_F(SupervisedUserPreferencesTest, IsSafeSitesEnabledSupervisedUser) {
-  // Enables parental controls with safe sites checks.
-  EnableParentalControls(*supervised_user_test_environment_.pref_service());
-  EXPECT_TRUE(
-      IsSafeSitesEnabled(*supervised_user_test_environment_.pref_service()));
-}
-
-TEST_F(SupervisedUserPreferencesTest,
-       IsSubjectToParentalControlsForSupervisedUser) {
-  // Simply enables parental controls.
-  EnableParentalControls(*supervised_user_test_environment_.pref_service());
-  EXPECT_TRUE(supervised_user::IsSubjectToParentalControls(
-      *supervised_user_test_environment_.pref_service()));
-
-  // Safe sites is enabled by default.
-  EXPECT_TRUE(supervised_user::IsSafeSitesEnabled(
-      *supervised_user_test_environment_.pref_service()));
-}
-
 TEST_F(SupervisedUserPreferencesTest,
        IsSubjectToParentalControlsForNonSupervisedUser) {
   // Set non-supervised user preference.
@@ -158,23 +141,5 @@ TEST_F(SupervisedUserPreferencesTest,
   EXPECT_FALSE(IsSubjectToParentalControls(
       *supervised_user_test_environment_.pref_service()));
 }
-
-// This configuration is not reachable in prod (thus uses plain pref service),
-// but proves that these utility accessors are independent.
-TEST(SupervisedUserPreferencesTestWithoutEnvironment,
-     IsSafeSitesEnabledIndependentlyFromSupervision) {
-  TestingPrefServiceSimple pref_service;
-  RegisterProfilePrefs(pref_service.registry());
-
-  // Default behavior.
-  ASSERT_FALSE(IsSubjectToParentalControls(pref_service));
-  ASSERT_FALSE(IsSafeSitesEnabled(pref_service));
-
-  pref_service.SetSupervisedUserPref(prefs::kSupervisedUserSafeSites,
-                                     base::Value(true));
-  EXPECT_FALSE(IsSubjectToParentalControls(pref_service));
-  EXPECT_TRUE(IsSafeSitesEnabled(pref_service));
-}
-
 }  // namespace
 }  // namespace supervised_user

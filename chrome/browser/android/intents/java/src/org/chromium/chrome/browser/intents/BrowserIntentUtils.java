@@ -24,6 +24,18 @@ public class BrowserIntentUtils {
     public static final String CHROME_LAUNCHER_ACTIVITY_CLASS_NAME =
             "com.google.android.apps.chrome.IntentDispatcher";
 
+    /** Class name for LauncherShortcutActivity. */
+    public static final String LAUNCHER_SHORTCUT_ACTIVITY_CLASS_NAME =
+            "org.chromium.chrome.browser.LauncherShortcutActivity";
+
+    public static final String EXTRA_PREFER_NEW = "com.android.chrome.prefer_new";
+    public static final String EXTRA_OPEN_NEW_INCOGNITO_TAB =
+            "com.google.android.apps.chrome.EXTRA_OPEN_NEW_INCOGNITO_TAB";
+    public static final String EXTRA_OPEN_NEW_INCOGNITO_WINDOW =
+            "com.google.android.apps.chrome.EXTRA_OPEN_NEW_INCOGNITO_WINDOW";
+    public static final String EXTRA_TAB_LAUNCH_TYPE =
+            "org.chromium.chrome.browser.tab_launch_type";
+
     /**
      * Adds the current realtime and uptime timestamps to an intent.
      *

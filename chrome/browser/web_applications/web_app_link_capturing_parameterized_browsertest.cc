@@ -11,7 +11,6 @@
 
 #include "base/base_paths.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -49,7 +48,7 @@
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_browsertest_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/views/web_apps/web_app_link_capturing_test_utils.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
@@ -99,6 +98,106 @@ namespace web_app {
 
 namespace {
 
+std::string_view MetricValueToString(apps::LaunchSource launch_source) {
+  switch (launch_source) {
+    case apps::LaunchSource::kUnknown:
+      return "kUnknown";
+    case apps::LaunchSource::kFromAppListGrid:
+      return "kFromAppListGrid";
+    case apps::LaunchSource::kFromAppListGridContextMenu:
+      return "kFromAppListGridContextMenu";
+    case apps::LaunchSource::kFromAppListQuery:
+      return "kFromAppListQuery";
+    case apps::LaunchSource::kFromAppListQueryContextMenu:
+      return "kFromAppListQueryContextMenu";
+    case apps::LaunchSource::kFromAppListRecommendation:
+      return "kFromAppListRecommendation";
+    case apps::LaunchSource::kFromParentalControls:
+      return "kFromParentalControls";
+    case apps::LaunchSource::kFromShelf:
+      return "kFromShelf";
+    case apps::LaunchSource::kFromFileManager:
+      return "kFromFileManager";
+    case apps::LaunchSource::kFromLink:
+      return "kFromLink";
+    case apps::LaunchSource::kFromOmnibox:
+      return "kFromOmnibox";
+    case apps::LaunchSource::kFromChromeInternal:
+      return "kFromChromeInternal";
+    case apps::LaunchSource::kFromKeyboard:
+      return "kFromKeyboard";
+    case apps::LaunchSource::kFromOtherApp:
+      return "kFromOtherApp";
+    case apps::LaunchSource::kFromMenu:
+      return "kFromMenu";
+    case apps::LaunchSource::kFromInstalledNotification:
+      return "kFromInstalledNotification";
+    case apps::LaunchSource::kFromTest:
+      return "kFromTest";
+    case apps::LaunchSource::kFromArc:
+      return "kFromArc";
+    case apps::LaunchSource::kFromSharesheet:
+      return "kFromSharesheet";
+    case apps::LaunchSource::kFromReleaseNotesNotification:
+      return "kFromReleaseNotesNotification";
+    case apps::LaunchSource::kFromFullRestore:
+      return "kFromFullRestore";
+    case apps::LaunchSource::kFromSmartTextContextMenu:
+      return "kFromSmartTextContextMenu";
+    case apps::LaunchSource::kFromDiscoverTabNotification:
+      return "kFromDiscoverTabNotification";
+    case apps::LaunchSource::kFromManagementApi:
+      return "kFromManagementApi";
+    case apps::LaunchSource::kFromKiosk:
+      return "kFromKiosk";
+    case apps::LaunchSource::kFromCommandLine:
+      return "kFromCommandLine";
+    case apps::LaunchSource::kFromBackgroundMode:
+      return "kFromBackgroundMode";
+    case apps::LaunchSource::kFromNewTabPage:
+      return "kFromNewTabPage";
+    case apps::LaunchSource::kFromIntentUrl:
+      return "kFromIntentUrl";
+    case apps::LaunchSource::kFromOsLogin:
+      return "kFromOsLogin";
+    case apps::LaunchSource::kFromProtocolHandler:
+      return "kFromProtocolHandler";
+    case apps::LaunchSource::kFromUrlHandler:
+      return "kFromUrlHandler";
+    case apps::LaunchSource::kFromLockScreen:
+      return "kFromLockScreen";
+    case apps::LaunchSource::kFromAppHomePage:
+      return "kFromAppHomePage";
+    case apps::LaunchSource::kFromReparenting:
+      return "kFromReparenting";
+    case apps::LaunchSource::kFromProfileMenu:
+      return "kFromProfileMenu";
+    case apps::LaunchSource::kFromSysTrayCalendar:
+      return "kFromSysTrayCalendar";
+    case apps::LaunchSource::kFromInstaller:
+      return "kFromInstaller";
+    case apps::LaunchSource::kFromFirstRun:
+      return "kFromFirstRun";
+    case apps::LaunchSource::kFromWelcomeTour:
+      return "kFromWelcomeTour";
+    case apps::LaunchSource::kFromFocusMode:
+      return "kFromFocusMode";
+    case apps::LaunchSource::kFromSparky:
+      return "kFromSparky";
+    case apps::LaunchSource::kFromNavigationCapturing:
+      return "kFromNavigationCapturing";
+    case apps::LaunchSource::kFromWebInstallApi:
+      return "kFromWebInstallApi";
+    case apps::LaunchSource::kFromMigration:
+      return "kFromMigration";
+  }
+}
+
+template <typename T>
+std::string MetricValueToString(T value) {
+  return base::ToString(value);
+}
+
 constexpr char kStartPageScopeA[] =
     "/banners/link_capturing/scope_a/start.html";
 constexpr char kDestinationPageScopeA[] =
@@ -134,9 +233,8 @@ enum class LinkCapturing {
   kEnabled,
   kDisabled,
   kEnabledViaClientMode,
-  kEnabledWithSelfLinkCapture,
   kMinValue = kEnabled,
-  kMaxValue = kEnabledWithSelfLinkCapture
+  kMaxValue = kEnabledViaClientMode
 };
 
 constexpr std::string_view ToParamString(LinkCapturing capturing) {
@@ -147,8 +245,6 @@ constexpr std::string_view ToParamString(LinkCapturing capturing) {
       return "CaptureOff";
     case LinkCapturing::kEnabledViaClientMode:
       return "CaptureForSpecifiedClientMode";
-    case LinkCapturing::kEnabledWithSelfLinkCapture:
-      return "CaptureOnWithSelfLinkCapture";
   }
 }
 
@@ -527,8 +623,8 @@ bool DoesTestMatchFileConfig(std::string_view full_test_params,
       TupleItemToParamString<LinkCapturing>(file_config);
   std::string display_mode_name =
       TupleItemToParamString<AppUserDisplayMode>(file_config);
-  return base::Contains(full_test_params, link_capturing_name) &&
-         base::Contains(full_test_params, display_mode_name);
+  return full_test_params.contains(link_capturing_name) &&
+         full_test_params.contains(display_mode_name);
 }
 
 // Removes all of the parameters from the `full_test_params` that are handled by
@@ -561,10 +657,6 @@ std::string BrowserTypeToString(BrowserWindowInterface::Type type) {
       return "TYPE_DEVTOOLS";
     case BrowserWindowInterface::Type::TYPE_APP_POPUP:
       return "TYPE_APP_POPUP";
-#if BUILDFLAG(IS_CHROMEOS)
-    case BrowserWindowInterface::Type::TYPE_CUSTOM_TAB:
-      return "TYPE_CUSTOM_TAB";
-#endif
     case BrowserWindowInterface::Type::TYPE_PICTURE_IN_PICTURE:
       return "TYPE_PICTURE_IN_PICTURE";
   }
@@ -584,8 +676,8 @@ bool IsNewTabOrAboutBlankUrl(const BrowserWindowInterface* browser,
 // dictionary that can be stored as JSON. This includes the frame name and
 // current URL.
 // TODO(crbug.com/359418631): Add opener information to frames if possible.
-base::Value::Dict RenderFrameHostToJson(content::RenderFrameHost& rfh) {
-  base::Value::Dict dict;
+base::DictValue RenderFrameHostToJson(content::RenderFrameHost& rfh) {
+  base::DictValue dict;
   if (!rfh.GetFrameName().empty()) {
     dict.Set("frame_name", rfh.GetFrameName());
   }
@@ -595,9 +687,9 @@ base::Value::Dict RenderFrameHostToJson(content::RenderFrameHost& rfh) {
 
 // Serializes the state of a WebContents, including the state of all its iframes
 // as well as navigation history for the tab.
-base::Value::Dict WebContentsToJson(const BrowserWindowInterface& browser,
-                                    content::WebContents& web_contents) {
-  base::Value::Dict dict =
+base::DictValue WebContentsToJson(const BrowserWindowInterface& browser,
+                                  content::WebContents& web_contents) {
+  base::DictValue dict =
       RenderFrameHostToJson(*web_contents.GetPrimaryMainFrame());
   if (web_contents.HasOpener()) {
     dict.Set("has_opener", true);
@@ -608,7 +700,7 @@ base::Value::Dict WebContentsToJson(const BrowserWindowInterface& browser,
 
   // The new tab page has inconsistent frames, so skip frame analysis there.
   if (!IsNewTabOrAboutBlankUrl(&browser, last_committed_url)) {
-    base::Value::List frames;
+    base::ListValue frames;
     web_contents.GetPrimaryMainFrame()->ForEachRenderFrameHost(
         [&](content::RenderFrameHost* frame) {
           if (frame->IsInPrimaryMainFrame()) {
@@ -622,12 +714,12 @@ base::Value::Dict WebContentsToJson(const BrowserWindowInterface& browser,
     }
   }
 
-  base::Value::List history;
+  base::ListValue history;
   content::NavigationController& navigation_controller =
       web_contents.GetController();
   for (int i = 0; i < navigation_controller.GetEntryCount(); ++i) {
     content::NavigationEntry& entry = *navigation_controller.GetEntryAtIndex(i);
-    base::Value::Dict json_entry;
+    base::DictValue json_entry;
     json_entry.Set("url", entry.GetURL().PathForRequest());
     if (!entry.GetReferrer().url.is_empty()) {
       json_entry.Set("referrer", entry.GetReferrer().url.PathForRequest());
@@ -641,8 +733,7 @@ base::Value::Dict WebContentsToJson(const BrowserWindowInterface& browser,
   content::EvalJsResult launchParamsResults = content::EvalJs(
       web_contents.GetPrimaryMainFrame(),
       "'launchParamsTargetUrls' in window ? launchParamsTargetUrls : []");
-  EXPECT_THAT(launchParamsResults, content::EvalJsResult::IsOk());
-  const base::Value::List& launchParamsTargetUrls =
+  const base::ListValue& launchParamsTargetUrls =
       launchParamsResults.ExtractList();
   if (!launchParamsTargetUrls.empty()) {
     for (const base::Value& url : launchParamsTargetUrls) {
@@ -667,8 +758,8 @@ base::Value::Dict WebContentsToJson(const BrowserWindowInterface& browser,
 // For app browsers, the scope path is added to simplify manual debugging to
 // identify cases where a source app window can have an out of scope destination
 // url loaded in it.
-base::Value::Dict BrowserToJson(BrowserWindowInterface& browser) {
-  base::Value::Dict dict = base::Value::Dict().Set(
+base::DictValue BrowserToJson(BrowserWindowInterface& browser) {
+  base::DictValue dict = base::DictValue().Set(
       "browser_type", BrowserTypeToString(browser.GetType()));
   if (browser.GetType() == BrowserWindowInterface::Type::TYPE_APP ||
       browser.GetType() == BrowserWindowInterface::Type::TYPE_APP_POPUP) {
@@ -684,7 +775,7 @@ base::Value::Dict BrowserToJson(BrowserWindowInterface& browser) {
       dict.Set("app_scope", app_scope.PathForRequest());
     }
   }
-  base::Value::List tabs;
+  base::ListValue tabs;
   const TabStripModel* const tab_model = browser.GetTabStripModel();
   for (int i = 0; i < tab_model->count(); ++i) {
     content::WebContents* const current_contents =
@@ -695,7 +786,7 @@ base::Value::Dict BrowserToJson(BrowserWindowInterface& browser) {
     if (current_contents->IsBeingDestroyed()) {
       continue;
     }
-    base::Value::Dict tab = WebContentsToJson(browser, *current_contents);
+    base::DictValue tab = WebContentsToJson(browser, *current_contents);
     if (i == tab_model->active_index()) {
       tab.Set("active", true);
     }
@@ -761,6 +852,16 @@ static const base::flat_set<std::string> disabled_flaky_tests = {
 // "FocusExisting_BothStandalone_CaptureOn_AppWnd_ScopeA2B_Direct_..." (etc).
 #elif BUILDFLAG(IS_LINUX)
 #elif BUILDFLAG(IS_WIN)
+    // TODO(crbug.com/521419451) Re-enable tests.
+    "AppANavigateExistingAppBFocusExisting_BothStandalone_"
+    "CaptureForSpecifiedClientMode_Tab_ScopeA2B_Direct_ViaButton_LeftClick_"
+    "WithoutOpener_TargetSelf",
+    "NavigateNew_AppAStandaloneAppBBrowser_CaptureForSpecifiedClientMode_Tab_"
+    "ScopeA2X_Direct_ViaButton_LeftClick_WithoutOpener_TargetNoFrame",
+    "NavigateNew_BothStandalone_CaptureForSpecifiedClientMode_Tab_ScopeA2X_"
+    "Direct_ViaLink_LeftClick_WithOpener_TargetFrame",
+    "NavigateExisting_BothStandalone_CaptureOnWithSelfLinkCapture_Tab_ScopeA2B_"
+    "ServerSideViaA_ViaButton_LeftClick_WithoutOpener_TargetBlank"
 #elif BUILDFLAG(IS_CHROMEOS)
 #endif
 };
@@ -836,20 +937,10 @@ class NavCaptureParameterizedBrowserTest
             base::FieldTrialParams());
       }
 
-#if BUILDFLAG(IS_CHROMEOS)
-      if (GetLinkCapturing() == LinkCapturing::kEnabledWithSelfLinkCapture) {
-        enabled_features.emplace_back(
-            apps::features::kNavigationCapturingOnExistingFrames,
-            base::FieldTrialParams());
-      }
-#endif  // !BUILDFLAG(IS_CHROMEOS)
     }
     enabled_features.emplace_back(
         features::kPwaNavigationCapturing,
         base::FieldTrialParams({{"link_capturing_state", mode}}));
-    enabled_features.emplace_back(
-        features::kPwaNavigationCapturingWithScopeExtensions,
-        base::FieldTrialParams());
     scoped_feature_list_.InitWithFeaturesAndParameters(
         /*enabled_features=*/enabled_features,
         /*disabled_features=*/{});
@@ -929,7 +1020,7 @@ class NavCaptureParameterizedBrowserTest
     // redirection happening on the way from a source to a destination url.
     // Prevent multiple redirections from being triggered which causes a Chrome
     // error page to show up, cancelling the navigation.
-    if (base::Contains(request.GetURL().query(), "redirect")) {
+    if (request.GetURL().query().contains("redirect")) {
       return nullptr;
     }
 
@@ -942,7 +1033,7 @@ class NavCaptureParameterizedBrowserTest
     const GURL& final_request_url =
         request.GetURL().ReplaceComponents(request_replacements);
 
-    if (!base::Contains(final_request_url.spec(), "/destination.html")) {
+    if (!final_request_url.spec().contains("/destination.html")) {
       return nullptr;  // Only redirect for destination pages.
     }
 
@@ -980,7 +1071,7 @@ class NavCaptureParameterizedBrowserTest
 
  protected:
   void EnsureValidNewTabPage(Browser* browser) {
-    CHECK(browser->is_type_normal());
+    CHECK(browser->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL);
     // Ensure that if a fixture ended up loading a different page in the
     // starting tab, create a new tab for the navigation.
     GURL last_committed_url = browser->tab_strip_model()
@@ -991,13 +1082,13 @@ class NavCaptureParameterizedBrowserTest
     if (!is_at_new_tab_page) {
       LOG(ERROR) << "opening new tab due to "
                  << last_committed_url.possibly_invalid_spec();
-      chrome::NewTab(browser);
+      chrome::NewTab(browser, NewTabTypes::kNoUserAction);
     }
   }
 
   content::WebContents* LaunchStartPageAsApp(const webapps::AppId& app_id,
                                              const GURL& url) {
-    base::test::TestFuture<base::WeakPtr<Browser>,
+    base::test::TestFuture<base::WeakPtr<BrowserWindowInterface>,
                            base::WeakPtr<content::WebContents>,
                            apps::LaunchContainer>
         launch_future;
@@ -1035,7 +1126,7 @@ class NavCaptureParameterizedBrowserTest
     return contents;
   }
 
-  void ClickIntentPickerChip(Browser* browser) {
+  void ClickIntentPickerChip(BrowserWindowInterface* browser) {
     ui_test_utils::BrowserCreatedObserver browser_created_observer;
     // Clicking the Intent Picker will trigger a re-parenting (not a new
     // navigation, so the DomMessage has already been sent).
@@ -1045,7 +1136,7 @@ class NavCaptureParameterizedBrowserTest
     // After re-parenting, the old browser gets a new tab contents and we
     // need to wait for that to finish loading before capturing the end
     // state.
-    WaitForLoadStop(browser->tab_strip_model()->GetActiveWebContents());
+    WaitForLoadStop(browser->GetTabStripModel()->GetActiveWebContents());
   }
 
   void GetNewContentsAndPropagationOfLaunchParams(
@@ -1131,10 +1222,10 @@ class NavCaptureParameterizedBrowserTest
   // This method returns the dictionary associated with the test name derived
   // from the test parameters. If no entry exists for the test, a new one is
   // created.
-  base::Value::Dict& GetTestCaseDataFromParam() {
+  base::DictValue& GetTestCaseDataFromParam() {
     std::string shortened_name =
         TupleToParamString(GetShortenedConfigFromTestConfig(GetParam()));
-    base::Value::Dict* result =
+    base::DictValue* result =
         test_expectations().EnsureDict("tests")->EnsureDict(shortened_name);
     // Temporarily check expectations for the test name before redirect mode was
     // a separate parameter as well to make it easier to migrate expectations.
@@ -1193,10 +1284,10 @@ class NavCaptureParameterizedBrowserTest
   base::Value GetMetricBuckets(std::string metric_name, T value) {
     std::vector<base::Bucket> launch_source_buckets =
         action_histogram_tester_->GetAllSamples(metric_name);
-    base::Value::List bucket_list;
+    base::ListValue bucket_list;
     for (const base::Bucket& bucket : launch_source_buckets) {
       for (int count = 0; count < bucket.count; count++) {
-        bucket_list.Append(base::ToString(static_cast<T>(bucket.min)));
+        bucket_list.Append(MetricValueToString(static_cast<T>(bucket.min)));
       }
     }
     return base::Value(std::move(bucket_list));
@@ -1205,8 +1296,8 @@ class NavCaptureParameterizedBrowserTest
   // Serializes the entire state of chrome that we're interested in in this test
   // to a dictionary. This state consists of the state of all Browser windows,
   // in creation order of the Browser.
-  base::Value::Dict CaptureCurrentState() {
-    base::Value::List browsers;
+  base::DictValue CaptureCurrentState() {
+    base::ListValue browsers;
     GlobalBrowserCollection::GetInstance()->ForEach(
         [&browsers](BrowserWindowInterface* browser) {
           browsers.Append(BrowserToJson(*browser));
@@ -1218,7 +1309,7 @@ class NavCaptureParameterizedBrowserTest
     // metrics for the redirections and non-redirected navigations. It is
     // expected that redirections should ALSO have non-redirected values
     // measured.
-    return base::Value::Dict()
+    return base::DictValue()
         .Set("browsers", std::move(browsers))
         .Set("launch_metric_buckets",
              GetMetricBuckets("WebApp.LaunchSource",
@@ -1243,8 +1334,8 @@ class NavCaptureParameterizedBrowserTest
     // doing a rebaseline.
     base::ScopedClosureRunner lock = LockExpectationsFile(file_config);
 
-    base::Value::Dict& test_case_to_be_updated = GetTestCaseDataFromParam();
-    base::Value::Dict saved_test_case = test_case_to_be_updated.Clone();
+    base::DictValue& test_case_to_be_updated = GetTestCaseDataFromParam();
+    base::DictValue saved_test_case = test_case_to_be_updated.Clone();
 
     std::string full_test_params = TupleToParamString(GetParam());
     test_case_to_be_updated.Set("_params", full_test_params);
@@ -1476,16 +1567,15 @@ class NavCaptureParameterizedBrowserTest
   }
 
   void SetUpOnMainThread() override {
-    WebAppBrowserTestBase::SetUpOnMainThread();
-
     embedded_test_server()->RegisterRequestHandler(base::BindRepeating(
         &NavCaptureParameterizedBrowserTest::SimulateRedirectHandler,
         base::Unretained(this)));
-    ASSERT_TRUE(embedded_test_server()->Start());
     embedded_https_test_server().RegisterRequestHandler(base::BindRepeating(
         &NavCaptureParameterizedBrowserTest::SimulateRedirectHandler,
         base::Unretained(this)));
-    ASSERT_TRUE(embedded_https_test_server().Start());
+
+    WebAppBrowserTestBase::SetUpOnMainThread();
+    ASSERT_TRUE(embedded_test_server()->Start());
 
     NotificationPermissionContext::UpdatePermission(
         profile(), embedded_test_server()->GetOrigin().GetURL(),
@@ -1524,8 +1614,7 @@ class NavCaptureParameterizedBrowserTest
     for (int i = 0; i < unit_test->total_test_suite_count(); ++i) {
       const testing::TestSuite* test_suite = unit_test->GetTestSuite(i);
       // We only care about link capturing parameterized tests.
-      if (!base::Contains(std::string(test_suite->name()),
-                          GetTestClassName())) {
+      if (!(std::string(test_suite->name())).contains(GetTestClassName())) {
         continue;
       }
       for (int j = 0; j < test_suite->total_test_count(); ++j) {
@@ -1557,12 +1646,12 @@ class NavCaptureParameterizedBrowserTest
     const bool should_log_disabled_tests =
         base::CommandLine::ForCurrentProcess()->HasSwitch("log-disabled-tests");
 
-    base::Value::Dict& expectations = *test_expectations().EnsureDict("tests");
+    base::DictValue& expectations = *test_expectations().EnsureDict("tests");
     std::vector<std::string> tests_to_remove;
     for (const auto [shortened_name, expectation] : expectations) {
       if (!shortened_test_cases.contains(shortened_name)) {
         tests_to_remove.push_back(shortened_name);
-      } else if (base::Value::Dict* d = expectation.GetIfDict()) {
+      } else if (base::DictValue* d = expectation.GetIfDict()) {
         if (should_log_disabled_tests &&
             (d->FindBool("disabled").value_or(false) ||
              d->FindString("disabled"))) {
@@ -1605,7 +1694,7 @@ class NavCaptureParameterizedBrowserTest
     }
   }
 
-  base::Value::Dict& test_expectations() {
+  base::DictValue& test_expectations() {
     CHECK(test_expectations_.has_value());
     CHECK(test_expectations_->is_dict());
     return test_expectations_->GetDict();
@@ -1622,17 +1711,6 @@ class NavCaptureParameterizedBrowserTest
           << "Skipped as test is marked as disabled in the expectations file. "
              "Add the switch '--run-all-tests' to run disabled tests too.";
     }
-
-#if !BUILDFLAG(IS_CHROMEOS)
-    if (GetLinkCapturing() == LinkCapturing::kEnabledWithSelfLinkCapture) {
-      GTEST_SKIP() << "The existing-frame feature flag is ChromeOS specific";
-    }
-#else
-    if (GetClientModeCombination() == ClientModeCombination::kNotSpecified) {
-      GTEST_SKIP() << "Unspecified client mode support is not yet implemented "
-                      "for ChromeOS";
-    }
-#endif  // !BUILDFLAG(IS_CHROMEOS)
 
     AssertValidTestConfiguration();
     if (testing::Test::HasFatalFailure()) {
@@ -1687,13 +1765,6 @@ class NavCaptureParameterizedBrowserTest
     switch (GetLinkCapturing()) {
       case LinkCapturing::kEnabled:
       case LinkCapturing::kEnabledViaClientMode:
-      case LinkCapturing::kEnabledWithSelfLinkCapture:
-#if BUILDFLAG(IS_CHROMEOS)
-        ASSERT_EQ(apps::test::EnableLinkCapturingByUser(profile(), app_a),
-                  base::ok());
-        ASSERT_EQ(apps::test::EnableLinkCapturingByUser(profile(), app_b),
-                  base::ok());
-#endif
         break;
       case LinkCapturing::kDisabled:
         ASSERT_EQ(apps::test::DisableLinkCapturingByUser(profile(), app_a),
@@ -1708,7 +1779,7 @@ class NavCaptureParameterizedBrowserTest
     ASSERT_TRUE(MaybeCustomPreSetup(app_a, app_b));
 
     // Setup the initial page.
-    Browser* browser_a;
+    BrowserWindowInterface* browser_a;
     content::WebContents* contents_a;
     {
       if (StartInAppWindow()) {
@@ -1731,11 +1802,12 @@ class NavCaptureParameterizedBrowserTest
              "could mean the test setup didn't wait for enough navigations to "
              "finish.";
 
-      browser_a = chrome::FindBrowserWithTab(contents_a);
+      browser_a = GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          contents_a);
       ASSERT_TRUE(browser_a != nullptr);
-      ASSERT_EQ(StartInAppWindow() ? Browser::Type::TYPE_APP
-                                   : Browser::Type::TYPE_NORMAL,
-                browser_a->type());
+      ASSERT_EQ(StartInAppWindow() ? BrowserWindowInterface::Type::TYPE_APP
+                                   : BrowserWindowInterface::Type::TYPE_NORMAL,
+                browser_a->GetType());
     }
 
     ASSERT_TRUE(MaybeCustomPostSetup(app_a, app_b));
@@ -1793,8 +1865,8 @@ class NavCaptureParameterizedBrowserTest
     if (ShouldRebaseline()) {
       RecordActualResults(GetExpectationsFileConfigFromTestConfig(GetParam()));
     } else {
-      const base::Value::Dict& test_case = GetTestCaseDataFromParam();
-      const base::Value::Dict* expected_state =
+      const base::DictValue& test_case = GetTestCaseDataFromParam();
+      const base::DictValue* expected_state =
           test_case.FindDict("expected_state");
       ASSERT_TRUE(expected_state)
           << "Expected state not found in file "
@@ -1825,7 +1897,7 @@ class NavCaptureParameterizedBrowserTest
 #endif
 
     testing::TestParamInfo<LinkCaptureTestParam> param(GetParam(), 0);
-    const base::Value::Dict& test_case = GetTestCaseDataFromParam();
+    const base::DictValue& test_case = GetTestCaseDataFromParam();
 
     // Skip current test-case if the test is disabled in the expectations file.
     // If the "disabled" value is a string (which can be used to specify why the
@@ -1836,8 +1908,8 @@ class NavCaptureParameterizedBrowserTest
     }
 
     // Skip tests that are disabled because they are flaky.
-    if (base::Contains(disabled_flaky_tests, TupleToParamString(param.param)) ||
-        base::Contains(disabled_flaky_tests, "*")) {
+    if (disabled_flaky_tests.contains(TupleToParamString(param.param)) ||
+        disabled_flaky_tests.contains("*")) {
       return true;
     }
 
@@ -1871,11 +1943,6 @@ class NavCaptureParameterizedBrowserTest
     if (type == "TYPE_APP_POPUP") {
       return Browser::Type::TYPE_APP_POPUP;
     }
-#if BUILDFLAG(IS_CHROMEOS)
-    if (type == "TYPE_CUSTOM_TAB") {
-      return Browser::Type::TYPE_CUSTOM_TAB;
-    }
-#endif
     if (type == "TYPE_PICTURE_IN_PICTURE") {
       return Browser::Type::TYPE_PICTURE_IN_PICTURE;
     }
@@ -1900,10 +1967,9 @@ class NavCaptureParameterizedBrowserTest
     // Cleanup tests will call this with every combination of file
     // configuration, and if no tests exist then the load will fail.
     if (!ShouldRebaseline() &&
-        !base::Contains(std::string(::testing::UnitTest::GetInstance()
-                                        ->current_test_info()
-                                        ->name()),
-                        "Cleanup")) {
+        !(std::string(
+              ::testing::UnitTest::GetInstance()->current_test_info()->name()))
+             .contains("Cleanup")) {
       ASSERT_TRUE(file_read_success_)
           << "Failed to read test baselines from "
           << GetExpectationsFile(file_config).value()
@@ -1965,9 +2031,7 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Combine(
         testing::Values(ClientModeCombination::kAuto),
         testing::Values(AppUserDisplayMode::kBothStandalone),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kDisabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled, LinkCapturing::kDisabled),
         testing::Values(StartingPoint::kAppWindow, StartingPoint::kTab),
         testing::Values(Destination::kScopeA2A,
                         Destination::kScopeA2B,
@@ -2012,9 +2076,7 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Combine(
         testing::Values(ClientModeCombination::kAuto),
         testing::Values(AppUserDisplayMode::kAppAStandaloneAppBBrowser),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kDisabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled, LinkCapturing::kDisabled),
         testing::Values(StartingPoint::kAppWindow, StartingPoint::kTab),
         testing::Values(Destination::kScopeA2B),
         testing::Values(RedirectType::kNone),
@@ -2063,27 +2125,6 @@ INSTANTIATE_TEST_SUITE_P(
     LinkCaptureTestParamToString);
 
 INSTANTIATE_TEST_SUITE_P(
-    SelfCapturingIgnoresModified,
-    NavCaptureParameterizedBrowserTest,
-    testing::Combine(
-        testing::Values(ClientModeCombination::kAuto),
-        testing::Values(AppUserDisplayMode::kBothStandalone),
-        testing::Values(LinkCapturing::kEnabledWithSelfLinkCapture),
-        testing::Values(StartingPoint::kTab, StartingPoint::kAppWindow),
-        testing::Values(Destination::kScopeA2B),
-        testing::Values(RedirectType::kNone),
-        testing::Values(NavigationElement::kElementLink,
-                        NavigationElement::kElementButton),
-        testing::Values(test::ClickMethod::kMiddleClick,
-                        test::ClickMethod::kShiftClick),
-        testing::Values(OpenerMode::kNoOpener),
-        testing::Values(NavigationTarget::kSelf,
-                        NavigationTarget::kBlank,
-                        NavigationTarget::kFrame,
-                        NavigationTarget::kNoFrame)),
-    LinkCaptureTestParamToString);
-
-INSTANTIATE_TEST_SUITE_P(
     IntentPicker,
     NavCaptureParameterizedBrowserTest,
     testing::Combine(
@@ -2128,9 +2169,7 @@ INSTANTIATE_TEST_SUITE_P(
         testing::Values(ClientModeCombination::kBothFocusExisting,
                         ClientModeCombination::kBothNavigateExisting),
         testing::Values(AppUserDisplayMode::kBothStandalone),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kDisabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled, LinkCapturing::kDisabled),
         testing::Values(StartingPoint::kAppWindow, StartingPoint::kTab),
         testing::Values(Destination::kScopeA2A, Destination::kScopeA2B),
         // TODO: Add redirection cases.
@@ -2151,8 +2190,7 @@ INSTANTIATE_TEST_SUITE_P(
                         ClientModeCombination::kBothFocusExisting,
                         ClientModeCombination::kBothNavigateExisting),
         testing::Values(AppUserDisplayMode::kBothBrowser),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled),
         testing::Values(StartingPoint::kTab),
         testing::Values(Destination::kScopeA2A, Destination::kScopeA2B),
         // TODO(crbug.com/375619465): Test redirection.
@@ -2174,9 +2212,7 @@ INSTANTIATE_TEST_SUITE_P(
         testing::Values(ClientModeCombination::kBothFocusExisting,
                         ClientModeCombination::kBothNavigateExisting),
         testing::Values(AppUserDisplayMode::kAppAStandaloneAppBBrowser),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kDisabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled, LinkCapturing::kDisabled),
         testing::Values(StartingPoint::kAppWindow, StartingPoint::kTab),
         testing::Values(Destination::kScopeA2B),
         // TODO: Add redirection cases.
@@ -2213,8 +2249,7 @@ INSTANTIATE_TEST_SUITE_P(
         testing::Values(ClientModeCombination::kBothFocusExisting,
                         ClientModeCombination::kBothNavigateExisting),
         testing::Values(AppUserDisplayMode::kBothStandalone),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled),
         testing::Values(StartingPoint::kAppWindow),
         testing::Values(Destination::kScopeA2A),
         testing::Values(RedirectType::kServerSideViaB),
@@ -2231,8 +2266,7 @@ INSTANTIATE_TEST_SUITE_P(
         testing::Values(ClientModeCombination::kBothFocusExisting,
                         ClientModeCombination::kBothNavigateExisting),
         testing::Values(AppUserDisplayMode::kAppAStandaloneAppBBrowser),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled),
         testing::Values(StartingPoint::kTab),
         testing::Values(Destination::kScopeA2A),
         testing::Values(RedirectType::kServerSideViaB),
@@ -2260,6 +2294,26 @@ INSTANTIATE_TEST_SUITE_P(
                         test::ClickMethod::kShiftClick),
         testing::Values(OpenerMode::kOpener),
         testing::Values(NavigationTarget::kBlank)),
+    LinkCaptureTestParamToString);
+
+// Use-case where redirection goes into a browser tab as an intermediate step
+// and ends up in an app window, triggered by a left click.
+// This should only happen when navigation capturing AND
+// kEnableAuxContextKeepSameContainer are both enabled.
+INSTANTIATE_TEST_SUITE_P(
+    Redirection_OpenInApp_LeftClick,
+    NavCaptureParameterizedBrowserTest,
+    testing::Combine(testing::Values(ClientModeCombination::kAuto),
+                     testing::Values(AppUserDisplayMode::kBothStandalone),
+                     testing::Values(LinkCapturing::kEnabled,
+                                     LinkCapturing::kDisabled),
+                     testing::Values(StartingPoint::kAppWindow),
+                     testing::Values(Destination::kScopeA2A),
+                     testing::Values(RedirectType::kServerSideViaX),
+                     testing::Values(NavigationElement::kElementLink),
+                     testing::Values(test::ClickMethod::kLeftClick),
+                     testing::Values(OpenerMode::kOpener),
+                     testing::Values(NavigationTarget::kBlank)),
     LinkCaptureTestParamToString);
 
 // This is meant to test (most) of the user-modified click scenarios that
@@ -2308,8 +2362,7 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Combine(
         testing::Values(ClientModeCombination::kAuto),
         testing::Values(AppUserDisplayMode::kAppAStandaloneAppBBrowser),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled),
         testing::Values(StartingPoint::kTab),
         testing::Values(Destination::kScopeA2A,
                         Destination::kScopeA2B,
@@ -2367,8 +2420,7 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Combine(
         testing::Values(ClientModeCombination::kBothNavigateNew),
         testing::Values(AppUserDisplayMode::kBothStandalone),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled),
         testing::Values(StartingPoint::kAppWindow, StartingPoint::kTab),
         testing::Values(Destination::kScopeA2B, Destination::kScopeA2X),
         testing::Values(RedirectType::kServerSideViaA,
@@ -2390,8 +2442,7 @@ INSTANTIATE_TEST_SUITE_P(
         testing::Values(ClientModeCombination::kBothNavigateExisting,
                         ClientModeCombination::kBothFocusExisting),
         testing::Values(AppUserDisplayMode::kBothStandalone),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled),
         testing::Values(StartingPoint::kTab),
         testing::Values(Destination::kScopeA2B, Destination::kScopeA2X),
         testing::Values(RedirectType::kServerSideViaA),
@@ -2457,23 +2508,34 @@ INSTANTIATE_TEST_SUITE_P(
     LinkCaptureTestParamToString);
 
 // kEnabledViaClientMode should capture when the client modes are specified
-// (including `auto`).
+// (including `auto`). Mimics the `All_LeftClick` tests to ensure all default
+// navigation capturing use-cases are covered.
 INSTANTIATE_TEST_SUITE_P(
     ClientModeEnabledCaptured,
     NavCaptureParameterizedBrowserTest,
     testing::Combine(
-        testing::Values(ClientModeCombination::kBothNavigateNew,
-                        ClientModeCombination::kAuto),
-        testing::Values(AppUserDisplayMode::kBothStandalone),
-        testing::Values(LinkCapturing::kEnabledViaClientMode,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
-        testing::Values(StartingPoint::kTab),
-        testing::Values(Destination::kScopeA2B),
+        testing::Values(
+            ClientModeCombination::kAuto,
+            ClientModeCombination::kBothNavigateNew,
+            ClientModeCombination::kBothNavigateExisting,
+            ClientModeCombination::kBothFocusExisting,
+            ClientModeCombination::kAppANavigateExistingAppBFocusExisting),
+        testing::Values(AppUserDisplayMode::kBothStandalone,
+                        AppUserDisplayMode::kAppAStandaloneAppBBrowser),
+        testing::Values(LinkCapturing::kEnabledViaClientMode),
+        testing::Values(StartingPoint::kAppWindow, StartingPoint::kTab),
+        testing::Values(Destination::kScopeA2A,
+                        Destination::kScopeA2B,
+                        Destination::kScopeA2X),
         testing::Values(RedirectType::kNone),
-        testing::Values(NavigationElement::kElementLink),
+        testing::Values(NavigationElement::kElementLink,
+                        NavigationElement::kElementButton),
         testing::Values(test::ClickMethod::kLeftClick),
-        testing::Values(OpenerMode::kNoOpener),
-        testing::Values(NavigationTarget::kSelf, NavigationTarget::kBlank)),
+        testing::Values(OpenerMode::kOpener, OpenerMode::kNoOpener),
+        testing::Values(NavigationTarget::kSelf,
+                        NavigationTarget::kFrame,
+                        NavigationTarget::kBlank,
+                        NavigationTarget::kNoFrame)),
     LinkCaptureTestParamToString);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -2486,8 +2548,7 @@ INSTANTIATE_TEST_SUITE_P(
             ClientModeCombination::kBothNavigateExisting),
         testing::Values(AppUserDisplayMode::kAppAStandaloneAppBTabbed,
                         AppUserDisplayMode::kAppAStandaloneAppBTabbedWithHome),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled),
         testing::Values(StartingPoint::kTab),
         testing::Values(Destination::kScopeA2B, Destination::kScopeA2B2),
         testing::Values(RedirectType::kNone,
@@ -2539,7 +2600,7 @@ class NavCaptureTestWithAppBLaunched
         WebAppProvider::GetForTest(profile())
             ->registrar_unsafe()
             .GetAppLaunchUrl(app_b));
-    base::test::TestFuture<base::WeakPtr<Browser>,
+    base::test::TestFuture<base::WeakPtr<BrowserWindowInterface>,
                            base::WeakPtr<content::WebContents>,
                            apps::LaunchContainer>
         launch_future;
@@ -2579,8 +2640,7 @@ INSTANTIATE_TEST_SUITE_P(
         testing::Values(ClientModeCombination::kBothFocusExisting,
                         ClientModeCombination::kBothNavigateExisting),
         testing::Values(AppUserDisplayMode::kBothStandalone),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled),
         testing::Values(StartingPoint::kAppWindow, StartingPoint::kTab),
         testing::Values(Destination::kScopeA2B),
         testing::Values(RedirectType::kNone),
@@ -2597,9 +2657,7 @@ INSTANTIATE_TEST_SUITE_P(
         testing::Values(ClientModeCombination::kBothFocusExisting,
                         ClientModeCombination::kBothNavigateExisting),
         testing::Values(AppUserDisplayMode::kAppAStandaloneAppBBrowser),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kDisabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled, LinkCapturing::kDisabled),
         testing::Values(StartingPoint::kAppWindow, StartingPoint::kTab),
         testing::Values(Destination::kScopeA2B),
         // TODO: Add redirection cases.
@@ -2618,8 +2676,7 @@ INSTANTIATE_TEST_SUITE_P(
             ClientModeCombination::kAppANavigateExistingAppBFocusExisting,
             ClientModeCombination::kBothNavigateExisting),
         testing::Values(AppUserDisplayMode::kBothStandalone),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled),
         testing::Values(StartingPoint::kAppWindow, StartingPoint::kTab),
         testing::Values(Destination::kScopeA2B),
         testing::Values(RedirectType::kServerSideViaA,
@@ -2639,8 +2696,7 @@ INSTANTIATE_TEST_SUITE_P(
                         ClientModeCombination::kBothNavigateExisting),
         testing::Values(AppUserDisplayMode::kAppAStandaloneAppBBrowser,
                         AppUserDisplayMode::kBothBrowser),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled),
         testing::Values(StartingPoint::kTab),
         testing::Values(Destination::kScopeA2B),  // Navigate A -> B
         testing::Values(RedirectType::kServerSideViaA),
@@ -2662,8 +2718,7 @@ INSTANTIATE_TEST_SUITE_P(
             ClientModeCombination::kBothNavigateExisting),
         testing::Values(AppUserDisplayMode::kAppAStandaloneAppBTabbed,
                         AppUserDisplayMode::kAppAStandaloneAppBTabbedWithHome),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled),
         testing::Values(StartingPoint::kTab),
         testing::Values(Destination::kScopeA2B, Destination::kScopeA2B2),
         testing::Values(RedirectType::kNone,
@@ -2699,7 +2754,7 @@ class NavCaptureTestWithBLaunchedAndBrowserTab
         WebAppProvider::GetForTest(profile())
             ->registrar_unsafe()
             .GetAppLaunchUrl(app_b));
-    base::test::TestFuture<base::WeakPtr<Browser>,
+    base::test::TestFuture<base::WeakPtr<BrowserWindowInterface>,
                            base::WeakPtr<content::WebContents>,
                            apps::LaunchContainer>
         launch_future;
@@ -2751,8 +2806,7 @@ INSTANTIATE_TEST_SUITE_P(
         testing::Values(ClientModeCombination::kBothFocusExisting,
                         ClientModeCombination::kBothNavigateExisting),
         testing::Values(AppUserDisplayMode::kBothStandalone),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled),
         testing::Values(StartingPoint::kAppWindow, StartingPoint::kTab),
         testing::Values(Destination::kScopeA2B),
         testing::Values(RedirectType::kNone),
@@ -2810,8 +2864,7 @@ INSTANTIATE_TEST_SUITE_P(
         testing::Values(ClientModeCombination::kBothFocusExisting,
                         ClientModeCombination::kBothNavigateExisting),
         testing::Values(AppUserDisplayMode::kBothStandalone),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled),
         testing::Values(StartingPoint::kAppWindow, StartingPoint::kTab),
         testing::Values(Destination::kScopeA2B),
         testing::Values(RedirectType::kNone),
@@ -2862,8 +2915,7 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Combine(
         testing::Values(ClientModeCombination::kAuto),
         testing::Values(AppUserDisplayMode::kBothStandalone),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
+        testing::Values(LinkCapturing::kEnabled),
         testing::Values(StartingPoint::kAppWindow),
         testing::Values(Destination::kScopeA2X),
         testing::Values(RedirectType::kNone, RedirectType::kServerSideViaB),
@@ -2930,18 +2982,17 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingTestWithAppBInNewBrowserWindow,
 INSTANTIATE_TEST_SUITE_P(
     ChooseActiveBrowser,
     NavigationCapturingTestWithAppBInNewBrowserWindow,
-    testing::Combine(
-        testing::Values(ClientModeCombination::kAuto),
-        testing::Values(AppUserDisplayMode::kBothBrowser),
-        testing::Values(LinkCapturing::kEnabled,
-                        LinkCapturing::kEnabledWithSelfLinkCapture),
-        testing::Values(StartingPoint::kTab),
-        testing::Values(Destination::kScopeA2B),
-        testing::Values(RedirectType::kNone),
-        testing::Values(NavigationElement::kElementLink),
-        testing::Values(test::ClickMethod::kLeftClick),
-        testing::Values(OpenerMode::kNoOpener),
-        testing::Values(NavigationTarget::kSelf, NavigationTarget::kBlank)),
+    testing::Combine(testing::Values(ClientModeCombination::kAuto),
+                     testing::Values(AppUserDisplayMode::kBothBrowser),
+                     testing::Values(LinkCapturing::kEnabled),
+                     testing::Values(StartingPoint::kTab),
+                     testing::Values(Destination::kScopeA2B),
+                     testing::Values(RedirectType::kNone),
+                     testing::Values(NavigationElement::kElementLink),
+                     testing::Values(test::ClickMethod::kLeftClick),
+                     testing::Values(OpenerMode::kNoOpener),
+                     testing::Values(NavigationTarget::kSelf,
+                                     NavigationTarget::kBlank)),
     LinkCaptureTestParamToString);
 
 }  // namespace

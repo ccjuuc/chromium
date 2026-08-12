@@ -16,7 +16,6 @@
 #import "ios/chrome/browser/data_import/ui/data_import_credential_conflict_resolution_view_controller_delegate.h"
 #import "ios/chrome/browser/data_import/ui/data_import_import_stage_transition_handler.h"
 #import "ios/chrome/browser/data_import/ui/ui_utils.h"
-#import "ios/chrome/browser/settings/ui_bundled/utils/password_utils.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_attributed_string_header_footer_item.h"
 #import "ios/chrome/browser/shared/ui/table_view/content_configuration/table_view_cell_content_configuration.h"
@@ -181,14 +180,6 @@ NSString* const kDataImportCredentialConflictResolutionSection =
 
 #pragma mark - Private
 
-/// Lazy-loader of the reauthentication module.
-- (ReauthenticationModule*)reauthModule {
-  if (!_reauthModule) {
-    _reauthModule = password_manager::BuildReauthenticationModule();
-  }
-  return _reauthModule;
-}
-
 /// Helper method that returns the number of selected items.
 - (NSUInteger)selectedItemsCount {
   NSArray<NSIndexPath*>* selectedRows =
@@ -240,7 +231,7 @@ NSString* const kDataImportCredentialConflictResolutionSection =
   cell.contentConfiguration = config;
   cell.editingAccessoryView = [self accessoryViewForItemIdentifier:identifier];
   UIView* selectedBackgroundView = [[UIView alloc] init];
-  selectedBackgroundView.backgroundColor = [UIColor clearColor];
+  selectedBackgroundView.backgroundColor = [UIColor colorNamed:kBlueHaloColor];
   cell.selectedBackgroundView = selectedBackgroundView;
   return cell;
 }
@@ -270,10 +261,24 @@ NSString* const kDataImportCredentialConflictResolutionSection =
                            target:self
                            action:@selector(didTapCancelButton)];
   /// Navigation bar: continue button.
-  self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
-      initWithBarButtonSystemItem:UIBarButtonSystemItemDone
-                           target:self
-                           action:@selector(didTapContinueButton)];
+  if (@available(iOS 26, *)) {
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
+        initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+                             target:self
+                             action:@selector(didTapContinueButton)];
+  } else {
+    NSString* continueButtonTitle = l10n_util::GetNSString(IDS_CONTINUE);
+    UIBarButtonItem* continueButton =
+        [self newButtonWithTitle:continueButtonTitle
+                          action:@selector(didTapContinueButton)];
+    NSDictionary<NSString*, UIFont*>* continueButtonAttributes = @{
+      NSFontAttributeName : [UIFont systemFontOfSize:UIFont.buttonFontSize
+                                              weight:UIFontWeightSemibold]
+    };
+    [continueButton setTitleTextAttributes:continueButtonAttributes
+                                  forState:UIControlStateNormal];
+    self.navigationItem.rightBarButtonItem = continueButton;
+  }
   /// Toolbar select buttons.
   NSString* selectButtonTitle = l10n_util::GetNSString(
       IDS_IOS_SAFARI_IMPORT_PASSWORD_CONFLICT_RESOLUTION_BUTTON_SELECT_ALL);
@@ -356,11 +361,10 @@ NSString* const kDataImportCredentialConflictResolutionSection =
       !(_shouldUnmaskPasswordAtIndex[identifier.index].boolValue);
   UIButtonConfiguration* configuration =
       [UIButtonConfiguration plainButtonConfiguration];
-  NSString* symbol_name =
-      forUnmaskAction ? kShowActionSymbol : kHideActionSymbol;
-  UIImage* buttonImage = DefaultSymbolWithConfiguration(  // Store the image
-      symbol_name, [UIImageSymbolConfiguration
-                       configurationWithWeight:UIImageSymbolWeightMedium]);
+  Symbol symbol = forUnmaskAction ? SymbolShowAction : SymbolHideAction;
+  UIImage* buttonImage = SymbolWithConfiguration(
+      symbol, [UIImageSymbolConfiguration
+                  configurationWithWeight:UIImageSymbolWeightMedium]);
   configuration.image = buttonImage;
   configuration.contentInsets = NSDirectionalEdgeInsetsZero;
   __weak __typeof(self) weakSelf = self;

@@ -24,11 +24,18 @@ namespace blink {
 
 namespace {
 
-const char kAbortedMessage[] = "Transition was skipped";
+const char kAbortedMessage[] = "Transition was skipped. ";
 const char kInvalidStateMessage[] =
-    "Transition was aborted because of invalid state";
+    "Transition was aborted because of invalid state. ";
 const char kTimeoutMessage[] =
-    "Transition was aborted because of timeout in DOM update";
+    "Transition was aborted because of timeout in DOM update. ";
+
+String FormatExceptionMessage(const char* prefix,
+                              ViewTransitionSkipReason reason) {
+  const char* reason_str = SkipReasonToString(reason);
+  CHECK(reason_str);
+  return String(String(prefix) + reason_str).StripWhiteSpace();
+}
 
 }  // namespace
 
@@ -53,12 +60,13 @@ class DOMViewTransition::WaitUntilPromiseSettledCallback
   Member<ViewTransition> view_transition_;
 };
 
-DOMViewTransition::DOMViewTransition(ExecutionContext& execution_context,
+DOMViewTransition::DOMViewTransition(ExecutionContext* execution_context,
                                      ViewTransition& view_transition)
     : DOMViewTransition(execution_context,
                         view_transition,
                         /*update_dom_callback=*/nullptr) {
-  if (view_transition.IsForNavigationOnNewDocument()) {
+  if (view_transition.IsForNavigationOnNewDocument() ||
+      view_transition.IsPreview()) {
     // In a cross-document view transition, the DOM is "updated" by the
     // navigation so by the time we create this object (in the pagereveal
     // event), the update is complete.
@@ -68,24 +76,31 @@ DOMViewTransition::DOMViewTransition(ExecutionContext& execution_context,
 }
 
 DOMViewTransition::DOMViewTransition(
-    ExecutionContext& execution_context,
+    ExecutionContext* execution_context,
     ViewTransition& view_transition,
     V8ViewTransitionCallback* update_dom_callback)
-    : ExecutionContextLifecycleObserver(&execution_context),
-      execution_context_(&execution_context),
+    : ExecutionContextLifecycleObserver(execution_context),
+      execution_context_(execution_context),
       view_transition_{&view_transition},
       update_dom_callback_(update_dom_callback),
       finished_promise_property_(
-          MakeGarbageCollected<PromiseProperty>(execution_context_)),
+          execution_context_
+              ? MakeGarbageCollected<PromiseProperty>(execution_context_)
+              : nullptr),
       ready_promise_property_(
-          MakeGarbageCollected<PromiseProperty>(execution_context_)),
+          execution_context_
+              ? MakeGarbageCollected<PromiseProperty>(execution_context_)
+              : nullptr),
       dom_updated_promise_property_(
-          MakeGarbageCollected<PromiseProperty>(execution_context_)),
-      task_state_(update_dom_callback_
-                      ? CaptureCurrentTaskStateIfMainWorld(
-                            update_dom_callback_->CallbackRelevantScriptState())
+          execution_context_
+              ? MakeGarbageCollected<PromiseProperty>(execution_context_)
+              : nullptr),
+      task_state_(update_dom_callback_ && execution_context_
+                      ? CaptureCurrentTaskState(execution_context_)
                       : nullptr) {
-  CHECK(execution_context_->GetAgent());
+  if (execution_context_) {
+    CHECK(execution_context_->GetAgent());
+  }
 }
 
 DOMViewTransition::~DOMViewTransition() = default;
@@ -95,22 +110,37 @@ void DOMViewTransition::ContextDestroyed() {
 }
 
 void DOMViewTransition::skipTransition() {
-  view_transition_->SkipTransition();
+  view_transition_->SkipTransition(
+      ViewTransition::PromiseResponse::kRejectAbort,
+      ViewTransitionSkipReason::kUserSkipped);
 }
 
 ScriptPromise<IDLUndefined> DOMViewTransition::finished(
     ScriptState* script_state) const {
-  return finished_promise_property_->Promise(script_state->World());
+  return finished_promise_property_
+             ? finished_promise_property_->Promise(script_state->World())
+             : ScriptPromise<IDLUndefined>::FromV8Value(
+                   script_state, v8::Undefined(script_state->GetIsolate()));
 }
 
 ScriptPromise<IDLUndefined> DOMViewTransition::ready(
     ScriptState* script_state) const {
-  return ready_promise_property_->Promise(script_state->World());
+  return ready_promise_property_
+             ? ready_promise_property_->Promise(script_state->World())
+             : ScriptPromise<IDLUndefined>::RejectWithDOMException(
+                   script_state, MakeGarbageCollected<DOMException>(
+                                     DOMExceptionCode::kAbortError,
+                                     "Transition was skipped"));
 }
 
 ScriptPromise<IDLUndefined> DOMViewTransition::updateCallbackDone(
     ScriptState* script_state) const {
-  return dom_updated_promise_property_->Promise(script_state->World());
+  return dom_updated_promise_property_
+             ? dom_updated_promise_property_->Promise(script_state->World())
+             : ScriptPromise<IDLUndefined>::RejectWithDOMException(
+                   script_state, MakeGarbageCollected<DOMException>(
+                                     DOMExceptionCode::kAbortError,
+                                     "Transition was skipped"));
 }
 
 void DOMViewTransition::waitUntil(ScriptState* script_state,
@@ -126,16 +156,29 @@ void DOMViewTransition::waitUntil(ScriptState* script_state,
 }
 
 void DOMViewTransition::DidSkipTransition(
-    ViewTransition::PromiseResponse response) {
+    ViewTransition::PromiseResponse response,
+    ViewTransitionSkipReason reason) {
   CHECK_NE(response, ViewTransition::PromiseResponse::kResolve);
 
   if (!execution_context_) {
     return;
   }
 
+  if (RuntimeEnabledFeatures::TransitionNavigationQuietSkipEnabled() &&
+      view_transition_ && view_transition_->NavigationSnapshotComplete()) {
+    // Suppress reporting of unhandled rejections on the old document
+    // for a cross document navigation.  The transition on the old document is
+    // skipped when the document is hidden.
+    // TODO(https://github.com/w3c/csswg-drafts/issues/13463): Revisit when
+    // this issue is resolved. Somewhat tangential, but each cross-doc
+    // navigation triggers a skip on the document, which by (current) spec
+    // needs to be handled.
+    mark_promises_as_handled_ = true;
+  }
+
   // If the ready promise has not yet been resolved, reject it.
   if (ready_promise_property_->GetState() == PromiseProperty::State::kPending) {
-    AtMicrotask(response, ready_promise_property_);
+    AtMicrotask(response, reason, ready_promise_property_);
   }
 
   // If we haven't run the dom change callback yet, schedule a task to do so.
@@ -160,6 +203,7 @@ void DOMViewTransition::DidSkipTransition(
     // But if the callback was successful, we need to resolve the finished
     // promise while skipping the transition.
     AtMicrotask(ViewTransition::PromiseResponse::kResolve,
+                ViewTransitionSkipReason::kExpected,
                 finished_promise_property_);
   }
 }
@@ -181,6 +225,22 @@ void DOMViewTransition::NotifyDOMCallbackFinished() {
 
 void DOMViewTransition::NotifyDOMCallbackRejected(ScriptValue value) {
   CHECK_EQ(dom_callback_result_, DOMCallbackResult::kRunning);
+
+  // TODO(crbug.com/481374782): Consider generalizing solution to ensure
+  // no rejection paths can lead to being unable to detect an unhandled
+  // rejection.
+
+  // If the promises have not been accessed yet, create them here so that they
+  // report an unhandled rejection if they are not subsequently handled.
+  if (ScriptState* script_state =
+          ToScriptStateForMainWorld(execution_context_)) {
+    dom_updated_promise_property_->Promise(script_state->World());
+    if (!view_transition_->IsDone()) {
+      ready_promise_property_->Promise(script_state->World());
+    }
+    finished_promise_property_->Promise(script_state->World());
+  }
+
   // Handle all promises which depend on this callback.
   dom_updated_promise_property_->Reject(value);
 
@@ -200,12 +260,12 @@ void DOMViewTransition::NotifyDOMCallbackRejected(ScriptValue value) {
 
 void DOMViewTransition::DidStartAnimating() {
   AtMicrotask(ViewTransition::PromiseResponse::kResolve,
-              ready_promise_property_);
+              ViewTransitionSkipReason::kExpected, ready_promise_property_);
 }
 
 void DOMViewTransition::DidFinishAnimating() {
   AtMicrotask(ViewTransition::PromiseResponse::kResolve,
-              finished_promise_property_);
+              ViewTransitionSkipReason::kExpected, finished_promise_property_);
 }
 
 // Invoked when ViewTransitionCallback finishes running.
@@ -275,6 +335,16 @@ void DOMViewTransition::InvokeDOMChangeCallback() {
   ScriptState* script_state =
       update_dom_callback_ ? update_dom_callback_->CallbackRelevantScriptState()
                            : ToScriptStateForMainWorld(execution_context_);
+  if (!script_state || !script_state->ContextIsValid()) {
+    HandlePromise(ViewTransition::PromiseResponse::kRejectAbort,
+                  ViewTransitionSkipReason::kContextDestroyed,
+                  dom_updated_promise_property_);
+    HandlePromise(ViewTransition::PromiseResponse::kRejectAbort,
+                  ViewTransitionSkipReason::kContextDestroyed,
+                  finished_promise_property_);
+    view_transition_->NotifyInvokeDOMChangeCallback();
+    return;
+  }
   ScriptState::Scope scope(script_state);
 
   if (update_dom_callback_) {
@@ -320,19 +390,32 @@ void DOMViewTransition::Trace(Visitor* visitor) const {
 }
 
 void DOMViewTransition::AtMicrotask(ViewTransition::PromiseResponse response,
+                                    ViewTransitionSkipReason reason,
                                     PromiseProperty* property) {
   if (!execution_context_) {
     return;
   }
   execution_context_->GetAgent()->event_loop()->EnqueueMicrotask(
       BindOnce(&DOMViewTransition::HandlePromise, WrapPersistent(this),
-               response, WrapPersistent(property)));
+               response, reason, WrapPersistent(property)));
 }
 
 void DOMViewTransition::HandlePromise(ViewTransition::PromiseResponse response,
+                                      ViewTransitionSkipReason reason,
                                       PromiseProperty* property) {
   if (!execution_context_) {
     return;
+  }
+
+  if (mark_promises_as_handled_) {
+    // Suppress reporting of unhandled rejections on the old document
+    // for a cross document navigation.  The transition on the old document is
+    // skipped when the document is hidden.
+    // TODO(https://github.com/w3c/csswg-drafts/issues/13463): Revisit when
+    // this issue is resolved. Somewhat tangential, but each cross-doc
+    // navigation triggers a skip on the document, which by (current) spec
+    // needs to be handled.
+    property->MarkAsHandled();
   }
 
   // It's possible for multiple fulfillment microtasks to be queued so
@@ -349,8 +432,14 @@ void DOMViewTransition::HandlePromise(ViewTransition::PromiseResponse response,
   ScriptState* main_world_script_state =
       ToScriptStateForMainWorld(execution_context_);
 
-  if (!main_world_script_state) {
+  if (!main_world_script_state || !main_world_script_state->ContextIsValid()) {
     return;
+  }
+
+  // TODO(crbug.com/481374782): Consider generalizing solution to future proof
+  // handling of all rejection paths.
+  if (response != ViewTransition::PromiseResponse::kResolve) {
+    property->Promise(main_world_script_state->World());
   }
 
   switch (response) {
@@ -361,8 +450,9 @@ void DOMViewTransition::HandlePromise(ViewTransition::PromiseResponse response,
       ScriptState::Scope scope(main_world_script_state);
       auto value = ScriptValue::From(
           main_world_script_state,
-          MakeGarbageCollected<DOMException>(DOMExceptionCode::kAbortError,
-                                             kAbortedMessage));
+          MakeGarbageCollected<DOMException>(
+              DOMExceptionCode::kAbortError,
+              FormatExceptionMessage(kAbortedMessage, reason)));
       property->Reject(value);
       break;
     }
@@ -371,7 +461,8 @@ void DOMViewTransition::HandlePromise(ViewTransition::PromiseResponse response,
       auto value = ScriptValue::From(
           main_world_script_state,
           MakeGarbageCollected<DOMException>(
-              DOMExceptionCode::kInvalidStateError, kInvalidStateMessage));
+              DOMExceptionCode::kInvalidStateError,
+              FormatExceptionMessage(kInvalidStateMessage, reason)));
       property->Reject(value);
       break;
     }
@@ -379,8 +470,9 @@ void DOMViewTransition::HandlePromise(ViewTransition::PromiseResponse response,
       ScriptState::Scope scope(main_world_script_state);
       auto value = ScriptValue::From(
           main_world_script_state,
-          MakeGarbageCollected<DOMException>(DOMExceptionCode::kTimeoutError,
-                                             kTimeoutMessage));
+          MakeGarbageCollected<DOMException>(
+              DOMExceptionCode::kTimeoutError,
+              FormatExceptionMessage(kTimeoutMessage, reason)));
       property->Reject(value);
       break;
     }

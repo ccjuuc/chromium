@@ -26,6 +26,7 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
@@ -34,13 +35,13 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "base/types/expected_macros.h"
-#include "base/win/atl.h"
 #include "base/win/elevation_util.h"
 #include "base/win/scoped_com_initializer.h"
 #include "base/win/scoped_localalloc.h"
@@ -48,6 +49,7 @@
 #include "chrome/installer/util/lzma_util.h"
 #include "chrome/updater/branded_constants.h"
 #include "chrome/updater/constants.h"
+#include "chrome/updater/get_updater_scope.h"
 #include "chrome/updater/ping_configurator.h"
 #include "chrome/updater/tag.h"
 #include "chrome/updater/updater_branding.h"
@@ -60,11 +62,11 @@
 #include "chrome/updater/win/installer/pe_resource.h"
 #include "chrome/updater/win/installer/splash_wnd.h"
 #include "chrome/updater/win/ui/l10n_util.h"
+#include "chrome/updater/win/ui/message_loop.h"
 #include "chrome/updater/win/ui/ui_util.h"
 #include "chrome/updater/win/win_constants.h"
 #include "components/update_client/protocol_definition.h"
 #include "components/update_client/update_client.h"
-#include "third_party/wtl/include/atlapp.h"
 
 namespace updater {
 
@@ -87,7 +89,7 @@ std::string ExtractTag() {
 base::ScopedClosureRunner CreateSplashScreen() {
   HWND splash_hwnd = nullptr;
   if (GetCommandLineLegacyCompatible().HasSwitch(kSilentSwitch)) {
-    return base::ScopedClosureRunner(base::BindOnce([] {}));
+    return base::ScopedClosureRunner(base::DoNothing());
   }
 
   base::WaitableEvent ui_initialized_event;
@@ -100,11 +102,12 @@ base::ScopedClosureRunner CreateSplashScreen() {
                      [](base::WaitableEvent& event, HWND& splash_hwnd) {
                        ui::SplashWnd splash;
                        splash.Create(nullptr);
-                       splash.ShowWindow(SW_SHOW);
-                       splash_hwnd = splash.m_hWnd;
+                       ::ShowWindow(splash.hwnd(), SW_SHOW);
+                       ::UpdateWindow(splash.hwnd());
+                       splash_hwnd = splash.hwnd();
                        event.Signal();
 
-                       WTL::CMessageLoop().Run();
+                       ui::MessageLoop().Run();
                      },
                      std::ref(ui_initialized_event), std::ref(splash_hwnd)));
 
@@ -189,7 +192,7 @@ ProcessExitResult RunProcessAndWait(const wchar_t* exe_path, wchar_t* cmdline) {
     // Split specific failure modes. If the process couldn't be launched because
     // its file/path couldn't be found, report its attributes in ExtraCode1.
     // This will help diagnose the prevalence of launch failures due to Image
-    // File Execution Options tampering. See https://crbug.com/672813 for more
+    // File Execution Options tampering. See https://crbug.com/41290422 for more
     // details.
     const DWORD last_error = ::GetLastError();
     const DWORD attributes = ::GetFileAttributes(exe_path);
@@ -312,7 +315,7 @@ ProcessExitResult BuildInstallerCommandLineArgumentsInternal(
   if (args.GetSwitchValueUTF8(kInstallSwitch).empty()) {
     const std::string tag = ExtractTag();
     if (!tag.empty()) {
-      args.AppendSwitchUTF8(kInstallSwitch, tag.c_str());
+      args.AppendSwitchUTF8(kInstallSwitch, tag);
     }
   }
 
@@ -380,7 +383,9 @@ ProcessExitResult HandleRunElevated(const base::CommandLine& command_line) {
     return ProcessExitResult(UNEXPECTED_ELEVATION_LOOP);
   }
 
-  if (command_line.HasSwitch(kSilentSwitch)) {
+  if (command_line.HasSwitch(kSilentSwitch) &&
+      command_line.GetSwitchValueASCII(kSilentSwitch) !=
+          kSilentSwitchValueAllowUAC) {
     VLOG(1) << __func__ << ": cannot show an elevation prompt with `/silent`: "
             << command_line.GetCommandLineString();
     return ProcessExitResult(UNEXPECTED_ELEVATION_LOOP_SILENT);
@@ -436,7 +441,6 @@ ProcessExitResult InstallerMain(HMODULE module,
                                 bool& usage_stats_enable,
                                 std::wstring& lang,
                                 std::u16string& bundle_name) {
-  CHECK(EnableSecureDllLoading());
   EnableProcessHeapMetadataProtection();
 
   if (base::win::GetVersion() < base::win::Version::WIN10) {
@@ -601,6 +605,7 @@ ProcessExitResult InstallerMain(HMODULE module,
 }
 
 int WMain(HMODULE module) {
+  CHECK(EnableSecureDllLoading());
   InitializeThreadPool("windows-installer");
   bool usage_stats_enable = false;
   std::wstring lang;

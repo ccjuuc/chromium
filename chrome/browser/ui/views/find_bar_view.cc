@@ -13,6 +13,7 @@
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
 #include "chrome/app/vector_icons/vector_icons.h"
+#include "chrome/browser/enterprise/data_protection/data_protection_clipboard_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
@@ -25,20 +26,22 @@
 #include "chrome/browser/ui/views/find_bar_host.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/user_education/user_education_service.h"
-#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/find_in_page/find_notification_details.h"
 #include "components/find_in_page/find_tab_helper.h"
 #include "components/find_in_page/find_types.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
+#include "content/public/browser/clipboard_types.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
+#include "ui/base/data_transfer_policy/data_transfer_endpoint.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/text_input_flags.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/theme_provider.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/events/event.h"
@@ -271,15 +274,62 @@ FindBarView::FindBarView(FindBarHost* host) {
   main_container->SetFlexForView(find_text_, 1, true);
 
   // Theme-aware image models.
-  views::SetImageFromVectorIconWithColorId(
-      find_previous_button_, kKeyboardArrowUpChromeRefreshIcon,
-      kColorFindBarButtonIcon, kColorFindBarButtonIconDisabled);
-  views::SetImageFromVectorIconWithColorId(
-      find_next_button_, kKeyboardArrowDownChromeRefreshIcon,
-      kColorFindBarButtonIcon, kColorFindBarButtonIconDisabled);
-  views::SetImageFromVectorIconWithColorId(
-      close_button_, kCloseChromeRefreshIcon, kColorFindBarButtonIcon,
-      kColorFindBarButtonIconDisabled);
+  views::SetImageFromVectorIconWithColor(
+      find_previous_button_,
+      features::IsRoundedIconsEnabled() ? vector_icons::kKeyboardArrowUpIcon
+                                        : kKeyboardArrowUpChromeRefreshOldIcon,
+      {kColorFindBarButtonIcon, kColorFindBarButtonIconDisabled});
+  find_previous_button_->SetImageModel(
+      views::Button::STATE_HOVERED,
+      ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                         ? vector_icons::kKeyboardArrowUpIcon
+                                         : kKeyboardArrowUpChromeRefreshOldIcon,
+                                     kColorFindBarButtonIconHovered));
+  find_previous_button_->SetImageModel(
+      views::Button::STATE_PRESSED,
+      ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                         ? vector_icons::kKeyboardArrowUpIcon
+                                         : kKeyboardArrowUpChromeRefreshOldIcon,
+                                     kColorFindBarButtonIconHovered));
+
+  views::SetImageFromVectorIconWithColor(
+      find_next_button_,
+      features::IsRoundedIconsEnabled()
+          ? kKeyboardArrowDownIcon
+          : kKeyboardArrowDownChromeRefreshOldIcon,
+      {kColorFindBarButtonIcon, kColorFindBarButtonIconDisabled});
+  find_next_button_->SetImageModel(
+      views::Button::STATE_HOVERED,
+      ui::ImageModel::FromVectorIcon(
+          features::IsRoundedIconsEnabled()
+              ? kKeyboardArrowDownIcon
+              : kKeyboardArrowDownChromeRefreshOldIcon,
+          kColorFindBarButtonIconHovered));
+  find_next_button_->SetImageModel(
+      views::Button::STATE_PRESSED,
+      ui::ImageModel::FromVectorIcon(
+          features::IsRoundedIconsEnabled()
+              ? kKeyboardArrowDownIcon
+              : kKeyboardArrowDownChromeRefreshOldIcon,
+          kColorFindBarButtonIconHovered));
+
+  views::SetImageFromVectorIconWithColor(
+      close_button_,
+      features::IsRoundedIconsEnabled() ? kCloseSmallIcon
+                                        : kCloseChromeRefreshOldIcon,
+      {kColorFindBarButtonIcon, kColorFindBarButtonIconDisabled});
+  close_button_->SetImageModel(
+      views::Button::STATE_HOVERED,
+      ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                         ? kCloseSmallIcon
+                                         : kCloseChromeRefreshOldIcon,
+                                     kColorFindBarButtonIconHovered));
+  close_button_->SetImageModel(
+      views::Button::STATE_PRESSED,
+      ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                         ? kCloseSmallIcon
+                                         : kCloseChromeRefreshOldIcon,
+                                     kColorFindBarButtonIconHovered));
 
   SetOrientation(views::BoxLayout::Orientation::kVertical);
   SetHost(host);
@@ -347,7 +397,7 @@ void FindBarView::UpdateForResult(
   bool have_valid_range =
       result.number_of_matches() != -1 && result.active_match_ordinal() != -1;
 
-  // http://crbug.com/34970: some IMEs get confused if we change the text
+  // http://crbug.com/41093231: some IMEs get confused if we change the text
   // composed by them. To avoid this problem, we should check the IME status and
   // update the text only when the IME is not composing text.
   //
@@ -474,6 +524,21 @@ bool FindBarView::HandleKeyEvent(views::Textfield* sender,
   return false;
 }
 
+bool FindBarView::HandleMouseEvent(views::Textfield* sender,
+                                   const ui::MouseEvent& key_event) {
+#if BUILDFLAG(IS_MAC)
+  if (key_event.type() == ui::EventType::kMousePressed) {
+    // On macOS, clicking on the find text field should also activate the owner
+    // widget (if it isn't already), so that the user can interact with the text
+    // field.
+    DCHECK(find_bar_host_);
+    find_bar_host_->ActivateOwnerWidgetIfNecessary();
+  }
+#endif  // BUILDFLAG(IS_MAC)
+
+  return false;
+}
+
 void FindBarView::OnAfterUserAction(views::Textfield* sender) {
   // The composition text wouldn't be what the user is really looking for.
   // We delay the search until the user commits the composition text.
@@ -485,8 +550,47 @@ void FindBarView::OnAfterUserAction(views::Textfield* sender) {
 void FindBarView::OnAfterPaste() {
   // Clear the last search text so we always search for the user input after
   // a paste operation, even if the pasted text is the same as before.
-  // See http://crbug.com/79002
+  // See http://crbug.com/40552385
   last_searched_text_.clear();
+}
+
+bool FindBarView::OnBeforeCutOrCopy(views::Textfield* sender,
+                                    std::u16string* copy_contents) {
+  CHECK(copy_contents);
+  CHECK(copy_contents->empty());
+
+  return enterprise_data_protection::ReplaceCopyFromFindBar(
+      sender->GetSelectedText(),
+      find_bar_host_->GetFindBarController()->web_contents(), copy_contents);
+}
+
+void FindBarView::OnBeforePaste(
+    views::Textfield* sender,
+    base::OnceCallback<void(std::optional<std::u16string>)> callback) {
+  enterprise_data_protection::ReplacePasteToFindBar(
+      find_bar_host_->GetFindBarController()->web_contents(),
+      std::move(callback));
+}
+
+std::unique_ptr<ui::ScopedClipboardWriter>
+FindBarView::CreateClipboardWriter() {
+  content::WebContents* web_contents =
+      find_bar_host_->GetFindBarController()->web_contents();
+  std::unique_ptr<ui::DataTransferEndpoint> dte;
+  if (web_contents->GetLastCommittedURL().is_valid()) {
+    dte = std::make_unique<ui::DataTransferEndpoint>(
+        web_contents->GetLastCommittedURL(),
+        ui::DataTransferEndpointOptions{
+            .off_the_record =
+                web_contents->GetBrowserContext()->IsOffTheRecord(),
+        });
+  }
+  auto clipboard_writer = std::make_unique<ui::ScopedClipboardWriter>(
+      ui::ClipboardBuffer::kCopyPaste, std::move(dte));
+  content::AddSourceDataToClipboardWriter(*clipboard_writer,
+                                          *web_contents->GetPrimaryMainFrame());
+
+  return clipboard_writer;
 }
 
 void FindBarView::Find(std::u16string_view search_text) {

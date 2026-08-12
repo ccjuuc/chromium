@@ -8,6 +8,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "ash/constants/url_constants.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/strings/utf_string_conversions.h"
@@ -15,7 +16,6 @@
 #include "chrome/browser/ash/input_method/input_method_settings.h"
 #include "chrome/browser/ui/webui/ash/settings/os_settings_features_util.h"
 #include "chrome/browser/ui/webui/ash/settings/search/search_tag_registry.h"
-#include "chrome/common/url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/components/magic_boost/public/cpp/magic_boost_state.h"
 #include "chromeos/constants/chromeos_features.h"
@@ -177,14 +177,14 @@ void AddInputMethodOptionsLoadTimeData(
        IDS_SETTINGS_INPUT_METHOD_OPTIONS_JAPANESE_INPUT_MODE_KANA},
       {"inputMethodOptionsJapanesePunctuationStyle",
        IDS_SETTINGS_INPUT_METHOD_OPTIONS_JAPANESE_PUNCTUATION_STYLE},
-      {"inputMethodOptionsJapanesePunctuationStyleKutenTouten",
-       IDS_SETTINGS_INPUT_METHOD_OPTIONS_JAPANESE_PUNCTUATION_STYLE_KUTEN_TOUTEN},
+      {"inputMethodOptionsJapanesePunctuationStyleToutenKuten",
+       IDS_SETTINGS_INPUT_METHOD_OPTIONS_JAPANESE_PUNCTUATION_STYLE_TOUTEN_KUTEN},
       {"inputMethodOptionsJapanesePunctuationStyleCommaPeriod",
        IDS_SETTINGS_INPUT_METHOD_OPTIONS_JAPANESE_PUNCTUATION_STYLE_COMMA_PERIOD},
-      {"inputMethodOptionsJapanesePunctuationStyleKutenPeriod",
-       IDS_SETTINGS_INPUT_METHOD_OPTIONS_JAPANESE_PUNCTUATION_STYLE_KUTEN_PERIOD},
-      {"inputMethodOptionsJapanesePunctuationStyleCommaTouten",
-       IDS_SETTINGS_INPUT_METHOD_OPTIONS_JAPANESE_PUNCTUATION_STYLE_COMMA_TOUTEN},
+      {"inputMethodOptionsJapanesePunctuationStyleToutenPeriod",
+       IDS_SETTINGS_INPUT_METHOD_OPTIONS_JAPANESE_PUNCTUATION_STYLE_TOUTEN_PERIOD},
+      {"inputMethodOptionsJapanesePunctuationStyleCommaKuten",
+       IDS_SETTINGS_INPUT_METHOD_OPTIONS_JAPANESE_PUNCTUATION_STYLE_COMMA_KUTEN},
       {"inputMethodOptionsJapaneseSymbolStyle",
        IDS_SETTINGS_INPUT_METHOD_OPTIONS_JAPANESE_SYMBOL_STYLE},
       {"inputMethodOptionsJapaneseSymbolStyleCornerBracketMiddleDot",
@@ -292,7 +292,6 @@ void AddInputMethodOptionsLoadTimeData(
   html_source->AddBoolean(
       "autocorrectEnableByDefault",
       base::FeatureList::IsEnabled(features::kAutocorrectByDefault));
-  html_source->AddBoolean("allowFirstPartyVietnameseInput", true);
 }
 
 }  // namespace
@@ -454,10 +453,10 @@ void InputsSection::AddLoadTimeData(content::WebUIDataSource* html_source) {
   };
   html_source->AddLocalizedStrings(kLocalizedStrings);
 
-  html_source->AddString(
-      "languagePacksNotice",
-      l10n_util::GetStringFUTF16(IDS_SETTINGS_LANGUAGES_LANGUAGE_PACKS_NOTICE,
-                                 chrome::kLanguagePacksLearnMoreURL));
+  html_source->AddString("languagePacksNotice",
+                         l10n_util::GetStringFUTF16(
+                             IDS_SETTINGS_LANGUAGES_LANGUAGE_PACKS_NOTICE,
+                             ash::external_urls::kLanguagePacksLearnMoreURL));
   html_source->AddBoolean(
       "onDeviceGrammarCheckEnabled",
       base::FeatureList::IsEnabled(features::kOnDeviceGrammarCheck));

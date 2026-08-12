@@ -105,7 +105,7 @@ void ScrollAnchor::SetScroller(ScrollableArea* scroller) {
 // adjust only on the block flow axis.  This could probably be refactored to
 // simply measure the movement of the block-start edge.
 static Corner CornerToAnchor(const ScrollableArea* scroller) {
-  auto writing_mode = ScrollerLayoutBox(scroller)->Style()->GetWritingMode();
+  auto writing_mode = ScrollerLayoutBox(scroller)->StyleRef().GetWritingMode();
   if (IsFlippedBlocksWritingMode(writing_mode)) {
     return Corner::kTopRight;
   }
@@ -131,27 +131,33 @@ static PhysicalOffset CornerPointOfRect(const PhysicalRect& rect,
 // Bounds of the LayoutObject relative to the scroller's visible content rect.
 static PhysicalRect RelativeBounds(const LayoutObject* layout_object,
                                    const ScrollableArea* scroller) {
-  PhysicalRect local_bounds;
-  if (const auto* box = DynamicTo<LayoutBox>(layout_object)) {
-    local_bounds = box->PhysicalBorderBoxRect();
+  gfx::RectF local_bounds;
+  if (layout_object->IsSVGChild() && !layout_object->IsSVGForeignObject() &&
+      !layout_object->IsSVGInlineText()) {
+    // Because SVG nodes use DecoratedBoundingBox to calculate
+    // AbsoluteBoundingBoxRectF, we use DecoratedBoundingBox here to calculate
+    // local_bounds.
+    local_bounds = layout_object->DecoratedBoundingBox();
+  } else if (const auto* box = DynamicTo<LayoutBox>(layout_object)) {
+    PhysicalRect physical_rect = box->PhysicalBorderBoxRect();
     // If we clip overflow then we can use the `PhysicalBorderBoxRect()`
     // as our bounds. If not, we expand the bounds by the scrollable overflow.
     if (!layout_object->ShouldClipOverflowAlongEitherAxis()) {
       // BorderBoxRect doesn't include overflow content and floats.
-      LayoutUnit max_y = std::max(local_bounds.Bottom(),
+      LayoutUnit max_y = std::max(physical_rect.Bottom(),
                                   box->ScrollableOverflowRect().Bottom());
-      local_bounds.ShiftBottomEdgeTo(max_y);
+      physical_rect.ShiftBottomEdgeTo(max_y);
     }
+    local_bounds = gfx::RectF(physical_rect);
   } else if (layout_object->IsText()) {
     const auto* text = To<LayoutText>(layout_object);
     // TODO(kojii): |PhysicalLinesBoundingBox()| cannot compute, and thus
     // returns (0, 0) when changes are made that |DeleteLineBoxes()| or clear
     // |SetPaintFragment()|, e.g., |SplitFlow()|. crbug.com/965352
-    local_bounds.Unite(text->PhysicalLinesBoundingBox());
-
+    local_bounds = gfx::RectF(text->PhysicalLinesBoundingBox());
   } else if (const auto* inline_layout =
                  DynamicTo<LayoutInline>(layout_object)) {
-    local_bounds.Unite(inline_layout->PhysicalLinesBoundingBox());
+    local_bounds = gfx::RectF(inline_layout->PhysicalLinesBoundingBox());
   } else {
     // Only LayoutBox, LayoutText and LayoutInline are supported.
     NOTREACHED();
@@ -159,8 +165,7 @@ static PhysicalRect RelativeBounds(const LayoutObject* layout_object,
 
   gfx::RectF relative_bounds =
       scroller
-          ->LocalToVisibleContentQuad(gfx::QuadF(gfx::RectF(local_bounds)),
-                                      layout_object)
+          ->LocalToVisibleContentQuad(gfx::QuadF(local_bounds), layout_object)
           .BoundingBox();
 
   return PhysicalRect::FastAndLossyFromRectF(relative_bounds);
@@ -337,16 +342,14 @@ static const String ComputeUniqueSelector(LayoutObject* anchor_object) {
 }
 
 static PhysicalRect GetVisibleRect(ScrollableArea* scroller) {
-  auto visible_rect =
-      ScrollerLayoutBox(scroller)->OverflowClipRect(PhysicalOffset());
+  auto visible_rect = ScrollerLayoutBox(scroller)->OverflowClipRect();
 
-  const ComputedStyle* style = ScrollerLayoutBox(scroller)->Style();
+  const ComputedStyle& style = ScrollerLayoutBox(scroller)->StyleRef();
   visible_rect.ContractEdges(
-      MinimumValueForLength(style->ScrollPaddingTop(), visible_rect.Height()),
-      MinimumValueForLength(style->ScrollPaddingRight(), visible_rect.Width()),
-      MinimumValueForLength(style->ScrollPaddingBottom(),
-                            visible_rect.Height()),
-      MinimumValueForLength(style->ScrollPaddingLeft(), visible_rect.Width()));
+      MinimumValueForLength(style.ScrollPaddingTop(), visible_rect.Height()),
+      MinimumValueForLength(style.ScrollPaddingRight(), visible_rect.Width()),
+      MinimumValueForLength(style.ScrollPaddingBottom(), visible_rect.Height()),
+      MinimumValueForLength(style.ScrollPaddingLeft(), visible_rect.Width()));
   return visible_rect;
 }
 
@@ -463,8 +466,7 @@ LayoutObject* ScrollAnchor::PriorityCandidateFromNode(const Node* node) const {
   while (node) {
     if (auto* layout_object = node->GetLayoutObject()) {
       if (!layout_object->IsAnonymous() &&
-          (!layout_object->IsInline() ||
-           layout_object->IsAtomicInlineLevel())) {
+          !layout_object->IsNonAtomicInline()) {
         return layout_object;
       }
     }
@@ -591,20 +593,6 @@ ScrollAnchor::WalkStatus ScrollAnchor::FindAnchorInOOFs(
   return kSkip;
 }
 
-SuppressScrollAnchorScope::SuppressScrollAnchorScope(ScrollableArea* scroller) {
-  if (scroller) {
-    anchor_ = scroller->GetScrollAnchor();
-    DCHECK(anchor_);
-    anchor_->BeginSuppressAdjustment();
-  }
-}
-
-SuppressScrollAnchorScope::~SuppressScrollAnchorScope() {
-  if (anchor_) {
-    anchor_->EndSuppressAdjustment();
-  }
-}
-
 bool ScrollAnchor::ComputeScrollAnchorDisablingStyleChanged() {
   LayoutObject* current = AnchorObject();
   if (!current)
@@ -722,13 +710,15 @@ gfx::Vector2d ScrollAnchor::ComputeAdjustment() const {
 void ScrollAnchor::Adjust() {
   TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("blink.debug"),
                "ScrollAnchor::Adjust");
+  if (!queued_) {
+    return;
+  }
+  queued_ = false;
+
   if (suppress_adjustment_count_ > 0) {
     return;
   }
 
-  if (!queued_)
-    return;
-  queued_ = false;
   DCHECK(scroller_);
   if (!anchor_object_)
     return;
@@ -822,7 +812,7 @@ bool ScrollAnchor::RestoreAnchor(const SerializedAnchor& serialized_anchor) {
     // roughly the same.
     ScrollOffset current_offset = scroller_->GetScrollOffset();
     gfx::RectF bounding_box = anchor_object->AbsoluteBoundingBoxRectF();
-    WritingMode writing_mode = anchor_object->Style()->GetWritingMode();
+    WritingMode writing_mode = anchor_object->StyleRef().GetWritingMode();
     gfx::PointF location_point =
         IsFlippedBlocksWritingMode(writing_mode)   ? bounding_box.top_right()
         : writing_mode == WritingMode::kSidewaysLr ? bounding_box.bottom_left()
@@ -938,6 +928,20 @@ bool ScrollAnchor::RefersTo(const LayoutObject* layout_object) const {
 void ScrollAnchor::NotifyRemoved(LayoutObject* layout_object) {
   if (anchor_object_ == layout_object)
     ClearSelf();
+}
+
+SuppressScrollAnchorScope::SuppressScrollAnchorScope(ScrollableArea* scroller) {
+  if (scroller) {
+    anchor_ = scroller->GetScrollAnchor();
+    DCHECK(anchor_);
+    anchor_->BeginSuppressAdjustment();
+  }
+}
+
+SuppressScrollAnchorScope::~SuppressScrollAnchorScope() {
+  if (anchor_) {
+    anchor_->EndSuppressAdjustment();
+  }
 }
 
 }  // namespace blink

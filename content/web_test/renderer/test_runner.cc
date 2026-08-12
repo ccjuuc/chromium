@@ -15,7 +15,6 @@
 
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/unique_ptr_adapters.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
@@ -56,6 +55,7 @@
 #include "printing/page_number.h"
 #include "printing/page_range.h"
 #include "printing/print_settings.h"
+#include "services/device/public/mojom/screen_orientation_lock_types.mojom-shared.h"
 #include "services/network/public/mojom/cors.mojom.h"
 #include "third_party/abseil-cpp/absl/numeric/int128.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
@@ -152,8 +152,7 @@ v8::LocalVector<v8::Value> ConvertBitmapToV8(
 
   blink::WebArrayBuffer buffer =
       blink::WebArrayBuffer::Create(info.computeByteSize(row_bytes), 1);
-  bool read = bitmap.readPixels(info, buffer.Data(), row_bytes, 0, 0);
-  CHECK(read);
+  CHECK(bitmap.readPixels(info, buffer.ByteSpan().data(), row_bytes, 0, 0));
 
   args.push_back(blink::WebArrayBufferConverter::ToV8Value(&buffer, isolate));
   return args;
@@ -281,6 +280,8 @@ class TestRunnerBindings final : public gin::Wrappable<TestRunnerBindings> {
   void ClearTrustTokenState(v8::Local<v8::Function> callback);
   void CopyImageThen(int x, int y, v8::Local<v8::Function> callback);
   void DisableMockScreenOrientation();
+  void SimulateScreenOrientationLockChanged(bool locked,
+                                            const std::string& orientation);
   void DispatchBeforeInstallPromptEvent(
       const std::vector<std::string>& event_platforms,
       v8::Local<v8::Function> callback);
@@ -313,6 +314,7 @@ class TestRunnerBindings final : public gin::Wrappable<TestRunnerBindings> {
   void ForceNextDrawingBufferCreationToFail();
   void ForceNextWebGLContextCreationToFail();
   void GetBluetoothManualChooserEvents(v8::Local<v8::Function> callback);
+  gin::Dictionary GetClipboardReadState(v8::Isolate* isolate);
   void GetManifestThen(v8::Local<v8::Function> callback);
   std::string GetWritableDirectory();
   void InsertStyleSheet(const std::string& source_code);
@@ -332,6 +334,7 @@ class TestRunnerBindings final : public gin::Wrappable<TestRunnerBindings> {
   void QueueReload();
   void RemoveSpellCheckResolvedCallback();
   void RemoveWebPageOverlay();
+  void ResetClipboardReadTracking();
   void ResolveBeforeInstallPromptPromise(const std::string& platform);
   void SendBluetoothManualChooserEvent(const std::string& event,
                                        const std::string& argument);
@@ -598,6 +601,8 @@ gin::ObjectTemplateBuilder TestRunnerBindings::GetObjectTemplateBuilder(
                  &TestRunnerBindings::DisableAutoResizeMode)
       .SetMethod("disableMockScreenOrientation",
                  &TestRunnerBindings::DisableMockScreenOrientation)
+      .SetMethod("simulateScreenOrientationLockChanged",
+                 &TestRunnerBindings::SimulateScreenOrientationLockChanged)
       // Sets up a WebDocumentSubresourceFilterImpl to disallow subsequent
       // subresource loads within the current document with the given path
       // |suffixes|. The filter is created and injected even if |suffixes| is
@@ -671,6 +676,12 @@ gin::ObjectTemplateBuilder TestRunnerBindings::GetObjectTemplateBuilder(
       // Returns the events recorded since the last call to this function.
       .SetMethod("getBluetoothManualChooserEvents",
                  &TestRunnerBindings::GetBluetoothManualChooserEvents)
+      // Returns the clipboard read tracking state from the mock clipboard host.
+      // The returned object has boolean properties: readTextCalled,
+      // readHtmlCalled, readUnsanitizedCustomFormatCalled,
+      // readAvailableFormatsCalled.
+      .SetMethod("getClipboardReadState",
+                 &TestRunnerBindings::GetClipboardReadState)
       .SetMethod("getManifestThen", &TestRunnerBindings::GetManifestThen)
       // Returns the absolute path to a directory this test can write data in.
       // This returns the path to a fresh empty directory every time this method
@@ -712,6 +723,9 @@ gin::ObjectTemplateBuilder TestRunnerBindings::GetObjectTemplateBuilder(
       // from inside the main frame.
       .SetMethod("removeWebPageOverlay",
                  &TestRunnerBindings::RemoveWebPageOverlay)
+      // Resets the clipboard read tracking state on the mock clipboard host.
+      .SetMethod("resetClipboardReadTracking",
+                 &TestRunnerBindings::ResetClipboardReadTracking)
       .SetMethod("resolveBeforeInstallPromptPromise",
                  &TestRunnerBindings::ResolveBeforeInstallPromptPromise)
       .SetMethod("selectionAsMarkup", &TestRunnerBindings::SelectionAsMarkup)
@@ -1072,8 +1086,8 @@ void TestRunnerBindings::ExecCommand(gin::Arguments* args) {
   }
 
   // Note: webkit's version does not return the boolean, so neither do we.
-  GetWebFrame()->ExecuteCommand(blink::WebString::FromUTF8(command),
-                                blink::WebString::FromUTF8(value));
+  GetWebFrame()->ExecuteCommand(blink::WebString::FromUtf8(command),
+                                blink::WebString::FromUtf8(value));
 }
 
 void TestRunnerBindings::TriggerTestInspectorIssue(gin::Arguments* args) {
@@ -1088,7 +1102,7 @@ bool TestRunnerBindings::IsCommandEnabled(const std::string& command) {
   if (!frame_) {
     return false;
   }
-  return GetWebFrame()->IsCommandEnabled(blink::WebString::FromUTF8(command));
+  return GetWebFrame()->IsCommandEnabled(blink::WebString::FromUtf8(command));
 }
 
 void TestRunnerBindings::SetDomainRelaxationForbiddenForURLScheme(
@@ -1098,7 +1112,7 @@ void TestRunnerBindings::SetDomainRelaxationForbiddenForURLScheme(
     return;
   }
   blink::SetDomainRelaxationForbiddenForTest(
-      forbidden, blink::WebString::FromUTF8(scheme));
+      forbidden, blink::WebString::FromUtf8(scheme));
 }
 
 void TestRunnerBindings::SetDumpConsoleMessages(bool enabled) {
@@ -1151,6 +1165,34 @@ std::string TestRunnerBindings::GetWritableDirectory() {
   return result.AsUTF8Unsafe();
 }
 
+gin::Dictionary TestRunnerBindings::GetClipboardReadState(
+    v8::Isolate* isolate) {
+  gin::Dictionary result = gin::Dictionary::CreateEmpty(isolate);
+  if (!frame_) {
+    return result;
+  }
+  bool read_text_called = false;
+  bool read_html_called = false;
+  bool read_unsanitized_custom_format_called = false;
+  bool read_available_formats_called = false;
+  frame_->GetWebTestControlHostRemote()->GetClipboardReadState(
+      &read_text_called, &read_html_called,
+      &read_unsanitized_custom_format_called, &read_available_formats_called);
+  result.Set("readTextCalled", read_text_called);
+  result.Set("readHtmlCalled", read_html_called);
+  result.Set("readUnsanitizedCustomFormatCalled",
+             read_unsanitized_custom_format_called);
+  result.Set("readAvailableFormatsCalled", read_available_formats_called);
+  return result;
+}
+
+void TestRunnerBindings::ResetClipboardReadTracking() {
+  if (!frame_) {
+    return;
+  }
+  frame_->GetWebTestControlHostRemote()->ResetClipboardReadTracking();
+}
+
 void TestRunnerBindings::SetFilePathForMockFileDialog(const std::string& path) {
   if (!frame_) {
     return;
@@ -1189,7 +1231,7 @@ TestRunnerBindings::EvaluateScriptInIsolatedWorldAndReturnValue(
     return {};
   }
 
-  blink::WebScriptSource source(blink::WebString::FromUTF8(script));
+  blink::WebScriptSource source(blink::WebString::FromUtf8(script));
   return GetWebFrame()->ExecuteScriptInIsolatedWorldAndReturnValue(
       world_id, source, blink::BackForwardCacheAware::kAllow);
 }
@@ -1201,7 +1243,7 @@ void TestRunnerBindings::EvaluateScriptInIsolatedWorld(
     return;
   }
 
-  blink::WebScriptSource source(blink::WebString::FromUTF8(script));
+  blink::WebScriptSource source(blink::WebString::FromUtf8(script));
   GetWebFrame()->ExecuteScriptInIsolatedWorld(
       world_id, source, blink::BackForwardCacheAware::kAllow);
 }
@@ -1214,7 +1256,7 @@ void TestRunnerBindings::EvaluateScriptInOwnTask(
     return;
   }
 
-  blink::WebScriptSource source(blink::WebString::FromUTF8(script),
+  blink::WebScriptSource source(blink::WebString::FromUtf8(script),
                                 blink::WebURL(GURL(url)));
   GetWebFrame()
       ->GetTaskRunner(blink::TaskType::kInternalTest)
@@ -1309,7 +1351,7 @@ void TestRunnerBindings::InsertStyleSheet(const std::string& source_code) {
     return;
   }
   GetWebFrame()->GetDocument().InsertStyleSheet(
-      blink::WebString::FromUTF8(source_code));
+      blink::WebString::FromUtf8(source_code));
 }
 
 bool TestRunnerBindings::FindString(
@@ -1338,7 +1380,7 @@ bool TestRunnerBindings::FindString(
   }
 
   const bool find_result = GetWebFrame()->FindForTesting(
-      0, blink::WebString::FromUTF8(search_text), match_case, forward,
+      0, blink::WebString::FromUtf8(search_text), match_case, forward,
       new_session, false /* force */, wrap_around, async);
   return find_result;
 }
@@ -1476,6 +1518,35 @@ void TestRunnerBindings::DisableMockScreenOrientation() {
   runner_->DisableMockScreenOrientation(GetWebFrame()->View());
 }
 
+void TestRunnerBindings::SimulateScreenOrientationLockChanged(
+    bool locked,
+    const std::string& orientation) {
+  if (!frame_) {
+    return;
+  }
+
+  device::mojom::ScreenOrientationLockType lock_type =
+      device::mojom::ScreenOrientationLockType::DEFAULT;
+  if (orientation == "portrait-primary") {
+    lock_type = device::mojom::ScreenOrientationLockType::PORTRAIT_PRIMARY;
+  } else if (orientation == "portrait-secondary") {
+    lock_type = device::mojom::ScreenOrientationLockType::PORTRAIT_SECONDARY;
+  } else if (orientation == "landscape-primary") {
+    lock_type = device::mojom::ScreenOrientationLockType::LANDSCAPE_PRIMARY;
+  } else if (orientation == "landscape-secondary") {
+    lock_type = device::mojom::ScreenOrientationLockType::LANDSCAPE_SECONDARY;
+  } else if (orientation == "portrait") {
+    lock_type = device::mojom::ScreenOrientationLockType::PORTRAIT;
+  } else if (orientation == "landscape") {
+    lock_type = device::mojom::ScreenOrientationLockType::LANDSCAPE;
+  } else if (orientation == "any") {
+    lock_type = device::mojom::ScreenOrientationLockType::ANY;
+  }
+
+  frame_->GetWebTestControlHostRemote()->SimulateScreenOrientationLockChanged(
+      frame_->GetWebFrame()->GetLocalFrameToken(), locked, lock_type);
+}
+
 void TestRunnerBindings::SetDisallowedSubresourcePathSuffixes(
     std::vector<std::string> suffixes,
     bool block_subresources) {
@@ -1594,8 +1665,6 @@ void TestRunnerBindings::OverridePreference(gin::Arguments* args) {
     ConvertAndSet(args, &prefs_.disable_reading_from_canvas);
   } else if (key == "WebKitStrictMixedContentChecking") {
     ConvertAndSet(args, &prefs_.strict_mixed_content_checking);
-  } else if (key == "WebKitStrictPowerfulFeatureRestrictions") {
-    ConvertAndSet(args, &prefs_.strict_powerful_feature_restrictions);
   } else if (key == "WebKitWebSecurityEnabled") {
     ConvertAndSet(args, &prefs_.web_security_enabled);
   } else if (key == "WebKitSpatialNavigationEnabled") {
@@ -1926,14 +1995,14 @@ void TestRunnerBindings::SetBackingScaleFactor(
     return;
   }
 
-  // Limit backing scale factor to something low - 15x. Without
-  // this limit, arbitrarily large values can be used, which can lead to
-  // crashes and other problems. Examples of problems:
+  // Limit backing scale factor to something low - 15x and non-negative.
+  // Without this limit, arbitrarily large or negative values can be used,
+  // which can lead to crashes and other problems. Examples of problems:
   // gfx::Size::GetCheckedArea crashes with a size which overflows int;
   // GLES2DecoderImpl::TexStorageImpl fails with "dimensions out of range"; GL
   // ERROR :GL_OUT_OF_MEMORY. See https://crbug.com/899482 or
   // https://crbug.com/900271
-  double limited_value = fmin(15, value);
+  double limited_value = std::clamp(value, 0.0, 15.0);
 
   frame_->GetLocalRootWebFrameWidget()->SetDeviceScaleFactorForTesting(
       limited_value);
@@ -2597,7 +2666,7 @@ bool TestRunner::WorkQueue::ProcessWorkItemInternal(
           controller_->FindInProcessMainWindowMainFrame();
       DCHECK(main_frame);
       main_frame->GetWebFrame()->ExecuteScript(blink::WebScriptSource(
-          blink::WebString::FromUTF8(item_loading_script->script)));
+          blink::WebString::FromUtf8(item_loading_script->script)));
       return true;  // TODO(danakj): Did it really start a navigation?
     }
     case mojom::WorkItem::Tag::kNonLoadingScript: {
@@ -2607,7 +2676,7 @@ bool TestRunner::WorkQueue::ProcessWorkItemInternal(
           controller_->FindInProcessMainWindowMainFrame();
       DCHECK(main_frame);
       main_frame->GetWebFrame()->ExecuteScript(blink::WebScriptSource(
-          blink::WebString::FromUTF8(item_non_loading_script->script)));
+          blink::WebString::FromUtf8(item_non_loading_script->script)));
       return false;
     }
     case mojom::WorkItem::Tag::kLoad: {
@@ -2623,7 +2692,7 @@ bool TestRunner::WorkQueue::ProcessWorkItemInternal(
   NOTREACHED();
 }
 
-void TestRunner::WorkQueue::ReplicateStates(const base::Value::Dict& values,
+void TestRunner::WorkQueue::ReplicateStates(const base::DictValue& values,
                                             WebFrameTestProxy& source) {
   states_.ApplyUntrackedChanges(values);
   if (!has_items())
@@ -2821,7 +2890,27 @@ int TestRunner::GetPrintingMargin() const {
   return web_test_runtime_flags_.printing_margin();
 }
 
-int TestRunner::GetSafePrintableInset() const {
+float TestRunner::GetSafePrintableInset(blink::WebLocalFrame* frame) const {
+  // First check for WPT-style <meta name="safe-printable-inset">
+  blink::WebElementCollection meta_iter =
+      frame->GetDocument().GetElementsByHTMLTagName("meta");
+  if (!meta_iter.IsNull()) {
+    for (blink::WebElement meta = meta_iter.FirstItem(); !meta.IsNull();
+         meta = meta_iter.NextItem()) {
+      if (meta.GetAttribute("name") == "safe-printable-inset") {
+        blink::WebString attr = meta.GetAttribute("content");
+        double inset;
+        if (!attr.IsNull() && base::StringToDouble(attr.Latin1(), &inset)) {
+          // The META element specifies the value in centimeters. Convert it to
+          // CSS pixels.
+          return inset * 96 / 2.54;
+        }
+        break;
+      }
+    }
+  }
+
+  // Fall back to runtime flags settings.
   return web_test_runtime_flags_.safe_printable_inset();
 }
 
@@ -2911,7 +3000,7 @@ SkBitmap TestRunner::PrintFrameToBitmap(blink::WebLocalFrame* frame) {
   print_params.default_page_description.margin_bottom = default_margin;
   print_params.default_page_description.margin_left = default_margin;
   gfx::RectF printable_area(page_size);
-  printable_area.Inset(GetSafePrintableInset());
+  printable_area.Inset(GetSafePrintableInset(frame));
   print_params.printable_area_in_css_pixels = printable_area;
   print_params.scale_factor = printing_scale_factor_;
   print_params.print_scaling_option =
@@ -2970,7 +3059,7 @@ SkBitmap TestRunner::DumpPixelsInRenderer(blink::WebLocalFrame* main_frame) {
   std::string frame_name = web_test_runtime_flags_.printing_frame();
   if (!frame_name.empty()) {
     blink::WebFrame* frame_to_print =
-        main_frame->FindFrameByName(blink::WebString::FromUTF8(frame_name));
+        main_frame->FindFrameByName(blink::WebString::FromUtf8(frame_name));
     if (frame_to_print && frame_to_print->IsWebLocalFrame())
       target_frame = frame_to_print->ToWebLocalFrame();
   }
@@ -2982,7 +3071,7 @@ SkBitmap TestRunner::DumpPixelsInRenderer(blink::WebLocalFrame* main_frame) {
 }
 
 void TestRunner::ReplicateWebTestRuntimeFlagsChanges(
-    const base::Value::Dict& changed_values) {
+    const base::DictValue& changed_values) {
   if (!test_is_running_)
     return;
 
@@ -3067,7 +3156,7 @@ void TestRunner::AddLoadingFrame(blink::WebLocalFrame* frame) {
 
 void TestRunner::RemoveLoadingFrame(blink::WebLocalFrame* frame) {
   // We don't track frames that were started between tests.
-  if (!base::Contains(loading_frames_, frame))
+  if (!std::ranges::contains(loading_frames_, frame))
     return;
 
   // We had a DCHECK checking
@@ -3307,7 +3396,7 @@ void TestRunner::ProcessWorkItem(mojom::WorkItemPtr work_item,
   work_queue_.ProcessWorkItem(std::move(work_item), source);
 }
 
-void TestRunner::ReplicateWorkQueueStates(const base::Value::Dict& values,
+void TestRunner::ReplicateWorkQueueStates(const base::DictValue& values,
                                           WebFrameTestProxy& source) {
   if (!test_is_running_)
     return;
@@ -3340,8 +3429,8 @@ void TestRunner::SetMainWindowAndTestConfiguration(
       command_line->GetSwitchValueASCII(switches::kWebSettingsForTesting);
   for (auto [key, value] :
        TestRunnerUtils::ParseWebSettingsString(web_settings_switch_value)) {
-    view->GetSettings()->SetFromStrings(blink::WebString::FromASCII(key),
-                                        blink::WebString::FromASCII(value));
+    view->GetSettings()->SetFromStrings(blink::WebString::FromAscii(key),
+                                        blink::WebString::FromAscii(value));
   }
 
   if (command_line->HasSwitch(switches::kTargetDeviceScaleForTesting)) {
@@ -3352,7 +3441,8 @@ void TestRunner::SetMainWindowAndTestConfiguration(
             TrimWhitespaceASCII(target_scale_factor_for_testing,
                                 base::TRIM_ALL),
             &scale_factor)) {
-      frame->FrameWidget()->SetDeviceScaleFactorForTesting(scale_factor);
+      frame->FrameWidget()->SetDeviceScaleFactorForTesting(
+          std::clamp(scale_factor, 0.0, 15.0));
     }
   }
 
@@ -3476,8 +3566,8 @@ void TestRunner::AddOriginAccessAllowListEntry(
     return;
 
   blink::WebSecurityPolicy::AddOriginAccessAllowListEntry(
-      url, blink::WebString::FromUTF8(destination_protocol),
-      blink::WebString::FromUTF8(destination_host), /*destination_port=*/0,
+      url, blink::WebString::FromUtf8(destination_protocol),
+      blink::WebString::FromUtf8(destination_host), /*destination_port=*/0,
       allow_destination_subdomains
           ? network::mojom::CorsDomainMatchMode::kAllowSubdomains
           : network::mojom::CorsDomainMatchMode::kDisallowSubdomains,
@@ -3565,9 +3655,9 @@ void TestRunner::DumpIconChanges(WebFrameTestProxy& source) {
 }
 
 void TestRunner::SetAudioData(const gin::ArrayBufferView& view) {
-  uint8_t* bytes = static_cast<uint8_t*>(view.bytes());
-  audio_data_.resize(view.num_bytes());
-  std::copy(bytes, UNSAFE_TODO(bytes + view.num_bytes()), audio_data_.begin());
+  base::span<const uint8_t> src = view.span();
+  audio_data_.resize(src.size());
+  base::span(audio_data_).copy_from_nonoverlapping(src);
   dump_as_audio_ = true;
 }
 
@@ -3722,7 +3812,7 @@ blink::WebString TestRunner::RegisterIsolatedFileSystem(
   std::string filesystem_id;
   source.GetWebTestControlHostRemote()->RegisterIsolatedFileSystem(
       file_paths, &filesystem_id);
-  return blink::WebString::FromUTF8(filesystem_id);
+  return blink::WebString::FromUtf8(filesystem_id);
 }
 
 void TestRunner::FocusWindow(RenderFrame* main_frame, bool focus) {

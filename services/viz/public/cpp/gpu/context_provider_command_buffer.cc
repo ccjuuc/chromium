@@ -102,10 +102,8 @@ ContextProviderCommandBuffer::CreateForGL(
     int32_t stream_id,
     gpu::SchedulingPriority stream_priority,
     const GURL& active_url,
-    command_buffer_metrics::ContextType type,
-    bool lose_context_when_out_of_memory) {
+    command_buffer_metrics::ContextType type) {
   auto attributes = gpu::mojom::GLESCreationAttribs::New();
-  attributes->lose_context_when_out_of_memory = lose_context_when_out_of_memory;
 
   return base::MakeRefCounted<ContextProviderCommandBuffer>(
       base::PassKey<ContextProviderCommandBuffer>(), std::move(channel),
@@ -176,10 +174,8 @@ ContextProviderCommandBuffer::CreateForRaster(
     bool automatic_flushes,
     bool support_locking,
     const gpu::SharedMemoryLimits& memory_limits,
-    command_buffer_metrics::ContextType type,
-    bool lose_context_when_out_of_memory) {
+    command_buffer_metrics::ContextType type) {
   auto attributes = gpu::mojom::RasterCreationAttribs::New();
-  attributes->lose_context_when_out_of_memory = lose_context_when_out_of_memory;
 
   return base::MakeRefCounted<ContextProviderCommandBuffer>(
       base::PassKey<ContextProviderCommandBuffer>(), std::move(channel),
@@ -193,6 +189,9 @@ ContextProviderCommandBuffer::~ContextProviderCommandBuffer() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(context_sequence_checker_);
 
   if (bind_tried_ && bind_result_ == gpu::ContextResult::kSuccess) {
+    // Stop the IO thread from calling back into us.
+    command_buffer_->ShutdownClientMessageFilter();
+
     // Clear the lock to avoid DCHECKs that the lock is being held during
     // shutdown.
     command_buffer_->SetLock(nullptr);
@@ -327,8 +326,7 @@ gpu::ContextResult ContextProviderCommandBuffer::BindToCurrentSequence() {
       DCHECK(channel_);
       auto raster_impl = std::make_unique<gpu::raster::RasterImplementation>(
           raster_helper.get(), transfer_buffer.get(),
-          attributes_->get_raster()->lose_context_when_out_of_memory,
-          command_buffer_.get());
+          /*lose_context_when_out_of_memory=*/true, command_buffer_.get());
       bind_result_ = raster_impl->Initialize(memory_limits_);
       if (bind_result_ != gpu::ContextResult::kSuccess) {
         DLOG(ERROR) << "Failed to initialize RasterImplementation.";
@@ -370,8 +368,7 @@ gpu::ContextResult ContextProviderCommandBuffer::BindToCurrentSequence() {
       // gpu::ContextSupport interface.
       auto gles2_impl = std::make_unique<gpu::gles2::GLES2Implementation>(
           gles2_helper.get(), /*share_group=*/nullptr, transfer_buffer.get(),
-          attributes_->get_gles()->lose_context_when_out_of_memory,
-          command_buffer_.get());
+          /*lose_context_when_out_of_memory=*/true, command_buffer_.get());
       bind_result_ = gles2_impl->Initialize(memory_limits_);
       if (bind_result_ != gpu::ContextResult::kSuccess) {
         DLOG(ERROR) << "Failed to initialize GLES2Implementation.";
@@ -550,6 +547,18 @@ void ContextProviderCommandBuffer::AddObserver(ContextLostObserver* obs) {
 void ContextProviderCommandBuffer::RemoveObserver(ContextLostObserver* obs) {
   CheckValidSequenceOrLockAcquired();
   observers_.RemoveObserver(obs);
+}
+
+bool ContextProviderCommandBuffer::IsLost() {
+  CheckValidSequenceOrLockAcquired();
+  if (gles2_impl_) {
+    return gles2_impl_->GetGraphicsResetStatusKHR() != GL_NO_ERROR;
+  }
+  if (raster_interface_) {
+    return raster_interface_->GetGraphicsResetStatusKHR() != GL_NO_ERROR;
+  }
+
+  NOTREACHED();
 }
 
 gpu::webgpu::WebGPUInterface* ContextProviderCommandBuffer::WebGPUInterface() {

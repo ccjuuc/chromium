@@ -10,7 +10,8 @@ import android.view.ViewGroup;
 
 import androidx.annotation.Px;
 
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.back_press.BackPressManager;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData;
@@ -117,7 +118,7 @@ public interface ManualFillingComponent extends BackPressHandler {
             BooleanSupplier isContextualSearchOpened,
             SoftKeyboardDelegate keyboardDelegate,
             BackPressManager backPressManager,
-            ObservableSupplier<EdgeToEdgeController> edgeToEdgeControllerSupplier,
+            MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeControllerSupplier,
             InsetObserver insetObserver,
             AsyncViewStub sheetStub,
             AsyncViewStub barStub);
@@ -188,10 +189,10 @@ public interface ManualFillingComponent extends BackPressHandler {
      * Signals that the accessory has permission to show.
      *
      * @param waitForKeyboard signals if the keyboard is requested.
-     * @param isCredentialFieldOrHasAutofillSuggestions signals if the form field is either a
-     *     username/password field or it has autofill suggestions.
+     * @param shouldShowOnLargeFormFactor signals if the accessory should be shown on Large Form
+     *     Factors.
      */
-    void show(boolean waitForKeyboard, boolean isCredentialFieldOrHasAutofillSuggestions);
+    void show(boolean waitForKeyboard, boolean shouldShowOnLargeFormFactor);
 
     /**
      * Requests to close the active tab in the keyboard accessory. If there is no active tab, this
@@ -231,9 +232,10 @@ public interface ManualFillingComponent extends BackPressHandler {
     /**
      * The filling UI extends or
      *
-     * @return A {@link ObservableSupplier<Integer>} providing an inset to shrink the page by.
+     * @return A {@link NonNullObservableSupplier <Integer>} providing an inset to shrink the page
+     *     by.
      */
-    ObservableSupplier<Integer> getBottomInsetSupplier();
+    NonNullObservableSupplier<Integer> getBottomInsetSupplier();
 
     /**
      * @param observer An {@link Observer} to add.
@@ -279,12 +281,34 @@ public interface ManualFillingComponent extends BackPressHandler {
      * Returns a supplier for {@link KeyboardAccessoryVisualStateProvider} that can be observed to
      * be notified of changes to the visual state of the keyboard accessory.
      */
-    ObservableSupplier<KeyboardAccessoryVisualStateProvider>
+    MonotonicObservableSupplier<KeyboardAccessoryVisualStateProvider>
             getKeyboardAccessoryVisualStateProvider();
 
     /**
      * Returns a supplier for {@link AccessorySheetVisualStateProvider} that can be observed to be
      * notified of changes to the visual state of the keyboard accessory sheet.
      */
-    ObservableSupplier<AccessorySheetVisualStateProvider> getAccessorySheetVisualStateProvider();
+    MonotonicObservableSupplier<AccessorySheetVisualStateProvider>
+            getAccessorySheetVisualStateProvider();
+
+    /**
+     * Returns a supplier indicating whether the accessory bar or sheet is currently requested to
+     * show.
+     */
+    NonNullObservableSupplier<Boolean> getIsAccessoryRequestedSupplier();
+
+    /**
+     * Informs the component whether an asynchronous action is pending. If true, the component might
+     * defer closing the soft keyboard. If false, it clears this state.
+     *
+     * @param waiting Whether an asynchronous action is pending.
+     */
+    void setWaitingForFetch(boolean waiting);
+
+    /**
+     * Dismisses the component only if it is currently waiting for an asynchronous fetch to
+     * complete. This allows consecutive calls to the component to interrupt and cancel this delayed
+     * dismiss.
+     */
+    void dismissIfWaitingForFetch();
 }

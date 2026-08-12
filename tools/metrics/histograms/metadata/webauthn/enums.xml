@@ -39,7 +39,18 @@ chromium-metrics-reviews@google.com.
   <int value="7"
       label="Change PIN request failed in enclave. This does not include
              cancellations."/>
+  <int value="8"
+      label="A PIN change request is triggered because the user has no UV"/>
 </enum>
+
+<!-- LINT.IfChange(CmtgDeviceKeysResult) -->
+
+<enum name="CmtgDeviceKeysResult">
+  <int value="0" label="Success"/>
+  <int value="1" label="Network error"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/webauthn/core/browser/cryptauth_cmtg_device_key_provider.cc:CmtgDeviceKeysResult) -->
 
 <!-- LINT.IfChange(CombinedSelectorAction) -->
 
@@ -88,6 +99,90 @@ chromium-metrics-reviews@google.com.
   <int value="4" label="prepareGetCredential request failed."/>
 </enum>
 
+<!-- LINT.IfChange(EnclaveManagerActionOutcome) -->
+
+<enum name="EnclaveManagerActionOutcome">
+  <int value="0" label="Success"/>
+  <int value="1" label="Generic error"/>
+  <int value="2" label="State machine has been destroyed"/>
+  <int value="3" label="Action has been cancelled"/>
+  <int value="4" label="Error fetching of cert.xml or cert.sig.xml (or both)"/>
+  <int value="5" label="Failure of DoGeneratingKeys"/>
+  <int value="6" label="Trusted vault registration error"/>
+  <int value="7"
+      label="Secret wrapping malformed response in DoJoiningPINToDomain"/>
+  <int value="8"
+      label="Trusted vault registration error in DoJoiningPINToDomain"/>
+  <int value="9"
+      label="Trusted vault registration error in DoJoiningUpdatedPINToDomain"/>
+  <int value="10" label="Renewing PIN while user is not registered"/>
+  <int value="11" label="Setting or updating PIN while user is not registered"/>
+  <int value="12" label="Enclave registration resulted in error response"/>
+  <int value="13" label="Failure of DoRegisteringWithEnclave"/>
+  <int value="14"
+      label="Wrapped member key was invalid during enclave registration"/>
+  <int value="15"
+      label="Enclave reports that the cohort is not yet deprecated"/>
+  <int value="16" label="PIN renewal resulted in error response"/>
+  <int value="17" label="Failure of DoRenewingPIN"/>
+  <int value="18"
+      label="Parsing wrapped PIN from CBOR failed in DoRenewingPIN"/>
+  <int value="19"
+      label="Not renewing PIN because it would result in downgrading the
+             recovery store"/>
+  <int value="20"
+      label="Can not parse wrapped PIN from an enclave CBOR response in
+             DoSettingPIN"/>
+  <int value="21" label="Failure of DoSettingPIN"/>
+  <int value="22" label="PIN change resulted in error response"/>
+  <int value="23"
+      label="No system UV and no GPM PIN during out-of-context retrieval"/>
+  <int value="24"
+      label="Problem while parsing wrapped PIN during out-of-context
+             retrieval"/>
+  <int value="25" label="Already has pin in DoSyncingWithSecurityDomain"/>
+  <int value="26" label="The security domain has been reset"/>
+  <int value="27" label="Tried to change the PIN, but SDS reports no PIN"/>
+  <int value="28"
+      label="Downloading authentication factors registration state resulted
+             in error"/>
+  <int value="29" label="Unregister request resulted in error response"/>
+  <int value="30" label="Failure of DoUnregistering"/>
+  <int value="31"
+      label="Failed to get access token for enclave in
+             DoWaitingForEnclaveTokenForPINWrapping"/>
+  <int value="32"
+      label="Failed to get access token for enclave in
+             DoWaitingForEnclaveTokenForRegistration"/>
+  <int value="33"
+      label="Failed to get access token for enclave in
+             DoWaitingForEnclaveTokenForUnregister"/>
+  <int value="34"
+      label="Failed to get access token for enclave in
+             DoWaitingForEnclaveTokenForWrapping"/>
+  <int value="35" label="Failed to upload to recovery key store"/>
+  <int value="36" label="PIN wrapping resulted in error response"/>
+  <int value="37" label="Failure of DoWrappingPINAndSecret"/>
+  <int value="38"
+      label="Failed to translate response into an UpdateVaultProto"/>
+  <int value="39" label="Failed to store wrapped secrets"/>
+  <int value="40" label="Failed to wrap security domain secrets"/>
+  <int value="41" label="Secrets wrapping resulted in error response"/>
+  <int value="42" label="Enclave response was not a map"/>
+  <int value="43"
+      label="Can not parse a vault and security domain member keys from a
+             CBOR map"/>
+  <int value="44" label="Account mismatch in DoNextAction"/>
+  <int value="45"
+      label="Failed to parse wrapped PIN or PIN invariants check failed in
+             AddDeviceToAccount"/>
+  <int value="46"
+      label="Failed to parse wrapped PIN or PIN invariants check failed in
+             ConsiderSecurityDomainState"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/webauthn/enclave_manager.h:EnclaveManagerActionOutcome) -->
+
 <!-- LINT.IfChange(GmsCoreGetCredentialsResultEnum) -->
 
 <enum name="GmsCoreGetCredentialsResult">
@@ -112,6 +207,26 @@ chromium-metrics-reviews@google.com.
 
 <!-- LINT.ThenChange(//components/webauthn/android/java/src/org/chromium/components/webauthn/GmsCoreGetCredentialsHelper.java:GmsCoreGetCredentialsResult) -->
 
+<!-- LINT.IfChange(GmsCoreSkippedCacheReason) -->
+
+<enum name="GmsCoreSkippedCacheReason">
+  <int value="0" label="GoogleRp">The request is for a Google passkey.</int>
+  <int value="1" label="PaymentRequest">
+    The request is associated with payments.
+  </int>
+  <int value="2" label="ModalAllowListRequest">
+    This is a modal WebAuthn request with an allow list.
+  </int>
+  <int value="3" label="(obsolete) FeatureDisabled">
+    Use of the metadata cache is disabled in Chrome. Removed in M144.
+  </int>
+  <int value="4" label="OldGmsCoreVersion">
+    The current GMS Core version does not support the metadata cache.
+  </int>
+</enum>
+
+<!-- LINT.ThenChange(//components/webauthn/android/java/src/org/chromium/components/webauthn/GmsCoreGetCredentialsHelper.java:GmsCoreSkippedCacheReason) -->
+
 <enum name="GPMGetAssertionEvents">
   <int value="0" label="Started - GPM passkey selected"/>
   <int value="1" label="Success - Authentication complete"/>
@@ -134,6 +249,19 @@ chromium-metrics-reviews@google.com.
 
 <!-- LINT.ThenChange(//chrome/browser/webauthn/enclave_manager_interface.h:GpmPinAvailability) -->
 
+<!-- LINT.IfChange(ImportedPasskeyStatus) -->
+
+<enum name="ImportedPasskeyStatus">
+  <int value="0" label="Ok"/>
+  <int value="1" label="Credential ID too short"/>
+  <int value="2" label="Credential ID too long"/>
+  <int value="3" label="User ID too long"/>
+  <int value="4" label="Private key missing"/>
+  <int value="5" label="RP ID missing"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/webauthn/core/browser/import/imported_passkey_checker.h:ImportedPasskeyStatus) -->
+
 <enum name="OnboardingEvents">
   <int value="0" label="Started (Create GPM passkey dialog shown)"/>
   <int value="1" label="Succeeded (GPM passkey created)"/>
@@ -154,6 +282,7 @@ chromium-metrics-reviews@google.com.
   <int value="5" label="No password with matching username found"/>
   <int value="6" label="Matching password was not recently used"/>
   <int value="7" label="GPM Enclave error"/>
+  <int value="8" label="Security domain state is stale"/>
 </enum>
 
 <!-- LINT.ThenChange(//chrome/browser/ui/webauthn/passkey_upgrade_request_controller.h:PasskeyUpgradeResult) -->
@@ -351,6 +480,7 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="Cloud-assisted BLE"/>
   <int value="4" label="Internal"/>
   <int value="5" label="Android Accessory (Deprecated)"/>
+  <int value="6" label="Smart Card"/>
 </enum>
 
 <enum name="WebAuthenticationGetAssertionOutcome">
@@ -370,7 +500,25 @@ chromium-metrics-reviews@google.com.
   <int value="13" label="Timeout Occurred"/>
   <int value="14" label="Other Failure"/>
   <int value="15" label="Blocked by actor task"/>
+  <int value="16" label="Cross Device Fallback"/>
 </enum>
+
+<!-- LINT.IfChange(WebAuthenticationGPMCachedOpportunisticallyRetrievedKeyEvent) -->
+
+<enum name="WebAuthenticationGPMCachedOpportunisticallyRetrievedKeyEvent">
+  <int value="0"
+      label="The temporarily cached key from the opportunistic key retrieval
+             flow has been discarded after timeout"/>
+  <int value="1"
+      label="Storing the temporarily cached key from the opportunistic key
+             retrieval flow after profile signed-in"/>
+  <int value="2"
+      label="The temporarily cached key from the opportunistic key retrieval
+             has been overwritten by some other opportunistically retrieved
+             key"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/webauthn/webauthn_metrics_util.h:WebAuthenticationGPMCachedOpportunisticallyRetrievedKeyEvent) -->
 
 <!-- LINT.IfChange(WebAuthenticationGPMRecoveryEvent) -->
 
@@ -388,10 +536,14 @@ chromium-metrics-reviews@google.com.
              because it is redundant)"/>
   <int value="5"
       label="Storing key from opportunistic key retrieval flow (key ignored
-             because no UV available)"/>
+             because no UV available). Deprecated."/>
   <int value="6"
       label="Storing key from opportunistic key retrieval flow (failed when
              adding device to account)"/>
+  <int value="7"
+      label="Key from the opportunistic key retrieval flow has been
+             temporarily cached because profile is not signed-in or the
+             primary account does not match"/>
 </enum>
 
 <!-- LINT.ThenChange(//chrome/browser/webauthn/webauthn_metrics_util.h:WebAuthenticationGPMRecoveryEvent) -->
@@ -433,6 +585,22 @@ chromium-metrics-reviews@google.com.
   <int value="5" label="CreateResolvedNonGpm">
     WebAuthn credential create request was successfully resolved with different
     authenticator than Google Password Manager.
+  </int>
+  <int value="6" label="IncognitoInterstitialShown">
+    The Incognito interstitial warning was shown to the user during passkey
+    creation.
+  </int>
+  <int value="7" label="CancelRequested">
+    Page cancelled a WebAuthn credential request via an AbortSignal.
+  </int>
+  <int value="8" label="SignalUnknownCredentialRequested">
+    Page requested a WebAuthn signalUnknownCredential call.
+  </int>
+  <int value="9" label="SignalCurrentUserDetailsRequested">
+    Page requested a WebAuthn signalCurrentUserDetails call.
+  </int>
+  <int value="10" label="SignalAllAcceptedCredentialsRequested">
+    Page requested a WebAuthn signalAllAcceptedCredentials call.
   </int>
 </enum>
 
@@ -524,30 +692,6 @@ chromium-metrics-reviews@google.com.
   <int value="5" label="Successful renewal"/>
   <int value="6" label="Renewal failed"/>
 </enum>
-
-<!-- LINT.IfChange(WebAuthenticationPinRenewalFailureCause) -->
-
-<enum name="WebAuthenticationPinRenewalFailureCause">
-  <int value="1" label="Renewal failed while downloading XML files"/>
-  <int value="2" label="Renewal failed getting access token"/>
-  <int value="3" label="Renewal failed during enclave request (1)"/>
-  <int value="4" label="Renewal failed during enclave request (2)"/>
-  <int value="5" label="Renewal failed parsing enclave response (1)"/>
-  <int value="6" label="Renewal failed parsing enclave response (2)"/>
-  <int value="7" label="Renewal failed uploading to recovery key store"/>
-  <int value="8" label="Renewal failed joining the PIN to the domain"/>
-  <int value="9" label="Tried to renew but the security domain reports no PIN"/>
-  <int value="10"
-      label="Renewal failed because the security domain has been reset"/>
-  <int value="11"
-      label="Renewal failed because the enclave reports the cohort hasn't
-             been deprecated yet"/>
-  <int value="12"
-      label="Renewal failed because it would result in downgrading the
-             recovery store"/>
-</enum>
-
-<!-- LINT.ThenChange(//chrome/browser/webauthn/enclave_manager.h:PinRenewalFailureCause) -->
 
 <!-- LINT.IfChange(WebAuthenticationRequestMode) -->
 

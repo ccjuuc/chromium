@@ -4,9 +4,7 @@
 
 #include "chrome/browser/ui/views/passwords/manage_passwords_list_view.h"
 
-#include "build/branding_buildflags.h"
 #include "build/build_config.h"
-#include "build/buildflag.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/passwords/ui_utils.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
@@ -17,8 +15,8 @@
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/favicon_size.h"
-#include "ui/gfx/vector_icon_utils.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/separator.h"
 #include "ui/views/view_class_properties.h"
@@ -39,7 +37,9 @@ ManagePasswordsListView::ManagePasswordsListView(
     ui::ImageModel store_icon;
     if (is_account_storage_available && !password_form->IsUsingAccountStore()) {
       store_icon = ui::ImageModel::FromVectorIcon(
-          vector_icons::kNotUploadedIcon, ui::kColorIcon, gfx::kFaviconSize);
+          features::IsRoundedIconsEnabled() ? vector_icons::kCloudOffIcon
+                                            : vector_icons::kNotUploadedOldIcon,
+          ui::kColorIcon, gfx::kFaviconSize);
     }
 
     std::unique_ptr<RichHoverButton> list_item =
@@ -64,8 +64,11 @@ ManagePasswordsListView::ManagePasswordsListView(
             /*title_text=*/GetDisplayUsername(*password_form),
             /*subtitle_text=*/std::u16string(),
             /*action_image_icon=*/
-            ui::ImageModel::FromVectorIcon(vector_icons::kSubmenuArrowIcon,
-                                           ui::kColorIcon),
+            ui::ImageModel::FromVectorIcon(
+                features::IsRoundedIconsEnabled()
+                    ? vector_icons::kArrowRightFlippableIcon
+                    : vector_icons::kSubmenuArrowOldIcon,
+                ui::kColorIcon),
             /*state_icon=*/store_icon);
 
     if (is_account_storage_available && !password_form->IsUsingAccountStore()) {
@@ -88,7 +91,9 @@ ManagePasswordsListView::ManagePasswordsListView(
       AddChildView(std::make_unique<RichHoverButton>(
           std::move(on_navigate_to_settings_clicked_callback),
           /*main_image_icon=*/
-          ui::ImageModel::FromVectorIcon(vector_icons::kSettingsIcon,
+          ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                             ? vector_icons::kSettingsFilledIcon
+                                             : vector_icons::kSettingsOldIcon,
                                          ui::kColorIcon),
           /*title_text=*/
           l10n_util::GetStringUTF16(
@@ -96,8 +101,11 @@ ManagePasswordsListView::ManagePasswordsListView(
           /*subtitle_text=*/std::u16string(),
           /*action_image_icon=*/
           ui::ImageModel::FromVectorIcon(
-              vector_icons::kLaunchIcon, ui::kColorIconSecondary,
-              GetLayoutConstant(PAGE_INFO_ICON_SIZE))));
+              features::IsRoundedIconsEnabled()
+                  ? vector_icons::kOpenInNewFlippableIcon
+                  : vector_icons::kLaunchOldIcon,
+              ui::kColorIconSecondary,
+              GetLayoutConstant(LayoutConstant::kPageInfoIconSize))));
   manage_passwords_button->SetID(static_cast<int>(
       password_manager::ManagePasswordsViewIDs::kManagePasswordsButton));
   manage_passwords_button->SetTooltipText(

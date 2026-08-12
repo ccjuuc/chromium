@@ -17,8 +17,8 @@
 import '/strings.m.js';
 /** Subpages */
 import './crostini_page/bruschetta_subpage.js';
+import './crostini_page/crostini_arc_adb.js';
 import './crostini_page/crostini_export_import.js';
-import './crostini_page/crostini_extra_containers.js';
 import './crostini_page/crostini_port_forwarding.js';
 import './crostini_page/crostini_shared_usb_devices.js';
 import './crostini_page/crostini_subpage.js';
@@ -119,12 +119,11 @@ export {MediaDevicesProxy} from './common/media_devices_proxy.js';
  */
 export {SettingsRadioGroupElement} from './controls/settings_radio_group.js';
 export {BruschettaSubpageElement} from './crostini_page/bruschetta_subpage.js';
+export {SettingsCrostiniArcAdbElement} from './crostini_page/crostini_arc_adb.js';
 export type {CrostiniBrowserProxy, CrostiniDiskInfo, CrostiniPortActiveSetting, CrostiniPortSetting} from './crostini_page/crostini_browser_proxy.js';
 export {CrostiniBrowserProxyImpl, CrostiniPortProtocol, VmType} from './crostini_page/crostini_browser_proxy.js';
 export {SettingsCrostiniDiskResizeDialogElement} from './crostini_page/crostini_disk_resize_dialog.js';
 export {SettingsCrostiniExportImportElement} from './crostini_page/crostini_export_import.js';
-export {ExtraContainersElement} from './crostini_page/crostini_extra_containers.js';
-export {ExtraContainersCreateDialog} from './crostini_page/crostini_extra_containers_create_dialog.js';
 export {CrostiniPortForwardingElement} from './crostini_page/crostini_port_forwarding.js';
 export {CrostiniSettingsCardElement} from './crostini_page/crostini_settings_card.js';
 export {CrostiniSharedUsbDevicesElement} from './crostini_page/crostini_shared_usb_devices.js';
@@ -170,7 +169,7 @@ export {setShortcutInputProviderForTesting} from './device_page/shortcut_input_m
 export {SettingsStorageElement} from './device_page/storage.js';
 export {SettingsStylusElement} from './device_page/stylus.js';
 export type {ContainerInfo, GuestId, GuestOsBrowserProxy, GuestOsSharedUsbDevice, ShareableDevices} from './guest_os/guest_os_browser_proxy.js';
-export {CROSTINI_TYPE, GuestOsBrowserProxyImpl, PLUGIN_VM_TYPE} from './guest_os/guest_os_browser_proxy.js';
+export {CROSTINI_TYPE, GuestOsBrowserProxyImpl} from './guest_os/guest_os_browser_proxy.js';
 export {SettingsGuestOsConfirmationDialogElement} from './guest_os/guest_os_confirmation_dialog.js';
 export {ContainerSelectElement} from './guest_os/guest_os_container_select.js';
 export {SettingsGuestOsSharedPathsElement} from './guest_os/guest_os_shared_paths.js';
@@ -241,7 +240,6 @@ export {SettingsTtsVoiceSubpageElement} from './os_a11y_page/tts_voice_subpage.j
 export {SettingsChannelSwitcherDialogElement} from './os_about_page/channel_switcher_dialog.js';
 export {SettingsConsumerAutoUpdateToggleDialogElement} from './os_about_page/consumer_auto_update_toggle_dialog.js';
 export {SettingsDetailedBuildInfoSubpageElement} from './os_about_page/detailed_build_info_subpage.js';
-export {EditHostnameDialogElement} from './os_about_page/edit_hostname_dialog.js';
 export {SettingsAndroidAppsSubpageElement} from './os_apps_page/android_apps_subpage.js';
 export {AppManagementAppDetailViewElement} from './os_apps_page/app_management_page/app_detail_view.js';
 export {AppManagementAppDetailsItem} from './os_apps_page/app_management_page/app_details_item.js';
@@ -256,7 +254,6 @@ export {AppManagementMainViewElement} from './os_apps_page/app_management_page/m
 export {AppManagementPermissionHeadingElement} from './os_apps_page/app_management_page/permission_heading.js';
 export {AppManagementPermissionItemElement} from './os_apps_page/app_management_page/permission_item.js';
 export {AppManagementPinToShelfItemElement} from './os_apps_page/app_management_page/pin_to_shelf_item.js';
-export {AppManagementPluginVmDetailViewElement} from './os_apps_page/app_management_page/plugin_vm_page/plugin_vm_detail_view.js';
 export {AppManagementPwaDetailViewElement} from './os_apps_page/app_management_page/pwa_detail_view.js';
 export {AppManagementResizeLockItemElement} from './os_apps_page/app_management_page/resize_lock_item.js';
 export {AppManagementSubAppsItemElement} from './os_apps_page/app_management_page/sub_apps_item.js';
@@ -272,7 +269,6 @@ export {AppSetupPinKeyboardElement} from './os_apps_page/app_parental_controls/a
 export {AppVerifyPinDialogElement} from './os_apps_page/app_parental_controls/app_verify_pin_dialog.js';
 export {BlockAppItemElement} from './os_apps_page/app_parental_controls/block_app_item.js';
 export {ParentalControlsDialogAction, ParentalControlsPinDialogError} from './os_apps_page/app_parental_controls/metrics_utils.js';
-export {ManageIsolatedWebAppsSubpageElement} from './os_apps_page/manage_isolated_web_apps_page/manage_isolated_web_apps_subpage.js';
 export {SettingsBluetoothChangeDeviceNameDialogElement} from './os_bluetooth_page/os_bluetooth_change_device_name_dialog.js';
 export {SettingsBluetoothDeviceDetailSubpageElement} from './os_bluetooth_page/os_bluetooth_device_detail_subpage.js';
 export {SettingsBluetoothDevicesSubpageElement} from './os_bluetooth_page/os_bluetooth_devices_subpage.js';

@@ -5,8 +5,12 @@
 #ifndef CONTENT_BROWSER_SPEECH_ON_DEVICE_SPEECH_RECOGNITION_ENGINE_IMPL_H_
 #define CONTENT_BROWSER_SPEECH_ON_DEVICE_SPEECH_RECOGNITION_ENGINE_IMPL_H_
 
+#include <optional>
+
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/threading/sequence_bound.h"
 #include "components/optimization_guide/core/delivery/optimization_guide_model_provider.h"
 #include "components/optimization_guide/core/model_execution/model_broker_client.h"
 #include "content/browser/speech/speech_recognition_engine.h"
@@ -27,6 +31,7 @@ class ModelBrokerClient;
 
 namespace content {
 class BrowserContext;
+struct GlobalRenderFrameHostId;
 
 class CONTENT_EXPORT OnDeviceSpeechRecognitionEngine
     : public SpeechRecognitionEngine,
@@ -57,49 +62,69 @@ class CONTENT_EXPORT OnDeviceSpeechRecognitionEngine
       override;
 
   // Helper class to manage lifetimes of objects that live on the UI thread.
-  struct Core {
-    explicit Core(on_device_model::mojom::AsrStreamResponder* responder);
+  class Core {
+   public:
+    using StreamCreatedCallback = base::OnceCallback<void(
+        mojo::PendingRemote<on_device_model::mojom::AsrStreamInput>,
+        mojo::PendingReceiver<on_device_model::mojom::AsrStreamResponder>)>;
+
+    explicit Core(StreamCreatedCallback on_stream_created_callback);
     ~Core();
 
-    struct Deleter {
-      void operator()(Core* core) const;
-    };
+    void CreateModelClient(GlobalRenderFrameHostId global_id,
+                           media::mojom::SpeechRecognitionQuality quality,
+                           const std::string& language);
+    void SetAudioParameters(int sample_rate_hz);
 
-    mojo::Remote<on_device_model::mojom::Session> session;
-    base::WeakPtr<optimization_guide::ModelClient> model_client;
-    std::unique_ptr<optimization_guide::ModelBrokerClient> model_broker_client;
-    mojo::Receiver<on_device_model::mojom::AsrStreamResponder>
-        asr_stream_responder;
+   private:
+    friend class OnDeviceSpeechRecognitionEngineTest;
+    FRIEND_TEST(OnDeviceSpeechRecognitionEngine, Reinitialization);
+    FRIEND_TEST(OnDeviceSpeechRecognitionEngine, LanguagePropagation);
+    FRIEND_TEST(OnDeviceSpeechRecognitionEngine, EmptyLanguagePropagation);
+
+    void OnModelClientAvailable(
+        base::WeakPtr<optimization_guide::ModelClient> client);
+    void TryCreateSession();
+
+    mojo::Remote<on_device_model::mojom::Session> session_;
+    base::WeakPtr<optimization_guide::ModelClient> model_client_;
+    std::unique_ptr<optimization_guide::ModelBrokerClient> model_broker_client_;
+
+    std::optional<int> sample_rate_hz_;
+    std::string language_;
+    bool session_created_ = false;
+
+    StreamCreatedCallback on_stream_created_callback_;
+
+    base::WeakPtrFactory<Core> weak_factory_{this};
   };
 
  private:
+  friend class OnDeviceSpeechRecognitionEngineTest;
   FRIEND_TEST(OnDeviceSpeechRecognitionEngine, ConvertAccumulatedAudioData);
+  FRIEND_TEST(OnDeviceSpeechRecognitionEngine, Reinitialization);
+  FRIEND_TEST(OnDeviceSpeechRecognitionEngine, LanguagePropagation);
+  FRIEND_TEST(OnDeviceSpeechRecognitionEngine, EmptyLanguagePropagation);
 
-  void CreateModelClientOnUI(int render_process_id, int render_frame_id);
-  void OnModelClientAvailable(
-      base::WeakPtr<optimization_guide::ModelClient> client);
-  void CreateSessionOnUI();
   void OnAsrStreamCreated(
-      mojo::PendingRemote<on_device_model::mojom::AsrStreamInput> remote);
+      mojo::PendingRemote<on_device_model::mojom::AsrStreamInput> asr_stream,
+      mojo::PendingReceiver<on_device_model::mojom::AsrStreamResponder>
+          asr_stream_responder);
 
   void OnRecognizerDisconnected();
+  void OnResponderDisconnectedWithReason(uint32_t custom_reason,
+                                         const std::string& description);
 
   on_device_model::mojom::AudioDataPtr ConvertAccumulatedAudioData();
 
-  // The ModelBrokerClient must be created on the UI thread because it requires
-  // access to the BrowserContext.
-  scoped_refptr<base::SequencedTaskRunner> ui_task_runner_;
-
-  // Bind the AsrStreamInput remote on the IO thread to avoid clogging up the UI
-  // thread with audio processing.
-  scoped_refptr<base::SequencedTaskRunner> io_task_runner_;
-
   SpeechRecognitionSessionConfig config_;
-  std::unique_ptr<Core, Core::Deleter> core_;
+  base::SequenceBound<Core> core_;
   mojo::Remote<on_device_model::mojom::AsrStreamInput> asr_stream_;
+  mojo::Receiver<on_device_model::mojom::AsrStreamResponder>
+      asr_stream_responder_{this};
   std::vector<int16_t> accumulated_audio_data_;
 
-  bool session_created_ = false;
+  base::TimeDelta audio_duration_;
 
   SEQUENCE_CHECKER(main_sequence_checker_);
 

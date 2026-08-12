@@ -85,6 +85,10 @@ void UkmDatabaseClient::PostMessageLoopRun() {
     // PreProfileInit().
     ukm_observer_->StopObserving();
   }
+
+  // Tell the manager that shutdown has started so that it can close the UKM
+  // database once it's no longer referenced.
+  ukm_data_manager_->BeginShutdown();
 }
 
 // static
@@ -101,8 +105,9 @@ UkmDatabaseClient& UkmDatabaseClientHolder::GetClientInstance(
   if (!instance.clients_for_testing_.empty()) {
     CHECK_IS_TEST();
     CHECK(profile);
-    CHECK(instance.clients_for_testing_.count(profile));
-    return *instance.clients_for_testing_[profile];
+    auto it = instance.clients_for_testing_.find(profile);
+    CHECK(it != instance.clients_for_testing_.end());
+    return *it->second;
   }
   return *instance.main_client_;
 }

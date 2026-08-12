@@ -124,9 +124,8 @@ public class TestBottomSheetContent implements BottomSheetContent {
         return mContentView;
     }
 
-    @Nullable
     @Override
-    public View getToolbarView() {
+    public @Nullable View getToolbarView() {
         return mToolbarView;
     }
 
@@ -240,11 +239,16 @@ public class TestBottomSheetContent implements BottomSheetContent {
     }
 
     @Override
-    public boolean canSuppressInAnyState() {
+    public @StringRes int getSheetHiddenAccessibilityStringId() {
+        return android.R.string.copy;
+    }
+
+    @Override
+    public boolean canBeSuppressed(BottomSheetContent nextContent) {
         return mCanSuppressInAnyState;
     }
 
-    public void setCanSuppressInAnyState(boolean value) {
+    public void setCanBeSuppressed(boolean value) {
         mCanSuppressInAnyState = value;
     }
 }

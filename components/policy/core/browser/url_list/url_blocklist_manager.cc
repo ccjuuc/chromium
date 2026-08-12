@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "base/check.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
@@ -23,8 +24,11 @@
 #include "build/build_config.h"
 #include "components/policy/core/browser/configuration_policy_handler.h"
 #include "components/policy/core/browser/url_list/url_blocklist_policy_handler.h"
+#include "components/policy/core/browser/url_list/url_list_policy_pref_names.h"
+#include "components/policy/core/common/features.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
 #include "components/url_formatter/url_fixer.h"
 #include "net/base/filename_util.h"
@@ -63,18 +67,23 @@ constexpr const char* kBypassBlocklistWildcardForSchemes[] = {
     "chrome-search",
 };
 
+// TODO(crbug.com/487922969): Move this to the list above once the feature is
+// launched.
+constexpr char kChromeScheme[] = "chrome";
+
 #if BUILDFLAG(IS_IOS)
 // The two schemes used on iOS for the NTP.
 constexpr char kIosNtpAboutScheme[] = "about";
-constexpr char kIosNtpChromeScheme[] = "chrome";
 // The host string used on iOS for the NTP.
 constexpr char kIosNtpHost[] = "newtab";
 #endif
 
 // Returns a blocklist based on the given |block| and |allow| pattern lists.
-std::unique_ptr<URLBlocklist> BuildBlocklist(const base::Value::List* block,
-                                             const base::Value::List* allow) {
+std::unique_ptr<URLBlocklist> BuildBlocklist(const base::ListValue* block,
+                                             const base::ListValue* allow,
+                                             bool downgrade = true) {
   auto blocklist = std::make_unique<URLBlocklist>();
+  blocklist->SetDowngradeAllowlistWildcardToNeutral(downgrade);
   if (block) {
     blocklist->Block(*block);
   }
@@ -84,8 +93,8 @@ std::unique_ptr<URLBlocklist> BuildBlocklist(const base::Value::List* block,
   return blocklist;
 }
 
-const base::Value::List* GetPrefList(const PrefService* pref_service,
-                                     std::optional<std::string> pref_path) {
+const base::ListValue* GetPrefList(const PrefService* pref_service,
+                                   std::optional<std::string> pref_path) {
   DCHECK(pref_service);
 
   if (!pref_path) {
@@ -106,10 +115,16 @@ bool BypassBlocklistWildcardForURL(const GURL& url) {
       return true;
     }
   }
+
+  if (base::FeatureList::IsEnabled(
+          features::kBypassURLBlocklistWildcardForInternalChromeUrls) &&
+      scheme == kChromeScheme) {
+    return true;
+  }
 #if BUILDFLAG(IS_IOS)
   // Compare the chrome scheme and host against the chrome://newtab version of
   // the NTP URL.
-  if (scheme == kIosNtpChromeScheme && url.host() == kIosNtpHost) {
+  if (scheme == kChromeScheme && url.host() == kIosNtpHost) {
     return true;
   }
   // Compare the URL scheme and path to the about:newtab version of the NTP URL.
@@ -126,6 +141,10 @@ bool BypassBlocklistWildcardForURL(const GURL& url) {
 
 bool IsWildcardBlocklist(const FilterComponents& filter) {
   return !filter.allow && filter.IsWildcard();
+}
+
+bool IsWildcardAllowlist(const FilterComponents& filter) {
+  return filter.allow && filter.IsWildcard();
 }
 
 // Determines if the left-hand side `lhs` filter takes precedence over the
@@ -194,11 +213,11 @@ class DefaultBlocklistSource : public BlocklistSource {
   DefaultBlocklistSource& operator=(const DefaultBlocklistSource&) = delete;
   ~DefaultBlocklistSource() override = default;
 
-  const base::Value::List* GetBlocklistSpec() const override {
+  const base::ListValue* GetBlocklistSpec() const override {
     return GetPrefList(pref_change_registrar_.prefs(), blocklist_pref_path_);
   }
 
-  const base::Value::List* GetAllowlistSpec() const override {
+  const base::ListValue* GetAllowlistSpec() const override {
     return GetPrefList(pref_change_registrar_.prefs(), allowlist_pref_path_);
   }
 
@@ -215,23 +234,29 @@ class DefaultBlocklistSource : public BlocklistSource {
     }
   }
 
+  bool DowngradeAllowlistWildcardToNeutral() const override { return true; }
+
  private:
   std::optional<std::string> blocklist_pref_path_;
   std::optional<std::string> allowlist_pref_path_;
   PrefChangeRegistrar pref_change_registrar_;
 };
 
+bool BlocklistSource::DowngradeAllowlistWildcardToNeutral() const {
+  return true;
+}
+
 URLBlocklist::URLBlocklist() : url_matcher_(new URLMatcher) {}
 
 URLBlocklist::~URLBlocklist() = default;
 
-void URLBlocklist::Block(const base::Value::List& filters) {
+void URLBlocklist::Block(const base::ListValue& filters) {
   url_matcher::util::AddFiltersWithLimit(url_matcher_.get(), /*allow=*/false,
                                          &id_, filters, &filters_,
                                          kMaxUrlFiltersPerPolicy);
 }
 
-void URLBlocklist::Allow(const base::Value::List& filters) {
+void URLBlocklist::Allow(const base::ListValue& filters) {
   url_matcher::util::AddFiltersWithLimit(url_matcher_.get(), /*allow=*/true,
                                          &id_, filters, &filters_,
                                          kMaxUrlFiltersPerPolicy);
@@ -251,6 +276,13 @@ URLBlocklist::URLBlocklistState URLBlocklist::GetURLBlocklistState(
     return URLBlocklist::URLBlocklistState::URL_NEUTRAL_STATE;
   }
 
+  if (base::FeatureList::IsEnabled(
+          features::kDowngradeURLAllowlistWildcardToNeutral) &&
+      downgrade_allowlist_wildcard_to_neutral_ &&
+      IsWildcardAllowlist(*highest_priority_filter)) {
+    return URLBlocklist::URLBlocklistState::URL_NEUTRAL_STATE;
+  }
+
   // Some of the internal Chrome URLs are not affected by the "*" in the
   // blocklist. Note that the "*" is the lowest priority filter possible, so
   // any higher priority filter will be applied first.
@@ -262,6 +294,10 @@ URLBlocklist::URLBlocklistState URLBlocklist::GetURLBlocklistState(
   return highest_priority_filter->allow
              ? URLBlocklist::URLBlocklistState::URL_IN_ALLOWLIST
              : URLBlocklist::URLBlocklistState::URL_IN_BLOCKLIST;
+}
+
+void URLBlocklist::SetDowngradeAllowlistWildcardToNeutral(bool downgrade) {
+  downgrade_allowlist_wildcard_to_neutral_ = downgrade;
 }
 
 const FilterComponents* URLBlocklist::GetHighestPriorityFilterFor(
@@ -299,10 +335,8 @@ URLBlocklistManager::URLBlocklistManager(
       &URLBlocklistManager::ScheduleUpdate, base::Unretained(this)));
   // Start enforcing the policies without a delay when they are present at
   // startup.
-  const base::Value::List* block =
-      default_blocklist_source_->GetBlocklistSpec();
-  const base::Value::List* allow =
-      default_blocklist_source_->GetAllowlistSpec();
+  const base::ListValue* block = default_blocklist_source_->GetBlocklistSpec();
+  const base::ListValue* allow = default_blocklist_source_->GetAllowlistSpec();
   if (block || allow) {
     SetBlocklist(BuildBlocklist(block, allow));
   }
@@ -333,19 +367,20 @@ void URLBlocklistManager::Update() {
                                               ? override_blocklist_source_.get()
                                               : default_blocklist_source_.get();
 
-  const base::Value::List* block = current_source->GetBlocklistSpec();
-  const base::Value::List* allow = current_source->GetAllowlistSpec();
+  bool downgrade = current_source->DowngradeAllowlistWildcardToNeutral();
+
+  const base::ListValue* block = current_source->GetBlocklistSpec();
+  const base::ListValue* allow = current_source->GetAllowlistSpec();
 
   background_task_runner_->PostTaskAndReplyWithResult(
       FROM_HERE,
       base::BindOnce(
           &BuildBlocklist,
-          base::Owned(block
-                          ? std::make_unique<base::Value::List>(block->Clone())
-                          : nullptr),
-          base::Owned(allow
-                          ? std::make_unique<base::Value::List>(allow->Clone())
-                          : nullptr)),
+          base::Owned(block ? std::make_unique<base::ListValue>(block->Clone())
+                            : nullptr),
+          base::Owned(allow ? std::make_unique<base::ListValue>(allow->Clone())
+                            : nullptr),
+          downgrade),
       base::BindOnce(&URLBlocklistManager::SetBlocklist,
                      ui_weak_ptr_factory_.GetWeakPtr()));
 }

@@ -10,7 +10,6 @@
 #include <utility>
 
 #include "base/check_is_test.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -33,7 +32,6 @@
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "chrome/browser/web_applications/web_contents/web_contents_manager.h"
-#include "chrome/common/chrome_features.h"
 #include "components/webapps/browser/web_contents/web_app_url_loader.h"
 #include "content/public/browser/web_contents.h"
 
@@ -80,7 +78,7 @@ void WebAppCommandManager::ScheduleCommand(
   command->SetScheduledAt(base::PassKey<WebAppCommandManager>());
   command->SetCommandManager(base::PassKey<WebAppCommandManager>(), this);
   internal::CommandBase::Id command_id = command->id();
-  CHECK(!base::Contains(commands_, command_id));
+  CHECK(!commands_.contains(command_id));
 
   if (!started_) {
     commands_waiting_for_start_.emplace_back(std::move(command), location);
@@ -171,7 +169,7 @@ void WebAppCommandManager::Shutdown() {
 }
 
 base::Value WebAppCommandManager::ToDebugValue() {
-  base::Value::List queued;
+  base::ListValue queued;
   for (const auto& [command, location] : commands_waiting_for_start_) {
     queued.Append(command->GetDebugValue().Clone());
   }
@@ -179,7 +177,7 @@ base::Value WebAppCommandManager::ToDebugValue() {
     queued.Append(command->GetDebugValue().Clone());
   }
 
-  base::Value::Dict state;
+  base::DictValue state;
   if (log_) {
     state.Set("command_log", log_->CloneToList());
   }

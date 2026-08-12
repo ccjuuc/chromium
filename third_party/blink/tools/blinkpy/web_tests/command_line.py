@@ -123,14 +123,10 @@ def add_configuration_options_group(parser: argparse.ArgumentParser,
                        const='Release',
                        dest='configuration',
                        help='Set the configuration to Release')
-    group.add_argument('--chrome-branded',
-                       action='store_true',
-                       help='Set the configuration as chrome_branded.')
     group.add_argument('--no-xvfb',
                        action='store_false',
                        dest='use_xvfb',
                        help='Do not run tests with Xvfb')
-    group.add_argument('--coverage-dir', type=str, help=argparse.SUPPRESS)
     add_common_wpt_options(group)
     if not rwt:
         group.add_argument(
@@ -298,6 +294,11 @@ def add_testing_options_group(parser: argparse.ArgumentParser,
         '--enable-leak-detection',
         action='store_true',
         help='Enable the leak detection of DOM objects.')
+    testing_group.add_argument(
+        '--timeout-multiplier',
+        type=float,
+        default=1.0,
+        help='Multiplier to apply to default test timeouts.')
     testing_group.add_argument(
         '--enable-sanitizer',
         action='store_true',
@@ -580,10 +581,6 @@ def add_testing_options_group(parser: argparse.ArgumentParser,
                   'failures are expected in *-expected.txt.'))
     else:
         test_types = get_args(TestType)
-        testing_group.add_argument(
-            '--timeout-multiplier',
-            type=float,
-            help='Multiplier relative to standard test timeouts to use')
         testing_group.add_argument(
             '--test-types',
             nargs='*',

@@ -10,6 +10,7 @@
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/safe_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
@@ -20,6 +21,7 @@
 #include "components/permissions/permission_decision.h"
 #include "components/permissions/permission_request.h"
 #include "components/permissions/permission_request_data.h"
+#include "components/permissions/resolvers/permission_prompt_options.h"
 #include "components/permissions/resolvers/permission_resolver.h"
 #include "content/public/browser/permission_result.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
@@ -28,6 +30,7 @@
 class GURL;
 
 namespace permissions {
+struct PermissionPromptDecision;
 class PermissionRequestID;
 }
 
@@ -134,6 +137,13 @@ class PermissionContextBase : public content_settings::Observer {
       const GURL& requesting_origin,
       const GURL& embedding_origin) const;
 
+  // Optionally overwrites the result before returning it to the caller (for a
+  // permissions request or status query). Default implementation does nothing.
+  // Useful (for example) to mask an internal DENIED state and expose it as
+  // PROMPT to the web.
+  virtual void MaybeOverridePermissionResultToReturn(
+      content::PermissionResult& result) const;
+
   // Returns whether the permission is usable by requesting/embedding origins.
   bool IsPermissionAvailableToOrigins(const GURL& requesting_origin,
                                       const GURL& embedding_origin) const;
@@ -201,13 +211,25 @@ class PermissionContextBase : public content_settings::Observer {
       std::unique_ptr<PermissionRequestData> request_data,
       BrowserPermissionCallback callback);
 
-  // Updates stored setting if persist is set, updates tab indicators
-  // and runs the callback to finish the request.
-  virtual void NotifyPermissionSet(const PermissionRequestData& request_data,
-                                   BrowserPermissionCallback callback,
-                                   bool persist,
-                                   PermissionDecision decision,
-                                   bool is_final_decision);
+  // Computes the new PermissionResult based on the current value and a decision
+  // made on a permission request.
+  content::PermissionResult ComputeNewPermissionResult(
+      const PermissionRequestData& request_data,
+      const permissions::PermissionPromptDecision& decision);
+
+  // Called when the permission decision has been made. Updates stored setting
+  // if persist is set, updates tab indicators and runs the callback to finish
+  // the request.
+  //
+  // If `permission_result` is non null, it will be used as the final result.
+  // Otherwise, a new result will be computed using
+  // `ComputeNewPermissionResult()`.
+  virtual void NotifyPermissionSet(
+      const PermissionRequestData& request_data,
+      BrowserPermissionCallback callback,
+      bool persist,
+      const content::PermissionResult* permission_result,
+      const permissions::PermissionPromptDecision& decision);
 
   // Implementors can override this method to update the icons on the
   // url bar with the result of the new permission.
@@ -220,7 +242,7 @@ class PermissionContextBase : public content_settings::Observer {
   // Store the decided permission state. Virtual since the permission might be
   // stored with different restrictions (for example for desktop notifications).
   virtual void UpdateSetting(const PermissionRequestData& request_data,
-                             PermissionSetting setting,
+                             const PermissionSetting& setting,
                              bool is_one_time);
 
   // Whether the permission should be restricted to secure origins.
@@ -251,6 +273,11 @@ class PermissionContextBase : public content_settings::Observer {
   // Implementors can override this method to avoid using automatic embargo.
   virtual bool UsesAutomaticEmbargo() const;
 
+  // Implementors can override this method to use custom notification logic.
+  virtual void NotifyObservers(const ContentSettingsPattern& primary_pattern,
+                               const ContentSettingsPattern& secondary_pattern,
+                               ContentSettingsTypeSet content_type_set) const;
+
   // Derived classes can use this function to find some particular permission
   // request.
   const PermissionRequest* FindPermissionRequest(
@@ -260,7 +287,17 @@ class PermissionContextBase : public content_settings::Observer {
   // TODO(crbug.com/40220500): This should return a url::Origin instead.
   virtual GURL GetEffectiveEmbedderOrigin(content::RenderFrameHost* rfh) const;
 
-  base::ObserverList<permissions::Observer> permission_observers_;
+  // Implementors can override this method to use a custom Permission Policy
+  // check.
+  virtual bool PermissionAllowedByPermissionsPolicy(
+      content::RenderFrameHost* rfh) const;
+
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      permissions::Observer,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      permission_observers_;
 
   // Set by subclasses to inform the base class that they will handle adding
   // and removing themselves as observers to the HostContentSettingsMap.
@@ -274,9 +311,6 @@ class PermissionContextBase : public content_settings::Observer {
  private:
   friend class PermissionContextBaseTests;
 
-  bool PermissionAllowedByPermissionsPolicy(
-      content::RenderFrameHost* rfh) const;
-
   // Called when a request is no longer used so it can be cleaned up.
   void CleanUpRequest(content::WebContents* web_contents,
                       const PermissionRequestID& id);
@@ -285,23 +319,19 @@ class PermissionContextBase : public content_settings::Observer {
       const PermissionRequestID& id,
       BrowserPermissionCallback callback,
       PermissionDecision decision,
-      PermissionSetting new_value);
+      const content::PermissionResult& permission_result);
+
   // This is the callback for PermissionRequest and is called once the user
   // allows/blocks/dismisses a permission prompt.
-  void PermissionDecided(PermissionDecision decision,
-                         bool is_final_decision,
+  void PermissionDecided(const permissions::PermissionPromptDecision& decision,
                          const PermissionRequestData& request_data);
-
-  void NotifyObservers(const ContentSettingsPattern& primary_pattern,
-                       const ContentSettingsPattern& secondary_pattern,
-                       ContentSettingsTypeSet content_type_set) const;
 
   raw_ptr<content::BrowserContext> browser_context_;
   const ContentSettingsType content_settings_type_;
   const network::mojom::PermissionsPolicyFeature permissions_policy_feature_;
   std::unordered_map<
       std::string,
-      std::pair<base::WeakPtr<PermissionRequest>, BrowserPermissionCallback>>
+      std::pair<base::SafeRef<PermissionRequest>, BrowserPermissionCallback>>
       pending_requests_;
 
   mutable std::optional<bool> last_has_device_permission_result_ = std::nullopt;

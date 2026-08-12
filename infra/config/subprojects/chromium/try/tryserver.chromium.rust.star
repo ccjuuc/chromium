@@ -3,7 +3,7 @@
 # found in the LICENSE file.
 """Definitions of builders in the tryserver.chromium.rust builder group."""
 
-load("@chromium-luci//builders.star", "os")
+load("@chromium-luci//builders.star", "cpu", "os")
 load("@chromium-luci//consoles.star", "consoles")
 load("@chromium-luci//try.star", "try_")
 load("//lib/siso.star", "siso")
@@ -21,6 +21,7 @@ try_.defaults.set(
         "chromium_tests.resultdb_module": 100,
     },
     service_account = try_constants.DEFAULT_SERVICE_ACCOUNT,
+    siso_keep_going = siso.KEEP_GOING,
     siso_project = siso.project.DEFAULT_UNTRUSTED,
     siso_remote_jobs = siso.remote_jobs.LOW_JOBS_FOR_CQ,
 )
@@ -74,9 +75,12 @@ try_.builder(
 )
 
 try_.builder(
-    name = "mac-rust-x64-dbg",
-    mirrors = ["ci/mac-rust-x64-dbg"],
-    gn_args = "ci/mac-rust-x64-dbg",
+    name = "mac-rust-arm64-dbg",
+    description_html = "Runs rust tests on MacOS on try",
+    mirrors = ["ci/mac-rust-arm64-dbg"],
+    gn_args = "ci/mac-rust-arm64-dbg",
     cores = None,
     os = os.MAC_DEFAULT,
+    cpu = cpu.ARM64,
+    contact_team_email = "rust-in-chrome@google.com",
 )

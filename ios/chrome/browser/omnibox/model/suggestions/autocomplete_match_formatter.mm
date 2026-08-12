@@ -6,10 +6,10 @@
 
 #import <UIKit/UIKit.h>
 
+#import <algorithm>
 #import <array>
 #import <string>
 
-#import "base/containers/contains.h"
 #import "base/metrics/field_trial_params.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/strings/utf_string_conversions.h"
@@ -27,7 +27,6 @@
 #import "ios/chrome/browser/omnibox/public/omnibox_ui_features.h"
 #import "ios/chrome/browser/omnibox/public/omnibox_util.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
-#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/common/NSString+Chromium.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 
@@ -69,7 +68,7 @@ UIColor* DimColorIncognito() {
   self = [super init];
   if (self) {
     _match = AutocompleteMatch(match);
-    _isReverseColorLogic = base::Contains(
+    _isReverseColorLogic = std::ranges::contains(
         kReverseColorLocales,
         GetApplicationContext()->GetApplicationLocaleStorage()->Get());
   }
@@ -362,6 +361,10 @@ UIColor* DimColorIncognito() {
 /// the omnibox would be a noop. However, this list also omits other types that
 /// are deprecated or not launched on iOS.
 - (BOOL)isAppendable {
+  if (_match.IsThreadsHistorySuggestion()) {
+    return NO;
+  }
+
   if (_match.suggest_template) {
     return YES;
   }

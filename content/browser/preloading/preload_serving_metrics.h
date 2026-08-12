@@ -10,17 +10,19 @@
 #include <vector>
 
 #include "base/time/time.h"
+#include "content/browser/preloading/prefetch/prefetch_key.h"
 #include "content/browser/preloading/prefetch/prefetch_servable_state.h"
 #include "content/browser/preloading/prefetch/prefetch_streaming_url_loader_common_types.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/preload_serving_metrics_capsule.h"
+#include "net/http/http_no_vary_search_data.h"
 
 namespace content {
 
-enum class PrefetchPotentialCandidateCollectResult;
-enum class PrefetchPotentialCandidateServingResult;
 class NavigationHandle;
 class PrefetchContainer;
+enum class PrefetchPotentialCandidateCollectResult;
+enum class PrefetchPotentialCandidateServingResult;
 enum class PrefetchStatus;
 
 // All the structs in this file are "Logs" as defined in
@@ -66,6 +68,8 @@ struct CONTENT_EXPORT PrefetchContainerMetrics final {
   std::optional<base::TimeDelta> create_stream_delay;
   std::optional<base::TimeDelta> connected_callback_delay;
   std::optional<base::TimeDelta> initialize_stream_delay;
+
+  bool is_constructed_from_pre_prefetch = false;
 };
 
 // Debug information of prefetch ahead of prerender at prefetch matching.
@@ -95,6 +99,9 @@ struct CONTENT_EXPORT PrefetchMatchPrefetchAheadOfPrerenderDebugMetrics final {
   int queue_size;
   std::optional<int> queue_index;
   PrefetchPotentialCandidateCollectResult collect_result;
+  PrefetchKey prefetch_key_navigated;
+  PrefetchKey prefetch_key_ahead_of_prerender;
+  std::optional<net::HttpNoVarySearchData> prefetch_nvs_hint_ahead_of_prerender;
 };
 
 // Debug information of prefetch ahead of prerender at prefetch matching.
@@ -183,10 +190,6 @@ struct CONTENT_EXPORT PrefetchMatchMetrics final {
   std::unique_ptr<PrefetchContainerMetrics>
       prefetch_container_metrics_ahead_of_prerender = nullptr;
 
-  // Null if `!UsePrefetchScheduler()`.
-  //
-  // TODO(crbug.com/406402069): Remove the above comment.
-  //
   // Non null if the navigation is prerender initial navigation.
   std::unique_ptr<PrefetchMatchPrerenderDebugMetrics> prerender_debug_metrics;
 };
@@ -219,6 +222,10 @@ struct CONTENT_EXPORT PreloadServingMetrics final {
   const PrefetchMatchMetrics* GetMeaningfulPrefetchMatchMetrics() const;
 
   void RecordMetricsForNonPrerenderNavigationCommitted() const;
+  void RecordPreloadServingMetricsByNavigationInitiator(
+      bool did_nav_use_bfcache,
+      const std::string& navigation_initiator_string,
+      bool is_url_srp) const;
   void RecordMetricsForPrerenderInitialNavigationFailed() const;
   void RecordFirstContentfulPaint(
       base::TimeDelta corrected_first_contentful_paint) const;
@@ -251,6 +258,10 @@ class CONTENT_EXPORT PreloadServingMetricsCapsuleImpl final
       NavigationHandle& navigation_handle);
 
   void RecordMetricsForNonPrerenderNavigationCommitted() const override;
+  void RecordPreloadServingMetricsByNavigationInitiator(
+      bool did_nav_use_bfcache,
+      const std::string& navigation_initiator_string,
+      bool is_url_srp) const override;
   void RecordFirstContentfulPaint(
       base::TimeDelta corrected_first_contentful_paint) const override;
 

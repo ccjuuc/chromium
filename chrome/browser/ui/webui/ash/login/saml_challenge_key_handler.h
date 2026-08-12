@@ -23,26 +23,28 @@ namespace ash {
 // attestation during SAML authentication.
 class SamlChallengeKeyHandler final {
  public:
-  using CallbackType =
-      base::OnceCallback<void(const base::Value::Dict response)>;
+  using CallbackType = base::OnceCallback<void(const base::DictValue response)>;
 
   SamlChallengeKeyHandler();
   SamlChallengeKeyHandler(const SamlChallengeKeyHandler&) = delete;
   SamlChallengeKeyHandler& operator=(const SamlChallengeKeyHandler&) = delete;
   ~SamlChallengeKeyHandler();
 
-  // Checks that provided `url` is allowlisted and tries to calculate response
-  // for the `challenge`.
+  // Checks that provided `source_url` and `destination_url` are allowlisted
+  // and tries to calculate response for the `challenge`.
   void Run(Profile* profile,
            CallbackType callback,
-           const GURL& url,
+           const GURL& source_url,
+           const GURL& destination_url,
            const std::string& challenge);
 
   void SetTpmResponseTimeoutForTesting(base::TimeDelta timeout);
 
  private:
-  // Checks if it is allowed for provided `url` to perform device attestation.
-  void BuildResponseForAllowlistedUrl(const GURL& url);
+  // Checks if it is allowed for provided `source_url` and `destination_url` to
+  // perform device attestation.
+  void BuildResponseForAllowlistedUrl(const GURL& source_url,
+                                      const GURL& destination_url);
   // Starts flow that acutally builds a response.
   void BuildChallengeResponse();
   // Returns current timeout for `tpm_key_challenger_` to response.

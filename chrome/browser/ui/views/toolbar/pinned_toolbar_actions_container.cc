@@ -10,7 +10,6 @@
 #include <string>
 #include <type_traits>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
@@ -20,23 +19,25 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/layout_constants.h"
+#include "chrome/browser/ui/side_panel/side_panel_enums.h"
 #include "chrome/browser/ui/toolbar/toolbar_pref_names.h"
 #include "chrome/browser/ui/views/extensions/browser_action_drag_data.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_enums.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_util.h"
 #include "chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.h"
 #include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container_layout.h"
-#include "chrome/common/chrome_features.h"
+#include "chrome/browser/ui/views/toolbar/toolbar_divider.h"
+#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "chrome/browser/ui/web_applications/app_browser_controller.h"
+#include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "ui/actions/action_id.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
-#include "ui/base/dragdrop/mojom/drag_drop_types.mojom-shared.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -141,7 +142,7 @@ PinnedToolbarActionsContainer::PinnedToolbarActionsContainer(
   // is the same size regardless of where and if the divider is in the
   // container.
   layout->SetInteriorMargin(gfx::Insets::TLBR(
-      0, 0, 0, -GetLayoutConstant(TOOLBAR_ICON_DEFAULT_MARGIN)));
+      0, 0, 0, -GetLayoutConstant(LayoutConstant::kToolbarIconDefaultMargin)));
 
   // Animations.
   GetAnimatingLayoutManager()->SetDefaultFadeMode(
@@ -155,21 +156,19 @@ PinnedToolbarActionsContainer::PinnedToolbarActionsContainer(
       base::Milliseconds(200));
 
   // Create the toolbar divider.
-  std::unique_ptr<views::View> toolbar_divider =
-      std::make_unique<views::View>();
+  std::unique_ptr<ToolbarDivider> toolbar_divider =
+      std::make_unique<ToolbarDivider>();
   toolbar_divider->SetProperty(views::kElementIdentifierKey,
                                kPinnedToolbarActionsContainerDividerElementId);
-  toolbar_divider->SetPreferredSize(
-      gfx::Size(GetLayoutConstant(TOOLBAR_DIVIDER_WIDTH),
-                GetLayoutConstant(TOOLBAR_DIVIDER_HEIGHT)));
   // The divider only exists if there are pinned buttons, which have padding on
   // the right. Remove that amount of padding to compensate.
   toolbar_divider->SetProperty(
       views::kMarginsKey,
-      gfx::Insets::TLBR(0,
-                        GetLayoutConstant(TOOLBAR_DIVIDER_SPACING) -
-                            GetLayoutConstant(TOOLBAR_ICON_DEFAULT_MARGIN),
-                        0, GetLayoutConstant(TOOLBAR_DIVIDER_SPACING)));
+      gfx::Insets::TLBR(
+          0,
+          GetLayoutConstant(LayoutConstant::kToolbarDividerSpacing) -
+              GetLayoutConstant(LayoutConstant::kToolbarIconDefaultMargin),
+          0, GetLayoutConstant(LayoutConstant::kToolbarDividerSpacing)));
   toolbar_divider_ = AddChildView(std::move(toolbar_divider));
 
   // Initialize the pinned action buttons.
@@ -189,8 +188,9 @@ int PinnedToolbarActionsContainer::CalculatePoppedOutButtonsWidth() {
     popped_out_buttons_width += popped_button->GetPreferredSize().width();
   }
 
-  popped_out_buttons_width += (popped_out_buttons_.size() - 1) *
-                              (GetLayoutConstant(TOOLBAR_ICON_DEFAULT_MARGIN));
+  popped_out_buttons_width +=
+      (popped_out_buttons_.size() - 1) *
+      (GetLayoutConstant(LayoutConstant::kToolbarIconDefaultMargin));
 
   return popped_out_buttons_width;
 }
@@ -271,6 +271,12 @@ void PinnedToolbarActionsContainer::UpdatePinnedStateAndAnnounce(
   model_->UpdatePinnedState(id, pin);
 }
 
+void PinnedToolbarActionsContainer::MovePinnedAction(
+    actions::ActionId action_id,
+    int target_index) {
+  model_->MovePinnedAction(action_id, target_index);
+}
+
 void PinnedToolbarActionsContainer::MovePinnedActionBy(actions::ActionId id,
                                                        int delta) {
   DCHECK(IsActionPinned(id));
@@ -297,14 +303,6 @@ void PinnedToolbarActionsContainer::UpdateAllIcons() {
   }
 }
 
-void PinnedToolbarActionsContainer::OnThemeChanged() {
-  const SkColor toolbar_divider_color =
-      GetColorProvider()->GetColor(kColorToolbarExtensionSeparatorEnabled);
-  toolbar_divider_->SetBackground(views::CreateRoundedRectBackground(
-      toolbar_divider_color, GetLayoutConstant(TOOLBAR_DIVIDER_CORNER_RADIUS)));
-  ToolbarIconContainerView::OnThemeChanged();
-}
-
 void PinnedToolbarActionsContainer::AddedToWidget() {
   OnThemeChanged();
 }
@@ -321,7 +319,7 @@ bool PinnedToolbarActionsContainer::AreDropTypesRequired() {
 
 bool PinnedToolbarActionsContainer::CanDrop(const OSExchangeData& data) {
   return BrowserActionDragData::CanDrop(data,
-                                        browser_view_->browser()->profile());
+                                        browser_view_->browser()->GetProfile());
 }
 
 void PinnedToolbarActionsContainer::OnDragEntered(
@@ -401,7 +399,7 @@ views::View::DropCallback PinnedToolbarActionsContainer::GetDropCallback(
   base::ScopedClosureRunner cleanup(
       base::BindOnce(&PinnedToolbarActionsContainer::DragDropCleanup,
                      weak_ptr_factory_.GetWeakPtr(), action_id));
-  return base::BindOnce(&PinnedToolbarActionsContainer::MovePinnedAction,
+  return base::BindOnce(&PinnedToolbarActionsContainer::MovePinnedActionOnDrop,
                         drop_weak_ptr_factory_.GetWeakPtr(), action_id, index,
                         std::move(cleanup));
 }
@@ -468,7 +466,7 @@ actions::ActionItem* PinnedToolbarActionsContainer::GetActionItemFor(
     return nullptr;
   }
   return actions::ActionManager::Get().FindAction(
-      id, browser_view_->browser()->browser_actions()->root_action_item());
+      id, BrowserActions::From(browser_view_->browser())->root_action_item());
 }
 
 PinnedActionToolbarButton* PinnedToolbarActionsContainer::AddPoppedOutButtonFor(
@@ -529,9 +527,10 @@ void PinnedToolbarActionsContainer::AddPinnedActionButtonFor(
   // Pinned buttons shouldn't appear in web apps or browsers without a tabstrip
   // (like popups).
   if (auto* browser = browser_view_->browser();
-      browser && (browser->app_controller() ||
-                  !browser->SupportsWindowFeature(
-                      Browser::WindowFeature::kFeatureTabStrip))) {
+      browser &&
+      (web_app::AppBrowserController::From(browser) ||
+       !WindowFeatureController::From(browser)->SupportsWindowFeature(
+           WindowFeatureController::WindowFeature::kFeatureTabStrip))) {
     return;
   }
 
@@ -640,17 +639,16 @@ void PinnedToolbarActionsContainer::RemoveButton(
 }
 
 bool PinnedToolbarActionsContainer::IsOverflowed(actions::ActionId id) {
-  const auto* const pinned_button = GetPinnedButtonFor(id);
-  // TODO(pengchaocai): Support popped out buttons overflow.
+  const auto* const button = GetButtonFor(id);
   // TODO(crbug.com/40949386): If this container is not visible treat the
   // elements inside as overflowed.
 
   // Need to use the target layout in case the animation has not yet shown the
   // button but is in the process of revealing it.
   const auto* const layout =
-      GetAnimatingLayoutManager()->target_layout().GetLayoutFor(pinned_button);
+      GetAnimatingLayoutManager()->target_layout().GetLayoutFor(button);
   return GetAnimatingLayoutManager()->target_layout_manager()->CanBeVisible(
-             pinned_button) &&
+             button) &&
          layout && (!GetVisible() || !layout->visible);
 }
 
@@ -668,17 +666,20 @@ bool PinnedToolbarActionsContainer::ShouldAnyButtonsOverflow(
         GetAnimatingLayoutManager()->target_layout_manager()->GetProposedLayout(
             available_size);
   }
-  for (PinnedActionToolbarButton* pinned_button : pinned_buttons_) {
+
+  auto is_button_overflowing = [&](PinnedActionToolbarButton* button) {
     if (views::ChildLayout* child_layout =
-            proposed_layout.GetLayoutFor(pinned_button)) {
+            proposed_layout.GetLayoutFor(button)) {
       if (GetAnimatingLayoutManager()->target_layout_manager()->CanBeVisible(
-              pinned_button) &&
+              button) &&
           !child_layout->visible) {
         return true;
       }
     }
-  }
-  return false;
+    return false;
+  };
+  return std::ranges::any_of(pinned_buttons_, is_button_overflowing) ||
+         std::ranges::any_of(popped_out_buttons_, is_button_overflowing);
 }
 
 bool PinnedToolbarActionsContainer::IsActionPinned(actions::ActionId id) {
@@ -752,7 +753,7 @@ void PinnedToolbarActionsContainer::UpdateViews() {
   // 1. Remove buttons for actions in the UI that are not present in the
   // model.
   for (actions::ActionId id : old_ids) {
-    if (base::Contains(new_ids, id)) {
+    if (std::ranges::contains(new_ids, id)) {
       continue;
     }
 
@@ -766,7 +767,7 @@ void PinnedToolbarActionsContainer::UpdateViews() {
 
   // 2. Add buttons for actions that are in the model but not in the UI.
   for (actions::ActionId id : new_ids) {
-    if (base::Contains(old_ids, id)) {
+    if (std::ranges::contains(old_ids, id)) {
       continue;
     }
 
@@ -792,7 +793,7 @@ void PinnedToolbarActionsContainer::SetActionButtonIconVisibility(
   }
 }
 
-void PinnedToolbarActionsContainer::MovePinnedAction(
+void PinnedToolbarActionsContainer::MovePinnedActionOnDrop(
     actions::ActionId action_id,
     size_t index,
     base::ScopedClosureRunner cleanup,
@@ -830,7 +831,8 @@ size_t PinnedToolbarActionsContainer::WidthToIconCount(int x_offset) {
   if (!button_provider_) {
     return 0;
   }
-  const int element_padding = GetLayoutConstant(TOOLBAR_ELEMENT_PADDING);
+  const int element_padding =
+      GetLayoutConstant(LayoutConstant::kToolbarElementPadding);
   size_t unclamped_count = std::max(
       (x_offset + element_padding) /
           (button_provider_->GetToolbarButtonSize().width() + element_padding),
@@ -859,14 +861,62 @@ PinnedToolbarActionsContainer::CreateOrGetButtonForAction(
     return button;
   }
 
-  auto button = std::make_unique<PinnedActionToolbarButton>(
-      browser_view_->browser(), id, weak_ptr_factory_.GetWeakPtr());
+  std::unique_ptr<PinnedActionToolbarButton> button;
+  actions::ActionItem* action_item = GetActionItemFor(id);
+  auto* custom_factory =
+      action_item->GetProperty(kCustomPinnedActionToolbarButtonFactoryKey);
+
+  if (custom_factory && !custom_factory->is_null()) {
+    button = custom_factory->Run(browser_view_->browser(), id,
+                                 weak_ptr_factory_.GetWeakPtr());
+  } else {
+    button = std::make_unique<PinnedActionToolbarButton>(
+        browser_view_->browser(), id, weak_ptr_factory_.GetWeakPtr());
+  }
   action_view_controller_->CreateActionViewRelationship(
-      button.get(), GetActionItemFor(id)->GetAsWeakPtr());
+      button.get(), action_item->GetAsWeakPtr());
 
   button->SetPaintToLayer();
   button->layer()->SetFillsBoundsOpaquely(false);
   return button;
+}
+
+void PinnedToolbarActionsContainer::PostOrQueueActionAfterAnimation(
+    base::OnceClosure action) {
+  GetAnimatingLayoutManager()->PostOrQueueAction(std::move(action));
+}
+
+ToolbarButton* PinnedToolbarActionsContainer::GetDownloadButton() {
+  return GetButtonFor(kActionShowDownloads);
+}
+
+views::BubbleAnchor PinnedToolbarActionsContainer::GetBubbleAnchor(
+    actions::ActionId action_id) {
+  if (IsOverflowed(action_id)) {
+    if (browser_view_ && browser_view_->toolbar() &&
+        browser_view_->toolbar()->overflow_button() &&
+        browser_view_->toolbar()->overflow_button()->GetVisible()) {
+      return views::BubbleAnchor(browser_view_->toolbar()->overflow_button());
+    }
+  }
+  return views::BubbleAnchor(GetButtonFor(action_id));
+}
+
+void PinnedToolbarActionsContainer::GetBubbleAnchorAsync(
+    actions::ActionId action_id,
+    base::OnceCallback<void(BubbleAnchorResult)> callback) {
+  auto anchor = GetBubbleAnchor(action_id);
+  if (anchor.IsNull()) {
+    std::move(callback).Run(
+        base::unexpected(GetAnchorFailureReason::kAnchorNotFound));
+  } else {
+    std::move(callback).Run(anchor);
+  }
+}
+
+PinnedActionToolbarButton*
+PinnedToolbarActionsContainer::GetChromeLabsButton() {
+  return GetButtonFor(kActionShowChromeLabs);
 }
 
 BEGIN_METADATA(PinnedToolbarActionsContainer)

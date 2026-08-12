@@ -65,7 +65,6 @@ id<GREYMatcher> CarouselMatcher() {
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config = [super appConfigurationForTestCase];
-
   // Disable AutocompleteProvider types: TYPE_SEARCH and TYPE_ON_DEVICE_HEAD.
   omnibox::DisableAutocompleteProviders(config, 1056);
 
@@ -188,13 +187,8 @@ id<GREYMatcher> CarouselMatcher() {
 }
 
 // Tests the "Copy URL" action of carousel context menu.
-// TODO(crbug.com/435096812): Reenable this test.
 - (void)testMostVisitedTileCopyURL {
-  if ([ChromeEarlGrey isIPhoneIdiom]) {
-    if (!@available(iOS 18, *)) {
-      EARL_GREY_TEST_DISABLED(@"Failing on iPhone Simulator iOS 17");
-    }
-  }
+
   [self addNumberOfMostVisitedTiles:1];
   Page page1 = Page(1);
   id<GREYMatcher> tile1 = TileWithTitle(PageTitle(page1));
@@ -208,13 +202,8 @@ id<GREYMatcher> CarouselMatcher() {
 }
 
 // Tests the "Share" action of the carousel context menu.
-// TODO(crbug.com/435093465): Reenable this test.
 - (void)testMostVisitedShare {
-  if (![ChromeEarlGrey isIPadIdiom]) {
-    if (!@available(iOS 18, *)) {
-      EARL_GREY_TEST_DISABLED(@"Failing on iPhone Simulator iOS 17");
-    }
-  }
+
   [self addNumberOfMostVisitedTiles:1];
   Page page1 = Page(1);
   id<GREYMatcher> tile1 = TileWithTitle(PageTitle(page1));
@@ -304,7 +293,7 @@ id<GREYMatcher> CarouselMatcher() {
   // Tap on remove.
   [[EarlGrey selectElementWithMatcher:
                  chrome_test_util::ContextMenuItemWithAccessibilityLabelId(
-                     IDS_IOS_CONTENT_SUGGESTIONS_REMOVE)]
+                     IDS_IOS_CONTENT_SUGGESTIONS_NEVER_SHOW_SITE)]
       performAction:grey_tap()];
   // Check tile is removed.
   [[EarlGrey selectElementWithMatcher:tile] assertWithMatcher:grey_nil()];

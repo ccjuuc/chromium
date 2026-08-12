@@ -2,14 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import type {CapabilitiesResponse, Cdd, ColorOption, DocumentSettings, DpiOption, DuplexOption, ExtensionDestinationInfo, LocalDestinationInfo, MediaSizeCapability, MediaSizeOption, NativeInitialSettings, PageOrientationOption} from 'chrome://print/print_preview.js';
-import {createDocumentSettings as createDefaultDocumentSettings, DEFAULT_MAX_COPIES, Destination, DestinationOrigin, DestinationStore, GooglePromotedDestinationId, MeasurementSystemUnitType, VendorCapabilityValueType} from 'chrome://print/print_preview.js';
+import type {CapabilitiesResponse, Cdd, ColorOption, DocumentSettings, DpiOption, DuplexOption, ExtensionDestinationInfo, LocalDestinationInfo, MediaSizeCapability, MediaSizeOption, NativeInitialSettings, PageOrientationOption, VendorCapability} from 'chrome://print/print_preview.js';
+import {createDocumentSettings as createDefaultDocumentSettings, DEFAULT_MAX_COPIES, Destination, DestinationOrigin, DestinationStore, GooglePromotedDestinationId, MeasurementSystemUnitType, VendorCapabilityType, VendorCapabilityValueType} from 'chrome://print/print_preview.js';
 import type {CrInputElement} from 'chrome://resources/cr_elements/cr_input/cr_input.js';
-import {WebUiListenerMixinLit} from 'chrome://resources/cr_elements/web_ui_listener_mixin_lit.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
-import {assertEquals} from 'chrome://webui-test/chai_assert.js';
 import {eventToPromise} from 'chrome://webui-test/test_util.js';
 
 export function getDefaultInitialSettings(isPdf: boolean = false):
@@ -113,33 +110,34 @@ export function getCddTemplateWithAdvancedSettings(
     return template;
   }
 
-  template.capabilities!.printer.vendor_capability = [{
+  const vendorCapability: VendorCapability[] = [{
     display_name: 'Print Area',
     id: 'printArea',
-    type: 'SELECT',
+    type: VendorCapabilityType.SELECT,
     select_cap: {
       option: [
-        {display_name: 'A4', value: 4, is_default: true},
-        {display_name: 'A6', value: 6},
-        {display_name: 'A7', value: 7},
+        {display_name: 'A4', value: '4', is_default: true},
+        {display_name: 'A6', value: '6'},
+        {display_name: 'A7', value: '7'},
       ],
     },
   }];
+  template.capabilities!.printer.vendor_capability = vendorCapability;
 
   if (numSettings < 2) {
     return template;
   }
 
   // Add new capability.
-  template.capabilities!.printer.vendor_capability.push({
+  vendorCapability.push({
     display_name: 'Paper Type',
     id: 'paperType',
-    type: 'SELECT',
+    type: VendorCapabilityType.SELECT,
     select_cap: {
       option: [
-        {display_name: 'Standard', value: 0, is_default: true},
-        {display_name: 'Recycled', value: 1},
-        {display_name: 'Special', value: 2},
+        {display_name: 'Standard', value: '0', is_default: true},
+        {display_name: 'Recycled', value: '1'},
+        {display_name: 'Special', value: '2'},
       ],
     },
   });
@@ -148,10 +146,10 @@ export function getCddTemplateWithAdvancedSettings(
     return template;
   }
 
-  template.capabilities!.printer.vendor_capability.push({
+  vendorCapability.push({
     display_name: 'Watermark',
     id: 'watermark',
-    type: 'TYPED_VALUE',
+    type: VendorCapabilityType.TYPED_VALUE,
     typed_value_cap: {
       default: '',
     },
@@ -161,10 +159,10 @@ export function getCddTemplateWithAdvancedSettings(
     return template;
   }
 
-  template.capabilities!.printer.vendor_capability.push({
+  vendorCapability.push({
     display_name: 'Staple',
     id: 'finishings/4',
-    type: 'TYPED_VALUE',
+    type: VendorCapabilityType.TYPED_VALUE,
     typed_value_cap: {
       default: '',
       value_type: VendorCapabilityValueType.BOOLEAN,
@@ -175,10 +173,10 @@ export function getCddTemplateWithAdvancedSettings(
     return template;
   }
 
-  template.capabilities!.printer.vendor_capability.push({
+  vendorCapability.push({
     display_name: 'Quality',
     id: 'print-quality',
-    type: 'SELECT',
+    type: VendorCapabilityType.SELECT,
     select_cap: {
       option: [
         {display_name: 'Draft', value: '3'},
@@ -343,35 +341,18 @@ export function getMediaSizeCapabilityWithCustomNames(): MediaSizeCapability {
  */
 export async function triggerInputEvent(
     inputElement: HTMLInputElement|CrInputElement, input: string,
-    parentElement: HTMLElement): Promise<void> {
+    parentElement: HTMLElement): Promise<CustomEvent<string>> {
   inputElement.value = input;
   if (inputElement.tagName === 'CR-INPUT') {
     await (inputElement as CrInputElement).updateComplete;
   }
   inputElement.dispatchEvent(
       new CustomEvent('input', {composed: true, bubbles: true}));
-  return await eventToPromise('input-change', parentElement);
-}
-
-const TestListenerElementBase = WebUiListenerMixinLit(CrLitElement);
-class TestListenerElement extends TestListenerElementBase {
-  static get is() {
-    return 'test-listener-element';
-  }
-}
-
-declare global {
-  interface HTMLElementTagNameMap {
-    'test-listener-element': TestListenerElement;
-  }
-}
-
-export function setupTestListenerElement(): void {
-  customElements.define(TestListenerElement.is, TestListenerElement);
+  return eventToPromise<CustomEvent<string>>('input-change', parentElement);
 }
 
 export function createDestinationStore(): DestinationStore {
-  const testListenerElement = document.createElement('test-listener-element');
+  const testListenerElement = document.createElement('test-listener');
   document.body.appendChild(testListenerElement);
   return new DestinationStore(
       testListenerElement.addWebUiListener.bind(testListenerElement));
@@ -391,7 +372,7 @@ export function getSaveAsPdfDestination(): Destination {
  *     process-select-change event has fired.
  */
 export function selectOption(
-    section: HTMLElement, option: string): Promise<void> {
+    section: HTMLElement, option: string): Promise<Event> {
   const select = section.shadowRoot!.querySelector('select')!;
   select.focus();
   select.value = option;
@@ -399,45 +380,3 @@ export function selectOption(
   return eventToPromise('process-select-change', section);
 }
 
-// Fake MediaQueryList used in mocking response of |window.matchMedia|.
-export class FakeMediaQueryList extends EventTarget implements MediaQueryList {
-  private listener_: ((e: MediaQueryListEvent) => any)|null = null;
-  private matches_: boolean = false;
-  private media_: string;
-
-  constructor(media: string) {
-    super();
-    this.media_ = media;
-  }
-
-  addListener(listener: (e: MediaQueryListEvent) => any) {
-    this.listener_ = listener;
-  }
-
-  removeListener(listener: (e: MediaQueryListEvent) => any) {
-    assertEquals(listener, this.listener_);
-    this.listener_ = null;
-  }
-
-  onchange() {
-    if (this.listener_) {
-      this.listener_(new MediaQueryListEvent(
-          'change', {media: this.media_, matches: this.matches_}));
-    }
-  }
-
-  get media(): string {
-    return this.media_;
-  }
-
-  get matches(): boolean {
-    return this.matches_;
-  }
-
-  set matches(matches: boolean) {
-    if (this.matches_ !== matches) {
-      this.matches_ = matches;
-      this.onchange();
-    }
-  }
-}

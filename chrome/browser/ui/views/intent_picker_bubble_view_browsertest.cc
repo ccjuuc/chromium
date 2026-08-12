@@ -20,9 +20,7 @@
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
-#include "chrome/browser/ui/views/location_bar/intent_chip_button.h"
 #include "chrome/browser/ui/views/location_bar/intent_chip_button_test_base.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_view.h"
 #include "chrome/browser/ui/views/web_apps/web_app_link_capturing_test_utils.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
@@ -59,14 +57,12 @@ namespace {
 
 std::string GetLinkCapturingTestName(
     const testing::TestParamInfo<
-        std::tuple<std::string, LinkCapturingFeatureVersion, bool>>& info) {
+        std::tuple<std::string, LinkCapturingFeatureVersion>>& info) {
   std::string test_name;
   test_name = std::get<std::string>(info.param);
   test_name.append("_");
   test_name.append(
       apps::test::ToString(std::get<LinkCapturingFeatureVersion>(info.param)));
-  test_name.append(std::get<bool>(info.param) ? "MigrationEnabled"
-                                              : "MigrationNotEnabled");
   return test_name;
 }
 
@@ -74,16 +70,7 @@ std::string GetLinkCapturingTestName(
 
 class IntentPickerBrowserTest : public web_app::WebAppNavigationBrowserTest {
  public:
-  IntentPickerBrowserTest() {
-    if (IsMigrationEnabled()) {
-      scoped_feature_list_.InitAndEnableFeatureWithParameters(
-          features::kPageActionsMigration,
-          {{features::kPageActionsMigrationIntentPicker.name, "true"}});
-    } else {
-      scoped_feature_list_.InitWithFeatures(
-          {}, {::features::kPageActionsMigration});
-    }
-  }
+  IntentPickerBrowserTest() = default;
 
   template <typename Action>
   testing::AssertionResult DoAndWaitForIntentPickerIconUpdate(Action action) {
@@ -110,7 +97,7 @@ class IntentPickerBrowserTest : public web_app::WebAppNavigationBrowserTest {
 
   content::WebContents* OpenNewTab(const GURL& url,
                                    const std::string& rel = "") {
-    chrome::NewTab(browser());
+    chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
     content::WebContents* web_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
 
@@ -156,7 +143,7 @@ class IntentPickerBrowserTest : public web_app::WebAppNavigationBrowserTest {
 class IntentPickerIconBrowserTest
     : public IntentPickerBrowserTest,
       public ::testing::WithParamInterface<
-          std::tuple<std::string, LinkCapturingFeatureVersion, bool>>,
+          std::tuple<std::string, LinkCapturingFeatureVersion>>,
       public IntentChipButtonTestBase {
  public:
   // TODO(crbug.com/40097608): Stop disabling Paint Holding.
@@ -165,19 +152,8 @@ class IntentPickerIconBrowserTest
         apps::test::GetFeaturesToEnableLinkCapturingUX(LinkCapturingVersion());
 
     features_to_enable.push_back({blink::features::kPaintHolding, {}});
-    if (IsMigrationEnabled()) {
-      features_to_enable.push_back(
-          {::features::kPageActionsMigration,
-           {{::features::kPageActionsMigrationIntentPicker.name, "true"}}});
-    }
-    features_to_enable.push_back(
-        {features::kPwaNavigationCapturingWithScopeExtensions, {}});
 
     feature_list_.InitWithFeaturesAndParameters(features_to_enable, {});
-  }
-
-  bool IsMigrationEnabled() const override {
-    return std::get<bool>(GetParam());
   }
 
   LinkCapturingFeatureVersion LinkCapturingVersion() {
@@ -204,8 +180,8 @@ IN_PROC_BROWSER_TEST_P(IntentPickerIconBrowserTest,
                        NavigationToOutOfScopeLinkDoesNotShowIntentPicker) {
   InstallTestWebApp();
 
-  const GURL out_of_scope_url =
-      https_server().GetURL(GetAppUrlHost(), GetOutOfScopeUrlPath());
+  const GURL out_of_scope_url = embedded_https_test_server().GetURL(
+      GetAppUrlHost(), GetOutOfScopeUrlPath());
   NavigateToLaunchingPage(browser());
   ASSERT_TRUE(ExpectLinkClickNotCapturedIntoAppBrowser(
       browser(), out_of_scope_url, rel()));
@@ -225,7 +201,7 @@ IN_PROC_BROWSER_TEST_P(IntentPickerIconBrowserTest,
   InstallTestWebApp();
 
   const GURL in_scope_url =
-      https_server().GetURL(GetAppUrlHost(), GetInScopeUrlPath());
+      embedded_https_test_server().GetURL(GetAppUrlHost(), GetInScopeUrlPath());
   auto* tab_helper = IntentPickerTabHelper::FromWebContents(GetWebContents());
   NavigateToLaunchingPage(browser());
 
@@ -246,9 +222,9 @@ IN_PROC_BROWSER_TEST_P(IntentPickerIconBrowserTest,
   InstallTestWebApp();
 
   const GURL in_scope_url =
-      https_server().GetURL(GetAppUrlHost(), GetInScopeUrlPath());
-  const GURL out_of_scope_url =
-      https_server().GetURL(GetAppUrlHost(), GetOutOfScopeUrlPath());
+      embedded_https_test_server().GetURL(GetAppUrlHost(), GetInScopeUrlPath());
+  const GURL out_of_scope_url = embedded_https_test_server().GetURL(
+      GetAppUrlHost(), GetOutOfScopeUrlPath());
 
   // OpenNewTab opens a new tab and focus on the new tab.
   OpenNewTab(in_scope_url, /*rel=*/rel());
@@ -270,9 +246,9 @@ IN_PROC_BROWSER_TEST_P(IntentPickerIconBrowserTest,
   InstallTestWebApp();
 
   const GURL in_scope_url =
-      https_server().GetURL(GetAppUrlHost(), GetInScopeUrlPath());
-  const GURL out_of_scope_url =
-      https_server().GetURL(GetAppUrlHost(), GetOutOfScopeUrlPath());
+      embedded_https_test_server().GetURL(GetAppUrlHost(), GetInScopeUrlPath());
+  const GURL out_of_scope_url = embedded_https_test_server().GetURL(
+      GetAppUrlHost(), GetOutOfScopeUrlPath());
 
   views::Button* intent_picker_icon = GetIntentChip(browser());
 
@@ -298,10 +274,11 @@ IN_PROC_BROWSER_TEST_P(IntentPickerIconBrowserTest,
                        DoesNotShowIntentPickerWhenRedirectedOutOfScope) {
   InstallTestWebApp(GetOtherAppUrlHost(), /*app_scope=*/"/");
 
-  const GURL out_of_scope_url =
-      https_server().GetURL(GetAppUrlHost(), GetOutOfScopeUrlPath());
-  const GURL in_scope_url = https_server().GetURL(GetOtherAppUrlHost(), "/");
-  const GURL redirect_url = https_server().GetURL(
+  const GURL out_of_scope_url = embedded_https_test_server().GetURL(
+      GetAppUrlHost(), GetOutOfScopeUrlPath());
+  const GURL in_scope_url =
+      embedded_https_test_server().GetURL(GetOtherAppUrlHost(), "/");
+  const GURL redirect_url = embedded_https_test_server().GetURL(
       GetOtherAppUrlHost(), CreateServerRedirect(out_of_scope_url));
 
   views::Button* intent_picker_icon = GetIntentChip(browser());
@@ -324,7 +301,7 @@ IN_PROC_BROWSER_TEST_P(IntentPickerIconBrowserTest,
   InstallTestWebApp();
 
   const GURL in_scope_url =
-      https_server().GetURL(GetAppUrlHost(), GetInScopeUrlPath());
+      embedded_https_test_server().GetURL(GetAppUrlHost(), GetInScopeUrlPath());
   GURL chrome_pages_url("chrome://version");
   std::string app_name = "test_name";
 
@@ -353,7 +330,7 @@ IN_PROC_BROWSER_TEST_P(IntentPickerIconBrowserTest, DoNotShowIconOnErrorPages) {
   InstallTestWebApp("www.google.com", "/");
 
   const GURL in_scope_url =
-      https_server().GetURL(GetAppUrlHost(), GetInScopeUrlPath());
+      embedded_https_test_server().GetURL(GetAppUrlHost(), GetInScopeUrlPath());
 
   views::Button* intent_picker_view = GetIntentChip(browser());
   ASSERT_TRUE(intent_picker_view);
@@ -383,7 +360,6 @@ IN_PROC_BROWSER_TEST_P(IntentPickerIconBrowserTest, PushStateURLChangeTest) {
   // Note: The test page is served from embedded_test_server() as https_server()
   // always returns empty responses.
   ASSERT_TRUE(embedded_test_server()->Start());
-  ASSERT_TRUE(https_server().Start());
 
   const GURL test_url =
       embedded_test_server()->GetURL("/intent_picker/push_state_test.html");
@@ -408,23 +384,23 @@ IN_PROC_BROWSER_TEST_P(IntentPickerIconBrowserTest, PushStateURLChangeTest) {
 
 IN_PROC_BROWSER_TEST_P(IntentPickerIconBrowserTest,
                        NavigationToScopeExtensionShowsIntentPicker) {
-  ASSERT_TRUE(https_server().Start());
-
   // Install a web app with a scope extension.
   auto web_app_info = web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(
-      https_server().GetURL(GetAppUrlHost(), "/"));
+      embedded_https_test_server().GetURL(GetAppUrlHost(), "/"));
   web_app_info->scope = web_app_info->start_url();
   web_app_info->title = u"Test app";
   web_app_info->user_display_mode =
       web_app::mojom::UserDisplayMode::kStandalone;
-  const GURL extension_url = https_server().GetURL("app.org", "/");
+  const GURL extension_url =
+      embedded_https_test_server().GetURL("app.org", "/");
   web_app_info->scope_extensions = {
       web_app::ScopeExtensionInfo::CreateForOrigin(
           url::Origin::Create(extension_url))};
   // The test infra doesn't run the scope extension validation, so we can just
   // copy them to the validated set.
   web_app_info->validated_scope_extensions = web_app_info->scope_extensions;
-  web_app::test::InstallWebApp(browser()->profile(), std::move(web_app_info));
+  web_app::test::InstallWebApp(browser()->GetProfile(),
+                               std::move(web_app_info));
 
   // Go to a URL in the extended scope and wait for the intent picker icon to
   // load.
@@ -436,22 +412,19 @@ IN_PROC_BROWSER_TEST_P(IntentPickerIconBrowserTest,
 INSTANTIATE_TEST_SUITE_P(
     All,
     IntentPickerIconBrowserTest,
-    testing::Combine(testing::Values("", "noopener", "noreferrer", "nofollow"),
-#if BUILDFLAG(IS_CHROMEOS)
-                     testing::Values(LinkCapturingFeatureVersion::kV1DefaultOff,
-                                     LinkCapturingFeatureVersion::kV2DefaultOff)
-#else
-                     testing::Values(LinkCapturingFeatureVersion::kV2DefaultOn,
-                                     LinkCapturingFeatureVersion::kV2DefaultOff)
-#endif  // BUILDFLAG(IS_CHROMEOS)
-                         ,
-                     testing::Bool()),
+    testing::Combine(
+        testing::Values("", "noopener", "noreferrer", "nofollow"),
+        testing::Values(LinkCapturingFeatureVersion::kV2DefaultOff,
+                        LinkCapturingFeatureVersion::kV2DefaultOn)),
     GetLinkCapturingTestName);
 
+#if BUILDFLAG(IS_CHROMEOS)
+// This test verifies UXes that show up when an app is not set to be the
+// preferred app for capturing links.
 class IntentPickerIconBrowserBubbleTest
     : public IntentPickerBrowserTest,
       public ::testing::WithParamInterface<
-          std::tuple<std::string, LinkCapturingFeatureVersion, bool>>,
+          std::tuple<std::string, LinkCapturingFeatureVersion>>,
       public IntentChipButtonTestBase {
  public:
   // TODO(crbug.com/40097608): Stop disabling Paint Holding.
@@ -459,29 +432,15 @@ class IntentPickerIconBrowserBubbleTest
     std::vector<base::test::FeatureRefAndParams> features_to_enable =
         apps::test::GetFeaturesToEnableLinkCapturingUX(LinkCapturingVersion());
 
-    if (IsMigrationEnabled()) {
-      features_to_enable.push_back(
-          {::features::kPageActionsMigration,
-           {{::features::kPageActionsMigrationIntentPicker.name, "true"}}});
-    }
-
     feature_list_.InitWithFeaturesAndParameters(
         features_to_enable, {blink::features::kPaintHolding});
-  }
-
-  bool IsMigrationEnabled() const override {
-    return std::get<bool>(GetParam());
   }
 
   LinkCapturingFeatureVersion LinkCapturingVersion() const {
     return std::get<LinkCapturingFeatureVersion>(GetParam());
   }
   bool LinkCapturingEnabledByDefault() const {
-#if BUILDFLAG(IS_CHROMEOS)
-    return false;
-#else
     return LinkCapturingVersion() == LinkCapturingFeatureVersion::kV2DefaultOn;
-#endif  // BUILDFLAG(IS_CHROMEOS)
   }
 
   size_t GetItemContainerSize(IntentPickerBubbleView* bubble) {
@@ -490,16 +449,26 @@ class IntentPickerIconBrowserBubbleTest
         .size();
   }
 
+  // The intent picker icon bubble shows up only when the app is not set as
+  // the preferred app to capture links on ChromeOS.
+  void InstallTestWebAppAndDisableLinkCapturingIfNecessary() {
+    InstallTestWebApp();
+    if (LinkCapturingEnabledByDefault()) {
+      auto result =
+          apps::test::DisableLinkCapturingByUser(profile(), test_web_app_id());
+      ASSERT_TRUE(result.has_value()) << result.error();
+    }
+  }
+
  private:
   base::test::ScopedFeatureList feature_list_;
 };
 
-#if BUILDFLAG(IS_CHROMEOS)
 IN_PROC_BROWSER_TEST_P(IntentPickerIconBrowserBubbleTest,
                        IntentChipOpensBubble) {
-  InstallTestWebApp();
+  InstallTestWebAppAndDisableLinkCapturingIfNecessary();
   const GURL in_scope_url =
-      https_server().GetURL(GetAppUrlHost(), GetInScopeUrlPath());
+      embedded_https_test_server().GetURL(GetAppUrlHost(), GetInScopeUrlPath());
 
   OpenNewTab(in_scope_url);
   ASSERT_TRUE(web_app::ClickIntentPickerAndWaitForBubble(browser()));
@@ -515,9 +484,9 @@ IN_PROC_BROWSER_TEST_P(IntentPickerIconBrowserBubbleTest,
 IN_PROC_BROWSER_TEST_P(IntentPickerIconBrowserBubbleTest, RememberOpenWebApp) {
   base::HistogramTester histogram_tester;
 
-  InstallTestWebApp();
+  InstallTestWebAppAndDisableLinkCapturingIfNecessary();
   const GURL in_scope_url =
-      https_server().GetURL(GetAppUrlHost(), GetInScopeUrlPath());
+      embedded_https_test_server().GetURL(GetAppUrlHost(), GetInScopeUrlPath());
 
   OpenNewTab(in_scope_url);
   ASSERT_TRUE(web_app::ClickIntentPickerAndWaitForBubble(browser()));
@@ -555,44 +524,15 @@ IN_PROC_BROWSER_TEST_P(IntentPickerIconBrowserBubbleTest, RememberOpenWebApp) {
       apps::IntentHandlingMetrics::LinkCapturingEvent::kSettingsChanged, 1);
 }
 
-#else
-IN_PROC_BROWSER_TEST_P(IntentPickerIconBrowserBubbleTest,
-                       DISABLED_IntentChipLaunchesAppDirectly) {
-  InstallTestWebApp();
-  const GURL in_scope_url =
-      https_server().GetURL(GetAppUrlHost(), GetInScopeUrlPath());
-
-  views::Button* intent_picker_icon = GetIntentChip(browser());
-
-  OpenNewTab(in_scope_url);
-  EXPECT_TRUE(intent_picker_icon->GetVisible());
-
-  views::test::ButtonTestApi test_api(intent_picker_icon);
-  test_api.NotifyClick(ui::MouseEvent(
-      ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
-      base::TimeTicks(), ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
-  Browser* app_browser = ui_test_utils::WaitForBrowserToOpen();
-  EXPECT_FALSE(intent_picker_bubble());
-  EXPECT_TRUE(app_browser);
-  ASSERT_TRUE(web_app::AppBrowserController::IsForWebApp(app_browser,
-                                                         test_web_app_id()));
-}
-#endif  // BUILDFLAG(IS_CHROMEOS)
-
 INSTANTIATE_TEST_SUITE_P(
     All,
     IntentPickerIconBrowserBubbleTest,
-    testing::Combine(testing::Values("", "noopener", "noreferrer", "nofollow"),
-#if BUILDFLAG(IS_CHROMEOS)
-                     testing::Values(LinkCapturingFeatureVersion::kV1DefaultOff,
-                                     LinkCapturingFeatureVersion::kV2DefaultOff)
-#else
-                     testing::Values(LinkCapturingFeatureVersion::kV2DefaultOn,
-                                     LinkCapturingFeatureVersion::kV2DefaultOff)
-#endif  // BUILDFLAG(IS_CHROMEOS)
-                         ,
-                     testing::Bool()),
+    testing::Combine(
+        testing::Values("", "noopener", "noreferrer", "nofollow"),
+        testing::Values(LinkCapturingFeatureVersion::kV2DefaultOff,
+                        LinkCapturingFeatureVersion::kV2DefaultOn)),
     GetLinkCapturingTestName);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // This test only works when link capturing is set to default off for desktop
 // platforms, as prerendering navigations are aborted during link captured app
@@ -618,10 +558,6 @@ class IntentPickerIconPrerenderingBrowserTest
     IntentPickerIconBrowserTest::SetUp();
   }
 
-  bool IsMigrationEnabled() const override {
-    return std::get<bool>(GetParam());
-  }
-
   void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
     ASSERT_TRUE(embedded_test_server()->Start());
@@ -641,7 +577,7 @@ IN_PROC_BROWSER_TEST_P(IntentPickerIconPrerenderingBrowserTest,
   InstallTestWebApp();
 
   const GURL initial_url =
-      https_server().GetURL(GetAppUrlHost(), "/empty.html");
+      embedded_https_test_server().GetURL(GetAppUrlHost(), "/empty.html");
   OpenNewTab(initial_url);
 
   views::Button* intent_picker_icon = GetIntentChip(browser());
@@ -649,9 +585,9 @@ IN_PROC_BROWSER_TEST_P(IntentPickerIconPrerenderingBrowserTest,
 
   // Load a prerender page and prerendering should not try to show the
   // intent picker.
-  const GURL prerender_url = https_server().GetURL(
+  const GURL prerender_url = embedded_https_test_server().GetURL(
       GetAppUrlHost(), std::string(GetAppScopePath()) + "index1.html");
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_test_helper().AddPrerender(prerender_url);
   content::test::PrerenderHostObserver host_observer(*GetWebContents(),
                                                      host_id);
@@ -673,15 +609,9 @@ IN_PROC_BROWSER_TEST_P(IntentPickerIconPrerenderingBrowserTest,
 INSTANTIATE_TEST_SUITE_P(
     All,
     IntentPickerIconPrerenderingBrowserTest,
-    testing::Combine(testing::Values("", "noopener", "noreferrer", "nofollow"),
-#if BUILDFLAG(IS_CHROMEOS)
-                     testing::Values(LinkCapturingFeatureVersion::kV1DefaultOff,
-                                     LinkCapturingFeatureVersion::kV2DefaultOff)
-#else
-                     testing::Values(LinkCapturingFeatureVersion::kV2DefaultOff)
-#endif  // BUILDFLAG(IS_CHROMEOS)
-                         ,
-                     testing::Bool()),
+    testing::Combine(
+        testing::Values("", "noopener", "noreferrer", "nofollow"),
+        testing::Values(LinkCapturingFeatureVersion::kV2DefaultOff)),
     GetLinkCapturingTestName);
 
 class IntentPickerIconFencedFrameBrowserTest
@@ -699,10 +629,6 @@ class IntentPickerIconFencedFrameBrowserTest
     return fenced_frame_helper_;
   }
 
-  bool IsMigrationEnabled() const override {
-    return std::get<bool>(GetParam());
-  }
-
  private:
   content::test::FencedFrameTestHelper fenced_frame_helper_;
 };
@@ -714,11 +640,11 @@ IN_PROC_BROWSER_TEST_P(IntentPickerIconFencedFrameBrowserTest,
   views::Button* intent_picker_icon = GetIntentChip(browser());
 
   const GURL initial_url =
-      https_server().GetURL(GetAppUrlHost(), "/empty.html");
+      embedded_https_test_server().GetURL(GetAppUrlHost(), "/empty.html");
   OpenNewTab(initial_url);
   EXPECT_FALSE(intent_picker_icon->GetVisible());
 
-  const GURL fenced_frame_url = https_server().GetURL(
+  const GURL fenced_frame_url = embedded_https_test_server().GetURL(
       GetAppUrlHost(), std::string(GetAppScopePath()) + "index1.html");
   // Create a fenced frame.
   ASSERT_TRUE(fenced_frame_test_helper().CreateFencedFrame(
@@ -730,14 +656,49 @@ IN_PROC_BROWSER_TEST_P(IntentPickerIconFencedFrameBrowserTest,
 INSTANTIATE_TEST_SUITE_P(
     All,
     IntentPickerIconFencedFrameBrowserTest,
-    testing::Combine(testing::Values("", "noopener", "noreferrer", "nofollow"),
-#if BUILDFLAG(IS_CHROMEOS)
-                     testing::Values(LinkCapturingFeatureVersion::kV1DefaultOff,
-                                     LinkCapturingFeatureVersion::kV2DefaultOff)
-#else
-                     testing::Values(LinkCapturingFeatureVersion::kV2DefaultOn,
-                                     LinkCapturingFeatureVersion::kV2DefaultOff)
-#endif  // BUILDFLAG(IS_CHROMEOS)
-                         ,
-                     testing::Bool()),
+    testing::Combine(
+        testing::Values("", "noopener", "noreferrer", "nofollow"),
+        testing::Values(LinkCapturingFeatureVersion::kV2DefaultOff,
+                        LinkCapturingFeatureVersion::kV2DefaultOn)),
     GetLinkCapturingTestName);
+
+class IntentPickerCrashTest : public IntentPickerBrowserTest {
+ public:
+  IntentPickerCrashTest() {
+    feature_list_.InitWithFeaturesAndParameters(
+        apps::test::GetFeaturesToEnableLinkCapturingUX(
+            LinkCapturingFeatureVersion::kV2DefaultOn),
+        {});
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(IntentPickerCrashTest, DoubleClickDoesNotCrash) {
+  InstallTestWebApp();
+  const GURL in_scope_url =
+      embedded_https_test_server().GetURL(GetAppUrlHost(), GetInScopeUrlPath());
+
+  NavigateToLaunchingPage(browser());
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), in_scope_url));
+
+  auto* tab_helper = IntentPickerTabHelper::FromWebContents(GetWebContents());
+  ASSERT_TRUE(tab_helper);
+
+  base::test::TestFuture<bool> future1;
+  base::test::TestFuture<bool> future2;
+
+  tab_helper->ShowIntentPickerBubbleOrLaunchApp(in_scope_url,
+                                                /*always_show=*/false,
+                                                future1.GetCallback());
+  tab_helper->ShowIntentPickerBubbleOrLaunchApp(in_scope_url,
+                                                /*always_show=*/false,
+                                                future2.GetCallback());
+
+  bool r1 = future1.Get();
+  bool r2 = future2.Get();
+
+  EXPECT_TRUE(r1 || r2);
+  EXPECT_FALSE(r1 && r2);
+}

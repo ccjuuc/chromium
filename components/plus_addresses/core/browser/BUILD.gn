@@ -29,26 +29,6 @@ if (is_android) {
   }
 }
 
-source_set("hats_utils") {
-  sources = [ "plus_address_hats_utils.h" ]
-}
-
-proto_library("plus_address_blocklist_proto") {
-  sources = [ "blocked_facets.proto" ]
-}
-
-source_set("blocklist_data") {
-  sources = [
-    "plus_address_blocklist_data.cc",
-    "plus_address_blocklist_data.h",
-  ]
-  deps = [ "//base" ]
-  public_deps = [
-    ":plus_address_blocklist_proto",
-    "//third_party/re2",
-  ]
-}
-
 source_set("parsing") {
   sources = [
     "plus_address_parsing_utils.cc",
@@ -59,7 +39,6 @@ source_set("parsing") {
   public_deps = [
     ":types",
     "//base",
-    "//services/data_decoder/public/cpp",
   ]
 }
 
@@ -86,14 +65,10 @@ source_set("browser") {
     "plus_address_ui_utils.h",
   ]
   deps = [
-    ":blocklist_data",
-    ":hats_utils",
     ":parsing",
     "//components/affiliations/core/browser:affiliations",
     "//components/feature_engagement/public",
-    "//components/plus_addresses/core/browser/metrics",
     "//components/plus_addresses/core/browser/metrics:submission_logger",
-    "//components/plus_addresses/core/browser/resources/strings",
     "//components/plus_addresses/core/browser/settings",
     "//components/plus_addresses/core/browser/webdata",
     "//components/plus_addresses/core/common:prefs",
@@ -101,7 +76,6 @@ source_set("browser") {
     "//components/strings:components_strings_grit",
     "//components/url_formatter",
     "//net",
-    "//services/data_decoder/public/cpp",
     "//services/network/public/cpp",
     "//ui/base",
   ]
@@ -130,7 +104,6 @@ source_set("unit_tests") {
   sources = [
     "affiliations/plus_address_affiliation_match_helper_unittest.cc",
     "affiliations/plus_address_affiliation_source_adapter_unittest.cc",
-    "plus_address_blocklist_data_unittest.cc",
     "plus_address_http_client_impl_unittest.cc",
     "plus_address_jit_allocator_unittest.cc",
     "plus_address_parsing_utils_unittest.cc",
@@ -139,9 +112,7 @@ source_set("unit_tests") {
   ]
 
   deps = [
-    ":blocklist_data",
     ":browser",
-    ":hats_utils",
     ":parsing",
     ":test_support",
     "//base/test:test_support",
@@ -150,8 +121,6 @@ source_set("unit_tests") {
     "//components/autofill/core/browser:test_support",
     "//components/feature_engagement/public",
     "//components/os_crypt/async/browser:test_support",
-    "//components/plus_addresses/core/browser/metrics",
-    "//components/plus_addresses/core/browser/resources/strings",
     "//components/plus_addresses/core/browser/settings:test_support",
     "//components/plus_addresses/core/browser/webdata",
     "//components/plus_addresses/core/common:features",
@@ -159,7 +128,6 @@ source_set("unit_tests") {
     "//components/prefs:test_support",
     "//components/signin/public/identity_manager:test_support",
     "//components/sync_preferences:test_support",
-    "//services/data_decoder/public/cpp:test_support",
     "//services/network:test_support",
   ]
 }
@@ -180,14 +148,12 @@ static_library("test_support") {
     "plus_address_test_utils.h",
   ]
   deps = [
-    ":hats_utils",
     "//base",
     "//base/test:test_support",
     "//components/affiliations/core/browser:test_support",
     "//components/autofill/core/browser",
     "//components/autofill/core/browser:test_support",
     "//components/feature_engagement/public",
-    "//components/plus_addresses/core/browser/resources/strings",
     "//components/plus_addresses/core/common:prefs",
     "//components/strings:components_strings_grit",
     "//net:test_support",

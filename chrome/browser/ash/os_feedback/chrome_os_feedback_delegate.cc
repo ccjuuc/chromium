@@ -11,10 +11,10 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "ash/constants/chrome_webui_url_constants.h"
 #include "ash/shell.h"
 #include "ash/webui/os_feedback_ui/backend/histogram_util.h"
 #include "ash/webui/os_feedback_ui/mojom/os_feedback_ui.mojom.h"
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
@@ -35,10 +35,10 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
-#include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/webui/ash/diagnostics_dialog/diagnostics_dialog.h"
 #include "chrome/browser/ui/webui/ash/os_feedback_dialog/os_feedback_dialog.h"
-#include "chrome/common/webui_url_constants.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "chromeos/ash/services/multidevice_setup/public/cpp/multidevice_setup_client.h"
 #include "components/feedback/content/content_tracing_manager.h"
 #include "components/feedback/feedback_common.h"
@@ -48,6 +48,7 @@
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/web_contents.h"
 #include "extensions/browser/api/feedback_private/feedback_private_api.h"
 #include "extensions/browser/api/feedback_private/feedback_service.h"
 #include "mojo/public/cpp/base/big_buffer.h"
@@ -119,10 +120,6 @@ constexpr char kFeedbackUserConsentGrantedValue[] = "true";
 // Consent value matches JavaScript: `String(false)`.
 constexpr char kFeedbackUserConsentDeniedValue[] = "false";
 constexpr char kExtraDiagnosticsKey[] = "EXTRA_DIAGNOSTICS";
-constexpr char kLinkCrossDeviceDogfoodFeedbackWithBluetoothLogs[] =
-    "linkCrossDeviceDogfoodFeedbackWithBluetoothLogs";
-constexpr char kLinkCrossDeviceDogfoodFeedbackWithoutBluetoothLogs[] =
-    "linkCrossDeviceDogfoodFeedbackWithoutBluetoothLogs";
 
 }  // namespace
 
@@ -160,7 +157,7 @@ bool ChromeOsFeedbackDelegate::IsWifiDebugLogsAllowed(
     return false;
   }
 
-  const base::Value::List& allowed_list =
+  const base::ListValue& allowed_list =
       prefs->GetList(prefs::kUserFeedbackWithLowLevelDebugDataAllowed);
   for (const auto& item : allowed_list) {
     if (item == "all" || item == "wifi") {
@@ -206,24 +203,6 @@ std::optional<std::string> ChromeOsFeedbackDelegate::GetSignedInUserEmail()
   // Browser sync consent is not required to use feedback.
   return identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
       .email;
-}
-
-std::optional<std::string>
-ChromeOsFeedbackDelegate::GetLinkedPhoneMacAddress() {
-  CHECK(features::IsLinkCrossDeviceDogfoodFeedbackEnabled());
-
-  auto* multidevice_setup_client =
-      ash::multidevice_setup::MultiDeviceSetupClientFactory::GetForProfile(
-          profile_);
-  if (!multidevice_setup_client) {
-    return std::nullopt;
-  }
-  std::optional<multidevice::RemoteDeviceRef> remote_device_ref =
-      multidevice_setup_client->GetHostStatus().second;
-  if (!remote_device_ref.has_value()) {
-    return std::nullopt;
-  }
-  return remote_device_ref.value().bluetooth_public_address();
 }
 
 bool ChromeOsFeedbackDelegate::IsWifiDebugLogsAllowed() const {
@@ -378,26 +357,6 @@ void ChromeOsFeedbackDelegate::SendReport(
       base::BindOnce(&ChromeOsFeedbackDelegate::OnSendFeedbackDone,
                      weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 
-  //  Only get and set the mac address if all the following are true:
-  //  1. The flag is enabled,
-  //  2. It is an internal account,
-  //  3. Category tag has a value, and
-  //  4. The value of the category tag is
-  //     kLinkCrossDeviceDogfoodFeedbackWithBluetoothLogs or
-  //     kLinkCrossDeviceDogfoodFeedbackWithoutBluetoothLogs.
-  bool is_linked_cross_device_feedback_report =
-      feedback_context->category_tag.has_value() &&
-      (feedback_context->category_tag.value() ==
-           kLinkCrossDeviceDogfoodFeedbackWithBluetoothLogs ||
-       feedback_context->category_tag.value() ==
-           kLinkCrossDeviceDogfoodFeedbackWithoutBluetoothLogs);
-
-  if (features::IsLinkCrossDeviceDogfoodFeedbackEnabled() &&
-      feedback_context->is_internal_account &&
-      feedback_context->category_tag.has_value() &&
-      is_linked_cross_device_feedback_report) {
-    feedback_data->set_mac_address(GetLinkedPhoneMacAddress());
-  }
 }
 
 void ChromeOsFeedbackDelegate::OnSendFeedbackDone(SendReportCallback callback,
@@ -430,19 +389,20 @@ void ChromeOsFeedbackDelegate::OpenExploreApp() {
 }
 
 void ChromeOsFeedbackDelegate::OpenMetricsDialog() {
-  OpenWebDialog(GURL(chrome::kChromeUIHistogramsURL), /*args=*/"");
+  OpenWebDialog(GURL(ash::chrome_urls::kChromeUIHistogramsURL), /*args=*/"");
 }
 
 void ChromeOsFeedbackDelegate::OpenSystemInfoDialog() {
-  GURL systemInfoUrl = GURL(
-      base::StrCat({chrome::kChromeUIFeedbackURL, "html/system_info.html"}));
+  GURL systemInfoUrl = GURL(base::StrCat(
+      {ash::chrome_urls::kChromeUIFeedbackURL, "html/system_info.html"}));
   OpenWebDialog(systemInfoUrl, /*args=*/"");
 }
 
 void ChromeOsFeedbackDelegate::OpenAutofillMetadataDialog(
     const std::string& autofill_metadata) {
-  GURL autofillInfoUrl = GURL(base::StrCat(
-      {chrome::kChromeUIFeedbackURL, "html/autofill_metadata_info.html"}));
+  GURL autofillInfoUrl =
+      GURL(base::StrCat({ash::chrome_urls::kChromeUIFeedbackURL,
+                         "html/autofill_metadata_info.html"}));
   OpenWebDialog(autofillInfoUrl, autofill_metadata);
 }
 

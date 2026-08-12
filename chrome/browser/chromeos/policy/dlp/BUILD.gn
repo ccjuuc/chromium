@@ -61,7 +61,7 @@ static_library("dlp") {
 
   public_deps = [
     "//chrome/browser:browser_public_dependencies",
-    "//chrome/browser/ui:browser_list",
+    "//chrome/browser/ash/browser_delegate",
     "//chrome/browser/ui/tabs:tab_strip_model_observer",
   ]
 
@@ -70,18 +70,20 @@ static_library("dlp") {
     "//ash/constants",
     "//ash/public/cpp",
     "//ash/resources/vector_icons",
+    "//ash/strings",
     "//ash/webui/file_manager:constants",
     "//base",
     "//chrome/app:generated_resources",
     "//chrome/browser:browser_process",
     "//chrome/browser/ash/profiles",
     "//chrome/browser/chromeos/policy/dlp/dialogs",
+    "//chrome/browser/download",
     "//chrome/browser/favicon",
     "//chrome/browser/notifications",
     "//chrome/browser/profiles",
     "//chrome/browser/profiles:profile",
-    "//chrome/browser/ui:browser_navigator_params_headers",
     "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/navigator",
     "//chrome/browser/ui/tabs:tab_strip",
     "//chrome/common:chrome_features",
     "//chrome/common:constants",
@@ -154,6 +156,7 @@ source_set("unit_tests") {
   deps = [
     ":dlp",
     "//ash/constants",
+    "//ash/strings",
     "//base",
     "//base/test:test_support",
     "//chrome/app:generated_resources",
@@ -161,6 +164,7 @@ source_set("unit_tests") {
     "//chrome/browser/chromeos/policy/dlp/test:test_support",
     "//chrome/browser/enterprise/data_controls",
     "//chrome/browser/enterprise/data_controls:test_support",
+    "//chrome/browser/policy:test_support",
     "//chrome/browser/profiles",
     "//chrome/browser/ui",
     "//chrome/browser/ui/tabs:test_support",
@@ -196,10 +200,6 @@ source_set("unit_tests") {
     "//ui/views",
     "//url",
   ]
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 source_set("browser_tests") {
@@ -222,6 +222,7 @@ source_set("browser_tests") {
     "//chrome/browser",
     "//chrome/browser:browser_process",
     "//chrome/browser/apps/app_service",
+    "//chrome/browser/apps/platform_apps:browser_test_support",
     "//chrome/browser/chromeos/policy/dlp/test:test_support",
     "//chrome/browser/file_system_access",
     "//chrome/browser/profiles:profile",
@@ -252,10 +253,6 @@ source_set("browser_tests") {
     "//ui/views",
     "//ui/views:test_support",
   ]
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 if (!is_chromeos_device) {
@@ -265,8 +262,8 @@ if (!is_chromeos_device) {
     defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
 
     sources = [
-      "data_transfer_dlp_controller_browsertest.cc",
-      "dlp_content_manager_browsertest.cc",
+      "data_transfer_dlp_controller_interactive_uitest.cc",
+      "dlp_content_manager_interactive_uitest.cc",
       "dlp_scoped_file_access_delegate_interactive_uitest.cc",
     ]
 
@@ -279,9 +276,11 @@ if (!is_chromeos_device) {
       "//chrome/browser/chromeos/policy/dlp/test:test_support",
       "//chrome/browser/enterprise/data_controls",
       "//chrome/browser/enterprise/data_controls:test_support",
+      "//chrome/browser/policy:test_support",
+      "//chrome/browser/printing",
+      "//chrome/browser/printing:test_support",
       "//chrome/browser/profiles:profile",
       "//chrome/browser/ui",
-      "//chrome/test:print_preview_test_support",
       "//chrome/test:test_support",
       "//chrome/test:test_support_ui",
       "//chromeos/dbus/dlp",
@@ -303,6 +302,7 @@ if (!is_chromeos_device) {
       "//ui/aura",
       "//ui/base",
       "//ui/base/clipboard",
+      "//ui/base/clipboard:clipboard_test_support",
       "//ui/base/clipboard:clipboard_types",
       "//ui/base/data_transfer_policy",
       "//ui/base/dragdrop:types",
@@ -312,9 +312,5 @@ if (!is_chromeos_device) {
       "//ui/views:test_support",
       "//url",
     ]
-
-    # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-    # enable the diagnostic by removing this line.
-    configs += [ "//build/config/compiler:no_exit_time_destructors" ]
   }
 }

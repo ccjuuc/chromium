@@ -59,13 +59,13 @@ class KioskNetworkStateObserver : public NetworkStateHandlerObserver {
                                 const std::string& error_message);
   void ReceiveProperties(const std::string& passphrase,
                          const std::string& service_path,
-                         std::optional<base::Value::Dict> shill_properties);
+                         std::optional<base::DictValue> shill_properties);
 
   void OnCreatedShillConfigSuccess(const std::string&, const std::string&);
   void OnCreatedShillConfigFailure(const std::string& error);
 
   // This function is called once
-  // `prefs::kKioskActiveWiFiCredentialsScopeChangeEnabled` preference is
+  // `ash::prefs::kKioskActiveWiFiCredentialsScopeChangeEnabled` preference is
   // updated.
   void PolicyChanged();
 
@@ -88,7 +88,7 @@ class KioskNetworkStateObserver : public NetworkStateHandlerObserver {
   size_t wifi_exposure_attempts_ = 0;
 
   const raw_ptr<PrefService> pref_service_;
-  // Register `prefs::kKioskActiveWiFiCredentialsScopeChangeEnabled`
+  // Register `ash::prefs::kKioskActiveWiFiCredentialsScopeChangeEnabled`
   // preference to support dynamic refresh.
   PrefChangeRegistrar pref_change_registrar_;
 

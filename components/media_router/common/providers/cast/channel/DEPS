@@ -7,7 +7,6 @@ include_rules = [
   "+crypto",
   "+mojo/public/cpp",
   "+net",
-  "+services/data_decoder/public",
   "+services/network",
   "+services/service_manager/public",
   "+third_party/openscreen/src/cast/common/certificate/proto",
@@ -20,7 +19,7 @@ specific_include_rules = {
     "+third_party/openscreen/src/cast/common/channel/testing",
     "+components/test/data/media_router/common/providers/cast/certificate",
   ],
-  "openscreen.*_fuzzer\.cc": [
+  "openscreen.*_fuzzer\\.cc": [
     "+third_party/openscreen/src/cast/common/channel",
     "+third_party/openscreen/src/cast/sender/channel",
   ]

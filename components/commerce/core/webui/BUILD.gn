@@ -4,8 +4,6 @@
 
 source_set("webui") {
   sources = [
-    "product_specifications_handler.cc",
-    "product_specifications_handler.h",
     "shopping_service_handler.cc",
     "shopping_service_handler.h",
     "webui_utils.cc",
@@ -15,7 +13,6 @@ source_set("webui") {
   deps = [
     "../:shopping_service",
     "../mojom:mojo_bindings",
-    "../product_specifications",
     "//base",
     "//components/bookmarks/browser",
     "//components/commerce/core:commerce_constants",
@@ -42,15 +39,10 @@ source_set("webui") {
 source_set("unit_tests") {
   testonly = true
 
-  sources = [
-    "product_specifications_handler_unittest.cc",
-    "shopping_service_handler_unittest.cc",
-  ]
+  sources = [ "shopping_service_handler_unittest.cc" ]
 
   deps = [
     ":webui",
-    "../product_specifications",
-    "../product_specifications:test_support",
     "//base/test:test_support",
     "//components/bookmarks/browser",
     "//components/bookmarks/test",

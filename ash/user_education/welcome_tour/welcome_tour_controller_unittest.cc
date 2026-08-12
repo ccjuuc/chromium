@@ -36,7 +36,6 @@
 #include "ash/user_education/welcome_tour/welcome_tour_dialog.h"
 #include "ash/user_education/welcome_tour/welcome_tour_metrics.h"
 #include "ash/user_education/welcome_tour/welcome_tour_test_util.h"
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "base/functional/callback.h"
 #include "base/scoped_observation.h"
 #include "base/strings/string_number_conversions.h"
@@ -46,6 +45,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "chromeos/constants/devicetype.h"
 #include "components/account_id/account_id.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
@@ -70,6 +70,8 @@
 #include "ui/views/view.h"
 
 namespace ash {
+
+using chromeos::AppType;
 namespace {
 
 // Aliases.
@@ -1364,7 +1366,7 @@ TEST_F(WelcomeTourControllerRunTest, ToastPause) {
 
 // Verifies that windows are minimized iff the Welcome Tour is in progress.
 TEST_F(WelcomeTourControllerRunTest, WindowMinimizer) {
-  auto window_1 = CreateAppWindow();
+  auto window_1 = CreateWindowWithAppType(AppType::SYSTEM_APP);
 
   // Case: Before Welcome Tour.
   EXPECT_THAT(window_1, Minimized(Eq(false)));
@@ -1373,13 +1375,13 @@ TEST_F(WelcomeTourControllerRunTest, WindowMinimizer) {
   ASSERT_NO_FATAL_FAILURE(
       Run(/*in_progress_callback=*/base::BindLambdaForTesting([&]() {
         EXPECT_TRUE(WaitUntilMinimized(window_1.get()));
-        auto window_2 = CreateAppWindow();
+        auto window_2 = CreateWindowWithAppType(AppType::SYSTEM_APP);
         EXPECT_TRUE(WaitUntilMinimized(window_2.get()));
       })));
 
   // Case: After Welcome Tour.
   EXPECT_THAT(window_1, Minimized(Eq(true)));
-  auto window_3 = CreateAppWindow();
+  auto window_3 = CreateWindowWithAppType(AppType::SYSTEM_APP);
   EXPECT_THAT(window_3, Minimized(Eq(false)));
 }
 

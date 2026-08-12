@@ -9,6 +9,9 @@
 #include "chrome/browser/extensions/extension_context_menu_model.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/extensions/extension_action_view_model.h"
+#include "chrome/browser/ui/extensions/extensions_container.h"
+#include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_registry.h"
@@ -36,18 +39,20 @@ ExtensionActionContextMenuBridge::ExtensionActionContextMenuBridge(
       registry->enabled_extensions().GetByID(action_id);
   DCHECK(extension);
 
-  bool is_pinned =
-      ToolbarActionsModel::Get(profile)->IsActionPinned(extension->id());
+  auto* container = ExtensionsContainer::From(*browser);
+  CHECK(container);
+  ToolbarActionViewModel* action_model = container->GetActionForId(action_id);
+  CHECK(action_model);
 
-  extension_context_menu_model_ = std::make_unique<ExtensionContextMenuModel>(
-      extension.get(), browser, is_pinned, /* delegate= */ nullptr,
-      /* can_show_icon_in_toolbar= */ true, context_menu_source);
+  ui::MenuModel* menu_model = action_model->GetContextMenu(context_menu_source);
+  CHECK(menu_model);
+  context_menu_model_ = menu_model->AsWeakPtr();
 
-  menu_model_bridge_ = std::make_unique<ui::MenuModelBridge>(
-      extension_context_menu_model_->AsWeakPtr());
+  menu_model_bridge_ =
+      std::make_unique<ui::MenuModelBridge>(context_menu_model_);
 }
 
-ExtensionActionContextMenuBridge::~ExtensionActionContextMenuBridge() {}
+ExtensionActionContextMenuBridge::~ExtensionActionContextMenuBridge() = default;
 
 ScopedJavaLocalRef<jobject>
 ExtensionActionContextMenuBridge::GetMenuModelBridge(JNIEnv* env) {
@@ -58,10 +63,10 @@ void ExtensionActionContextMenuBridge::Destroy(JNIEnv* env) {
   delete this;
 }
 
-static jlong JNI_ExtensionActionContextMenuBridge_Init(
+static int64_t JNI_ExtensionActionContextMenuBridge_Init(
     JNIEnv* env,
-    jlong browser_window_interface_ptr,
-    ToolbarActionsModel::ActionId& action_id,
+    int64_t browser_window_interface_ptr,
+    const ToolbarActionsModel::ActionId& action_id,
     content::WebContents* web_contents,
     ExtensionContextMenuModel::ContextMenuSource context_menu_source) {
   BrowserWindowInterface* browser =
@@ -70,7 +75,7 @@ static jlong JNI_ExtensionActionContextMenuBridge_Init(
       browser, action_id, web_contents, context_menu_source);
   // The bridge is owned by the Java object and will be destroyed when
   // ExtensionActionContextMenuBridge.destroy() is called.
-  return reinterpret_cast<jlong>(bridge);
+  return reinterpret_cast<int64_t>(bridge);
 }
 
 }  // namespace extensions

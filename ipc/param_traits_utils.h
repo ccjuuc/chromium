@@ -32,6 +32,7 @@
 #include "base/numerics/safe_conversions.h"
 #include "base/pickle.h"
 #include "base/types/id_type.h"
+#include "base/types/strong_alias.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "ipc/mojo_param_traits.h"
@@ -487,8 +488,8 @@ struct ParamTraits<std::pair<A, B>> {
 // Base ParamTraits ------------------------------------------------------------
 
 template <>
-struct COMPONENT_EXPORT(IPC) ParamTraits<base::Value::Dict> {
-  typedef base::Value::Dict param_type;
+struct COMPONENT_EXPORT(IPC) ParamTraits<base::DictValue> {
+  typedef base::DictValue param_type;
   static void Write(base::Pickle* m, const param_type& p);
   static bool Read(const base::Pickle* m,
                    base::PickleIterator* iter,
@@ -631,8 +632,8 @@ struct COMPONENT_EXPORT(IPC) ParamTraits<base::FilePath> {
 };
 
 template <>
-struct COMPONENT_EXPORT(IPC) ParamTraits<base::Value::List> {
-  typedef base::Value::List param_type;
+struct COMPONENT_EXPORT(IPC) ParamTraits<base::ListValue> {
+  typedef base::ListValue param_type;
   static void Write(base::Pickle* m, const param_type& p);
   static bool Read(const base::Pickle* m,
                    base::PickleIterator* iter,

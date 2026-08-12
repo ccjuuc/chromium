@@ -43,7 +43,7 @@ bool ClearD3D11TextureToColor(
   return true;
 }
 
-wgpu::Texture CreateDawnSharedTexture(
+GPU_GLES2_EXPORT wgpu::Texture CreateDawnSharedTexture(
     const wgpu::SharedTextureMemory& shared_texture_memory,
     wgpu::TextureUsage usage,
     wgpu::TextureUsage internal_usage,
@@ -119,6 +119,29 @@ wgpu::SharedTextureMemory CreateDawnSharedTextureMemory(
   return shared_texture_memory;
 }
 
+GPU_GLES2_EXPORT wgpu::SharedTextureMemory CreateDawnSharedTextureMemory(
+    const wgpu::Device& device,
+    Microsoft::WRL::ComPtr<ID3D12Resource> resource) {
+  wgpu::SharedTextureMemory shared_texture_memory;
+  dawn::native::d3d12::SharedTextureMemoryD3D12ResourceDescriptor resource_desc;
+  resource_desc.resource = std::move(resource);
+
+  wgpu::SharedTextureMemoryDescriptor desc;
+  desc.nextInChain = &resource_desc;
+  desc.label = "SharedImageD3D_SharedTextureMemory_D3D12Resource";
+  shared_texture_memory = device.ImportSharedTextureMemory(&desc);
+
+  // If ImportSharedTextureMemory is not successful and the device is not lost,
+  // an error SharedTextureMemory object will be returned, which will cause an
+  // error upon usage.
+  if (shared_texture_memory.IsDeviceLost()) {
+    LOG(ERROR) << "Failed to create shared texture memory due to device loss.";
+    return nullptr;
+  }
+
+  return shared_texture_memory;
+}
+
 wgpu::Buffer CreateDawnSharedBuffer(
     const wgpu::SharedBufferMemory& shared_buffer_memory,
     wgpu::BufferUsage usage) {
@@ -155,7 +178,7 @@ wgpu::SharedBufferMemory CreateDawnSharedBufferMemory(
   return shared_buffer_memory;
 }
 
-wgpu::SharedFence CreateDawnSharedFence(
+GPU_GLES2_EXPORT wgpu::SharedFence CreateDawnSharedFence(
     const wgpu::Device& device,
     scoped_refptr<gfx::D3DSharedFence> fence) {
   wgpu::SharedFence shared_fence;

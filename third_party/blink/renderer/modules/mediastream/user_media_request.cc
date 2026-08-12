@@ -427,9 +427,9 @@ UserMediaRequest* UserMediaRequest::Create(
       };
       for (const BaseConstraint* constraint : constraints) {
         if (constraint->HasMandatory()) {
-          exception_state.ThrowTypeError(
+          exception_state.ThrowTypeError(UNSAFE_TODO(
               String::Format("Mandatory %s constraints are not supported",
-                             constraint->GetName()));
+                             constraint->GetName())));
           return nullptr;
         }
       }
@@ -649,6 +649,14 @@ UserMediaRequest* UserMediaRequest::Create(
     RecordGetDisplayMediaIncludeExcludeConstraintUma(
         include_or_exclude,
         "Media.GetDisplayMedia.Constraints.MonitorTypeSurfaces");
+  }
+
+  result->set_audio_selection_preferred(options->hasAudioSelection());
+  if (media_type == UserMediaRequestType::kDisplayMedia) {
+    RecordBooleanConstraintUma(
+        result->audio_selection_preferred() ? std::make_optional(true)
+                                            : std::nullopt,
+        "Media.GetDisplayMedia.Constraints.AudioSelection");
   }
 
   result->set_suppress_local_audio_playback(
@@ -944,18 +952,11 @@ void UserMediaRequest::Fail(Result error, const String& message) {
     case Result::PERMISSION_DISMISSED:
     case Result::SAFE_BROWSING_OBSERVER:
     case Result::INVALID_DEVICE_TYPE_REQUEST:
-      // TODO(crbug.com/453600255): Use `result_enum` kAbortError for
-      // INVALID_DEVICE_TYPE_REQUEST once all new enum values are added.
     case Result::ANDROID_CANT_REQUEST_PERMISSION:
     case Result::PERMISSION_DENIED_BY_EMBEDDER_CONTEXT:
     case Result::DLP_PERMISSION_DENIED:
-    case Result::NO_TRANSIENT_ACTIVATION:
-      // TODO(crbug.com/453600255): Use `result_enum` kInvalidStateError for
-      // NO_TRANSIENT_ACTIVATION once all new enum values are added.
     case Result::CAPTURE_NOT_ALLOWED_BY_POLICY:
     case Result::MULTI_CAPTURE_NOT_SUPPORTED:
-      // TODO(crbug.com/453600255): Use `result_enum` kNotSupportedError for
-      // MULTI_CAPTURE_NOT_SUPPORTED once all new enum values are added.
     case Result::KILL_SWITCH_ON:
     case Result::PERMISSION_DENIED_BY_CONTROLLER:
       exception_code = DOMExceptionCode::kNotAllowedError;
@@ -971,33 +972,31 @@ void UserMediaRequest::Fail(Result error, const String& message) {
       break;
     case Result::INVALID_STATE:
     case Result::INVALID_VIDEO_DEVICE_ID:
-    case Result::FAILED_DUE_TO_SHUTDOWN:
-      // TODO(crbug.com/453600255): Use `result_enum` kContextDestroyed and
-      // `exception_code` kInvalidStateError for
-      // FAILED_DUE_TO_SHUTDOWN once all new enum values are added.
+    case Result::FAILED_DUE_TO_SHUTDOWN_OTHER:
+    case Result::FAILED_DUE_TO_SHUTDOWN_CONTROLLER_DESTRUCTOR:
+    case Result::FAILED_DUE_TO_SHUTDOWN_REQUEST_REMOVED:
+    case Result::FAILED_DUE_TO_SHUTDOWN_NO_DELEGATE:
+    case Result::FAILED_DUE_TO_SHUTDOWN_NO_GUEST_PAGE_HOLDER_DELEGATE:
+    case Result::FAILED_DUE_TO_SHUTDOWN_NO_RFH_IN_DISPATCHER:
+    case Result::FAILED_DUE_TO_SHUTDOWN_NO_RFH_CANCELLED_REQUEST:
+    case Result::FAILED_DUE_TO_SHUTDOWN_NO_RFH_IN_CONTROLLER:
+    case Result::FAILED_DUE_TO_SHUTDOWN_NO_RFH_IN_HANDLER:
+    case Result::FAILED_DUE_TO_SHUTDOWN_NO_WEB_VIEW_DELEGATE:
+    case Result::FAILED_DUE_TO_SHUTDOWN_WEB_VIEW_NOT_ATTACHED:
+    case Result::FAILED_DUE_TO_SHUTDOWN_USER_MEDIA_PROCESSOR_CANCEL_REQUEST:
+    case Result::
+        FAILED_DUE_TO_SHUTDOWN_USER_MEDIA_PROCESSOR_STOP_ALL_PROCESSING:
+    case Result::FAILED_DUE_TO_SHUTDOWN_WEB_CONTENTS_NO_DELEGATE:
     case Result::INVALID_EXTENSION_TYPE_REQUEST:
     case Result::CAPTURED_TAB_DESTROYED:
-      // TODO(crbug.com/453600255): Use `result_enum` kNotFoundError for
-      // CAPTURED_TAB_DESTROYED once all new enum values are added.
     case Result::CAPTURE_NOT_ENABLED:
     case Result::CAPTURE_NOT_ALLOWED_FOR_LONG_DOMAINS:
-    case Result::CAPTURE_FROM_BACKGROUND_PAGE_ON_MAC:
-      // TODO(crbug.com/453600255): Use `result_enum` kInvalidStateError for
-      // CAPTURE_FROM_BACKGROUND_PAGE_ON_MAC once all new enum values are added.
-    case Result::TAB_CAPTURE_FAILURE:
     case Result::STREAM_NOT_FOUND_IN_REGISTRY:
     case Result::REGISTRY_REQUEST_UNVERIFIED:
-    case Result::SCREEN_CAPTURE_FAILURE:
-    case Result::CAPTURE_FAILURE:
     case Result::START_TIMEOUT:
     case Result::INVALID_DISPLAY_CAPTURE_CONSTRAINTS:
     case Result::INVALID_GUM_TAB_CAPTURE_CONSTRAINTS:
     case Result::INVALID_GUM_SCREEN_CAPTURE_CONSTRAINTS:
-      // TODO(crbug.com/453600255): Use `result_enum` kOverconstrainedError for
-      // INVALID_DISPLAY_CAPTURE_CONSTRAINTS,
-      // INVALID_GUM_TAB_CAPTURE_CONSTRAINTS and
-      // INVALID_GUM_SCREEN_CAPTURE_CONSTRAINTS once all new enum values are
-      // added.
       exception_code = DOMExceptionCode::kAbortError;
       result_enum = UserMediaRequestResult::kAbortError;
       break;
@@ -1005,6 +1004,7 @@ void UserMediaRequest::Fail(Result error, const String& message) {
     case Result::TRACK_START_FAILURE_VIDEO:
     case Result::AUDIO_DEVICE_SOCKET_ERROR:
     case Result::DEVICE_IN_USE:
+    case Result::DEVICE_REMOVED:
       exception_code = DOMExceptionCode::kNotReadableError;
       result_enum = UserMediaRequestResult::kNotReadableError;
       break;
@@ -1016,12 +1016,15 @@ void UserMediaRequest::Fail(Result error, const String& message) {
       exception_code = DOMExceptionCode::kSecurityError;
       result_enum = UserMediaRequestResult::kSecurityError;
       break;
+    case Result::NO_TRANSIENT_ACTIVATION:
+    case Result::CAPTURE_FROM_BACKGROUND_PAGE_ON_MAC:
+      exception_code = DOMExceptionCode::kInvalidStateError;
+      result_enum = UserMediaRequestResult::kInvalidStateError;
+      break;
     case Result::CONSTRAINT_NOT_SATISFIED:
-      // TODO(crbug.com/416456028): Either handle these or document why
-      // they cannot be encountered by this method.
-      NOTREACHED();
-    case Result::REQUEST_CANCELLED:  // Deprecated, use FAILED_DUE_TO_SHUTDOWN
-      NOTREACHED();  // Not a valid enum value.
+      exception_code = DOMExceptionCode::kOverconstrainedError;
+      result_enum = UserMediaRequestResult::kOverConstrainedError;
+      break;
   }
   CHECK(exception_code.has_value());
   CHECK(result_enum.has_value());

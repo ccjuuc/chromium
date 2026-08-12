@@ -13,10 +13,13 @@
 
 #include "base/barrier_closure.h"
 #include "base/check.h"
+#include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/feature_list.h"
+#include "base/containers/flat_map.h"
+#include "base/feature.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
 #include "base/i18n/time_formatting.h"
 #include "base/json/json_string_value_serializer.h"
@@ -48,7 +51,7 @@
 #include "chrome/browser/policy/value_provider/value_provider_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/chrome_select_file_policy.h"
+#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 #include "chrome/browser/ui/webui/policy/policy_ui.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/grit/branded_strings.h"
@@ -87,7 +90,9 @@
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_ui.h"
 #include "extensions/buildflags/buildflags.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -109,9 +114,13 @@
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/enterprise/identifiers/profile_id_service_factory.h"
-#include "chrome/browser/ui/ui_features.h"
+#include "chrome/common/chrome_switches.h"
 #include "components/enterprise/browser/identifiers/profile_id_service.h"
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/enterprise/reporting/browser_launch/scoped_initial_command_line.h"
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
 
 // LINT.IfChange
 
@@ -122,12 +131,42 @@ constexpr char kExtensionsKey[] = "extensions";
 
 }  // namespace
 
-namespace features {
-BASE_FEATURE(kPolicyPagePromotionEligibilityCheckedBanner,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-}  // namespace features
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+bool HasUserSpecifiedCommandLineSwitches(
+    const base::CommandLine* command_line) {
+  if (!command_line) {
+    return false;
+  }
 
-PolicyUIHandler::PolicyUIHandler() = default;
+  // List of command-line switches that are not considered user-specified,
+  // even when present on the command line.
+  static const char* const kIgnoredSwitches[] = {
+      // Gets added automatically via profile shortcuts.
+      switches::kProfileDirectory,
+  };
+
+  for (const auto& switch_pair : command_line->GetSwitches()) {
+    if (!std::ranges::contains(kIgnoredSwitches, switch_pair.first)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+
+PolicyUIHandler::PolicyUIHandler(Profile* profile) : profile_(*profile) {}
+
+PolicyUIHandler::PolicyUIHandler(
+    mojo::PendingReceiver<policy::mojom::PolicyPageHandler> receiver,
+    mojo::PendingRemote<policy::mojom::PolicyPageClient> client,
+    Profile* profile)
+    : receiver_(this, std::move(receiver)),
+      client_(std::move(client)),
+      profile_(*profile) {
+  policy_value_and_status_aggregator_ = policy::PolicyValueAndStatusAggregator::
+      CreateDefaultPolicyValueAndStatusAggregator(&profile_.get());
+}
 
 PolicyUIHandler::~PolicyUIHandler() {
   policy::RecordPolicyUIButtonUsage(reload_policies_count_,
@@ -196,12 +235,12 @@ void PolicyUIHandler::RegisterMessages() {
       enterprise_reporting::kLastUploadSucceededTimestamp, update_callback);
 
   policy_value_and_status_aggregator_ = policy::PolicyValueAndStatusAggregator::
-      CreateDefaultPolicyValueAndStatusAggregator(Profile::FromWebUI(web_ui()));
+      CreateDefaultPolicyValueAndStatusAggregator(&profile_.get());
   policy_value_and_status_observation_.Observe(
       policy_value_and_status_aggregator_.get());
 
   const auto* policy_schema_registry_service =
-      Profile::FromWebUI(web_ui())->GetPolicySchemaRegistryService();
+      profile_->GetPolicySchemaRegistryService();
   // In case web_ui() represents an OffTheRecordProfileImpl object (like in a
   // guest session), there's no PolicySchemaRegistryService, so nothing to
   // observe there. The profile has no policies anyway.
@@ -211,20 +250,12 @@ void PolicyUIHandler::RegisterMessages() {
   }
 
   web_ui()->RegisterMessageCallback(
-      "exportPoliciesJSON",
-      base::BindRepeating(&PolicyUIHandler::HandleExportPoliciesJson,
-                          base::Unretained(this)));
-  web_ui()->RegisterMessageCallback(
       "listenPoliciesUpdates",
       base::BindRepeating(&PolicyUIHandler::HandleListenPoliciesUpdates,
                           base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
       "reloadPolicies",
       base::BindRepeating(&PolicyUIHandler::HandleReloadPolicies,
-                          base::Unretained(this)));
-  web_ui()->RegisterMessageCallback(
-      "copyPoliciesJSON",
-      base::BindRepeating(&PolicyUIHandler::HandleCopyPoliciesJson,
                           base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
       "setLocalTestPolicies",
@@ -253,6 +284,12 @@ void PolicyUIHandler::RegisterMessages() {
       "getAppliedTestPolicies",
       base::BindRepeating(&PolicyUIHandler::HandleGetAppliedTestPolicies,
                           base::Unretained(this)));
+
+#if !BUILDFLAG(IS_ANDROID)
+  web_ui()->RegisterMessageCallback(
+      "checkCommandLineSwitches",
+      base::BindRepeating(&PolicyUIHandler::HandleCheckCommandLineSwitches,
+                          base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
       "shouldShowPromotion",
       base::BindRepeating(&PolicyUIHandler::HandleShouldShowPromotion,
@@ -265,21 +302,17 @@ void PolicyUIHandler::RegisterMessages() {
       "recordBannerRedirected",
       base::BindRepeating(&PolicyUIHandler::HandleRecordBannerRedirected,
                           base::Unretained(this)));
+#endif
+
+  web_ui()->RegisterMessageCallback(
+      "getPoliciesJson",
+      base::BindRepeating(&PolicyUIHandler::HandleGetPoliciesJson,
+                          base::Unretained(this)));
 #if !BUILDFLAG(IS_CHROMEOS)
   web_ui()->RegisterMessageCallback(
       "uploadReport", base::BindRepeating(&PolicyUIHandler::HandleUploadReport,
                                           base::Unretained(this)));
 #endif  // !BUILDFLAG(IS_CHROMEOS)
-}
-
-void PolicyUIHandler::AddPolicyPromotionObserver(
-    PolicyPromotionObserver* observer) {
-  promotion_eligibility_observers_.AddObserver(observer);
-}
-
-void PolicyUIHandler::RemovePolicyPromotionObserver(
-    PolicyPromotionObserver* observer) {
-  promotion_eligibility_observers_.RemoveObserver(observer);
 }
 
 void PolicyUIHandler::OnPolicyValueAndStatusChanged() {
@@ -295,26 +328,14 @@ void PolicyUIHandler::OnSchemaRegistryUpdated(bool has_new_schemas) {
 }
 
 void PolicyUIHandler::SendSchema() {
-  Profile* profile = Profile::FromWebUI(web_ui());
-  if (!IsJavascriptAllowed() || !PolicyUI::ShouldLoadTestPage(profile)) {
+  if (!IsJavascriptAllowed() ||
+      !PolicyUI::ShouldLoadTestPage(&profile_.get())) {
     return;
   }
-  FireWebUIListener("schema-updated", PolicyUI::GetSchema(profile));
+  FireWebUIListener("schema-updated", PolicyUI::GetSchema(&profile_.get()));
 }
 
-void PolicyUIHandler::HandleExportPoliciesJson(const base::Value::List& args) {
-  export_to_json_count_ += 1;
-  if (!IsJavascriptAllowed()) {
-    DVLOG(1) << "Tried to export policies as JSON but executing JavaScript is "
-                "not allowed.";
-    return;
-  }
-
-  FireWebUIListener("download-json", base::Value(GetPoliciesAsJson()));
-}
-
-void PolicyUIHandler::HandleListenPoliciesUpdates(
-    const base::Value::List& args) {
+void PolicyUIHandler::HandleListenPoliciesUpdates(const base::ListValue& args) {
   // Send initial policy values and status to UI page.
   AllowJavascript();
   SendSchema();
@@ -322,7 +343,7 @@ void PolicyUIHandler::HandleListenPoliciesUpdates(
   SendStatus();
 }
 
-void PolicyUIHandler::HandleReloadPolicies(const base::Value::List& args) {
+void PolicyUIHandler::HandleReloadPolicies(const base::ListValue&) {
   reload_policies_count_ += 1;
 #if BUILDFLAG(IS_CHROMEOS)
   // Allow user to manually fetch remote commands. Useful for testing or when
@@ -331,9 +352,8 @@ void PolicyUIHandler::HandleReloadPolicies(const base::Value::List& args) {
       g_browser_process->platform_part()
           ->browser_policy_connector_ash()
           ->GetDeviceCloudPolicyManager();
-  Profile* const profile = Profile::FromWebUI(web_ui());
   policy::CloudPolicyManager* const user_manager =
-      profile->GetUserCloudPolicyManagerAsh();
+      profile_->GetUserCloudPolicyManagerAsh();
 
   // Fetch both device and user remote commands.
   for (policy::CloudPolicyManager* manager : {device_manager, user_manager}) {
@@ -351,20 +371,27 @@ void PolicyUIHandler::HandleReloadPolicies(const base::Value::List& args) {
   policy_value_and_status_aggregator_->Refresh();
 }
 
-void PolicyUIHandler::HandleCopyPoliciesJson(const base::Value::List& args) {
-  copy_to_json_count_ += 1;
-  std::string policies_json = GetPoliciesAsJson();
-  ui::ScopedClipboardWriter scw(ui::ClipboardBuffer::kCopyPaste);
-  scw.WriteText(base::UTF8ToUTF16(policies_json));
+void PolicyUIHandler::HandleSetLocalTestPolicies(const base::ListValue& args) {
+  CHECK_EQ(args.size(), 3u);
+  const std::string& policies = args[1].GetString();
+  const std::string& profile_separation_policy_response = args[2].GetString();
+  SetLocalTestPoliciesImpl(policies, profile_separation_policy_response);
+  AllowJavascript();
+  ResolveJavascriptCallback(args[0], true);
 }
 
-void PolicyUIHandler::HandleSetLocalTestPolicies(
-    const base::Value::List& args) {
-  const std::string& policies = args[1].GetString();
-  AllowJavascript();
+void PolicyUIHandler::SetLocalTestPolicies(
+    const std::string& policies,
+    const std::string& profile_separation_policy_response,
+    SetLocalTestPoliciesCallback callback) {
+  SetLocalTestPoliciesImpl(policies, profile_separation_policy_response);
+  std::move(callback).Run();
+}
 
-  if (!PolicyUI::ShouldLoadTestPage(Profile::FromWebUI(web_ui()))) {
-    ResolveJavascriptCallback(args[0], true);
+void PolicyUIHandler::SetLocalTestPoliciesImpl(
+    const std::string& policies,
+    const std::string& profile_separation_policy_response) {
+  if (!PolicyUI::ShouldLoadTestPage(&profile_.get())) {
     return;
   }
 
@@ -372,46 +399,50 @@ void PolicyUIHandler::HandleSetLocalTestPolicies(
       static_cast<policy::LocalTestPolicyProvider*>(
           g_browser_process->browser_policy_connector()
               ->local_test_policy_provider());
-
   CHECK(local_test_provider);
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
-  const std::string& profile_separation_policy_response = args[2].GetString();
-  Profile::FromWebUI(web_ui())->GetPrefs()->ClearPref(
+  profile_->GetPrefs()->ClearPref(
       prefs::kUserCloudSigninPolicyResponseFromPolicyTestPage);
-  Profile::FromWebUI(web_ui())->GetPrefs()->SetDefaultPrefValue(
+  profile_->GetPrefs()->SetDefaultPrefValue(
       prefs::kUserCloudSigninPolicyResponseFromPolicyTestPage,
       base::Value(profile_separation_policy_response));
 #endif
 
-  Profile::FromWebUI(web_ui())
-      ->GetProfilePolicyConnector()
-      ->UseLocalTestPolicyProvider();
+  profile_->GetProfilePolicyConnector()->UseLocalTestPolicyProvider();
 
   local_test_provider->LoadJsonPolicies(policies);
-  ResolveJavascriptCallback(args[0], true);
 }
 
 void PolicyUIHandler::HandleRevertLocalTestPolicies(
-    const base::Value::List& args) {
-  if (!PolicyUI::ShouldLoadTestPage(Profile::FromWebUI(web_ui()))) {
+    const base::ListValue& args) {
+  RevertLocalTestPolicies();
+}
+
+void PolicyUIHandler::RevertLocalTestPolicies() {
+  if (!PolicyUI::ShouldLoadTestPage(&profile_.get())) {
     return;
   }
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
-  Profile::FromWebUI(web_ui())->GetPrefs()->ClearPref(
+  profile_->GetPrefs()->ClearPref(
       prefs::kUserCloudSigninPolicyResponseFromPolicyTestPage);
-  Profile::FromWebUI(web_ui())->GetPrefs()->SetDefaultPrefValue(
+  profile_->GetPrefs()->SetDefaultPrefValue(
       prefs::kUserCloudSigninPolicyResponseFromPolicyTestPage,
       base::Value(std::string()));
 #endif
-  Profile::FromWebUI(web_ui())
-      ->GetProfilePolicyConnector()
-      ->RevertUseLocalTestPolicyProvider();
+  profile_->GetProfilePolicyConnector()->RevertUseLocalTestPolicyProvider();
 }
 
-void PolicyUIHandler::HandleRestartBrowser(const base::Value::List& args) {
-  CHECK(args.size() == 2);
-  const std::string& policies = args[1].GetString();
+void PolicyUIHandler::HandleRestartBrowser(const base::ListValue& args) {
+  CHECK_EQ(args.size(), 1u);
+  const std::string& policies = args[0].GetString();
+  RestartBrowser(policies);
+}
+
+void PolicyUIHandler::RestartBrowser(const std::string& policies) {
+  if (!PolicyUI::ShouldLoadTestPage(&*profile_)) {
+    return;
+  }
 
   // Set policies to preference
   PrefService* prefs = g_browser_process->local_state();
@@ -422,38 +453,58 @@ void PolicyUIHandler::HandleRestartBrowser(const base::Value::List& args) {
   chrome::AttemptRestart();
 }
 
-void PolicyUIHandler::HandleSetUserAffiliated(const base::Value::List& args) {
+void PolicyUIHandler::HandleSetUserAffiliated(const base::ListValue& args) {
   CHECK_EQ(args.size(), 2u);
   bool affiliated = args[1].GetBool();
-
-  auto* local_test_provider = static_cast<policy::LocalTestPolicyProvider*>(
-      g_browser_process->browser_policy_connector()
-          ->local_test_policy_provider());
-  local_test_provider->SetUserAffiliated(affiliated);
+  SetUserAffiliatedImpl(affiliated);
   AllowJavascript();
   ResolveJavascriptCallback(args[0], true);
 }
 
-void PolicyUIHandler::HandleGetAppliedTestPolicies(
-    const base::Value::List& args) {
-  CHECK_EQ(args.size(), 1u);
+void PolicyUIHandler::SetUserAffiliated(bool affiliated,
+                                        SetUserAffiliatedCallback callback) {
+  SetUserAffiliatedImpl(affiliated);
+  std::move(callback).Run();
+}
 
+void PolicyUIHandler::SetUserAffiliatedImpl(bool affiliated) {
   auto* local_test_provider = static_cast<policy::LocalTestPolicyProvider*>(
       g_browser_process->browser_policy_connector()
           ->local_test_policy_provider());
-
-  AllowJavascript();
-  ResolveJavascriptCallback(args[0], local_test_provider->GetPolicies());
+  local_test_provider->SetUserAffiliated(affiliated);
 }
 
-void PolicyUIHandler::HandleGetPolicyLogs(const base::Value::List& args) {
+void PolicyUIHandler::HandleGetAppliedTestPolicies(
+    const base::ListValue& args) {
+  CHECK_EQ(args.size(), 1u);
+  AllowJavascript();
+  ResolveJavascriptCallback(args[0], GetAppliedTestPoliciesImpl());
+}
+
+void PolicyUIHandler::GetAppliedTestPolicies(
+    GetAppliedTestPoliciesCallback callback) {
+  std::move(callback).Run(GetAppliedTestPoliciesImpl());
+}
+
+const std::string& PolicyUIHandler::GetAppliedTestPoliciesImpl() {
+  auto* local_test_provider = static_cast<policy::LocalTestPolicyProvider*>(
+      g_browser_process->browser_policy_connector()
+          ->local_test_policy_provider());
+  return local_test_provider->GetPolicies();
+}
+
+void PolicyUIHandler::HandleGetPolicyLogs(const base::ListValue& args) {
   AllowJavascript();
   ResolveJavascriptCallback(args[0],
                             policy::PolicyLogger::GetInstance()->GetAsList());
 }
 
+void PolicyUIHandler::GetPolicyLogs(GetPolicyLogsCallback callback) {
+  std::move(callback).Run(policy::PolicyLogger::GetInstance()->GetAsMojoList());
+}
+
 #if !BUILDFLAG(IS_CHROMEOS)
-void PolicyUIHandler::HandleUploadReport(const base::Value::List& args) {
+void PolicyUIHandler::HandleUploadReport(const base::ListValue& args) {
   upload_report_count_ += 1;
   DCHECK_EQ(1u, args.size());
   const std::string& callback_id = args[0].GetString();
@@ -461,29 +512,32 @@ void PolicyUIHandler::HandleUploadReport(const base::Value::List& args) {
                                ->chrome_browser_cloud_management_controller()
                                ->report_scheduler();
 
-  auto* profile_report_scheduler =
+  auto* cloud_profile_reporting_service =
       enterprise_reporting::CloudProfileReportingServiceFactory::GetForProfile(
-          Profile::FromWebUI(web_ui()))
-          ->report_scheduler();
+          Profile::FromWebUI(web_ui()));
+  auto* profile_report_scheduler =
+      cloud_profile_reporting_service
+          ? cloud_profile_reporting_service->report_scheduler()
+          : nullptr;
 
   if (report_scheduler && profile_report_scheduler) {
     const auto on_report_uploaded = base::BarrierClosure(
         2, base::BindOnce(&PolicyUIHandler::OnReportUploaded,
                           weak_factory_.GetWeakPtr(), callback_id));
-    report_scheduler->UploadFullReport(on_report_uploaded);
-    profile_report_scheduler->UploadFullReport(on_report_uploaded);
+    report_scheduler->UploadReport(on_report_uploaded);
+    profile_report_scheduler->UploadReport(on_report_uploaded);
     return;
   }
 
   if (report_scheduler) {
-    report_scheduler->UploadFullReport(
+    report_scheduler->UploadReport(
         base::BindOnce(&PolicyUIHandler::OnReportUploaded,
                        weak_factory_.GetWeakPtr(), callback_id));
     return;
   }
 
   if (profile_report_scheduler) {
-    profile_report_scheduler->UploadFullReport(
+    profile_report_scheduler->UploadReport(
         base::BindOnce(&PolicyUIHandler::OnReportUploaded,
                        weak_factory_.GetWeakPtr(), callback_id));
     return;
@@ -509,62 +563,98 @@ void PolicyUIHandler::SendPolicies() {
 }
 
 void PolicyUIHandler::SendStatus() {
-  if (!IsJavascriptAllowed()) {
-    return;
-  }
+  if (IsMojoMigrationEnabled()) {
+    client_->StatusUpdated(
+        policy_value_and_status_aggregator_->GetAggregatedPolicyStatusMojo());
+  } else {
+    if (!IsJavascriptAllowed()) {
+      return;
+    }
 
-  FireWebUIListener(
-      "status-updated",
-      policy_value_and_status_aggregator_->GetAggregatedPolicyStatus());
+    FireWebUIListener(
+        "status-updated",
+        policy_value_and_status_aggregator_->GetAggregatedPolicyStatus());
+  }
 }
 
-void PolicyUIHandler::HandleShouldShowPromotion(const base::Value::List& args) {
-  AllowJavascript();
 #if !BUILDFLAG(IS_ANDROID)
-  Profile* profile = Profile::FromWebUI(web_ui());
-  const std::string& callback_id = args[0].GetString();
+void PolicyUIHandler::OnPromotionEligibilityFetchedWebUiWrapper(
+    base::Value callback_id,
+    bool response) {
+  AllowJavascript();
+  ResolveJavascriptCallback(callback_id, response);
+}
 
-  bool dismissed_banner_pref = profile->GetPrefs()->GetBoolean(
+void PolicyUIHandler::HandleShouldShowPromotion(const base::ListValue& args) {
+  CheckPromotionEligibility(base::BindOnce(
+      &PolicyUIHandler::OnPromotionEligibilityFetchedWebUiWrapper,
+      weak_factory_.GetWeakPtr(), args[0].Clone()));
+}
+
+void PolicyUIHandler::CheckPromotionEligibility(
+    CheckPromotionEligibilityCallback callback) {
+  bool dismissed_banner_pref = profile_->GetPrefs()->GetBoolean(
       policy::policy_prefs::kHasDismissedPolicyPagePromotionBanner);
 
-  bool feature_enabled =
-      base::FeatureList::IsEnabled(features::kEnablePolicyPromotionBanner);
-
-  promotion_eligibility_checker_ =
-      policy::CreatePromotionEligibilityChecker(
-          profile, dismissed_banner_pref, feature_enabled);
+  promotion_eligibility_checker_ = policy::CreatePromotionEligibilityChecker(
+      &profile_.get(), dismissed_banner_pref, /*feature_enabled=*/true);
   if (!promotion_eligibility_checker_) {
     OnPromotionEligibilityFetched(
-        callback_id,
+        std::move(callback),
         enterprise_management::GetUserEligiblePromotionsResponse());
     return;
   }
   promotion_eligibility_checker_->MaybeCheckPromotionEligibility(
       base::BindOnce(&PolicyUIHandler::OnPromotionEligibilityFetched,
-                     weak_factory_.GetWeakPtr(), callback_id));
+                     weak_factory_.GetWeakPtr(), std::move(callback)));
   return;
-
-#else
-  // If the build is on Android, still handle the request but return false
-  // so the banner does not show.
-  ResolveJavascriptCallback(args[0], false);
-#endif  // !BUILDFLAG(IS_ANDROID)
 }
 
-void PolicyUIHandler::HandleSetBannerDismissed(const base::Value::List& args) {
+void PolicyUIHandler::HandleSetBannerDismissed(const base::ListValue& args) {
+  SetBannerDismissed();
+}
+
+void PolicyUIHandler::SetBannerDismissed() {
   base::UmaHistogramEnumeration(
       "Enterprise.PolicyPromotionBannerAction",
       policy::PolicyPromotionBannerAction::kBannerDismissed);
-  Profile::FromWebUI(web_ui())->GetPrefs()->SetBoolean(
+  profile_->GetPrefs()->SetBoolean(
       policy::policy_prefs::kHasDismissedPolicyPagePromotionBanner, true);
 }
 
 void PolicyUIHandler::HandleRecordBannerRedirected(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
+  RecordBannerRedirected();
+}
+
+void PolicyUIHandler::RecordBannerRedirected() {
   base::UmaHistogramEnumeration(
       "Enterprise.PolicyPromotionBannerAction",
       policy::PolicyPromotionBannerAction::kBannerRedirected);
 }
+
+void PolicyUIHandler::CheckCommandLineSwitches(
+    CheckCommandLineSwitchesCallback callback) {
+#if !BUILDFLAG(IS_CHROMEOS)
+  std::move(callback).Run(
+      HasUserSpecifiedCommandLineSwitches(&GetInitialBrowserCommandLine()));
+#else
+  std::move(callback).Run(false);
+#endif
+}
+
+void PolicyUIHandler::HandleCheckCommandLineSwitches(
+    const base::ListValue& args) {
+  AllowJavascript();
+#if !BUILDFLAG(IS_CHROMEOS)
+  ResolveJavascriptCallback(args[0],
+                            base::Value(HasUserSpecifiedCommandLineSwitches(
+                                &GetInitialBrowserCommandLine())));
+#else
+  ResolveJavascriptCallback(args[0], base::Value(false));
+#endif
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 #if !BUILDFLAG(IS_CHROMEOS)
 void PolicyUIHandler::OnReportUploaded(const std::string& callback_id) {
@@ -579,37 +669,36 @@ void PolicyUIHandler::OnReportUploaded(const std::string& callback_id) {
 
 #if !BUILDFLAG(IS_ANDROID)
 void PolicyUIHandler::OnPromotionEligibilityFetched(
-    const std::string& callback_id,
+    CheckPromotionEligibilityCallback callback,
     enterprise_management::GetUserEligiblePromotionsResponse response) {
-  AllowJavascript();
   bool should_show_promotion = response.promotions().policy_page_promotion() ==
                                enterprise_management::CHROME_ENTERPRISE_CORE;
   // Log the UMA metric for the promotion banner displayed.
   base::UmaHistogramBoolean("Enterprise.PolicyPromotionBannerDisplayed",
                             should_show_promotion);
-
-  ResolveJavascriptCallback(base::Value(callback_id), should_show_promotion);
-
-  for (PolicyPromotionObserver& observer : promotion_eligibility_observers_) {
-    observer.OnPromotionEligibilityFetched(callback_id, response);
-  }
-
-  promotion_checked_ = true;
+  std::move(callback).Run(should_show_promotion);
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-std::string PolicyUIHandler::GetPoliciesAsJson() {
-  base::Value::Dict policy_values =
+std::string PolicyUIHandler::GetPoliciesJsonImpl(
+    policy::mojom::GetPoliciesReason reason) {
+  if (reason == policy::mojom::GetPoliciesReason::kCopy) {
+    copy_to_json_count_ += 1;
+  } else if (reason == policy::mojom::GetPoliciesReason::kExport) {
+    export_to_json_count_ += 1;
+  }
+
+  base::DictValue policy_values =
       policy_value_and_status_aggregator_->GetAggregatedPolicyValues();
   policy_values.Remove(policy::kPolicyIdsKey);
-  base::Value::Dict* extensions_dict =
+  base::DictValue* extensions_dict =
       policy_values.FindDict(policy::kPolicyValuesKey)
           ->EnsureDict(kExtensionsKey);
 
   // Iterate through all policy headings to identify extension policies.
   for (auto entry : *policy_values.FindDict(policy::kPolicyValuesKey)) {
     if (crx_file::id_util::IdIsValid(entry.first)) {
-      extensions_dict->Set(entry.first, base::Value::Dict());
+      extensions_dict->Set(entry.first, base::DictValue());
     }
   }
 
@@ -627,6 +716,22 @@ std::string PolicyUIHandler::GetPoliciesAsJson() {
       /*params=*/
       policy::GetChromeMetadataParams(
           /*application_name=*/l10n_util::GetStringUTF8(IDS_PRODUCT_NAME)));
+}
+
+void PolicyUIHandler::GetDebugString(GetDebugStringCallback callback) {
+  std::move(callback).Run("Migrating chrome://policy to mojo!");
+}
+
+void PolicyUIHandler::HandleGetPoliciesJson(const base::ListValue& args) {
+  policy::mojom::GetPoliciesReason reason =
+      static_cast<policy::mojom::GetPoliciesReason>(args[1].GetInt());
+  AllowJavascript();
+  ResolveJavascriptCallback(args[0], GetPoliciesJsonImpl(reason));
+}
+
+void PolicyUIHandler::GetPoliciesJson(policy::mojom::GetPoliciesReason reason,
+                                      GetPoliciesJsonCallback callback) {
+  std::move(callback).Run(GetPoliciesJsonImpl(reason));
 }
 
 // LINT.ThenChange(//ios/chrome/browser/webui/ui_bundled/policy/policy_ui_handler.mm)

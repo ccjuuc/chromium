@@ -26,6 +26,13 @@ source_set("model") {
     "tab_url_provider_impl.h",
     "tab_url_provider_impl.mm",
   ]
+
+  if (build_with_model_execution) {
+    sources += [
+      "ios_model_execution_manager_delegate.h",
+      "ios_model_execution_manager_delegate.mm",
+    ]
+  }
   deps = [
     "//base",
     "//components/application_locale_storage",
@@ -60,6 +67,13 @@ source_set("model") {
     "//ios/web/public",
     "//ios/web/public:web_state_observer",
   ]
+
+  if (build_with_model_execution) {
+    deps += [
+      "//components/private_ai",
+      "//ios/chrome/browser/private_ai/model",
+    ]
+  }
   frameworks = [ "UIKit.framework" ]
   public_deps = [
     ":download_client_header",
@@ -73,6 +87,21 @@ source_set("download_client_header") {
     "//base",
     "//components/download/public/background_service:public",
     "//ios/chrome/browser/shared/model/profile",
+  ]
+}
+
+source_set("test_support") {
+  testonly = true
+  sources = [
+    "fake_optimization_guide_service.h",
+    "fake_optimization_guide_service.mm",
+  ]
+  deps = [
+    ":model",
+    "//base",
+    "//components/optimization_guide/core",
+    "//components/optimization_guide/proto:optimization_guide_proto",
+    "//services/network/public/cpp",
   ]
 }
 
@@ -148,10 +177,6 @@ source_set("eg_app_support+eg2") {
     "//ios/chrome/browser/optimization_guide/model",
     "//ios/chrome/test/app:test_support",
   ]
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 source_set("eg_test_support+eg2") {

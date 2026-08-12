@@ -13,8 +13,9 @@
 #include "base/metrics/histogram_functions.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
-#include "components/autofill/content/browser/integrators/glic/autofill_annotations_provider_impl.h"
+#include "components/autofill/content/browser/integrators/actor/autofill_annotations_provider_impl.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
+#include "components/autofill/core/browser/payments/autofill_offer_manager.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/studies/autofill_experiments.h"
 #include "components/autofill/core/common/autofill_features.h"
@@ -82,7 +83,7 @@ void ContentAutofillDriverFactory::BindAutofillDriver(
   }
 
   if (auto* driver = factory->DriverForFrame(render_frame_host)) {
-    driver->BindPendingReceiver(std::move(pending_receiver));
+    driver->BindPendingReceiver(std::move(pending_receiver), /*pass_key=*/{});
   }
 }
 

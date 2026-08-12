@@ -10,7 +10,7 @@
 #import "ios/chrome/browser/omnibox/public/omnibox_presentation_context.h"
 #import "ios/chrome/browser/shared/coordinator/chrome_coordinator/chrome_coordinator.h"
 
-class OmniboxClient;
+class OmniboxClientIOS;
 @protocol EditViewAnimatee;
 @class OmniboxPopupCoordinator;
 @protocol LocationBarOffsetProvider;
@@ -25,7 +25,7 @@ class OmniboxClient;
 - (instancetype)
     initWithBaseViewController:(UIViewController*)viewController
                        browser:(Browser*)browser
-                 omniboxClient:(std::unique_ptr<OmniboxClient>)client
+                 omniboxClient:(std::unique_ptr<OmniboxClientIOS>)client
            presentationContext:(OmniboxPresentationContext)presentationContext
     NS_DESIGNATED_INITIALIZER;
 
@@ -49,8 +49,8 @@ class OmniboxClient;
 @property(nonatomic, readonly) UIView<TextFieldViewContaining>* editView;
 
 /// Controls the UI configuration of the omnibox to reflect search-only mode.
-/// Actual navigation limitations are managed by the `OmniboxClient`. Has to be
-/// configured before calling `start`. Defaults to `NO`.
+/// Actual navigation limitations are managed by the `OmniboxClientIOS`. Has to
+/// be configured before calling `start`. Defaults to `NO`.
 @property(nonatomic, assign) BOOL searchOnlyUI;
 
 /// The view controller managed by this coordinator. The parent of this
@@ -72,6 +72,8 @@ class OmniboxClient;
 /// Use this method to insert target URL or search terms for alternative input
 /// methods, such as QR code scanner or voice search.
 - (void)insertTextToOmnibox:(NSString*)string;
+/// Refines the omnibox query with the given text.
+- (void)refineWithText:(NSString*)text;
 /// Updates the contents and the styling of the omnibox.
 - (void)updateOmniboxState;
 /// Makes the omnibox first responder.
@@ -96,6 +98,9 @@ class OmniboxClient;
 
 // Clears the omnibox suggestions and optionally restarts autocomplete.
 - (void)clearSuggestionsWithRestartAutocomplete:(BOOL)restartAutocomplete;
+
+/// Toggle visibility of the omnibox debugger view.
+- (void)toggleOmniboxDebuggerView;
 
 @end
 

@@ -12,7 +12,6 @@
 #include <set>
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/format_macros.h"
 #include "base/functional/bind.h"
@@ -55,6 +54,10 @@ const char kFlags12[] = "flag12";
 const char kFlags13[] = "flag13";
 const char kFlags14[] = "flag14";
 
+// Matches an entry of kRenamedFlags to test rename migration.
+const char kOldFlagName[] = "prompt-api-for-gemini-nano";
+const char kNewFlagName[] = "prompt-api";
+
 const char kSwitch1[] = "switch";
 const char kSwitch2[] = "switch2";
 const char kSwitch3[] = "switch3";
@@ -94,13 +97,13 @@ const FeatureEntry::FeatureParam kTestVariationOther3[] = {
 };
 
 const FeatureEntry::FeatureVariation kTestVariations1[] = {
-    {"dummy description 1", kTestVariationOther1, 1, nullptr}};
+    {"dummy description 1", kTestVariationOther1, nullptr}};
 const FeatureEntry::FeatureVariation kTestVariations2[] = {
-    {"dummy description 2", kTestVariationOther2, 1, nullptr}};
+    {"dummy description 2", kTestVariationOther2, nullptr}};
 const FeatureEntry::FeatureVariation kTestVariations3[] = {
-    {"dummy description 1", kTestVariationOther1, 1, nullptr},
-    {"dummy description 2", kTestVariationOther2, 1, nullptr},
-    {"dummy description 3", kTestVariationOther3, 2, "t123456"}};
+    {"dummy description 1", kTestVariationOther1, nullptr},
+    {"dummy description 2", kTestVariationOther2, nullptr},
+    {"dummy description 3", kTestVariationOther3, "t123456"}};
 
 const char kTestVariation3Cmdline[] =
     "FeatureName3:param1/value/param%3A%2F3/value";
@@ -216,6 +219,9 @@ auto kEntries = std::to_array<FeatureEntry>({
     {kFlags14, kDummyName, kDummyDescription,
      0,  // Ends up being mapped to the current platform.
      MULTI_VALUE_TYPE(kMultiChoicesWithEnableDisableFeatures2)},
+    {kNewFlagName, kDummyName, kDummyDescription,
+     0,  // Ends up being mapped to the current platform.
+     SINGLE_VALUE_TYPE(kSwitch1)},
 });
 
 class FlagsStateTest : public ::testing::Test,
@@ -277,6 +283,14 @@ TEST_F(FlagsStateTest, ChangeNeedsRestart) {
   EXPECT_TRUE(flags_state_->IsRestartNeededToCommitChanges());
 }
 
+TEST_F(FlagsStateTest, RenamedFlagMigration) {
+  flags_storage_.SetFlags({kOldFlagName});
+  std::set<std::string> enabled_flags;
+  flags_state_->GetSanitizedEnabledFlags(&flags_storage_, &enabled_flags);
+  EXPECT_THAT(enabled_flags, ::testing::ElementsAre(kNewFlagName));
+  EXPECT_THAT(flags_storage_.GetFlags(), ::testing::ElementsAre(kNewFlagName));
+}
+
 // Tests that disabling a default enabled entry requires a restart.
 TEST_F(FlagsStateTest, DisableChangeNeedsRestart) {
   EXPECT_FALSE(flags_state_->IsRestartNeededToCommitChanges());
@@ -306,7 +320,7 @@ TEST_F(FlagsStateTest, AddTwoFlagsRemoveOne) {
   flags_state_->SetFeatureEntryEnabled(&flags_storage_, kFlags2, true);
 
   {
-    const base::Value::List& entries_list =
+    const base::ListValue& entries_list =
         prefs_.GetList(prefs::kAboutFlagsEntries);
     ASSERT_EQ(2u, entries_list.size());
 
@@ -321,7 +335,7 @@ TEST_F(FlagsStateTest, AddTwoFlagsRemoveOne) {
   flags_state_->SetFeatureEntryEnabled(&flags_storage_, kFlags2, false);
 
   {
-    const base::Value::List& entries_list =
+    const base::ListValue& entries_list =
         prefs_.GetList(prefs::kAboutFlagsEntries);
     ASSERT_EQ(1u, entries_list.size());
     std::string s0 = entries_list[0].GetString();
@@ -334,7 +348,7 @@ TEST_F(FlagsStateTest, AddTwoFlagsRemoveBoth) {
   flags_state_->SetFeatureEntryEnabled(&flags_storage_, kFlags1, true);
   flags_state_->SetFeatureEntryEnabled(&flags_storage_, kFlags2, true);
   {
-    const base::Value::List& entries_list =
+    const base::ListValue& entries_list =
         prefs_.GetList(prefs::kAboutFlagsEntries);
     ASSERT_EQ(2u, entries_list.size());
   }
@@ -343,7 +357,7 @@ TEST_F(FlagsStateTest, AddTwoFlagsRemoveBoth) {
   flags_state_->SetFeatureEntryEnabled(&flags_storage_, kFlags1, false);
   flags_state_->SetFeatureEntryEnabled(&flags_storage_, kFlags2, false);
   {
-    const base::Value::List& entries_list =
+    const base::ListValue& entries_list =
         prefs_.GetList(prefs::kAboutFlagsEntries);
     EXPECT_TRUE(entries_list.empty());
   }
@@ -412,11 +426,6 @@ TEST_F(FlagsStateTest, ConvertFlagsToSwitches) {
   EXPECT_TRUE(command_line3.HasSwitch(kEnableFeatures));
   EXPECT_EQ(command_line3.GetSwitchValueASCII(kEnableFeatures),
             kTestVariation3Cmdline);
-  EXPECT_TRUE(
-      command_line3.HasSwitch(variations::switches::kForceVariationIds));
-  EXPECT_EQ(command_line3.GetSwitchValueASCII(
-                variations::switches::kForceVariationIds),
-            "t123456");
 }
 
 TEST_F(FlagsStateTest, RegisterAllFeatureVariationParameters) {
@@ -482,6 +491,26 @@ TEST_F(FlagsStateTest, RegisterAllFeatureVariationParametersNonDefault) {
             base::GetFieldTrialParamValueByFeature(kTestFeature1, kTestParam1));
 }
 
+// Verifies that variation IDs are still correctly collected and returned by
+// RegisterAllFeatureVariationParameters().
+TEST_F(FlagsStateTest, RegisterAllFeatureVariationParametersVariationIds) {
+  const FeatureEntry& entry = kEntries[11];
+  ASSERT_EQ(kFlags12, entry.internal_name);
+  std::unique_ptr<base::FeatureList> feature_list =
+      std::make_unique<base::FeatureList>();
+
+  // Select the 3rd variation (@4).
+  flags_state_->SetFeatureEntryEnabled(
+      &flags_storage_, std::string(kFlags12).append("@4"), true);
+
+  std::vector<std::string> variation_ids =
+      flags_state_->RegisterAllFeatureVariationParameters(&flags_storage_,
+                                                          feature_list.get());
+
+  ASSERT_EQ(1u, variation_ids.size());
+  EXPECT_EQ("t123456", variation_ids[0]);
+}
+
 TEST_F(FlagsStateTest, RegisterAllFeatureVariationParametersWithDefaultTrials) {
   const FeatureEntry& entry1 = kEntries[8];
   const FeatureEntry& entry2 = kEntries[9];
@@ -533,10 +562,10 @@ TEST_F(FlagsStateTest, RemoveFlagSwitches) {
   // This shouldn't do anything before ConvertFlagsToSwitches() wasn't called.
   flags_state_->RemoveFlagsSwitches(&switch_list);
   ASSERT_EQ(4u, switch_list.size());
-  EXPECT_TRUE(base::Contains(switch_list, kSwitch1));
-  EXPECT_TRUE(base::Contains(switch_list, switches::kFlagSwitchesBegin));
-  EXPECT_TRUE(base::Contains(switch_list, switches::kFlagSwitchesEnd));
-  EXPECT_TRUE(base::Contains(switch_list, "foo"));
+  EXPECT_TRUE(switch_list.contains(kSwitch1));
+  EXPECT_TRUE(switch_list.contains(switches::kFlagSwitchesBegin));
+  EXPECT_TRUE(switch_list.contains(switches::kFlagSwitchesEnd));
+  EXPECT_TRUE(switch_list.contains("foo"));
 
   // Call ConvertFlagsToSwitches(), then RemoveFlagsSwitches() again.
   base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
@@ -548,7 +577,7 @@ TEST_F(FlagsStateTest, RemoveFlagSwitches) {
 
   // Now the about:flags-related switch should have been removed.
   ASSERT_EQ(1u, switch_list.size());
-  EXPECT_TRUE(base::Contains(switch_list, "foo"));
+  EXPECT_TRUE(switch_list.contains("foo"));
 }
 
 TEST_F(FlagsStateTest, RemoveFlagSwitches_Features) {
@@ -600,14 +629,14 @@ TEST_F(FlagsStateTest, RemoveFlagSwitches_Features) {
                                          kDisableFeatures);
     auto switch_list = command_line.GetSwitches();
     EXPECT_EQ(cases[i].expected_enable_features != nullptr,
-              base::Contains(switch_list, kEnableFeatures));
+              switch_list.contains(kEnableFeatures));
     if (cases[i].expected_enable_features) {
       EXPECT_EQ(CreateSwitch(cases[i].expected_enable_features),
                 switch_list[kEnableFeatures]);
     }
 
     EXPECT_EQ(cases[i].expected_disable_features != nullptr,
-              base::Contains(switch_list, kDisableFeatures));
+              switch_list.contains(kDisableFeatures));
     if (cases[i].expected_disable_features) {
       EXPECT_EQ(CreateSwitch(cases[i].expected_disable_features),
                 switch_list[kDisableFeatures]);
@@ -618,13 +647,13 @@ TEST_F(FlagsStateTest, RemoveFlagSwitches_Features) {
     switch_list = command_line.GetSwitches();
     flags_state_->RemoveFlagsSwitches(&switch_list);
     EXPECT_EQ(cases[i].existing_enable_features != nullptr,
-              base::Contains(switch_list, kEnableFeatures));
+              switch_list.contains(kEnableFeatures));
     if (cases[i].existing_enable_features) {
       EXPECT_EQ(CreateSwitch(cases[i].existing_enable_features),
                 switch_list[kEnableFeatures]);
     }
     EXPECT_EQ(cases[i].existing_disable_features != nullptr,
-              base::Contains(switch_list, kEnableFeatures));
+              switch_list.contains(kEnableFeatures));
     if (cases[i].existing_disable_features) {
       EXPECT_EQ(CreateSwitch(cases[i].existing_disable_features),
                 switch_list[kDisableFeatures]);
@@ -650,7 +679,7 @@ TEST_F(FlagsStateTest, PersistAndPrune) {
   EXPECT_FALSE(command_line.HasSwitch(kSwitch3));
 
   // FeatureEntry 3 should show still be persisted in preferences though.
-  const base::Value::List& entries_list =
+  const base::ListValue& entries_list =
       prefs_.GetList(prefs::kAboutFlagsEntries);
   EXPECT_EQ(2U, entries_list.size());
   std::string s0 = entries_list[0].GetString();
@@ -702,7 +731,7 @@ TEST_F(FlagsStateTest, CheckValues) {
 #endif
 
   // And it should persist.
-  const base::Value::List& entries_list =
+  const base::ListValue& entries_list =
       prefs_.GetList(prefs::kAboutFlagsEntries);
   EXPECT_EQ(2U, entries_list.size());
   std::string s0 = entries_list[0].GetString();
@@ -966,15 +995,15 @@ TEST_F(FlagsStateTest, FeatureValues) {
 }
 
 TEST_F(FlagsStateTest, GetFlagFeatureEntries) {
-  base::Value::List supported_entries;
-  base::Value::List unsupported_entries;
+  base::ListValue supported_entries;
+  base::ListValue unsupported_entries;
   flags_state_->GetFlagFeatureEntries(&flags_storage_, kGeneralAccessFlagsOnly,
                                       supported_entries, unsupported_entries,
                                       base::BindRepeating(&SkipFeatureEntry));
   // All |kEntries| except for |kFlags3| should be supported.
   auto supported_count = supported_entries.size();
   auto unsupported_count = unsupported_entries.size();
-  EXPECT_EQ(13u, supported_count);
+  EXPECT_EQ(14u, supported_count);
   EXPECT_EQ(1u, unsupported_count);
   EXPECT_EQ(std::size(kEntries), supported_count + unsupported_count);
 }

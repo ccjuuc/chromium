@@ -5,9 +5,14 @@
 #ifndef BASE_TRACE_EVENT_MEASURED_MEMORY_DUMP_PROVIDER_INFO_H_
 #define BASE_TRACE_EVENT_MEASURED_MEMORY_DUMP_PROVIDER_INFO_H_
 
+#include <optional>
+#include <string_view>
+
 #include "base/base_export.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
+#include "base/trace_event/memory_dump_request_args.h"
 
 namespace base::trace_event {
 
@@ -67,7 +72,7 @@ class BASE_EXPORT MeasuredMemoryDumpProviderInfo {
 
   MeasuredMemoryDumpProviderInfo(
       scoped_refptr<MemoryDumpProviderInfo> provider_info,
-      size_t num_following_providers);
+      MemoryDumpRequestArgs request_args);
 
   // Logs all metrics for the wrapped MemoryDumpProvider.
   ~MeasuredMemoryDumpProviderInfo();
@@ -87,17 +92,39 @@ class BASE_EXPORT MeasuredMemoryDumpProviderInfo {
     return provider_info_.get();
   }
 
-  // Returns the number of providers that are queued to run after this one.
-  size_t num_following_providers() const { return num_following_providers_; }
+  // Returns the args for the CreateProcessDump() call that started this dump.
+  const MemoryDumpRequestArgs& request_args() const { return request_args_; }
+
+  // Sets the number of providers that are queued to run after this one. This
+  // must be called before deletion.
+  void set_num_following_providers(size_t num_following_providers) {
+    num_following_providers_ = num_following_providers;
+  }
 
   // Updates the current status of the provider. The status begins as kQueued,
   // and MemoryDumpManager should update it whenever it moves the
   // MemoryDumpProviderInfo to a new state.
-  void SetStatus(Status status) { status_ = status; }
+  void SetStatus(Status status);
+
+  // Logs Memory.DumpProvider.MemoryDumpTime.* histograms for this provider.
+  void LogMemoryDumpTimeHistograms(base::TimeDelta time) const;
+
+  // Logs Memory.DumpProvider.Count.* histograms for the provider named
+  // `provider_name`.
+  static void LogProviderCountHistograms(
+      std::string_view provider_name,
+      MemoryDumpLevelOfDetail level_of_detail,
+      size_t count);
+
+  // Returns a string to use in histogram variants for `level_of_detail`.
+  static std::string_view LevelOfDetailString(
+      MemoryDumpLevelOfDetail level_of_detail);
 
  private:
   scoped_refptr<MemoryDumpProviderInfo> provider_info_;
-  size_t num_following_providers_;
+  MemoryDumpRequestArgs request_args_{};
+
+  std::optional<size_t> num_following_providers_;
   Status status_ = Status::kQueued;
 
   // Measures the time between the MemoryDumpProvider being placed into the
@@ -105,7 +132,11 @@ class BASE_EXPORT MeasuredMemoryDumpProviderInfo {
   // being destroyed. This includes the time the MemoryDumpProvider spent in the
   // queue (while other providers were running), and the time the provider was
   // running (if `status_` is kDumpSucceeded or kDumpFailed).
-  base::ElapsedTimer elapsed_timer_;
+  base::ElapsedLiveTimer elapsed_timer_;
+
+  // Measures the time it takes for a MemoryDumpProvider that's posted to
+  // execute on another thread to finish.
+  std::optional<base::ElapsedLiveTimer> post_task_timer_;
 };
 
 }  // namespace base::trace_event

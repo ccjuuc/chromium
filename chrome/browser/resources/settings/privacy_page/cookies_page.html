@@ -4,6 +4,10 @@
       padding: 0 var(--cr-section-padding);
     }
 
+    #explanationText {
+      padding-bottom: var(--cr-section-vertical-padding);
+    }
+
     #additionalProtections {
       padding: 16px var(--cr-section-padding) 8px var(--cr-section-padding);
     }
@@ -48,13 +52,6 @@
       padding-inline-end: 0;
       padding-inline-start: 0;
     }
-
-    #toastText {
-      align-items: center;
-      display: flex;
-      max-width: 300px;
-      min-height: var(--cr-section-two-line-min-height);
-    }
   </style>
   <settings-subpage
       page-title="$i18n{thirdPartyCookiesPageTitle}"
@@ -90,7 +87,7 @@
               </div>
             </div>
             <div class="bullet-line one-line">
-              <cr-icon icon="settings20:incognito-unfilled"></cr-icon>
+              <cr-icon icon="settings20:incognito"></cr-icon>
               <div class="secondary">
                 $i18n{cookiePageSettingsAllowBulletThree}
               </div>
@@ -116,20 +113,22 @@
               </div>
             </div>
             <div class="bullet-line one-line">
-              <cr-icon icon="settings20:broken"></cr-icon>
+              <cr-icon icon="settings20:broken-image"></cr-icon>
               <div class="secondary">
                 $i18n{cookiePageSettingsBlockBulletThree}
               </div>
             </div>
           </div>
           <div slot="noSelectionCollapse">
-            <settings-toggle-button id="relatedWebsiteSetsToggle"
+            <template is="dom-if" if="[[isRelatedWebsiteSetsUiEnabled_]]">
+              <settings-toggle-button id="relatedWebsiteSetsToggle"
                 pref="{{prefs.privacy_sandbox.first_party_sets_enabled}}"
                 label="$i18n{cookiePageRwsLabel}"
                 sub-label="$i18n{cookiePageRwsSubLabel}"
                 disabled="[[relatedWebsiteSetsToggleDisabled_(
-                              prefs.generated.third_party_cookie_blocking_setting.value)]]">
-            </settings-toggle-button>
+                  prefs.generated.third_party_cookie_blocking_setting.value)]]">
+              </settings-toggle-button>
+            </template>
           </div>
         </settings-collapse-radio-button>
       </settings-radio-group>
@@ -153,13 +152,4 @@
         search-filter="[[searchTerm]]"
         cookies-exception-type="third-party">
     </site-list>
-    <cr-toast id="toast">
-      <div id="toastText">$i18n{privacySandboxCookiesDialog}</div>
-      <cr-button on-click="onPrivacySandboxClick_">
-        $i18n{privacySandboxCookiesDialogMore}
-      </cr-button>
-      <a id="privacySandboxLink" href="adPrivacy"
-          target="_blank" tabindex="-1" aria-disabled="true"
-          role="none"></a>
-    </cr-toast>
   </settings-subpage>

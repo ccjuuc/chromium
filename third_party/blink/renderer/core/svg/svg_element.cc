@@ -76,14 +76,17 @@ namespace blink {
 SVGElement::SVGElement(const QualifiedName& tag_name,
                        Document& document,
                        ConstructionType construction_type)
-    : Element(tag_name, &document, construction_type),
-      svg_rare_data_(nullptr),
-      class_name_(
-          MakeGarbageCollected<SVGAnimatedString>(this,
-                                                  html_names::kClassAttr)) {
-  if (!RuntimeEnabledFeatures::Svg2CascadeEnabled()) {
-    SetHasCustomStyleCallbacks();
+    : Element(tag_name, &document, construction_type), svg_rare_data_(nullptr) {
+  // For WillRecalcStyle()
+  SetHasCustomStyleCallbacks();
+}
+
+SVGAnimatedString& SVGElement::EnsureClassName() const {
+  if (!class_name_) {
+    class_name_ = MakeGarbageCollected<SVGAnimatedString>(
+        const_cast<SVGElement*>(this), html_names::kClassAttr);
   }
+  return *class_name_;
 }
 
 void SVGElement::DetachLayoutTree(bool performing_reattach) {
@@ -494,7 +497,7 @@ bool SVGElement::InUseShadowTree() const {
 }
 
 void SVGElement::ParseAttribute(const AttributeModificationParams& params) {
-  // SVGElement and HTMLElement are handling "nonce" the same way.
+  // SVGElement, HTMLElement and MathMLElement handle "nonce" the same way.
   if (params.name == html_names::kNonceAttr) {
     if (params.new_value != g_empty_atom)
       setNonce(params.new_value);
@@ -517,7 +520,7 @@ void SVGElement::ParseAttribute(const AttributeModificationParams& params) {
 SVGAnimatedPropertyBase* SVGElement::PropertyFromAttribute(
     const QualifiedName& attribute_name) const {
   if (attribute_name == html_names::kClassAttr) {
-    return class_name_.Get();
+    return &EnsureClassName();
   } else {
     return nullptr;
   }
@@ -727,32 +730,12 @@ void SVGElement::AttributeChanged(const AttributeModificationParams& params) {
     return;
   }
 
-  if (!RuntimeEnabledFeatures::Svg2CascadeEnabled()) {
-    if (params.name == html_names::kIdAttr) {
-      // TODO(crbug.com/40550039): Id attributes also need to be synchronized
-      // instead of rebuilding the tree as animations/transitions would
-      // otherwise not work correctly.
-      InvalidateInstances();
-      return;
-    }
-
-    // Changes to the style attribute are processed lazily (see
-    // Element::getAttribute() and related methods), so we don't want changes to
-    // the style attribute to result in extra work here.
-    if (params.name == html_names::kStyleAttr) {
-      return;
-    }
-  }
-
   CSSPropertyID prop_id =
       CssPropertyIdForSVGAttributeName(GetExecutionContext(), params.name);
   if (prop_id > CSSPropertyID::kInvalid) {
     UpdatePresentationAttributeStyle(prop_id, params.name, params.new_value);
   }
-  if (prop_id > CSSPropertyID::kInvalid ||
-      RuntimeEnabledFeatures::Svg2CascadeEnabled()) {
-    SynchronizeAttributeInShadowInstances(params.name, params.new_value);
-  }
+  SynchronizeAttributeInShadowInstances(params.name, params.new_value);
 }
 
 void SVGElement::SvgAttributeChanged(const SvgAttributeChangedParams& params) {
@@ -766,7 +749,7 @@ void SVGElement::BaseValueChanged(const SVGAnimatedPropertyBase& property) {
   EnsureUniqueElementData().SetSvgAttributesAreDirty(true);
   SvgAttributeChanged({property, property.AttributeName(),
                        AttributeModificationReason::kDirectly});
-  if (class_name_ == &property) {
+  if (class_name_ && class_name_ == &property) {
     UpdateClassList(g_null_atom,
                     AtomicString(class_name_->BaseValue()->Value()));
   }
@@ -785,7 +768,7 @@ void SVGElement::SynchronizeSVGAttribute(const QualifiedName& name) const {
 void SVGElement::SynchronizeAllSVGAttributes() const {
   DCHECK(HasElementData());
   DCHECK(GetElementData()->svg_attributes_are_dirty());
-  if (class_name_->NeedsSynchronizeAttribute()) {
+  if (class_name_ && class_name_->NeedsSynchronizeAttribute()) {
     class_name_->SynchronizeAttribute();
   }
   GetElementData()->SetSvgAttributesAreDirty(false);
@@ -887,29 +870,6 @@ void SVGElement::AddAnimatedPropertyToPresentationAttributeStyle(
                                           *value);
 }
 
-const ComputedStyle* SVGElement::CustomStyleForLayoutObject(
-    const StyleRecalcContext& style_recalc_context) {
-  SVGElement* corresponding_element = CorrespondingElement();
-  if (!corresponding_element || RuntimeEnabledFeatures::Svg2CascadeEnabled()) {
-    return GetDocument().GetStyleResolver().ResolveStyle(this,
-                                                         style_recalc_context);
-  }
-
-  const ComputedStyle* style = nullptr;
-  if (Element* parent = ParentOrShadowHostElement())
-    style = parent->GetComputedStyle();
-
-  StyleRequest style_request;
-  style_request.parent_override = style;
-  style_request.layout_parent_override = style;
-  style_request.styled_element = this;
-  StyleRecalcContext corresponding_recalc_context(style_recalc_context);
-  corresponding_recalc_context.old_style =
-      PostStyleUpdateScope::GetOldStyle(*this);
-  return GetDocument().GetStyleResolver().ResolveStyle(
-      corresponding_element, corresponding_recalc_context, style_request);
-}
-
 bool SVGElement::LayoutObjectIsNeeded(const DisplayStyle& style) const {
   return IsValid() && HasSVGParent() && Element::LayoutObjectIsNeeded(style);
 }
@@ -965,8 +925,7 @@ void SVGElement::NotifyResourceClients() const {
 void SVGElement::InvalidateStyleAttribute(
     bool only_changed_independent_properties) {
   Element::InvalidateStyleAttribute(only_changed_independent_properties);
-  if (RuntimeEnabledFeatures::Svg2CascadeEnabled() &&
-      !InstancesForElement().empty()) {
+  if (!InstancesForElement().empty()) {
     SynchronizeAttributeInShadowInstances(html_names::kStyleAttr,
                                           getAttribute(html_names::kStyleAttr));
   }
@@ -1211,8 +1170,8 @@ SMILTimeContainer* SVGElement::GetTimeContainer() const {
 void SVGElement::SynchronizeAttributeInShadowInstances(
     const QualifiedName& name,
     const AtomicString& value) {
-  const HeapHashSet<WeakMember<SVGElement>>& set = InstancesForElement();
-  for (SVGElement* instance : set) {
+  HeapHashSet<WeakMember<SVGElement>> instances = InstancesForElement();
+  for (SVGElement* instance : instances) {
     instance->SetAttributeWithoutValidation(name, value);
   }
 }

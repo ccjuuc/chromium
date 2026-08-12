@@ -11,6 +11,7 @@
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "base/containers/heap_array.h"
+#include "base/containers/span.h"
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/debug/leak_annotations.h"
@@ -183,10 +184,7 @@ Count32 SampleVectorBase::TotalCount() const {
   // Handle the multi-sample case.
   if (counts().has_value() || MountExistingCountsStorage()) {
     Count32 count = 0;
-    // TODO(danakj): In C++23 we can skip the `counts_span` lvalue and iterate
-    // over `counts().value()` directly without creating a dangling reference.
-    span<const HistogramBase::AtomicCount> counts_span = counts().value();
-    for (const HistogramBase::AtomicCount& c : counts_span) {
+    for (const HistogramBase::AtomicCount& c : counts().value()) {
       count += subtle::NoBarrier_Load(&c);
     }
     return count;

@@ -14,6 +14,7 @@
 #include "base/test/protobuf_matchers.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile_test_api.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
@@ -290,8 +291,6 @@ TEST_F(ContactInfoSyncBridgeTest,
 // local storage, if necessary.
 TEST_F(ContactInfoSyncBridgeTest,
        ApplyIncrementalSyncChanges_HomeAndWorkCompleteness) {
-  base::test::ScopedFeatureList feature(
-      features::kAutofillEnableSupportForHomeAndWork);
   AutofillProfile remote = test::GetFullProfile();
   test_api(remote).set_record_type(AutofillProfile::RecordType::kAccountHome);
   base::HistogramTester histogram_tester;

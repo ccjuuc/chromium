@@ -12,9 +12,11 @@
 
 #include "base/functional/callback.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/types/id_type.h"
 #include "base/values.h"
 #include "chrome/browser/actor/actor_task.h"
 #include "chrome/browser/glic/test_support/interactive_glic_test.h"
+#include "components/actor/public/mojom/actor_types.mojom-forward.h"
 #include "components/optimization_guide/proto/features/actions_data.pb.h"
 #include "components/tabs/public/tab_interface.h"
 #include "ui/base/interaction/element_identifier.h"
@@ -28,6 +30,10 @@ namespace glic::test {
 // that changes in Chrome aren't breaking Glic (though this relies on manual
 // intervention anytime Glic changes and so is not a replacement for full
 // end-to-end tests).
+// =============================================================================
+// DEPRECATED: Do not use this test fixture for new code.
+// Please use `chrome/browser/glic/test_support/glic_browser_test.h` instead.
+// =============================================================================
 class GlicActorUiTest : public test::InteractiveGlicTest {
  public:
   using InteractiveTestApi::MultiStep;
@@ -37,6 +43,11 @@ class GlicActorUiTest : public test::InteractiveGlicTest {
                                            mojom::PerformActionsErrorReason>;
   using ExpectedResumeResult =
       std::variant<std::monostate, actor::mojom::ActionResultCode, bool>;
+  using ExpectedCreateTaskResult =
+      std::variant<std::monostate, mojom::CreateTaskErrorReason>;
+
+  using PerformActionsResultHandle =
+      base::IdType32<class PerformActionsResultHandleTag>;
 
   static constexpr int32_t kNonExistentContentNodeId =
       std::numeric_limits<int32_t>::max();
@@ -75,10 +86,24 @@ class GlicActorUiTest : public test::InteractiveGlicTest {
   MultiStep ExecuteAction(ActionProtoProvider proto_provider,
                           ExpectedErrorResult expected_result = {});
 
+  // Initiates a BrowserAction without waiting for it to complete. The promise
+  // result is stored in `out_result`.
+  MultiStep SendExecuteActions(
+      std::optional<PerformActionsResultHandle>& out_result,
+      ActionProtoProvider proto_provider);
+
+  // Waits for a BrowserAction initiated by SendExecuteActions to complete and
+  // verifies the result.
+  MultiStep CheckExecuteActionsResultHandle(
+      std::optional<PerformActionsResultHandle>& promise_result,
+      ExpectedErrorResult expected_result = {});
+
   MultiStep ExecuteInGlic(
       base::OnceCallback<void(content::WebContents*)> callback);
 
-  MultiStep CreateTask(actor::TaskId& out_task, std::string_view title);
+  MultiStep CreateTask(actor::TaskId& out_task,
+                       std::string_view title,
+                       ExpectedCreateTaskResult expected_result = {});
 
   // Note: In all the Create*Action functions below, parameters that are
   // expected to be created as a result of test steps (task_id, tab_handle,
@@ -157,14 +182,16 @@ class GlicActorUiTest : public test::InteractiveGlicTest {
   // client and host to make sure the call has made it to the browser.
   MultiStep RoundTrip(actor::TaskId& task_id);
 
-  // Stops a running task by calling the glic StopActorTask API.
+  // Stops a running task by calling the glic StopActorTask API. Stops the
+  // default task in task_id_ if none is provided.
   MultiStep StopActorTask();
+  MultiStep StopActorTask(actor::TaskId& task_id);
 
   // Pauses a running task by calling the glic PauseActorTask API.
   MultiStep PauseActorTask();
 
   // Resumes a paused task by calling the glic ResumeActorTask API.
-  MultiStep ResumeActorTask(base::Value::Dict context_options,
+  MultiStep ResumeActorTask(base::DictValue context_options,
                             ExpectedResumeResult expected_result);
 
   // Interrupts a task by calling the glic InterruptActorTask API.
@@ -174,9 +201,13 @@ class GlicActorUiTest : public test::InteractiveGlicTest {
 
   MultiStep WaitForActorTaskState(mojom::ActorTaskState expected_state);
 
+  // Like StopActorTask but also waits until the task notifies transition to a
+  // stopped state.
+  MultiStep StopActorTaskAndWait(actor::TaskId& task_id);
+
   // Gets a reference to a state observable for use in
-  // WaitForActorTaskStateToStopped.
-  MultiStep PrepareForStopStateChange();
+  // WaitForActorTaskStateChangeToStopped.
+  MultiStep PrepareForStopStateChange(actor::TaskId& task_id);
 
   // Uses the state observable from PrepareForStopStateChange to await a state
   // change to stopped.
@@ -197,7 +228,7 @@ class GlicActorUiTest : public test::InteractiveGlicTest {
   // Gets the context options to capture a new observation after completing an
   // action. This includes both annotations (i.e. AnnotatedPageContent) and a
   // screenshot.
-  base::Value::Dict UpdatedContextOptions();
+  base::DictValue UpdatedContextOptions();
 
   MultiStep InitializeWithOpenGlicWindow();
 
@@ -214,6 +245,9 @@ class GlicActorUiTest : public test::InteractiveGlicTest {
 
   MultiStep CheckIsWebContentsCaptured(ui::ElementIdentifier tab,
                                        bool expected);
+
+  MultiStep CheckActorTaskState(actor::TaskId& task_id,
+                                actor::ActorTask::State state);
 
   // Waits for the specified tab to render a frame. Unlike
   // `WaitForWebContentsPainted` this does not require the frame to have
@@ -236,6 +270,16 @@ class GlicActorUiTest : public test::InteractiveGlicTest {
   tabs::TabHandle tab_handle_;
 
  protected:
+  actor::ActorKeyedService* actor_service() {
+    return actor::ActorKeyedService::Get(browser()->GetProfile());
+  }
+
+  // Checks a previously retrieved execute actions result `result_buffer`
+  // against the `expected_result`.
+  MultiStep CheckExecuteActionsResult(
+      std::unique_ptr<std::optional<content::EvalJsResult>> result_buffer,
+      ExpectedErrorResult expected_result);
+
   void EnableScreenshotsInContext() { include_screenshot_ = true; }
 
   std::unique_ptr<optimization_guide::proto::AnnotatedPageContent>

@@ -10,7 +10,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
-#include "ui/gfx/paint_vector_icon.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/views/accessibility/view_accessibility.h"
 
 namespace {
@@ -28,7 +28,9 @@ OverlayWindowMinimizeButton::OverlayWindowMinimizeButton(
   SetSize(gfx::Size(kMinimizeButtonSize, kMinimizeButtonSize));
 
   SetImageModel(views::Button::STATE_NORMAL,
-                ui::ImageModel::FromVectorIcon(kChromiumMinimizeIcon,
+                ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                                   ? kChromeMinimizeIcon
+                                                   : kChromiumMinimizeOldIcon,
                                                kColorPipWindowForeground,
                                                kMinimizeButtonIconSize));
 

@@ -105,7 +105,7 @@ body { margin:0; padding: 0; }
 
   Vector<gfx::QuadF> quads;
   auto* object = GetLayoutObjectByElementId("t");
-  object->AbsoluteQuads(quads, 0);
+  object->AbsoluteQuads(quads);
   EXPECT_EQ(1u, quads.size());
   gfx::RectF bounding = quads.back().BoundingBox();
   EXPECT_EQ(7.0f, bounding.x());
@@ -149,9 +149,8 @@ TEST_F(LayoutSVGTextTest, SubtreeLayout) {
   GetElementById("t")->setAttribute(svg_names::kTransformAttr,
                                     AtomicString("scale(0.5)"));
   GetDocument().UpdateStyleAndLayoutTreeForThisDocument();
-  EXPECT_TRUE(frame_view->IsSubtreeLayout());
+  EXPECT_TRUE(frame_view->HasSubtreeLayoutRoots());
 
-  ;
   uint32_t pre_layout_count = frame_view->BlockLayoutCountForTesting();
   UpdateAllLifecyclePhasesForTest();
   // Only the <text> and its parent <svg> should be laid out again.

@@ -18,13 +18,20 @@
 #include "chrome/browser/media/media_engagement_service_factory.h"
 #include "chrome/browser/media/mock_media_engagement_service.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_base.h"
+#include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_observer_helper_base.h"
 #include "chrome/browser/picture_in_picture/auto_pip_setting_helper.h"
 #include "chrome/browser/picture_in_picture/auto_pip_setting_view.h"
+#include "chrome/browser/picture_in_picture/hats/auto_picture_in_picture_hats_service.h"
+#include "chrome/browser/picture_in_picture/hats/auto_picture_in_picture_hats_service_factory.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/hats/hats_service_factory.h"
+#include "chrome/browser/ui/hats/mock_hats_service.h"
+#include "chrome/browser/ui/hats/survey_config.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/recently_audible_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -43,6 +50,7 @@
 #include "components/permissions/permission_decision_auto_blocker.h"
 #include "components/safe_browsing/core/browser/db/fake_database_manager.h"
 #include "components/ukm/test_ukm_recorder.h"
+#include "components/zoom/zoom_controller.h"
 #include "content/public/browser/media_session.h"
 #include "content/public/browser/media_session_service.h"
 #include "content/public/browser/navigation_entry.h"
@@ -67,6 +75,7 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
+#include "third_party/blink/public/common/page/page_zoom.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/test/test_event.h"
 #include "ui/gfx/geometry/vector2d.h"
@@ -187,6 +196,39 @@ class MockContentBrowserClient : public ChromeContentBrowserClient {
               (const, override));
 };
 
+class MockAutoPictureInPictureWindowOcclusionHelper
+    : public AutoPictureInPictureWindowOcclusionHelperBase {
+ public:
+  MockAutoPictureInPictureWindowOcclusionHelper(
+      content::WebContents* web_contents,
+      OcclusionStateChangedCallback callback)
+      : AutoPictureInPictureWindowOcclusionHelperBase(web_contents,
+                                                      std::move(callback)) {}
+
+  void SimulateOcclusionStateChange(OcclusionState state) {
+    state_ = state;
+    RunCallback(state);
+  }
+
+  // AutoPictureInPictureWindowOcclusionHelperBase:
+  MOCK_METHOD(void, StartObserving, (), (override));
+  MOCK_METHOD(void, StopObserving, (), (override));
+
+  OcclusionState GetOcclusionState() const override { return state_; }
+
+ private:
+  OcclusionState state_ = OcclusionState::kVisible;
+};
+
+std::unique_ptr<AutoPictureInPictureWindowOcclusionHelperBase>
+MockAutoPictureInPictureWindowOcclusionHelperFactory(
+    content::WebContents* web_contents,
+    AutoPictureInPictureWindowOcclusionHelperBase::OcclusionStateChangedCallback
+        callback) {
+  return std::make_unique<MockAutoPictureInPictureWindowOcclusionHelper>(
+      web_contents, std::move(callback));
+}
+
 // Helper class to wait for "recently audible" callbacks.
 class WasRecentlyAudibleWaiter {
  public:
@@ -275,7 +317,7 @@ class AutoPipInfoDevToolsWaiter : public content::DevToolsInspectorLogWatcher::
 void OpenPageInfoBubble(Browser* browser) {
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
   LocationIconView* location_icon_view =
-      browser_view->toolbar()->location_bar()->location_icon_view();
+      browser_view->toolbar()->location_bar_view()->location_icon_view();
   ASSERT_TRUE(location_icon_view);
   ui::test::TestEvent event;
   location_icon_view->ShowBubble(event);
@@ -406,12 +448,22 @@ class AutoPictureInPictureTabHelperBrowserTest : public WebRtcTestBase {
     ASSERT_TRUE(embedded_test_server()->Start());
 
     ukm_recorder_ = std::make_unique<ukm::TestAutoSetUkmRecorder>();
+    test_clock_.SetNowTicks(base::TimeTicks::Now());
   }
 
   void SetUp() override {
-    scoped_feature_list_.InitWithFeatures(GetEnabledFeatures(),
-                                          GetDisabledFeatures());
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        GetEnabledFeaturesWithParameters(), GetDisabledFeatures());
     InProcessBrowserTest::SetUp();
+  }
+
+  virtual std::vector<base::test::FeatureRefAndParams>
+  GetEnabledFeaturesWithParameters() {
+    std::vector<base::test::FeatureRefAndParams> features;
+    for (const auto& feature : GetEnabledFeatures()) {
+      features.emplace_back(*feature, base::FieldTrialParams());
+    }
+    return features;
   }
 
   void LoadAutoVideoPipPage(Browser* browser) {
@@ -683,6 +735,12 @@ class AutoPictureInPictureTabHelperBrowserTest : public WebRtcTestBase {
     auto* tab_helper =
         AutoPictureInPictureTabHelper::FromWebContents(opener_web_contents);
 
+    // Inject `test_clock_` to freeze time during the tab-switch transition.
+    // This prevents the Auto PiP activation window
+    // (`blink::kActivationLifespan`) from expiring on slow test bots, which
+    // would otherwise cause flakiness.
+    tab_helper->set_clock_for_testing(&test_clock_);
+
     // There should not currently be a picture-in-picture window.
     EXPECT_FALSE(opener_web_contents->HasPictureInPictureVideo());
     EXPECT_FALSE(opener_web_contents->HasPictureInPictureDocument());
@@ -747,7 +805,15 @@ class AutoPictureInPictureTabHelperBrowserTest : public WebRtcTestBase {
     SwitchBackToOpenerAndWaitForPipToClose();
   }
 
-  void SwitchToNewTabAndDontExpectAutopip() {
+  // By default, expect that the browser-side preconditions remain unmet after
+  // switching tabs (e.g., because there is no media engagement). For cases
+  // where preconditions are met (e.g., video has engagement) but we are blocked
+  // by renderer-side constraints (e.g., video size), set
+  // `expect_preconditions_unmet` to false. We cannot `EXPECT_TRUE` in that
+  // case because the activation window is transient and may expire by the time
+  // we check it.
+  void SwitchToNewTabAndDontExpectAutopip(
+      bool expect_preconditions_unmet = true) {
     auto* opener_web_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
     auto* tab_helper =
@@ -765,8 +831,11 @@ class AutoPictureInPictureTabHelperBrowserTest : public WebRtcTestBase {
 
     // The tab helper should indicate that we are not in pip.
     EXPECT_FALSE(tab_helper->IsInAutoPictureInPicture());
-    // Preconditions should remain unmet.
-    EXPECT_FALSE(tab_helper->AreAutoPictureInPicturePreconditionsMet());
+
+    if (expect_preconditions_unmet) {
+      // Preconditions should remain unmet.
+      EXPECT_FALSE(tab_helper->AreAutoPictureInPicturePreconditionsMet());
+    }
 
     // Verify that we did not enter pip.
     EXPECT_FALSE(opener_web_contents->HasPictureInPictureVideo());
@@ -926,8 +995,14 @@ class AutoPictureInPictureTabHelperBrowserTest : public WebRtcTestBase {
   }
 
   virtual std::vector<base::test::FeatureRef> GetDisabledFeatures() {
-    return {blink::features::kBrowserInitiatedAutomaticPictureInPicture};
+    // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox is
+    // enabled and then remove the two omnibox features.
+    return {blink::features::kBrowserInitiatedAutomaticPictureInPicture,
+            omnibox::internal::kWebUIOmniboxPopup,
+            omnibox::internal::kWebUIOmniboxAimPopup};
   }
+
+  base::SimpleTestTickClock& test_clock() { return test_clock_; }
 
  private:
   std::unique_ptr<media_session::test::TestAudioFocusObserver>
@@ -935,6 +1010,7 @@ class AutoPictureInPictureTabHelperBrowserTest : public WebRtcTestBase {
 
   base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<ukm::TestAutoSetUkmRecorder> ukm_recorder_;
+  base::SimpleTestTickClock test_clock_;
 };
 
 class AutoPictureInPictureWithVideoPlaybackBrowserTest
@@ -960,7 +1036,6 @@ class AutoPictureInPictureWithVideoPlaybackBrowserTest
   std::vector<base::test::FeatureRef> GetEnabledFeatures() override {
     auto features =
         AutoPictureInPictureTabHelperBrowserTest::GetEnabledFeatures();
-    features.push_back(media::kAutoPictureInPictureForVideoPlayback);
     features.push_back(blink::features::kAutoPictureInPictureVideoHeuristics);
     return features;
   }
@@ -976,7 +1051,8 @@ class AutoPictureInPictureWithVideoPlaybackBrowserTest
   }
 
   MediaEngagementService* GetMediaEngagementService() const {
-    return MediaEngagementServiceFactory::GetForProfile(browser()->profile());
+    return MediaEngagementServiceFactory::GetForProfile(
+        browser()->GetProfile());
   }
 
   void SetExpectedHasHighEngagement(bool has_high_engagenent) const {
@@ -1009,6 +1085,70 @@ class AutoPictureInPictureWithVideoPlaybackBrowserTest
   std::unique_ptr<safe_browsing::TestSafeBrowsingServiceFactory>
       safe_browsing_factory_;
   base::CallbackListSubscription dependency_manager_subscription_;
+};
+
+struct HatsTestParams {
+  std::string result;
+  std::string trigger;
+  AutoPipSettingHelper::PromptResult prompt_result;
+};
+
+class AutoPictureInPictureTabHelperHatsBrowserTest
+    : public AutoPictureInPictureWithVideoPlaybackBrowserTest,
+      public testing::WithParamInterface<HatsTestParams> {
+ public:
+  AutoPictureInPictureTabHelperHatsBrowserTest() {
+    hats_dependency_manager_subscription_ =
+        BrowserContextDependencyManager::GetInstance()
+            ->RegisterCreateServicesCallbackForTesting(base::BindRepeating(
+                &AutoPictureInPictureTabHelperHatsBrowserTest::
+                    SetHatsTestingFactory,
+                base::Unretained(this)));
+  }
+
+  void SetHatsTestingFactory(content::BrowserContext* context) {
+    HatsServiceFactory::GetInstance()->SetTestingFactory(
+        context, base::BindRepeating(&BuildMockHatsService));
+  }
+
+  MockHatsService* GetMockHatsService() {
+    return static_cast<MockHatsService*>(
+        HatsServiceFactory::GetForProfile(browser()->GetProfile(),
+                                          /*create_if_necessary=*/true));
+  }
+
+ private:
+  base::CallbackListSubscription hats_dependency_manager_subscription_;
+};
+
+class AutoPictureInPictureTabHelperHatsDocumentPipBrowserTest
+    : public AutoPictureInPictureTabHelperHatsBrowserTest {
+ public:
+  std::vector<base::test::FeatureRefAndParams>
+  GetEnabledFeaturesWithParameters() override {
+    auto features = AutoPictureInPictureTabHelperHatsBrowserTest::
+        GetEnabledFeaturesWithParameters();
+    features.emplace_back(
+        media::kAutoPictureInPictureSurveys,
+        base::FieldTrialParams({{"autopip_reason", "VideoConferencing"},
+                                {"prompt_result", GetParam().result}}));
+    return features;
+  }
+};
+
+class AutoPictureInPictureTabHelperHatsVideoPipBrowserTest
+    : public AutoPictureInPictureTabHelperHatsBrowserTest {
+ public:
+  std::vector<base::test::FeatureRefAndParams>
+  GetEnabledFeaturesWithParameters() override {
+    auto features = AutoPictureInPictureTabHelperHatsBrowserTest::
+        GetEnabledFeaturesWithParameters();
+    features.emplace_back(
+        media::kAutoPictureInPictureSurveys,
+        base::FieldTrialParams({{"autopip_reason", "MediaPlayback"},
+                                {"prompt_result", GetParam().result}}));
+    return features;
+  }
 };
 
 class BrowserInitiatedAutoPictureInPictureBrowserTest
@@ -1503,7 +1643,7 @@ IN_PROC_BROWSER_TEST_F(
     AutoPictureInPictureTabHelperBrowserTest,
     PromptResultRecorded_VideoConferencingNotShownIncognito) {
   // Load a page that registers for autopip and start video playback.
-  Browser* incognito_browser = CreateIncognitoBrowser(browser()->profile());
+  Browser* incognito_browser = CreateIncognitoBrowser(browser()->GetProfile());
   LoadCameraMicrophonePage(incognito_browser, "a.com");
   auto* web_contents =
       incognito_browser->tab_strip_model()->GetActiveWebContents();
@@ -1534,17 +1674,10 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureTabHelperBrowserTest,
   auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
   GetUserMediaAndAccept(web_contents);
 
-  // Set clock for testing.
-  base::SimpleTestTickClock test_clock;
-  test_clock.SetNowTicks(base::TimeTicks::Now());
-  auto* tab_helper =
-      AutoPictureInPictureTabHelper::FromWebContents(web_contents);
-  tab_helper->set_clock_for_testing(&test_clock);
-
   // Trigger metric recording.
   base::HistogramTester histograms;
   SwitchToNewTabAndWaitForAutoPip();
-  test_clock.Advance(base::Milliseconds(5000));
+  test_clock().Advance(base::Milliseconds(5000));
   SwitchBackToOpenerAndWaitForPipToClose();
 
   // Verify expectations.
@@ -1564,11 +1697,9 @@ IN_PROC_BROWSER_TEST_F(
   GetUserMediaAndAccept(web_contents);
 
   // Set clock for testing.
-  base::SimpleTestTickClock test_clock;
-  test_clock.SetNowTicks(base::TimeTicks::Now());
   auto* tab_helper =
       AutoPictureInPictureTabHelper::FromWebContents(web_contents);
-  tab_helper->set_clock_for_testing(&test_clock);
+  tab_helper->set_clock_for_testing(&test_clock());
 
   base::HistogramTester histograms;
 
@@ -1582,9 +1713,10 @@ IN_PROC_BROWSER_TEST_F(
   enter_pip_observer.Wait();
 
   // Trigger metric recording.
-  test_clock.Advance(base::Milliseconds(5000));
+  test_clock().Advance(base::Milliseconds(5000));
+  ui_test_utils::BrowserDestroyedObserver observer(browser());
   web_contents->ClosePage();
-  ui_test_utils::WaitForBrowserToClose(browser());
+  observer.Wait();
 
   // Verify expectations.
   metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
@@ -1608,21 +1740,14 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureTabHelperBrowserTest,
   auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
   GetUserMediaAndAccept(web_contents);
 
-  // Set clock for testing.
-  base::SimpleTestTickClock test_clock;
-  test_clock.SetNowTicks(base::TimeTicks::Now());
-  auto* tab_helper =
-      AutoPictureInPictureTabHelper::FromWebContents(web_contents);
-  tab_helper->set_clock_for_testing(&test_clock);
-
   // Simulate the accumulatation of video conferencing pip time.
   base::HistogramTester histograms;
   SwitchToNewTabAndWaitForAutoPip();
-  test_clock.Advance(base::Milliseconds(5000));
+  test_clock().Advance(base::Milliseconds(5000));
   SwitchBackToOpenerAndWaitForPipToClose();
 
   SwitchToNewTabAndWaitForAutoPip();
-  test_clock.Advance(base::Milliseconds(5000));
+  test_clock().Advance(base::Milliseconds(5000));
   SwitchBackToOpenerAndWaitForPipToClose();
 
   // Trigger metric recording.
@@ -1734,8 +1859,9 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureTabHelperBrowserTest,
   EXPECT_EQ(expected_reason, tab_helper->GetAutoPipTriggerReason());
   EXPECT_EQ(expected_reason, GetAutoPipReason(*web_contents));
 
+  ui_test_utils::BrowserDestroyedObserver observer(browser());
   web_contents->ClosePage();
-  ui_test_utils::WaitForBrowserToClose(browser());
+  observer.Wait();
 }
 
 IN_PROC_BROWSER_TEST_F(AutoPictureInPictureTabHelperBrowserTest,
@@ -1831,7 +1957,9 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureTabHelperBrowserTest,
                              new_pip_contents->GetTopLevelNativeWindow())
                              ->GetWidget();
   EXPECT_NE(moved_bounds, new_pip_widget->GetWindowBoundsInScreen());
-  EXPECT_EQ(initial_bounds, new_pip_widget->GetWindowBoundsInScreen());
+  WidgetBoundsChangeWaiter(new_pip_widget,
+                           WidgetBoundsChangeWaiter::Comparison::kIsEqual)
+      .Wait(initial_bounds);
 }
 
 IN_PROC_BROWSER_TEST_F(AutoPictureInPictureWithVideoPlaybackBrowserTest,
@@ -2171,7 +2299,7 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureTabHelperBrowserTest,
 IN_PROC_BROWSER_TEST_F(AutoPictureInPictureTabHelperBrowserTest,
                        ContentSettingAskIsBlockForIncognito) {
   // Load a page that registers for autopip.
-  Browser* incognito_browser = CreateIncognitoBrowser(browser()->profile());
+  Browser* incognito_browser = CreateIncognitoBrowser(browser()->GetProfile());
   LoadCameraMicrophonePage(incognito_browser);
   auto* original_web_contents =
       incognito_browser->tab_strip_model()->GetActiveWebContents();
@@ -2520,7 +2648,9 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureWithVideoPlaybackBrowserTest,
 
     // Generate media logs.
     PlayVideo(web_contents);
+    WaitForAudioFocusGained();
     WaitForMediaSessionPlaying(web_contents);
+    WaitForWasRecentlyAudible(web_contents);
 
     // Verify that media logs were recorded, since the player should be using
     // the media element execution context of the opener document.
@@ -2701,17 +2831,10 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureWithVideoPlaybackBrowserTest,
   SetExpectedHasHighEngagement(true);
   WaitForWasRecentlyAudible(web_contents);
 
-  // Set clock for testing.
-  base::SimpleTestTickClock test_clock;
-  test_clock.SetNowTicks(base::TimeTicks::Now());
-  auto* tab_helper =
-      AutoPictureInPictureTabHelper::FromWebContents(web_contents);
-  tab_helper->set_clock_for_testing(&test_clock);
-
   // Trigger metric recording.
   base::HistogramTester histograms;
   SwitchToNewTabAndWaitForAutoPip();
-  test_clock.Advance(base::Milliseconds(5000));
+  test_clock().Advance(base::Milliseconds(5000));
   SwitchBackToOpenerAndWaitForPipToClose();
 
   // Verify expectations.
@@ -2733,26 +2856,19 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureWithVideoPlaybackBrowserTest,
   SetExpectedHasHighEngagement(true);
   WaitForWasRecentlyAudible(web_contents);
 
-  // Set clock for testing.
-  base::SimpleTestTickClock test_clock;
-  test_clock.SetNowTicks(base::TimeTicks::Now());
-  auto* tab_helper =
-      AutoPictureInPictureTabHelper::FromWebContents(web_contents);
-  tab_helper->set_clock_for_testing(&test_clock);
-
   // Trigger metric recording.
   base::HistogramTester histograms;
   SwitchToNewTabAndWaitForAutoPip();
   // Playing for 5000 ms
-  test_clock.Advance(base::Milliseconds(5000));
+  test_clock().Advance(base::Milliseconds(5000));
   PauseVideo(web_contents);
   WaitForMediaSessionPaused(web_contents);
   // Paused for 2000 ms.
-  test_clock.Advance(base::Milliseconds(2000));
+  test_clock().Advance(base::Milliseconds(2000));
   PlayVideo(web_contents);
   WaitForMediaSessionPlaying(web_contents);
   // Playing for 3000 ms
-  test_clock.Advance(base::Milliseconds(3000));
+  test_clock().Advance(base::Milliseconds(3000));
   SwitchBackToOpenerAndWaitForPipToClose();
 
   // Verify expectations.
@@ -2773,27 +2889,20 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureWithVideoPlaybackBrowserTest,
   WaitForWasRecentlyAudible(web_contents);
   SetExpectedHasHighEngagement(true);
 
-  // Set clock for testing.
-  base::SimpleTestTickClock test_clock;
-  test_clock.SetNowTicks(base::TimeTicks::Now());
-  auto* tab_helper =
-      AutoPictureInPictureTabHelper::FromWebContents(web_contents);
-  tab_helper->set_clock_for_testing(&test_clock);
-
   base::HistogramTester histograms;
 
   // Trigger Auto-PiP.
   SwitchToNewTabAndWaitForAutoPip();
 
   // Advance clock by 10 seconds while playing.
-  test_clock.Advance(base::Milliseconds(10000));
+  test_clock().Advance(base::Milliseconds(10000));
 
   // Pause video.
   PauseVideo(web_contents);
   WaitForMediaSessionPaused(web_contents);
 
   // Advance clock by another 10 seconds while paused.
-  test_clock.Advance(base::Milliseconds(10000));
+  test_clock().Advance(base::Milliseconds(10000));
 
   // Close Auto-PiP.
   SwitchBackToOpenerAndWaitForPipToClose();
@@ -2827,11 +2936,9 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureWithVideoPlaybackBrowserTest,
   auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
 
   // Set clock for testing.
-  base::SimpleTestTickClock test_clock;
-  test_clock.SetNowTicks(base::TimeTicks::Now());
   auto* tab_helper =
       AutoPictureInPictureTabHelper::FromWebContents(web_contents);
-  tab_helper->set_clock_for_testing(&test_clock);
+  tab_helper->set_clock_for_testing(&test_clock());
 
   base::HistogramTester histograms;
 
@@ -2843,9 +2950,10 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureWithVideoPlaybackBrowserTest,
   enter_pip_observer.Wait();
 
   // Trigger metric recording.
-  test_clock.Advance(base::Milliseconds(5000));
+  test_clock().Advance(base::Milliseconds(5000));
+  ui_test_utils::BrowserDestroyedObserver observer(browser());
   web_contents->ClosePage();
-  ui_test_utils::WaitForBrowserToClose(browser());
+  observer.Wait();
 
   // Verify expectations.
   metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
@@ -2873,21 +2981,14 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureWithVideoPlaybackBrowserTest,
   SetExpectedHasHighEngagement(true);
   WaitForWasRecentlyAudible(web_contents);
 
-  // Set clock for testing.
-  base::SimpleTestTickClock test_clock;
-  test_clock.SetNowTicks(base::TimeTicks::Now());
-  auto* tab_helper =
-      AutoPictureInPictureTabHelper::FromWebContents(web_contents);
-  tab_helper->set_clock_for_testing(&test_clock);
-
   // Simulate the accumulatation of media playback pip time.
   base::HistogramTester histograms;
   SwitchToNewTabAndWaitForAutoPip();
-  test_clock.Advance(base::Milliseconds(5000));
+  test_clock().Advance(base::Milliseconds(5000));
   SwitchBackToOpenerAndWaitForPipToClose();
 
   SwitchToNewTabAndWaitForAutoPip();
-  test_clock.Advance(base::Milliseconds(5000));
+  test_clock().Advance(base::Milliseconds(5000));
   SwitchBackToOpenerAndWaitForPipToClose();
 
   // Trigger metric recording.
@@ -2921,17 +3022,10 @@ IN_PROC_BROWSER_TEST_F(
   SetExpectedHasHighEngagement(true);
   WaitForWasRecentlyAudible(web_contents);
 
-  // Set clock for testing.
-  base::SimpleTestTickClock test_clock;
-  test_clock.SetNowTicks(base::TimeTicks::Now());
-  auto* tab_helper =
-      AutoPictureInPictureTabHelper::FromWebContents(web_contents);
-  tab_helper->set_clock_for_testing(&test_clock);
-
   // Simulate the accumulatation of media playback pip time.
   base::HistogramTester histograms;
   SwitchToNewTabAndWaitForAutoPip();
-  test_clock.Advance(base::Milliseconds(5000));
+  test_clock().Advance(base::Milliseconds(5000));
   SwitchBackToOpenerAndWaitForPipToClose();
 
   // Starts using camera/microphone.
@@ -2939,7 +3033,7 @@ IN_PROC_BROWSER_TEST_F(
 
   // Simulate the accumulatation of video conferencing pip time.
   SwitchToNewTabAndWaitForAutoPip();
-  test_clock.Advance(base::Milliseconds(5000));
+  test_clock().Advance(base::Milliseconds(5000));
   SwitchBackToOpenerAndWaitForPipToClose();
 
   // Trigger metrics recording.
@@ -3050,8 +3144,9 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureWithVideoPlaybackBrowserTest,
   EXPECT_EQ(expected_reason, tab_helper->GetAutoPipTriggerReason());
   EXPECT_EQ(expected_reason, GetAutoPipReason(*web_contents));
 
+  ui_test_utils::BrowserDestroyedObserver observer(browser());
   web_contents->ClosePage();
-  ui_test_utils::WaitForBrowserToClose(browser());
+  observer.Wait();
 }
 
 IN_PROC_BROWSER_TEST_F(AutoPictureInPictureWithVideoPlaybackBrowserTest,
@@ -3353,6 +3448,448 @@ IN_PROC_BROWSER_TEST_F(BrowserInitiatedAutoPictureInPictureBrowserTest,
                                PromptResult::kAllowOnce);
 }
 
+struct AutoPipSizeTestCase {
+  int width;
+  int height;
+  bool should_pip;
+};
+
+// Pretty-print helper for test parameters.
+std::ostream& operator<<(std::ostream& os,
+                         const AutoPipSizeTestCase& test_case) {
+  return os << test_case.width << "x" << test_case.height
+            << (test_case.should_pip ? "_Allow" : "_Block");
+}
+
+class BrowserInitiatedAutoPictureInPictureSizeTest
+    : public BrowserInitiatedAutoPictureInPictureBrowserTest,
+      public ::testing::WithParamInterface<AutoPipSizeTestCase> {};
+
+IN_PROC_BROWSER_TEST_P(BrowserInitiatedAutoPictureInPictureSizeTest,
+                       VerifySizeThreshold) {
+  const auto& test_case = GetParam();
+
+  LoadNotRegisteredPage(browser());
+  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  PlayVideo(web_contents);
+  WaitForAudioFocusGained();
+  WaitForMediaSessionPlaying(web_contents);
+  WaitForWasRecentlyAudible(web_contents);
+  SetExpectedHasHighEngagement(true);
+
+  // Set object-fit to fill to avoid letterboxing, then resize and wait for
+  // layout.
+  EXPECT_EQ(true, EvalJs(web_contents,
+                         content::JsReplace(
+                             "new Promise(resolve => {"
+                             "  video.style.objectFit = 'fill';"
+                             "  video.style.width = $1 + 'px';"
+                             "  video.style.height = $2 + 'px';"
+                             "  requestAnimationFrame(() => "
+                             "requestAnimationFrame(() => resolve(true)));"
+                             "});",
+                             test_case.width, test_case.height)));
+
+  test_case.should_pip
+      ? SwitchToNewTabAndBackAndExpectAutopip(/*should_video_pip=*/true,
+                                              /*should_document_pip=*/false)
+      : SwitchToNewTabAndDontExpectAutopip(
+            /*expect_preconditions_unmet=*/false);
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         BrowserInitiatedAutoPictureInPictureSizeTest,
+                         ::testing::Values(
+                             // Too small (both dimensions)
+                             AutoPipSizeTestCase{50, 50, false},
+                             // Borderline small (width)
+                             AutoPipSizeTestCase{99, 100, false},
+                             // Borderline small (height)
+                             AutoPipSizeTestCase{100, 99, false},
+                             // Exactly at threshold
+                             AutoPipSizeTestCase{100, 100, true},
+                             // Large enough
+                             AutoPipSizeTestCase{300, 300, true}),
+                         ::testing::PrintToStringParamName());
+
+IN_PROC_BROWSER_TEST_F(BrowserInitiatedAutoPictureInPictureBrowserTest,
+                       ManualPipNotBlockedIfVideoTooSmall) {
+  LoadNotRegisteredPage(browser());
+  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  PlayVideo(web_contents);
+  WaitForAudioFocusGained();
+  WaitForMediaSessionPlaying(web_contents);
+  WaitForWasRecentlyAudible(web_contents);
+  SetExpectedHasHighEngagement(true);
+
+  // Resize the video to be too small for Auto-PiP and wait for layout.
+  EXPECT_EQ(true, EvalJs(web_contents,
+                         "new Promise(resolve => {"
+                         "  video.style.width = '50px';"
+                         "  video.style.height = '50px';"
+                         "  requestAnimationFrame(() => "
+                         "requestAnimationFrame(() => resolve(true)));"
+                         "});"));
+
+  base::HistogramTester histograms;
+
+  // Trigger manual PiP via MediaSession.
+  content::MediaStartStopObserver enter_pip_observer(
+      web_contents,
+      content::MediaStartStopObserver::Type::kEnterPictureInPicture);
+  content::MediaSession::Get(web_contents)->EnterPictureInPicture();
+  enter_pip_observer.Wait();
+
+  // It should open despite being small because it is manual.
+  EXPECT_TRUE(web_contents->HasPictureInPictureVideo());
+
+  metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
+  histograms.ExpectTotalCount("Media.PictureInPicture.SizeConstraintResult", 0);
+  histograms.ExpectTotalCount("Media.PictureInPicture.BlockedVideoEncodedSize",
+                              0);
+
+  // Clean up by exiting PiP.
+  content::MediaStartStopObserver exit_pip_observer(
+      web_contents,
+      content::MediaStartStopObserver::Type::kExitPictureInPicture);
+  content::MediaSession::Get(web_contents)->ExitPictureInPicture();
+  exit_pip_observer.Wait();
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserInitiatedAutoPictureInPictureBrowserTest,
+                       OpensIfVideoResizedBackToLarge) {
+  LoadNotRegisteredPage(browser());
+  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  PlayVideo(web_contents);
+  WaitForAudioFocusGained();
+  WaitForMediaSessionPlaying(web_contents);
+  WaitForWasRecentlyAudible(web_contents);
+  SetExpectedHasHighEngagement(true);
+
+  // Resize the video to be too small for Auto-PiP and wait for layout.
+  EXPECT_EQ(true, EvalJs(web_contents,
+                         "new Promise(resolve => {"
+                         "  video.style.width = '50px';"
+                         "  video.style.height = '50px';"
+                         "  requestAnimationFrame(() => "
+                         "requestAnimationFrame(() => resolve(true)));"
+                         "});"));
+
+  // Resize it back to be large and wait for layout.
+  EXPECT_EQ(true, EvalJs(web_contents,
+                         "new Promise(resolve => {"
+                         "  video.style.width = '300px';"
+                         "  video.style.height = '300px';"
+                         "  requestAnimationFrame(() => "
+                         "requestAnimationFrame(() => resolve(true)));"
+                         "});"));
+
+  // We expect Auto-PiP to open.
+  SwitchToNewTabAndBackAndExpectAutopip(/*should_video_pip=*/true,
+                                        /*should_document_pip=*/false);
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserInitiatedAutoPictureInPictureBrowserTest,
+                       SizeConstraintMetricsBlocked) {
+  LoadNotRegisteredPage(browser());
+  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  PlayVideo(web_contents);
+  WaitForAudioFocusGained();
+  WaitForMediaSessionPlaying(web_contents);
+  WaitForWasRecentlyAudible(web_contents);
+  SetExpectedHasHighEngagement(true);
+
+  // Resize to too small (50x50) and expect blocking.
+  EXPECT_EQ(true, EvalJs(web_contents,
+                         "new Promise(resolve => {"
+                         "  video.style.objectFit = 'fill';"
+                         "  video.style.width = '50px';"
+                         "  video.style.height = '50px';"
+                         "  requestAnimationFrame(() => "
+                         "requestAnimationFrame(() => resolve(true)));"
+                         "});"));
+
+  base::HistogramTester histograms;
+  SwitchToNewTabAndDontExpectAutopip(/*expect_preconditions_unmet=*/false);
+  metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
+  histograms.ExpectUniqueSample("Media.PictureInPicture.SizeConstraintResult",
+                                1 /* SizeConstraintNotMet */, 1);
+  int32_t expected_encoded_size = (50 << 16) | 50;
+  histograms.ExpectUniqueSample(
+      "Media.PictureInPicture.BlockedVideoEncodedSize", expected_encoded_size,
+      1);
+  histograms.ExpectTotalCount("Media.PictureInPicture.AllowedVideoEncodedSize",
+                              0);
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserInitiatedAutoPictureInPictureBrowserTest,
+                       SizeConstraintMetricsAllowed) {
+  LoadNotRegisteredPage(browser());
+  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  PlayVideo(web_contents);
+  WaitForAudioFocusGained();
+  WaitForMediaSessionPlaying(web_contents);
+  WaitForWasRecentlyAudible(web_contents);
+  SetExpectedHasHighEngagement(true);
+
+  // Resize to large enough (300x300) and expect success.
+  EXPECT_EQ(true, EvalJs(web_contents,
+                         "new Promise(resolve => {"
+                         "  video.style.objectFit = 'fill';"
+                         "  video.style.width = '300px';"
+                         "  video.style.height = '300px';"
+                         "  requestAnimationFrame(() => "
+                         "requestAnimationFrame(() => resolve(true)));"
+                         "});"));
+
+  base::HistogramTester histograms;
+  SwitchToNewTabAndBackAndExpectAutopip(/*should_video_pip=*/true,
+                                        /*should_document_pip=*/false);
+  metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
+  histograms.ExpectUniqueSample("Media.PictureInPicture.SizeConstraintResult",
+                                0 /* SizeConstraintMet */, 1);
+  int32_t expected_encoded_size = (300 << 16) | 300;
+  histograms.ExpectUniqueSample(
+      "Media.PictureInPicture.AllowedVideoEncodedSize", expected_encoded_size,
+      1);
+  histograms.ExpectTotalCount("Media.PictureInPicture.BlockedVideoEncodedSize",
+                              0);
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserInitiatedAutoPictureInPictureBrowserTest,
+                       SizeConstraintAllowedWithPageZoom) {
+  LoadNotRegisteredPage(browser());
+  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  PlayVideo(web_contents);
+  WaitForAudioFocusGained();
+  WaitForMediaSessionPlaying(web_contents);
+  WaitForWasRecentlyAudible(web_contents);
+  SetExpectedHasHighEngagement(true);
+
+  // Setup resize listener in before we zoom. We append "true;" so the script
+  // evaluates to a boolean instead of a Promise, preventing ExecJs from
+  // blocking here. We will wait on the Promise later using EvalJs.
+  ASSERT_TRUE(ExecJs(web_contents,
+                     "window.zoomPromise = new Promise(resolve => {"
+                     "  window.addEventListener('resize', () => "
+                     "resolve('ResizeCompleted'), {once: true});"
+                     "});"
+                     "true;"));
+
+  // Set page zoom to 200%.
+  auto* zoom_controller = zoom::ZoomController::FromWebContents(web_contents);
+  zoom_controller->SetZoomLevel(blink::ZoomFactorToZoomLevel(2.0));
+
+  // Wait for the renderer to apply the zoom and complete layout.
+  EXPECT_EQ("ResizeCompleted", EvalJs(web_contents, "window.zoomPromise"));
+
+  // Video is 80x80 CSS, but at 200% zoom it is 160x160 DIPs.
+  EXPECT_EQ(true, EvalJs(web_contents,
+                         "new Promise(resolve => {"
+                         "  video.style.objectFit = 'fill';"
+                         "  video.style.width = '80px';"
+                         "  video.style.height = '80px';"
+                         "  requestAnimationFrame(() => "
+                         "requestAnimationFrame(() => resolve(true)));"
+                         "});"));
+
+  base::HistogramTester histograms;
+
+  // Verify that the video is allowed to enter Auto-PiP because page zoom is
+  // 200% (making it 160x160 DIPs, which is >= 100x100 threshold).
+  SwitchToNewTabAndBackAndExpectAutopip(/*should_video_pip=*/true,
+                                        /*should_document_pip=*/false);
+
+  metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
+  histograms.ExpectUniqueSample("Media.PictureInPicture.SizeConstraintResult",
+                                0 /* SizeConstraintMet */, 1);
+  int32_t expected_encoded_size = (160 << 16) | 160;
+  histograms.ExpectUniqueSample(
+      "Media.PictureInPicture.AllowedVideoEncodedSize", expected_encoded_size,
+      1);
+  histograms.ExpectTotalCount("Media.PictureInPicture.BlockedVideoEncodedSize",
+                              0);
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserInitiatedAutoPictureInPictureBrowserTest,
+                       SizeConstraintBlockedWithPageZoom) {
+  LoadNotRegisteredPage(browser());
+  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  PlayVideo(web_contents);
+  WaitForAudioFocusGained();
+  WaitForMediaSessionPlaying(web_contents);
+  WaitForWasRecentlyAudible(web_contents);
+  SetExpectedHasHighEngagement(true);
+
+  // Setup resize listener in before we zoom. We append "true;" so the script
+  // evaluates to a boolean instead of a Promise, preventing ExecJs from
+  // blocking here. We will wait on the Promise later using EvalJs.
+  ASSERT_TRUE(ExecJs(web_contents,
+                     "window.zoomPromise = new Promise(resolve => {"
+                     "  window.addEventListener('resize', () => "
+                     "resolve('ResizeCompleted'), {once: true});"
+                     "});"
+                     "true;"));
+
+  // Set page zoom to 50%.
+  auto* zoom_controller = zoom::ZoomController::FromWebContents(web_contents);
+  zoom_controller->SetZoomLevel(blink::ZoomFactorToZoomLevel(0.5));
+
+  // Wait for the renderer to apply the zoom and complete layout.
+  EXPECT_EQ("ResizeCompleted", EvalJs(web_contents, "window.zoomPromise"));
+
+  // Video is 120x120 CSS, but at 50% zoom it is 60x60 DIPs.
+  EXPECT_EQ(true, EvalJs(web_contents,
+                         "new Promise(resolve => {"
+                         "  video.style.objectFit = 'fill';"
+                         "  video.style.width = '120px';"
+                         "  video.style.height = '120px';"
+                         "  requestAnimationFrame(() => "
+                         "requestAnimationFrame(() => resolve(true)));"
+                         "});"));
+
+  base::HistogramTester histograms;
+
+  // Verify that the video is blocked from Auto-PiP because page zoom is 50%
+  // (making it 60x60 DIPs, which is < 100x100 threshold).
+  SwitchToNewTabAndDontExpectAutopip(/*expect_preconditions_unmet=*/false);
+
+  metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
+  histograms.ExpectUniqueSample("Media.PictureInPicture.SizeConstraintResult",
+                                1 /* SizeConstraintNotMet */, 1);
+
+  // Verify it logs the correct blocked size of 60x60 encoded in 32-bit.
+  int32_t expected_encoded_size = (60 << 16) | 60;
+  histograms.ExpectUniqueSample(
+      "Media.PictureInPicture.BlockedVideoEncodedSize", expected_encoded_size,
+      1);
+  histograms.ExpectTotalCount("Media.PictureInPicture.AllowedVideoEncodedSize",
+                              0);
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserInitiatedAutoPictureInPictureBrowserTest,
+                       DoesNotOpenIfVideoScaledDown) {
+  LoadNotRegisteredPage(browser());
+  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  PlayVideo(web_contents);
+  WaitForAudioFocusGained();
+  WaitForMediaSessionPlaying(web_contents);
+  WaitForWasRecentlyAudible(web_contents);
+  SetExpectedHasHighEngagement(true);
+
+  // Video is 300x300 styled (large enough), but scaled down to 10% (30x30
+  // visual).
+  EXPECT_EQ(true, EvalJs(web_contents,
+                         "new Promise(resolve => {"
+                         "  video.style.objectFit = 'fill';"
+                         "  video.style.width = '300px';"
+                         "  video.style.height = '300px';"
+                         "  video.style.transform = 'scale(0.1)';"
+                         "  requestAnimationFrame(() => "
+                         "requestAnimationFrame(() => resolve(true)));"
+                         "});"));
+
+  SwitchToNewTabAndDontExpectAutopip(/*expect_preconditions_unmet=*/false);
+}
+
+class AutoPictureInPictureTabHelperWindowOcclusionDisabledBrowserTest
+    : public AutoPictureInPictureTabHelperBrowserTest {
+  std::vector<base::test::FeatureRef> GetDisabledFeatures() override {
+    auto features =
+        AutoPictureInPictureTabHelperBrowserTest::GetDisabledFeatures();
+    features.push_back(media::kAutoPictureInPictureOnWindowOccluded);
+    return features;
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(
+    AutoPictureInPictureTabHelperWindowOcclusionDisabledBrowserTest,
+    TabHelperDoesNotCreateWindowOcclusionHelperWhenFeatureDisabled) {
+  // Load a page that registers for autopip and starts using camera/microphone.
+  LoadCameraMicrophonePage(browser());
+  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  GetUserMediaAndAccept(web_contents);
+
+  // The tab helper should not have a window occlusion helper since the feature
+  // is disabled.
+  auto* tab_helper =
+      AutoPictureInPictureTabHelper::FromWebContents(web_contents);
+  EXPECT_EQ(nullptr, tab_helper->window_occlusion_helper_for_testing());
+}
+
+class AutoPictureInPictureTabHelperWindowOcclusionBrowserTest
+    : public AutoPictureInPictureTabHelperBrowserTest {
+ public:
+  void SetUp() override {
+    AutoPictureInPictureWindowOcclusionHelperBase::SetFactoryForTesting(
+        base::BindRepeating(
+            &MockAutoPictureInPictureWindowOcclusionHelperFactory));
+
+    AutoPictureInPictureTabHelperBrowserTest::SetUp();
+  }
+
+  void TearDown() override {
+    AutoPictureInPictureWindowOcclusionHelperBase::SetFactoryForTesting(
+        AutoPictureInPictureWindowOcclusionHelperBase::FactoryCallback());
+
+    AutoPictureInPictureTabHelperBrowserTest::TearDown();
+  }
+
+  std::vector<base::test::FeatureRef> GetEnabledFeatures() override {
+    auto features =
+        AutoPictureInPictureTabHelperBrowserTest::GetEnabledFeatures();
+    features.push_back(media::kAutoPictureInPictureOnWindowOccluded);
+    return features;
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(AutoPictureInPictureTabHelperWindowOcclusionBrowserTest,
+                       WindowOcclusionTriggersAutoPip) {
+  // Load a page that registers for autopip and starts using camera/microphone.
+  LoadCameraMicrophonePage(browser());
+  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  GetUserMediaAndAccept(web_contents);
+
+  auto* tab_helper =
+      AutoPictureInPictureTabHelper::FromWebContents(web_contents);
+  auto* mock_occlusion_helper =
+      static_cast<MockAutoPictureInPictureWindowOcclusionHelper*>(
+          tab_helper->window_occlusion_helper_for_testing());
+  ASSERT_NE(nullptr, mock_occlusion_helper);
+
+  // Simulate the window becoming occluded.
+  content::MediaStartStopObserver enter_pip_observer(
+      web_contents,
+      content::MediaStartStopObserver::Type::kEnterPictureInPicture);
+  mock_occlusion_helper->SimulateOcclusionStateChange(
+      AutoPictureInPictureWindowOcclusionHelperBase::OcclusionState::kOccluded);
+  enter_pip_observer.Wait();
+
+  // The tab helper should indicate that we're now in pip.
+  EXPECT_TRUE(web_contents->HasPictureInPictureDocument());
+
+  // Simulate the window becoming hidden. This should not close the pip window.
+  mock_occlusion_helper->SimulateOcclusionStateChange(
+      AutoPictureInPictureWindowOcclusionHelperBase::OcclusionState::kHidden);
+  EXPECT_TRUE(web_contents->HasPictureInPictureDocument());
+
+  // Simulate the window becoming visible again.
+  content::MediaStartStopObserver exit_pip_observer(
+      web_contents,
+      content::MediaStartStopObserver::Type::kExitPictureInPicture);
+  mock_occlusion_helper->SimulateOcclusionStateChange(
+      AutoPictureInPictureWindowOcclusionHelperBase::OcclusionState::kVisible);
+  exit_pip_observer.Wait();
+
+  // There should no longer be a picture-in-picture window.
+  EXPECT_FALSE(web_contents->HasPictureInPictureDocument());
+
+  // Simulate the window becoming hidden. This should not open a pip window.
+  mock_occlusion_helper->SimulateOcclusionStateChange(
+      AutoPictureInPictureWindowOcclusionHelperBase::OcclusionState::kHidden);
+  EXPECT_FALSE(web_contents->HasPictureInPictureDocument());
+}
+
 class AutoPictureInPictureTabHelperBrowserAutoPipDryRunTest
     : public AutoPictureInPictureWithVideoPlaybackBrowserTest,
       public ::testing::WithParamInterface<std::tuple<bool, bool, bool>> {
@@ -3372,7 +3909,6 @@ class AutoPictureInPictureTabHelperBrowserAutoPipDryRunTest
   std::vector<base::test::FeatureRef> GetEnabledFeatures() override {
     std::vector<base::test::FeatureRef> features = {
         blink::features::kDocumentPictureInPictureAPI,
-        media::kAutoPictureInPictureForVideoPlayback,
         blink::features::kAutoPictureInPictureVideoHeuristics};
 
     if (IsBrowserInitiatedAutoPipEnabled()) {
@@ -3437,3 +3973,153 @@ INSTANTIATE_TEST_SUITE_P(All,
                          ::testing::Combine(::testing::Bool(),
                                             ::testing::Bool(),
                                             ::testing::Bool()));
+
+IN_PROC_BROWSER_TEST_P(AutoPictureInPictureTabHelperHatsDocumentPipBrowserTest,
+                       TriggersSurveyOnTabActivation) {
+  auto* hats_service = GetMockHatsService();
+  ON_CALL(*hats_service, CanShowAnySurvey(false))
+      .WillByDefault(testing::Return(true));
+
+  // Load a page that supports Auto-PiP (Document PiP).
+  LoadCameraMicrophonePage(browser(), "a.com");
+  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  GetUserMediaAndAccept(web_contents);
+
+  // Trigger Auto-PiP by switching to a new tab.
+  {
+    content::MediaStartStopObserver enter_pip_observer(
+        web_contents,
+        content::MediaStartStopObserver::Type::kEnterPictureInPicture);
+    OpenNewTab(browser());
+    enter_pip_observer.Wait();
+  }
+  ASSERT_TRUE(web_contents->HasPictureInPictureDocument());
+
+  // Interact with the Auto-PiP window.
+  switch (GetParam().prompt_result) {
+    case AutoPipSettingHelper::PromptResult::kAllowOnce:
+    case AutoPipSettingHelper::PromptResult::kBlock: {
+      auto* overlay_view = GetOverlayViewFromDocumentPipWindow();
+      ASSERT_TRUE(overlay_view);
+      overlay_view->get_view_for_testing()->simulate_button_press_for_testing(
+          GetParam().prompt_result == AutoPipSettingHelper::PromptResult::kBlock
+              ? AutoPipSettingView::UiResult::kBlock
+              : AutoPipSettingView::UiResult::kAllowOnce);
+      break;
+    }
+    case AutoPipSettingHelper::PromptResult::kIgnored:
+      // Simulate manual closure without making a choice.
+      PictureInPictureWindowManager::GetInstance()
+          ->ExitPictureInPictureViaWindowUi(
+              PictureInPictureWindowManager::UiBehavior::kCloseWindowOnly);
+      break;
+    default:
+      NOTREACHED();
+  }
+
+  // Switch back to the original tab and verify survey launch.
+  base::test::TestFuture<void> survey_launched;
+  EXPECT_CALL(*hats_service,
+              LaunchSurveyForWebContents(GetParam().trigger, web_contents, _, _,
+                                         _, _, _, _))
+      .WillOnce(testing::DoAll(
+          testing::InvokeWithoutArgs([&]() { survey_launched.SetValue(); }),
+          testing::Return(HatsService::LaunchError::kNone)));
+
+  SwitchToExistingTab(web_contents);
+  EXPECT_TRUE(survey_launched.Wait());
+}
+
+IN_PROC_BROWSER_TEST_P(AutoPictureInPictureTabHelperHatsVideoPipBrowserTest,
+                       TriggersSurveyOnTabActivation) {
+  auto* hats_service = GetMockHatsService();
+  ON_CALL(*hats_service, CanShowAnySurvey(false))
+      .WillByDefault(testing::Return(true));
+
+  // Load a page that supports Auto-PiP (Video PiP).
+  LoadAutoVideoPipPage(browser());
+  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  PlayVideo(web_contents);
+  WaitForAudioFocusGained();
+  WaitForMediaSessionPlaying(web_contents);
+  WaitForWasRecentlyAudible(web_contents);
+  SetExpectedHasHighEngagement(true);
+
+  // Trigger Auto-PiP by switching to a new tab.
+  {
+    content::MediaStartStopObserver enter_pip_observer(
+        web_contents,
+        content::MediaStartStopObserver::Type::kEnterPictureInPicture);
+    OpenNewTab(browser());
+    enter_pip_observer.Wait();
+  }
+  ASSERT_TRUE(web_contents->HasPictureInPictureVideo());
+
+  // Interact with the Auto-PiP window.
+  switch (GetParam().prompt_result) {
+    case AutoPipSettingHelper::PromptResult::kAllowOnce:
+    case AutoPipSettingHelper::PromptResult::kBlock: {
+      auto* overlay_view = GetOverlayViewFromVideoPipWindow();
+      ASSERT_TRUE(overlay_view);
+      overlay_view->get_view_for_testing()->simulate_button_press_for_testing(
+          GetParam().prompt_result == AutoPipSettingHelper::PromptResult::kBlock
+              ? AutoPipSettingView::UiResult::kBlock
+              : AutoPipSettingView::UiResult::kAllowOnce);
+      break;
+    }
+    case AutoPipSettingHelper::PromptResult::kIgnored:
+      // Simulate manual closure without making a choice.
+      PictureInPictureWindowManager::GetInstance()
+          ->ExitPictureInPictureViaWindowUi(
+              PictureInPictureWindowManager::UiBehavior::kCloseWindowOnly);
+      break;
+    default:
+      NOTREACHED();
+  }
+
+  // Switch back to the original tab and verify survey launch.
+  base::test::TestFuture<void> survey_launched;
+  EXPECT_CALL(*hats_service,
+              LaunchSurveyForWebContents(GetParam().trigger, web_contents, _, _,
+                                         _, _, _, _))
+      .WillOnce(testing::DoAll(
+          testing::InvokeWithoutArgs([&]() { survey_launched.SetValue(); }),
+          testing::Return(HatsService::LaunchError::kNone)));
+
+  SwitchToExistingTab(web_contents);
+  EXPECT_TRUE(survey_launched.Wait());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    AutoPictureInPictureTabHelperHatsDocumentPipBrowserTest,
+    testing::Values(
+        HatsTestParams{
+            .result = "AllowOnce",
+            .trigger = kHatsSurveyTriggerAutoPipAllowed,
+            .prompt_result = AutoPipSettingHelper::PromptResult::kAllowOnce},
+        HatsTestParams{
+            .result = "Block",
+            .trigger = kHatsSurveyTriggerAutoPipBlocked,
+            .prompt_result = AutoPipSettingHelper::PromptResult::kBlock},
+        HatsTestParams{
+            .result = "Ignored",
+            .trigger = kHatsSurveyTriggerAutoPipPermissionPromptIgnored,
+            .prompt_result = AutoPipSettingHelper::PromptResult::kIgnored}));
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    AutoPictureInPictureTabHelperHatsVideoPipBrowserTest,
+    testing::Values(
+        HatsTestParams{
+            .result = "AllowOnce",
+            .trigger = kHatsSurveyTriggerAutoPipAllowed,
+            .prompt_result = AutoPipSettingHelper::PromptResult::kAllowOnce},
+        HatsTestParams{
+            .result = "Block",
+            .trigger = kHatsSurveyTriggerAutoPipBlocked,
+            .prompt_result = AutoPipSettingHelper::PromptResult::kBlock},
+        HatsTestParams{
+            .result = "Ignored",
+            .trigger = kHatsSurveyTriggerAutoPipPermissionPromptIgnored,
+            .prompt_result = AutoPipSettingHelper::PromptResult::kIgnored}));

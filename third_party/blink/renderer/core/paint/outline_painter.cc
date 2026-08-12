@@ -8,6 +8,8 @@
 
 #include "build/build_config.h"
 #include "third_party/blink/renderer/core/layout/geometry/physical_rect.h"
+#include "third_party/blink/renderer/core/paint/border_shape_painter.h"
+#include "third_party/blink/renderer/core/paint/border_shape_utils.h"
 #include "third_party/blink/renderer/core/paint/box_border_painter.h"
 #include "third_party/blink/renderer/core/paint/contoured_border_geometry.h"
 #include "third_party/blink/renderer/core/paint/paint_auto_dark_mode.h"
@@ -23,6 +25,7 @@
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
 #include "third_party/blink/renderer/platform/graphics/styled_stroke_data.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "third_party/skia/include/core/SkPathBuilder.h"
 #include "ui/gfx/geometry/point_conversions.h"
@@ -342,21 +345,31 @@ class RoundedEdgePathIterator {
       : iter_(rounded_center_path, /*forceClose*/ true),
         center_inset_(center_inset) {}
 
+ private:
+  // The three points are: start, control (the right-angle corner), end.
+  static constexpr size_t kArcPointCount = 3;
+  using ArcPointArray = std::array<SkPoint, kArcPointCount>;
+  using ArcPointSpan = base::span<const SkPoint, kArcPointCount>;
+
+ public:
   SkPath Next() {
     SkPath edge_stroke_path;
     while (true) {
       SkPoint points[4];
       switch (iter_.next(points)) {
-        case SkPath::kConic_Verb:
+        case SkPath::kConic_Verb: {
+          ArcPointSpan arc_points = base::span(points).first<kArcPointCount>();
           if (is_new_contour_) {
-            std::copy_n(points, kArcPointCount, prev_arc_points_);
-            std::copy_n(points, kArcPointCount, first_arc_points_);
+            base::span(prev_arc_points_).copy_from(arc_points);
+            base::span(first_arc_points_).copy_from(arc_points);
             is_new_contour_ = false;
             continue;
           }
-          edge_stroke_path = GenerateEdgeStrokePath(prev_arc_points_, points);
-          std::copy_n(points, kArcPointCount, prev_arc_points_);
+          edge_stroke_path =
+              GenerateEdgeStrokePath(prev_arc_points_, arc_points);
+          base::span(prev_arc_points_).copy_from(arc_points);
           return edge_stroke_path;
+        }
         case SkPath::kClose_Verb:
           DCHECK(!is_new_contour_);
           edge_stroke_path =
@@ -380,8 +393,8 @@ class RoundedEdgePathIterator {
   //           |   Short extension after the ending arc (see code comment)
   // The edge will drawn with a clip to remove the first half of the starting
   // arc and the second half of the ending arc.
-  SkPath GenerateEdgeStrokePath(base::span<const SkPoint> starting_arc_points,
-                                base::span<const SkPoint> ending_arc_points) {
+  SkPath GenerateEdgeStrokePath(ArcPointSpan starting_arc_points,
+                                ArcPointSpan ending_arc_points) {
     SkPoint line_start = starting_arc_points[2];
     SkPoint line_end = ending_arc_points[0];
     SkPathBuilder edge_stroke_path;
@@ -419,10 +432,8 @@ class RoundedEdgePathIterator {
   SkPath::Iter iter_;
   const int center_inset_;
   bool is_new_contour_ = true;
-  // The three points are: start, control (the right-angle corner), end.
-  static constexpr size_t kArcPointCount = 3;
-  SkPoint first_arc_points_[kArcPointCount];
-  SkPoint prev_arc_points_[kArcPointCount];
+  ArcPointArray first_arc_points_;
+  ArcPointArray prev_arc_points_;
 };
 
 class ComplexOutlinePainter {
@@ -450,8 +461,8 @@ class ComplexOutlinePainter {
     } else if (width_ == 1 && (outline_style_ == EBorderStyle::kRidge ||
                                outline_style_ == EBorderStyle::kGroove)) {
       outline_style_ = EBorderStyle::kSolid;
-      color_ = Color::FromColorMix(Color::ColorSpace::kSRGB, std::nullopt,
-                                   color_, color_.Dark(), 0.5f, 1.0f);
+      color_ = Color::InterpolateColors(Color::ColorSpace::kSRGB, std::nullopt,
+                                        color_, color_.Dark(), 0.5f);
     }
   }
 
@@ -848,21 +859,59 @@ void PaintSingleFocusRing(
   context.DrawFocusRingPath(path, color, width, 0, auto_dark_mode);
 }
 
+Color FocusRingInnerColor(const ComputedStyle& style) {
+  Color inner_color = style.VisitedDependentColor(GetCSSPropertyOutlineColor());
+#if !BUILDFLAG(IS_MAC)
+  if (style.DarkColorScheme() &&
+      !RuntimeEnabledFeatures::
+          FocusRingRespectExplicitOutlineColorInDarkModeEnabled()) {
+    inner_color = Color::kWhite;
+  }
+#endif
+  return inner_color;
+}
+
 void PaintFocusRing(GraphicsContext& context,
                     const Vector<gfx::Rect>& rects,
                     const ComputedStyle& style,
                     const FloatRoundedRect::Radii& corner_radii,
-                    const LayoutObject::OutlineInfo& info) {
-  Color inner_color = style.VisitedDependentColor(GetCSSPropertyOutlineColor());
-#if !BUILDFLAG(IS_MAC)
-  if (style.DarkColorScheme()) {
-    inner_color = Color::kWhite;
-  }
-#endif
+                    const LayoutObject::OutlineInfo& info,
+                    const LayoutObject* layout_object,
+                    const PhysicalRect& border_rect) {
+  Color inner_color = FocusRingInnerColor(style);
 
   const float outer_ring_width = FocusRingOuterStrokeWidth(style);
   const float inner_ring_width = FocusRingInnerStrokeWidth(style);
   const int offset = FocusRingOffset(style, info);
+
+  Color outer_color =
+      style.DarkColorScheme() ? Color(0x10, 0x10, 0x10) : Color::kWhite;
+
+  if (style.HasBorderShape() && layout_object) {
+    // TODO(crbug.com/505631141): Border-shape focus ring painting currently
+    // doesn't handle fragmented boxes.
+    std::optional<BorderShapeReferenceRects> shape_ref_rects =
+        ComputeBorderShapeReferenceRects(border_rect, style, *layout_object);
+    PhysicalRect outer_reference_rect =
+        shape_ref_rects ? shape_ref_rects->outer : border_rect;
+
+    // Paint outer ring. We use OuterPathWithOffset to get the path
+    // expanded by the offset, and then DrawFocusRingPath strokes it.
+    float outer_offset = offset + std::ceil(inner_ring_width);
+    Path outer_path = BorderShapePainter::OuterPathWithOffset(
+        style, outer_reference_rect, outer_offset);
+
+    context.DrawFocusRingPath(outer_path.GetSkPath(), outer_color,
+                              outer_ring_width, 0, AutoDarkMode::Disabled());
+
+    // Paint inner ring.
+    Path inner_path = BorderShapePainter::OuterPathWithOffset(
+        style, outer_reference_rect, offset);
+
+    context.DrawFocusRingPath(inner_path.GetSkPath(), inner_color,
+                              outer_ring_width, 0, AutoDarkMode::Disabled());
+    return;
+  }
 
   const ContouredRect::CornerCurvature corner_curvature(
       corner_radii.TopLeft().IsEmpty() ? ContouredRect::CornerCurvature::kRound
@@ -877,8 +926,6 @@ void PaintFocusRing(GraphicsContext& context,
           ? ContouredRect::CornerCurvature::kRound
           : style.CornerBottomLeftShape().Exponent());
 
-  Color outer_color =
-      style.DarkColorScheme() ? Color(0x10, 0x10, 0x10) : Color::kWhite;
   PaintSingleFocusRing(context, rects, outer_ring_width,
                        offset + std::ceil(inner_ring_width), corner_radii,
                        corner_curvature, outer_color, AutoDarkMode::Disabled());
@@ -889,7 +936,6 @@ void PaintFocusRing(GraphicsContext& context,
   PaintSingleFocusRing(context, rects, outer_ring_width, offset, corner_radii,
                        corner_curvature, inner_color, AutoDarkMode::Disabled());
 }
-
 }  // anonymous namespace
 
 void OutlinePainter::PaintOutlineRects(
@@ -898,6 +944,16 @@ void OutlinePainter::PaintOutlineRects(
     const Vector<PhysicalRect>& outline_rects,
     const LayoutObject::OutlineInfo& info,
     const ComputedStyle& style) {
+  PaintOutlineRects(paint_info, client, outline_rects, info, style, nullptr);
+}
+
+void OutlinePainter::PaintOutlineRects(
+    const PaintInfo& paint_info,
+    const DisplayItemClient& client,
+    const Vector<PhysicalRect>& outline_rects,
+    const LayoutObject::OutlineInfo& info,
+    const ComputedStyle& style,
+    const LayoutObject* layout_object) {
   DCHECK(style.HasOutline());
   DCHECK(!outline_rects.empty());
 
@@ -923,13 +979,48 @@ void OutlinePainter::PaintOutlineRects(
 
   gfx::Rect visual_rect = *united_outline_rect;
   visual_rect.Outset(OutlineOutsetExtent(style, info));
+
+  if (style.HasBorderShape() && layout_object && !style.OutlineStyleIsAuto()) {
+    PhysicalRect border_rect = outline_rects[0];
+    std::optional<BorderShapeReferenceRects> shape_ref_rects =
+        ComputeBorderShapeReferenceRects(border_rect, style, *layout_object);
+    PhysicalRect outer_reference_rect =
+        shape_ref_rects ? shape_ref_rects->outer : border_rect;
+    PhysicalRect inner_reference_rect =
+        shape_ref_rects ? shape_ref_rects->inner : border_rect;
+
+    PhysicalRect border_shape_visual_rect = border_rect;
+    border_shape_visual_rect.Expand(BorderShapePainter::VisualOutsets(
+        style, border_rect, outer_reference_rect, inner_reference_rect));
+    visual_rect.Union(ToPixelSnappedRect(border_shape_visual_rect));
+  }
+
   DrawingRecorder recorder(paint_info.context, client, paint_info.phase,
                            visual_rect);
+
+  // Handle border-shape outline: if the element has a border-shape, the outline
+  // should follow the border-shape path instead of the rectangular outline.
+  if (style.HasBorderShape() && layout_object && !style.OutlineStyleIsAuto()) {
+    PhysicalRect border_rect = outline_rects[0];
+    std::optional<BorderShapeReferenceRects> shape_ref_rects =
+        ComputeBorderShapeReferenceRects(border_rect, style, *layout_object);
+    PhysicalRect outer_reference_rect =
+        shape_ref_rects ? shape_ref_rects->outer : border_rect;
+    // TODO(crbug.com/7531762): Border-shape outline painting here uses
+    // BorderShapePainter::PaintOutline which currently doesn't handle
+    // fragmented boxes. See bug for follow-up to support fragmentation and
+    // ensure the outline follows the border-shape across fragments.
+    if (BorderShapePainter::PaintOutline(paint_info.context, style,
+                                         outer_reference_rect, info.width,
+                                         info.offset)) {
+      return;
+    }
+  }
 
   if (style.OutlineStyleIsAuto()) {
     auto corner_radii = GetFocusRingCornerRadii(style, outline_rects[0], info);
     PaintFocusRing(paint_info.context, pixel_snapped_outline_rects, style,
-                   corner_radii, info);
+                   corner_radii, info, layout_object, outline_rects[0]);
     return;
   }
 
@@ -975,6 +1066,11 @@ int OutlinePainter::OutlineOutsetExtent(const ComputedStyle& style,
            std::ceil(FocusRingStrokeWidth(style) / 3.f) * 2;
   }
   return base::ClampAdd(info.width, info.offset).Max(0);
+}
+
+Color OutlinePainter::FocusRingInnerColorForTesting(
+    const ComputedStyle& style) {
+  return FocusRingInnerColor(style);
 }
 
 void OutlinePainter::IterateRightAnglePathForTesting(

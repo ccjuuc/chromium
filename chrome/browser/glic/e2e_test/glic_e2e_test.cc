@@ -10,32 +10,42 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
+#include "base/notimplemented.h"
 #include "base/path_service.h"
 #include "base/strings/stringprintf.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
-#include "chrome/browser/contextual_cueing/contextual_cueing_features.h"
-#include "chrome/browser/glic/fre/fre_util.h"
-#include "chrome/browser/glic/fre/glic_fre_dialog_view.h"
+#include "chrome/browser/actor/actor_keyed_service.h"
+#include "chrome/browser/actor/ui/handoff_button_controller.h"
 #include "chrome/browser/glic/glic_pref_names.h"
+#include "chrome/browser/glic/glic_pref_names_internal.h"
 #include "chrome/browser/glic/host/glic_features.mojom.h"
 #include "chrome/browser/glic/host/guest_util.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
+#include "chrome/browser/glic/public/service/glic_instance_coordinator.h"
+#include "chrome/browser/glic/service/glic_instance_coordinator_impl.h"
+#include "chrome/browser/glic/service/glic_instance_impl.h"
+#include "chrome/browser/glic/suggestions/contextual_cueing_features.h"
 #include "chrome/browser/glic/test_support/glic_test_util.h"
 #include "chrome/browser/glic/test_support/interactive_test_util.h"
 #include "chrome/browser/glic/widget/glic_view.h"
-#include "chrome/browser/glic/widget/glic_window_controller.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/e2e_tests/live_test.h"
 #include "chrome/browser/signin/e2e_tests/signin_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
+#include "chrome/common/actor.mojom.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/save_desktop_snapshot.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/actor/core/actor_features.h"
+#include "components/actor/core/actor_switches.h"
+#include "components/prefs/pref_service.h"
 #include "components/signin/public/identity_manager/test_accounts.h"
 #include "components/sync/base/features.h"
 #include "content/public/browser/web_contents.h"
@@ -56,8 +66,7 @@ namespace glic::test {
 
 namespace {
 
-using glic::test::internal::kGlicFreShowingDialogState;
-using glic::test::internal::kGlicWindowControllerState;
+using glic::test::internal::kGlicInstanceCoordinatorState;
 
 constexpr base::FilePath::StringViewType kRecordingDirectoryPath =
     FILE_PATH_LITERAL("chrome/browser/glic/e2e_test/internal/wpr_recordings");
@@ -79,21 +88,26 @@ const char kIgnoreCertificateErrorsSPKIListValue[] =
     "PoNnQAwghMiLUPg1YNFtvTfGreNT8r9oeLEyzgNCJWc=";
 }  // namespace
 
-GlicE2ETest::GlicE2ETest() {
-  // TODO(crbug.com/440578183): ZeroStateSuggestionsV2 is enabled here
-  // due to the associated bug and should be removed here once fixed.
-  scoped_feature_list_.InitWithFeatures(
-      /*enabled_features=*/{features::kGlic, features::kTabstripComboButton,
-                            features::kGlicKeyboardShortcutNewBadge,
-                            features::kGlicRollout,
-                            contextual_cueing::kContextualCueing,
-                            mojom::features::kZeroStateSuggestionsV2},
-      /*disabled_features=*/{
-          syncer::kReplaceSyncPromosWithSignInPromos,
-          // Don't disable glic based on country/locale.
-          features::kGlicCountryFiltering,
-          features::kGlicLocaleFiltering,
-      });
+GlicE2ETest::GlicE2ETest(
+    const std::vector<base::test::FeatureRef>& additional_enabled_features,
+    const std::vector<base::test::FeatureRef>& additional_disabled_features) {
+  std::vector<base::test::FeatureRef> enabled = {
+      features::kGlic, features::kGlicKeyboardShortcutNewBadge,
+      features::kGlicRollout, kContextualCueing};
+  enabled.insert(enabled.end(), additional_enabled_features.begin(),
+                 additional_enabled_features.end());
+
+  std::vector<base::test::FeatureRef> disabled = {
+      syncer::kReplaceSyncPromosWithSignInPromos,
+      syncer::kReplaceSyncPromosWithSigninPromosNewSignin,
+      // Don't disable glic based on country/locale.
+      features::kGlicCountryFiltering,
+      features::kGlicLocaleFiltering,
+  };
+  disabled.insert(disabled.end(), additional_disabled_features.begin(),
+                  additional_disabled_features.end());
+
+  scoped_feature_list_.InitWithFeatures(enabled, disabled);
 }
 
 GlicE2ETest::~GlicE2ETest() = default;
@@ -106,6 +120,12 @@ void GlicE2ETest::SetUp() {
       command_line_of_test->GetSwitchValueASCII(kGlicE2ETestModeSwitch);
 
   running_actor_tests_ = command_line_of_test->HasSwitch(kEnableActorTests);
+  if (running_actor_tests_) {
+    exempt_actor_policy_control_feature_list_
+        .InitAndEnableFeatureWithParameters(
+            features::kGlicActor,
+            {{features::kGlicActorPolicyControlExemption.name, "true"}});
+  }
   enable_low_bandwidth_tests_ =
       command_line_of_test->HasSwitch(kEnableLowBandwidthTestsSwitch);
 
@@ -155,24 +175,34 @@ void GlicE2ETest::SetUpCommandLine(base::CommandLine* command_line) {
 void GlicE2ETest::PreRunTestOnMainThread() {
   LiveTest::PreRunTestOnMainThread();
 
-  GURL glic_fre_url = glic::GetFreURL(browser()->profile());
+  active_instance_subscription_ =
+      instance_coordinator()
+          .AddActiveInstanceChangedCallbackAndNotifyImmediately(
+              base::BindRepeating(&GlicE2ETest::OnActiveInstanceChanged,
+                                  base::Unretained(this)));
+
   GURL glic_guest_url = glic::GetGuestURL();
-  CHECK(glic_fre_url.is_valid() && glic_guest_url.is_valid())
-      << "Incorrect GLiC guest or FRE URL in cmd line arguments.";
+  CHECK(glic_guest_url.is_valid())
+      << "Incorrect GLiC guest URL in cmd line arguments.";
 
   if (test_mode_ == kRecord || test_mode_ == kReplay) {
     // When WPR is used, for consistency, require consistent host and path.
-    CHECK(base::Contains(glic_fre_url.spec(), kAllowedHostAndPathForWpr) &&
-          base::Contains(glic_guest_url.spec(), kAllowedHostAndPathForWpr))
+    CHECK(glic_guest_url.spec().contains(kAllowedHostAndPathForWpr))
         << "Please use allowed URL for WPR.";
   }
 }
 
 void GlicE2ETest::LoginTestAccountOrForceFakeSignin() {
   if (test_mode_ == kRealBackend || test_mode_ == kRecord) {
+    std::string account_label = test_account_label_;
+    // TODO(crbug.com/476984789): Remove this fallback once all tests have been
+    // updated to call set_test_account_label().
+    if (account_label.empty()) {
+      account_label =
+          running_actor_tests_ ? kTestActorAccountLabel : kTestAccountLabel;
+    }
     std::optional<signin::TestAccountSigninCredentials> test_account =
-        GetTestAccounts()->GetAccount(
-            running_actor_tests_ ? kTestActorAccountLabel : kTestAccountLabel);
+        GetTestAccounts()->GetAccount(account_label);
     signin::test::SignInFunctions sign_in_functions =
         signin::test::SignInFunctions(
             base::BindLambdaForTesting(
@@ -186,13 +216,25 @@ void GlicE2ETest::LoginTestAccountOrForceFakeSignin() {
     CHECK(test_account.has_value());
     sign_in_functions.TurnOnSync(*test_account, 0);
   } else {
-    SigninWithPrimaryAccount(browser()->profile());
-    SetGlicCapability(browser()->profile(), true);
+    SigninWithPrimaryAccount(browser()->GetProfile());
+    SetGlicCapability(browser()->GetProfile(), true);
   }
 }
 
 void GlicE2ETest::SetFRECompletion() {
-  ::glic::SetFRECompletion(browser()->profile(), prefs::FreStatus::kCompleted);
+  ::glic::SetFRECompletion(browser()->GetProfile(),
+                           prefs::FreStatus::kCompleted);
+}
+
+void GlicE2ETest::SetUserEnabledActuationOnWeb(bool enabled) {
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
+      glic::prefs::kGlicUserEnabledActuationOnWeb, enabled);
+}
+
+ui::InteractionSequence::StepBuilder GlicE2ETest::ClearOmniboxFocus() {
+  return WithView(kOmniboxElementId, [](OmniboxViewViews* omnibox_view) {
+    omnibox_view->GetFocusManager()->ClearFocus();
+  });
 }
 
 void GlicE2ETest::SetUpInProcessBrowserTestFixture() {
@@ -223,40 +265,20 @@ void GlicE2ETest::TearDownOnMainThread() {
   LiveTest::TearDownOnMainThread();
 }
 
-ui::test::InteractiveTestApi::MultiStep GlicE2ETest::WaitForAndInstrumentFre() {
-  MultiStep steps(Steps(
-      UninstrumentWebContents(kGlicFreContentsElementId, false),
-      UninstrumentWebContents(kGlicFreHostElementId, false),
-      InAnyContext(
-          ObserveState(kGlicFreShowingDialogState, std::ref(fre_controller())),
-          WaitForState(kGlicFreShowingDialogState, true),
-          Steps(InstrumentNonTabWebView(
-                    kGlicFreHostElementId,
-                    GlicFreDialogView::kWebViewElementIdForTesting),
-                InstrumentInnerWebContents(kGlicFreContentsElementId,
-                                           kGlicFreHostElementId, 0),
-                WaitForWebContentsReady(kGlicFreContentsElementId)),
-          StopObservingState(kGlicFreShowingDialogState))));
-
-  AddDescriptionPrefix(steps, "WaitForAndInstrumentFre");
-  return steps;
-}
-
 ui::test::InteractiveTestApi::MultiStep
 GlicE2ETest::WaitForAndInstrumentGlic() {
   MultiStep steps(Steps(
       UninstrumentWebContents(kGlicContentsElementId, false),
       UninstrumentWebContents(kGlicHostElementId, false),
       InAnyContext(
-          ObserveState(kGlicWindowControllerState,
-                       std::ref(window_controller()), active_tab()),
-          WaitForState(kGlicWindowControllerState,
-                       GlicWindowController::State::kOpen),
+          ObserveState(kGlicInstanceCoordinatorState,
+                       std::ref(instance_coordinator()), active_tab()),
+          WaitForState(kGlicInstanceCoordinatorState, GlicPanelState::kOpen),
           Steps(InstrumentNonTabWebView(kGlicHostElementId, kGlicViewElementId),
                 InstrumentInnerWebContents(kGlicContentsElementId,
                                            kGlicHostElementId, 0),
                 WaitForWebContentsReady(kGlicContentsElementId)),
-          StopObservingState(kGlicWindowControllerState))));
+          StopObservingState(kGlicInstanceCoordinatorState))));
 
   AddDescriptionPrefix(steps, "WaitForAndInstrumentGlic");
   return steps;
@@ -286,13 +308,10 @@ GlicKeyedService* GlicE2ETest::glic_service() {
   return GlicKeyedServiceFactory::GetGlicKeyedService(
       InProcessBrowserTest::browser()->GetProfile());
 }
-GlicWindowController& GlicE2ETest::window_controller() {
-  return glic_service()->window_controller();
+GlicInstanceCoordinator& GlicE2ETest::instance_coordinator() {
+  return glic_service()->instance_coordinator();
 }
 
-GlicFreController& GlicE2ETest::fre_controller() {
-  return glic_service()->fre_controller();
-}
 WebPageReplayServerWrapper* GlicE2ETest::web_page_replay_server_wrapper() {
   return web_page_replay_server_wrapper_.get();
 }
@@ -318,12 +337,12 @@ void GlicE2ETest::ThrottleWebContentsNetwork(
     devtools_client_ptr =
         std::make_unique<content::TestDevToolsProtocolClient>();
     devtools_client_ptr->AttachToWebContents(web_contents);
-    devtools_client_ptr->SendCommand("Network.enable", base::Value::Dict());
+    devtools_client_ptr->SendCommand("Network.enable", base::DictValue());
   }
 
   // Corresponds to the "Slow 3G" preset in
   // third_party/devtools-frontend/src/front_end/core/sdk/NetworkManager.ts
-  base::Value::Dict params;
+  base::DictValue params;
   params.Set("offline", false);
   // Latency in ms.
   params.Set("latency", 2000.0);
@@ -336,16 +355,126 @@ void GlicE2ETest::ThrottleWebContentsNetwork(
 }
 
 void GlicE2ETest::ThrottleGlicNetwork() {
-  auto* glic_service =
-      glic::GlicKeyedServiceFactory::GetGlicKeyedService(browser()->profile());
-  for (auto* host : glic_service->host_manager().GetAllHosts()) {
-    auto* webui_contents = host->webui_contents();
-    if (webui_contents) {
-      content::WebContents* inner_contents =
-          webui_contents->GetInnerWebContents()[0];
-      CHECK(inner_contents);
-      ThrottleWebContentsNetwork(inner_contents);
+  auto& coordinator =
+      static_cast<GlicInstanceCoordinatorImpl&>(instance_coordinator());
+  for (GlicInstanceImpl* instance : coordinator.GetInstances()) {
+    content::WebContents* guest_contents =
+        instance->host().web_client_contents();
+    if (guest_contents) {
+      ThrottleWebContentsNetwork(guest_contents);
     }
+  }
+}
+
+GlicActorTaskState::GlicActorTaskState(Profile* profile) {
+  actor::ActorKeyedService* actor_keyed_service =
+      actor::ActorKeyedService::Get(profile);
+  CHECK(actor_keyed_service);
+  actor_task_listener_ =
+      actor_keyed_service->AddTaskStateChangedCallback(base::BindRepeating(
+          &GlicActorTaskState::StateChanged, base::Unretained(this)));
+}
+GlicActorTaskState::~GlicActorTaskState() = default;
+
+void GlicActorTaskState::StateChanged(actor::ActorTask& task) {
+  if (task_id_.is_null()) {
+    task_id_ = task.id();
+  }
+  if (task.id() != task_id_) {
+    return;
+  }
+  OnStateObserverStateChanged(task.GetState());
+}
+
+DEFINE_STATE_IDENTIFIER_VALUE(GlicActorTaskState, kGlicActorTaskState);
+
+const ui::ElementIdentifier kGlicHandoffButtonElementId =
+    actor::ui::HandoffButtonController::kHandoffButtonElementId;
+
+// Static assertions to ensure that commonly used ActorTask states in internal
+// tests are validated on public bots to prevent silent build breakages.
+static_assert(static_cast<int>(GlicActorTaskState::State::kFinished) >= 0);
+static_assert(static_cast<int>(GlicActorTaskState::State::kCancelled) >= 0);
+static_assert(static_cast<int>(GlicActorTaskState::State::kPausedByUser) >= 0);
+static_assert(static_cast<int>(GlicActorTaskState::State::kReflecting) >= 0);
+
+// Validate features and switches used by internal tests:
+const base::Feature& GetGlicActionAllowlistFeature() {
+  return actor::kGlicActionAllowlist;
+}
+
+const char* GetDisableActorSafetyChecksSwitch() {
+  return actor::switches::kDisableActorSafetyChecks;
+}
+
+const base::Feature& GetGlicLiveModeFeature() {
+  return features::kGlicLiveMode;
+}
+
+const base::Feature& GetGlicMultiInstanceFeature() {
+  return features::kGlicMultiInstance;
+}
+
+// Validate Mojo types used by internal tests:
+static_assert(static_cast<int>(actor::mojom::ActionResultCode::kOk) >= 0);
+
+ui::ElementIdentifier GetGlicButtonElementId() {
+  return kGlicButtonElementId;
+}
+ui::ElementIdentifier GetTabStripElementId() {
+  return kTabStripElementId;
+}
+ui::ElementIdentifier GetOmniboxElementId() {
+  return kOmniboxElementId;
+}
+ui::ElementIdentifier GetGlicViewElementId() {
+  return kGlicViewElementId;
+}
+
+void GlicE2ETest::OnActiveInstanceChanged(GlicInstance* new_instance) {
+  host_observation_.Reset();
+  if (new_instance) {
+    host_observation_.Observe(
+        &static_cast<GlicInstanceImpl*>(new_instance)->host());
+  }
+}
+
+void GlicE2ETest::WebUiStateChanged(glic::mojom::WebUiState state) {
+  if (expects_error_) {
+    return;
+  }
+  switch (state) {
+    // Errors that should cause an early bail.
+    case glic::mojom::WebUiState::kError:
+    case glic::mojom::WebUiState::kUnresponsive:
+    case glic::mojom::WebUiState::kGuestError:
+    case glic::mojom::WebUiState::kDisabledByAdmin:
+    case glic::mojom::WebUiState::kLocationMismatch:
+    case glic::mojom::WebUiState::kIneligibleAccount:
+    case glic::mojom::WebUiState::kOffline:
+    case glic::mojom::WebUiState::kUnavailable: {
+      ADD_FAILURE() << "Early bail: Glic WebUI entered error state: "
+                    << static_cast<int>(state);
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(
+                         [](base::WeakPtr<GlicE2ETest> self) {
+                           if (self) {
+                             self->instance_coordinator().Shutdown();
+                           }
+                         },
+                         weak_ptr_factory_.GetWeakPtr()));
+      break;
+    }
+    // Valid states for Glic where no early bail is needed.
+    case glic::mojom::WebUiState::kUninitialized:
+    case glic::mojom::WebUiState::kBeginLoad:
+    case glic::mojom::WebUiState::kShowLoading:
+    case glic::mojom::WebUiState::kHoldLoading:
+    case glic::mojom::WebUiState::kFinishLoading:
+    case glic::mojom::WebUiState::kReady:
+    case glic::mojom::WebUiState::kWarmed:
+    case glic::mojom::WebUiState::kSignIn:
+      break;
   }
 }
 

@@ -6,14 +6,18 @@
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_WEBDATA_PAYMENTS_PAYMENTS_AUTOFILL_TABLE_H_
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "base/containers/flat_set.h"
+#include "build/buildflag.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card_benefit.h"
 #include "components/webdata/common/web_database_table.h"
+#include "url/origin.h"
 
 class WebDatabase;
 
@@ -451,10 +455,6 @@ class PaymentsAutofillTable : public WebDatabaseTable {
   // This will clear all the local cvcs.
   bool ClearLocalCvcs();
 
-  // Method to clear all local CVCs created before mid-May 2025. For more
-  // information, see crbug.com/411681430.
-  bool ClearLocalCvcsUpToMay2025();
-
 #if BUILDFLAG(IS_IOS)
   // Method to clean up for crbug.com/445879524.
   bool CleanupForCrbug445879524();
@@ -601,6 +601,7 @@ class PaymentsAutofillTable : public WebDatabaseTable {
   bool MigrateToVersion136AddPaymentInstrumentCreationOptionsTable();
   bool MigrateToVersion141AddCardBenefitSourceColumn();
   bool MigrateToVersion144AddCardCreationSourceColumn();
+  bool MigrateToVersion153ReplaceOriginWithIsUserConfirmed();
 
  private:
   // Adds to |masked_credit_cards| and updates |server_card_metadata|.

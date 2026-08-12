@@ -1,7 +1,6 @@
 <?xml version="1.0" ?>
 <!DOCTYPE translationbundle>
 <translationbundle lang="it">
-<translation id="1028699632127661925">Invio a <ph name="DEVICE_NAME" />…</translation>
 <translation id="111910763555783249">Impostazioni di notifica</translation>
 <translation id="1127811143501539442">{DAYS,plural, =1{1 giorno fa}other{# giorni fa}}</translation>
 <translation id="1156623771253174079">{SECONDS,plural, =1{1 minuto fa}other{# minuti fa}}</translation>
@@ -12,7 +11,6 @@
 <translation id="1253734725326687145">Touch target spostato in alto a destra. Tocca qui.</translation>
 <translation id="1266864766717917324">Impossibile condividere <ph name="CONTENT_TYPE" /></translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">Prova a condividere il testo in parti più piccole.</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">Da sinistra a destra</translation>
 <translation id="1383876407941801731">Cerca</translation>
@@ -20,6 +18,7 @@
 <translation id="1432724887402139994">{SECONDS,plural, =1{1 minuto fa}other{# minuti fa}}</translation>
 <translation id="1450753235335490080">Impossibile condividere <ph name="CONTENT_TYPE" /></translation>
 <translation id="1523230076022876491">{MONTHS,plural, =1{1 mese fa}other{# mesi fa}}</translation>
+<translation id="1591017414891297549">ANTEPRIMA</translation>
 <translation id="1591184457164800433">{MINUTES,plural, =1{1 minuto e }other{# minuti e }}</translation>
 <translation id="1643823602425662293">Notifica</translation>
 <translation id="169515659049020177">Maiusc</translation>
@@ -39,12 +38,11 @@
 <translation id="19085484004813472">Questa funzionalità è nuova</translation>
 <translation id="2006524834898217237">Assicurati che questo dispositivo sia connesso a Internet.</translation>
 <translation id="208586643495776849">Riprova</translation>
-<translation id="2111134541987263231">Attiva l'opzione <ph name="BEGIN_BOLD" />Consenti modalità di navigazione in incognito<ph name="END_BOLD" /></translation>
+<translation id="2111134541987263231">Attiva l'opzione <ph name="BEGIN_BOLD" />Consenti modalità Incognito<ph name="END_BOLD" /></translation>
 <translation id="2141853158323869627">{DAYS,plural, =1{1 g}other{# gg}}</translation>
 <translation id="2148716181193084225">Oggi</translation>
 <translation id="2168039046890040389">Pagina su</translation>
 <translation id="2190355936436201913">(vuoto)</translation>
-<translation id="2192232475740621500">Usa densità bassa</translation>
 <translation id="2267918077332197517">Blocca tutte le notifiche da questo sito</translation>
 <translation id="2283117145434822734">F6</translation>
 <translation id="2289052229480071835">Tocca i touch target sul tuo schermo.</translation>
@@ -56,7 +54,6 @@
 <translation id="2388990488038464401">Vuoi chiamare questo numero dal telefono?</translation>
 <translation id="2435457462613246316">Mostra password</translation>
 <translation id="24452542372838207">Espandi la notifica</translation>
-<translation id="2445449901874883781">Usa densità alta</translation>
 <translation id="2448407890032181691">Touch target spostato in basso a destra. Tocca qui.</translation>
 <translation id="2482878487686419369">Notifiche</translation>
 <translation id="2497284189126895209">Tutti i file</translation>
@@ -69,7 +66,6 @@
 <translation id="2586657967955657006">Appunti</translation>
 <translation id="2653844658857826081">NOVITÀ</translation>
 <translation id="2666092431469916601">In alto</translation>
-<translation id="2701330563083355633">Condivisione da <ph name="DEVICE_NAME" /></translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{1 anno fa}other{# anni fa}}</translation>
 <translation id="2878511608894704031">Elimina tutto</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{tra 1 g}other{tra # g}}</translation>
@@ -88,7 +84,6 @@
 <translation id="3306688585798492231">Display incorporato</translation>
 <translation id="335581015389089642">Voce</translation>
 <translation id="3372635229069101468">Fai clic su <ph name="BEGIN_BOLD" />Dettagli<ph name="END_BOLD" /></translation>
-<translation id="3389286852084373014">Il testo è troppo grande</translation>
 <translation id="3406306243914553062">Contenuti HTML</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{1 giorno rimanente}other{# giorni rimanenti}}</translation>
 <translation id="3600969208114796418">File <ph name="SAVEAS_EXTENSION_TYPE" /></translation>
@@ -108,7 +103,8 @@
 <translation id="3994749195054421561">Colonna <ph name="COLUMN_NAME" /> ordinata in ordine crescente.</translation>
 <translation id="4031910098617850788">F5</translation>
 <translation id="40579289237549812">{UNREAD_NOTIFICATIONS,plural, =1{1 notifica da leggere}other{# notifiche da leggere}}</translation>
-<translation id="41501027364808384">{COUNT,plural, =1{Attiva la seguente estensione in modalità di navigazione in incognito:}other{Attiva le seguenti estensioni in modalità di navigazione in incognito:}}</translation>
+<translation id="41501027364808384">{COUNT,plural, =1{Attiva la seguente estensione in modalità Incognito:}other{Attiva le seguenti estensioni in modalità Incognito:}}</translation>
+<translation id="4230098358142093034">Home</translation>
 <translation id="4266252015790371705">{MONTHS,plural, =1{1 mese fa}other{# mesi fa}}</translation>
 <translation id="4277033906326892359">Colonna <ph name="COLUMN_NAME" /> ordinata in ordine crescente</translation>
 <translation id="4289300219472526559">Avvia comandi vocali</translation>
@@ -119,9 +115,9 @@
 <translation id="4689010477870442157">{YEARS,plural, =1{1 anno fa}other{# anni fa}}</translation>
 <translation id="4724120544754982507">Centro notifiche, <ph name="UNREAD_NOTIFICATION_COUNT" /> notifiche da leggere</translation>
 <translation id="4729257764711776855">numero</translation>
-<translation id="4746179598275229723">Estensione sbloccata</translation>
+<translation id="4746179598275229723">Estensione non fissata</translation>
 <translation id="4788285488841504513">{MONTHS,plural, =1{1 mese rimasto}other{# mesi rimasti}}</translation>
-<translation id="4816695657735045067">{COUNT,plural, =1{La tua organizzazione richiede un'estensione per usare la modalità di navigazione in incognito}other{La tua organizzazione richiede alcune estensioni per usare la modalità di navigazione in incognito}}</translation>
+<translation id="4816695657735045067">{COUNT,plural, =1{La tua organizzazione richiede un'estensione per usare la modalità Incognito}other{La tua organizzazione richiede alcune estensioni per usare la modalità Incognito}}</translation>
 <translation id="482932175346970750">Digita <ph name="BEGIN_BOLD" />chrome://extensions<ph name="END_BOLD" /> nel browser</translation>
 <translation id="4888938634149558681">Chiama</translation>
 <translation id="4895877746940133817"><ph name="TYPE_1" />, <ph name="TYPE_2" />, <ph name="TYPE_3" /></translation>
@@ -131,7 +127,7 @@
 <translation id="5076340679995252485">&amp;Incolla</translation>
 <translation id="520299402983819650"><ph name="QUANTITY" /> PB</translation>
 <translation id="5278860589123563674">Invio non riuscito</translation>
-<translation id="5283101102242354279">Attiva un'estensione in modalità di navigazione in incognito:</translation>
+<translation id="5283101102242354279">Attiva un'estensione in modalità Incognito:</translation>
 <translation id="528468243742722775">Fine</translation>
 <translation id="5329858601952122676">&amp;Elimina</translation>
 <translation id="5361107212971249203">testo</translation>
@@ -190,7 +186,6 @@
 <translation id="6965382102122355670">Ok</translation>
 <translation id="6974053822202609517">Da destra a sinistra</translation>
 <translation id="7052633198403197513">F1</translation>
-<translation id="7170202025028120564">Le impostazioni di visualizzazione dell'applicazione verranno applicate dopo il prossimo riavvio.</translation>
 <translation id="7222373446505536781">F11</translation>
 <translation id="7238427729722629793">{MINUTES,plural, =1{1 min rimanente}other{# min rimanenti}}</translation>
 <translation id="7252604552361840748">Cerca l'estensione indicata in alto</translation>
@@ -200,6 +195,7 @@
 <translation id="7410957453383678442">{MINUTES,plural, =1{1 minuto rimanente}other{# minuti rimanenti}}</translation>
 <translation id="7437971918971306061">Colonna <ph name="COLUMN_NAME" /> non ordinata.</translation>
 <translation id="7460907917090416791"><ph name="QUANTITY" /> TB</translation>
+<translation id="7485236722522518129">F4</translation>
 <translation id="7507604095951736240">Emoji</translation>
 <translation id="7620655452534002301">Voce rimossa.</translation>
 <translation id="7658239707568436148">Annulla</translation>
@@ -232,6 +228,7 @@
 <translation id="8677655579646609597"><ph name="QUANTITY" /> kB/s</translation>
 <translation id="8725488761726303204">+ altre <ph name="NUMBER" /></translation>
 <translation id="8730621377337864115">Fine</translation>
+<translation id="8741385002816058621">Questa è una funzionalità in anteprima</translation>
 <translation id="8772073294905169192">{HOURS,plural, =1{1 h}other{# h}}</translation>
 <translation id="8798099450830957504">Predefinito</translation>
 <translation id="8841375032071747811">Pulsante Indietro</translation>
@@ -245,7 +242,6 @@
 <translation id="9170848237812810038">&amp;Annulla</translation>
 <translation id="9195990613383871904">Domani</translation>
 <translation id="928628199082367701">Super</translation>
-<translation id="932327136139879170">Home page</translation>
 <translation id="944069440740578670">Notifiche da leggere</translation>
 <translation id="966963601246348639">{SECONDS,plural, =1{1 secondo fa}other{# secondi fa}}</translation>
 </translationbundle>

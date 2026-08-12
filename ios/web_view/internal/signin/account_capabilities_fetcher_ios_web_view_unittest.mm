@@ -11,6 +11,7 @@
 #import "base/run_loop.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/test/task_environment.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
 #import "components/signin/public/identity_manager/identity_test_environment.h"
 #import "testing/gtest/include/gtest/gtest.h"
@@ -21,10 +22,9 @@ namespace {
 
 const char kTestEmail[] = "janedoe@chromium.org";
 
-void CheckCapabilityFetchEmpty(
-    const CoreAccountId& account_id,
-    const std::optional<AccountCapabilities>& capabilities) {
-  ASSERT_FALSE(capabilities.has_value());
+void CheckCapabilityFetchUnexpected(const CoreAccountId& account_id,
+                                    const AccountCapabilities& capabilities) {
+  ADD_FAILURE() << "Unexpected capabilities fetched";
 }
 
 }  // anonymous namespace
@@ -44,14 +44,17 @@ TEST_F(AccountCapabilitiesFetcherIOSWebViewTest, CheckCapabilityFetchDisabled) {
       identity_test_environment_.MakePrimaryAccountAvailable(
           kTestEmail, signin::ConsentLevel::kSignin);
 
-  AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
-  mutator.set_can_have_email_address_displayed(true);
+  AccountCapabilitiesTestMutator mutator(&account_info);
+  mutator.set_can_fetch_family_member_info(true);
   identity_test_environment_.UpdateAccountInfoForAccount(account_info);
 
   base::RunLoop run_loop;
   ios_web_view::AccountCapabilitiesFetcherIOSWebView fetcher(
       account_info, AccountCapabilitiesFetcher::FetchPriority::kForeground,
-      base::BindOnce(&CheckCapabilityFetchEmpty).Then(run_loop.QuitClosure()));
+      base::BindRepeating(&CheckCapabilityFetchUnexpected),
+      base::BindOnce([](base::RunLoop* run_loop,
+                        const CoreAccountId&) { run_loop->Quit(); },
+                     &run_loop));
 
   fetcher.Start();
   run_loop.Run();

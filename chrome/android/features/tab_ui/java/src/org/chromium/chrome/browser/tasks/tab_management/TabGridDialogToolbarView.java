@@ -24,7 +24,6 @@ import android.widget.LinearLayout;
 import androidx.annotation.ColorInt;
 import androidx.annotation.ColorRes;
 import androidx.annotation.StringRes;
-import androidx.core.content.ContextCompat;
 import androidx.core.graphics.drawable.DrawableCompat;
 import androidx.core.widget.ImageViewCompat;
 
@@ -140,12 +139,9 @@ public class TabGridDialogToolbarView extends FrameLayout {
             // show the keyboard.
             KeyboardVisibilityDelegate delegate = KeyboardVisibilityDelegate.getInstance();
             postDelayed(
-                    new Runnable() {
-                        @Override
-                        public void run() {
-                            assert hasWindowFocus();
-                            delegate.showKeyboard(mTitleTextView);
-                        }
+                    () -> {
+                        assert hasWindowFocus();
+                        delegate.showKeyboard(mTitleTextView);
                     },
                     showKeyboardDelay);
         } else {
@@ -172,7 +168,7 @@ public class TabGridDialogToolbarView extends FrameLayout {
                 isIncognito
                         ? R.color.default_icon_color_light_tint_list
                         : R.color.default_icon_color_tint_list;
-        ColorStateList tintList = ContextCompat.getColorStateList(getContext(), tintListRes);
+        ColorStateList tintList = getContext().getColorStateList(tintListRes);
         setTint(tintList);
     }
 

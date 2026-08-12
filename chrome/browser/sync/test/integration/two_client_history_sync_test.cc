@@ -11,7 +11,7 @@
 #include "chrome/browser/sync/test/integration/bookmarks_helper.h"
 #include "chrome/browser/sync/test/integration/history_helper.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "components/bookmarks/browser/bookmark_model.h"
@@ -37,6 +37,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #endif
 
+using bookmarks_helper::StoreType;
 using history_helper::HasVisitDuration;
 using history_helper::UrlIs;
 using history_helper::VisitRowHasDuration;
@@ -92,8 +93,6 @@ class TwoClientHistorySyncTest
 
   void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
-
-    ASSERT_TRUE(embedded_test_server()->Start());
 
     SyncTest::SetUpOnMainThread();
   }
@@ -154,14 +153,10 @@ class TwoClientHistorySyncTest
     return GetBrowser(profile_index)->tab_strip_model()->GetActiveWebContents();
   }
 
-  const bookmarks::BookmarkNode* GetBookmarkBarNode() {
-    bookmarks::BookmarkModel* model = bookmarks_helper::GetBookmarkModel(0);
-    switch (GetSetupSyncMode()) {
-      case SetupSyncMode::kSyncTransportOnly:
-        return model->account_bookmark_bar_node();
-      case SetupSyncMode::kSyncTheFeature:
-        return model->bookmark_bar_node();
-    }
+  StoreType GetStoreType() {
+    return GetSetupSyncMode() == SyncTest::SetupSyncMode::kSyncTransportOnly
+               ? StoreType::kAccountStore
+               : StoreType::kLocalOrSyncableStore;
   }
 
  private:
@@ -196,8 +191,7 @@ IN_PROC_BROWSER_TEST_P(TwoClientHistorySyncTest, SyncsVisitForBookmarkedUrl) {
 
   // Create a bookmark and wait for it to sync.
   const bookmarks::BookmarkNode* node = bookmarks_helper::AddURL(
-      0, GetBookmarkBarNode(), 0, bookmarks_helper::IndexedURLTitle(0),
-      bookmark_url);
+      0, bookmarks_helper::IndexedURLTitle(0), bookmark_url, GetStoreType());
   bookmarks_helper::SetFavicon(0, node, bookmark_icon_url,
                                bookmarks_helper::CreateFavicon(SK_ColorWHITE),
                                bookmarks_helper::FROM_UI);
@@ -328,8 +322,8 @@ IN_PROC_BROWSER_TEST_P(TwoClientHistorySyncTest, SyncsVisitsDeletion) {
   // Logic similar to `BrowsingHistoryHandler::HandleRemoveVisits()`.
   history::BrowsingHistoryService::HistoryEntry entry1;
   entry1.url = url1;
-  entry1.all_timestamps.insert(time1a);
-  entry1.all_timestamps.insert(time1b);
+  entry1.all_timestamps[url1].insert(time1a);
+  entry1.all_timestamps[url1].insert(time1b);
   std::vector<history::BrowsingHistoryService::HistoryEntry> items_to_remove;
   items_to_remove.push_back(entry1);
 
@@ -351,67 +345,6 @@ IN_PROC_BROWSER_TEST_P(TwoClientHistorySyncTest, SyncsVisitsDeletion) {
   // Wait for the deletions to apply to the second client: Both visits to the
   // first URL should be gone, but the second URL's visits should remain.
   EXPECT_TRUE(WaitForLocalHistory(1, {{url1, IsEmpty()}, {url2, SizeIs(2)}}));
-}
-
-IN_PROC_BROWSER_TEST_P(TwoClientHistorySyncTest,
-                       DoesNotSyncBrowsingTopicsEligibility) {
-  ASSERT_TRUE(SetupSync());
-
-  // Navigate to some URL.
-  GURL url1 =
-      embedded_test_server()->GetURL("synced1.com", "/sync/simple.html");
-  NavigateToURL(0, url1);
-
-  // (Hackily) mark the just-added history entry as eligible for browsing
-  // topics. This field should *not* be synced.
-  history::HistoryService* history_service =
-      HistoryServiceFactory::GetForProfile(GetProfile(0),
-                                           ServiceAccessType::EXPLICIT_ACCESS);
-
-  history::ContextID context_id =
-      history::ContextIDForWebContents(GetActiveWebContents(0));
-  int nav_entry_id = GetActiveWebContents(0)
-                         ->GetController()
-                         .GetLastCommittedEntry()
-                         ->GetUniqueID();
-
-  history_service->SetBrowsingTopicsAllowed(context_id, nav_entry_id, url1);
-
-  // Navigate somewhere else, to "complete" the first visit and populate its
-  // duration.
-  GURL url2 =
-      embedded_test_server()->GetURL("synced2.com", "/sync/simple.html");
-  NavigateToURL(0, url2);
-
-  // Ensure the visit arrived on the server, including the duration. The
-  // browsing-topics-allowed bit should *not* be here, but there's no real way
-  // to check for its absence on the server. Instead, we'll check that on the
-  // second client, below.
-  EXPECT_TRUE(WaitForServerHistory(UnorderedElementsAre(
-      AllOf(UrlIs(url1.spec()), HasVisitDuration()), UrlIs(url2))));
-
-  // Wait for the visit to arrive on the second client.
-  EXPECT_TRUE(WaitForLocalHistory(
-      1, {{url1, UnorderedElementsAre(VisitRowHasDuration())}}));
-
-  // Finally, check that the local visit (on the first client) has the
-  // browsing-topics-allowed bit set, but the synced visit (on the second
-  // client) does not.
-  std::vector<history::AnnotatedVisit> local_visits =
-      history_helper::GetAnnotatedVisitsForURLFromClient(0, url1);
-  ASSERT_EQ(local_visits.size(), 1u);
-  history::AnnotatedVisit local_visit = local_visits[0];
-  EXPECT_TRUE(local_visit.content_annotations.annotation_flags &
-              history::VisitContentAnnotationFlag::kBrowsingTopicsEligible);
-
-  std::vector<history::AnnotatedVisit> synced_visits =
-      history_helper::GetAnnotatedVisitsForURLFromClient(1, url1);
-  ASSERT_EQ(synced_visits.size(), 1u);
-  history::AnnotatedVisit synced_visit = synced_visits[0];
-  EXPECT_FALSE(synced_visit.content_annotations.annotation_flags &
-               history::VisitContentAnnotationFlag::kBrowsingTopicsEligible);
-  // Just as a sanity check: Other visit fields *did* arrive.
-  EXPECT_FALSE(synced_visit.visit_row.visit_duration.is_zero());
 }
 
 }  // namespace

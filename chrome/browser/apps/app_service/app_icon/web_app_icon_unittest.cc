@@ -34,7 +34,6 @@
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_profile.h"
-#include "components/services/app_service/public/cpp/features.h"
 #include "components/services/app_service/public/cpp/icon_effects.h"
 #include "components/services/app_service/public/cpp/icon_types.h"
 #include "content/public/test/browser_task_environment.h"
@@ -51,7 +50,6 @@
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ash/app_list/md_icon_normalizer.h"
 #include "chrome/browser/ash/arc/icon_decode_request.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
 #include "components/services/app_service/public/cpp/icon_loader.h"
 #include "components/services/app_service/public/cpp/icon_types.h"
@@ -424,7 +422,7 @@ TEST_F(WebAppIconFactoryTest, LoadIconFailed) {
 #if BUILDFLAG(IS_CHROMEOS)
 TEST_F(WebAppIconFactoryTest, ConvertSquareBitmapsToImageSkia_Empty) {
   gfx::ImageSkia converted_image = ConvertSquareBitmapsToImageSkia(
-      /*icon_bitmaps=*/std::map<web_app::SquareSizePx, SkBitmap>{},
+      /*icon_bitmaps=*/web_app::OrderedSizeToBitmap{},
       /*icon_effects=*/apps::IconEffects::kNone,
       /*size_hint_in_dip=*/32);
 
@@ -433,7 +431,7 @@ TEST_F(WebAppIconFactoryTest, ConvertSquareBitmapsToImageSkia_Empty) {
 
 TEST_F(WebAppIconFactoryTest,
        ConvertSquareBitmapsToImageSkia_OneBigIconForDownscale) {
-  std::map<web_app::SquareSizePx, SkBitmap> icon_bitmaps;
+  web_app::OrderedSizeToBitmap icon_bitmaps;
   web_app::AddGeneratedIcon(&icon_bitmaps, web_app::icon_size::k512,
                             SK_ColorYELLOW);
 
@@ -456,7 +454,7 @@ TEST_F(WebAppIconFactoryTest,
 
 TEST_F(WebAppIconFactoryTest,
        ConvertSquareBitmapsToImageSkia_OneSmallIconNoUpscale) {
-  std::map<web_app::SquareSizePx, SkBitmap> icon_bitmaps;
+  web_app::OrderedSizeToBitmap icon_bitmaps;
   web_app::AddGeneratedIcon(&icon_bitmaps, web_app::icon_size::k16,
                             SK_ColorMAGENTA);
 
@@ -473,7 +471,7 @@ TEST_F(WebAppIconFactoryTest, ConvertSquareBitmapsToImageSkia_MatchBigger) {
   const std::vector<SkColor> colors{SK_ColorBLUE, SK_ColorRED, SK_ColorMAGENTA,
                                     SK_ColorGREEN, SK_ColorWHITE};
 
-  std::map<web_app::SquareSizePx, SkBitmap> icon_bitmaps;
+  web_app::OrderedSizeToBitmap icon_bitmaps;
   for (size_t i = 0; i < sizes_px.size(); ++i) {
     web_app::AddGeneratedIcon(&icon_bitmaps, sizes_px[i], colors[i]);
   }
@@ -504,7 +502,7 @@ TEST_F(WebAppIconFactoryTest, ConvertSquareBitmapsToImageSkia_StandardEffect) {
                                                     web_app::icon_size::k96};
   const std::vector<SkColor> colors{SK_ColorBLUE, SK_ColorRED};
 
-  std::map<web_app::SquareSizePx, SkBitmap> icon_bitmaps;
+  web_app::OrderedSizeToBitmap icon_bitmaps;
   for (size_t i = 0; i < sizes_px.size(); ++i) {
     web_app::AddGeneratedIcon(&icon_bitmaps, sizes_px[i], colors[i]);
   }
@@ -536,7 +534,7 @@ TEST_F(WebAppIconFactoryTest, ConvertSquareBitmapsToImageSkia_StandardEffect) {
   }
 }
 
-// Regression test for crash. https://crbug.com/1335266
+// Regression test for crash. https://crbug.com/40846976
 TEST_F(WebAppIconFactoryTest, ApplyBackgroundAndMask_NullImage) {
   gfx::ImageSkia image = apps::ApplyBackgroundAndMask(gfx::ImageSkia());
   DCHECK(image.isNull());

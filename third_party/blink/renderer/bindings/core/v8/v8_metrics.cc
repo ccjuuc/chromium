@@ -180,6 +180,7 @@ void CheckUnifiedEvents(const v8::metrics::GarbageCollectionFullCycle& event) {
   DCHECK_LE(0, event.collection_rate_in_percent);
   DCHECK_LE(0, event.collection_weight_in_percent);
   DCHECK_LE(0, event.main_thread_collection_weight_in_percent);
+  DCHECK_LE(0, event.found_js_global_proxies);
 }
 
 constexpr size_t kMinSize = 1;
@@ -240,9 +241,16 @@ void ReportHistogramCollectionLimits(
 void ReportV8FullHistograms(
     std::string_view priority,
     const v8::metrics::GarbageCollectionFullCycle& event) {
+  const std::string is_input_handling =
+      event.is_input_handling ? ".IsInputHandling" : ".NotInputHandling";
+
   base::UmaHistogramExactLinear(
       base::StrCat({"V8.GC.Cycle", priority, ".Reason.Full"}), event.reason,
       v8::internal::kGarbageCollectionReasonMaxValue);
+  base::UmaHistogramExactLinear(
+      base::StrCat(
+          {"V8.GC.Cycle", priority, ".Reason.Full", is_input_handling}),
+      event.reason, v8::internal::kGarbageCollectionReasonMaxValue);
 
   // Interval between full cycles can go over 10s. UmaHistogramMediumTimes() can
   // record intervals up to 3m, as opposed to 10s for UmaHistogramMedium().
@@ -256,6 +264,13 @@ void ReportV8FullHistograms(
   ReportHistogramTimesAllGcPhases(
       base::StrCat({"V8.GC.Cycle", priority, ".MainThread.Full"}), "",
       event.main_thread);
+  ReportHistogramTimesAllGcPhases(
+      base::StrCat({"V8.GC.Cycle", priority, ".Full", is_input_handling}), "",
+      event.total);
+  ReportHistogramTimesAllGcPhases(
+      base::StrCat(
+          {"V8.GC.Cycle", priority, ".MainThread.Full", is_input_handling}),
+      "", event.main_thread);
 
   /* Report atomic pause metrics: */
   ReportHistogramTimesAllGcPhases(
@@ -302,6 +317,10 @@ void ReportV8FullHistograms(
       base::StrCat({"V8.GC.Cycle", priority, ".ExternalMemory.Full"}),
       CappedSizeInKB(event.external_memory_bytes), kMinSize, kMaxSizeLarge,
       kNumBuckets);
+  base::UmaHistogramCounts10000(
+      base::StrCat({"V8.GC.Cycle", priority, ".FoundJSGlobalProxies.Full"}),
+      base::saturated_cast<base::Histogram::Sample32>(
+          event.found_js_global_proxies));
 
   /* Report efficacy metrics: */
   base::UmaHistogramCustomCounts(
@@ -451,7 +470,9 @@ void V8MetricsRecorder::AddMainThreadEvent(
     builder.SetReason(event.reason)
         .SetReduceMemory(event.reduce_memory)
         .SetIsLoading(event.is_loading)
+        .SetIsInputHandling(event.is_input_handling)
         .SetReason_IncrementalMarking(event.incremental_marking_reason)
+        .SetGrowingMode(event.growing_mode)
         .SetDuration_SinceLastMarkCompact(
             ukm::GetExponentialBucketMinForFineUserTiming(
                 event.total_duration_since_last_mark_compact))

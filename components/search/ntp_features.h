@@ -25,23 +25,38 @@ BASE_DECLARE_FEATURE(kCustomizeChromeSidePanelExtensionsCard);
 BASE_DECLARE_FEATURE(kCustomizeChromeWallpaperSearch);
 BASE_DECLARE_FEATURE(kCustomizeChromeWallpaperSearchButton);
 BASE_DECLARE_FEATURE(kCustomizeChromeWallpaperSearchInspirationCard);
+enum class EnergyEffectVariant {
+  // Default (M149 / 12% shadow)
+  kEnergyEffectOriginal = 0,
+  // Variant 1 (20% shadow)
+  kEnergyEffectDarkerShadow = 1,
+  // Variant 2 (reduced original shadow + darker border)
+  kPreEnergyEffectWithBorder = 2,
+  // Variant 4 (Fusebox shadow @ 16%)
+  kEnergyEffectFusebox = 3,
+};
+
+BASE_DECLARE_FEATURE(kEnergyEffect);
+BASE_DECLARE_FEATURE(kEnergyEffectAnimation);
 BASE_DECLARE_FEATURE(kRealboxCr23Theming);
 BASE_DECLARE_FEATURE(kRealboxMatchOmniboxTheme);
-BASE_DECLARE_FEATURE(kRealboxMatchSearchboxTheme);
-BASE_DECLARE_FEATURE(kRealboxUseGoogleGIcon);
 BASE_DECLARE_FEATURE(kNtpAlphaBackgroundCollections);
+BASE_DECLARE_FEATURE(kNtpAnimatedCaret);
 BASE_DECLARE_FEATURE(kNtpBackgroundImageErrorDetection);
 BASE_DECLARE_FEATURE(kNtpCalendarModule);
 BASE_DECLARE_FEATURE(kNtpChromeCartModule);
 BASE_DECLARE_FEATURE(kNtpCustomizeChromeAutoOpen);
+BASE_DECLARE_FEATURE(kNtpCustomizeWebUiAndroid);
+BASE_DECLARE_FEATURE(kNtpDisableBrowserInitiatedLinks);
 BASE_DECLARE_FEATURE(kNtpDriveModule);
 BASE_DECLARE_FEATURE(kNtpDriveModuleHistorySyncRequirement);
+BASE_DECLARE_FEATURE(kNtpDriveModuleLink);
 BASE_DECLARE_FEATURE(kNtpDriveModuleSegmentation);
-BASE_DECLARE_FEATURE(kNtpDriveModuleShowSixFiles);
 #if !defined(OFFICIAL_BUILD)
 BASE_DECLARE_FEATURE(kNtpDummyModules);
 #endif
 BASE_DECLARE_FEATURE(kNtpComprehensiveTheming);
+BASE_DECLARE_FEATURE(kNtpGoogleLogo26);
 BASE_DECLARE_FEATURE(kNtpLogo);
 BASE_DECLARE_FEATURE(kNtpMiddleSlotPromo);
 BASE_DECLARE_FEATURE(kNtpMiddleSlotPromoDismissal);
@@ -51,14 +66,9 @@ BASE_DECLARE_FEATURE(kNtpModulesDragAndDrop);
 BASE_DECLARE_FEATURE(kNtpModulesLoad);
 BASE_DECLARE_FEATURE(kNtpModuleSignInRequirement);
 BASE_DECLARE_FEATURE(kNtpOutlookCalendarModule);
-BASE_DECLARE_FEATURE(kNtpPhotosModule);
-BASE_DECLARE_FEATURE(kNtpPhotosModuleSoftOptOut);
-BASE_DECLARE_FEATURE(kNtpPhotosModuleCustomizedOptInTitle);
-BASE_DECLARE_FEATURE(kNtpPhotosModuleCustomizedOptInArtWork);
-BASE_DECLARE_FEATURE(kNtpPhotosModuleSplitSvgOptInArtWork);
-BASE_DECLARE_FEATURE(kNtpFeedModule);
 BASE_DECLARE_FEATURE(kNtpOneGoogleBar);
-BASE_DECLARE_FEATURE(kNtpSafeBrowsingModule);
+BASE_DECLARE_FEATURE(kNtpScaledActionChips);
+BASE_DECLARE_FEATURE(kNtpScaledActionChipsSmall);
 BASE_DECLARE_FEATURE(kNtpSharepointModule);
 enum class NtpSharepointModuleDataType {
   kTrendingInsights,
@@ -77,9 +87,10 @@ BASE_DECLARE_FEATURE(kNtpTabResumptionModuleTimeLimit);
 BASE_DECLARE_FEATURE(kNtpWallpaperSearchButton);
 BASE_DECLARE_FEATURE(kNtpWallpaperSearchButtonAnimation);
 BASE_DECLARE_FEATURE(kNtpWallpaperSearchButtonAnimationShownThreshold);
-BASE_DECLARE_FEATURE(kNtpMobilePromo);
 BASE_DECLARE_FEATURE(kNtpMicrosoftAuthenticationModule);
 BASE_DECLARE_FEATURE(kNtpNextFeatures);
+BASE_DECLARE_FEATURE(kNtpNextCanvasChip);
+BASE_DECLARE_FEATURE(kNtpStarterChip);
 BASE_DECLARE_FEATURE(kNtpOneGoogleBarAsyncBarParts);
 BASE_DECLARE_FEATURE(kNtpFooter);
 BASE_DECLARE_FEATURE(kNtpTabGroupsModule);
@@ -87,6 +98,13 @@ BASE_DECLARE_FEATURE(kNtpTabGroupsModuleZeroState);
 BASE_DECLARE_FEATURE(kNtpFeatureOptimizationModuleRemoval);
 BASE_DECLARE_FEATURE(kNtpFeatureOptimizationShortcutsRemoval);
 BASE_DECLARE_FEATURE(kNtpFeatureOptimizationDismissModulesRemoval);
+BASE_DECLARE_FEATURE(kNtpAnimatedDoodles);
+BASE_DECLARE_FEATURE(kNtpDoodleMurals);
+BASE_DECLARE_FEATURE(kLightningTakeoverEdition);
+BASE_DECLARE_FEATURE(kNtpShortcutsRedesign);
+BASE_DECLARE_FEATURE(kNtpSimplificationBookmarkBar);
+BASE_DECLARE_FEATURE(kBookmarkBarUpdatesForTesting);
+BASE_DECLARE_FEATURE(kNtpThreadsRail);
 
 // Parameter for controlling the luminosity difference for NTP elements on light
 // backgrounds.
@@ -138,17 +156,7 @@ extern const char kNtpModulesEligibleForHappinessTrackingSurveyParam[];
 // Parameter determining module trigger ids for HaTS for eligible module ids for
 // a given module interaction type.
 extern const char kNtpModulesInteractionBasedSurveyEligibleIdsParam[];
-// Parameter determining the type of Photos data to render.
-extern const char kNtpPhotosModuleDataParam[];
-// Parameter determining the art work in opt-in card.
-extern const char kNtpPhotosModuleOptInArtWorkParam[];
-// Parameter determining the title for the opt-in card.
-extern const char kNtpPhotosModuleOptInTitleParam[];
-// Parameter determining the number of times a module is shown to a user
-// before cooldown starts.
-extern const char kNtpSafeBrowsingModuleCountMaxParam[];
-// Parameter determining the cooldown period (in days) for a target user.
-extern const char kNtpSafeBrowsingModuleCooldownPeriodDaysParam[];
+
 // Parameter determining the variation of the omnibox theme matching.
 extern const char kRealboxMatchOmniboxThemeVariantParam[];
 extern const char kNtpMostRelevantTabResumptionModuleDataParam[];
@@ -178,8 +186,6 @@ extern const char kNtpWallpaperSearchButtonAnimationShownThresholdParam[];
 extern const char kNtpWallpaperSearchButtonHideConditionParam[];
 // Parameter determining the trigger delay of the Wallpaper Search HaTS survey.
 extern const char kWallpaperSearchHatsDelayParam[];
-// Parameter determining the target url to go to from the Ntp Mobile Promo.
-extern const char kNtpMobilePromoTargetUrlParam[];
 
 // Parameter determining the experiment name to pass to the Google Calendar
 // API.
@@ -219,9 +225,6 @@ extern const base::FeatureParam<bool>
     kNtpRealboxCr23ExpandedStateBgMatchesOmnibox;
 // Parameter determining the whether the steady state realbox has a shadow.
 extern const base::FeatureParam<bool> kNtpRealboxCr23SteadyStateShadow;
-// Parameter determining the impression limit for the NTP mobile promo. The
-// promo will not be shown again after the impression limit is reached.
-extern const base::FeatureParam<int> kNtpMobilePromoImpressionLimit;
 // Parameter determining the type of data to render.
 extern const base::FeatureParam<NtpSharepointModuleDataType>
     kNtpSharepointModuleDataParam;
@@ -248,36 +251,43 @@ extern const base::FeatureParam<base::TimeDelta>
 // Parameter determing the max number of tab groups to show in the module.
 extern const base::FeatureParam<size_t> kNtpTabGroupsModuleMaxGroupCountParam;
 
-// Parameter determining the max number of MV tiles before the "Show more"
-// button is shown.
-extern const base::FeatureParam<int> kNtpNextMaxMVTilesBeforeShowMoreParam;
-
 // Parameter determining if the Action Chips on the NTP should display static
 // text instead of real suggestions.
 extern const base::FeatureParam<bool> kNtpNextShowStaticTextParam;
-
-// Parameter determining if the Action Chips on the NTP should display deep
-// dive suggestions.
-extern const base::FeatureParam<bool> kNtpNextShowDeepDiveSuggestionsParam;
 
 // Parameter determining if the recent tab should be run through client-side
 // sensitivity check.
 extern const base::FeatureParam<bool> kNtpNextClientSensitivityCheckParam;
 
-// Parameter determining if the suggestions are retrieved from the newly
-// implemented search suggestions endpoint. If true, the new one is used.
-// If false, an existing endpoint (used by ZPS) is used for deep dive chips,
-// and static data is used for steady state chips.
-extern const base::FeatureParam<bool>
-    kNtpNextSuggestionsFromNewSearchSuggestionsEndpointParam;
+// Parameter determining if a recent tab chip/row should be generated in the
+// steady state in NTP. If false, one is NOT generated in the steady state,
+// while one is still generated in the deep-dive state.
+extern const base::FeatureParam<bool> kNtpNextShowStaticRecentTabChipParam;
 
 // Parameter determining if the Action Chips on the NTP should display the
-// NTP Simplification UI.
-extern const base::FeatureParam<bool> kNtpNextShowSimplificationUIParam;
+// dismissal UI.
+extern const base::FeatureParam<bool> kNtpNextShowDismissalUIParam;
+
+// Parameter determining if right-clicking an action chip should display the
+// disablement context menu.
+extern const base::FeatureParam<bool> kNtpNextDisablementContextMenuParam;
+
+// Parameter determining if the disablement is enabled for NTP Next.
+extern const base::FeatureParam<bool> kNtpNextDisablementParam;
 
 // Parameter determining if the tab upload should be delayed when tab context is
 // added from an action chip.
 extern const base::FeatureParam<bool> kAddTabUploadDelayOnActionChipClick;
+
+// Parameter determining the maximum number of small action chips to show.
+extern const base::FeatureParam<int> kNtpMaxSmallChips;
+
+// Parameter determining if in test mode for small action chips.
+extern const base::FeatureParam<bool> kNtpScaledActionChipsSmallInTestMode;
+
+// Parameter determining if fallback action chips should be shown.
+// Used for local testing.
+extern const base::FeatureParam<bool> kNtpScaledActionChipsShowFallback;
 
 // Parameter determining the minimum amount of time that must pass before
 // shortcuts staleness counters will be incremented.
@@ -296,6 +306,15 @@ extern const base::FeatureParam<int> kStaleShortcutsCountThreshold;
 // Parameter determining the count at which modules will be considered stale
 // and eligible for auto-removal.
 extern const base::FeatureParam<int> kStaleModulesCountThreshold;
+
+// Parameter determining the count at which the bookmark bar will be eligible
+// for auto-removal.
+extern const base::FeatureParam<int> kBookmarkBarCountThreshold;
+
+// Parameter determining the minimum amount of time before auto-removal prefs
+// are updated.
+extern const base::FeatureParam<base::TimeDelta>
+    kBookmarkBarMinStalenessTimeInterval;
 
 // Returns the timeout after which the load of a module should be aborted.
 base::TimeDelta GetModulesLoadTimeout();
@@ -319,11 +338,37 @@ int GetWallpaperSearchButtonAnimationShownThreshold();
 // Returns the condition to use to hide the wallpaper search button.
 int GetWallpaperSearchButtonHideCondition();
 
-std::string GetMobilePromoTargetURL();
+// Parameter determining the max number of tiles to show in the collapsed state.
+extern const base::FeatureParam<int> kMaxTilesInCollapsedState;
 
-// Returns the max number of tiles to show before the "show more" button is
-// shown.
-int GetMaxTilesBeforeShowMore();
+// Parameter determining the max number of shortcuts to show in the expanded
+// state.
+extern const base::FeatureParam<int> kMaxShortcutsInExpandedState;
+
+// Parameter determining the max number of MV tiles to show in the expanded
+// state.
+extern const base::FeatureParam<int> kMaxMostVisitedTilesInExpandedState;
+
+// Parameter determining the max number of enterprise shortcuts allowed.
+extern const base::FeatureParam<int> kMaxEnterpriseShortcuts;
+
+// Returns the max number of tiles to show in the collapsed state.
+int GetMaxTilesInCollapsedState();
+
+// Returns the max number of shortcuts to show in the expanded state.
+int GetMaxShortcutsInExpandedState();
+
+// Returns the max number of MV tiles to show in the expanded state.
+int GetMaxMostVisitedTilesInExpandedState();
+
+// Returns the max number of enterprise shortcuts allowed.
+int GetMaxEnterpriseShortcuts();
+
+base::TimeDelta GetBookmarkBarMinStalenessTimeInterval();
+
+int GetBookmarkBarCountThreshold();
+
+extern const base::FeatureParam<EnergyEffectVariant> kEnergyEffectVariantParam;
 
 }  // namespace ntp_features
 

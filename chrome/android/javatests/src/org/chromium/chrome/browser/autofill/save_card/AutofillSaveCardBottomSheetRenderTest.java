@@ -24,8 +24,11 @@ import org.mockito.junit.MockitoRule;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.R;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
+import org.chromium.components.autofill.AutofillFeatures;
 import org.chromium.components.autofill.payments.AutofillSaveCardUiInfo;
 import org.chromium.components.autofill.payments.CardDetail;
 import org.chromium.components.autofill.payments.LegalMessageLine;
@@ -36,6 +39,8 @@ import org.chromium.components.browser_ui.bottomsheet.BottomSheetTestSupport;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager.ScrimClient;
 import org.chromium.ui.KeyboardVisibilityDelegate;
+import org.chromium.ui.base.ImmutableWeakReference;
+import org.chromium.ui.insets.InsetObserver;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 import org.chromium.ui.test.util.BlankUiTestActivity;
@@ -76,6 +81,14 @@ public class AutofillSaveCardBottomSheetRenderTest {
         runOnUiThreadBlocking(
                 () -> {
                     mActivity = sActivityTestRule.getActivity();
+
+                    InsetObserver insetObserver =
+                            new InsetObserver(
+                                    new ImmutableWeakReference<>(
+                                            mActivity.getWindow().getDecorView()),
+                                    new ImmutableWeakReference<>(mActivity.getApplicationContext()),
+                                    /* enableKeyboardOverlayMode= */ false,
+                                    /* enableExtraEdgeToEdgeLogging= */ false);
                     ViewGroup activityContentView = mActivity.findViewById(android.R.id.content);
                     activityContentView.removeAllViews();
                     ScrimManager scrimManager =
@@ -83,10 +96,10 @@ public class AutofillSaveCardBottomSheetRenderTest {
                     mBottomSheetController =
                             BottomSheetControllerFactory.createFullWidthBottomSheetController(
                                     () -> scrimManager,
-                                    (unused) -> {},
                                     mActivity.getWindow(),
                                     KeyboardVisibilityDelegate.getInstance(),
-                                    () -> activityContentView);
+                                    () -> activityContentView,
+                                    insetObserver);
                 });
     }
 
@@ -103,6 +116,7 @@ public class AutofillSaveCardBottomSheetRenderTest {
 
     @Test
     @Feature({"RenderTest"})
+    @EnableFeatures({AutofillFeatures.AUTOFILL_ENABLE_GRADIENT_GOOGLE_LOGOS})
     public void testUploadSave() throws Exception {
         setUpSaveCardBottomSheetContent(
                 new AutofillSaveCardUiInfo.Builder()
@@ -125,9 +139,53 @@ public class AutofillSaveCardBottomSheetRenderTest {
                         .withConfirmText("Confirm text")
                         .withCancelText("Cancel text")
                         .withDescriptionText("Description text.")
-                        .withIsGooglePayBrandingEnabled(true)
+                        .withIsChromeBrandingEnabled(true)
                         .withCardDescription("")
                         .withLoadingDescription("")
+                        .withGooglePayPillLogo(R.drawable.googlepay_pill_with_gradient)
+                        .build());
+        runOnUiThreadBlocking(
+                () -> {
+                    mBottomSheetController.requestShowContent(
+                            mSaveCardBottomSheetContent, /* animate= */ false);
+                });
+        ViewGroup activityContentView =
+                sActivityTestRule.getActivity().findViewById(android.R.id.content);
+        BottomSheetTestSupport.waitForOpen(mBottomSheetController);
+
+        // Render the activity to show the content sheet and its contents.
+        mRenderTestRule.render(activityContentView, "save_card_bottom_sheet_content_upload");
+    }
+
+    @Test
+    @Feature({"RenderTest"})
+    @DisableFeatures({AutofillFeatures.AUTOFILL_ENABLE_GRADIENT_GOOGLE_LOGOS})
+    public void testUploadSave_WithGradientGoogleLogosDisabled() throws Exception {
+        setUpSaveCardBottomSheetContent(
+                new AutofillSaveCardUiInfo.Builder()
+                        .withIsForUpload(true)
+                        .withLogoIcon(R.drawable.google_pay)
+                        .withLogoIconDescription("Google Pay logo")
+                        .withCardDetail(
+                                new CardDetail(R.drawable.visa_card, "Card label", "Card sublabel"))
+                        .withLegalMessageLines(
+                                Arrays.asList(
+                                        new LegalMessageLine(
+                                                "Legal message line #1",
+                                                Arrays.asList(
+                                                        new Link(
+                                                                /* start= */ 0,
+                                                                /* end= */ 5,
+                                                                /* url= */ "https://example.com"))),
+                                        new LegalMessageLine("Legal message line #2")))
+                        .withTitleText("Title text")
+                        .withConfirmText("Confirm text")
+                        .withCancelText("Cancel text")
+                        .withDescriptionText("Description text.")
+                        .withIsChromeBrandingEnabled(true)
+                        .withCardDescription("")
+                        .withLoadingDescription("")
+                        .withGooglePayPillLogo(R.drawable.googlepay_pill)
                         .build());
         runOnUiThreadBlocking(
                 () -> {
@@ -157,7 +215,7 @@ public class AutofillSaveCardBottomSheetRenderTest {
                         .withTitleText("Title text")
                         .withConfirmText("Confirm text")
                         .withCancelText("Cancel text")
-                        .withIsGooglePayBrandingEnabled(false)
+                        .withIsChromeBrandingEnabled(false)
                         .withDescriptionText("") // Description text is empty on local save.
                         .withCardDescription("")
                         .withLoadingDescription("")
@@ -215,6 +273,11 @@ public class AutofillSaveCardBottomSheetRenderTest {
                                 AutofillSaveCardBottomSheetProperties.LOADING_DESCRIPTION,
                                 uiInfo.getLoadingDescription())
                         .with(AutofillSaveCardBottomSheetProperties.SHOW_LOADING_STATE, false)
+                        .with(
+                                AutofillSaveCardBottomSheetProperties.GOOGLE_PAY_PILL_LOGO,
+                                uiInfo.isForUpload() && uiInfo.isChromeBrandingEnabled()
+                                        ? uiInfo.getGooglePayPillLogoId()
+                                        : 0)
                         .build();
         PropertyModelChangeProcessor.create(
                 model, view, AutofillSaveCardBottomSheetViewBinder::bind);

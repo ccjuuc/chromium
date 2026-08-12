@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/check_deref.h"
 #include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
@@ -15,11 +16,13 @@
 #include "base/sequence_checker_impl.h"
 #include "base/strings/strcat.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/enterprise/signin/profile_management_disclaimer_service.h"
 #include "chrome/browser/enterprise/signin/profile_management_disclaimer_service_factory.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/regional_capabilities/regional_capabilities_service_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_promo_util.h"
 #include "chrome/browser/signin/signin_util.h"
@@ -29,6 +32,7 @@
 #include "chrome/browser/ui/webui/signin/history_sync_optin_service.h"
 #include "chrome/browser/ui/webui/signin/history_sync_optin_service_factory.h"
 #include "chrome/browser/ui/webui/signin/turn_sync_on_helper_policy_fetch_tracker.h"
+#include "components/regional_capabilities/regional_capabilities_service.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/base/signin_switches.h"
@@ -49,6 +53,18 @@ constexpr char kHistorySyncOptIntAccessPointActionPrefix[] =
     "Signin_HistorySync_";
 constexpr char kOtherManagedProfileCreationHistogramName[] =
     "Signin.ManagedUserProfileCreationConflict";
+constexpr char kSyncServiceStartupAwaitCompleteHistogramName[] =
+    "Signin.HistorySyncOptin.SyncStartupAwaitTime.Complete";
+constexpr char kSyncServiceStartupAwaitTimeoutHistogramName[] =
+    "Signin.HistorySyncOptin.SyncStartupAwaitTime.Timeout";
+
+base::TimeDelta GetElapsedTime(const base::OneShotTimer& timer) {
+  CHECK(timer.IsRunning());
+  base::TimeTicks now = base::TimeTicks::Now();
+  base::TimeTicks start_time =
+      timer.desired_run_time() - timer.GetCurrentDelay();
+  return now - start_time;
+}
 
 // LINT.IfChange(FlowEventToString)
 std::string_view GetHistorySyncSkipReasonMetricName(
@@ -90,6 +106,16 @@ std::string_view UserChoiceToStringMetric(
 }
 // LINT.ThenChange(/tools/metrics/histograms/metadata/signin/histograms.xml:Signin.HistorySyncOptIn)
 
+void RecordSyncServiceStartupCompletionMetrics(base::TimeDelta elapsed_time) {
+  base::UmaHistogramTimes(kSyncServiceStartupAwaitCompleteHistogramName,
+                          elapsed_time);
+}
+
+void RecordSyncServiceStartupTimeoutMetrics(base::TimeDelta elapsed_time) {
+  base::UmaHistogramTimes(kSyncServiceStartupAwaitTimeoutHistogramName,
+                          elapsed_time);
+}
+
 void RecordMetricsForHistorySyncUserChoice(
     HistorySyncOptinHelper::ScreenChoiceResult user_choice,
     Profile* profile,
@@ -110,7 +136,10 @@ void RecordMetricsForHistorySyncUserChoice(
                           kHistorySyncOptinExpansionPillOnStartup) {
     signin::RecordAvatarButtonPromoAcceptedAtPromoShownCount(
         signin::ProfileMenuAvatarButtonPromoInfo::Type::kHistorySyncPromo,
-        IdentityManagerFactory::GetForProfile(profile), *profile->GetPrefs());
+        IdentityManagerFactory::GetForProfile(profile)
+            ->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
+            .gaia,
+        *profile->GetPrefs());
   }
 }
 
@@ -149,11 +178,186 @@ syncer::SyncService* GetSyncService(Profile* profile) {
              ? SyncServiceFactory::GetForProfile(profile)
              : nullptr;
 }
-}  // namespace
 
-SyncServiceStartupStateObserver::SyncServiceStartupStateObserver(
+bool IsSyncStartupInPendingState(syncer::SyncService* sync_service) {
+  if (!sync_service) {
+    return false;
+  }
+  auto transport_state = sync_service->GetTransportState();
+  switch (transport_state) {
+    case syncer::SyncService::TransportState::DISABLED:
+    case syncer::SyncService::TransportState::PAUSED:
+      return false;
+    case syncer::SyncService::TransportState::START_DEFERRED:
+    case syncer::SyncService::TransportState::INITIALIZING:
+      return true;
+    case syncer::SyncService::TransportState::PENDING_DESIRED_CONFIGURATION:
+    case syncer::SyncService::TransportState::CONFIGURING:
+    case syncer::SyncService::TransportState::ACTIVE:
+      return false;
+  }
+  NOTREACHED();
+}
+
+// An implementation of `SyncServiceStartupStateObserver` directly
+// observing the Sync Service and tracking if its transport state
+// has reached a final state.
+class SyncServiceStartupStateObserverImpl
+    : public SyncServiceStartupStateObserver,
+      public syncer::SyncServiceObserver {
+ public:
+  SyncServiceStartupStateObserverImpl(
+      syncer::SyncService* sync_service,
+      base::TimeDelta startup_delay,
+      base::OnceClosure on_state_updated_callback);
+  ~SyncServiceStartupStateObserverImpl() override;
+
+  static std::unique_ptr<SyncServiceStartupStateObserver>
+  MaybeCreateSyncServiceStateObserverForAccountWithClouldPolicies(
+      syncer::SyncService* sync_service,
+      Profile* profile,
+      const CoreAccountInfo& account_info,
+      base::TimeDelta startup_delay,
+      base::OnceClosure callback);
+
+  // SyncServiceStartupStateObserver implementation:
+  void MockTimeoutReachedForTesting() override;  // IN-TEST
+  void OnSyncStartupStateChangedForTesting(      // IN-TEST
+      SyncStartupTracker::ServiceStartupState state) override;
+
+ private:
+  // syncer::SyncServiceObserver:
+  void OnStateChanged(syncer::SyncService* sync) override;
+  void OnSyncShutdown(syncer::SyncService* sync) override;
+
+  void OnSyncServiceStartupTimeout();
+
+  base::OnceClosure on_state_updated_callback_;
+  base::OneShotTimer sync_service_startup_timeout_timer_;
+  base::ScopedObservation<syncer::SyncService, syncer::SyncServiceObserver>
+      sync_service_observation_{this};
+  base::WeakPtrFactory<SyncServiceStartupStateObserverImpl>
+      weak_pointer_factory_{this};
+};
+
+SyncServiceStartupStateObserverImpl::SyncServiceStartupStateObserverImpl(
     syncer::SyncService* sync_service,
+    base::TimeDelta startup_delay,
     base::OnceClosure on_state_updated_callback)
+    : on_state_updated_callback_(std::move(on_state_updated_callback)) {
+  CHECK(sync_service);
+  CHECK(on_state_updated_callback_);
+  // Start a timeout for sync service to update its state.
+  sync_service_startup_timeout_timer_.Start(
+      FROM_HERE, startup_delay,
+      base::BindOnce(
+          &SyncServiceStartupStateObserverImpl::OnSyncServiceStartupTimeout,
+          weak_pointer_factory_.GetWeakPtr()));
+  sync_service_observation_.Observe(sync_service);
+}
+
+SyncServiceStartupStateObserverImpl::~SyncServiceStartupStateObserverImpl() =
+    default;
+
+// static
+std::unique_ptr<SyncServiceStartupStateObserver>
+SyncServiceStartupStateObserverImpl::
+    MaybeCreateSyncServiceStateObserverForAccountWithClouldPolicies(
+        syncer::SyncService* sync_service,
+        Profile* profile,
+        const CoreAccountInfo& account_info,
+        base::TimeDelta startup_delay,
+        base::OnceClosure callback) {
+  if (AccountMayHaveCloudPolicies(profile, account_info.email) &&
+      IsSyncStartupInPendingState(sync_service)) {
+    // The service is still starting up, wait for it to become active or
+    // disabled.
+    return std::make_unique<SyncServiceStartupStateObserverImpl>(
+        sync_service, startup_delay, std::move(callback));
+  }
+  return nullptr;
+}
+
+void SyncServiceStartupStateObserverImpl::MockTimeoutReachedForTesting() {
+  sync_service_startup_timeout_timer_.FireNow();
+}
+
+void SyncServiceStartupStateObserverImpl::
+    OnSyncStartupStateChangedForTesting(  // IN-TEST
+        SyncStartupTracker::ServiceStartupState state) {
+  // Tests using this implementation should set the transport state of the sync
+  // service directly.
+  NOTREACHED();
+}
+
+void SyncServiceStartupStateObserverImpl::OnStateChanged(
+    syncer::SyncService* sync) {
+  if (!IsSyncStartupInPendingState(sync)) {
+    // The sync service has finished starting up, so we can stop observing.
+    if (sync_startup_complete_metrics_callback_) {
+      std::move(sync_startup_complete_metrics_callback_)
+          .Run(GetElapsedTime(sync_service_startup_timeout_timer_));
+    }
+    sync_service_startup_timeout_timer_.Stop();
+    sync_service_observation_.Reset();
+    std::move(on_state_updated_callback_).Run();
+  }
+}
+
+void SyncServiceStartupStateObserverImpl::OnSyncShutdown(
+    syncer::SyncService* sync) {
+  sync_service_startup_timeout_timer_.Stop();
+  sync_service_observation_.Reset();
+}
+
+void SyncServiceStartupStateObserverImpl::OnSyncServiceStartupTimeout() {
+  if (timeout_metrics_callback_) {
+    std::move(timeout_metrics_callback_)
+        .Run(sync_service_startup_timeout_timer_.GetCurrentDelay());
+  }
+  sync_service_startup_timeout_timer_.Stop();
+  sync_service_observation_.Reset();
+  CHECK(!on_state_updated_callback_.is_null());
+  std::move(on_state_updated_callback_).Run();
+}
+
+// An implementation of `SyncServiceStartupStateObserver` based on the
+// soon to be deprecated `SyncStartupTracker`.
+// TODO(crbug.com/40067025): Delete this implementation once the
+// TurnSyncOnHelper is deprecated. `HistorySyncOptinHelper` should use the
+// `SyncServiceStartupStateObserver` (currently gated by a feature flag).
+class SyncServiceStartupStateLegacyObserverImpl
+    : public SyncServiceStartupStateObserver {
+ public:
+  SyncServiceStartupStateLegacyObserverImpl(
+      syncer::SyncService* sync_service,
+      base::OnceClosure on_state_updated_callback);
+  ~SyncServiceStartupStateLegacyObserverImpl() override;
+
+  static std::unique_ptr<SyncServiceStartupStateObserver>
+  MaybeCreateSyncServiceStateObserverForAccountWithClouldPolicies(
+      syncer::SyncService* sync_service,
+      Profile* profile,
+      const CoreAccountInfo& account_info,
+      base::OnceClosure callback);
+  // SyncServiceStartupStateObserver implementation:
+  void MockTimeoutReachedForTesting() override;  // IN-TEST
+  void OnSyncStartupStateChangedForTesting(
+      SyncStartupTracker::ServiceStartupState state) override;  // IN-TEST
+
+ private:
+  void OnSyncStartupStateChanged(SyncStartupTracker::ServiceStartupState state);
+
+  base::OnceClosure on_state_updated_callback_;
+  std::unique_ptr<SyncStartupTracker> sync_startup_tracker_;
+  base::WeakPtrFactory<SyncServiceStartupStateLegacyObserverImpl>
+      weak_pointer_factory_{this};
+};
+
+SyncServiceStartupStateLegacyObserverImpl::
+    SyncServiceStartupStateLegacyObserverImpl(
+        syncer::SyncService* sync_service,
+        base::OnceClosure on_state_updated_callback)
     : on_state_updated_callback_(std::move(on_state_updated_callback)) {
   CHECK(sync_service);
   CHECK(on_state_updated_callback_);
@@ -161,16 +365,17 @@ SyncServiceStartupStateObserver::SyncServiceStartupStateObserver(
   sync_startup_tracker_ = std::make_unique<SyncStartupTracker>(
       sync_service,
       base::BindOnce(
-          &SyncServiceStartupStateObserver::OnSyncStartupStateChanged,
+          &SyncServiceStartupStateLegacyObserverImpl::OnSyncStartupStateChanged,
           weak_pointer_factory_.GetWeakPtr()));
   return;
 }
 
-SyncServiceStartupStateObserver::~SyncServiceStartupStateObserver() = default;
+SyncServiceStartupStateLegacyObserverImpl::
+    ~SyncServiceStartupStateLegacyObserverImpl() = default;
 
 // static
 std::unique_ptr<SyncServiceStartupStateObserver>
-SyncServiceStartupStateObserver::
+SyncServiceStartupStateLegacyObserverImpl::
     MaybeCreateSyncServiceStateObserverForAccountWithClouldPolicies(
         syncer::SyncService* sync_service,
         Profile* profile,
@@ -179,13 +384,13 @@ SyncServiceStartupStateObserver::
   if (AccountMayHaveCloudPolicies(profile, account_info.email) &&
       SyncStartupTracker::GetServiceStartupState(sync_service) ==
           SyncStartupTracker::ServiceStartupState::kPending) {
-    return std::make_unique<SyncServiceStartupStateObserver>(
+    return std::make_unique<SyncServiceStartupStateLegacyObserverImpl>(
         sync_service, std::move(callback));
   }
   return nullptr;
 }
 
-void SyncServiceStartupStateObserver::OnSyncStartupStateChanged(
+void SyncServiceStartupStateLegacyObserverImpl::OnSyncStartupStateChanged(
     SyncStartupTracker::ServiceStartupState state) {
   switch (state) {
     case SyncStartupTracker::ServiceStartupState::kPending:
@@ -196,6 +401,72 @@ void SyncServiceStartupStateObserver::OnSyncStartupStateChanged(
     case SyncStartupTracker::ServiceStartupState::kComplete:
       std::move(on_state_updated_callback_).Run();
   }
+}
+
+void SyncServiceStartupStateLegacyObserverImpl::MockTimeoutReachedForTesting() {
+  // Tests using this implementation can make use of
+  // `testing::ScopedSyncStartupTimeoutOverride`.
+  NOTREACHED();
+}
+
+void SyncServiceStartupStateLegacyObserverImpl::
+    OnSyncStartupStateChangedForTesting(
+        SyncStartupTracker::ServiceStartupState state) {
+  OnSyncStartupStateChanged(state);
+}
+}  // namespace
+
+BASE_FEATURE(kEnableAwaitSyncServiceStartupOnHistorySync,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+const int kAwaitSyncServiceStartupInProfilePickerTimeoutDefaultValue = 10;
+const base::FeatureParam<int>
+    kAwaitSyncServiceStartupInProfilePickerTimeoutSeconds{
+        &kEnableAwaitSyncServiceStartupOnHistorySync,
+        /*name=*/"AwaitSyncServiceStartupInProfilePickerTimeoutSeconds",
+        kAwaitSyncServiceStartupInProfilePickerTimeoutDefaultValue};
+
+const int kAwaitSyncServiceStartupInBrowserTimeoutDefaultValue = 3;
+const base::FeatureParam<int> kAwaitSyncServiceStartupInBrowserTimeoutSeconds{
+    &kEnableAwaitSyncServiceStartupOnHistorySync,
+    /*name=*/"AwaitSyncServiceStartupInBrowserTimeoutSeconds",
+    kAwaitSyncServiceStartupInBrowserTimeoutDefaultValue};
+
+SyncServiceStartupStateObserver::SyncServiceStartupStateObserver() = default;
+SyncServiceStartupStateObserver::~SyncServiceStartupStateObserver() = default;
+
+// static
+std::unique_ptr<SyncServiceStartupStateObserver>
+SyncServiceStartupStateObserver::
+    MaybeCreateSyncServiceStateObserverForAccountWithClouldPolicies(
+        syncer::SyncService* sync_service,
+        Profile* profile,
+        const CoreAccountInfo& account_info,
+        base::TimeDelta startup_delay,
+        base::OnceClosure callback) {
+  if (base::FeatureList::IsEnabled(
+          kEnableAwaitSyncServiceStartupOnHistorySync) &&
+      syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
+    return SyncServiceStartupStateObserverImpl::
+        MaybeCreateSyncServiceStateObserverForAccountWithClouldPolicies(
+            sync_service, profile, account_info, startup_delay,
+            std::move(callback));
+  }
+  return SyncServiceStartupStateLegacyObserverImpl::
+      MaybeCreateSyncServiceStateObserverForAccountWithClouldPolicies(
+          sync_service, profile, account_info, std::move(callback));
+}
+
+void SyncServiceStartupStateObserver::SetSyncStartupCompleteMetricsCallback(
+    base::OnceCallback<void(base::TimeDelta)> callback) {
+  CHECK(callback);
+  sync_startup_complete_metrics_callback_ = std::move(callback);
+}
+
+void SyncServiceStartupStateObserver::SetTimeoutMetricsCallback(
+    base::OnceCallback<void(base::TimeDelta)> callback) {
+  CHECK(callback);
+  timeout_metrics_callback_ = std::move(callback);
 }
 
 HistorySyncOptinPolicyHelper::HistorySyncOptinPolicyHelper(
@@ -269,8 +540,7 @@ HistorySyncOptinHelper::HistorySyncOptinHelper(
               &HistorySyncOptinHelper::ResumeShowHistorySyncOptinScreenFlow,
               base::Unretained(this)))),
       access_point_(access_point) {
-  CHECK(
-      base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos));
+  CHECK(syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
   CHECK(delegate);
 }
 
@@ -347,6 +617,29 @@ void HistorySyncOptinHelper::ResumeShowHistorySyncOptinScreenFlow(
     }
   }
 
+  MaybeShowSignInCelebration(maybe_managed_account);
+}
+
+void HistorySyncOptinHelper::MaybeShowSignInCelebration(
+    signin::Tribool maybe_managed_account) {
+  if (maybe_managed_account != signin::Tribool::kFalse) {
+    AwaitSyncStartupAndShowHistorySyncScreen();
+    return;
+  }
+
+  if (access_point() == signin_metrics::AccessPoint::kForYouFre) {
+    const bool is_in_search_engine_choice_region =
+        CHECK_DEREF(regional_capabilities::RegionalCapabilitiesServiceFactory::
+                        GetForProfile(profile_))
+            .IsInSearchEngineChoiceScreenRegion();
+    if (switches::IsFirstRunDesktopRevampEnabled(
+            is_in_search_engine_choice_region)) {
+      delegate_->ShowSignInCelebration(base::BindOnce(
+          &HistorySyncOptinHelper::AwaitSyncStartupAndShowHistorySyncScreen,
+          weak_ptr_factory_.GetWeakPtr()));
+      return;
+    }
+  }
   AwaitSyncStartupAndShowHistorySyncScreen();
 }
 
@@ -359,10 +652,14 @@ void HistorySyncOptinHelper::AwaitSyncStartupAndShowHistorySyncScreen() {
   if (sync_service) {
     sync_startup_state_observer_ = SyncServiceStartupStateObserver::
         MaybeCreateSyncServiceStateObserverForAccountWithClouldPolicies(
-            sync_service, profile_, account_info_,
+            sync_service, profile_, account_info_, GetSyncStartupDelay(),
             base::BindOnce(&HistorySyncOptinHelper::ShowHistorySyncOptinScreen,
                            weak_ptr_factory_.GetWeakPtr()));
     if (sync_startup_state_observer_) {
+      sync_startup_state_observer_->SetSyncStartupCompleteMetricsCallback(
+          base::BindOnce(&RecordSyncServiceStartupCompletionMetrics));
+      sync_startup_state_observer_->SetTimeoutMetricsCallback(
+          base::BindOnce(&RecordSyncServiceStartupTimeoutMetrics));
       return;
     }
   }
@@ -483,6 +780,10 @@ void HistorySyncOptinHelperInBrowser::
       std::move(profile_management_accepted_callback));
 }
 
+base::TimeDelta HistorySyncOptinHelperInBrowser::GetSyncStartupDelay() {
+  return base::Seconds(kAwaitSyncServiceStartupInBrowserTimeoutSeconds.Get());
+}
+
 void HistorySyncOptinHelperInBrowser::OnManagementAccepted(
     Profile* chosen_profile,
     bool) {
@@ -581,6 +882,11 @@ void HistorySyncOptinHelperInProfilePicker::
   return;
 }
 
+base::TimeDelta HistorySyncOptinHelperInProfilePicker::GetSyncStartupDelay() {
+  return base::Seconds(
+      kAwaitSyncServiceStartupInProfilePickerTimeoutSeconds.Get());
+}
+
 void HistorySyncOptinHelperInProfilePicker::MaybeShowAccountManagementScreen(
     bool is_managed_account) {
   if (!is_managed_account) {
@@ -617,9 +923,9 @@ void HistorySyncOptinHelperInProfilePicker::OnAccountManagementScreenClosed(
           HistorySyncSkipReason::kManagementRejected);
       return;
     case signin::SIGNIN_CHOICE_NEW_PROFILE:
+      FetchPoliciesAndUpdateManagedDisclaimerState();
       // Mark the user having accepted the management.
       enterprise_util::SetUserAcceptedAccountManagement(profile(), true);
-      FetchPoliciesAndUpdateManagedDisclaimerState();
       return;
   }
 }

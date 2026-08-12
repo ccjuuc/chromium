@@ -162,14 +162,18 @@ void MediaSessionAndroid::MediaSessionPositionChanged(
   }
 }
 
-void MediaSessionAndroid::Resume(JNIEnv* env) {
+void MediaSessionAndroid::Resume(
+    JNIEnv* env,
+    media_session::mojom::MediaSession::SuspendType suspend_type) {
   DCHECK(media_session_);
-  media_session_->Resume(MediaSession::SuspendType::kUI);
+  media_session_->Resume(suspend_type);
 }
 
-void MediaSessionAndroid::Suspend(JNIEnv* env) {
+void MediaSessionAndroid::Suspend(
+    JNIEnv* env,
+    media_session::mojom::MediaSession::SuspendType suspend_type) {
   DCHECK(media_session_);
-  media_session_->Suspend(MediaSession::SuspendType::kUI);
+  media_session_->Suspend(suspend_type);
 }
 
 void MediaSessionAndroid::Stop(JNIEnv* env) {
@@ -177,14 +181,14 @@ void MediaSessionAndroid::Stop(JNIEnv* env) {
   media_session_->Stop(MediaSession::SuspendType::kUI);
 }
 
-void MediaSessionAndroid::Seek(JNIEnv* env, const jlong millis) {
+void MediaSessionAndroid::Seek(JNIEnv* env, const int64_t millis) {
   DCHECK(media_session_);
   DCHECK_NE(millis, 0)
       << "Attempted to seek by a missing number of milliseconds";
   media_session_->Seek(base::Milliseconds(millis));
 }
 
-void MediaSessionAndroid::SeekTo(JNIEnv* env, const jlong millis) {
+void MediaSessionAndroid::SeekTo(JNIEnv* env, const int64_t millis) {
   DCHECK(media_session_);
   DCHECK_GE(millis, 0) << "Attempted to seek to a negative position";
   media_session_->SeekTo(base::Milliseconds(millis));

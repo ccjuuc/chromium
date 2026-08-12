@@ -19,6 +19,8 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 import android.app.Notification;
 import android.content.Context;
 
+import androidx.annotation.IntDef;
+
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -32,13 +34,13 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.mockito.stubbing.Answer;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.library_loader.LibraryProcessType;
 import org.chromium.base.library_loader.LoaderErrors;
 import org.chromium.base.library_loader.ProcessInitException;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.init.BrowserParts;
 import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
@@ -50,18 +52,20 @@ import org.chromium.components.background_task_scheduler.TaskIds;
 import org.chromium.components.background_task_scheduler.TaskParameters;
 import org.chromium.content_public.browser.BrowserStartupController;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 
 /** Unit tests for {@link NativeBackgroundTask}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
-@LooperMode(LooperMode.Mode.LEGACY)
 public class NativeBackgroundTaskTest {
-    private enum InitializerSetup {
-        SUCCESS,
-        FAILURE,
-        EXCEPTION,
+    @IntDef({InitializerSetup.SUCCESS, InitializerSetup.FAILURE, InitializerSetup.EXCEPTION})
+    @Retention(RetentionPolicy.SOURCE)
+    private @interface InitializerSetup {
+        int SUCCESS = 0;
+        int FAILURE = 1;
+        int EXCEPTION = 2;
     }
 
     private static class LazyTaskParameters {
@@ -82,7 +86,6 @@ public class NativeBackgroundTaskTest {
                 boolean startGpuProcess,
                 boolean startMinimalBrowser,
                 boolean singleProcess,
-                boolean scheduleFlushStartupTasks,
                 final StartupCallback callback) {}
 
         @Override
@@ -165,7 +168,8 @@ public class NativeBackgroundTaskTest {
         }
 
         boolean waitOnCallback() {
-            return waitOnLatch(mCallbackLatch);
+            RobolectricUtil.runAllBackgroundAndUi();
+            return mWasCalled;
         }
     }
 
@@ -221,7 +225,8 @@ public class NativeBackgroundTaskTest {
         }
 
         boolean waitOnStartWithNativeCallback() {
-            return waitOnLatch(mStartWithNativeLatch);
+            RobolectricUtil.runAllBackgroundAndUi();
+            return mWasOnStartTaskWithNativeCalled;
         }
 
         boolean wasOnStartTaskWithNativeCalled() {
@@ -265,12 +270,12 @@ public class NativeBackgroundTaskTest {
         verifyNoMoreInteractions(mExternalUmaMock);
     }
 
-    private void setUpChromeBrowserInitializer(InitializerSetup setup) {
+    private void setUpChromeBrowserInitializer(@InitializerSetup int setup) {
         doNothing()
                 .when(mChromeBrowserInitializer)
                 .handlePreNativeStartupAndLoadLibraries(any(BrowserParts.class));
         switch (setup) {
-            case SUCCESS:
+            case InitializerSetup.SUCCESS:
                 doAnswer(
                                 new Answer<>() {
                                     @Override
@@ -282,7 +287,7 @@ public class NativeBackgroundTaskTest {
                         .when(mChromeBrowserInitializer)
                         .handlePostNativeStartup(eq(true), mBrowserParts.capture());
                 break;
-            case FAILURE:
+            case InitializerSetup.FAILURE:
                 doAnswer(
                                 new Answer<>() {
                                     @Override
@@ -294,7 +299,7 @@ public class NativeBackgroundTaskTest {
                         .when(mChromeBrowserInitializer)
                         .handlePostNativeStartup(eq(true), mBrowserParts.capture());
                 break;
-            case EXCEPTION:
+            case InitializerSetup.EXCEPTION:
                 doThrow(new ProcessInitException(LoaderErrors.NATIVE_LIBRARY_LOAD_FAILED))
                         .when(mChromeBrowserInitializer)
                         .handlePostNativeStartup(eq(true), any(BrowserParts.class));
@@ -309,15 +314,6 @@ public class NativeBackgroundTaskTest {
                 .handlePreNativeStartupAndLoadLibraries(any(BrowserParts.class));
         verify(mChromeBrowserInitializer, times(expectedPostNativeCalls))
                 .handlePostNativeStartup(eq(true), any(BrowserParts.class));
-    }
-
-    private static boolean waitOnLatch(CountDownLatch latch) {
-        try {
-            // All tests are expected to get it done much faster
-            return latch.await(5, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            return false;
-        }
     }
 
     @Test
@@ -356,6 +352,7 @@ public class NativeBackgroundTaskTest {
     public void testOnStartTask_NativeAlreadyLoaded() {
         mBrowserStartupController.setIsStartupSuccessfullyCompleted(true);
         mTask.onStartTask(ContextUtils.getApplicationContext(), getTaskParameters(), mCallback);
+        RobolectricUtil.runAllBackgroundAndUi();
 
         assertTrue(mTask.waitOnStartWithNativeCallback());
         assertEquals(1, mBrowserStartupController.completedCallCount());
@@ -370,6 +367,7 @@ public class NativeBackgroundTaskTest {
         mBrowserStartupController.setIsStartupSuccessfullyCompleted(false);
         setUpChromeBrowserInitializer(InitializerSetup.SUCCESS);
         mTask.onStartTask(ContextUtils.getApplicationContext(), getTaskParameters(), mCallback);
+        RobolectricUtil.runAllBackgroundAndUi();
 
         assertTrue(mTask.waitOnStartWithNativeCallback());
         assertEquals(1, mBrowserStartupController.completedCallCount());
@@ -385,6 +383,7 @@ public class NativeBackgroundTaskTest {
         mBrowserStartupController.setIsStartupSuccessfullyCompleted(false);
         setUpChromeBrowserInitializer(InitializerSetup.FAILURE);
         mTask.onStartTask(ContextUtils.getApplicationContext(), getTaskParameters(), mCallback);
+        RobolectricUtil.runAllBackgroundAndUi();
 
         assertTrue(mCallback.waitOnCallback());
         assertEquals(1, mBrowserStartupController.completedCallCount());
@@ -401,6 +400,7 @@ public class NativeBackgroundTaskTest {
         mBrowserStartupController.setIsStartupSuccessfullyCompleted(false);
         setUpChromeBrowserInitializer(InitializerSetup.EXCEPTION);
         mTask.onStartTask(ContextUtils.getApplicationContext(), getTaskParameters(), mCallback);
+        RobolectricUtil.runAllBackgroundAndUi();
 
         assertTrue(mCallback.waitOnCallback());
         assertEquals(1, mBrowserStartupController.completedCallCount());
@@ -416,6 +416,7 @@ public class NativeBackgroundTaskTest {
     public void testOnStopTask_BeforeNativeLoaded_NeedsRescheduling() {
         mBrowserStartupController.setIsStartupSuccessfullyCompleted(false);
         mTask.onStartTask(ContextUtils.getApplicationContext(), getTaskParameters(), mCallback);
+        RobolectricUtil.runAllBackgroundAndUi();
         mTask.setNeedsReschedulingAfterStop(true);
 
         assertTrue(mTask.onStopTask(ContextUtils.getApplicationContext(), getTaskParameters()));
@@ -429,6 +430,7 @@ public class NativeBackgroundTaskTest {
     public void testOnStopTask_BeforeNativeLoaded_DoesntNeedRescheduling() {
         mBrowserStartupController.setIsStartupSuccessfullyCompleted(false);
         mTask.onStartTask(ContextUtils.getApplicationContext(), getTaskParameters(), mCallback);
+        RobolectricUtil.runAllBackgroundAndUi();
         mTask.setNeedsReschedulingAfterStop(false);
 
         assertFalse(mTask.onStopTask(ContextUtils.getApplicationContext(), getTaskParameters()));
@@ -442,6 +444,7 @@ public class NativeBackgroundTaskTest {
     public void testOnStopTask_NativeLoaded_NeedsRescheduling() {
         mBrowserStartupController.setIsStartupSuccessfullyCompleted(true);
         mTask.onStartTask(ContextUtils.getApplicationContext(), getTaskParameters(), mCallback);
+        RobolectricUtil.runAllBackgroundAndUi();
         mTask.setNeedsReschedulingAfterStop(true);
 
         assertTrue(mTask.onStopTask(ContextUtils.getApplicationContext(), getTaskParameters()));
@@ -454,6 +457,7 @@ public class NativeBackgroundTaskTest {
     public void testOnStopTask_NativeLoaded_DoesntNeedRescheduling() {
         mBrowserStartupController.setIsStartupSuccessfullyCompleted(true);
         mTask.onStartTask(ContextUtils.getApplicationContext(), getTaskParameters(), mCallback);
+        RobolectricUtil.runAllBackgroundAndUi();
         mTask.setNeedsReschedulingAfterStop(false);
 
         assertFalse(mTask.onStopTask(ContextUtils.getApplicationContext(), getTaskParameters()));

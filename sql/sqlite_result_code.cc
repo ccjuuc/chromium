@@ -43,9 +43,7 @@ constexpr SqliteResultCodeMappingEntry kResultCodeMapping[] = {
     {SQLITE_PERM, static_cast<int>(SqliteLoggedResultCode::kPermission)},
     {SQLITE_ABORT, static_cast<int>(SqliteLoggedResultCode::kAbort)},
     {SQLITE_BUSY, static_cast<int>(SqliteLoggedResultCode::kBusy)},
-
-    // Chrome features shouldn't execute conflicting statements concurrently.
-    {SQLITE_LOCKED, static_cast<int>(SqliteLoggedResultCode::kUnusedChrome)},
+    {SQLITE_LOCKED, static_cast<int>(SqliteLoggedResultCode::kLocked)},
 
     // Chrome should crash on OOM.
     {SQLITE_NOMEM, static_cast<int>(SqliteLoggedResultCode::kUnusedChrome)},
@@ -126,6 +124,8 @@ constexpr SqliteResultCodeMappingEntry kResultCodeMapping[] = {
      static_cast<int>(SqliteLoggedResultCode::kUnusedSqlite)},
     {SQLITE_WARNING_AUTOINDEX,
      static_cast<int>(SqliteLoggedResultCode::kUnusedSqlite)},
+    {SQLITE_OK_SYMLINK,
+     static_cast<int>(SqliteLoggedResultCode::kUnusedSqlite)},
     {SQLITE_ERROR_RETRY,
      static_cast<int>(SqliteLoggedResultCode::kUnusedSqlite)},
     {SQLITE_ABORT_ROLLBACK,
@@ -182,6 +182,11 @@ file lock requests"
 
     {SQLITE_CONSTRAINT_FOREIGNKEY,
      static_cast<int>(SqliteLoggedResultCode::kConstraintForeignKey)},
+    {SQLITE_NOTICE_RBU,
+     static_cast<int>(SqliteLoggedResultCode::kUnusedSqlite)},
+    // Unused as of SQLite 3.51.2.
+    {SQLITE_ERROR_RESERVESIZE,
+     static_cast<int>(SqliteLoggedResultCode::kUnusedSqlite)},
     {SQLITE_READONLY_DBMOVED,
      static_cast<int>(SqliteLoggedResultCode::kReadOnlyDbMoved)},
     {SQLITE_IOERR_FSYNC, static_cast<int>(SqliteLoggedResultCode::kIoFsync)},
@@ -193,6 +198,8 @@ file lock requests"
     // Chrome does not use extension functions.
     {SQLITE_CONSTRAINT_FUNCTION,
      static_cast<int>(SqliteLoggedResultCode::kUnusedChrome)},
+    // Unused as of SQLite 3.51.2.
+    {SQLITE_ERROR_KEY, static_cast<int>(SqliteLoggedResultCode::kUnusedSqlite)},
 
     {SQLITE_READONLY_CANTINIT,
      static_cast<int>(SqliteLoggedResultCode::kUnusedSqlite)},
@@ -202,6 +209,9 @@ file lock requests"
      static_cast<int>(SqliteLoggedResultCode::kUnusedSqlite)},
     {SQLITE_CONSTRAINT_NOTNULL,
      static_cast<int>(SqliteLoggedResultCode::kConstraintNotNull)},
+    // Only used internally as of SQLite 3.51.2.
+    {SQLITE_ERROR_UNABLE,
+     static_cast<int>(SqliteLoggedResultCode::kUnusedChrome)},
     {SQLITE_READONLY_DIRECTORY,
      static_cast<int>(SqliteLoggedResultCode::kReadOnlyDirectory)},
     {SQLITE_IOERR_TRUNCATE,
@@ -257,21 +267,13 @@ file lock requests"
     {SQLITE_IOERR_CLOSE, static_cast<int>(SqliteLoggedResultCode::kIoClose)},
     {SQLITE_IOERR_DIR_CLOSE,
      static_cast<int>(SqliteLoggedResultCode::kUnusedSqlite)},
-
-    // Chrome will only allow enabling WAL on databases with exclusive locking.
     {SQLITE_IOERR_SHMOPEN,
-     static_cast<int>(SqliteLoggedResultCode::kUnusedChrome)},
-
-    // Chrome will only allow enabling WAL on databases with exclusive locking.
+     static_cast<int>(SqliteLoggedResultCode::kIoShmOpen)},
     {SQLITE_IOERR_SHMSIZE,
-     static_cast<int>(SqliteLoggedResultCode::kUnusedChrome)},
-
+     static_cast<int>(SqliteLoggedResultCode::kIoShmSize)},
     {SQLITE_IOERR_SHMLOCK,
-     static_cast<int>(SqliteLoggedResultCode::kUnusedSqlite)},
-
-    // Chrome will only allow enabling WAL on databases with exclusive locking.
-    {SQLITE_IOERR_SHMMAP,
-     static_cast<int>(SqliteLoggedResultCode::kUnusedChrome)},
+     static_cast<int>(SqliteLoggedResultCode::kIoShmLock)},
+    {SQLITE_IOERR_SHMMAP, static_cast<int>(SqliteLoggedResultCode::kIoShmMap)},
 
     {SQLITE_IOERR_SEEK, static_cast<int>(SqliteLoggedResultCode::kIoSeek)},
     {SQLITE_IOERR_DELETE_NOENT,
@@ -306,6 +308,14 @@ file lock requests"
 
     {SQLITE_IOERR_CORRUPTFS,
      static_cast<int>(SqliteLoggedResultCode::kIoCorruptFileSystem)},
+
+    {SQLITE_IOERR_IN_PAGE, static_cast<int>(SqliteLoggedResultCode::kIoInPage)},
+    // Unused as of SQLite 3.51.2.
+    {SQLITE_IOERR_BADKEY,
+     static_cast<int>(SqliteLoggedResultCode::kUnusedSqlite)},
+    // Unused as of SQLite 3.51.2.
+    {SQLITE_IOERR_CODEC,
+     static_cast<int>(SqliteLoggedResultCode::kUnusedSqlite)},
 };
 
 // Number of #defines in https://www.sqlite.org/c3ref/c_abort.html
@@ -314,11 +324,11 @@ file lock requests"
 // https://www.sqlite.org/rescode.html#primary_result_code_list
 static constexpr int kPrimaryResultCodes = 31;
 
-// Number of #defines in https://www.sqlite.org/c3ref/c_abort_rollback.html
+// Number of extended codes defined in //third_party/sqlite/src/src/sqlite.h.in.
 //
-// This number is also stated at
-// https://www.sqlite.org/rescode.html#extended_result_code_list
-static constexpr int kExtendedResultCodes = 74;
+// Note that https://www.sqlite.org/rescode.html#extended_result_code_list shows
+// an outdated list as of this writing.
+static constexpr int kExtendedResultCodes = 82;
 
 static_assert(std::size(kResultCodeMapping) ==
                   size_t{kPrimaryResultCodes + kExtendedResultCodes},
@@ -329,7 +339,7 @@ static_assert(std::size(kResultCodeMapping) ==
 // Returns an entry in kResultCodeMapping or kUnknownResultCodeMappingEntry.
 // CHECKs if the `sqlite_result_code` is not in the mapping table.
 SqliteResultCodeMappingEntry FindResultCode(int sqlite_result_code) {
-  const auto* mapping_it = std::ranges::find_if(
+  const SqliteResultCodeMappingEntry* mapping_it = std::ranges::find_if(
       kResultCodeMapping,
       [&sqlite_result_code](SqliteResultCodeMappingEntry rhs) {
         return sqlite_result_code == rhs.result_code;

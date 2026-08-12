@@ -8,7 +8,6 @@
 
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/process/launch.h"
 #include "base/strings/strcat.h"
@@ -61,7 +60,7 @@ void BrowserUiTestBase::Invoke() {
   base::LaunchOptions options;
 
   // Wait on subprocess. Otherwise the whole process group will be killed on
-  // parent process exit. See http://crbug.com/1094369.
+  // parent process exit. See http://crbug.com/40135391.
   options.wait = true;
 
   base::LaunchProcess(invoker, options);

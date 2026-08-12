@@ -4,16 +4,20 @@
 
 #include "media/audio/android/aaudio_output.h"
 
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/numerics/checked_math.h"
 #include "base/task/sequenced_task_runner.h"
 #include "media/audio/android/audio_device.h"
 #include "media/audio/android/audio_manager_android.h"
+#include "media/audio/audio_features.h"
 #include "media/audio/audio_manager.h"
 #include "media/base/amplitude_peak_detector.h"
 #include "media/base/audio_bus.h"
+#include "media/base/audio_pull_fifo.h"
 #include "media/base/audio_sample_types.h"
+#include "media/base/audio_timestamp_helper.h"
 
 namespace media {
 
@@ -26,6 +30,7 @@ AAudioOutputStream::AAudioOutputStream(
     : audio_manager_(manager),
       params_(params),
       peak_detector_(std::move(peak_detected_cb)),
+      delay_helper_(params_.sample_rate()),
       stream_wrapper_(this,
                       AAudioStreamWrapper::StreamType::kOutput,
                       params,
@@ -49,6 +54,13 @@ bool AAudioOutputStream::Open() {
 
   CHECK(!audio_bus_);
   audio_bus_ = AudioBus::Create(params_);
+
+  if (base::FeatureList::IsEnabled(features::kAAudioVariableSizedCallbacks)) {
+    pull_fifo_ = std::make_unique<AudioPullFifo>(
+        params_.channels(), params_.frames_per_buffer(),
+        base::BindRepeating(&AAudioOutputStream::RefillFifo,
+                            base::Unretained(this)));
+  }
 
   return true;
 }
@@ -114,41 +126,83 @@ void AAudioOutputStream::Stop() {
   }
 }
 
-bool AAudioOutputStream::OnAudioDataRequested(void* audio_data,
-                                              int32_t num_frames) {
-  CHECK_EQ(num_frames, audio_bus_->frames());
-
+bool AAudioOutputStream::OnAudioDataRequested(base::span<float> audio_data) {
   base::AutoLock al(lock_);
   if (!callback_) {
     // Stop() might have already been called, but there can still be pending
     // data callbacks in flight.
-
-    size_t total_size;
-    auto total_frames = base::CheckMul(num_frames, audio_bus_->channels());
-    if (base::CheckMul(total_frames, sizeof(float))
-            .AssignIfValid(&total_size)) {
-      // SAFETY: Unfortunately, `audio_data` comes from the OS, and we must use
-      // some unsafe buffers. This should be safe because we set the format
-      // as AAUDIO_FORMAT_PCM_FLOAT in AAudioStreamWrapper (and CHECK that it is
-      // set), so we know this void* is pointing towards floats. We also control
-      // the channel count, and the OS gives us `num_frames`.
-      UNSAFE_BUFFERS(memset(audio_data, 0, total_size));
-    }
+    std::ranges::fill(audio_data, 0.0);
     return false;
   }
 
   const base::TimeTicks delay_timestamp = base::TimeTicks::Now();
   const base::TimeDelta delay = stream_wrapper_.GetOutputDelay(delay_timestamp);
 
-  const int frames_filled =
-      callback_->OnMoreData(delay, delay_timestamp, {}, audio_bus_.get());
+  if (pull_fifo_) {
+    delay_helper_.SetBaseTimestamp(delay);
+    delay_timestamp_ = delay_timestamp;
 
-  peak_detector_.FindPeak(audio_bus_.get());
+    const size_t channels = params_.channels();
+
+    while (!audio_data.empty()) {
+      const size_t frames_to_pull =
+          std::min(audio_data.size() / channels,
+                   static_cast<size_t>(audio_bus_->frames()));
+
+      pull_fifo_->Consume(audio_bus_.get(), frames_to_pull);
+
+      audio_bus_->Scale(muted_ ? 0.0 : volume_);
+      audio_bus_->ToInterleavedPartial<Float32SampleTypeTraits>(
+          0, audio_data.take_first(frames_to_pull * channels));
+
+      delay_helper_.AddFrames(frames_to_pull);
+    }
+
+    return true;
+  }
+
+  if (!PullDataFromSource(delay, delay_timestamp, audio_bus_.get())) {
+    std::ranges::fill(audio_data, 0.0);
+    return true;
+  }
 
   audio_bus_->Scale(muted_ ? 0.0 : volume_);
-  audio_bus_->ToInterleaved<Float32SampleTypeTraits>(
-      frames_filled, reinterpret_cast<float*>(audio_data));
+  audio_bus_->ToInterleaved<Float32SampleTypeTraits>(audio_data);
 
+  return true;
+}
+
+void AAudioOutputStream::RefillFifo(int frame_delay, AudioBus* destination) {
+  // Consuming data from `pull_fifo_` in `OnAudioDataRequested()` will
+  // synchronously call this method, potentially splitting large requests into
+  // multiple `Consume()` calls of at most `audio_bus_->frames()`.
+
+  // `delay_helper_.GetTimestamp()` returns the current AAudio output delay.
+  // `frame_delay` accounts for frames that were already consumed from
+  // `pull_fifo_` before this method was called.
+  const base::TimeDelta delay =
+      delay_helper_.GetTimestamp() +
+      AudioTimestampHelper::FramesToTime(frame_delay, params_.sample_rate());
+
+  PullDataFromSource(delay, delay_timestamp_, destination);
+}
+
+bool AAudioOutputStream::PullDataFromSource(base::TimeDelta delay,
+                                            base::TimeTicks delay_timestamp,
+                                            AudioBus* destination) {
+  lock_.AssertAcquired();
+
+  const int frames_filled =
+      callback_->OnMoreData(delay, delay_timestamp, {}, destination);
+
+  if (!frames_filled) {
+    destination->Zero();
+    return false;
+  }
+
+  peak_detector_.FindPeak(destination);
+
+  CHECK_EQ(frames_filled, destination->frames());
   return true;
 }
 

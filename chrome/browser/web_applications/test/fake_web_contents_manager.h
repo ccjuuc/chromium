@@ -64,7 +64,7 @@ class FakeWebContentsManager : public WebContentsManager {
     // redirection is allowed by the `LoadUrlComparison`, then `url_load_result`
     // will be given as the result. Otherwise,`kRedirectedUrlLoaded` is
     // returned.
-    std::optional<GURL> redirection_url = std::nullopt;
+    std::optional<GURL> redirection_url;
     webapps::WebAppUrlLoaderResult url_load_result =
         webapps::WebAppUrlLoaderResult::kFailedErrorPageLoaded;
 
@@ -122,6 +122,11 @@ class FakeWebContentsManager : public WebContentsManager {
   std::unique_ptr<webapps::WebAppUrlLoader> CreateUrlLoader() override;
   std::unique_ptr<WebAppDataRetriever> CreateDataRetriever() override;
   std::unique_ptr<WebAppIconDownloader> CreateIconDownloader() override;
+  base::CallbackListSubscription GetPrimaryPageAllSpecifiedManifests(
+      content::WebContents& web_contents,
+      AllManifestsCallbackList::CallbackType callback) override;
+  std::optional<webapps::AppId> GetAppIdForWebContents(
+      content::WebContents* web_contents) const override;
   FakeWebContentsManager* AsFakeWebContentsManagerForTesting() override;
 
   // Set the behavior for calls to `GetIcons` from wrappers returned by this

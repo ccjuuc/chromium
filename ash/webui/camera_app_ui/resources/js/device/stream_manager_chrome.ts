@@ -4,10 +4,8 @@
 
 import {assertExists} from '../assert.js';
 
-import {
-  StreamConstraints,
-  toMediaStreamConstraints,
-} from './stream_constraints.js';
+import type {StreamConstraints} from './stream_constraints.js';
+import {toMediaStreamConstraints} from './stream_constraints.js';
 
 /**
  * The singleton instance of StreamManagerChrome. Initialized by the first

@@ -4,12 +4,14 @@
 
 #import "ios/chrome/browser/default_browser/promo/ui/default_browser_instructions_view_controller.h"
 
+#import "ios/chrome/browser/default_browser/promo/public/features.h"
 #import "ios/chrome/common/ui/button_stack/button_stack_constants.h"
 #import "ios/chrome/common/ui/confirmation_alert/constants.h"
 #import "ios/public/provider/chrome/browser/lottie/lottie_animation_api.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
 #import "testing/platform_test.h"
+#import "ui/base/device_form_factor.h"
 
 using DefaultBrowserInstructionsViewControllerTest = PlatformTest;
 
@@ -80,7 +82,6 @@ TEST_F(DefaultBrowserInstructionsViewControllerTest,
                    hasRemindMeLater:NO
           useDefaultAppsDestination:NO
                            hasSteps:NO
-                      actionHandler:nil
                           titleText:nil];
   UIView* view = instructionsViewController.view;
   ASSERT_NE(instructionsViewController, nil);
@@ -100,7 +101,6 @@ TEST_F(DefaultBrowserInstructionsViewControllerTest, CreateViewWithStepsTest) {
                    hasRemindMeLater:NO
           useDefaultAppsDestination:NO
                            hasSteps:YES
-                      actionHandler:nil
                           titleText:nil];
   UIView* view = instructionsViewController.view;
   ASSERT_NE(instructionsViewController, nil);
@@ -121,7 +121,6 @@ TEST_F(DefaultBrowserInstructionsViewControllerTest,
                    hasRemindMeLater:NO
           useDefaultAppsDestination:NO
                            hasSteps:NO
-                      actionHandler:nil
                           titleText:nil];
   UIView* view = instructionsViewController.view;
   ASSERT_NE(instructionsViewController, nil);
@@ -142,7 +141,6 @@ TEST_F(DefaultBrowserInstructionsViewControllerTest,
                    hasRemindMeLater:YES
           useDefaultAppsDestination:NO
                            hasSteps:NO
-                      actionHandler:nil
                           titleText:nil];
   UIView* view = instructionsViewController.view;
   ASSERT_NE(instructionsViewController, nil);
@@ -162,16 +160,24 @@ TEST_F(DefaultBrowserInstructionsViewControllerTest, AnimationViewTest) {
                    hasRemindMeLater:NO
           useDefaultAppsDestination:NO
                            hasSteps:NO
-                      actionHandler:nil
                           titleText:nil];
   UIView* view = instructionsViewController.view;
   ASSERT_NE(instructionsViewController, nil);
 
   UIView* animationView = GetAnimationSubview(view);
   UIView* darkAnimationView = GetDarkAnimationSubview(view);
+
+  BOOL isiPad = IsDefaultBrowserPromoIpadInstructions() &&
+                ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET;
+
+  // The iPad video uses one dynamic lottie animation for dark mode.
   EXPECT_NE(animationView, nil);
-  EXPECT_NE(darkAnimationView, nil);
+  if (isiPad) {
+    EXPECT_EQ(darkAnimationView, nil);
+  } else {
+    EXPECT_NE(darkAnimationView, nil);
+  }
 
   EXPECT_FALSE(animationView.hidden);
-  EXPECT_TRUE(darkAnimationView.hidden);
+  EXPECT_EQ(darkAnimationView.hidden, !isiPad);
 }

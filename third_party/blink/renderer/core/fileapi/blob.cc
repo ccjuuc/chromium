@@ -30,12 +30,16 @@
 
 #include "third_party/blink/renderer/core/fileapi/blob.h"
 
+#include <limits>
 #include <memory>
 #include <utility>
 
+#include "base/check.h"
+#include "base/notreached.h"
 #include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_blob_property_bag.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_readable_writable_pair.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_arraybuffer_arraybufferview_blob_usvstring.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/fetch/blob_bytes_consumer.h"
@@ -44,14 +48,17 @@
 #include "third_party/blink/renderer/core/fileapi/file_reader_client.h"
 #include "third_party/blink/renderer/core/fileapi/file_reader_loader.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
-#include "third_party/blink/renderer/core/url/dom_url.h"
+#include "third_party/blink/renderer/core/streams/readable_stream.h"
+#include "third_party/blink/renderer/core/streams/text_decoder_transformer.h"
+#include "third_party/blink/renderer/core/streams/transform_stream.h"
+#include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
+#include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer_view.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
-#include "third_party/blink/renderer/platform/blob/blob_url.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/self_keep_alive.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
-#include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/text/text_encoding.h"
 
 namespace blink {
 
@@ -69,14 +76,6 @@ bool IsValidBlobType(const String& type) {
 }
 
 }  // namespace
-
-// TODO(https://crbug.com/989876): This is not used any more, refactor
-// PublicURLManager to deprecate this.
-class NullURLRegistry final : public URLRegistry {
- public:
-  void RegisterURL(const KURL&, URLRegistrable*) override {}
-  void UnregisterURL(const KURL&) override {}
-};
 
 // Helper class to asynchronously read from a Blob using a FileReaderLoader.
 // Each client is only good for one Blob read operation.
@@ -257,6 +256,34 @@ ReadableStream* Blob::stream(ScriptState* script_state) const {
   return body_buffer->Stream();
 }
 
+ReadableStream* Blob::textStream(ScriptState* script_state,
+                                 ExceptionState& exception_state) const {
+  ReadableStream* body_stream = stream(script_state);
+  if (!body_stream) {
+    return nullptr;
+  }
+
+  auto* transformer = MakeGarbageCollected<TextDecoderTransformer>(
+      script_state, Utf8Encoding(), /*fatal=*/false, /*ignore_bom=*/false);
+  TransformStream* transform_stream =
+      TransformStream::Create(script_state, transformer, exception_state);
+  if (exception_state.HadException() || !transform_stream) {
+    return nullptr;
+  }
+
+  ReadableWritablePair* pair = ReadableWritablePair::Create();
+  pair->setReadable(transform_stream->readable());
+  pair->setWritable(transform_stream->writable());
+
+  ReadableStream* piped_stream =
+      body_stream->pipeThrough(script_state, pair, exception_state);
+  if (exception_state.HadException()) {
+    return nullptr;
+  }
+
+  return piped_stream;
+}
+
 ScriptPromise<IDLUSVString> Blob::text(ScriptState* script_state) {
   auto* resolver =
       MakeGarbageCollected<ScriptPromiseResolver<IDLUSVString>>(script_state);
@@ -307,15 +334,6 @@ void Blob::AppendTo(BlobData& blob_data) const {
   blob_data.AppendBlob(blob_data_handle_, 0, size());
 }
 
-URLRegistry& Blob::Registry() const {
-  DEFINE_THREAD_SAFE_STATIC_LOCAL(NullURLRegistry, instance, ());
-  return instance;
-}
-
-bool Blob::IsMojoBlob() {
-  return true;
-}
-
 void Blob::CloneMojoBlob(mojo::PendingReceiver<mojom::blink::Blob> receiver) {
   blob_data_handle_->CloneBlobRemote(std::move(receiver));
 }
@@ -335,7 +353,7 @@ String Blob::NormalizeType(const String& type) {
   if (!IsValidBlobType(type)) {
     return g_empty_string;
   }
-  return type.DeprecatedLower();
+  return type.ToAsciiLower();
 }
 
 }  // namespace blink

@@ -29,7 +29,6 @@ import org.chromium.base.version_info.VersionConstants;
 import org.chromium.build.BuildConfig;
 import org.chromium.components.crash.CustomAssertionHandler;
 import org.chromium.components.crash.PureJavaExceptionHandler;
-import org.chromium.components.embedder_support.application.FontPreloadingWorkaround;
 import org.chromium.ui.base.ResourceBundle;
 
 /**
@@ -46,9 +45,9 @@ public class WebViewApkApplication extends Application {
 
     // Called by the framework for ALL processes. Runs before ContentProviders are created.
     //
-    // Logic here is specific for standalone WebView and trichrome but does not run by
-    // Monochrome. Common logic between all WebView flavours should be go into
-    // maybeInitProcessGlobals instead which is called by Monochrome too.
+    // Logic here is specific for standalone WebView and trichrome. There used to be a historical
+    // distinction between this method and maybeInitProcessGlobals(), but now initialization logic
+    // can safely go in either method.
     // Quirk: context.getApplicationContext() returns null during this method.
     @Override
     protected void attachBaseContext(Context context) {
@@ -68,8 +67,6 @@ public class WebViewApkApplication extends Application {
         maybeSetPreloader();
         maybeInitProcessGlobals();
 
-        // MonochromeApplication has its own locale configuration already, so call this here
-        // rather than in maybeInitProcessGlobals.
         ResourceBundle.setAvailablePakLocales(AwLocaleConfig.getWebViewSupportedPakLocales());
     }
 
@@ -77,7 +74,6 @@ public class WebViewApkApplication extends Application {
     public void onCreate() {
         super.onCreate();
         checkForAppRecovery();
-        FontPreloadingWorkaround.maybeInstallWorkaround(this);
     }
 
     public static void checkForAppRecovery() {
@@ -89,9 +85,6 @@ public class WebViewApkApplication extends Application {
     /**
      * Initializes globals needed for components that run in the "webview_apk" or "webview_service"
      * process.
-     *
-     * <p>This is also called by MonochromeApplication, so the initialization here will run for
-     * those processes regardless of whether the WebView is standalone or Monochrome.
      */
     public static void maybeInitProcessGlobals() {
         if (isWebViewProcess()) {
@@ -114,12 +107,7 @@ public class WebViewApkApplication extends Application {
         }
     }
 
-    /**
-     * Sets the native library preloader.
-     *
-     * <p>This is also called by MonochromeApplication, so the initialization here will run for
-     * those processes regardless of whether the WebView is standalone or Monochrome.
-     */
+    /** Sets the native library preloader. */
     public static void maybeSetPreloader() {
         if (!LibraryLoader.getInstance().isLoadedByZygote()) {
             LibraryLoader.getInstance().setNativeLibraryPreloader(new WebViewLibraryPreloader());

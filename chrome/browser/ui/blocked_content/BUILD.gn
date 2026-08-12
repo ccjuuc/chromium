@@ -4,6 +4,7 @@
 
 import("//build/config/chromeos/args.gni")
 import("//build/config/ozone.gni")
+import("//extensions/buildflags/buildflags.gni")
 
 assert(is_win || is_mac || is_linux || is_chromeos || is_android)
 
@@ -16,7 +17,7 @@ source_set("blocked_content") {
 
   public_deps = [
     "//base",
-    "//chrome/browser/ui:browser_navigator_params_headers",
+    "//chrome/browser/ui/navigator",
     "//components/blocked_content",
     "//content/public/browser",
     "//content/public/common",
@@ -61,11 +62,9 @@ source_set("impl") {
     ]
 
     deps += [
-      "//chrome/browser/ui:browser_list",
       "//chrome/browser/ui/browser_window",
       "//chrome/browser/ui/tabs:tab_strip",
       "//components/guest_view/browser",
-      "//extensions/common:common_constants",
     ]
   } else {  # !is_android
     deps += [
@@ -73,6 +72,10 @@ source_set("impl") {
       "//components/messages/android",
       "//components/messages/android:feature_flags",
     ]
+  }
+
+  if (enable_extensions_core) {
+    deps += [ "//extensions/common:common_constants" ]
   }
 }
 
@@ -106,6 +109,7 @@ if (!is_android && !is_chromeos_device) {
     deps = [
       ":blocked_content",
       "//chrome/browser/content_settings:content_settings_factory",
+      "//chrome/browser/printing",
       "//chrome/browser/search_engines",
       "//chrome/browser/ui/location_bar",
       "//chrome/browser/web_applications:web_applications_test_support",
@@ -131,7 +135,7 @@ source_set("unit_tests") {
   ]
   if (is_android) {
     deps += [
-      "//components/infobars/android",
+      "//chrome/browser/android",
       "//components/messages/android:test_support",
       "//components/ukm:test_support",
     ]

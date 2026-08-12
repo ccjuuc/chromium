@@ -19,6 +19,7 @@
 #include "net/spdy/spdy_read_queue.h"
 #include "net/spdy/spdy_stream.h"
 #include "net/third_party/quiche/src/quiche/common/http/http_header_block.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_stream_priority.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/websockets/websocket_basic_stream.h"
 #include "net/websockets/websocket_quic_spdy_stream.h"
@@ -195,6 +196,9 @@ class NET_EXPORT_PRIVATE WebSocketQuicStreamAdapter
 
   size_t WriteHeaders(quiche::HttpHeaderBlock header_block, bool fin);
 
+  // Sets the priority of the underlying QUIC stream.
+  void SetPriority(const quic::QuicStreamPriority& priority);
+
   // WebSocketBasicStream::Adapter methods.
   // TODO(momoka): Add functions that are needed to implement
   // WebSocketHttp3HandshakeStream.
@@ -212,6 +216,10 @@ class NET_EXPORT_PRIVATE WebSocketQuicStreamAdapter
             const NetworkTrafficAnnotationTag& traffic_annotation) override;
   void Disconnect() override;
   bool is_initialized() const override;
+
+  // Byte count accessors. Return 0 after Disconnect().
+  uint64_t stream_bytes_read() const;
+  uint64_t stream_bytes_written() const;
 
   // WebSocketQuicSpdyStream::Delegate methods.
   void OnInitialHeadersComplete(
@@ -231,6 +239,9 @@ class NET_EXPORT_PRIVATE WebSocketQuicStreamAdapter
   //  because they may be destroyed in any order.
   raw_ptr<WebSocketQuicSpdyStream> websocket_quic_spdy_stream_;
 
+  // Close error returned by Read() and Write() after the stream is cleared.
+  int stream_error_ = ERR_UNEXPECTED;
+
   raw_ptr<Delegate> delegate_;
 
   // Read buffer, length and callback used for asynchronous read operations.
@@ -239,6 +250,8 @@ class NET_EXPORT_PRIVATE WebSocketQuicStreamAdapter
   int write_length_ = 0u;
   CompletionOnceCallback read_callback_;
   CompletionOnceCallback write_callback_;
+
+  base::WeakPtrFactory<WebSocketQuicStreamAdapter> weak_factory_{this};
 };
 
 }  // namespace net

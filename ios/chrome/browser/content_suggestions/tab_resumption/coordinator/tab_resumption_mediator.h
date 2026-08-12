@@ -7,23 +7,12 @@
 
 #import <UIKit/UIKit.h>
 
-@protocol ApplicationCommands;
-class AuthenticationService;
 class Browser;
-@class ContentSuggestionsMetricsRecorder;
-class ImpressionLimitService;
 @protocol NewTabPageActionsDelegate;
 class OptimizationGuideService;
 class PrefService;
-@protocol PriceTrackedItemsCommands;
-class PushNotificationService;
-@protocol SnackbarCommands;
-@class TabResumptionItem;
+@class TabResumptionConfig;
 @protocol TabResumptionMediatorDelegate;
-
-namespace bookmarks {
-class BookmarkModel;
-}  // namespace bookmarks
 
 namespace commerce {
 class ShoppingService;
@@ -37,22 +26,13 @@ class IdentityManager;
 @interface TabResumptionMediator : NSObject
 
 // The latest state of the item config for the Tab Resumption module.
-@property(nonatomic, strong, readonly) TabResumptionItem* itemConfig;
+@property(nonatomic, strong, readonly) TabResumptionConfig* itemConfig;
 
 // The delegate for this mediator.
 @property(nonatomic, weak) id<TabResumptionMediatorDelegate> delegate;
 
 // Delegate for reporting content suggestions actions to the NTP.
 @property(nonatomic, weak) id<NewTabPageActionsDelegate> NTPActionsDelegate;
-
-// Recorder for content suggestions metrics.
-@property(nonatomic, weak)
-    ContentSuggestionsMetricsRecorder* contentSuggestionsMetricsRecorder;
-
-// Dispatcher.
-@property(nonatomic, weak)
-    id<ApplicationCommands, PriceTrackedItemsCommands, SnackbarCommands>
-        dispatcher;
 
 // Default initializer.
 - (instancetype)
@@ -61,11 +41,7 @@ class IdentityManager;
              identityManager:(signin::IdentityManager*)identityManager
                      browser:(Browser*)browser
     optimizationGuideService:(OptimizationGuideService*)optimizationGuideService
-      impressionLimitService:(ImpressionLimitService*)impressionLimitService
              shoppingService:(commerce::ShoppingService*)shoppingService
-               bookmarkModel:(bookmarks::BookmarkModel*)bookmarkModel
-     pushNotificationService:(PushNotificationService*)pushNotificationService
-       authenticationService:(AuthenticationService*)authenticationService
     NS_DESIGNATED_INITIALIZER;
 
 - (instancetype)init NS_UNAVAILABLE;

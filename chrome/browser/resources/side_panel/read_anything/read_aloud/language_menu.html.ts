@@ -9,9 +9,8 @@ import type {LanguageMenuElement} from './language_menu.js';
 export function getHtml(this: LanguageMenuElement) {
   // clang-format off
   return html`<!--_html_template_start_-->
-<cr-dialog id="languageMenu"
-    @close="${this.closeLanguageMenu_}"
-    @keydown="${this.onKeyDown_}"
+    <cr-dialog id="languageMenu" @close="${this.onClose_}"
+      @keydown="${this.onKeydown_}"
     close-text="$i18n{readingModeLanguageMenuClose}"
     show-close-button show-on-attach ignore-popstate>
   <div slot="title" class="language-menu-title-bar">
@@ -25,7 +24,7 @@ export function getHtml(this: LanguageMenuElement) {
       <cr-icon slot="inline-prefix" alt="" icon="cr:search"></cr-icon>
       ${this.languageSearchValue_ ? html`
         <cr-icon-button id="clearLanguageSearch"
-          iron-icon="cr:cancel"
+          iron-icon="cr:cancel-filled"
           slot="inline-suffix"
           @click="${this.onClearSearchClick_}"
           title="$i18n{readingModeLanguageMenuSearchClear}">

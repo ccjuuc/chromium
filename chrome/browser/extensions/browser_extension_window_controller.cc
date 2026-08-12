@@ -14,9 +14,9 @@
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/window_controller_list.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/tabs/tab_list_interface.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/common/extensions/api/tabs.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/sessions/core/session_id.h"
@@ -38,7 +38,8 @@
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"  // nogncheck
+#include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"  // nogncheck
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
 #include "chrome/browser/ui/singleton_tabs.h"
 #endif
@@ -62,7 +63,7 @@ constexpr char kShowStateValueNormal[] = "normal";
 constexpr char kShowStateValueMinimized[] = "minimized";
 constexpr char kShowStateValueMaximized[] = "maximized";
 constexpr char kShowStateValueFullscreen[] = "fullscreen";
-#if !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_CHROMEOS)
 constexpr char kShowStateValueLockedFullscreen[] = "locked-fullscreen";
 #endif
 
@@ -76,6 +77,10 @@ api::tabs::WindowType GetTabsWindowType(const BrowserWindowInterface* browser) {
     case BrowserWindowInterface::TYPE_APP_POPUP:
     case BrowserWindowInterface::TYPE_POPUP:
       return api::tabs::WindowType::kPopup;
+#if BUILDFLAG(IS_ANDROID)
+    case BrowserWindowInterface::TYPE_CUSTOM_TAB:
+      return api::tabs::WindowType::kCustomTab;
+#endif
 #if !BUILDFLAG(IS_ANDROID)
     case BrowserWindowInterface::TYPE_DEVTOOLS:
       return api::tabs::WindowType::kDevtools;
@@ -90,9 +95,6 @@ api::tabs::WindowType GetTabsWindowType(const BrowserWindowInterface* browser) {
 #if !BUILDFLAG(IS_ANDROID)
     case BrowserWindowInterface::TYPE_PICTURE_IN_PICTURE:
 #endif
-#if BUILDFLAG(IS_CHROMEOS)
-    case BrowserWindowInterface::TYPE_CUSTOM_TAB:
-#endif
       return api::tabs::WindowType::kNormal;
   }
 }
@@ -105,9 +107,6 @@ BrowserExtensionWindowController::BrowserExtensionWindowController(
     BrowserWindowInterface* browser)
     : WindowController(browser->GetWindow(), browser->GetProfile()),
       browser_(CHECK_DEREF(browser)),
-#if !BUILDFLAG(IS_ANDROID)
-      window_(CHECK_DEREF(browser->GetBrowserForMigrationOnly()->window())),
-#endif  // !BUILDFLAG(IS_ANDROID)
       tab_list_(CHECK_DEREF(TabListInterface::From(browser))),
       session_id_(browser->GetSessionID()),
       window_type_(GetTabsWindowType(browser)),
@@ -139,24 +138,12 @@ void BrowserExtensionWindowController::SetFullscreenMode(
 #if BUILDFLAG(IS_ANDROID)
   NOTIMPLEMENTED();
 #else
-  if (window_->IsFullscreen() != is_fullscreen) {
-    GetBrowser()->ToggleFullscreenModeWithExtension(extension_url);
+  if (window()->IsFullscreen() != is_fullscreen) {
+    ExclusiveAccessManager::From(&browser_.get())
+        ->fullscreen_controller()
+        ->ToggleBrowserFullscreenModeWithExtension(extension_url);
   }
 #endif
-}
-
-bool BrowserExtensionWindowController::CanClose(Reason* reason) const {
-#if BUILDFLAG(IS_ANDROID)
-  NOTIMPLEMENTED();
-#else
-  // Don't let an extension remove the window if the user is dragging tabs
-  // in that window.
-  if (!window_->IsTabStripEditable()) {
-    *reason = WindowController::REASON_NOT_EDITABLE;
-    return false;
-  }
-#endif
-  return true;
 }
 
 BrowserWindowInterface*
@@ -170,28 +157,10 @@ Browser* BrowserExtensionWindowController::GetBrowser() const {
 }
 #endif
 
-bool BrowserExtensionWindowController::IsDeleteScheduled() const {
-#if BUILDFLAG(IS_ANDROID)
-  NOTIMPLEMENTED();
-  return false;
-#else
-  return GetBrowser()->is_delete_scheduled();
-#endif
-}
-
 content::WebContents* BrowserExtensionWindowController::GetActiveTab() const {
   // In some situations, especially tests, there may not be an active tab.
   tabs::TabInterface* active_tab = tab_list_->GetActiveTab();
   return active_tab ? active_tab->GetContents() : nullptr;
-}
-
-bool BrowserExtensionWindowController::HasEditableTabStrip() const {
-#if BUILDFLAG(IS_ANDROID)
-  NOTIMPLEMENTED();
-  return true;
-#else
-  return window_->IsTabStripEditable();
-#endif
 }
 
 int BrowserExtensionWindowController::GetTabCount() const {
@@ -218,12 +187,11 @@ bool BrowserExtensionWindowController::IsVisibleToTabsAPIForExtension(
          allow_dev_tools_windows;
 }
 
-base::Value::Dict
-BrowserExtensionWindowController::CreateWindowValueForExtension(
+base::DictValue BrowserExtensionWindowController::CreateWindowValueForExtension(
     const Extension* extension,
     PopulateTabBehavior populate_tab_behavior,
     mojom::ContextType context) const {
-  base::Value::Dict dict;
+  base::DictValue dict;
 
   dict.Set(extension_misc::kId, session_id_.id());
   dict.Set(kWindowTypeKey, GetWindowTypeText());
@@ -236,7 +204,7 @@ BrowserExtensionWindowController::CreateWindowValueForExtension(
     if (window()->IsMinimized()) {
       return kShowStateValueMinimized;
     } else if (window()->IsFullscreen()) {
-#if !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_CHROMEOS)
       if (platform_util::IsBrowserLockedFullscreen(GetBrowser())) {
         return kShowStateValueLockedFullscreen;
       }
@@ -264,10 +232,10 @@ BrowserExtensionWindowController::CreateWindowValueForExtension(
   return dict;
 }
 
-base::Value::List BrowserExtensionWindowController::CreateTabList(
+base::ListValue BrowserExtensionWindowController::CreateTabList(
     const Extension* extension,
     mojom::ContextType context) const {
-  base::Value::List tab_list;
+  base::ListValue tab_list;
   const int tab_count = tab_list_->GetTabCount();
 
   for (int i = 0; i < tab_count; ++i) {
@@ -275,23 +243,22 @@ base::Value::List BrowserExtensionWindowController::CreateTabList(
 
 #if BUILDFLAG(IS_ANDROID)
     // TODO(http://crbug.com/453008083): Remove feature flags
-    // kLoadAllTabsAtStartup, kTabFreezingUsesDiscard, and kWebContentsDiscard,
-    // when all of them are enabled by default.
+    // kLoadAllTabsAtStartup, and kWebContentsDiscard when both of them are
+    // enabled by default.
     //
     // On Android, it was possible for tabs to have null WebContents, so we
     // implemented a temporary workaround that ignored such tabs to avoid
     // crashes. The workaround introduced a bug: tabs with null WebContents were
     // visible on the tab strip, but they couldn't be seen by extensions.
     //
-    // When feature flags kLoadAllTabsAtStartup, kTabFreezingUsesDiscard, and
-    // kWebContentsDiscard are all enabled, all tabs will create a WebContents
-    // without a renderer during initialization, which will properly fix the
-    // issue above. As of Oct 22, 2025, the feature flags weren't enabled by
-    // default, so we needed to keep the workaround.
+    // When feature flags kLoadAllTabsAtStartup, and kWebContentsDiscard are
+    // enabled, all tabs will create a WebContents without a renderer during
+    // initialization, which will properly fix the issue above. As of Feb 2026,
+    // the kLoadAllTabsAtStartup is not enabled by default on non-desktop
+    // Android. WebContentsDiscard is enabled by default on all Android, but the
+    // flag still remains available on other platforms.
     bool is_non_null_web_contents_guaranteed =
         base::FeatureList::IsEnabled(chrome::android::kLoadAllTabsAtStartup) &&
-        base::FeatureList::IsEnabled(
-            chrome::android::kTabFreezingUsesDiscard) &&
         base::FeatureList::IsEnabled(features::kWebContentsDiscard);
 
     if (!is_non_null_web_contents_guaranteed && web_contents == nullptr) {
@@ -319,17 +286,23 @@ bool BrowserExtensionWindowController::OpenOptionsPage(
   DCHECK(OptionsPageInfo::HasOptionsPage(extension));
 
 #if BUILDFLAG(IS_ANDROID)
-  NOTIMPLEMENTED();
+  // On Android, we just open the options page in a new tab.
+  content::OpenURLParams params(
+      url, content::Referrer(),
+      open_in_tab ? WindowOpenDisposition::NEW_FOREGROUND_TAB
+                  : WindowOpenDisposition::CURRENT_TAB,
+      ui::PAGE_TRANSITION_LINK, /*is_renderer_initiated=*/false);
+  browser_->OpenURL(params, /*navigation_handle_callback=*/{});
 #else
   // Force the options page to open in non-OTR window if the extension is not
   // running in split mode, because it won't be able to save settings from OTR.
   // This version of OpenOptionsPage() can be called from an OTR window via e.g.
   // the action menu, since that's not initiated by the extension.
-  Browser* browser_to_use = GetBrowser();
+  BrowserWindowInterface* browser_to_use = GetBrowser();
   std::optional<chrome::ScopedTabbedBrowserDisplayer> displayer;
   if (profile()->IsOffTheRecord() && !IncognitoInfo::IsSplitMode(extension)) {
     displayer.emplace(profile()->GetOriginalProfile());
-    browser_to_use = displayer->browser();
+    browser_to_use = displayer->browser_window_interface();
   }
 
   // We need to respect path differences because we don't want opening the
@@ -344,10 +317,6 @@ bool BrowserExtensionWindowController::OpenOptionsPage(
 #endif
 
   return true;
-}
-
-bool BrowserExtensionWindowController::SupportsTabs() {
-  return window_type_ != api::tabs::WindowType::kDevtools;
 }
 
 }  // namespace extensions

@@ -50,7 +50,7 @@ const CGFloat kLeadingImageTrailingMarginLensOverlay = 9;
 const CGFloat kLeadingImageSizeAIM = 22;
 // The leading image margins when presented in composebox.
 const CGFloat kLeadingImageLeadingMarginAIM = 7;
-const CGFloat kLeadingImageTrailingMarginAIM = 11;
+const CGFloat kLeadingImageTrailingMarginAIM = 10;
 
 /// Space between the clear button and the edge of the omnibox.
 const CGFloat kTextInputViewClearButtonTrailingOffset = 4;
@@ -64,12 +64,8 @@ const CGFloat kClearButtonSize = 28.0f;
 
 /// Whether the omnibox is using the text view instead of the text field.
 bool UseTextView(OmniboxPresentationContext presentation_context) {
-  if (presentation_context == OmniboxPresentationContext::kLocationBar) {
-    return IsMultilineBrowserOmniboxEnabled();
-  } else if (presentation_context == OmniboxPresentationContext::kComposebox) {
-    return YES;
-  }
-  return NO;
+  return presentation_context == OmniboxPresentationContext::kComposebox ||
+         presentation_context == OmniboxPresentationContext::kCobrowse;
 }
 
 /// The maxium number of lines for the multiline omnibox before it starts
@@ -136,7 +132,7 @@ UIButton* CreateClearButton(OmniboxPresentationContext presentationContext) {
       presentationContext == OmniboxPresentationContext::kComposebox
           ? kComposeboxClearButtonImageSize
           : kClearButtonImageSize;
-  conf.image = DefaultSymbolWithPointSize(kXMarkCircleFillSymbol, imageSize);
+  conf.image = SymbolWithPointSize(SymbolXMarkCircleFill, imageSize);
   conf.contentInsets =
       NSDirectionalEdgeInsetsMake(kClearButtonInset, kClearButtonInset,
                                   kClearButtonInset, kClearButtonInset);
@@ -277,17 +273,15 @@ UIButton* CreateClearButton(OmniboxPresentationContext presentationContext) {
     ]];
 
     // Thumbnail image view.
-    if (base::FeatureList::IsEnabled(kEnableLensOverlay)) {
-      _thumbnailButton = CreateThumbnailButton();
-      [self addSubview:_thumbnailButton];
-      [NSLayoutConstraint activateConstraints:@[
-        [_thumbnailButton.leadingAnchor
-            constraintEqualToAnchor:_leadingImageView.trailingAnchor
-                           constant:kThumbnailImageLeadingMargin],
-        [_thumbnailButton.centerYAnchor
-            constraintEqualToAnchor:referenceCenterYAnchor]
-      ]];
-    }
+    _thumbnailButton = CreateThumbnailButton();
+    [self addSubview:_thumbnailButton];
+    [NSLayoutConstraint activateConstraints:@[
+      [_thumbnailButton.leadingAnchor
+          constraintEqualToAnchor:_leadingImageView.trailingAnchor
+                         constant:kThumbnailImageLeadingMargin],
+      [_thumbnailButton.centerYAnchor
+          constraintEqualToAnchor:referenceCenterYAnchor]
+    ]];
 
     [self updateLeadingConstraint];
   }
@@ -361,8 +355,7 @@ UIButton* CreateClearButton(OmniboxPresentationContext presentationContext) {
 - (void)updateLeadingConstraint {
   _textInputViewLeadingConstraint.active = NO;
 
-  BOOL thumbnailVisible = !_thumbnailButton.hidden &&
-                          base::FeatureList::IsEnabled(kEnableLensOverlay);
+  BOOL thumbnailVisible = !_thumbnailButton.hidden;
   if (self.leadingImageHidden) {
     _textInputViewLeadingConstraint = [_textInputView.leadingAnchor
         constraintEqualToAnchor:self.leadingAnchor];

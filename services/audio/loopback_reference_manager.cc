@@ -9,6 +9,7 @@
 #include "base/containers/flat_set.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
@@ -45,6 +46,7 @@
 
 namespace audio {
 namespace {
+using Error = media::AudioInputStream::AudioInputCallback::Error;
 using ReferenceOpenOutcome = ReferenceSignalProvider::ReferenceOpenOutcome;
 using OpenOutcome = media::AudioInputStream::OpenOutcome;
 
@@ -57,13 +59,15 @@ ReferenceOpenOutcome MapStreamOpenOutcomeToReferenceOpenOutcome(
       return ReferenceOpenOutcome::STREAM_OPEN_SYSTEM_PERMISSIONS_ERROR;
     case OpenOutcome::kFailedInUse:
       return ReferenceOpenOutcome::STREAM_OPEN_DEVICE_IN_USE_ERROR;
+    case OpenOutcome::kFailedDeviceRemoved:
+      return ReferenceOpenOutcome::STREAM_OPEN_DEVICE_REMOVED_ERROR;
     default:
       return ReferenceOpenOutcome::STREAM_OPEN_ERROR;
   }
 }
 
 ReferenceOpenOutcome ReportOpenResult(ReferenceOpenOutcome outcome) {
-  base::UmaHistogramEnumeration("Media.Audio.LoopbackReference.OpenResult",
+  base::UmaHistogramEnumeration("Media.Audio.LoopbackReference.OpenResult2",
                                 outcome);
   return outcome;
 }
@@ -110,7 +114,8 @@ class LoopbackReferenceManagerCore
       media::AudioManager* audio_manager,
       LoopbackReferenceStreamIdProvider* stream_id_provider,
       ErrorCallback on_error_callback)
-      : audio_manager_(audio_manager),
+      : id_(base::UnguessableToken::Create()),
+        audio_manager_(audio_manager),
         glitch_reporter_(
             media::SystemGlitchReporter::StreamType::kLoopbackReference),
         task_runner_(base::SequencedTaskRunner::GetCurrentDefault()),
@@ -141,8 +146,8 @@ class LoopbackReferenceManagerCore
     }
 
     audio_log_->OnLogMessage(base::StringPrintf(
-        "LRMC::%s [id=%u] [this=0x%" PRIXPTR "]", message.c_str(),
-        stream_id_provider_->GetId(), reinterpret_cast<uintptr_t>(this)));
+        "LRMC::%s [stream_id=%u] [id=%s]", message.c_str(),
+        stream_id_provider_->GetId(), id_.ToString().c_str()));
   }
 
   void ReportAndResetGlitchStats() {
@@ -254,18 +259,19 @@ class LoopbackReferenceManagerCore
     glitch_reporter_.UpdateStats(audio_glitch_info.duration);
   }
 
-  void OnError() override {
+  void OnError(Error error_code) override {
     // We post a new task even when we run on the same sequence, to avoid odd
     // call stacks where the input stream is closed while it's being started.
     task_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(&LoopbackReferenceManagerCore::OnErrorMainSequence,
-                       weak_ptr_factory_.GetWeakPtr()));
+                       weak_ptr_factory_.GetWeakPtr(), error_code));
   }
 
-  void OnErrorMainSequence() {
+  void OnErrorMainSequence(Error error_code) {
     DCHECK(task_runner_->RunsTasksInCurrentSequence());
-    SendLogMessage("OnError()");
+    SendLogMessage(
+        base::StringPrintf("OnError(%d)", static_cast<int>(error_code)));
     if (on_error_callback_) {
       std::move(on_error_callback_).Run();
     }
@@ -287,6 +293,7 @@ class LoopbackReferenceManagerCore
     audio_log_.reset();
   }
 
+  const base::UnguessableToken id_;
   const raw_ptr<media::AudioManager> audio_manager_;
   media::SystemGlitchReporter glitch_reporter_;
   const scoped_refptr<base::SequencedTaskRunner> task_runner_;
@@ -297,7 +304,8 @@ class LoopbackReferenceManagerCore
   int sample_rate_;
 
   base::Lock lock_;
-  base::flat_set<ReferenceOutput::Listener*> listeners_ GUARDED_BY(lock_);
+  base::flat_set<raw_ptr<ReferenceOutput::Listener>> listeners_
+      GUARDED_BY(lock_);
 
   base::WeakPtrFactory<LoopbackReferenceManagerCore> weak_ptr_factory_{this};
 };

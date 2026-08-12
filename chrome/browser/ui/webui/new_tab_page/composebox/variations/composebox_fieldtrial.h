@@ -22,24 +22,13 @@ BASE_DECLARE_FEATURE(kNtpComposebox);
 
 // The serialized base64 encoded `omnibox::NTPComposeboxConfig`.
 extern const base::FeatureParam<std::string> kConfigParam;
-// Whether or not to use separate request ids for viewport images if the
-// multi-context input flow is enabled.
-extern const base::FeatureParam<bool>
-    kUseSeparateRequestIdsForMultiContextViewportImages;
-// Whether to show zps suggestions under the composebox.
-extern const base::FeatureParam<bool> kShowComposeboxZps;
 // Whether to show typed suggestions under the composebox.
 extern const base::FeatureParam<bool> kShowComposeboxTypedSuggest;
 // Whether to show image suggestions under the composebox.
 extern const base::FeatureParam<bool> kShowComposeboxImageSuggestions;
-// Whether or not to attach the page title and url directly to the suggest
-// request params.
-extern const base::FeatureParam<bool> kAttachPageTitleAndUrlToSuggestRequest;
 // Whether to show the + entrypoint and contextual input menu in the realbox and
 // composebox.
 extern const base::FeatureParam<bool> kShowContextMenu;
-// Whether to show the recent tab chip in the realbox and composebox.
-extern const base::FeatureParam<bool> kShowRecentTabChip;
 // Whether to show tab previews on hover for the composebox context menu.
 extern const base::FeatureParam<bool> kShowContextMenuTabPreviews;
 // The maximum number of tab suggestions to show in the composebox context menu.
@@ -49,43 +38,15 @@ extern const base::FeatureParam<bool> kContextMenuEnableMultiTabSelection;
 
 // The maximum number of file attachments to upload.
 extern const base::FeatureParam<int> kMaxNumFiles;
-// Whether or not to show a description in the context menu entrypoint, or just
-// the icon.
-extern const base::FeatureParam<bool> kShowContextMenuDescription;
-// Whether or not to show the context menu description only when the user
-// hovers over the button.
-extern const base::FeatureParam<bool> kEnableEphemeralContextMenuDescription;
-// Whether or not to enable viewport images with page context uploads.
-extern const base::FeatureParam<bool> kEnableViewportImages;
-// Whether to show the tools and models picker in the composebox.
-extern const base::FeatureParam<bool> kShowToolsAndModels;
-// Whether to show the create image button in the composebox context menu.
-extern const base::FeatureParam<bool> kShowCreateImageTool;
-// Whether to allow drag and drop files on composebox
-extern const base::FeatureParam<bool> kEnableContextDragAndDrop;
+// Whether to show section headers in the context menu.
+extern const base::FeatureParam<bool> kShowContextMenuHeaders;
 
-// Whether to show the submit button in the composebox.
-extern const base::FeatureParam<bool> kShowSubmit;
 // Whether to show the smart compose in the composebox.
 extern const base::FeatureParam<bool> kShowSmartCompose;
-// Whether to show the voice search button in steady state composebox.
-extern const base::FeatureParam<bool> kShowVoiceSearchInSteadyComposebox;
-// Whether to show the voice search button in expanded composebox.
-extern const base::FeatureParam<bool> kShowVoiceSearchInExpandedComposebox;
-// Whether to exit AI mode when the user clicks Escape in the composebox.
-extern const base::FeatureParam<bool> kCloseComposeboxByEscape;
 // Whether to exit AI mode when the user clicks outside the composebox.
 extern const base::FeatureParam<bool> kCloseComposeboxByClickOutside;
-// Whether to delay an upload if tab context is added from the recent tab chip.
-extern const base::FeatureParam<bool> kAddTabUploadDelayOnRecentTabChipClick;
-// Whether to trap tab focus within the composebox.
-extern const base::FeatureParam<bool> kEnableModalComposebox;
 
 bool IsNtpComposeboxEnabled(Profile* profile);
-
-bool IsDeepSearchEnabled(Profile* profile);
-
-bool IsCreateImagesEnabled(Profile* profile);
 
 // Helper to create a QueryControllerConfigParams object from the feature
 // params.
@@ -130,35 +91,15 @@ enum class PlaceholderText {
 extern const base::FeatureParam<PlaceholderText> kSteadyPlaceholder;
 
 // Whether to show a series of cycling placeholder texts on the search input UI.
-extern const base::FeatureParam<bool> kCyclingPlaceholders;
-
-// Whether to show the voice search button in the realbox.
-extern const base::FeatureParam<bool> kShowVoiceSearchInExpandedRealbox;
-
-// Enum for `kRealboxLayoutMode`.
-enum class RealboxLayoutMode {
-  kTallBottomContext,
-  kTallTopContext,
-  kCompact,
-};
-
-// Flag to control the realbox layout mode (Tall, Compact).
-extern const base::FeatureParam<RealboxLayoutMode> kRealboxLayoutMode;
+BASE_DECLARE_FEATURE(kNtpRealboxCyclingPlaceholders);
 
 // Whether to enable multi-line input in the searchbox.
 extern const base::FeatureParam<bool> kMultiLineEnabled;
 
+// Whether to enable the dynamic version of the AI Mode button in the realbox.
+BASE_DECLARE_FEATURE(kNtpRealboxDynamicAiModeButton);
+
 bool IsNtpRealboxNextEnabled(Profile* profile);
-
-// String constants for RealboxLayoutMode.
-inline constexpr char kRealboxLayoutModeTallBottomContext[] =
-    "TallBottomContext";
-inline constexpr char kRealboxLayoutModeTallTopContext[] = "TallTopContext";
-inline constexpr char kRealboxLayoutModeCompact[] = "Compact";
-
-// Returns the string representation of `RealboxLayoutMode`.
-std::string_view RealboxLayoutModeToString(
-    RealboxLayoutMode realbox_layout_mode);
 
 }  // namespace ntp_realbox
 

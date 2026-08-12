@@ -12,24 +12,19 @@
 #include <memory>
 #include <string>
 
-#include "base/base_paths.h"
 #include "base/command_line.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/files/important_file_writer.h"
 #include "base/logging.h"
-#include "base/numerics/safe_conversions.h"
-#include "base/path_service.h"
 #include "base/process/launch.h"
-#include "base/strings/strcat.h"
-#include "base/strings/strcat_win.h"
+#include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "base/version_info/channel.h"
 #include "base/win/shortcut.h"
-#include "chrome/install_static/install_details.h"
 #include "chrome/install_static/install_util.h"
 #include "chrome/installer/setup/install_params.h"
 #include "chrome/installer/setup/install_worker.h"
@@ -46,8 +41,6 @@
 #include "chrome/installer/util/initial_preferences_constants.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/installation_state.h"
-#include "chrome/installer/util/installer_util_strings.h"
-#include "chrome/installer/util/l10n_string_util.h"
 #include "chrome/installer/util/taskbar_util.h"
 #include "chrome/installer/util/util_constants.h"
 #include "chrome/installer/util/work_item.h"
@@ -164,6 +157,30 @@ void CopyPreferenceFileForFirstRun(const InstallerState& installer_state,
   }
 }
 
+// Returns true if a diagnostic crash dump should be uploaded in case of a
+// failure while installing or updating the browser.
+bool ShouldSampleFailures() {
+  // Sample across channels based on historic error rates.
+  double report_probability = 0.0;
+  switch (install_static::GetChromeChannel()) {
+    case version_info::Channel::CANARY:
+      report_probability = 0.1;
+      break;
+    case version_info::Channel::DEV:
+      report_probability = 0.05;
+      break;
+    case version_info::Channel::BETA:
+      report_probability = 0.03;
+      break;
+    case version_info::Channel::STABLE:
+      report_probability = 0.00005;
+      break;
+    default:
+      return false;
+  }
+  return base::RandDouble() < report_probability;
+}
+
 // This function installs a new version of Chrome to the specified location.
 //
 // install_params: See install_params.h
@@ -195,6 +212,10 @@ InstallStatus InstallNewVersion(const InstallParams& install_params,
   installer_state.SetStage(EXECUTING);
 
   if (!install_list->Do()) {
+    if (ShouldSampleFailures()) {
+      // TODO(crbug.com/40462942): Remove after analyzing results.
+      base::debug::DumpWithoutCrashing();
+    }
     installer_state.SetStage(ROLLINGBACK);
     InstallStatus result = base::PathExists(new_chrome_exe) &&
                                    current_version.IsValid() &&
@@ -245,131 +266,7 @@ InstallStatus InstallNewVersion(const InstallParams& install_params,
   return INSTALL_FAILED;
 }
 
-std::string GenerateVisualElementsManifest(const base::Version& version) {
-  // A printf-style format string for generating the visual elements manifest.
-  // Required arguments, in order, are thrice:
-  //   - Relative path to the VisualElements directory.
-  //   - Logo suffix for the channel.
-  static constexpr char kManifestTemplate[] =
-      "<Application xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance'>\r\n"
-      "  <VisualElements\r\n"
-      "      ShowNameOnSquare150x150Logo='on'\r\n"
-      "      Square150x150Logo='%s\\Logo%s.png'\r\n"
-      "      Square70x70Logo='%s\\SmallLogo%s.png'\r\n"
-      "      Square44x44Logo='%s\\SmallLogo%s.png'\r\n"
-      "      ForegroundText='light'\r\n"
-      "      BackgroundColor='#5F6368'/>\r\n"
-      "</Application>\r\n";
-
-  // Construct the relative path to the versioned VisualElements directory.
-  std::string elements_dir = version.GetString();
-  elements_dir.push_back(
-      base::checked_cast<char>(base::FilePath::kSeparators[0]));
-  elements_dir.append(kVisualElements);
-
-  // Fill the manifest with the desired values.
-  const std::string logo_suffix =
-      base::WideToUTF8(install_static::InstallDetails::Get().logo_suffix());
-  return base::StringPrintf(kManifestTemplate, elements_dir.c_str(),
-                            logo_suffix.c_str(), elements_dir.c_str(),
-                            logo_suffix.c_str(), elements_dir.c_str(),
-                            logo_suffix.c_str());
-}
-
-// Whether VisualElements assets exist for this brand and mode.
-bool HasVisualElementAssets(const base::FilePath& base_path,
-                            const base::Version& version) {
-  // There are no assets at all if there's no VisualElements directory.
-  base::FilePath visual_elements_dir =
-      base_path.AppendASCII(version.GetString()).AppendASCII(kVisualElements);
-  if (!base::DirectoryExists(visual_elements_dir)) {
-    return false;
-  }
-
-// Assets are unconditionally required if there is a VisualElements directory.
-#if DCHECK_IS_ON()
-  DCHECK(base::PathExists(visual_elements_dir.Append(base::StrCat(
-      {L"Logo", install_static::InstallDetails::Get().logo_suffix(),
-       L".png"}))));
-#endif
-
-  return true;
-}
-
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-void LaunchOSUpdateHandlerIfNeeded(const InstallerState& installer_state,
-                                   const std::wstring& installed_version) {
-  auto os_update_handler_cmd =
-      GetOsUpdateHandlerCommand(installer_state, installed_version,
-                                *base::CommandLine::ForCurrentProcess());
-  if (!os_update_handler_cmd.has_value()) {
-    return;
-  }
-  base::LaunchOptions launch_options;
-  launch_options.feedback_cursor_off = true;
-  launch_options.force_breakaway_from_job_ = true;
-
-  ::SetLastError(ERROR_SUCCESS);
-  base::Process process =
-      base::LaunchProcess(os_update_handler_cmd.value(), launch_options);
-  if (!process.IsValid()) {
-    PLOG(ERROR) << "Failed to launch \""
-                << os_update_handler_cmd->GetCommandLineString() << "\"";
-  }
-  // There's no need to wait for this to finish.
-}
-#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
-
 }  // namespace
-
-bool CreateVisualElementsManifest(const base::FilePath& src_path,
-                                  const base::Version& version) {
-  if (!HasVisualElementAssets(src_path, version)) {
-    VLOG(1) << "No visual elements found, not writing "
-            << kVisualElementsManifest << " to " << src_path.value();
-    return true;
-  }
-
-  // Generate the manifest.
-  const std::string manifest(GenerateVisualElementsManifest(version));
-
-  // Write the manifest to |src_path|.
-  if (base::WriteFile(src_path.Append(kVisualElementsManifest), manifest)) {
-    VLOG(1) << "Successfully wrote " << kVisualElementsManifest << " to "
-            << src_path.value();
-    return true;
-  }
-  PLOG(ERROR) << "Error writing " << kVisualElementsManifest << " to "
-              << src_path.value();
-  return false;
-}
-
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-// Returns a CommandLine to run if os_update_handler.exe should be run,
-// i.e. a Windows update has been detected; null otherwise.
-std::optional<base::CommandLine> GetOsUpdateHandlerCommand(
-    const InstallerState& installer_state,
-    const std::wstring& installed_version,
-    const base::CommandLine& command_line) {
-  const auto args = command_line.GetArgs();
-  if (args.size() != 1) {
-    return std::nullopt;
-  }
-  // Use the Windows version update string set by Omaha on the command line
-  // as the version update string to pass to os_update_handler.exe.
-  base::CommandLine os_update_handler_cmd(installer_state.target_path()
-                                              .Append(installed_version)
-                                              .Append(kOsUpdateHandlerExe));
-  InstallUtil::AppendModeAndChannelSwitches(&os_update_handler_cmd);
-  // args[0] has the form "<prev_windows_version>-<new_windows_version>".
-  os_update_handler_cmd.AppendArgNative(args[0]);
-
-  if (installer_state.system_install()) {
-    os_update_handler_cmd.AppendSwitch(installer::switches::kSystemLevel);
-  }
-  return os_update_handler_cmd;
-}
-#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
 void CreateOrUpdateShortcuts(const base::FilePath& target,
                              const InitialPreferences& prefs,
@@ -478,7 +375,7 @@ void RegisterChromeOnMachine(const InstallerState& installer_state,
 // Run a child process that will create/update a shortcut for an
 // install. This is done in a child process to avoid crashing the main
 // install process if we crash in Windows shell functions. For more info,
-// see crbug.com/1276348.
+// see crbug.com/40058114.
 void RunShortcutCreationInChildProc(
     const InstallerState& installer_state,
     const base::FilePath& setup_path,
@@ -527,7 +424,6 @@ InstallStatus InstallOrUpdateProduct(const InstallParams& install_params,
   const InstallationState& original_state = *install_params.installation_state;
   const InstallerState& installer_state = *install_params.installer_state;
   const base::FilePath& setup_path = *install_params.setup_path;
-  const base::FilePath& src_path = *install_params.src_path;
   const base::Version& new_version = *install_params.new_version;
 
   // TODO(robertshield): Removing the pending on-reboot moves should be done
@@ -537,12 +433,6 @@ InstallStatus InstallOrUpdateProduct(const InstallParams& install_params,
   // the same version.
   LOG_IF(ERROR, !RemoveFromMovesPendingReboot(installer_state.target_path()))
       << "Error accessing pending moves value.";
-
-  // Create VisualElementManifest.xml in |src_path| (if required) so that it
-  // looks as if it had been extracted from the archive when calling
-  // InstallNewVersion() below.
-  installer_state.SetStage(CREATING_VISUAL_MANIFEST);
-  CreateVisualElementsManifest(src_path, new_version);
 
   InstallStatus result =
       InstallNewVersion(install_params, IsDowngradeAllowed(prefs));
@@ -666,11 +556,6 @@ void HandleOsUpgradeForBrowser(const InstallerState& installer_state,
     LOG(WARNING) << "Failed to reinstall Active Setup keys.";
     work_item_list->Rollback();
   }
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  LaunchOSUpdateHandlerIfNeeded(
-      installer_state, base::ASCIIToWide(installed_version.GetString()));
-#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
-
   UpdateOsUpgradeBeacon();
 
   // Update the per-user default browser beacon. For user-level installs this
@@ -698,13 +583,6 @@ void HandleOsUpgradeForBrowser(const InstallerState& installer_state,
 void HandleActiveSetupForBrowser(const InstallerState& installer_state,
                                  const base::FilePath& setup_path,
                                  bool force) {
-  std::unique_ptr<WorkItemList> cleanup_list(WorkItem::CreateWorkItemList());
-  cleanup_list->set_log_message("Cleanup deprecated per-user registrations");
-  cleanup_list->set_rollback_enabled(false);
-  cleanup_list->set_best_effort(true);
-  AddCleanupDeprecatedPerUserRegistrationsWorkItems(cleanup_list.get());
-  cleanup_list->Do();
-
   // Only create shortcuts on Active Setup if the first run sentinel is not
   // present for this user (as some shortcuts used to be installed on first
   // run and this could otherwise re-install shortcuts for users that have

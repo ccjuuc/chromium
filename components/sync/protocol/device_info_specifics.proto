@@ -98,6 +98,12 @@ message DeviceInfoSpecifics {
 
   // The form factor of the device.
   optional SyncEnums.DeviceFormFactor device_form_factor = 20;
+
+  // Prefix of the android.os.Build.FINGERPRINT (until the first colon).
+  optional string android_os_build_fingerprint_prefix = 21;
+
+  // A name determined by the server that can be used to personalize the device.
+  optional string server_determined_model_name = 22;
 }
 
 // Feature specific information about the device that is running a sync-enabled
@@ -122,6 +128,23 @@ message FeatureSpecificFields {
   // Tracks whether the Desktop to iOS Promo feature is enabled on the device.
   // This is populated only for iOS devices.
   optional bool desktop_to_ios_promo_receiving_enabled = 4;
+
+  // List of Desktop to iOS Promo types enabled on the device.
+  // This is populated only for iOS devices.
+  // The values correspond to the MobilePromoOnDesktopPromoType enum.
+  repeated SyncEnums.MobilePromoOnDesktopPromoType
+      desktop_to_ios_promo_receiving_types = 5;
+
+  reserved 6;
+  reserved "glic_experimental_triggering_opted_in";
+
+  // Tracks the experimental triggering state for Glic on the device.
+  optional SyncEnums.GlicExperimentalTriggeringState
+      glic_experimental_triggering_state = 7;
+
+  // Tracks the experimental triggering version of Glic on the device.
+  // Optional. If not set, the state is unavailable or unsupported.
+  optional int32 glic_experimental_triggering_version = 8;
 }
 
 // Device specific information for Sharing feature. Used to send end-to-end
@@ -132,6 +155,7 @@ message SharingSpecificFields {
   reserved "vapid_fcm_token", "vapid_p256dh", "vapid_auth_secret";
 
   // Enum defining available Sharing features.
+  // LINT.IfChange(EnabledFeatures)
   enum EnabledFeatures {
     reserved 5;
     reserved "PEER_CONNECTION";
@@ -139,18 +163,24 @@ message SharingSpecificFields {
     reserved "CLICK_TO_CALL_VAPID";
     reserved 2;
     reserved "SHARED_CLIPBOARD_VAPID";
+    reserved 6;
+    reserved "DISCOVERY";
 
     UNKNOWN = 0;
     SMS_FETCHER = 3;
     REMOTE_COPY = 4;
-    DISCOVERY = 6;
-    // Supports Click to Call via sender ID.
-    CLICK_TO_CALL_V2 = 7;
-    // Supports Shared Clipboard via sender ID.
-    SHARED_CLIPBOARD_V2 = 8;
+    reserved 7;
+    reserved "CLICK_TO_CALL_V2";
+    reserved 8;
+    reserved "SHARED_CLIPBOARD_V2";
     // Supports optimization guide push notification.
     OPTIMIZATION_GUIDE_PUSH_NOTIFICATION = 9;
+    // Supports receiving notifications about new OneTimeTokens in the backend.
+    ONE_TIME_TOKEN_BACKEND_NOTIFICATION = 10;
+    // Supports experimental triggering.
+    GLIC_EXPERIMENTAL_TRIGGERING = 11;
   }
+  // LINT.ThenChange(/components/sync_device_info/device_info.h:SharingFeature)
 
   // A list of enabled Sharing features.
   repeated EnabledFeatures enabled_features = 4;

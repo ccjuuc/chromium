@@ -4,12 +4,16 @@
 
 package org.chromium.components.embedder_support.contextmenu;
 
+import android.content.Context;
 import android.net.Uri;
 
 import androidx.annotation.IntDef;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.content_public.browser.AdditionalNavigationParams;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.content_public.common.Referrer;
 import org.chromium.url.GURL;
 
 import java.lang.annotation.Retention;
@@ -30,34 +34,29 @@ public interface ContextMenuItemDelegate {
     /** Called when this ContextMenuItemDelegate is about to be destroyed. */
     void onDestroy();
 
-    /**
-     * @return The title of the current page associated with this delegate..
-     */
+    /** Returns the title of the current page associated with this delegate.. */
     String getPageTitle();
 
-    /**
-     * @return The web contents of the current page owned by this delegate.
-     */
+    /** Returns the web contents of the current page owned by this delegate. */
     WebContents getWebContents();
 
-    /**
-     * @return Whether or not this context menu is being shown for an incognito content.
-     */
+    /** Returns whether this context menu is being shown for an incognito content. */
     default boolean isIncognito() {
         return false;
     }
 
-    /**
-     * @return Whether or not the current application can show incognito pages.
-     */
+    /** Returns whether the current application can show incognito pages. */
     default boolean isIncognitoSupported() {
         return false;
     }
 
-    /**
-     * @return Whether the embedder can get itself into multi-window mode.
-     */
-    default boolean canEnterMultiWindowMode() {
+    /** Returns whether the current profile enables printing. */
+    default boolean isPrintSupported() {
+        return false;
+    }
+
+    /** Returns whether the "Open in other window" context menu item should be shown. */
+    default boolean isOpenInOtherWindowSupported() {
         return false;
     }
 
@@ -71,6 +70,16 @@ public interface ContextMenuItemDelegate {
     default boolean startDownload(GURL url, boolean isLink) {
         return false;
     }
+
+    /**
+     * Called when the context menu is trying to start a download of the current page.
+     *
+     * @param context The context to use for the download.
+     */
+    default void startDownloadPage(Context context) {}
+
+    /** Initiates the printing process of the current page. */
+    default void startPrint() {}
 
     /**
      * Called when the {@code text} should be saved to the clipboard.
@@ -87,9 +96,7 @@ public interface ContextMenuItemDelegate {
      */
     default void onSaveImageToClipboard(Uri uri) {}
 
-    /**
-     * @return whether an activity is available to handle an intent to call a phone number.
-     */
+    /** Returns whether an activity is available to handle an intent to call a phone number. */
     default boolean supportsCall() {
         return false;
     }
@@ -101,9 +108,7 @@ public interface ContextMenuItemDelegate {
      */
     default void onCall(GURL url) {}
 
-    /**
-     * @return whether an activity is available to handle an intent to send an email.
-     */
+    /** Returns whether an activity is available to handle an intent to send an email. */
     default boolean supportsSendEmailMessage() {
         return false;
     }
@@ -115,9 +120,7 @@ public interface ContextMenuItemDelegate {
      */
     default void onSendEmailMessage(GURL url) {}
 
-    /**
-     * @return whether an activity is available to handle an intent to send a text message.
-     */
+    /** Returns whether an activity is available to handle an intent to send a text message. */
     default boolean supportsSendTextMessage() {
         return false;
     }
@@ -130,7 +133,7 @@ public interface ContextMenuItemDelegate {
     default void onSendTextMessage(GURL url) {}
 
     /**
-     * Returns whether or not an activity is available to handle intent to add contacts.
+     * Returns whether an activity is available to handle intent to add contacts.
      *
      * @return true if an activity is available to handle intent to add contacts.
      */
@@ -146,8 +149,186 @@ public interface ContextMenuItemDelegate {
     default void onAddToContacts(GURL url) {}
 
     /**
-     * @return page url.
+     * @return Whether opening an image in a new tab is supported.
      */
+    default boolean supportsOpenImageInNewTab() {
+        return false;
+    }
+
+    /**
+     * @return Whether opening an ephemeral preview tab is supported.
+     */
+    default boolean supportsOpenInEphemeralTab() {
+        return false;
+    }
+
+    /**
+     * @return Whether saving/downloading an image is supported.
+     */
+    default boolean supportsSaveImage() {
+        return false;
+    }
+
+    /**
+     * @return Whether saving/downloading a link is supported.
+     */
+    default boolean supportsSaveLinkAs() {
+        return false;
+    }
+
+    /**
+     * @return Whether searching by image / Google Lens is supported.
+     */
+    default boolean supportsSearchByImage() {
+        return false;
+    }
+
+    /**
+     * @return Whether inspecting elements is supported.
+     */
+    default boolean supportsInspectElement() {
+        return false;
+    }
+
+    /**
+     * Called when the {@code url} is of an image and should be opened in a new page.
+     *
+     * @param url The image URL to open.
+     * @param referrer The referrer to be used for navigation.
+     */
+    default void onOpenImageInNewTab(GURL url, @Nullable Referrer referrer) {}
+
+    /**
+     * Called when the {@code url} should be opened in an ephemeral page.
+     *
+     * @param url The URL to open.
+     * @param title The title text to show on top control.
+     */
+    default void onOpenInEphemeralTab(GURL url, String title) {}
+
+    /**
+     * @return Whether opening a link in a new tab is supported.
+     */
+    default boolean supportsOpenInNewTab() {
+        return false;
+    }
+
+    /**
+     * @return Whether opening a link in a new tab in group is supported.
+     */
+    default boolean supportsOpenInNewTabInGroup() {
+        return false;
+    }
+
+    /**
+     * @return Whether opening a link in a new incognito tab is supported.
+     */
+    default boolean supportsOpenInNewIncognitoTab() {
+        return false;
+    }
+
+    /**
+     * @return Whether opening a link in a new window is supported.
+     */
+    default boolean supportsOpenInNewWindow() {
+        return false;
+    }
+
+    /**
+     * @return Whether opening a link in an incognito window is supported.
+     */
+    default boolean supportsOpenInIncognitoWindow() {
+        return false;
+    }
+
+    /**
+     * Called when the {@code url} should be opened in a new page with the same incognito state as
+     * the current page.
+     *
+     * @param url The URL to open.
+     * @param referrer The attribution impression to associate with the navigation.
+     * @param navigateToTab Whether or not to navigate to the new page.
+     * @param additionalNavigationParams Additional information that needs to be passed to the
+     *     navigation request.
+     */
+    default void onOpenInNewTab(
+            GURL url,
+            @Nullable Referrer referrer,
+            boolean navigateToTab,
+            @Nullable AdditionalNavigationParams additionalNavigationParams) {}
+
+    /**
+     * Called when {@code url} should be opened in a new page in the same group as the current page.
+     *
+     * @param url The URL to open.
+     * @param referrer The attribution impression to associate with the navigation.
+     */
+    default void onOpenInNewTabInGroup(GURL url, @Nullable Referrer referrer) {}
+
+    /**
+     * Called when the {@code url} should be opened in a new incognito page.
+     *
+     * @param url The URL to open.
+     */
+    default void onOpenInNewIncognitoTab(GURL url) {}
+
+    /**
+     * Opens a URL in a new or existing window.
+     *
+     * @param url The URL to open.
+     * @param referrer The referrer to use when opening the URL.
+     * @param isIncognito Whether the other window should be incognito.
+     * @param preferNew Whether the URL should be opened in a new window.
+     */
+    default void openInOtherWindow(
+            GURL url, @Nullable Referrer referrer, boolean isIncognito, boolean preferNew) {}
+
+    /**
+     * Opens a URL in an incognito window.
+     *
+     * @param url The URL to open.
+     */
+    default void openInIncognitoWindow(GURL url) {}
+
+    /**
+     * @return Whether adding a link to the reading list is supported.
+     */
+    default boolean supportsReadLater() {
+        return false;
+    }
+
+    /**
+     * Called when Read Later was selected from the context menu.
+     *
+     * @param url The URL to be saved to the reading list.
+     * @param title The title text to be shown for this item in the reading list.
+     */
+    default void onReadLater(GURL url, String title) {}
+
+    /**
+     * Called when the {@code url} is of an image and should be opened in the same page.
+     *
+     * @param url The image URL to open.
+     */
+    default void onOpenImageUrl(GURL url, @Nullable Referrer referrer) {}
+
+    /**
+     * Called when a link should be opened in the main Chrome browser.
+     *
+     * @param linkUrl URL that should be opened.
+     * @param pageUrl URL of the current page.
+     */
+    default void onOpenInChrome(GURL linkUrl, GURL pageUrl) {}
+
+    /**
+     * Called when the {@code url} should be opened in a new Chrome page from CCT.
+     *
+     * @param linkUrl The URL to open.
+     * @param isIncognito true if the {@code url} should be opened in a new incognito page.
+     */
+    default void onOpenInNewChromeTabFromCct(GURL linkUrl, boolean isIncognito) {}
+
+    /** Returns the page url. */
     GURL getPageUrl();
 
     /**
@@ -156,4 +337,7 @@ public interface ContextMenuItemDelegate {
      * @param url The URL to open.
      */
     void onOpenInDefaultBrowser(GURL url);
+
+    /** Called when the current tab should be reloaded. */
+    default void onReloadCurrentTab() {}
 }

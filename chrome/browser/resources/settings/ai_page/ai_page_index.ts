@@ -10,12 +10,11 @@
 import 'chrome://resources/cr_elements/cr_view_manager/cr_view_manager.js';
 import '/shared/settings/prefs/prefs.js';
 import './ai_info_card.js';
+import './ai_mode_search_page.js';
 import './ai_page.js';
-// <if expr="enable_glic">
 import '../glic_page/glic_page.js';
 import '../glic_page/glic_subpage.js';
-
-// </if>
+import './inline_cue_menu_page.js';
 
 import type {CrViewManagerElement} from 'chrome://resources/cr_elements/cr_view_manager/cr_view_manager.js';
 import {assert} from 'chrome://resources/js/assert.js';
@@ -59,12 +58,10 @@ export class SettingsAiPageIndexElement extends SettingsAiPageIndexElementBase
         value: () => routes,
       },
 
-      // <if expr="enable_glic">
       showGlicSettings_: {
         type: Boolean,
         value: () => loadTimeData.getBoolean('showGlicSettings'),
       },
-      // </if>
 
       showAiPageAiFeatureSection_: {
         type: Boolean,
@@ -76,33 +73,50 @@ export class SettingsAiPageIndexElement extends SettingsAiPageIndexElementBase
         value: () => loadTimeData.getBoolean('showComposeControl'),
       },
 
-      showCompareControl_: {
-        type: Boolean,
-        value: () => loadTimeData.getBoolean('showCompareControl'),
-      },
-
       showHistorySearchControl_: {
         type: Boolean,
         value: () => loadTimeData.getBoolean('showHistorySearchControl'),
       },
 
-      showTabOrganizationControl_: {
+      enableAiModeSearchSetting_: {
         type: Boolean,
-        value: () => loadTimeData.getBoolean('showTabOrganizationControl'),
+        value: () => loadTimeData.getBoolean('enableAiModeSearchSetting'),
+      },
+
+      actorLoginFederatedLoginSupportEnabled_: {
+        type: Boolean,
+        value: () =>
+            loadTimeData.getBoolean('actorLoginFederatedLoginSupportEnabled'),
+      },
+
+      showAiSuggestionsControl_: {
+        type: Boolean,
+        value: () => loadTimeData.getBoolean('showAiSuggestionsControl'),
+      },
+
+      showInlineCueMenuControl_: {
+        type: Boolean,
+        value: () => loadTimeData.getBoolean('showInlineCueMenuControl'),
+      },
+
+      showSkillsSettingPage_: {
+        type: Boolean,
+        value: () => loadTimeData.getBoolean('showSkillsSettingPage'),
       },
     };
   }
 
-  declare prefs: {[key: string]: any};
+  declare prefs: Record<string, unknown>;
   declare private routes_: SettingsRoutes;
-  // <if expr="enable_glic">
   declare private showGlicSettings_: boolean;
-  // </if>
   declare private showAiPageAiFeatureSection_: boolean;
   declare private showComposeControl_: boolean;
-  declare private showCompareControl_: boolean;
   declare private showHistorySearchControl_: boolean;
-  declare private showTabOrganizationControl_: boolean;
+  declare private enableAiModeSearchSetting_: boolean;
+  declare private actorLoginFederatedLoginSupportEnabled_: boolean;
+  declare private showAiSuggestionsControl_: boolean;
+  declare private showInlineCueMenuControl_: boolean;
+  declare private showSkillsSettingPage_: boolean;
 
   private showDefaultViews_() {
     const defaultViews: string[] = ['aiInfoCard'];
@@ -111,14 +125,21 @@ export class SettingsAiPageIndexElement extends SettingsAiPageIndexElementBase
       defaultViews.push('parent');
     }
 
-    // <if expr="enable_glic">
+    if (this.enableAiModeSearchSetting_) {
+      defaultViews.push('aiModeSearch');
+    }
+
     if (this.showGlicSettings_) {
       defaultViews.push('glic');
     }
-    // </if>
 
     this.$.viewManager.switchViews(
         defaultViews, 'no-animation', 'no-animation');
+  }
+
+  private shouldShowPermissionsPage_(): boolean {
+    return this.showGlicSettings_ &&
+        this.actorLoginFederatedLoginSupportEnabled_;
   }
 
   override currentRouteChanged(newRoute: Route, oldRoute?: Route) {
@@ -136,11 +157,6 @@ export class SettingsAiPageIndexElement extends SettingsAiPageIndexElementBase
           // results.
           this.showDefaultViews_();
           break;
-        case routes.AI_TAB_ORGANIZATION:
-          assert(this.showTabOrganizationControl_);
-          this.$.viewManager.switchView(
-              'tabOrganization', 'no-animation', 'no-animation');
-          break;
         case routes.HISTORY_SEARCH:
           assert(this.showHistorySearchControl_);
           this.$.viewManager.switchView(
@@ -151,18 +167,32 @@ export class SettingsAiPageIndexElement extends SettingsAiPageIndexElementBase
           this.$.viewManager.switchView(
               'compose', 'no-animation', 'no-animation');
           break;
-        case routes.COMPARE:
-          assert(this.showCompareControl_);
-          this.$.viewManager.switchView(
-              'compare', 'no-animation', 'no-animation');
-          break;
-        // <if expr="enable_glic">
         case routes.GEMINI:
           assert(this.showGlicSettings_);
           this.$.viewManager.switchView(
               'gemini', 'no-animation', 'no-animation');
           break;
-        // </if>
+        case routes.GEMINI_LOGIN:
+          assert(this.showGlicSettings_);
+          assert(this.actorLoginFederatedLoginSupportEnabled_);
+          this.$.viewManager.switchView(
+              'geminiLoginPermissions', 'no-animation', 'no-animation');
+          break;
+        case routes.AI_SUGGESTIONS:
+          assert(this.showAiSuggestionsControl_);
+          this.$.viewManager.switchView(
+              'aiSuggestions', 'no-animation', 'no-animation');
+          break;
+        case routes.INLINE_CUE_MENU:
+          assert(this.showInlineCueMenuControl_);
+          this.$.viewManager.switchView(
+              'inlineCueMenu', 'no-animation', 'no-animation');
+          break;
+        case routes.SKILLS:
+          assert(this.showSkillsSettingPage_);
+          this.$.viewManager.switchView(
+              'skills', 'no-animation', 'no-animation');
+          break;
         default:
           // Nothing to do. Other parent elements are responsible for updating
           // the displayed contents.

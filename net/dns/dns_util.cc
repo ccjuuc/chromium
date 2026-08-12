@@ -12,14 +12,11 @@
 #include <cstring>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/byte_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -28,6 +25,7 @@
 #include "net/dns/public/doh_provider_entry.h"
 #include "net/dns/public/util.h"
 #include "net/third_party/uri_template/uri_template.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 #if BUILDFLAG(IS_POSIX)
 #include <net/if.h>
@@ -38,6 +36,9 @@
 #endif  // BUILDFLAG(IS_POSIX)
 
 #if BUILDFLAG(IS_ANDROID)
+#include <array>
+
+#include "base/time/time.h"
 #include "net/android/network_library.h"
 #endif
 
@@ -57,9 +58,9 @@ DohProviderEntry::List GetDohProviderEntriesFromNameservers(
       // Finch, the experiment only includes possible users of the
       // corresponding DoH provider (since the client will be included in the
       // experiment if the provider feature flag is checked).
-      if (base::Contains(entry->ip_addresses, server.address()) &&
+      if (entry->ip_addresses.contains(server.address()) &&
           base::FeatureList::IsEnabled(entry->feature.get()) &&
-          !base::Contains(entries, entry)) {
+          !std::ranges::contains(entries, entry)) {
         entries.push_back(entry);
       }
     }
@@ -69,9 +70,10 @@ DohProviderEntry::List GetDohProviderEntriesFromNameservers(
 
 }  // namespace
 
-std::string GetURLFromTemplateWithoutParameters(const string& server_template) {
+std::string GetURLFromTemplateWithoutParameters(
+    const std::string& server_template) {
   std::string url_string;
-  std::unordered_map<string, string> parameters;
+  absl::flat_hash_map<std::string, std::string> parameters;
   uri_template::Expand(server_template, parameters, &url_string);
   return url_string;
 }
@@ -163,7 +165,7 @@ std::vector<DnsOverHttpsServerConfig> GetDohUpgradeServersFromDotHostname(
     // the experiment only includes possible users of the corresponding DoH
     // provider (since the client will be included in the experiment if the
     // provider feature flag is checked).
-    if (base::Contains(entry->dns_over_tls_hostnames, dot_server) &&
+    if (entry->dns_over_tls_hostnames.contains(dot_server) &&
         base::FeatureList::IsEnabled(entry->feature.get())) {
       doh_servers.push_back(entry->doh_server_config);
     }

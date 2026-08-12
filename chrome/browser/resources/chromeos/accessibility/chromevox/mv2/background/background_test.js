@@ -279,7 +279,7 @@ AX_TEST_F(
     });
 
 AX_TEST_F('ChromeVoxMV2BackgroundTest', 'CaretNavigation', async function() {
-  // TODO(plundblad): Add braille expectations when crbug.com/523285 is fixed.
+  // TODO(plundblad): Add braille expectations when crbug.com/41196347 is fixed.
   const mockFeedback = this.createMockFeedback();
   await this.runWithLoadedTree(this.linksAndHeadingsDoc);
   mockFeedback.expectSpeech('start');
@@ -3904,6 +3904,11 @@ TEST_F('ChromeVoxMV2BackgroundTest', 'NewWindowWebSpeech', function() {
 
     // Ensure there are no announcements about the Tab role.
     assertTrue(speech.every(text => {
+      // Allow legitimate announcements for pinned buttons and the tab strip
+      // itself, while still guarding against the "Tab" role announcement.
+      if (text === 'Tab search' || text === 'Tab list') {
+        return true;
+      }
       return text.indexOf('Tab') !== 0;
     }));
   })();

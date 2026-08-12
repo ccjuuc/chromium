@@ -10,8 +10,9 @@
 
 namespace web_app {
 
-FakeWebAppOriginAssociationManager::FakeWebAppOriginAssociationManager() =
-    default;
+FakeWebAppOriginAssociationManager::FakeWebAppOriginAssociationManager(
+    Profile& profile)
+    : WebAppOriginAssociationManager(profile) {}
 
 FakeWebAppOriginAssociationManager::~FakeWebAppOriginAssociationManager() =
     default;
@@ -27,8 +28,14 @@ void FakeWebAppOriginAssociationManager::GetWebAppOriginAssociations(
   } else {
     for (const auto& scope_extension : origin_associations.scope_extensions) {
       auto it = data_.find(scope_extension);
-      if (it != data_.end())
+      if (it != data_.end()) {
         result.scope_extensions.insert(it->second);
+      }
+    }
+    for (const auto& migration_source : origin_associations.migration_sources) {
+      if (migration_sources_data_.contains(migration_source.manifest_id())) {
+        result.migration_sources.push_back(migration_source);
+      }
     }
   }
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
@@ -38,6 +45,11 @@ void FakeWebAppOriginAssociationManager::GetWebAppOriginAssociations(
 void FakeWebAppOriginAssociationManager::SetData(
     std::map<ScopeExtensionInfo, ScopeExtensionInfo> data) {
   data_ = std::move(data);
+}
+
+void FakeWebAppOriginAssociationManager::SetMigrationSourcesData(
+    base::flat_set<webapps::ManifestId> data) {
+  migration_sources_data_ = std::move(data);
 }
 
 }  // namespace web_app

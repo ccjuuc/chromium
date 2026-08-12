@@ -21,7 +21,6 @@
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
-#include "services/network/public/mojom/attribution.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -59,7 +58,7 @@ class ChromeKeepAliveRequestTrackerTestBase : public testing::Test {
   using FeaturesType = std::vector<base::test::FeatureRefAndParams>;
 
   ChromeKeepAliveRequestTrackerTestBase() {
-    static const FeaturesType enabled_features = {
+    const FeaturesType enabled_features = {
         {page_load_metrics::features::kBeaconLeakageLogging,
          {{"category_prefix", kRequestCategoryPrefix}}}};
     scoped_feature_list_.InitWithFeaturesAndParameters(enabled_features, {});
@@ -71,15 +70,9 @@ class ChromeKeepAliveRequestTrackerTestBase : public testing::Test {
     network::ResourceRequest request;
 
     request.url = GURL(url);
-    request.attribution_reporting_eligibility =
-        network::mojom::AttributionReportingEligibility::kEmpty;
     request.keepalive = true;
     request.keepalive_token = base::UnguessableToken::Create();
     request.is_fetch_later_api = IsFetchLaterRequest();
-    request.attribution_reporting_eligibility =
-        IsAttributionReportingEligibleRequest()
-            ? network::mojom::AttributionReportingEligibility::kTrigger
-            : network::mojom::AttributionReportingEligibility::kUnset;
 
     return request;
   }
@@ -97,7 +90,6 @@ class ChromeKeepAliveRequestTrackerTestBase : public testing::Test {
     return ukm::AssignNewSourceId();
   }
   virtual bool IsFetchLaterRequest() const { return false; }
-  virtual bool IsAttributionReportingEligibleRequest() const { return false; }
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
@@ -105,20 +97,19 @@ class ChromeKeepAliveRequestTrackerTestBase : public testing::Test {
 
 // A type to support parameterized testing for the category of the request.
 struct CategoryTestCase {
-  std::string test_case;
-  std::string category;
+  const char* test_case;
+  const char* category;
   bool expected;
 };
 
 // A type to support parameterized testing for the request type of the request.
 struct RequestTypeTestCase {
-  std::string test_case;
+  const char* test_case;
   RequestType request_type;
 };
 
 const RequestTypeTestCase kRequestTypeTestCases[] = {
     {"Fetch", RequestType::kFetch},
-    {"Attribution", RequestType::kAttribution},
     {"FetchLater", RequestType::kFetchLater},
 };
 
@@ -130,9 +121,6 @@ class MaybeCreateKeepAliveRequestTrackerForCategoryTest
   // ChromeKeepAliveRequestTrackerTestBase overrides:
   bool IsFetchLaterRequest() const override {
     return std::get<1>(GetParam()).request_type == RequestType::kFetchLater;
-  }
-  bool IsAttributionReportingEligibleRequest() const override {
-    return std::get<1>(GetParam()).request_type == RequestType::kAttribution;
   }
 };
 
@@ -148,12 +136,12 @@ INSTANTIATE_TEST_SUITE_P(
                      testing::ValuesIn(kRequestTypeTestCases)),
     [](const testing::TestParamInfo<
         std::tuple<CategoryTestCase, RequestTypeTestCase>>& info) {
-      return std::get<0>(info.param).test_case + "_" +
+      return std::string(std::get<0>(info.param).test_case) + "_" +
              std::get<1>(info.param).test_case;
     });
 
 TEST_P(MaybeCreateKeepAliveRequestTrackerForCategoryTest, WithCategory) {
-  auto url_category = std::get<0>(GetParam()).category;
+  const char* url_category = std::get<0>(GetParam()).category;
   auto request = CreateRequest(GetUrlWithCategory(url_category));
 
   auto tracker = CreateTracker(request);
@@ -194,9 +182,6 @@ class ChromeKeepAliveRequestTrackerTest
   bool IsFetchLaterRequest() const override {
     return GetParam().request_type == RequestType::kFetchLater;
   }
-  bool IsAttributionReportingEligibleRequest() const override {
-    return GetParam().request_type == RequestType::kAttribution;
-  }
 
  private:
   content::BrowserTaskEnvironment task_environment_;
@@ -208,7 +193,7 @@ INSTANTIATE_TEST_SUITE_P(
     ChromeKeepAliveRequestTrackerTest,
     testing::ValuesIn(kRequestTypeTestCases),
     [](const testing::TestParamInfo<RequestTypeTestCase>& info) {
-      return info.param.test_case;
+      return std::string(info.param.test_case);
     });
 
 TEST_P(ChromeKeepAliveRequestTrackerTest, NotLogForNonValidCategoryRequest) {

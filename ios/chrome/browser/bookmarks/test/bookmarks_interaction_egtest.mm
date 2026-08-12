@@ -4,6 +4,7 @@
 
 #import "base/ios/ios_util.h"
 #import "base/strings/sys_string_conversions.h"
+#import "base/test/ios/wait_util.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey_ui_test_util.h"
 #import "ios/chrome/browser/bookmarks/model/bookmark_storage_type.h"
@@ -16,7 +17,7 @@
 #import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
-#import "ios/chrome/test/earl_grey/web_http_server_chrome_test_case.h"
+#import "ios/chrome/test/earl_grey/chrome_test_case.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
 #import "net/base/net_errors.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
@@ -29,10 +30,15 @@ using chrome_test_util::TappableBookmarkNodeWithLabel;
 
 // Bookmark integration tests for Chrome focused on its interactions with the
 // rest of Chrome.
-@interface BookmarksInteractionTestCase : WebHttpServerChromeTestCase
+@interface BookmarksInteractionTestCase : ChromeTestCase
 @end
 
 @implementation BookmarksInteractionTestCase
+
+- (AppLaunchConfiguration)appConfigurationForTestCase {
+  AppLaunchConfiguration config = [super appConfigurationForTestCase];
+  return config;
+}
 
 - (void)setUp {
   [super setUp];
@@ -222,6 +228,8 @@ using chrome_test_util::TappableBookmarkNodeWithLabel;
   [[EarlGrey
       selectElementWithMatcher:TappableBookmarkNodeWithLabel(@"Second URL")]
       performAction:grey_tap()];
+
+  [ChromeEarlGrey waitForMatcher:chrome_test_util::ToolsMenuButton()];
 
   [ChromeEarlGreyUI openToolsMenu];
   [[[EarlGrey

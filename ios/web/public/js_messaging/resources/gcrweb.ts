@@ -17,12 +17,13 @@ import {generateRandomId, sendWebKitMessage} from '//ios/web/public/js_messaging
 class CrWeb {
   private readonly registeredApis: {[id: string]: CrWebApi} = {};
   private frameId: string = generateRandomId();
+  registerFrameCallback: ((payload: any) => void)|null = null;
 
   constructor() {
-    const crweb = new CrWebApi();
+    const crweb = new CrWebApi('crweb');
     crweb.addFunction('getFrameId', this.getFrameId.bind(this));
     crweb.addFunction('registerFrame', this.registerFrame.bind(this));
-    this.registerApi('crweb', crweb);
+    this.registerApi(crweb);
   }
 
   hasRegisteredApi(apiIdentifier: string): boolean {
@@ -33,11 +34,11 @@ class CrWeb {
    * Register a Javascript API into the CrWeb object. In case
    * of any collision, do not override a pre-registered API.
    */
-  registerApi(apiIdentifier: string, api: CrWebApi): void {
-    if (this.hasRegisteredApi(apiIdentifier)) {
-      throw new CrWebError(`API ${apiIdentifier} already registered.`);
+  registerApi(api: CrWebApi): void {
+    if (this.hasRegisteredApi(api.getApiName())) {
+      throw new CrWebError(`API ${api.getApiName()} already registered.`);
     }
-    this.registeredApis[apiIdentifier] = api;
+    this.registeredApis[api.getApiName()] = api;
   }
 
   getRegisteredApi(apiIdentifier: string): CrWebApi {
@@ -70,8 +71,13 @@ class CrWeb {
       return;
     }
 
-    sendWebKitMessage(
-      'FrameBecameAvailable', {'crwFrameId': this.getFrameId()});
+    const payload: any = {
+      'crwFrameId': this.getFrameId(),
+    };
+    if (this.registerFrameCallback) {
+      this.registerFrameCallback(payload);
+    }
+    sendWebKitMessage('FrameBecameAvailable', payload);
   }
 
   /**
@@ -99,7 +105,6 @@ class CrWeb {
     }
   }
 
-  // TODO(crbug.com/399666983): Remove legacy API handling
   /**
    * Interface to convert actual calls from the native side into
    * new CrWeb calls or call legacy code for that function or property.
@@ -107,27 +112,12 @@ class CrWeb {
    */
   callFunctionInGcrWeb(
       apiName: string, funcOrPropName: string, args: unknown[]): unknown {
-    try {
-      if (this.hasRegisteredApi(apiName)) {
-        const registeredApi = gCrWeb.getRegisteredApi(apiName);
-        if (registeredApi.hasFunction(funcOrPropName)) {
-          const func = registeredApi.getFunction(funcOrPropName);
-          return func(...args);
-        }
-        return registeredApi.getProperty(funcOrPropName);
-      }
-      if (apiName === '') {
-        return gCrWebLegacy[funcOrPropName](...args);
-      }
-      return gCrWebLegacy[apiName][funcOrPropName](...args);
-    } catch (error) {
-      if (error instanceof CrWebError) {
-        sendWebKitMessage(
-            'WindowErrorResultHandler',
-            {'message': error.message, 'is_crweb': true});
-      }
+    const registeredApi = gCrWeb.getRegisteredApi(apiName);
+    if (registeredApi.hasFunction(funcOrPropName)) {
+      const func = registeredApi.getFunction(funcOrPropName);
+      return func(...args);
     }
-    return undefined;
+    return registeredApi.getProperty(funcOrPropName);
   }
 }
 
@@ -135,10 +125,16 @@ export class CrWebApi {
   private readonly functions: {[id: string]: Function} = {};
   private readonly properties: {[id: string]: unknown} = {};
 
+  constructor(private readonly apiName: string) {}
+
+  getApiName(): string {
+    return this.apiName;
+  }
+
   addFunction(funcName: string, func: Function): void {
+    const apiName = this.getApiName() + '.' + funcName;
     this.functions[funcName] = function(...args: unknown[]) {
-      return catchAndReportErrors.apply(
-        null, [/*crweb=*/ true, funcName, func, args]);
+      return catchAndReportErrors.apply(null, [apiName, func, args]);
     };
   }
 
@@ -177,5 +173,13 @@ if (!(window as CrWebType).__gCrWeb) {
   (window as CrWebType).__gCrWeb = new CrWeb();
 }
 
-export const gCrWebLegacy: any = (window as CrWebType).__gCrWeb;
 export const gCrWeb: CrWeb = (window as CrWebType).__gCrWeb;
+
+/**
+ * Sets a callback that is invoked when a frame registers itself. This is used
+ * by the isolated world script to append additional metadata (e.g.
+ * crwParentChildToken) to the FrameBecameAvailable payload.
+ */
+export function setRegisterCallback(callback: (payload: any) => void) {
+  gCrWeb.registerFrameCallback = callback;
+}

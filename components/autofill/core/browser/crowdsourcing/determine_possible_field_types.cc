@@ -4,23 +4,28 @@
 
 #include "components/autofill/core/browser/crowdsourcing/determine_possible_field_types.h"
 
-#include <map>
+#include <stddef.h>
+
+#include <algorithm>
 #include <memory>
+#include <optional>
+#include <ranges>
+#include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
+#include "base/check.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
-#include "base/containers/to_vector.h"
 #include "base/feature_list.h"
-#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/types/zip.h"
 #include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/crowdsourcing/disambiguate_possible_field_types.h"
 #include "components/autofill/core/browser/data_model/addresses/address.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_normalization_utils.h"
@@ -33,10 +38,10 @@
 #include "components/autofill/core/browser/data_quality/validation.h"
 #include "components/autofill/core/browser/field_type_utils.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/geo/alternative_state_name_map.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
 #include "components/autofill/core/common/autofill_features.h"
-#include "components/autofill/core/common/autofill_regex_constants.h"
-#include "components/autofill/core/common/autofill_regexes.h"
+#include "components/autofill/core/common/form_field_data.h"
 #include "components/autofill/core/common/unique_ids.h"
 #include "components/one_time_tokens/core/browser/one_time_token.h"
 
@@ -105,7 +110,8 @@ FindDatesAndSetFormatStrings(
   // Cheap plausibility checks if the field is relevant for date matching.
   auto may_be_interesting = [](const std::unique_ptr<AutofillField>& field) {
     return field->form_control_type() == FormControlType::kInputText &&
-           (field->is_user_edited() || field->is_autofilled() ||
+           (field->all_modifiers().contains_any(
+                {FieldModifier::kUser, FieldModifier::kAutofill}) ||
             field->initial_value() != field->value());
   };
 
@@ -142,7 +148,7 @@ FindDatesAndSetFormatStrings(
   std::vector<std::pair<data_util::Date, PossibleTypes*>> dates;
 
   // Match formats against individual fields.
-  for (auto [field, pt] : base::zip(fields, possible_types)) {
+  for (auto [field, pt] : std::views::zip(fields, possible_types)) {
     if (!may_be_interesting(field) || !may_be_complete_date(field)) {
       continue;
     }
@@ -189,7 +195,7 @@ void FindAndSetPossibleCvcFieldTypes(
     base::span<const std::unique_ptr<AutofillField>> fields,
     base::span<PossibleTypes> possible_types) {
   if (!last_unlocked_credit_card_cvc.empty()) {
-    for (auto [field, pt] : base::zip(fields, possible_types)) {
+    for (auto [field, pt] : std::views::zip(fields, possible_types)) {
       if (last_unlocked_credit_card_cvc ==
           base::TrimWhitespace(field->value_for_import(), base::TRIM_ALL)) {
         pt.types.insert(CREDIT_CARD_VERIFICATION_CODE);
@@ -216,7 +222,7 @@ void FindAndSetPossibleCvcFieldTypes(
   // * it does not look like an expiration year or an expiration year was
   //   already found;
   // * it is filled with a 3-4 digit number;
-  for (auto [field, pt] : base::zip(fields, possible_types)) {
+  for (auto [field, pt] : std::views::zip(fields, possible_types)) {
     if (pt.types.contains(CREDIT_CARD_NUMBER)) {
       credit_card_number_found = true;
       continue;
@@ -266,6 +272,92 @@ FieldTypeSet GetAvailableAutofillAiFieldTypes(
   return types;
 }
 
+bool QualifiesForAffixFormatStringVote(FieldType field_type,
+                                       std::u16string_view value_in_field) {
+  return IsAffixFormatStringEnabledForType(field_type) &&
+         value_in_field.size() >= data_util::kMinAffixLengthForFormatString &&
+         value_in_field.size() <= data_util::kMaxAffixLengthForFormatString;
+}
+
+// Adds all applicable votes for `field_type` to `pt` for an unmasked
+// `value_on_file`, given that `value_in_field` was submitted.
+void AddPossibleAutofillAiTypesForUnmaskedValue(
+    std::u16string_view value_in_field,
+    std::u16string_view value_on_file,
+    FieldType field_type,
+    PossibleTypes& pt) {
+  // Test if `value_in_field` and `value_on_file` match.
+  bool full_match = AutofillProfileComparator::Compare(
+      value_in_field, value_on_file, normalization::WhitespaceSpec::kDiscard);
+  if (full_match) {
+    pt.types.insert(field_type);
+    if (IsAffixFormatStringEnabledForType(field_type)) {
+      pt.formats.emplace(FormatString_Type_AFFIX, u"0");
+    }
+    if (field_type == FLIGHT_RESERVATION_FLIGHT_NUMBER &&
+        base::FeatureList::IsEnabled(
+            features::kAutofillAiVoteForFormatStringsForFlightNumbers)) {
+      pt.formats.emplace(FormatString_Type_FLIGHT_NUMBER, u"F");
+    }
+  }
+
+  // Test if `value_in_field` is an affix of `value_on_file`.
+  if (QualifiesForAffixFormatStringVote(field_type, value_in_field) &&
+      value_in_field.size() < value_on_file.size()) {
+    if (value_on_file.starts_with(value_in_field)) {
+      pt.types.insert(field_type);
+      pt.formats.emplace(FormatString_Type_AFFIX,
+                         base::NumberToString16(value_in_field.size()));
+    }
+    if (value_on_file.ends_with(value_in_field)) {
+      pt.types.insert(field_type);
+      pt.formats.emplace(
+          FormatString_Type_AFFIX,
+          base::NumberToString16(-1 * static_cast<int>(value_in_field.size())));
+    }
+  }
+
+  if (field_type == FLIGHT_RESERVATION_FLIGHT_NUMBER &&
+      base::FeatureList::IsEnabled(
+          features::kAutofillAiVoteForFormatStringsForFlightNumbers)) {
+    if (value_in_field.size() == 2 &&
+        value_on_file.starts_with(value_in_field)) {
+      pt.types.insert(field_type);
+      pt.formats.emplace(FormatString_Type_FLIGHT_NUMBER, u"A");
+    } else if (value_on_file.size() > 3 &&
+               value_on_file.substr(2) == value_in_field) {
+      pt.types.insert(field_type);
+      pt.formats.emplace(FormatString_Type_FLIGHT_NUMBER, u"N");
+    }
+  }
+}
+
+// Adds all applicable votes for `field_type` to `pt` for a
+// `masked_value_on_file`, given that `value_in_field` was submitted.
+void AddPossibleAutofillAiTypesForMaskedValue(
+    std::u16string_view value_in_field,
+    std::u16string_view masked_value_on_file,
+    FieldType field_type,
+    PossibleTypes& pt) {
+  // Since the full value is not available on file, look for a suffix match.
+  if (value_in_field.ends_with(masked_value_on_file)) {
+    pt.types.insert(field_type);
+    // No "full match" FormatString_Type_AFFIX vote is created. With a masked
+    // value on file, the logic cannot distinguish between full and suffix
+    // matches.
+  }
+  // For FormatString_Type_AFFIX votes, only suffixes matches are possible for
+  // masked values. If the `masked_value_on_file` is shorter than the suffix
+  // filled into `value_in_field`, the vote will be missed.
+  if (QualifiesForAffixFormatStringVote(field_type, value_in_field) &&
+      masked_value_on_file.ends_with(value_in_field)) {
+    pt.types.insert(field_type);
+    pt.formats.emplace(
+        FormatString_Type_AFFIX,
+        base::NumberToString16(-1 * static_cast<int>(value_in_field.size())));
+  }
+}
+
 // Scans the given `entities` for values that match `value_u16`. It adds the
 // matching `FieldType` to `PossibleTypes::types` and, if applicable, a format
 // string to `PossibleTypes::format`.
@@ -287,59 +379,12 @@ void AddPossibleAutofillAiTypes(base::span<const EntityInstance> entities,
         const std::u16string& value_on_file =
             normalization::NormalizeForComparison(
                 attribute.GetInfo(field_type, app_locale, std::nullopt));
-
-        // Test if `value_in_field` and `value_on_file` match.
-        bool full_match =
-            AutofillProfileComparator::Compare(value_in_field, value_on_file);
-        if (full_match) {
-          pt.types.insert(field_type);
-          if (IsAffixFormatStringEnabledForType(field_type) &&
-              base::FeatureList::IsEnabled(
-                  features::kAutofillAiVoteForFormatStringsForAffixes)) {
-            pt.formats.emplace(FormatString_Type_AFFIX, u"0");
-          }
-          if (field_type == FLIGHT_RESERVATION_FLIGHT_NUMBER &&
-              base::FeatureList::IsEnabled(
-                  features::kAutofillAiVoteForFormatStringsForFlightNumbers)) {
-            pt.formats.emplace(FormatString_Type_FLIGHT_NUMBER, u"F");
-          }
-        }
-
-        // Test if `value_in_field` is an affix of `value_on_file`.
-        if (IsAffixFormatStringEnabledForType(field_type) &&
-            value_in_field.size() < value_on_file.size() &&
-            value_in_field.size() >=
-                data_util::kMinAffixLengthForFormatString &&
-            value_in_field.size() <=
-                data_util::kMaxAffixLengthForFormatString &&
-            base::FeatureList::IsEnabled(
-                features::kAutofillAiVoteForFormatStringsForAffixes)) {
-          if (value_on_file.starts_with(value_in_field)) {
-            pt.types.insert(field_type);
-            pt.formats.emplace(FormatString_Type_AFFIX,
-                               base::NumberToString16(value_in_field.size()));
-          }
-          if (value_on_file.ends_with(value_in_field)) {
-            pt.types.insert(field_type);
-            pt.formats.emplace(
-                FormatString_Type_AFFIX,
-                base::NumberToString16(
-                    -1 * static_cast<int>(value_in_field.size())));
-          }
-        }
-
-        if (field_type == FLIGHT_RESERVATION_FLIGHT_NUMBER &&
-            base::FeatureList::IsEnabled(
-                features::kAutofillAiVoteForFormatStringsForFlightNumbers)) {
-          if (value_in_field.size() == 2 &&
-              value_on_file.starts_with(value_in_field)) {
-            pt.types.insert(field_type);
-            pt.formats.emplace(FormatString_Type_FLIGHT_NUMBER, u"A");
-          } else if (value_on_file.size() > 3 &&
-                     value_on_file.substr(2) == value_in_field) {
-            pt.types.insert(field_type);
-            pt.formats.emplace(FormatString_Type_FLIGHT_NUMBER, u"N");
-          }
+        if (attribute.masked()) {
+          AddPossibleAutofillAiTypesForMaskedValue(
+              value_in_field, value_on_file, field_type, pt);
+        } else {
+          AddPossibleAutofillAiTypesForUnmaskedValue(
+              value_in_field, value_on_file, field_type, pt);
         }
       }
     }
@@ -374,6 +419,38 @@ void FindAndSetPossibleDateFieldTypesAndFormatStrings(
   }
 }
 
+void RationalizePossibleSplitZipFieldTypes(
+    base::span<PossibleTypes> possible_types) {
+  for (auto it = possible_types.begin(); it != possible_types.end(); ++it) {
+    // Voting for ADDRESS_HOME_ZIP_SUFFIX is allowed only if the previous field
+    // had ADDRESS_HOME_ZIP_PREFIX as one of its possible types.
+    if (it->types.contains(ADDRESS_HOME_ZIP_SUFFIX)) {
+      if (it == possible_types.begin() ||
+          !(it - 1)->types.contains(ADDRESS_HOME_ZIP_PREFIX)) {
+        it->types.erase(ADDRESS_HOME_ZIP_SUFFIX);
+      }
+    }
+
+    // Votes for single ADDRESS_HOME_ZIP_PREFIX fields are mapped to
+    // ADDRESS_HOME_ZIP to prevent unexpected voting results on international
+    // forms. On such forms with a single zip code field, American users often
+    // enter a 5-digit zip code. Since these 5-digit values correspond to both
+    // ADDRESS_HOME_ZIP and ADDRESS_HOME_ZIP_PREFIX, they can cause votes
+    // for ADDRESS_HOME_ZIP_PREFIX, while users from other countries
+    // will send votes for ADDRESS_HOME_ZIP.
+    // If ADDRESS_HOME_ZIP_PREFIX wins the vote, it could result in
+    // partial zip values autofilled in Japan, Brazil, and other
+    // countries with split zip code formats.
+    if (it->types.contains(ADDRESS_HOME_ZIP_PREFIX)) {
+      if (it + 1 == possible_types.end() ||
+          !(it + 1)->types.contains(ADDRESS_HOME_ZIP_SUFFIX)) {
+        it->types.erase(ADDRESS_HOME_ZIP_PREFIX);
+        it->types.insert(ADDRESS_HOME_ZIP);
+      }
+    }
+  }
+}
+
 // Matches the value from `field` against the values stored in the given
 // profiles etc.
 PossibleTypes GetPossibleTypes(
@@ -384,8 +461,8 @@ PossibleTypes GetPossibleTypes(
     base::span<const LoyaltyCard> loyalty_cards,
     const std::set<FieldGlobalId> fields_that_match_state,
     const std::string& app_locale) {
-  std::u16string value_u16 = field.value_for_import();
-  base::TrimWhitespace(value_u16, base::TRIM_ALL, &value_u16);
+  const std::u16string_view value_u16 =
+      base::TrimWhitespace(field.value_for_import(), base::TRIM_ALL);
 
   PossibleTypes pt;
 
@@ -401,9 +478,7 @@ PossibleTypes GetPossibleTypes(
   }
 
   // Do not issue loyalty card votes on values matching the email format.
-  if (base::FeatureList::IsEnabled(
-          features::kAutofillEnableLoyaltyCardsFilling) &&
-      !IsValidEmailAddress(value_u16)) {
+  if (!IsValidEmailAddress(value_u16)) {
     const std::string value_u8 = base::UTF16ToUTF8(value_u16);
     for (const LoyaltyCard& card : loyalty_cards) {
       if (value_u8 == card.loyalty_card_number()) {
@@ -427,10 +502,9 @@ void FindAndSetPossibleOtpFieldTypes(
     return;
   }
 
-  for (auto [field, pt] : base::zip(fields, possible_types)) {
-    std::u16string field_value = field->value();
-    base::TrimWhitespace(field_value, base::TRIM_ALL, &field_value);
-    const std::string field_value_u8 = base::UTF16ToUTF8(field_value);
+  for (auto [field, pt] : std::views::zip(fields, possible_types)) {
+    const std::string field_value_u8 = base::UTF16ToUTF8(
+        base::TrimWhitespace(field->value_for_import(), base::TRIM_ALL));
 
     // Check if the field value matches any of the recent OTPs.
     for (const OneTimeToken& otp : recent_otps) {
@@ -501,15 +575,17 @@ std::vector<PossibleTypes> DeterminePossibleFieldTypesForUpload(
   possible_types.resize(fields.size());
 
   // Most type detection happens in this loop.
-  for (auto [field, pt] : base::zip(fields, possible_types)) {
+  for (auto [field, pt] : std::views::zip(fields, possible_types)) {
     pt = GetPossibleTypes(*field, profiles, credit_cards, entities,
                           loyalty_cards, fields_that_match_state, app_locale);
   }
 
   // Date detection is not part of the above loop because dates can span
   // multiple fields.
-  FindAndSetPossibleDateFieldTypesAndFormatStrings(entities, app_locale, fields,
-                                                   possible_types);
+  if (base::FeatureList::IsEnabled(features::kAutofillAiWithDataSchema)) {
+    FindAndSetPossibleDateFieldTypesAndFormatStrings(entities, app_locale,
+                                                     fields, possible_types);
+  }
 
   // As CVCs are not stored, run special heuristics to detect CVC-like values.
   FindAndSetPossibleCvcFieldTypes(last_unlocked_credit_card_cvc, fields,
@@ -521,7 +597,11 @@ std::vector<PossibleTypes> DeterminePossibleFieldTypesForUpload(
     FindAndSetPossibleOtpFieldTypes(fields, recent_otps, possible_types);
   }
 
-  for (auto [field, pt] : base::zip(fields, possible_types)) {
+  if (base::FeatureList::IsEnabled(features::kAutofillSupportSplitZipCode)) {
+    RationalizePossibleSplitZipFieldTypes(possible_types);
+  }
+
+  for (auto [field, pt] : std::views::zip(fields, possible_types)) {
     if (pt.types.empty()) {
       pt.types = {UNKNOWN_TYPE};
     }
@@ -556,9 +636,7 @@ FieldTypeSet DetermineAvailableFieldTypes(
     types.insert_all(GetAvailableAutofillAiFieldTypes(entities, app_locale));
   }
 
-  if (base::FeatureList::IsEnabled(
-          features::kAutofillEnableLoyaltyCardsFilling) &&
-      !loyalty_cards.empty()) {
+  if (!loyalty_cards.empty()) {
     types.insert(LOYALTY_MEMBERSHIP_ID);
   }
 

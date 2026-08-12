@@ -8,7 +8,6 @@
 #include <string>
 
 #include "base/android/path_utils.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/memory/singleton.h"
 #include "base/strings/utf_string_conversions.h"
@@ -16,7 +15,6 @@
 #include "chrome/browser/download/android/download_dialog_utils.h"
 #include "chrome/browser/download/android/duplicate_download_dialog_bridge.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/web_contents.h"
@@ -49,7 +47,7 @@ void DuplicateDownloadDialogBridgeDelegate::CreateDialog(
         file_selected_callback) {
   DCHECK(web_contents);
   // Don't shown duplicate dialog again if it is already showing.
-  if (base::Contains(download_items_, download_item)) {
+  if (std::ranges::contains(download_items_, download_item)) {
     return;
   }
   download_item->AddObserver(this);

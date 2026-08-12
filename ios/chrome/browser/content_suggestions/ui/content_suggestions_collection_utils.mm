@@ -28,7 +28,6 @@
 #import "ios/components/ui_util/dynamic_type_util.h"
 #import "ui/base/device_form_factor.h"
 #import "ui/base/l10n/l10n_util.h"
-#import "ui/gfx/ios/uikit_util.h"
 
 namespace {
 
@@ -164,6 +163,33 @@ namespace content_suggestions {
 const CGFloat kHintTextScale = 0.15;
 const CGFloat kReturnToRecentTabSectionBottomMargin = 25;
 
+// Tight Padding Arm.
+const CGFloat kLogoTopPaddingTight = 24.0;
+const CGFloat kLogoToFakeboxPaddingTight = 32.0;
+const CGFloat kFakeboxToQuickActionsPaddingTight = 12.0;
+const CGFloat kQuickActionsToMostVisitedPaddingTight = 32.0;
+
+// Medium Padding Arm.
+const CGFloat kLogoTopPaddingMedium = 36.0;
+const CGFloat kLogoToFakeboxPaddingMedium = 36.0;
+const CGFloat kFakeboxToQuickActionsPaddingMedium = 12.0;
+const CGFloat kQuickActionsToMostVisitedPaddingMedium = 36.0;
+
+// Preferred Padding Arm.
+const CGFloat kLogoTopPaddingPreferred = 48.0;
+const CGFloat kLogoToFakeboxPaddingPreferred = 36.0;
+const CGFloat kFakeboxToQuickActionsPaddingPreferred = 12.0;
+const CGFloat kQuickActionsToMostVisitedPaddingPreferred = 36.0;
+
+// Control Padding.
+const CGFloat kFakeboxToQuickActionsPaddingControl = 8.0;
+const CGFloat kQuickActionsToMostVisitedPaddingControl = 20.0;
+const CGFloat kReducedModuleSpacingControl = 14.0;
+
+// Shared spacing constants.
+const CGFloat kReducedModuleSpacing = 12.0;
+const CGFloat kReducedModuleSpacingRegularXRegular = 14.0;
+
 CGFloat DoodleHeight(SearchEngineLogoState logo_state,
                      UITraitCollection* trait_collection) {
   // For users with non-Google default search engine, there is no doodle.
@@ -176,7 +202,7 @@ CGFloat DoodleHeight(SearchEngineLogoState logo_state,
       (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET)) {
     return kGoogleSearchDoodleShrunkHeight;
   }
-  if (ShouldEnlargeNTPFakeboxForMIA()) {
+  if (IsAimEnabledInNtp()) {
     return kLargeFakeboxGoogleSearchLogoHeight;
   }
   return kGoogleSearchLogoHeight;
@@ -188,8 +214,7 @@ CGFloat DoodleTopMargin(SearchEngineLogoState logo_state,
     return kDoodleTopMarginRegularXRegular;
   }
   CGFloat top_inset = 0;
-  if ((logo_state == SearchEngineLogoState::kLogo) &&
-      ShouldEnlargeNTPFakeboxForMIA()) {
+  if ((logo_state == SearchEngineLogoState::kLogo) && IsAimEnabledInNtp()) {
     // Shrink the top inset so that the enlarged logo has the same bottom
     // positioning as the regular logo.
     top_inset = kGoogleSearchLogoHeight - kLargeFakeboxGoogleSearchLogoHeight;
@@ -205,19 +230,19 @@ CGFloat DoodleTopMargin(SearchEngineLogoState logo_state,
   }
   CGFloat top_margin =
       top_inset +
-      AlignValueToPixel(kDoodleScaledTopMarginOther *
-                        ui_util::SystemSuggestedFontSizeMultiplier());
+      AlignValueToLowerPixel(kDoodleScaledTopMarginOther *
+                             ui_util::SystemSuggestedFontSizeMultiplier());
   top_margin += kDoodleTopMarginOther;
   return top_margin;
 }
 
 CGFloat HeaderSeparatorHeight() {
-  return ui::AlignValueToUpperPixel(kToolbarSeparatorHeight);
+  return AlignValueToUpperPixel(kToolbarSeparatorHeight);
 }
 
 CGFloat SearchFieldTopMargin(SearchEngineLogoState logo_state) {
-  CGFloat margin = ShouldEnlargeNTPFakeboxForMIA() ? kMIASearchFieldTopMargin
-                                                   : kSearchFieldTopMargin;
+  CGFloat margin =
+      IsAimEnabledInNtp() ? kMIASearchFieldTopMargin : kSearchFieldTopMargin;
   if (IsConsistentLogoDoodleHeightEnabled() &&
       ui::GetDeviceFormFactor() != ui::DEVICE_FORM_FACTOR_TABLET) {
     if (logo_state == SearchEngineLogoState::kDoodle) {
@@ -232,8 +257,9 @@ CGFloat SearchFieldWidth(CGFloat width, UITraitCollection* trait_collection) {
     return kSearchFieldLarge;
   }
 
-  if (ShouldEnlargeNTPFakeboxForMIA() && !IsCompactHeight(trait_collection)) {
-    return std::max(width - kMIASearchFieldMinMargin * 2, kSearchFieldSmallMin);
+  if (IsAimEnabledInNtp() && !IsCompactHeight(trait_collection)) {
+    return std::clamp(width - kMIASearchFieldMinMargin * 2,
+                      kSearchFieldSmallMin, kSearchFieldLarge);
   }
 
   // Special case for narrow sizes.
@@ -242,20 +268,20 @@ CGFloat SearchFieldWidth(CGFloat width, UITraitCollection* trait_collection) {
 }
 
 CGFloat FakeOmniboxHeight() {
-  if (ShouldEnlargeNTPFakeboxForMIA()) {
+  if (IsAimEnabledInNtp()) {
     CGFloat multiplier = ui_util::SystemSuggestedFontSizeMultiplier();
-    return AlignValueToPixel((kFakeboxHeight - kFakeboxHeightNonDynamic) *
-                                 multiplier +
-                             kFakeboxHeightNonDynamic);
+    return AlignValueToLowerPixel((kFakeboxHeight - kFakeboxHeightNonDynamic) *
+                                      multiplier +
+                                  kFakeboxHeightNonDynamic);
   }
   return ToolbarExpandedHeight(
       [UIApplication sharedApplication].preferredContentSizeCategory);
 }
 
 CGFloat PinnedFakeOmniboxHeight() {
-  if (ShouldEnlargeNTPFakeboxForMIA()) {
+  if (IsAimEnabledInNtp()) {
     CGFloat multiplier = ui_util::SystemSuggestedFontSizeMultiplier();
-    return AlignValueToPixel(
+    return AlignValueToLowerPixel(
         (kPinnedFakeboxHeight - kPinnedFakeboxHeightNonDynamic) * multiplier +
         kPinnedFakeboxHeightNonDynamic);
   }
@@ -264,7 +290,7 @@ CGFloat PinnedFakeOmniboxHeight() {
 }
 
 CGFloat FakeToolbarHeight() {
-  if (ShouldEnlargeNTPFakeboxForMIA()) {
+  if (IsAimEnabledInNtp()) {
     return PinnedFakeOmniboxHeight() + FakeToolbarVerticalMargin();
   }
   return ToolbarExpandedHeight(
@@ -273,9 +299,9 @@ CGFloat FakeToolbarHeight() {
 
 CGFloat HeightForLogoHeader(SearchEngineLogoState logo_state,
                             UITraitCollection* trait_collection) {
-  CGFloat header_height = DoodleTopMargin(logo_state, trait_collection) +
+  CGFloat header_height = LogoTopPadding(logo_state, trait_collection) +
                           DoodleHeight(logo_state, trait_collection) +
-                          SearchFieldTopMargin(logo_state) +
+                          LogoToFakeboxPadding(logo_state) +
                           FakeOmniboxHeight() +
                           ntp_header::kScrolledToTopOmniboxBottomMargin +
                           ceil(HeaderSeparatorHeight());
@@ -285,11 +311,14 @@ CGFloat HeightForLogoHeader(SearchEngineLogoState logo_state,
   if (logo_state == SearchEngineLogoState::kNone) {
     // Returns sufficient vertical space for the Identity Disc to be
     // displayed.
-    return ntp_home::kIdentityAvatarDimension +
+    return ntp_home::kIdentityAvatarDiameter +
            2 * (ntp_home::kHeaderIconMargin + ntp_home::kIdentityAvatarPadding);
   }
 
-  header_height += kTopSpacingMaterial;
+  // Minimize spacing between AI-mode entrypoint on large size class.
+  if (!base::FeatureList::IsEnabled(kAIMNTPEntrypointTablet)) {
+    header_height += kTopSpacingMaterial;
+  }
 
   return header_height;
 }
@@ -298,6 +327,76 @@ CGFloat HeaderBottomPadding(UITraitCollection* trait_collection) {
   return IsSplitToolbarMode(trait_collection)
              ? 0
              : kNTPShrunkLogoSearchFieldBottomPadding;
+}
+
+CGFloat LogoTopPadding(SearchEngineLogoState logo_state,
+                       UITraitCollection* trait_collection) {
+  if (IsRegularXRegularSizeClass(trait_collection)) {
+    return kDoodleTopMarginRegularXRegular;
+  }
+  switch (GetNTPPaddingUpdateVariation()) {
+    case NTPPaddingUpdateVariation::kTightPadding:
+      return FakeToolbarHeight() + kLogoTopPaddingTight;
+    case NTPPaddingUpdateVariation::kMediumPadding:
+      return FakeToolbarHeight() + kLogoTopPaddingMedium;
+    case NTPPaddingUpdateVariation::kPreferredPadding:
+      return FakeToolbarHeight() + kLogoTopPaddingPreferred;
+    case NTPPaddingUpdateVariation::kDisabled:
+      return DoodleTopMargin(logo_state, trait_collection);
+  }
+}
+
+CGFloat LogoToFakeboxPadding(SearchEngineLogoState logo_state) {
+  switch (GetNTPPaddingUpdateVariation()) {
+    case NTPPaddingUpdateVariation::kTightPadding:
+      return kLogoToFakeboxPaddingTight;
+    case NTPPaddingUpdateVariation::kMediumPadding:
+      return kLogoToFakeboxPaddingMedium;
+    case NTPPaddingUpdateVariation::kPreferredPadding:
+      return kLogoToFakeboxPaddingPreferred;
+    case NTPPaddingUpdateVariation::kDisabled:
+      return SearchFieldTopMargin(logo_state);
+  }
+}
+
+CGFloat FakeboxToQuickActionsPadding() {
+  switch (GetNTPPaddingUpdateVariation()) {
+    case NTPPaddingUpdateVariation::kTightPadding:
+      return kFakeboxToQuickActionsPaddingTight;
+    case NTPPaddingUpdateVariation::kMediumPadding:
+      return kFakeboxToQuickActionsPaddingMedium;
+    case NTPPaddingUpdateVariation::kPreferredPadding:
+      return kFakeboxToQuickActionsPaddingPreferred;
+    case NTPPaddingUpdateVariation::kDisabled:
+      return kFakeboxToQuickActionsPaddingControl;
+  }
+}
+
+CGFloat QuickActionsToMostVisitedPadding() {
+  switch (GetNTPPaddingUpdateVariation()) {
+    case NTPPaddingUpdateVariation::kTightPadding:
+      return kQuickActionsToMostVisitedPaddingTight;
+    case NTPPaddingUpdateVariation::kMediumPadding:
+      return kQuickActionsToMostVisitedPaddingMedium;
+    case NTPPaddingUpdateVariation::kPreferredPadding:
+      return kQuickActionsToMostVisitedPaddingPreferred;
+    case NTPPaddingUpdateVariation::kDisabled:
+      return kQuickActionsToMostVisitedPaddingControl;
+  }
+}
+
+CGFloat ReducedModuleSpacing(UITraitCollection* trait_collection) {
+  if (IsRegularXRegularSizeClass(trait_collection)) {
+    return kReducedModuleSpacingRegularXRegular;
+  }
+  switch (GetNTPPaddingUpdateVariation()) {
+    case NTPPaddingUpdateVariation::kTightPadding:
+    case NTPPaddingUpdateVariation::kMediumPadding:
+    case NTPPaddingUpdateVariation::kPreferredPadding:
+      return kReducedModuleSpacing;
+    case NTPPaddingUpdateVariation::kDisabled:
+      return kReducedModuleSpacingControl;
+  }
 }
 
 void ConfigureSearchHintLabel(UILabel* search_hint_label,
@@ -322,9 +421,10 @@ void ConfigureVoiceSearchButton(UIButton* voice_search_button,
   UIButtonConfiguration* buttonConfig =
       [UIButtonConfiguration plainButtonConfiguration];
   buttonConfig.contentInsets = NSDirectionalEdgeInsetsMake(0, 0, 0, 0);
+  buttonConfig.background.backgroundColor = [UIColor clearColor];
   voice_search_button.configuration = buttonConfig;
-  UIImage* mic_image = CustomSymbolWithPointSize(
-      kVoiceSymbol, kSymbolContentSuggestionsPointSize);
+  UIImage* mic_image =
+      SymbolWithPointSize(SymbolVoice, kSymbolContentSuggestionsPointSize);
   mic_image = use_color_icon ? MakeSymbolMulticolor(mic_image)
                              : MakeSymbolMonochrome(mic_image);
   [voice_search_button setImage:mic_image forState:UIControlStateNormal];
@@ -347,6 +447,7 @@ void ConfigureLensButtonAppearance(UIButton* lens_button,
   UIButtonConfiguration* buttonConfig =
       [UIButtonConfiguration plainButtonConfiguration];
   buttonConfig.contentInsets = NSDirectionalEdgeInsetsMake(0, 0, 0, 0);
+  buttonConfig.background.backgroundColor = [UIColor clearColor];
   lens_button.configuration = buttonConfig;
   lens_button.accessibilityLabel = l10n_util::GetNSString(IDS_IOS_ACCNAME_LENS);
   lens_button.accessibilityIdentifier = @"Lens";
@@ -357,8 +458,8 @@ void ConfigureLensButtonAppearance(UIButton* lens_button,
       CreateLiftEffectCirclePointerStyleProvider();
 
   // Use a monochrome or colored symbol with no background.
-  UIImage* camera_image = CustomSymbolWithPointSize(
-      kCameraLensSymbol, kSymbolContentSuggestionsPointSize);
+  UIImage* camera_image =
+      SymbolWithPointSize(SymbolCameraLens, kSymbolContentSuggestionsPointSize);
   camera_image = use_color_icon ? MakeSymbolMulticolor(camera_image)
                                 : MakeSymbolMonochrome(camera_image);
   [lens_button setImage:camera_image forState:UIControlStateNormal];
@@ -367,28 +468,6 @@ void ConfigureLensButtonAppearance(UIButton* lens_button,
     // Show the "New" badge and colored symbol.
     SetUpButtonWithNewFeatureBadge(lens_button, new_badge_color);
   }
-}
-
-void ConfigureMIAButton(UIButton* mia_button, BOOL use_color_icon) {
-  [mia_button setTranslatesAutoresizingMaskIntoConstraints:NO];
-
-  UIButtonConfiguration* buttonConfig =
-      [UIButtonConfiguration plainButtonConfiguration];
-  buttonConfig.contentInsets = NSDirectionalEdgeInsetsMake(0, 0, 0, 0);
-  mia_button.configuration = buttonConfig;
-
-  UIImage* magnifier_icon = CustomSymbolWithPointSize(
-      kMagnifyingglassSparkSymbol, kSymbolContentSuggestionsPointSize);
-
-  magnifier_icon = use_color_icon ? MakeSymbolMulticolor(magnifier_icon)
-                                  : MakeSymbolMonochrome(magnifier_icon);
-  [mia_button setImage:magnifier_icon forState:UIControlStateNormal];
-  // TODO(crbug.com/425339867): Handle button accessibility
-
-  mia_button.pointerInteractionEnabled = YES;
-  // Make the pointer shape fit the location bar's semi-circle end shape.
-  mia_button.pointerStyleProvider =
-      CreateLiftEffectCirclePointerStyleProvider();
 }
 
 void ConfigureLensButtonWithNewBadgeAlpha(UIButton* lens_button,
@@ -434,7 +513,7 @@ UIColor* SearchHintLabelColor() {
 }
 
 UIColor* DefaultIconTintColorWithAIMAllowed(bool aim_allowed) {
-  if (aim_allowed && ShouldEnlargeNTPFakeboxForMIA()) {
+  if (aim_allowed && IsAimEnabledInNtp()) {
     return [UIColor colorNamed:kSolidBlackColor];
   }
   return [UIColor colorNamed:kGrey700Color];

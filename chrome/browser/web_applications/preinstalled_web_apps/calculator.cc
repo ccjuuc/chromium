@@ -4,6 +4,7 @@
 
 #include "chrome/browser/web_applications/preinstalled_web_apps/calculator.h"
 
+#include "ash/constants/ash_extension_constants.h"
 #include "ash/constants/web_app_id_constants.h"
 #include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
@@ -12,7 +13,6 @@
 #include "chrome/browser/web_applications/preinstalled_web_apps/preinstalled_web_app_definition_utils.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/grit/preinstalled_web_apps_resources.h"
-#include "extensions/common/constants.h"
 
 namespace web_app {
 
@@ -23,7 +23,8 @@ ExternalInstallOptions GetConfigForCalculator() {
       /*install_source=*/ExternalInstallSource::kExternalDefault);
 
   options.user_type_allowlist = {"unmanaged", "managed", "child"};
-  options.uninstall_and_replace.push_back(extension_misc::kCalculatorAppId);
+  options.uninstall_and_replace.push_back(
+      extension_misc::kCalculatorExtensionId);
   options.expected_app_id = ash::kCalculatorAppId;
   return options;
 }

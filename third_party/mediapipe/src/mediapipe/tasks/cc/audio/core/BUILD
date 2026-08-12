@@ -12,14 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
 licenses(["notice"])
 
-package(default_visibility = ["//mediapipe/tasks:internal"])
+package(default_visibility = ["//visibility:public"])
 
 cc_library(
     name = "running_mode",
     hdrs = ["running_mode.h"],
-    visibility = ["//visibility:public"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
 )
 
 cc_library(
@@ -42,9 +48,12 @@ cc_library(
     hdrs = ["audio_task_api_factory.h"],
     deps = [
         ":base_audio_task_api",
+        ":running_mode",
         "//mediapipe/calculators/core:flow_limiter_calculator",
         "//mediapipe/framework:calculator_cc_proto",
+        "//mediapipe/framework:calculator_framework",
         "//mediapipe/tasks/cc/core:task_api_factory",
+        "//mediapipe/tasks/cc/core:task_runner",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",

@@ -17,14 +17,16 @@ import androidx.test.filters.SmallTest;
 
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
 import org.mockito.invocation.InvocationOnMock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.mockito.stubbing.Answer;
 
 import org.chromium.base.UnownedUserDataHost;
@@ -62,9 +64,10 @@ public final class TranslateMessageTest {
 
     @Captor ArgumentCaptor<PropertyModel> mPropertyModelCaptor;
 
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
 
         TranslateMessageJni.setInstanceForTesting(mMockJni);
     }
@@ -323,7 +326,7 @@ public final class TranslateMessageTest {
         translateMessage.clearNativePointer();
 
         // No native methods should be called after clearing the native pointer.
-        var unused = messageProperties.get(MessageBannerProperties.ON_PRIMARY_ACTION).get();
+        var _ = messageProperties.get(MessageBannerProperties.ON_PRIMARY_ACTION).get();
         messageProperties.get(MessageBannerProperties.ON_DISMISSED).onResult(DismissReason.GESTURE);
         Assert.assertNull(
                 translateMessage.handleSecondaryMenuItemClicked(
@@ -359,7 +362,7 @@ public final class TranslateMessageTest {
                 MessageIdentifier.TRANSLATE,
                 messageProperties.get(MessageBannerProperties.MESSAGE_IDENTIFIER));
         Assert.assertEquals(
-                R.drawable.infobar_translate_compact,
+                R.drawable.message_translate_compact,
                 messageProperties.get(MessageBannerProperties.ICON_RESOURCE_ID));
         Assert.assertEquals(
                 MessageBannerProperties.TINT_NONE,

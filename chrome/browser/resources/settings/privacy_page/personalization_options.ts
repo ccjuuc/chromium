@@ -9,7 +9,6 @@
  */
 import '//resources/cr_elements/cr_button/cr_button.js';
 import '//resources/cr_elements/cr_toggle/cr_toggle.js';
-import '/shared/settings/prefs/prefs.js';
 import '../controls/settings_toggle_button.js';
 import '../people_page/signout_dialog.js';
 import 'chrome://resources/cr_elements/md_select.css.js';
@@ -29,18 +28,22 @@ import 'chrome://resources/cr_elements/cr_link_row/cr_link_row.js';
 // </if>
 // </if>
 
-import type {CrLinkRowElement} from '//resources/cr_elements/cr_link_row/cr_link_row.js';
 import type {CrToastElement} from '//resources/cr_elements/cr_toast/cr_toast.js';
 import {WebUiListenerMixin} from '//resources/cr_elements/web_ui_listener_mixin.js';
 import {assert} from '//resources/js/assert.js';
 import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import type {ChromeSigninUserChoiceInfo, SyncBrowserProxy, SyncStatus} from '/shared/settings/people_page/sync_browser_proxy.js';
 import {ChromeSigninUserChoice, SignedInState, SyncBrowserProxyImpl} from '/shared/settings/people_page/sync_browser_proxy.js';
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
+import {PrefService} from '/shared/settings/prefs2/pref_service.js';
+import {PrefServiceObserverMixin} from '/shared/settings/prefs2/pref_service_observer_mixin.js';
 import type {MetricsReporting, PrivacyPageBrowserProxy} from '/shared/settings/privacy_page/privacy_page_browser_proxy.js';
 import {PrivacyPageBrowserProxyImpl} from '/shared/settings/privacy_page/privacy_page_browser_proxy.js';
 import {HelpBubbleMixin} from 'chrome://resources/cr_components/help_bubble/help_bubble_mixin.js';
 import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
+// <if expr="is_chromeos">
+import {OpenWindowProxyImpl} from 'chrome://resources/js/open_window_proxy.js';
+
+// </if>
 
 import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 import {loadTimeData} from '../i18n_setup.js';
@@ -55,16 +58,14 @@ export interface SettingsPersonalizationOptionsElement {
   $: {
     toast: CrToastElement,
     signinAllowedToggle: SettingsToggleButtonElement,
-    metricsReportingControl: SettingsToggleButtonElement,
-    metricsReportingLink: CrLinkRowElement,
     urlCollectionToggle: SettingsToggleButtonElement,
     chromeSigninUserChoiceSelection: HTMLSelectElement,
     chromeSigninUserChoiceToast: CrToastElement,
   };
 }
 
-const SettingsPersonalizationOptionsElementBase = HelpBubbleMixin(
-    RelaunchMixin(WebUiListenerMixin(I18nMixin(PrefsMixin(PolymerElement)))));
+const SettingsPersonalizationOptionsElementBase = HelpBubbleMixin(RelaunchMixin(
+    WebUiListenerMixin(I18nMixin(PrefServiceObserverMixin(PolymerElement)))));
 
 // browser_element_identifiers constants
 const ANONYMIZED_URL_COLLECTION_ID =
@@ -119,6 +120,12 @@ export class SettingsPersonalizationOptionsElement extends
 
       showSignoutDialog_: Boolean,
 
+      shouldUseMetricsConsentRestructure_: {
+        type: Boolean,
+        value: () =>
+            loadTimeData.getBoolean('shouldUseMetricsConsentRestructure'),
+      },
+
       syncFirstSetupInProgress_: {
         type: Boolean,
         value: false,
@@ -142,8 +149,13 @@ export class SettingsPersonalizationOptionsElement extends
         value: ChromeSigninUserChoice,
       },
       // </if>
+
+      spellCheckDictionariesPref_: Object,
     };
   }
+
+  declare private spellCheckDictionariesPref_:
+      chrome.settingsPrivate.PrefObject<string[]>|undefined;
 
   declare syncStatus: SyncStatus;
 
@@ -159,6 +171,7 @@ export class SettingsPersonalizationOptionsElement extends
 
   declare private showSignoutDialog_: boolean;
   declare private syncFirstSetupInProgress_: boolean;
+  declare private shouldUseMetricsConsentRestructure_: boolean;
 
   // <if expr="not is_chromeos">
   declare private signinAvailable_: boolean;
@@ -194,6 +207,11 @@ export class SettingsPersonalizationOptionsElement extends
     return loadTimeData.getStringF('priceEmailNotificationsPrefDesc', username);
   }
 
+  override connectedCallback() {
+    super.connectedCallback();
+    this.mirrorPref('spellcheck.dictionaries', 'spellCheckDictionariesPref_');
+  }
+
   override ready() {
     super.ready();
 
@@ -214,7 +232,7 @@ export class SettingsPersonalizationOptionsElement extends
 
     this.registerHelpBubble(
         ANONYMIZED_URL_COLLECTION_ID,
-        this.$.urlCollectionToggle.getBubbleAnchor(), {anchorPaddingTop: 10});
+        this.$.urlCollectionToggle.getBubbleAnchor(), {paddingTop: 10});
   }
 
   // <if expr="is_chromeos">
@@ -237,7 +255,9 @@ export class SettingsPersonalizationOptionsElement extends
 
   // <if expr="_google_chrome and not is_chromeos">
   private onMetricsReportingChange_() {
-    const enabled = this.$.metricsReportingControl.checked;
+    const control = this.shadowRoot!.querySelector<SettingsToggleButtonElement>(
+        '#metricsReportingControl');
+    const enabled = control?.checked ?? false;
     this.browserProxy_.setMetricsReportingEnabled(enabled);
   }
 
@@ -268,20 +288,18 @@ export class SettingsPersonalizationOptionsElement extends
 
   private showSearchSuggestToggle_(): boolean {
     if (pageVisibility?.privacy === undefined) {
-      // pageVisibility isn't defined in non-Guest profiles (crbug.com/1288911).
+      // pageVisibility isn't defined in non-Guest profiles
+      // (crbug.com/40211731).
       return true;
     }
     return (pageVisibility.privacy as PrivacyPageVisibility).searchPrediction;
   }
 
   // <if expr="is_chromeos">
-  private navigateTo_(url: string): void {
-    window.location.href = url;
-  }
-
   private onMetricsReportingLinkClick_() {
     // TODO(wesokuhara) Deep link directly to metrics toggle via settingId.
-    this.navigateTo_(loadTimeData.getString('osSettingsPrivacyHubSubpageUrl'));
+    OpenWindowProxyImpl.getInstance().openUrl(
+        loadTimeData.getString('osSettingsPrivacyHubSubpageUrl'));
   }
   // </if>
 
@@ -290,27 +308,27 @@ export class SettingsPersonalizationOptionsElement extends
     // If turning on using the spelling service, automatically turn on
     // spellcheck so that the spelling service can run.
     if ((event.target as SettingsToggleButtonElement).checked) {
-      this.setPrefValue('browser.enable_spellchecking', true);
+      PrefService.getInstance().setPrefValue(
+          'browser.enable_spellchecking', true);
     }
   }
 
   // <if expr="not is_chromeos">
   private showSpellCheckControlToggle_(): boolean {
-    return (
-        !!(this.prefs as {spellcheck?: any}).spellcheck &&
-        this.getPref<string[]>('spellcheck.dictionaries').value.length > 0);
+    return !!this.spellCheckDictionariesPref_ &&
+        this.spellCheckDictionariesPref_.value.length > 0;
   }
   // </if><!-- not chromeos -->
 
   // <if expr="is_chromeos">
   private showSpellCheckControlLink_(): boolean {
-    return (
-        !!(this.prefs as {spellcheck?: any}).spellcheck &&
-        this.getPref<string[]>('spellcheck.dictionaries').value.length > 0);
+    return !!this.spellCheckDictionariesPref_ &&
+        this.spellCheckDictionariesPref_.value.length > 0;
   }
 
   private onUseSpellingServiceLinkClick_() {
-    this.navigateTo_(loadTimeData.getString('osSyncSetupSettingsUrl'));
+    OpenWindowProxyImpl.getInstance().openUrl(
+        loadTimeData.getString('osSyncSetupSettingsUrl'));
   }
   // </if><!-- chromeos -->
   // </if><!-- _google_chrome -->

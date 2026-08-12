@@ -17,7 +17,6 @@
 #include "chrome/browser/ui/safety_hub/extensions_result.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/webui/extensions/extension_settings_test_base.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/chrome_test_utils.h"
@@ -54,8 +53,8 @@ class ExtensionSettingsUIBrowserTest : public ExtensionSettingsTestBase {
  public:
   guest_view::TestGuestViewManager* GetGuestViewManager() {
     return factory_.GetOrCreateTestGuestViewManager(
-        browser()->profile(), extensions::ExtensionsAPIClient::Get()
-                                  ->CreateGuestViewManagerDelegate());
+        GetProfile(), extensions::ExtensionsAPIClient::Get()
+                          ->CreateGuestViewManagerDelegate());
   }
 
  private:
@@ -64,8 +63,9 @@ class ExtensionSettingsUIBrowserTest : public ExtensionSettingsTestBase {
 };
 
 #if BUILDFLAG(ENABLE_GUEST_VIEW)
+#if !BUILDFLAG(IS_ANDROID)  // TODO(b/476468383): does not build on android.
 // Tests that viewing a source of the options page works fine.
-// This is a regression test for https://crbug.com/796080.
+// This is a regression test for https://crbug.com/41361513.
 IN_PROC_BROWSER_TEST_F(ExtensionSettingsUIBrowserTest, ViewSource) {
   // Navigate to an in-page (guest-view-based) extension options page
   // and grab the WebContents hosting the options page.
@@ -119,6 +119,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsUIBrowserTest, ViewSource) {
       base::RemoveChars(expected_source_text, "\n", &expected_source_text));
   EXPECT_EQ(expected_source_text, actual_source_text);
 }
+#endif  // !BUILDFLAG(IS_ANDROID)
 #endif  // BUILDFLAG(ENABLE_GUEST_VIEW)
 
 // Verify that listeners for the developer private API are only registered
@@ -249,7 +250,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsActivityLogTest, TestActivityLogVisible) {
 #if !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_F(ExtensionSettingsUIBrowserTest,
                        TestSafetyHubMenuNotificationDismissed) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   extensions::ExtensionPrefs* extension_prefs =
       extensions::ExtensionPrefs::Get(profile);
   const extensions::Extension* extension = InstallExtensionWithInPageOptions();
@@ -264,7 +265,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsUIBrowserTest,
       notification_service->GetNotificationToShow();
   ASSERT_FALSE(notification.has_value());
   // Update the extension pref to flag the extension as unpublished.
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("is-present", true);
   dict.Set("is-live", true);
   dict.Set("last-updated-time-millis", 100000000);

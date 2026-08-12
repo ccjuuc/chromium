@@ -43,6 +43,12 @@
 
 namespace blink {
 
+class CryptoKey;
+class EncapsulatedKey;
+class EncapsulatedBits;
+class V8UnionCryptoKeyOrCryptoKeyPair;
+class V8UnionArrayBufferOrJsonWebKey;
+
 MODULES_EXPORT ExceptionCode WebCryptoErrorToExceptionCode(WebCryptoErrorType);
 
 // Wrapper around a Promise to notify completion of the crypto operation.
@@ -60,15 +66,22 @@ class MODULES_EXPORT CryptoResultImpl final
     : public CryptoResult,
       public ExecutionContextLifecycleObserver {
  public:
-  enum class ResolverType { kAny, kTyped };
+  enum class DetailedResolverType {
+    kArrayBuffer,
+    kBoolean,
+    kKey,
+    kUnionCryptoKeyCryptoKeyPair,
+    kUnionArrayBufferJsonWebKey,
+    kEncapsulatedKey,
+    kEncapsulatedBits
+  };
 
   template <typename IDLType>
   CryptoResultImpl(ScriptState* script_state,
                    ScriptPromiseResolver<IDLType>* resolver)
       : ExecutionContextLifecycleObserver(ExecutionContext::From(script_state)),
         resolver_(resolver),
-        type_(std::is_same_v<IDLAny, IDLType> ? ResolverType::kAny
-                                              : ResolverType::kTyped),
+        detailed_type_(GetDetailedResolverType<IDLType>()),
         cancel_(base::MakeRefCounted<CryptoResultCancel>()) {
     // Sync cancellation state.
     if (ExecutionContext::From(script_state)->IsContextDestroyed()) {
@@ -82,8 +95,16 @@ class MODULES_EXPORT CryptoResultImpl final
   void CompleteWithJson(std::string_view utf8_data) override;
   void CompleteWithBoolean(bool) override;
   void CompleteWithKey(const WebCryptoKey&) override;
-  void CompleteWithKeyPair(const WebCryptoKey& public_key,
-                           const WebCryptoKey& private_key) override;
+  void CompleteWithKeyForGenerateKey(const WebCryptoKey&) override;
+  void CompleteWithKeyPairForGenerateKey(
+      const WebCryptoKey& public_key,
+      const WebCryptoKey& private_key) override;
+  void CompleteWithEncapsulatedKey(
+      const WebCryptoKey& shared_key,
+      base::span<const uint8_t> ciphertext) override;
+  void CompleteWithEncapsulatedBits(
+      base::span<const uint8_t> shared_key,
+      base::span<const uint8_t> ciphertext) override;
   WebCryptoWarningType GetWarning() override { return warning_code_; }
   void SetWarning(WebCryptoWarningType code) override { warning_code_ = code; }
   ExecutionContext* GetExecutionContext() const override {
@@ -101,8 +122,38 @@ class MODULES_EXPORT CryptoResultImpl final
   void Cancel();
   void ClearResolver();
 
+  template <typename...>
+  static constexpr bool kAlwaysFalse = false;
+
+  template <typename IDLType>
+  static DetailedResolverType GetDetailedResolverType() {
+    if constexpr (std::is_same_v<IDLType, DOMArrayBuffer>) {
+      return DetailedResolverType::kArrayBuffer;
+    } else if constexpr (std::is_same_v<IDLType, IDLBoolean>) {
+      return DetailedResolverType::kBoolean;
+    } else if constexpr (std::is_same_v<IDLType, CryptoKey>) {
+      return DetailedResolverType::kKey;
+    } else if constexpr (std::is_same_v<IDLType,
+                                        V8UnionCryptoKeyOrCryptoKeyPair>) {
+      return DetailedResolverType::kUnionCryptoKeyCryptoKeyPair;
+    } else if constexpr (std::is_same_v<IDLType,
+                                        V8UnionArrayBufferOrJsonWebKey>) {
+      return DetailedResolverType::kUnionArrayBufferJsonWebKey;
+    } else if constexpr (std::is_same_v<IDLType, EncapsulatedKey>) {
+      return DetailedResolverType::kEncapsulatedKey;
+    } else if constexpr (std::is_same_v<IDLType, EncapsulatedBits>) {
+      return DetailedResolverType::kEncapsulatedBits;
+    } else {
+      NOTREACHED();
+    }
+  }
+
+  // TODO(crbug.com/507066144): try to make resolver_ typed so we don't need to
+  // use DowncastTo. If that doesn't work, pick either the detailed_type_
+  // pattern or the CompleteWithKey/CompleteWithGenerateKey pattern and stick to
+  // one of those.
   Member<ScriptPromiseResolverBase> resolver_;
-  const ResolverType type_;
+  const DetailedResolverType detailed_type_;
 
   // Separately communicate cancellation to WebCryptoResults so as to
   // allow this result object, which will be on the Oilpan heap, to be

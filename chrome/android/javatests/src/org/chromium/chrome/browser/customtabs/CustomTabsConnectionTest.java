@@ -4,9 +4,6 @@
 
 package org.chromium.chrome.browser.customtabs;
 
-import static org.chromium.base.test.util.Restriction.RESTRICTION_TYPE_LOW_END_DEVICE;
-import static org.chromium.base.test.util.Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE;
-
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -31,6 +28,7 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.Mockito;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.library_loader.LibraryLoader;
@@ -41,8 +39,8 @@ import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
-import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.browser.WarmupManager;
+import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.browserservices.intents.SessionHolder;
 import org.chromium.chrome.browser.browserservices.verification.ChromeOriginVerifier;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -142,7 +140,6 @@ public class CustomTabsConnectionTest {
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testCreateSpareRenderer() throws Exception {
         CustomTabsTestUtils.warmUpAndWait();
         ThreadUtils.runOnUiThreadBlocking(this::assertSpareTabNotNullAndDestroy);
@@ -150,24 +147,6 @@ public class CustomTabsConnectionTest {
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_LOW_END_DEVICE)
-    public void testDoNotCreateSpareRendererOnLowEnd() throws Exception {
-        CustomTabsTestUtils.warmUpAndWait();
-        // On UI thread because:
-        // 1. hasSpareTab needs to be called from the UI thread.
-        // 2. warmup() is non-blocking and posts tasks to the UI thread, it ensures proper ordering.
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    WarmupManager warmupManager = WarmupManager.getInstance();
-                    Assert.assertFalse(
-                            warmupManager.hasSpareTab(
-                                    ProfileManager.getLastUsedRegularProfile(), false));
-                });
-    }
-
-    @Test
-    @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testCreateSpareRendererCanBeRecreated() throws Exception {
         CustomTabsTestUtils.warmUpAndWait();
         ThreadUtils.runOnUiThreadBlocking(
@@ -184,7 +163,6 @@ public class CustomTabsConnectionTest {
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testHiddenTabTakessSpareRenderer() throws Exception {
         final CustomTabsSessionToken token =
                 CustomTabsSessionToken.createMockSessionTokenForTesting();
@@ -203,11 +181,10 @@ public class CustomTabsConnectionTest {
 
     /*
      * Tests that when the disconnection notification comes from a non-UI thread, Chrome doesn't
-     * crash. Non-regression test for crbug.com/623128.
+     * crash. Non-regression test for crbug.com/41260795.
      */
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testPrerenderAndDisconnectOnOtherThread() throws Exception {
         final CustomTabsSessionToken token = assertWarmupAndMayLaunchUrl(null, URL, true);
         final Thread otherThread = new Thread(() -> mCustomTabsConnection.cleanUpSession(token));
@@ -218,7 +195,6 @@ public class CustomTabsConnectionTest {
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testMayLaunchUrlKeepsSpareRendererWithoutHiddenTab() throws Exception {
         CustomTabsTestUtils.warmUpAndWait();
         final CustomTabsSessionToken token =
@@ -244,7 +220,6 @@ public class CustomTabsConnectionTest {
     /** Tests that a new mayLaunchUrl() call destroys the previous hidden tab. */
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     @CommandLineFlags.Add(ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE)
     public void testOnlyOneHiddenTab() throws Exception {
         Assert.assertTrue("Failed warmup()", mCustomTabsConnection.warmup());
@@ -303,7 +278,6 @@ public class CustomTabsConnectionTest {
     /** Tests that if the renderer backing a hidden tab is killed, the speculation is canceled. */
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     @CommandLineFlags.Add(ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE)
     public void testKillHiddenTabRenderer() throws Exception {
         Assert.assertTrue("Failed warmup()", mCustomTabsConnection.warmup());
@@ -337,7 +311,6 @@ public class CustomTabsConnectionTest {
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testUnderstandsLowConfidenceMayLaunchUrl() {
         final CustomTabsSessionToken token =
                 CustomTabsSessionToken.createMockSessionTokenForTesting();
@@ -396,7 +369,6 @@ public class CustomTabsConnectionTest {
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testStillHighConfidenceMayLaunchUrlWithSeveralUrls() {
         final CustomTabsSessionToken token =
                 CustomTabsSessionToken.createMockSessionTokenForTesting();
@@ -424,7 +396,6 @@ public class CustomTabsConnectionTest {
      */
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     @EnableFeatures(ChromeFeatureList.MAYLAUNCHURL_USES_SEPARATE_STORAGE_PARTITION)
     @CommandLineFlags.Add(ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE)
     public void testMayLaunchUrlUsesSeparateCookieJar() throws Exception {
@@ -442,7 +413,7 @@ public class CustomTabsConnectionTest {
 
         Assert.assertTrue("Failed warmup()", mCustomTabsConnection.warmup());
 
-        final OnEvaluateJavaScriptResultHelper JsHelper = new OnEvaluateJavaScriptResultHelper();
+        final OnEvaluateJavaScriptResultHelper jsHelper = new OnEvaluateJavaScriptResultHelper();
 
         // Launch a custom tab and load the url.
         Assert.assertTrue("Failed warmup()", mCustomTabsConnection.warmup());
@@ -460,15 +431,15 @@ public class CustomTabsConnectionTest {
         // Set a cookie.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    JsHelper.evaluateJavaScriptForTests(
+                    jsHelper.evaluateJavaScriptForTests(
                             normalTab.getWebContents(),
                             "document.cookie = \"foo=bar; max-age = 1000 \";" + " document.cookie");
                 });
 
-        JsHelper.waitUntilHasValue(5, TimeUnit.SECONDS);
-        Assert.assertTrue("Failed to retrieve JavaScript evaluation results.", JsHelper.hasValue());
+        jsHelper.waitUntilHasValue(5, TimeUnit.SECONDS);
+        Assert.assertTrue("Failed to retrieve JavaScript evaluation results.", jsHelper.hasValue());
         // Verify the tab has the expected cookie.
-        Assert.assertEquals("\"foo=bar\"", JsHelper.getJsonResultAndClear());
+        Assert.assertEquals("\"foo=bar\"", jsHelper.getJsonResultAndClear());
         mCustomTabActivityTestRule.finishActivity();
 
         // Launch the first hidden tab. This tab should use a separate storage partition and
@@ -505,16 +476,16 @@ public class CustomTabsConnectionTest {
                 50);
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    JsHelper.evaluateJavaScriptForTests(
+                    jsHelper.evaluateJavaScriptForTests(
                             hiddenTab.getWebContents(),
                             "document.cookie = \"foo_hidden=bar; max-age =1000 \";"
                                     + " document.cookie");
                 });
 
-        JsHelper.waitUntilHasValue(5, TimeUnit.SECONDS);
-        Assert.assertTrue("Failed to retrieve JavaScript evaluation results.", JsHelper.hasValue());
+        jsHelper.waitUntilHasValue(5, TimeUnit.SECONDS);
+        Assert.assertTrue("Failed to retrieve JavaScript evaluation results.", jsHelper.hasValue());
         // The hidden tab should only see the cookie it set.
-        Assert.assertEquals("\"foo_hidden=bar\"", JsHelper.getJsonResultAndClear());
+        Assert.assertEquals("\"foo_hidden=bar\"", jsHelper.getJsonResultAndClear());
 
         // Launch another hidden tab. Doing this closes the first hidden tab and causes the cookie
         // jar to be cleared.
@@ -542,14 +513,14 @@ public class CustomTabsConnectionTest {
                 50);
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    JsHelper.evaluateJavaScriptForTests(
+                    jsHelper.evaluateJavaScriptForTests(
                             hiddenTab2.getWebContents(), "document.cookie=\"foo_hidden2=baz\"");
                 });
 
-        JsHelper.waitUntilHasValue(5, TimeUnit.SECONDS);
-        Assert.assertTrue("Failed to retrieve JavaScript evaluation results.", JsHelper.hasValue());
+        jsHelper.waitUntilHasValue(5, TimeUnit.SECONDS);
+        Assert.assertTrue("Failed to retrieve JavaScript evaluation results.", jsHelper.hasValue());
         // The second hidden tab should only have the cookie it set.
-        Assert.assertEquals("\"foo_hidden2=baz\"", JsHelper.getJsonResultAndClear());
+        Assert.assertEquals("\"foo_hidden2=baz\"", jsHelper.getJsonResultAndClear());
 
         // Launch the second custom tab. Because there is already a hidden tab for the same url this
         // custom tab should just re-use the hidden tab. This means that this tab will use the same
@@ -563,14 +534,14 @@ public class CustomTabsConnectionTest {
                                 Matchers.is("Activity test page")));
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    JsHelper.evaluateJavaScriptForTests(
+                    jsHelper.evaluateJavaScriptForTests(
                             normalTab2.getWebContents(), "document.cookie");
                 });
 
-        JsHelper.waitUntilHasValue(5, TimeUnit.SECONDS);
-        Assert.assertTrue("Failed to retrieve JavaScript evaluation results.", JsHelper.hasValue());
+        jsHelper.waitUntilHasValue(5, TimeUnit.SECONDS);
+        Assert.assertTrue("Failed to retrieve JavaScript evaluation results.", jsHelper.hasValue());
         // This custom tab should see the third cookie set.
-        Assert.assertEquals("\"foo_hidden2=baz\"", JsHelper.getJsonResultAndClear());
+        Assert.assertEquals("\"foo_hidden2=baz\"", jsHelper.getJsonResultAndClear());
         mCustomTabActivityTestRule.finishActivity();
 
         // Finally, launch a third custom tab. Because there isn't an associated mayLaunchUrl this
@@ -588,14 +559,14 @@ public class CustomTabsConnectionTest {
                                 Matchers.is("Activity test page")));
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    JsHelper.evaluateJavaScriptForTests(
+                    jsHelper.evaluateJavaScriptForTests(
                             normalTab3.getWebContents(), "document.cookie");
                 });
 
-        JsHelper.waitUntilHasValue(5, TimeUnit.SECONDS);
-        Assert.assertTrue("Failed to retrieve JavaScript evaluation results.", JsHelper.hasValue());
+        jsHelper.waitUntilHasValue(5, TimeUnit.SECONDS);
+        Assert.assertTrue("Failed to retrieve JavaScript evaluation results.", jsHelper.hasValue());
         // This custom tab should see the third cookie set.
-        Assert.assertEquals("\"foo=bar\"", JsHelper.getJsonResultAndClear());
+        Assert.assertEquals("\"foo=bar\"", jsHelper.getJsonResultAndClear());
     }
 
     private void assertSpareTabNotNullAndDestroy() {
@@ -745,7 +716,6 @@ public class CustomTabsConnectionTest {
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testBanningWorks() {
         mCustomTabsConnection.ban(Process.myUid());
         final CustomTabsSessionToken token =
@@ -758,7 +728,6 @@ public class CustomTabsConnectionTest {
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testBanningDisabledForCellular() {
         mCustomTabsConnection.ban(Process.myUid());
         final CustomTabsSessionToken token =
@@ -779,7 +748,6 @@ public class CustomTabsConnectionTest {
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testCellularPrerenderingDoesntOverrideSettings() throws Exception {
         CustomTabsSessionToken token = CustomTabsSessionToken.createMockSessionTokenForTesting();
         var sessionHolder = new SessionHolder<>(token);
@@ -814,7 +782,6 @@ public class CustomTabsConnectionTest {
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testHiddenTabTakesSpareRenderer() throws Exception {
         CustomTabsSessionToken token = CustomTabsSessionToken.createMockSessionTokenForTesting();
         var sessionHolder = new SessionHolder<>(token);
@@ -1034,5 +1001,17 @@ public class CustomTabsConnectionTest {
                 new PrefetchOptions.Builder()
                         .setSourceOrigin(Uri.parse(invalidSourceOrigin))
                         .build());
+    }
+
+    @Test
+    @SmallTest
+    public void testMaybeAddAdditionalContentExtrasToOutboundIntent() {
+        Intent outboundIntent = new Intent();
+        BrowserServicesIntentDataProvider browserServicesIntentDataProvider =
+                Mockito.mock(BrowserServicesIntentDataProvider.class);
+        mCustomTabsConnection.maybeAddAdditionalContentExtrasToOutboundIntent(
+                () -> null, browserServicesIntentDataProvider, outboundIntent, 1);
+
+        Assert.assertNull(outboundIntent.getExtras());
     }
 }

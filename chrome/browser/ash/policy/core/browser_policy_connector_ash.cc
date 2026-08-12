@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "ash/constants/ash_paths.h"
+#include "ash/constants/ash_policy_pref_names.h"
 #include "ash/shell.h"
 #include "base/check.h"
 #include "base/check_deref.h"
@@ -27,6 +28,8 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/default_clock.h"
+#include "chrome/browser/ash/app_mode/auto_sleep/device_weekly_scheduled_suspend_controller.h"
+#include "chrome/browser/ash/app_mode/auto_sleep/device_weekly_scheduled_suspend_policy_handler.h"
 #include "chrome/browser/ash/cert_provisioning/cert_provisioning_common.h"
 #include "chrome/browser/ash/cert_provisioning/cert_provisioning_scheduler.h"
 #include "chrome/browser/ash/notifications/adb_sideloading_policy_change_notification.h"
@@ -50,7 +53,7 @@
 #include "chrome/browser/ash/policy/handlers/bluetooth_policy_handler.h"
 #include "chrome/browser/ash/policy/handlers/device_dlc_predownload_list_policy_handler.h"
 #include "chrome/browser/ash/policy/handlers/device_dock_mac_address_source_handler.h"
-#include "chrome/browser/ash/policy/handlers/device_name_policy_handler_impl.h"
+#include "chrome/browser/ash/policy/handlers/device_name_policy_handler.h"
 #include "chrome/browser/ash/policy/handlers/device_wifi_allowed_handler.h"
 #include "chrome/browser/ash/policy/handlers/minimum_version_policy_handler.h"
 #include "chrome/browser/ash/policy/handlers/minimum_version_policy_handler_delegate_impl.h"
@@ -64,7 +67,6 @@
 #include "chrome/browser/ash/policy/server_backed_state/server_backed_state_keys_broker.h"
 #include "chrome/browser/ash/printing/enterprise/bulk_printers_calculator_factory.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
-#include "chrome/browser/ash/system/timezone_util.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/device_identity/device_identity_provider.h"
 #include "chrome/browser/device_identity/device_oauth2_token_service_factory.h"
@@ -73,8 +75,6 @@
 #include "chrome/browser/policy/device_management_service_configuration.h"
 #include "chrome/browser/policy/networking/device_network_configuration_updater_ash.h"
 #include "chrome/browser/policy/policy_util.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/cryptohome/system_salt_getter.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
@@ -88,6 +88,7 @@
 #include "chromeos/ash/components/settings/cros_settings_provider.h"
 #include "chromeos/ash/components/settings/timezone_settings.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
+#include "chromeos/ash/components/timezone/timezone_util.h"
 #include "components/gcm_driver/instance_id/instance_id_driver.h"
 #include "components/invalidation/invalidation_listener.h"
 #include "components/invalidation/legacy_topics_cleaner.h"
@@ -183,13 +184,13 @@ BrowserPolicyConnectorAsh::BrowserPolicyConnectorAsh() {
         std::move(device_cloud_policy_store), std::move(external_data_manager),
         base::SingleThreadTaskRunner::GetCurrentDefault(),
         state_keys_broker_.get(), crd_admin_session_controller_->GetDelegate());
-    providers_for_init_.push_back(base::WrapUnique<ConfigurationPolicyProvider>(
-        device_cloud_policy_manager_.get()));
+    providers_for_init_.push_back(
+        base::WrapUnique(device_cloud_policy_manager_.get()));
   }
 
   global_user_cloud_policy_provider_ = new ProxyPolicyProvider();
-  providers_for_init_.push_back(std::unique_ptr<ConfigurationPolicyProvider>(
-      global_user_cloud_policy_provider_));
+  providers_for_init_.push_back(
+      base::WrapUnique(global_user_cloud_policy_provider_.get()));
 }
 
 BrowserPolicyConnectorAsh::~BrowserPolicyConnectorAsh() = default;
@@ -216,16 +217,16 @@ void BrowserPolicyConnectorAsh::Init(
     // cloud policy for extensions is introduced. That means it'd have to be
     // initialized from here instead of BrowserPolicyConnector::Init().
 
-    device_cloud_policy_manager_->Initialize(local_state);
-    EnrollmentRequisitionManager::Initialize();
+    device_cloud_policy_manager_->Initialize(local_state, url_loader_factory);
+    EnrollmentRequisitionManager::Initialize(CHECK_DEREF(local_state));
     device_cloud_policy_manager_->AddDeviceCloudPolicyManagerObserver(this);
-    RestartDeviceCloudPolicyInitializer();
+    RestartDeviceCloudPolicyInitializer(url_loader_factory);
   }
 
   device_local_account_policy_service_ =
       std::make_unique<DeviceLocalAccountPolicyService>(
-          ash::SessionManagerClient::Get(), ash::DeviceSettingsService::Get(),
-          ash::CrosSettings::Get(),
+          url_loader_factory, ash::SessionManagerClient::Get(),
+          ash::DeviceSettingsService::Get(), ash::CrosSettings::Get(),
           invalidation_listener_per_project_
               [policy::kPolicyInvalidationProjectNumber]
                   .get(),
@@ -233,7 +234,7 @@ void BrowserPolicyConnectorAsh::Init(
           /*store_first_load_task_runner=*/CreateUserVisibleTaskRunner(),
           /*extension_cache_task_runner=*/CreateBackgroundTaskRunner(),
           /*external_data_service_backend_task_runner=*/
-          CreateBackgroundTaskRunner(), url_loader_factory);
+          CreateBackgroundTaskRunner());
   device_local_account_policy_service_->Connect(device_management_service());
 
   if (device_cloud_policy_manager_) {
@@ -285,14 +286,18 @@ void BrowserPolicyConnectorAsh::Init(
   bluetooth_policy_handler_ =
       std::make_unique<BluetoothPolicyHandler>(ash::CrosSettings::Get());
 
-  device_name_policy_handler_ = std::make_unique<DeviceNamePolicyHandlerImpl>(
-      this, ash::CrosSettings::Get());
+  device_name_policy_handler_ =
+      std::make_unique<DeviceNamePolicyHandler>(this, ash::CrosSettings::Get());
 
   minimum_version_policy_handler_delegate_ =
       std::make_unique<MinimumVersionPolicyHandlerDelegateImpl>();
 
+  // TODO(crbug.com/404133022): Avoid using g_browser_process.
+  BuildState* build_state = g_browser_process->GetBuildState();
+
   minimum_version_policy_handler_ =
       std::make_unique<MinimumVersionPolicyHandler>(
+          local_state, build_state, this,
           minimum_version_policy_handler_delegate_.get(),
           ash::CrosSettings::Get());
 
@@ -312,6 +317,7 @@ void BrowserPolicyConnectorAsh::Init(
       std::make_unique<DeviceScheduledUpdateChecker>(
           ash::CrosSettings::Get(),
           ash::NetworkHandler::Get()->network_state_handler(),
+          GetPolicyService(),
           std::make_unique<ScheduledTaskExecutorImpl>(
               update_checker_internal::kUpdateCheckTimerTag));
 
@@ -348,6 +354,10 @@ void BrowserPolicyConnectorAsh::Init(
               DeviceScheduledRebootHandler::kRebootTimerTag),
           reboot_notifications_scheduler_.get());
 
+  device_weekly_scheduled_suspend_controller_ =
+      std::make_unique<ash::DeviceWeeklyScheduledSuspendController>(
+          local_state);
+
   device_dlc_predownload_list_policy_handler_ =
       DeviceDlcPredownloadListPolicyHandler::Create();
 
@@ -355,11 +365,15 @@ void BrowserPolicyConnectorAsh::Init(
       url_loader_factory,
       std::make_unique<DeviceIdentityProvider>(
           DeviceOAuth2TokenServiceFactory::Get()),
-      g_browser_process->local_state());
+      local_state);
 }
 
 void BrowserPolicyConnectorAsh::OnBrowserStarted() {
   ChromeBrowserPolicyConnector::OnBrowserStarted();
+
+  if (device_weekly_scheduled_suspend_controller_) {
+    device_weekly_scheduled_suspend_controller_->InitSessionObservation();
+  }
 
   // `ash::Shell` is not available when `BrowserPolicyConnectorAsh::Init` is
   // invoked, so we must delay this initialization until now.
@@ -413,6 +427,8 @@ void BrowserPolicyConnectorAsh::Shutdown() {
   device_scheduled_update_checker_.reset();
 
   device_scheduled_reboot_handler_.reset();
+
+  device_weekly_scheduled_suspend_controller_.reset();
 
   device_dlc_predownload_list_policy_handler_.reset();
 
@@ -555,39 +571,53 @@ BrowserPolicyConnectorAsh::GetGlobalUserCloudPolicyProvider() {
 // static
 void BrowserPolicyConnectorAsh::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterIntegerPref(
-      prefs::kDevicePolicyRefreshRate,
+      ash::prefs::kDevicePolicyRefreshRate,
       CloudPolicyRefreshScheduler::kDefaultRefreshDelayMs);
+  DeviceWeeklyScheduledSuspendPolicyHandler::RegisterLocalStatePrefs(registry);
 }
 
 void BrowserPolicyConnectorAsh::OnUserManagerCreated(
     user_manager::UserManager* user_manager) {
+  // TODO(crbug.com/404133022): Avoid depending on g_browser_process.
+  // Currently, `local_state_` may be null in unit tests because Init() is not
+  // always called.
+  PrefService& local_state = CHECK_DEREF(g_browser_process->local_state());
+
+  if (device_weekly_scheduled_suspend_controller_) {
+    device_weekly_scheduled_suspend_controller_->InitUserManagerObservation(
+        user_manager);
+  }
   auto* cros_settings = ash::CrosSettings::Get();
   cloud_external_data_policy_observers_.push_back(
       std::make_unique<policy::CloudExternalDataPolicyObserver>(
           cros_settings, device_local_account_policy_service_.get(),
           policy::key::kUserAvatarImage, user_manager,
-          std::make_unique<policy::UserAvatarImageExternalDataHandler>()));
+          std::make_unique<policy::UserAvatarImageExternalDataHandler>(
+              &local_state)));
   cloud_external_data_policy_observers_.push_back(
       std::make_unique<policy::CloudExternalDataPolicyObserver>(
           cros_settings, device_local_account_policy_service_.get(),
           policy::key::kWallpaperImage, user_manager,
-          std::make_unique<policy::WallpaperImageExternalDataHandler>()));
+          std::make_unique<policy::WallpaperImageExternalDataHandler>(
+              &local_state)));
   cloud_external_data_policy_observers_.push_back(
       std::make_unique<policy::CloudExternalDataPolicyObserver>(
           cros_settings, device_local_account_policy_service_.get(),
           policy::key::kPrintersBulkConfiguration, user_manager,
-          std::make_unique<policy::PrintersExternalDataHandler>()));
+          std::make_unique<policy::PrintersExternalDataHandler>(&local_state)));
   cloud_external_data_policy_observers_.push_back(
       std::make_unique<policy::CloudExternalDataPolicyObserver>(
           cros_settings, device_local_account_policy_service_.get(),
           policy::key::kExternalPrintServers, user_manager,
-          std::make_unique<policy::PrintServersExternalDataHandler>()));
+          std::make_unique<policy::PrintServersExternalDataHandler>(
+              &local_state)));
   cloud_external_data_policy_observers_.push_back(
       std::make_unique<policy::CloudExternalDataPolicyObserver>(
           cros_settings, device_local_account_policy_service_.get(),
           policy::key::kPreconfiguredDeskTemplates, user_manager,
           std::make_unique<
-              policy::PreconfiguredDeskTemplatesExternalDataHandler>()));
+              policy::PreconfiguredDeskTemplatesExternalDataHandler>(
+              &local_state)));
   for (auto& observer : cloud_external_data_policy_observers_) {
     observer->Init();
   }
@@ -668,15 +698,17 @@ void BrowserPolicyConnectorAsh::SetTimezoneIfPolicyAvailable() {
   if (ash::CrosSettings::Get()->GetString(ash::kSystemTimezonePolicy,
                                           &timezone) &&
       !timezone.empty()) {
-    ash::system::SetSystemAndSigninScreenTimezone(timezone);
+    ash::system::SetSystemAndSigninScreenTimezone(
+        CHECK_DEREF(local_state_.get()), timezone);
   }
 }
 
-void BrowserPolicyConnectorAsh::RestartDeviceCloudPolicyInitializer() {
+void BrowserPolicyConnectorAsh::RestartDeviceCloudPolicyInitializer(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
   device_cloud_policy_initializer_ =
       std::make_unique<DeviceCloudPolicyInitializer>(
-          device_management_service(), ash::InstallAttributes::Get(),
-          state_keys_broker_.get(),
+          url_loader_factory, device_management_service(),
+          ash::InstallAttributes::Get(), state_keys_broker_.get(),
           device_cloud_policy_manager_->device_store(),
           device_cloud_policy_manager_,
           ash::system::StatisticsProvider::GetInstance());

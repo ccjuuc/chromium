@@ -11,6 +11,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/glic/host/glic.mojom-forward.h"
 #include "chrome/browser/glic/host/host.h"
+#include "chrome/browser/glic/public/glic_close_options.h"
 #include "chrome/browser/glic/service/glic_ui_types.h"
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -35,15 +36,20 @@ class GlicUiEmbedder {
         const ShowOptions& options,
         glic::mojom::ConversationInfoPtr info,
         mojom::WebClientHandler::SwitchConversationCallback callback) = 0;
-    virtual void WillCloseFor(EmbedderKey key) = 0;
+    // Called by the embedder after it closes. This method will by called by
+    // GlicInstanceImpl on behalf of embedders closed by being destroyed when
+    // the become inactive.
+    virtual void DidCloseFor(EmbedderKey key, EmbedderCloseReason reason) = 0;
     virtual Host& host() = 0;
-    virtual void Show(const ShowOptions& options) = 0;
+    virtual void Show(ShowOptions options) = 0;
     // Closes the side panel UI and opens the floating UI for this instance.
     virtual void Detach(tabs::TabInterface& tab) = 0;
-    // Closes the floating UI for this instance and opens the side panel UI
-    // in the tab that it was detached from. This should only be called from
-    // GlicFloatingUi.
-    virtual void Attach(tabs::TabInterface& tab) = 0;
+    // Closes the floating UI for this instance and opens the side panel UI.
+    // If `tab` is valid, it attaches to that specific tab. If `tab` is
+    // invalid (e.g., the source tab was closed), it may fall back to
+    // another available embedder if kGlicOrphanedReattachment is enabled.
+    // This should only be called from GlicFloatingUi.
+    virtual void Attach(tabs::TabHandle tab) = 0;
     // Called after the value of GetPanelState() changes.
     virtual void NotifyPanelStateChanged() = 0;
   };
@@ -58,11 +64,16 @@ class GlicUiEmbedder {
   // active embedder.
   virtual void Show(const ShowOptions& options) = 0;
 
-  // Returns true if the embedder is currently showing.
+  // Returns true if the embedder is strictly visible.
   virtual bool IsShowing() const = 0;
 
+  // Returns true if the embedder is visible or backgrounded (but not closed).
+  // Note: For side panels, this can mean it's currently visible, or it
+  // will be automatically shown when its tab is activated.
+  virtual bool IsShowingOrBackgrounded() const = 0;
+
   // Close the glic UI (keeps webclient alive for now)
-  virtual void Close() = 0;
+  virtual void Close(const CloseOptions& options) = 0;
 
   // Focus embedder's webcontents.
   virtual void Focus() = 0;
@@ -84,6 +95,10 @@ class GlicUiEmbedder {
 
   // Called when the client is ready to show.
   virtual void OnClientReady() {}
+
+  // Called after this embedder has been successfully registered in the
+  // instance.
+  virtual void InitializeAfterRegistration() {}
 
   virtual std::string DescribeForTesting() = 0;
 };

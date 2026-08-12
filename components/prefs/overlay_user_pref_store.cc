@@ -89,7 +89,7 @@ bool OverlayUserPrefStore::GetValue(std::string_view key,
   return persistent_user_pref_store_->GetValue(key, result);
 }
 
-base::Value::Dict OverlayUserPrefStore::GetValues() const {
+base::DictValue OverlayUserPrefStore::GetValues() const {
   auto values = ephemeral_user_pref_store_->GetValues();
   auto persistent_values = persistent_user_pref_store_->GetValues();
 
@@ -201,8 +201,8 @@ void OverlayUserPrefStore::SchedulePendingLossyWrites() {
 
 void OverlayUserPrefStore::ReportValueChanged(std::string_view key,
                                               uint32_t flags) {
-  for (PrefStore::Observer& observer : observers_)
-    observer.OnPrefValueChanged(key);
+  observers_.NotifyAllowReentrancy(&PrefStore::Observer::OnPrefValueChanged,
+                                   key);
 }
 
 void OverlayUserPrefStore::RegisterPersistentPref(std::string_view key) {

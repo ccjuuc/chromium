@@ -13,7 +13,7 @@
 #include "base/scoped_observation.h"
 #include "chrome/browser/actor/ui/actor_ui_tab_controller_interface.h"
 #include "chrome/browser/actor/ui/states/actor_overlay_state.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
+#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
@@ -21,6 +21,10 @@
 #include "ui/views/view_observer.h"
 
 class ActorOverlayWebView;
+
+namespace chrome {
+class BrowserCommandController;
+}  // namespace chrome
 
 namespace views {
 class WebView;
@@ -62,6 +66,8 @@ class ActorUiContentsContainerController : public content::WebContentsObserver,
   void OnWebContentsDetached(views::WebView* web_view);
 
   // Called whenever the visibility of the overlay or state has changed.
+  // Note: ActorOverlayState cannot request both a mouse movement and a click in
+  // the same update.
   void OnOverlayStateChanged(bool is_visible,
                              ActorOverlayState state,
                              base::OnceClosure callback);
@@ -94,6 +100,8 @@ class ActorUiContentsContainerController : public content::WebContentsObserver,
   void NotifyTabControllerOnViewBoundsChanged();
   // Notified whenever the overlay background status changes.
   void OnActorOverlayBackgroundChange(bool is_visible);
+  // Notifies the BrowserCommandController that the overlay state has changed.
+  void UpdateFindInPageCommandState();
 
   std::vector<base::CallbackListSubscription>
       web_contents_callback_subscriptions_;
@@ -148,10 +156,17 @@ class ActorUiWindowController : public ImmersiveModeController::Observer {
   bool IsToolbarRevealed() const;
   bool IsToolbarPinned() const;
 
+  chrome::BrowserCommandController* GetCommandController();
+
  private:
   void InitializeImmersiveModeObserver();
   void NotifyControllersOfImmersiveChange();
   void OnImmersiveFullscreenToolbarPrefChanged();
+
+  // Helper to run the immersive change notification asynchronously.
+  void NotifyControllersOfImmersiveChangeInternal();
+  // Helper to run the omnibox popup state change notification asynchronously.
+  void OnOmniboxPopupStateChangedInternal(bool is_open);
 
   bool is_omnibox_popup_open_ = false;
 

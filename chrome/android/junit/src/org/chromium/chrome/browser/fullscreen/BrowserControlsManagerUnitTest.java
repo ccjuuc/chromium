@@ -12,9 +12,11 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doReturn;
@@ -48,6 +50,7 @@ import org.chromium.base.ActivityState;
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.MathUtils;
 import org.chromium.base.UserDataHost;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.cc.input.BrowserControlsOffsetTags;
@@ -69,6 +72,7 @@ import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.toolbar.ControlContainer;
+import org.chromium.chrome.browser.ui.native_page.NativePage;
 import org.chromium.components.embedder_support.view.ContentView;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.BrowserControlsOffsetTagConstraints;
@@ -138,6 +142,10 @@ public class BrowserControlsManagerUnitTest {
         doNothing().when(mContentView).addOnSystemUiVisibilityChangeListener(any());
         when(mTabModel.iterator()).thenAnswer(inv -> Collections.emptyList().iterator());
         when(mTabModelSelector.getModels()).thenReturn(Collections.singletonList(mTabModel));
+        when(mTabModelSelector.getCurrentTabModelSupplier())
+                .thenReturn(ObservableSuppliers.createMonotonic(mTabModel));
+        when(mTabModelSelector.getCurrentTabSupplier())
+                .thenReturn(ObservableSuppliers.createNullable(mTab));
         when(mTabModel.getComprehensiveModel()).thenReturn(mTabModel);
 
         BrowserControlsManager browserControlsManager =
@@ -754,7 +762,6 @@ public class BrowserControlsManagerUnitTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.BCIV_BOTTOM_CONTROLS)
     public void testSkipOffsetChangedIfAnimatingPositionChange() {
         remakeWithoutSpy();
         notifyAddTab(mTab);
@@ -805,6 +812,198 @@ public class BrowserControlsManagerUnitTest {
                         BrowserControlsState.SHOWN);
         ShadowLooper.idleMainLooper();
         verify(mContainerView).requestLayout();
+    }
+
+    @Test
+    public void testBottomControlsHeightAnimation() {
+        // Simulate that we can't animate native browser controls so browser-driven animation runs.
+        when(mBrowserControlsManager.getTab()).thenReturn(null);
+        mBrowserControlsManager.setAnimateBrowserControlsHeightChanges(true);
+
+        mBrowserControlsManager.setBottomControlsHeight(TOOLBAR_HEIGHT + 10, 10);
+        assertEquals(
+                "Bottom controls should be animating.",
+                true,
+                mBrowserControlsManager.hasBottomControlsHeightAnimation());
+
+        if (mBrowserControlsManager.getControlsAnimatorForTesting() != null) {
+            mBrowserControlsManager.getControlsAnimatorForTesting().end();
+        }
+        assertEquals(
+                "Bottom controls should not be animating after animation end.",
+                false,
+                mBrowserControlsManager.hasBottomControlsHeightAnimation());
+        verify(mBrowserControlsStateProviderObserver).onBottomControlsHeightAnimationEnded();
+    }
+
+    @Test
+    public void testSetPositionsForTabOverridesOffsetsOnNativePage() {
+        remakeWithoutSpy();
+        notifyAddTab(mTab);
+        mActivityTabProvider.setForTesting(mTab);
+
+        // Setup mock tab as native page
+        doReturn(true).when(mTab).isNativePage();
+
+        // Setup heights
+        mBrowserControlsManager.setBottomControlsHeight(TOOLBAR_HEIGHT, 0);
+
+        // Programmatically override positions (setting bottom controls offset to 30)
+        mBrowserControlsManager.setPositionsForTab(0, 30, TOOLBAR_HEIGHT, 0, 0);
+
+        assertEquals(30, mBrowserControlsManager.getBottomControlOffset());
+        assertTrue(mBrowserControlsManager.offsetOverridden());
+    }
+
+    @Test
+    public void testHideAndroidControlsWithAnimation() {
+        // Simulate that we can't animate native browser controls so browser-driven animation runs.
+        when(mBrowserControlsManager.getTab()).thenReturn(null);
+
+        // Set top and bottom heights
+        mBrowserControlsManager.setTopControlsHeight(TOOLBAR_HEIGHT, 0);
+        mBrowserControlsManager.setBottomControlsHeight(TOOLBAR_HEIGHT, 0);
+
+        mBrowserControlsManager.setAnimateBrowserControlsHeightChanges(true);
+
+        // Hide controls with animation
+        mBrowserControlsManager.hideAndroidControls(true);
+
+        // Animator should be initialized and running
+        assertNotNull(
+                "Animator should be initialized.",
+                mBrowserControlsManager.getControlsAnimatorForTesting());
+
+        // End animation
+        mBrowserControlsManager.getControlsAnimatorForTesting().end();
+
+        // Offsets should be at min height (fully hidden)
+        assertEquals(-TOOLBAR_HEIGHT, mBrowserControlsManager.getTopControlOffset());
+        assertEquals(TOOLBAR_HEIGHT, mBrowserControlsManager.getBottomControlOffset());
+        assertEquals(0, mBrowserControlsManager.getContentOffset());
+        assertNull(mBrowserControlsManager.getControlsAnimatorForTesting());
+    }
+
+    @Test
+    public void testHideAndroidControlsWithoutAnimation() {
+        // Simulate that we can't animate native browser controls.
+        when(mBrowserControlsManager.getTab()).thenReturn(null);
+
+        // Set top and bottom heights
+        mBrowserControlsManager.setTopControlsHeight(TOOLBAR_HEIGHT, 0);
+        mBrowserControlsManager.setBottomControlsHeight(TOOLBAR_HEIGHT, 0);
+
+        // Hide controls instantly
+        mBrowserControlsManager.hideAndroidControls(false);
+
+        // Offsets should immediately be at min height (fully hidden)
+        assertEquals(-TOOLBAR_HEIGHT, mBrowserControlsManager.getTopControlOffset());
+        assertEquals(TOOLBAR_HEIGHT, mBrowserControlsManager.getBottomControlOffset());
+        assertEquals(0, mBrowserControlsManager.getContentOffset());
+        assertNull(mBrowserControlsManager.getControlsAnimatorForTesting());
+    }
+
+    @Test
+    public void testHideAndroidControlsWithAnimation_BottomPosition() {
+        // Simulate that we can't animate native browser controls.
+        when(mBrowserControlsManager.getTab()).thenReturn(null);
+
+        // Set position to BOTTOM, top heights to 0, bottom height to TOOLBAR_HEIGHT
+        mBrowserControlsManager.setControlsPosition(
+                ControlsPosition.BOTTOM, 0, 0, 0, TOOLBAR_HEIGHT, 0, 0);
+
+        mBrowserControlsManager.setAnimateBrowserControlsHeightChanges(true);
+
+        // Hide controls with animation
+        mBrowserControlsManager.hideAndroidControls(true);
+
+        // Animator should be initialized and running
+        assertNotNull(
+                "Animator should be initialized.",
+                mBrowserControlsManager.getControlsAnimatorForTesting());
+
+        // End animation
+        mBrowserControlsManager.getControlsAnimatorForTesting().end();
+
+        // Under BOTTOM position, top offset remains 0, bottom offset becomes TOOLBAR_HEIGHT
+        // (hidden)
+        assertEquals(0, mBrowserControlsManager.getTopControlOffset());
+        assertEquals(TOOLBAR_HEIGHT, mBrowserControlsManager.getBottomControlOffset());
+        assertNull(mBrowserControlsManager.getControlsAnimatorForTesting());
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR + ":disable_on_ntp/false")
+    public void testShowAndroidControlsWithAnimation_BottomPosition() {
+        // 1. During setControlsPosition(), ensure canAnimateNativeBrowserControls() is true
+        // (so it successfully saves the hidden offset TOOLBAR_HEIGHT).
+        when(mTab.isNativePage()).thenReturn(false);
+        mBrowserControlsManager.setControlsPosition(
+                ControlsPosition.BOTTOM,
+                0,
+                0,
+                0,
+                TOOLBAR_HEIGHT,
+                0,
+                TOOLBAR_HEIGHT); // Start at hidden offset TOOLBAR_HEIGHT
+
+        // 2. Now simulate that scroll-off is enabled (isNtpScrollOffEnabled evaluates to true).
+        // This requires mTab to return a mock NativePage with host "newtab",
+        // and isIncognito to be false. Since isNativePage() is true,
+        // canAnimateNativeBrowserControls() becomes false, correctly running the Java animator.
+        when(mTab.isIncognito()).thenReturn(false);
+        when(mTab.isNativePage()).thenReturn(true);
+        NativePage nativePage = Mockito.mock(NativePage.class);
+        when(nativePage.getHost()).thenReturn("newtab");
+        when(mTab.getNativePage()).thenReturn(nativePage);
+
+        mBrowserControlsManager.setAnimateBrowserControlsHeightChanges(true);
+
+        // Show controls with animation
+        mBrowserControlsManager.showAndroidControls(true);
+
+        // Animator should be initialized and running
+        assertNotNull(
+                "Animator should be initialized.",
+                mBrowserControlsManager.getControlsAnimatorForTesting());
+
+        // End animation
+        mBrowserControlsManager.getControlsAnimatorForTesting().end();
+
+        // Under BOTTOM position, top offset remains 0, bottom offset becomes 0 (fully visible)
+        assertEquals(0, mBrowserControlsManager.getTopControlOffset());
+        assertEquals(0, mBrowserControlsManager.getBottomControlOffset());
+        assertNull(mBrowserControlsManager.getControlsAnimatorForTesting());
+    }
+
+    @Test
+    public void testOffsetTagsChanged_HiddenConstraints_UpdatesOffsetsEvenWhenOnScreen() {
+        remakeWithoutSpy();
+        notifyAddTab(mTab);
+        mActivityTabProvider.setForTesting(mTab);
+        mBrowserControlsManager.addObserver(mBrowserControlsStateProviderObserver);
+
+        // Put controls on-screen at TOP position (not scrolled offscreen).
+        mBrowserControlsManager.setControlsPosition(
+                ControlsPosition.TOP, 0, TOOLBAR_HEIGHT, 0, 0, 0, 0);
+        ShadowLooper.idleMainLooper();
+
+        // When constraints transition to HIDDEN, shouldUpdateOffsets must be true so the
+        // compositor layer does not stay drawn at y = 0.
+        mBrowserControlsManager
+                .getTabControlsObserverForTesting()
+                .onOffsetTagsInfoChanged(
+                        mTab,
+                        new BrowserControlsOffsetTagsInfo(),
+                        new BrowserControlsOffsetTagsInfo(),
+                        BrowserControlsState.HIDDEN);
+
+        verify(mBrowserControlsStateProviderObserver)
+                .onOffsetTagsInfoChanged(
+                        any(BrowserControlsOffsetTagsInfo.class),
+                        any(BrowserControlsOffsetTagsInfo.class),
+                        eq(BrowserControlsState.HIDDEN),
+                        eq(true));
     }
 
     private void verifyUpdateOffsetTagDefinitions(

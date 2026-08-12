@@ -14,6 +14,7 @@
 #include "cc/layers/painted_scrollbar_layer_impl.h"
 #include "cc/layers/solid_color_scrollbar_layer_impl.h"
 #include "cc/test/fake_layer_tree_frame_sink.h"
+#include "cc/trees/client_layer_tree_host_impl.h"
 #include "cc/trees/compositor_commit_data.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
 #include "components/viz/test/begin_frame_args_test.h"
@@ -21,7 +22,59 @@
 
 namespace cc {
 
+namespace {
+
+base::test::ScopedFeatureList InitScopedFeatureListForMode(
+    LayerTreeImplTestMode mode) {
+  base::test::ScopedFeatureList feature_list;
+  switch (mode) {
+    case CommitToActiveTreeTreesInVizClient:
+    case CommitToPendingTreeTreesInVizClient:
+    case CommitToActiveTreeTreesInVizService:
+      feature_list.InitWithFeatures({features::kTreesInViz},
+                                    {features::kSnapFlingNearExtremes});
+      break;
+    case CommitToActiveTreeAnimationsInVizService:
+      feature_list.InitWithFeatures(
+          {features::kTreesInViz, features::kTreeAnimationsInViz},
+          {features::kSnapFlingNearExtremes});
+      break;
+    case CommitToActiveTree:
+    case CommitToPendingTree:
+      feature_list.InitWithFeatures(
+          {}, {features::kTreesInViz, features::kSnapFlingNearExtremes});
+      break;
+  }
+  return feature_list;
+}
+
+}  // namespace
+
 using ScrollThread = InputHandler::ScrollThread;
+
+std::unique_ptr<LayerTreeHostImpl> CreateLayerTreeHostImplForTesting(
+    const LayerTreeSettings& settings,
+    LayerTreeHostImplDelegate* delegate,
+    TaskRunnerProvider* task_runner_provider,
+    RenderingStatsInstrumentation* rendering_stats_instrumentation,
+    TaskGraphRunner* task_graph_runner,
+    std::unique_ptr<MutatorHost> mutator_host,
+    RasterDarkModeFilter* dark_mode_filter,
+    int id,
+    scoped_refptr<base::SequencedTaskRunner> image_worker_task_runner,
+    LayerTreeHostSchedulingDelegate* scheduling_delegate) {
+  if (settings.trees_in_viz_in_viz_process) {
+    return TestVizLayerTreeHostImpl::Create(
+        settings, delegate, task_runner_provider,
+        rendering_stats_instrumentation, task_graph_runner,
+        std::move(mutator_host), dark_mode_filter, id,
+        std::move(image_worker_task_runner), scheduling_delegate);
+  }
+  return ClientLayerTreeHostImpl::Create(
+      settings, delegate, task_runner_provider, rendering_stats_instrumentation,
+      task_graph_runner, std::move(mutator_host), dark_mode_filter, id,
+      std::move(image_worker_task_runner), scheduling_delegate);
+}
 
 TestFrameData::TestFrameData() {
   // Set ack to something valid, so DCHECKs don't complain.
@@ -67,7 +120,7 @@ void DidDrawCheckLayer::ClearDidDrawCheck() {
 }
 
 DidDrawCheckLayer::DidDrawCheckLayer(LayerTreeImpl* tree_impl, int id)
-    : LayerImpl(tree_impl, id),
+    : FakePictureLayerImpl(tree_impl, id),
       will_draw_returns_false_(false),
       will_draw_returned_true_(false),
       append_quads_called_(false),
@@ -77,9 +130,12 @@ DidDrawCheckLayer::DidDrawCheckLayer(LayerTreeImpl* tree_impl, int id)
   draw_properties().visible_layer_rect = gfx::Rect(0, 0, 10, 10);
 }
 
-LayerTreeHostImplTestBase::LayerTreeHostImplTestBase()
+LayerTreeHostImplTestBase::LayerTreeHostImplTestBase(
+    base::test::ScopedFeatureList scoped_feature_list)
     : task_runner_provider_(base::SingleThreadTaskRunner::GetCurrentDefault()),
       always_main_thread_blocked_(&task_runner_provider_),
+      scoped_feature_list_(std::move(scoped_feature_list)),
+      task_graph_runner_(),
       on_can_draw_state_changed_called_(false),
       did_notify_ready_to_activate_(false),
       did_request_commit_(false),
@@ -131,7 +187,8 @@ void LayerTreeHostImplTestBase::EnsureSyncTree() {
 }
 
 void LayerTreeHostImplTestBase::CreatePendingTree() {
-  host_impl_->CreatePendingTree();
+  // TODO(496580137): Move this to ClientLayerTreeHostImpl specific tests.
+  static_cast<ClientLayerTreeHostImpl*>(host_impl_.get())->CreatePendingTree();
   LayerTreeImpl* pending_tree = host_impl_->pending_tree();
   pending_tree->SetDeviceViewportRect(
       host_impl_->active_tree()->GetDeviceViewport());
@@ -155,7 +212,8 @@ void LayerTreeHostImplTestBase::OnCanDrawStateChanged(bool can_draw) {
 }
 void LayerTreeHostImplTestBase::NotifyReadyToActivate() {
   did_notify_ready_to_activate_ = true;
-  host_impl_->ActivateSyncTree();
+  // TODO(496580137): Move this to ClientLayerTreeHostImpl specific tests.
+  static_cast<ClientLayerTreeHostImpl*>(host_impl_.get())->ActivateSyncTree();
 }
 bool LayerTreeHostImplTestBase::IsReadyToActivate() {
   // in NotifyReadyToActivate(), call ActivateSyncTree() directly
@@ -172,7 +230,8 @@ void LayerTreeHostImplTestBase::SetNeedsOneBeginImplFrameOnImplThread() {
 void LayerTreeHostImplTestBase::SetNeedsPrepareTilesOnImplThread() {
   did_request_prepare_tiles_ = true;
 }
-void LayerTreeHostImplTestBase::SetNeedsCommitOnImplThread(bool urgent) {
+void LayerTreeHostImplTestBase::SetNeedsCommitOnImplThread(BeginMainFrameReason,
+                                                           bool urgent) {
   did_request_commit_ = true;
 }
 void LayerTreeHostImplTestBase::SetVideoNeedsBeginFrames(
@@ -275,7 +334,7 @@ bool LayerTreeHostImplTestBase::CreateHostImpl(
   }
   host_impl_.reset();
   InitializeImageWorker(settings);
-  host_impl_ = LayerTreeHostImpl::Create(
+  host_impl_ = CreateLayerTreeHostImplForTesting(
       settings, this, &task_runner_provider_, &stats_instrumentation_,
       &task_graph_runner_,
       AnimationHost::CreateForTesting(ThreadInstance::kImpl), nullptr, 0,
@@ -316,7 +375,7 @@ gfx::Size LayerTreeHostImplTestBase::DipSizeToPixelSize(const gfx::Size& size) {
 
 void LayerTreeHostImplTestBase::PushScrollOffsetsToPendingTree(
     const base::flat_map<ElementId, gfx::PointF>& offsets) {
-  PropertyTrees property_trees(*host_impl_);
+  PropertyTrees property_trees;
   auto& scroll_tree =
       host_impl_->active_tree()->property_trees()->scroll_tree_mutable();
   if (auto* layer = InnerViewportScrollLayer()) {
@@ -506,7 +565,7 @@ void LayerTreeHostImplTestBase::CreateAndTestNonScrollableLayers(
           .get(),
       ui::ScrollInputType::kWheel);
   ASSERT_EQ(ScrollThread::kScrollOnImplThread, status.thread);
-  ASSERT_EQ(MainThreadScrollingReason::kFailedHitTest,
+  ASSERT_EQ(MainThreadHitTestReasons{MainThreadHitTestReason::kFailedHitTest},
             status.main_thread_hit_test_reasons);
 
   // The point hits squash1 layer and also scrollbar layer.
@@ -516,7 +575,7 @@ void LayerTreeHostImplTestBase::CreateAndTestNonScrollableLayers(
           .get(),
       ui::ScrollInputType::kWheel);
   ASSERT_EQ(ScrollThread::kScrollOnImplThread, status.thread);
-  ASSERT_EQ(MainThreadScrollingReason::kFailedHitTest,
+  ASSERT_EQ(MainThreadHitTestReasons{MainThreadHitTestReason::kFailedHitTest},
             status.main_thread_hit_test_reasons);
 
   // The point hits squash2 layer and also scroll layer, because scroll layer
@@ -648,7 +707,7 @@ RenderFrameMetadata
 LayerTreeHostImplTestBase::StartDrawAndProduceRenderFrameMetadata() {
   TestFrameData frame;
   EXPECT_EQ(DrawResult::kSuccess, host_impl_->PrepareToDraw(&frame));
-  return host_impl_->MakeRenderFrameMetadata(&frame);
+  return host_impl_->MakeRenderFrameMetadata(frame);
 }
 
 void LayerTreeHostImplTestBase::AllowedTouchActionTestHelper(
@@ -881,8 +940,8 @@ void LayerTreeHostImplTestBase::SetupMouseMoveAtTestScrollbarStates(
   LayerImpl* root_scroll = OuterViewportScrollLayer();
 
   if (main_thread_scrolling) {
-    GetScrollNode(root_scroll)->main_thread_repaint_reasons =
-        MainThreadScrollingReason::kHasBackgroundAttachmentFixedObjects;
+    GetScrollNode(root_scroll)->main_thread_repaint_reasons = {
+        MainThreadRepaintReason::kHasBackgroundAttachmentFixedObjects};
   }
 
   // scrollbar_1 on root scroll.
@@ -962,24 +1021,8 @@ void LayerTreeHostImplTestBase::SetupMouseMoveAtTestScrollbarStates(
       ScrollbarOrientation::kVertical));
 }
 
-LayerTreeHostImplTest::LayerTreeHostImplTest() {
-  const auto test_mode = GetParam();
-  switch (test_mode) {
-    case CommitToActiveTreeTreesInVizClient:
-    case CommitToPendingTreeTreesInVizClient:
-    case CommitToActiveTreeTreesInVizService:
-      scoped_feature_list_.InitAndEnableFeature(features::kTreesInViz);
-      break;
-    case CommitToActiveTreeAnimationsInVizService:
-      scoped_feature_list_.InitWithFeatures(
-          {features::kTreesInViz, features::kTreeAnimationsInViz}, {});
-      break;
-    case CommitToActiveTree:
-    case CommitToPendingTree:
-      scoped_feature_list_.InitAndDisableFeature(features::kTreesInViz);
-      break;
-  }
-}
+LayerTreeHostImplTest::LayerTreeHostImplTest()
+    : LayerTreeHostImplTestBase(InitScopedFeatureListForMode(GetParam())) {}
 
 LayerTreeHostImplTest::~LayerTreeHostImplTest() = default;
 

@@ -12,7 +12,9 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/process/process.h"
 #include "base/strings/strcat.h"
@@ -61,14 +63,14 @@ ComponentFiles::ComponentFiles(
     VLOG(0) << "Could not read list of files for " << files_list_file_name;
     return;
   }
-  std::vector<std::string> files_list = base::SplitString(
+  std::vector<std::string_view> files_list = base::SplitStringPiece(
       file_content, "\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
   if (files_list.empty()) {
     VLOG(0) << "Could not parse files list for " << files_list_file_name;
     return;
   }
 
-  for (auto& relative_file_path : files_list) {
+  for (std::string_view relative_file_path : files_list) {
     // Ignore comment lines.
     if (relative_file_path.empty() || relative_file_path[0] == '#') {
       continue;
@@ -100,9 +102,7 @@ ComponentFiles::~ComponentFiles() {
   base::ThreadPool::PostTask(
       FROM_HERE,
       {base::MayBlock(), base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
-      base::BindOnce(
-          [](base::flat_map<base::FilePath, base::File> model_files) {},
-          std::move(model_files_)));
+      base::DoNothingWithBoundArgs(std::move(model_files_)));
 }
 
 std::unique_ptr<ComponentFiles> ComponentFiles::Load(
@@ -300,6 +300,12 @@ void ScreenAIServiceHandlerBase::OnServiceLaunched(
 void ScreenAIServiceHandlerBase::CreateResourceMonitor(
     const std::string& process_name) {
   CHECK(!resource_monitor_);
+
+  // Resource monitor is created with a delay after service is launched. Do not
+  // create it if the service is disconnected during this delay.
+  if (!screen_ai_service_factory_.is_bound()) {
+    return;
+  }
   // Resource monitor creation may [rarely] fail if the process name is not
   // found in process registry. It is only used for metrics and does not affect
   // user experience.

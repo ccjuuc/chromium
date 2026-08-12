@@ -128,11 +128,11 @@ TEST_F(RangeTest, SplitTextNodeRangeOutsideText) {
       "id=\"inner-right\">2</span>3</span>");
 
   Element* outer =
-      GetDocument().getElementById(AtomicString::FromUTF8("outer"));
+      GetDocument().getElementById(AtomicString::FromUtf8("outer"));
   Element* inner_left =
-      GetDocument().getElementById(AtomicString::FromUTF8("inner-left"));
+      GetDocument().getElementById(AtomicString::FromUtf8("inner-left"));
   Element* inner_right =
-      GetDocument().getElementById(AtomicString::FromUTF8("inner-right"));
+      GetDocument().getElementById(AtomicString::FromUtf8("inner-right"));
   auto* old_text = To<Text>(outer->childNodes()->item(2));
 
   auto* range_outer_outside =
@@ -282,7 +282,7 @@ TEST_F(RangeTest, BoundingRectMustIndependentFromSelection) {
   const gfx::RectF rect_before = range->BoundingRect();
   EXPECT_GT(rect_before.width(), 0);
   EXPECT_GT(rect_before.height(), 0);
-  Selection().SetSelection(SelectionInDOMTree::Builder()
+  Selection().SetSelection(SelectionInDomTree::Builder()
                                .SetBaseAndExtent(EphemeralRange(range))
                                .Build(),
                            SetSelectionOptions());

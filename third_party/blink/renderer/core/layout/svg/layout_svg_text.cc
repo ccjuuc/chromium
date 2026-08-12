@@ -10,6 +10,7 @@
 #include "third_party/blink/renderer/core/layout/block_node.h"
 #include "third_party/blink/renderer/core/layout/constraint_space_builder.h"
 #include "third_party/blink/renderer/core/layout/inline/fragment_item.h"
+#include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_inline.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_inline_text.h"
@@ -42,28 +43,27 @@ const LayoutSVGText* FindTextRoot(const LayoutObject* start) {
 
 }  // namespace
 
-LayoutSVGText::LayoutSVGText(Element* element)
-    : LayoutSVGBlock(element),
-      needs_update_bounding_box_(true),
-      needs_text_metrics_update_(true) {
+LayoutSVGText::LayoutSVGText(Element* element) : LayoutSVGBlock(element) {
   DCHECK(IsA<SVGTextElement>(element));
 }
 
 void LayoutSVGText::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
   if (needs_text_metrics_update_ && diff.HasDifference() && old_style) {
     diff.SetNeedsFullLayout();
   }
-  LayoutSVGBlock::StyleDidChange(diff, old_style, style_change_context);
-  SVGResources::UpdatePaints(*this, old_style, StyleRef());
+  LayoutSVGBlock::StyleDidChange(diff, old_style, new_style,
+                                 style_change_context);
+  SVGResources::UpdatePaints(*this, old_style, new_style);
 
   if (old_style) {
-    const ComputedStyle& style = StyleRef();
     if (transform_uses_reference_box_ && !needs_transform_update_) {
-      if (TransformHelper::CheckReferenceBoxDependencies(*old_style, style)) {
+      if (TransformHelper::CheckReferenceBoxDependencies(*old_style,
+                                                         new_style)) {
         SetNeedsTransformUpdate();
         SetNeedsPaintPropertyUpdate();
       }
@@ -146,9 +146,6 @@ void LayoutSVGText::SubtreeStructureChanged(
     LayoutInvalidationReasonForTracing) {
   NOT_DESTROYED();
   if (BeingDestroyed() || !EverHadLayout()) {
-    return;
-  }
-  if (DocumentBeingDestroyed()) {
     return;
   }
 
@@ -246,9 +243,9 @@ SVGLayoutResult LayoutSVGText::UpdateSVGLayout(
   const gfx::RectF old_boundaries = ObjectBoundingBox();
 
   const ComputedStyle& style = StyleRef();
-  ConstraintSpaceBuilder builder(
-      style.GetWritingMode(), style.GetWritingDirection(),
-      /* is_new_fc */ true, /* adjust_inline_size_if_needed */ false);
+  ConstraintSpaceBuilder builder(style.GetWritingMode(),
+                                 style.GetWritingDirection(),
+                                 /* is_new_fc */ true);
   builder.SetAvailableSize(LogicalSize());
   BlockNode(this).Layout(builder.ToConstraintSpace());
 
@@ -277,6 +274,9 @@ bool LayoutSVGText::UpdateAfterSVGLayout(const SVGLayoutInfo& layout_info,
   }
 
   UpdateTransformAffectsVectorEffect();
+  if (TransformAffectsVectorEffect()) {
+    View()->SetContainsNonScalingStroke();
+  }
   return UpdateTransformAfterLayout(layout_info, bounds_changed);
 }
 
@@ -339,7 +339,8 @@ gfx::RectF LayoutSVGText::VisualRectInLocalSVGCoordinates() const {
 void LayoutSVGText::QuadsInAncestorInternal(
     Vector<gfx::QuadF>& quads,
     const LayoutBoxModelObject* ancestor,
-    MapCoordinatesFlags mode) const {
+    MapCoordinatesFlags mode,
+    BoxQuadType) const {
   NOT_DESTROYED();
   quads.push_back(
       LocalToAncestorQuad(gfx::QuadF(DecoratedBoundingBox()), ancestor, mode));

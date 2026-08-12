@@ -19,7 +19,6 @@
 #include "ui/aura/client/drag_drop_delegate.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/drop_target_event.h"
-#include "ui/base/dragdrop/mojom/drag_drop_types.mojom-forward.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/display/manager/display_manager.h"
@@ -29,6 +28,8 @@
 #include "ui/gfx/geometry/point_f.h"
 
 namespace exo {
+
+using chromeos::AppType;
 
 using ::ui::mojom::DragOperation;
 using WMHelperTest = test::ExoTestBase;
@@ -48,9 +49,9 @@ TEST_F(WMHelperTest, FrameThrottling) {
 
   // Create two arc windows.
   std::unique_ptr<aura::Window> arc_window_1 =
-      CreateAppWindow(gfx::Rect(), chromeos::AppType::ARC_APP);
+      CreateWindowWithAppType(AppType::ARC_APP);
   std::unique_ptr<aura::Window> arc_window_2 =
-      CreateAppWindow(gfx::Rect(), chromeos::AppType::ARC_APP);
+      CreateWindowWithAppType(AppType::ARC_APP);
 
   // Starting throttling on one of the two arc windows will have no effect on
   // vsync time.

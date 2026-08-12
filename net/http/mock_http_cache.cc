@@ -11,6 +11,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/byte_size.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -18,8 +19,10 @@
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/pickle.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/types/expected.h"
 #include "net/base/features.h"
 #include "net/base/net_errors.h"
 #include "net/disk_cache/disk_cache_test_util.h"
@@ -60,7 +63,9 @@ struct MockDiskEntry::CallbackInfo {
 };
 
 MockDiskEntry::MockDiskEntry(const std::string& key)
-    : key_(key), max_file_size_(std::numeric_limits<int>::max()) {
+    : key_(key),
+      max_file_size_(std::numeric_limits<int>::max()),
+      last_used_time_(base::Time::Now()) {
   test_mode_ = GetTestModeForEntry(key);
 }
 
@@ -77,7 +82,7 @@ std::string MockDiskEntry::GetKey() const {
 }
 
 base::Time MockDiskEntry::GetLastUsed() const {
-  return base::Time::Now();
+  return last_used_time_;
 }
 
 int64_t MockDiskEntry::GetDataSize(int index) const {
@@ -356,7 +361,7 @@ void MockDiskEntry::SetEntryInMemoryData(uint8_t data) {
 }
 
 void MockDiskEntry::SetLastUsedTimeForTest(base::Time time) {
-  NOTREACHED();
+  last_used_time_ = time;
 }
 
 // If |value| is true, don't deliver any completion callbacks until called
@@ -440,9 +445,9 @@ MockDiskCache::~MockDiskCache() {
   ReleaseAll();
 }
 
-int32_t MockDiskCache::GetEntryCount(
-    net::Int32CompletionOnceCallback callback) const {
-  return static_cast<int32_t>(entries_.size());
+base::expected<int32_t, net::Error> MockDiskCache::GetEntryCount(
+    GetEntryCountCallback callback) const {
+  return base::ok(entries_.size());
 }
 
 disk_cache::EntryResult MockDiskCache::OpenOrCreateEntry(
@@ -672,6 +677,14 @@ int64_t MockDiskCache::MaxFileSize() const {
   return max_file_size_;
 }
 
+base::ByteSize MockDiskCache::GetMaxBytesForTesting() const {
+  return base::ByteSize(base::checked_cast<uint64_t>(max_bytes_));
+}
+
+void MockDiskCache::SetMaxBytes(base::ByteSize max_bytes) {
+  max_bytes_ = max_bytes.InBytes();
+}
+
 void MockDiskCache::ReleaseAll() {
   for (auto entry : entries_) {
     entry.second->Release();
@@ -713,10 +726,34 @@ const std::vector<std::string>& MockDiskCache::GetExternalCacheHits() const {
 
 //-----------------------------------------------------------------------------
 
+MockBackendFactory::MockBackendFactory() = default;
+
+MockBackendFactory::~MockBackendFactory() = default;
+
 disk_cache::BackendResult MockBackendFactory::CreateBackend(
     NetLog* net_log,
     disk_cache::BackendResultCallback callback) {
-  return disk_cache::BackendResult::Make(std::make_unique<MockDiskCache>());
+  auto backend = std::make_unique<MockDiskCache>();
+  backend->SetMaxBytes(
+      base::ByteSize(base::checked_cast<uint64_t>(max_bytes_)));
+  if (callback_later_) {
+    CHECK(pending_callback_.is_null());
+    pending_callback_ = std::move(callback);
+    pending_backend_ = std::move(backend);
+    return disk_cache::BackendResult::MakeError(net::ERR_IO_PENDING);
+  }
+  return disk_cache::BackendResult::Make(std::move(backend));
+}
+
+void MockBackendFactory::SetMaxBytes(int max_bytes) {
+  max_bytes_ = max_bytes;
+}
+
+void MockBackendFactory::CompleteCreateBackend() {
+  CHECK(!pending_callback_.is_null());
+  CHECK(pending_backend_);
+  std::move(pending_callback_)
+      .Run(disk_cache::BackendResult::Make(std::move(pending_backend_)));
 }
 
 //-----------------------------------------------------------------------------

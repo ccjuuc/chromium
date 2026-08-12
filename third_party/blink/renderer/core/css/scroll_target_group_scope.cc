@@ -148,7 +148,6 @@ template <>
 void OrderedScope<HTMLAnchorElement>::UpdateItemsInScope(
     const OrderedScope<HTMLAnchorElement>* scope) {
   if (ScrollMarkerGroupData* data = GetScrollMarkerGroupDataForScope(scope)) {
-    data->UpdateScrollableAreaSubscriptions();
     data->UpdateSelectedScrollMarker();
   }
 
@@ -185,10 +184,7 @@ void OrderedScope<HTMLAnchorElement>::OnScopeCreated(
 
     // Check if this is an anchor element we should attach.
     if (auto* anchor = DynamicTo<HTMLAnchorElement>(element)) {
-      if (anchor->ScrollTargetElement()) {
-        DCHECK(!anchor->GetScrollTargetGroupContainerData());
-        scope->AttachItem(*anchor);
-      }
+      anchor->UpdateScrollTargetGroupMembership();
     }
 
     node = LayoutTreeBuilderTraversal::Next(*node, scope_root);

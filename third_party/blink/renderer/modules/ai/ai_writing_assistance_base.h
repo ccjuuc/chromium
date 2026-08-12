@@ -24,6 +24,7 @@
 #include "third_party/blink/renderer/modules/ai/ai_writing_assistance_create_client.h"
 #include "third_party/blink/renderer/modules/ai/availability.h"
 #include "third_party/blink/renderer/modules/ai/exception_helpers.h"
+#include "third_party/blink/renderer/modules/ai/feedback_helpers.h"
 #include "third_party/blink/renderer/modules/ai/model_execution_responder.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
@@ -180,6 +181,7 @@ class AIWritingAssistanceBase : public ExecutionContextClient {
       ScriptState* script_state,
       CreateOptions* options,
       ExceptionState& exception_state) {
+    MaybeRequestFeedback(script_state, GetSessionType());
     if (!script_state->ContextIsValid()) {
       ThrowInvalidContextException(exception_state);
       return ScriptPromise<V8SessionObjectType>();
@@ -266,6 +268,7 @@ class AIWritingAssistanceBase : public ExecutionContextClient {
         script_state, composite_signal, task_runner_, metric_session_type_,
         BindOnce(&ResolvePromiseOnCompletion<IDLString>,
                  WrapPersistent(resolver)),
+        /*tool_call_callback=*/base::DoNothing(),
         base::DoNothingWithBoundArgs(WrapPersistent(this)),
         BindOnce(&RejectPromiseOnError<IDLString>, WrapPersistent(resolver)),
         BindOnce(&RejectPromiseOnAbort<IDLString>, WrapPersistent(resolver),

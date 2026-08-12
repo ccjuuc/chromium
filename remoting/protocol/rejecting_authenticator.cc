@@ -7,8 +7,6 @@
 #include "base/check_op.h"
 #include "base/functional/callback.h"
 #include "base/notreached.h"
-#include "remoting/protocol/channel_authenticator.h"
-#include "third_party/libjingle_xmpp/xmllite/xmlelement.h"
 
 namespace remoting::protocol {
 
@@ -49,16 +47,14 @@ Authenticator::RejectionDetails RejectingAuthenticator::rejection_details()
   return rejection_details_;
 }
 
-void RejectingAuthenticator::ProcessMessage(
-    const jingle_xmpp::XmlElement* message,
-    base::OnceClosure resume_callback) {
+void RejectingAuthenticator::ProcessMessage(const JingleAuthentication& message,
+                                            base::OnceClosure resume_callback) {
   DCHECK_EQ(state_, WAITING_MESSAGE);
   state_ = REJECTED;
   std::move(resume_callback).Run();
 }
 
-std::unique_ptr<jingle_xmpp::XmlElement>
-RejectingAuthenticator::GetNextMessage() {
+JingleAuthentication RejectingAuthenticator::GetNextMessage() {
   NOTREACHED();
 }
 
@@ -67,11 +63,6 @@ const std::string& RejectingAuthenticator::GetAuthKey() const {
 }
 
 const SessionPolicies* RejectingAuthenticator::GetSessionPolicies() const {
-  NOTREACHED();
-}
-
-std::unique_ptr<ChannelAuthenticator>
-RejectingAuthenticator::CreateChannelAuthenticator() const {
   NOTREACHED();
 }
 

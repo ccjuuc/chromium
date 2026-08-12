@@ -33,6 +33,8 @@
     UMA_HISTOGRAM_ENUMERATION(kNTPImpressionHistogram, impressionType,
                               IOSNTPImpressionType::kMaxValue);
   }
+  UMA_HISTOGRAM_ENUMERATION(kHomeImpressionHistogram, impressionType,
+                            IOSNTPImpressionType::kMaxValue);
 }
 
 - (void)recordCustomizationState:
@@ -70,8 +72,12 @@
   base::RecordAction(base::UserMetricsAction(kNTPIncognitoButtonTappedAction));
 }
 
-- (void)recordMIATapped {
+- (void)recordAIMButtonTapped {
   base::RecordAction(base::UserMetricsAction(kNTPMIAEntryPointTappedAction));
+}
+
+- (void)recordPlusButtonTapped {
+  base::RecordAction(base::UserMetricsAction(kNTPAIMPlusButtonTappedAction));
 }
 
 - (void)

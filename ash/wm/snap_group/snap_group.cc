@@ -570,8 +570,9 @@ void SnapGroup::UpdateGroupWindowsBounds(bool account_for_divider_width) {
   for (aura::Window* window : {window1_, window2_}) {
     // We only need to update the bounds to expand for the divider width if the
     // window is still snapped; `SnapGroup` will no longer manage the bounds if
-    // the window is unsnapped.
-    if (IsSnapped(window)) {
+    // the window is unsnapped. Skip if the window is being destroyed as the
+    // snap group will eventually be gone.
+    if (IsSnapped(window) && !window->is_destroying()) {
       UpdateSnappedWindowBounds(window, account_for_divider_width,
                                 std::nullopt);
     }
@@ -594,7 +595,11 @@ void SnapGroup::UpdateSnappedWindowBounds(aura::Window* window,
 }
 
 void SnapGroup::ApplyPrimarySnapRatio(float primary_snap_ratio) {
-  CHECK(CanWindowsFitInWorkArea(window1_, window2_));
+  if (!CanWindowsFitInWorkArea(window1_, window2_)) {
+    SnapGroupController::Get()->RemoveSnapGroup(
+        this, SnapGroupExitPoint::kCanNotFitInWorkArea);
+    return;
+  }
   // TODO(b/331304137): Remove the cyclic dependencies between snapped window
   // bounds calculation and divider position calculation.
   // `SplitViewDivider::SetDividerPosition()` will account for the windows'

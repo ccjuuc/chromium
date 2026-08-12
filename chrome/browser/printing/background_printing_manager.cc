@@ -4,7 +4,6 @@
 
 #include "chrome/browser/printing/background_printing_manager.h"
 
-#include "base/containers/contains.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
@@ -97,7 +96,7 @@ void BackgroundPrintingManager::DeletePreviewContents(
   if (i == printing_contents_map_.end()) {
     // Everyone is racing to be the first to delete the `preview_contents`. If
     // this case is hit, someone else won the race, so there is no need to
-    // continue. <http://crbug.com/100806>
+    // continue. <http://crbug.com/40100494>
     return;
   }
 
@@ -122,7 +121,7 @@ std::set<content::WebContents*> BackgroundPrintingManager::CurrentContentSet() {
 
 bool BackgroundPrintingManager::HasPrintPreviewDialog(
     WebContents* preview_dialog) {
-  return base::Contains(printing_contents_map_, preview_dialog);
+  return printing_contents_map_.contains(preview_dialog);
 }
 
 BackgroundPrintingManager::PrintingContents::PrintingContents() = default;

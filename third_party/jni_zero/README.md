@@ -1,42 +1,89 @@
 # JNI Zero
-A zero-overhead (or better!) middleware for JNI.
+
+A zero-overhead (or better!) middleware for JNI. Works on JVMs, but the focus is
+Android.
+
+Recommended pre-reading: https://developer.android.com/ndk/guides/jni-tips
+
+Googlers, see: go/jnizero.
+
+[TOC]
 
 ## Overview
+
 JNI (Java Native Interface) is the mechanism that enables Java code to call
 native functions, and native code to call Java functions.
 
- * Native code calls into Java using apis from `<jni.h>`, which basically mirror
-   Java's reflection APIs.
- * Java code calls native functions by declaring body-less functions with the
+- Native code calls into Java using apis from `<jni.h>`, which basically mirror
+  Java's reflection APIs.
+- Java code calls native functions by declaring body-less functions with the
   `native` keyword, and then calling them as normal Java functions.
 
 JNI Zero generates boiler-plate code with the goal of making our code:
- 1. easier to write,
- 2. typesafe,
- 3. more optimizable.
 
-JNI Zero uses regular expressions to parse .java files, so don't do
-anything too fancy :).
+1. easier to write,
+2. typesafe,
+3. more optimizable.
 
-### Exposing Native Methods
+### Why Python?
 
-There are two ways to have native methods be found by Java:
-1) Explicitly register the name -> function pointer mapping using JNI's
-   `RegisterNatives()` function.
-2) Export the symbols from the shared library, and let the runtime resolve them
-   on-demand (using `dlsym()`) the first time a native method is called.
+Using an annotation processor instead of Python to generate code would give
+perfect type information, but would mean that C++ files that depend on JNI Zero
+output would be blocked on Java compiles to finish before they can begin. To
+avoid such a slowdown compile times, JNI Zero uses regular expressions to parse
+.java files. It also does not have any knowledge of the classpath when resolving
+types.
 
-(2) Is generally preferred due to a smaller code size and less up-front work, but
-(1) is sometimes required (e.g. when OS bugs prevent `dlsym()` from working).
-Both ways are supported by this tool.
-
-### Exposing Java Methods
-
-Java methods just need to be annotated with `@CalledByNative`. By default the
-generated method stubs on the native side are not namespaced. The generated
-functions can be put into a namespace using `@JNINamespace("your_namespace")`.
+In order to ensure that Python resolves types correctly, JNI Zero has an
+annotation processor that validates that Python correctly resolved the relevant
+types.
 
 ## Usage
+
+### Java Smart Pointers
+
+Pointers to Java objects must be registered with JNI in order to prevent garbage
+collection from invalidating them.
+
+To help with this, JNI Zero provides the following smart pointers:
+
+- `ScopedJavaLocalRef<>` - When lifetime is the current function's scope.
+- `ScopedJavaGlobalRef<>` - When lifetime is longer than the current function's
+  scope.
+- `LeakedJavaGlobalRef<>` - For singletons (avoids having a destructor).
+- `JavaObjectWeakGlobalRef<>` - Weak reference (does not prevent garbage
+  collection).
+- `JavaRef<>&` - Use to accept any of the above as a parameter to a function
+  without creating a redundant registration.
+
+`jni.h` provides a limited number of types to represent Java objects. E.g.:
+
+- `jobject`
+- `jstring`
+- `jthrowable`
+- `jclass`
+
+To provide type-safety, JNI Zero generates subclasses for all referenced Java
+classes. E.g.:
+
+- `JList`
+- `JMap`
+- `JMyClass`
+
+Each of these types is defined in a C++ namespace that mirrors its Java package,
+and is aliased to the top-level scope on a first-come basis.
+
+Example usage:
+
+```
+jni_zero::ScopedJavaLocalRef<JList> GetValues(const jni_zero::JavaRef<JMap>& map) {
+    ...
+}
+```
+
+These custom subclasses are defined in a generated `ClassName_shared_jni.h`
+header so that they can be used from header files without pulling in all of the
+method-calling-related codegen (which lives in `ClassName_jni.h`).
 
 ### Calling Java -> Native
 
@@ -51,24 +98,24 @@ functions can be put into a namespace using `@JNINamespace("your_namespace")`.
 
 To add JNI to a class:
 
-1. Create a nested-interface annotated with `@NativeMethods` that contains
-   the declaration of the corresponding static methods you wish to have
-   implemented.
+1. Create a nested-interface annotated with `@NativeMethods` that contains the
+   declaration of the corresponding static methods you wish to have implemented.
 2. Call native functions using `${OriginalClassName}Jni.get().${method}()`
 3. In C++ code, add: `#include "${OriginalClassName}_jni.h"`
-   * The path will depend on the location of the `generate_jni` build rule
-     that lists your Java source code.
-   * The header should generally be included last, as it must appear after
+   - The path will depend on the location of the `generate_jni` build rule that
+     lists your Java source code.
+   - The header should generally be included last, as it must appear after
      headers that define types used in `@JniType` annotations.
 4. Add `DEFINE_JNI(JavaClassName)` to the bottom of your `.cc` file
 5. Implement the native methods.
-   * If unsure of what the signatures should look like, inspect the generated
+   - If unsure of what the signatures should look like, inspect the generated
      `_jni.h` file.
-   * The naming scheme is
-     * Non-class methods: `JNI_${ClassName}_${UpperCamelCaseMethod}`
-     * Class methods: `${OriginalClassName}::${UpperCamelCaseMethod}`
+   - The naming scheme is
+     - Non-class methods: `JNI_${ClassName}_${UpperCamelCaseMethod}`
+     - Class methods: `${OriginalClassName}::${UpperCamelCaseMethod}`
 
 #### Example:
+
 **Java**
 
 ```java
@@ -76,7 +123,7 @@ class MyClass {
   // Cannot be private. Must be package or public.
   @NativeMethods
   /* package */ interface Natives {
-    void foo();
+    void foo(List<String> list);
     double bar(int a, int b);
     // Either the |MyClass| part of the |nativeMyClass| parameter name must
     // match the native class name exactly, or the method annotation
@@ -93,7 +140,7 @@ class MyClass {
     // Storing MyClassJni.get() in a field defeats some of the desired R8
     // optimizations, but local variables are fine.
     Natives jni = MyClassJni.get();
-    jni.foo();
+    jni.foo(List.of("hi"));
     jni.bar(1,2);
     jni.nonStatic(mNativePointer);
   }
@@ -117,11 +164,11 @@ public:
 namespace { // Can also declare each with `static`
 
 // The JNIEnv* parameter is optional.
-void JNI_MyClass_Foo(JNIEnv* env) {
+void JNI_MyClass_Foo(JNIEnv* env, const jni_zero::JavaRef<JList>& list) {
   ...
 }
 
-void JNI_MyClass_Bar(jint a, jint b) {
+void JNI_MyClass_Bar(int32_t a, int32_t b) {
   ...
 }
 
@@ -137,77 +184,98 @@ DEFINE_JNI(MyClass)
 1. Annotate some methods with `@CalledByNative`, the generator will now generate
    stubs in `${OriginalClassName}_jni.h` header to call into those java methods
    from cpp.
-   * Inner class methods must provide the inner class name explicitly
-     (ex. `@CalledByNative("InnerClassName")`)
 
 2. In C++ code, `#include` the header `${OriginalClassName}_jni.h`. (The path
    will depend on the location of the `generate_jni` build rule that lists your
-   Java source code). That `.cc` can call the stubs with their generated name
-   `Java_${OriginalClassName}_${UpperCamelCaseMethod}`.
+   Java source code).
 
-Note: For test-only methods, use `@CalledByNativeForTesting` which will ensure
-that it is stripped in our release binaries.
+3. Call the generated methods using the `ClassNameJni` class or the `JClassName`
+   type.
 
-Note: Because the generated header files contain definitions as well as declarations,
-they must not be `#included` by multiple sources. If there are Java functions
-that need to be called by multiple sources, one source should be chosen to
-expose the functions to the others via additional wrapper functions.
+   - **Constructors:**
+     `ScopedJavaLocalRef<JMyClass> obj = MyClassJni::New(env, ...);`
+   - **Static Methods:** `MyClassJni::staticMethod(env, ...);`
+   - **Instance Methods:** `obj->instanceMethod(env, ...);`
 
-### Writing Build Rules
-1. Find or add a `generate_jni` target with your .java file, then add its `_java`
-   subtarget to your `deps`.
+**Note**: For test-only methods, use `@CalledByNativeForTesting` which will
+ensure that it is stripped in our release binaries.
 
-   ```python
-   generate_jni("abcd_jni") {
-     sources = [ "path/to/java/sources/with/jni/Annotations.java" ]
-   }
+#### Example:
 
-   android_library("abcd_java") {
-     ...
-     # For the generated `${OriginalClassName}Jni` classes.
-     deps = [ ":abcd_jni_java" ]
-   }
+**Java**
 
-   source_set("abcd") {
-    ...
-    # Allows the cpp files to include the generated `${OriginalClassName}_jni.h`
-    # headers.
-    deps = [ ":abcd_jni" ]
-   }
-   ```
-
-### Automatic Type Conversions using @JniType
-
-Normally, Java types map to C++ types from `<jni.h>` (`jobject` for
-reference types, `jint` for `int`, etc). The first thing most people do is
-convert the jni spec types into standard C++ types.
-
-`@JniType` to the rescue. By annotating a parameter or a return type with
-`@JniType("cpp_type_here")` the generated code will automatically convert from
-the jni type to the type listed inside the annotation. See example:
-
-#### Original Code:
 ```java
 class MyClass {
-  @NativeMethods
-  interface Natives {
-    void foo(
-            String string,
-            String[] strings,
-            MyClass obj,
-            MyClass[] objs)
+  @CalledByNative MyClass() {}
+
+  @CalledByNative int method() {
+      return 0;
   }
 }
 ```
 
+**C++**
+
 ```c++
 #include "third_party/jni_zero/jni_zero.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "<path to BUILD.gn>/<generate_jni target name>/MyClass_jni.h"
 
-void JNI_MyClass_Foo(JNIEnv* env, const JavaRef&, const JavaRef&, const JavaRef&, JavaRef&) {...}
+void Example() {
+    JNIEnv* env = jni_zero::AttachCurrentThread();
+    jni_zero::ScopedJavaLocalRef<JMyClass> ref = MyClassJni::New(env);
+    ref->method(env);
+}
 ```
 
-#### After using `@JniType`
+#### Legacy Syntax
+
+Calling methods like: `Java_ClassName_methodName(env, ...)`.
+
+This syntax still works, but support will be dropped when all usages are
+migrated. It does not use `jobject` subclasses.
+
+### Automatic Type Conversions using @JniType {#jnitype}
+
+Normally, JNI Zero maps Java types to C++ types as follows:
+
+| Java Type          | C++ Type        |
+| :----------------- | :-------------- |
+| `String`           | `jstring`       |
+| `Throwable`        | `jthrowable`    |
+| `Class`            | `jclass`        |
+| `Any other object` | `jobject`       |
+| `boolean`          | `bool`          |
+| `byte`             | `int8_t`        |
+| `char`             | `uint16_t`      |
+| `short`            | `int16_t`       |
+| `int`              | `int32_t`       |
+| `long`             | `int64_t`       |
+| `float`            | `float`         |
+| `double`           | `double`        |
+| `T[]`              | `jobjectArray`  |
+| `boolean[]`        | `jbooleanArray` |
+| `short[]`          | `jshortArray`   |
+| `...`              | `...`           |
+
+By annotating a parameter or a return type with `@JniType("cpp_type_here")` the
+generated code will convert from the JNI type to the type listed inside the
+annotation.
+
+`@JniType` can be used to convert primitives to enums, or Java types to C++
+types, but **there can be only one conversion for each C++ type**. E.g. you
+cannot have a different conversion from `String <-> std::string` and
+`URI <-> std::string`.
+
+Annotating your class with `@JNINamespace("foo")` will result in a
+`using namespace ::foo;` being added to the codegen, allowing for `@JniType`
+strings to be reference types that are defined in a namespace.
+
+#### Example Usage
+
+**Java**
+
 ```java
 class MyClass {
   @NativeMethods
@@ -220,18 +288,51 @@ class MyClass {
   }
 }
 ```
+
+**C++**
+
 ```c++
 #include "third_party/jni_zero/jni_zero.h"
 #include "<path to BUILD.gn>/<generate_jni target name>/MyClass_jni.h"
 
-void JNI_MyClass_Foo(JNIEnv* env, std::string&, std::vector<std::string>>&, myModule::CPPClass&, std::vector<myModule::CPPClass>&) {...}
+void JNI_MyClass_Foo(JNIEnv* env,
+                     const std::string&,
+                     const std::vector<std::string>>&,
+                     myModule::CPPClass&&,
+                     const std::vector<myModule::CPPClass>&) {
+  ...
+}
 ```
+
+#### Built-in Conversions
+
+JNI Zero provides built-in conversions for several common C++ and Java types
+within `third_party/jni_zero/default_conversions.h`.
+
+| C++ Type           | Java Type          |
+| :----------------- | :----------------- |
+| `std::optional<T>` | `@Nullable T`      |
+| `std::vector<T>`   | `T[]` or `List<T>` |
+| `std::map<K, V>`   | `Map<K, V>`        |
+| `bool`             | `Boolean` (boxed)  |
+| `int32_t`          | `Integer` (boxed)  |
+| `int64_t`          | `Long` (boxed)     |
+| `float`            | `Float` (boxed)    |
+| `double`           | `Double` (boxed)   |
+
+Note: `std::vector<T>` and `std::map<K, V>` conversions work by recursively
+calling `ToJniType` / `FromJniType` on their elements.
+
+Note: When going from C++ -> Java, any collection-like container should work
+(e.g. `std::set`).
+
+For Chromium-specific types (like `std::string` or `base::OnceClosure`), see
+[README.chromium.md](README.chromium.md).
 
 #### Implementing Conversion Functions
 
-Conversion functions must be defined for all types that appear in `@JniType`.
-Forgetting to `#include` the header that defines it will will result in a
-compile error.
+Conversion functions must exist for types that appear in `@JniType`. Forgetting
+to `#include` the header that defines it will will result in a compile error.
 
 ```c++
 // The conversion function primary templates.
@@ -241,7 +342,7 @@ template <typename O>
 ScopedJavaLocalRef<jobject> ToJniType(JNIEnv*, const O&);
 ```
 
-An example conversion function can look like:
+Example conversion function:
 
 ```c++
 #include "third_party/jni_zero/jni_zero.h"
@@ -266,8 +367,9 @@ EXPORT ScopedJavaLocalRef<jstring> ToJniType<std::string>(
 #### Array Conversion Functions
 
 Array conversion functions look different due to the partial specializations.
-The `ToJniType` direction also takes a `jclass` parameter which is the class of the
-array elements, because java requires it when creating a non-primitive array.
+The `ToJniType` direction also takes a `jclass` parameter which is the class of
+the array elements, because java requires it when creating a non-primitive
+array.
 
 ```c++
 template <typename O>
@@ -288,8 +390,34 @@ and thus cannot be `nullptr`. This means some conversion functions that return
 non-nullable types have to handle the situation where the passed in java type is
 null.
 
-JNI Zero defines conversions functions for `std::optional<T>` that will treat
-`nullptr` as missing.
+### Exposing Native Methods
+
+There are two ways to have native methods be found by Java:
+
+1. Explicitly register the name -> function pointer mapping using JNI's
+   `RegisterNatives()` function.
+2. Export the symbols from the shared library, and let the runtime resolve them
+   on-demand (using `dlsym()`) the first time a native method is called.
+
+(2) Is generally preferred due to a smaller code size and less up-front work,
+but (1) is sometimes required (e.g. when OS bugs prevent `dlsym()` from
+working). Both ways are supported.
+
+### JNI Registration for Precompiled Libraries (e.g., AARs)
+
+When integrating third-party libraries (distributed as AARs/Jars) that contain
+JNI, you might need to manually register their native methods. E.g. this is
+required if the native code lives in the app's "base" split, while the Java code
+lives in a non-base split.
+
+JNI Zero provides the `gen-register-natives` command to scan precompiled `.jar`
+files (extracted from AARs), find all `native` methods using `javap`, and
+generate a C++ header with a custom `RegisterNatives` function.
+
+### Exposing Java Methods
+
+JNI Zero ships with R8 configs that disable renaming of symbols that use
+`@CalledByNative`.
 
 ### Testing Mockable Natives
 
@@ -322,57 +450,43 @@ public class AnimationFrameTimeHistogramTest {
 }
 ```
 
-### Special case: APK Splits
-Each APK split with its own native library has its own generated `GEN_JNI`, which is
-`<module_name>_GEN_JNI`. In order to get your split's JNI to use the `<module_name>` prefix, you
-must add your module name into the argument of the `@NativeMethods` annotation.
+### Namespacing GEN_JNI (for APK Splits, or apk_under_test)
 
-So, for example, say your module was named `test_module`. You would annotate
-your `Natives` interface with `@NativeMethods("test_module")`, and this would
-result in `test_module_GEN_JNI`.
+Each `generate_final_jni` target results in a single `GEN_JNI` class. If you use
+JNI Zero in both and `Test.apk` and an `ApkUnderTest.apk`, or with isolated
+splits, then each APK should have its own `GEN_JNI`.
 
+To accomplish this, set `module_name = "name"` in all `generate_jni` targets, as
+well as the final `generate_final_jni` target. This will result in
+`<module_name>_GEN_JNI`.
 
 ### How to Know if Native is Loaded?
 
-You must call `System.loadLibrary("libname")` before making JNI calls, and it
-is up to each application to do so. Using an app's `Application` subclass is a
-good place to do this.
+You must call `System.loadLibrary("libname")` before making JNI calls, and it is
+up to each application to do so. Using an app's `Application` subclass is a good
+place to do this.
 
 #### Chrome-specific Guidance
 
- * Be careful of logic in early initialization where native has not yet been
-   loaded.
- * For tests, JNI Zero's check to ensure that all C++ implementations of JNI
-   methods are included is disabled (due to too many violations). If you hit a
-   `UnsatisfiedLinkError`, it's likely that you are missing a `deps` entry onto
-   the code that implements that C++ side of a JNI method.
+- Be careful of logic in early initialization where native has not yet been
+  loaded.
+- For tests, JNI Zero's check to ensure that all C++ implementations of JNI
+  methods are included is disabled (due to too many violations). If you hit a
+  `UnsatisfiedLinkError`, it's likely that you are missing a `deps` entry onto
+  the code that implements that C++ side of a JNI method.
 
-When you hit a scenario leading to an exception, relocate (or defer) the appropriate call to
-be made to a place where (or time when) you know the native libraries have been initialized (eg.
-`onStartWithNative`, `onNativeInitialized` etc).
+When you hit a scenario leading to an exception, relocate (or defer) the
+appropriate call to be made to a place where (or time when) you know the native
+libraries have been initialized (eg. `onStartWithNative`, `onNativeInitialized`
+etc).
 
 Avoid calling `LibraryLoader.isInitialized()` / `LibraryLoader.isLoaded()`,
 because the tell you only whether `System.loadLibray()` has been called, and
 often return "true" in Robolectric tests, which contain only a small number of
 JNI methods.
 
-One robust solution is to use your own "`sIsNativeReady`" flag that is set via
-a `@CalledByNative` method.
-
-### Java Objects and Garbage Collection
-
-All pointers to Java objects must be registered with JNI in order to prevent
-garbage collection from invalidating them.
-
-For other objects - use smart pointers to store them:
- * `ScopedJavaLocalRef<>` - When lifetime is the current function's scope.
- * `ScopedJavaGlobalRef<>` - When lifetime is longer than the current function's
-   scope.
- * `LeakedJavaGlobalRef<>` - For singletons (avoids having a destructor).
- * `JavaObjectWeakGlobalRef<>` - Weak reference (does not prevent garbage
-   collection).
- * `JavaRef<>&` - Use to accept any of the above as a parameter to a
-   function without creating a redundant registration.
+One robust solution is to use your own "`sIsNativeReady`" flag that is set via a
+`@CalledByNative` method.
 
 ### Additional Guidelines / Advice
 
@@ -384,30 +498,13 @@ If a Java object "owns" a native one, store the pointer via
 `"long mNativeClassName"`. Ensure to eventually call a native method to delete
 the object. For example, have a `close()` that deletes the native object.
 
-## Build Rules
-
- * `generate_jni` - Given a set of Java files, generates a header file to call
-   into Java for all `@CalledByNative` functions. If `@NativeMethods` is
-   present, also generates a `.srcjar` containing `<ClassName>Jni.java`, which
-   should be depended on via the generated GN target
-   `<generate_jni's target name>_java`.
- * `generate_jar_jni` - Given a `.jar` file, generates a header file similar to
-   `generate_jni`, if every method and public field were annotated by
-   `@CalledByNative`.
- * `generate_jni_registration` - Generates a whole-program Java and native
-   link - required for all Java that calls into native via `@NativeMethods`.
- * `shared_library_with_jni` - A wrapper around a native `shared_library`, which
-   also inserts a `__jni_registration` target for the library.
- * `component_with_jni` - Same as `shared_library` but for a `component`.
-
-Refer to [jni_zero.gni](https://source.chromium.org/chromium/chromium/src/+/main:third_party/jni_zero/jni_zero.gni)
-for more about the GN templates.
-
 ## JNI Benchmarking
-Refer to the [performance
-README.](https://source.chromium.org/chromium/chromium/src/+/main:third_party/jni_zero/benchmarks/README.md)
+
+Refer to the
+[performance README.](https://source.chromium.org/chromium/chromium/src/+/main:third_party/jni_zero/benchmarks/README.md)
 
 ## Under the Hood
+
 For `@CalledByNative`, we directly call the `<jni.h>` methods, which are
 basically just reflection APIs, and then add a proguard rule to ensure the
 annotated method/field is kept in Java. The registration step does nothing for
@@ -423,6 +520,7 @@ generated at the registration step, and how the registration works is different
 in different modes.
 
 For examples, we will imagine we have the following two classes:
+
 ```java
 class org.foo.Foo {
   @NativeMethods
@@ -437,7 +535,9 @@ class org.bar.Bar {
   }
 }
 ```
+
 Which will have the 2 `generate_jni` steps output something like:
+
 ```java
 // Java .srcjar outputs
 class FooJni {
@@ -451,6 +551,7 @@ class BarJni {
   }
 }
 ```
+
 ```c++
 // C++ header outputs
 class FooJni {
@@ -463,8 +564,10 @@ int Java_GEN_JNI_org_bar_Bar_b() {
 ```
 
 ### Debug Mode
+
 In debug mode, the `GEN_JNI` is a file containing `native` methods that match
 every single `@NativeMethods` from every `generate_jni` in our program.
+
 ```java
 class GEN_JNI {
   public static native int org_foo_Foo_f();
@@ -473,11 +576,13 @@ class GEN_JNI {
 ```
 
 ### Release Mode
+
 In release mode, the `GEN_JNI.java` is just a callthrough shim to `N.java` (a
 short name to reduce size), and `N` uses multiplexing by signature type to
 reduce the number of JNI functions. Then, we generate a C++ file with matching
 names to the smaller list of functions in `N`, which de-multiplexes back into
 the original functions.
+
 ```java
 class GEN_JNI {
   public static int org_foo_Foo_f() {
@@ -491,9 +596,10 @@ class N {
   public static native int _I(int switchNum);
 }
 ```
+
 ```C++
 // Generated C++ to be compiled into the final binary.
-int Java_N__1V(jint switch_num) {
+int Java_N__1V(int32_t switch_num) {
   switch (switch_num) {
     case 0:
       return org_foo_Foo_f();
@@ -509,48 +615,14 @@ it's so that Chrome can support multiple ABIs with a single Java file - we put
 the smaller (subset) ABI switch numbers first, and the superset ABI's unique
 classes get the final switch numbers.
 
-### Legacy Modes
-These are modes which JNI provides currently, but we hope to remove. Please do
-not add any new uses of these.
-
-#### Using the "native" Keyword
-
-E.g.:
-```
-class Foo {
-    native someMethod();
-}
-```
-
-This is still supported by default, but is less efficient than `@NativeMethods`
-interfaces. We plan to delete support for this.
-
-#### Hashed Names
-This was our old release mode. `GEN_JNI` would call into `N`, just as it does
-for our current release mode, but instead of multipelxing, we'd just take a
-short hash of the name so we have shorter exported string literals. This would
-also change the output of the headers made by `generate_jni`, as they needed to
-likewise have a hashed name generated.
-```java
-class GEN_JNI {
-  public static int org_foo_Foo_f() {
-    return N.MaQxW612();
-  }
-  public static int org_bar_Bar_b() {
-    return N.M2R2WaZb();
-  }
-}
-class N {
-  public static native int MaQxW612();
-  public static native int M2R2WaZb();
-}
-```
-
 #### Per-File Natives
-This was added to make transitioning to JNI Zero easier. The idea is that this
-allows you to partially onboard without needing to use a registration step, so
-no `GEN_JNI` is generated at all, and the `generate_jni` step's outputs look
-different than "normal" mode.
+
+This was added to make transitioning to JNI Zero easier. It allows using
+`@NativeMethods` without needing a registration step at the cost of extra binary
+size by putting the `native` methods directly in the `FooJni` classes.
+
+Example:
+
 ```java
 class FooJni {
   public static int f() {
@@ -566,17 +638,78 @@ class BarJni {
 }
 ```
 
+### Legacy Modes
+
+These are modes which JNI provides currently, but we hope to remove. Please do
+not add any new uses of these.
+
+#### Using the "native" Keyword
+
+E.g.:
+
+```
+class Foo {
+    native someMethod();
+}
+```
+
+This is still supported by default, but is less efficient than `@NativeMethods`
+interfaces. We plan to delete support for this.
+
+#### Hashed Names
+
+This was our old release mode. `GEN_JNI` would call into `N`, just as it does
+for our current release mode, but instead of multipelxing, we'd just take a
+short hash of the name so we have shorter exported string literals. This would
+also change the output of the headers made by `generate_jni`, as they needed to
+likewise have a hashed name generated.
+
+```java
+class GEN_JNI {
+  public static int org_foo_Foo_f() {
+    return N.MaQxW612();
+  }
+  public static int org_bar_Bar_b() {
+    return N.M2R2WaZb();
+  }
+}
+class N {
+  public static native int MaQxW612();
+  public static native int M2R2WaZb();
+}
+```
+
+### Placeholder .jar Files
+
+In the original design of JNI Zero, generated `.java` files would be included
+directly into the `android_library` target that contains the annotated classes.
+This was necessary because the generated files can reference any type that the
+host source files can. If it were a separate library, then we'd have a circular
+dependency (the codegen depends on the original, and the original depends on the
+codegen).
+
+The main downside of using a single target is that the generated `FooJni`
+classes refer to a placeholder "`GEN_JNI`" class, which the host library then
+needs to mark as compile-only (e.g. with `jar_excluded_patterns`). Another
+downside is that if one `android_library` depends on two `generate_jni` srcjars,
+the compiler complains of duplicate `GEN_JNI.java` classes.
+
+To address both of these downsides, we now generate separate `android_library`
+targets for the generated code. To avoid a circuclar dependency, we generate
+placeholder (compile-only) files for each type referenced by the generated code.
+See
+[`testPlaceholdersOverlapping-placeholder.srcjar.golden`](test/golden/testPlaceholdersOverlapping-placeholder.srcjar.golden)
+for an example.
 
 ## Changing JNI Zero
 
- * Python golden tests live in `test/integration_tests.py`
- * A working demo app exists as `sample:jni_zero_sample_apk` and this app is
-   tested in `sample:jni_zero_sample_apk_test`.
- * Compile-only tests exist in `test:jni_zero_compile_check_apk`
- * We are a Chromium project developed in the Chromium repo, but we intend to
-   have no dependencies on Chromium, to allow this project to be easily
-   portable.
- * `jni_zero.py` contains our flags and is the entry point, `jni_generator.py`
-   is the main file for the per-library generation step, and
-   `jni_registration_generator.py` is the main file for the whole-program
-   registration step.
+- Python golden tests live in `test/integration_tests.py`
+- A working demo app exists as `sample:jni_zero_sample_apk` and this app is
+  tested in `sample:jni_zero_sample_apk_test`.
+- Compile-only tests exist in `test:jni_zero_compile_check_apk`
+- We are a Chromium project developed in the Chromium repo, but we intend to
+  have no dependencies on Chromium, to allow this project to be easily portable.
+- `jni_zero.py` contains our flags and is the entry point, `jni_generator.py` is
+  the main file for the per-library generation step, and
+  `jni_registration_generator.py` is the main file for the whole-program
+  registration step.

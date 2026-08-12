@@ -5,23 +5,25 @@
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/secondary_toolbar_view_controller.h"
 
 #import "base/check.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.h"
+#import "ios/chrome/browser/fullscreen/public/fullscreen_metrics.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_controller.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/scoped_fullscreen_disabler.h"
+#import "ios/chrome/browser/shared/public/commands/fullscreen_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/layout_guide_names.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/shared/ui/util/util_swift.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/adaptive_toolbar_view_controller+subclassing.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_button.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_button_factory.h"
+#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/legacy_toolbar_button.h"
+#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/legacy_toolbar_button_factory.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_configuration.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/omnibox_position_util.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_constants.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_height_delegate.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_utils.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/secondary_toolbar_keyboard_state_provider.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/secondary_toolbar_view.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/toolbar_progress_bar.h"
+#import "ios/chrome/browser/toolbar/ui/toolbar_height_delegate.h"
 #import "ios/chrome/common/ui/util/ui_util.h"
 
 @interface SecondaryToolbarViewController ()
@@ -60,6 +62,7 @@
 }
 
 - (void)disconnect {
+  [super disconnect];
   _fullscreenController = nullptr;
   [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
@@ -73,18 +76,29 @@
 
   _locationIndicatorActive = locationIndicatorActive;
 
-  if (locationIndicatorActive) {
-    if (_fullscreenController) {
-      _fullscreenController->EnterForceFullscreenMode(
-          /* insets_update_enabled */ false);
+  FullscreenModeTransitionTrigger trigger =
+      FullscreenModeTransitionTrigger::kForcedByCode;
+
+  if (IsFullscreenRefactoringEnabled()) {
+    if (locationIndicatorActive) {
+      [self.fullscreenCommands enterFullscreenWithTrigger:trigger animated:YES];
+    } else {
+      [self.fullscreenCommands exitFullscreenWithTrigger:trigger animated:YES];
     }
+  } else if (_fullscreenController) {
+    if (locationIndicatorActive) {
+      _fullscreenController->EnterForceFullscreenMode(
+          /* insets_update_enabled */ false, trigger);
+    } else {
+      _fullscreenController->ExitForceFullscreenMode(trigger);
+    }
+  }
+
+  if (locationIndicatorActive) {
     self.view.locationBarTopConstraint.constant = 0;
     self.view.bottomSeparator.alpha = 1.0;
     [self.toolbarHeightDelegate secondaryToolbarMovedAboveKeyboard];
   } else {
-    if (_fullscreenController) {
-      _fullscreenController->ExitForceFullscreenMode();
-    }
     self.view.bottomSeparator.alpha = 0.0;
     [self.toolbarHeightDelegate secondaryToolbarRemovedFromKeyboard];
   }
@@ -159,11 +173,11 @@
       hasBottomSafeArea ? kBottomAdaptiveLocationBarVerticalMarginFullscreen
                         : 0;
 
-  return AlignValueToPixel((kBottomAdaptiveLocationBarTopMargin * progress +
-                            fullscreenMargin * (1 - progress)) *
-                               clampedFontSizeMultiplier +
-                           (clampedFontSizeMultiplier - 1) *
-                               kLocationBarVerticalMarginDynamicType);
+  return AlignValueToLowerPixel(
+      (kBottomAdaptiveLocationBarTopMargin * progress +
+       fullscreenMargin * (1 - progress)) *
+          clampedFontSizeMultiplier +
+      (clampedFontSizeMultiplier - 1) * kLocationBarVerticalMarginDynamicType);
 }
 
 /// Updates keyboard constraints with `notification`. When
@@ -171,6 +185,14 @@
 - (void)constraintToKeyboard:(BOOL)shouldConstraintToKeyboard
             withNotification:(NSNotification*)notification {
   if (!self.hasOmnibox) {
+    // When switching to landscape, the bottom omnibox is not available. If
+    // the location indicator was previously active (e.g. Find in Page was open
+    // in portrait), clean up the state so that ExitForceFullscreenMode is
+    // called to balance the earlier EnterForceFullscreenMode.
+    // See crbug.com/498378084 for more context.
+    if (self.locationIndicatorActive) {
+      self.locationIndicatorActive = NO;
+    }
     return;
   }
 
@@ -180,24 +202,19 @@
       !shouldConstraintToKeyboard && self.locationIndicatorActive;
 
   // Whether to show the secondary toolbar as a location indicator when keyboard
-  // is active for web content. Bottom omnibox exclusive.
+  // is active for web content or the Find navigator is visible. Bottom omnibox
+  // exclusive.
   BOOL keyboardActiveForWebContent =
       [self.keyboardStateProvider keyboardIsActiveForWebContent];
-  BOOL showLocationIndicator = shouldConstraintToKeyboard &&
-                               keyboardActiveForWebContent &&
-                               !hideLocationIndicator;
+  BOOL findNavigatorVisible =
+      [self.keyboardStateProvider isFindNavigatorVisibleForWebContent];
+  BOOL showLocationIndicator =
+      shouldConstraintToKeyboard &&
+      (keyboardActiveForWebContent || findNavigatorVisible) &&
+      !hideLocationIndicator;
 
-  // Whether the toolbar containing the omnibox should follow the keyboard.
-  BOOL followSteadyStateEnabled =
-      omnibox::ShouldFocusedOmniboxFollowSteadyStatePosition();
-  BOOL forceBottomOmniboxInEditState = omnibox::ForceBottomOmniboxInEditState();
-  BOOL omniboxAttachedInEditState =
-      !keyboardActiveForWebContent &&
-      (followSteadyStateEnabled || forceBottomOmniboxInEditState);
-
-  BOOL shouldAnimateOmniboxMovement = showLocationIndicator ||
-                                      hideLocationIndicator ||
-                                      omniboxAttachedInEditState;
+  BOOL shouldAnimateOmniboxMovement =
+      showLocationIndicator || hideLocationIndicator;
   if (!shouldAnimateOmniboxMovement) {
     return;
   }
@@ -224,7 +241,14 @@
       visibleKeyboardHeight = [self inputAccessoryHeightInWindow];
     } else {
       visibleKeyboardHeight =
-          [self keyboardHeightInWindowFromNotification:notification];
+          VisibleKeyboardHeightFromNotification(notification, self.view.window);
+      // If the Find navigator is visible and the toolbar is constrained to the
+      // keyboard, then add room for the collapsed toolbar to be visible above
+      // the keyboard.
+      if (findNavigatorVisible) {
+        visibleKeyboardHeight += ToolbarCollapsedHeight(
+            self.traitCollection.preferredContentSizeCategory);
+      }
     }
   }
 
@@ -250,20 +274,45 @@
   return self.view.window.frame.size.height - rectInWindowIA.origin.y;
 }
 
-// Returns the user visible height of the keyboard.
-- (CGFloat)keyboardHeightInWindowFromNotification:
-    (NSNotification*)notification {
-  NSDictionary* userInfo = notification.userInfo;
-  // Part of the keyboard might be hidden. Keep only the visible area.
-  CGRect keyboardFrame = [userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
-  id<UICoordinateSpace> fromCoordinateSpace =
-      ((UIScreen*)notification.object).coordinateSpace;
-  id<UICoordinateSpace> toCoordinateSpace = self.view.window;
-  CGRect keyboardFrameInWindow =
-      [fromCoordinateSpace convertRect:keyboardFrame
-                     toCoordinateSpace:toCoordinateSpace];
-  return CGRectIntersection(keyboardFrameInWindow, self.view.window.bounds)
-      .size.height;
+// The minimum height of this toolbar.
+- (CGFloat)minHeight {
+  UIContentSizeCategory category =
+      self.traitCollection.preferredContentSizeCategory;
+  return self.hasOmnibox ? ToolbarCollapsedHeight(category) : 0;
+}
+
+// The maximum height of this toolbar.
+- (CGFloat)maxHeight {
+  UIContentSizeCategory category =
+      self.traitCollection.preferredContentSizeCategory;
+  CGFloat maxHeight = self.view.intrinsicContentSize.height;
+  if (self.hasOmnibox) {
+    maxHeight += ToolbarExpandedHeight(category);
+  }
+  return maxHeight;
+}
+
+#pragma mark - FullscreenBrowserAgentObserving
+
+- (void)fullscreenWillUpdateObscuredInsetRange:(FullscreenBrowserAgent*)agent {
+  if (!IsSplitToolbarMode(self)) {
+    return;
+  }
+  agent->AddObscuredInsetRange(UIRectEdgeBottom, [self minHeight],
+                               [self maxHeight]);
+}
+
+- (void)fullscreenWillUpdateState:(FullscreenBrowserAgent*)agent {
+  if (!IsSplitToolbarMode(self)) {
+    return;
+  }
+  [self updateForFullscreenProgress:agent->bottom_progress()];
+  [self.view layoutIfNeeded];
+  CGFloat minHeight = [self minHeight];
+  CGFloat maxHeight = [self maxHeight];
+  CGFloat currentHeight =
+      minHeight + (maxHeight - minHeight) * agent->bottom_progress();
+  agent->AddObscuredInset(UIRectEdgeBottom, currentHeight);
 }
 
 #pragma mark - ToolbarAnimatee
@@ -299,18 +348,25 @@
 }
 
 - (void)setLocationBarHeightExpanded {
-  // With multine omnibox the location bar edit state height is managed by the
-  // toolbar coordinator. This will only update the expanded corner radius.
-  if (IsMultilineBrowserOmniboxEnabled()) {
-    self.view.locationBarContainer.layer.cornerRadius =
-        LocationBarHeight(self.traitCollection.preferredContentSizeCategory) /
-        2;
-  }
+  // NO OP.
 }
 
 // Changes related to the toolbar itself.
 - (void)setToolbarFaded:(BOOL)faded {
   self.view.alpha = faded ? 0 : 1;
+}
+
+#pragma mark - Properties
+
+- (void)setLocationBarViewController:
+    (UIViewController*)locationBarViewController {
+  // Resets `locationIndicatorActive` when the location bar is removed. This
+  // prevents an inconsistent active indicator state (and potential crash) when
+  // the secondary toolbar no longer has an omnibox.
+  [super setLocationBarViewController:locationBarViewController];
+  if (!self.hasOmnibox && self.locationIndicatorActive) {
+    self.locationIndicatorActive = NO;
+  }
 }
 
 @end

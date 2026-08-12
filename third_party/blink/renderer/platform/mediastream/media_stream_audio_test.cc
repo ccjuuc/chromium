@@ -8,6 +8,7 @@
 
 #include "base/atomicops.h"
 #include "base/compiler_specific.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/test/task_environment.h"
@@ -206,7 +207,7 @@ class FakeMediaStreamAudioSink final : public WebMediaStreamAudioSink {
       base::subtle::NoBarrier_Store(&audio_is_silent_, 0);
       base::span<const float> data = audio_bus.channel(0);
       if (expected_sample_count_ == -1) {
-        expected_sample_count_ = static_cast<int64_t>(data[0]);
+        expected_sample_count_ = base::checked_cast<int>(data[0]);
       }
       CHECK_LE(expected_sample_count_ + audio_bus.frames(),
                kMaxValueSafelyConvertableToFloat);
@@ -252,9 +253,8 @@ class MediaStreamAudioTest : public ::testing::Test {
  protected:
   void SetUp() override {
     audio_source_ = MakeGarbageCollected<MediaStreamSource>(
-        String::FromUTF8("audio_id"), MediaStreamSource::kTypeAudio,
-        String::FromUTF8("audio_track"), false /* remote */,
-        std::make_unique<FakeMediaStreamAudioSource>());
+        "audio_id", MediaStreamSource::kTypeAudio, "audio_track",
+        false /* remote */, std::make_unique<FakeMediaStreamAudioSource>());
     audio_component_ = MakeGarbageCollected<MediaStreamComponentImpl>(
         audio_source_->Id(), audio_source_,
         std::make_unique<MediaStreamAudioTrack>(true /* is_local_track */));

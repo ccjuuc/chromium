@@ -58,15 +58,15 @@ class StorageExternalEntryElement extends StorageExternalEntryElementBase {
     ];
   }
 
-  label: string;
-  uuid: string;
-  private visiblePref_: chrome.settingsPrivate.PrefObject<boolean>;
+  declare label: string;
+  declare uuid: string;
+  declare private visiblePref_: chrome.settingsPrivate.PrefObject<boolean>;
 
   /**
    * Handler for when the toggle button for this entry is clicked by a user.
    */
   private onVisibleChange_(event: Event): void {
-    const isVisible = !!(event.target as SettingsToggleButtonElement).checked;
+    const isVisible = (event.target as SettingsToggleButtonElement).checked;
     if (isVisible) {
       this.appendPrefListItem('arc.visible_external_storages', this.uuid);
     } else {

@@ -17,13 +17,12 @@
 #include "gpu/command_buffer/client/client_shared_image.h"
 #include "gpu/command_buffer/client/gles2_interface.h"
 #include "gpu/command_buffer/client/shared_image_interface.h"
+#include "gpu/command_buffer/client/shared_image_pool.h"
 #include "gpu/command_buffer/common/mailbox.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/common/sync_token.h"
 #include "skia/buildflags.h"
 #include "third_party/blink/public/platform/web_graphics_shared_image_interface_provider.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_high_entropy_op_type.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_resource_provider.h"
 #include "third_party/blink/renderer/platform/graphics/web_graphics_context_3d_provider_wrapper.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
@@ -37,12 +36,6 @@ class SkSurface;
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_CANVAS_RESOURCE_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_CANVAS_RESOURCE_H_
 
-namespace gfx {
-
-class ColorSpace;
-
-}  // namespace gfx
-
 namespace gpu::raster {
 
 class RasterInterface;
@@ -51,7 +44,6 @@ class RasterInterface;
 
 namespace blink {
 
-class CanvasResourceProviderSharedImage;
 class StaticBitmapImage;
 
 // Generic resource interface, used for locking (RAII) and recycling pixel
@@ -59,21 +51,12 @@ class StaticBitmapImage;
 // Note that this object may be accessed across multiple threads but not
 // concurrently. The caller is responsible to call Transfer on the object before
 // using it on a different thread.
-class PLATFORM_EXPORT CanvasResource
-    : public ThreadSafeRefCounted<CanvasResource> {
+class PLATFORM_EXPORT CanvasResource : public gpu::ClientImage {
  public:
   using ReleaseCallback = base::OnceCallback<void(
       scoped_refptr<blink::CanvasResource>&& canvas_resource,
       const gpu::SyncToken& sync_token,
       bool is_lost)>;
-
-  using LastUnrefCallback = base::OnceCallback<void(
-      scoped_refptr<blink::CanvasResource> canvas_resource)>;
-
-  virtual ~CanvasResource();
-
-  static void OnPlaceholderReleasedResource(
-      scoped_refptr<CanvasResource> resource);
 
   // Returns true if this instance creates TransferableResources for usage with
   // GPU compositing.
@@ -81,21 +64,18 @@ class PLATFORM_EXPORT CanvasResource
 
   virtual void OnRefReturned(scoped_refptr<CanvasResource>&& resource) {}
 
+  static void DropRefOnOwningThread(scoped_refptr<CanvasResource> resource);
+
   // Returns true if the resource is still usable. It maybe not be valid in the
   // case of a context loss or if we fail to initialize the memory backing for
   // the resource.
   virtual bool IsValid() const = 0;
 
   // The bounds for this resource.
-  gfx::Size Size() const { return GetClientSharedImage()->size(); }
+  gfx::Size Size() const { return GetSharedImage()->size(); }
   base::ByteSize EstimatedSizeInBytes() const {
-    return GetClientSharedImage()->EstimatedSizeInBytes();
+    return GetSharedImage()->EstimatedSizeInBytes();
   }
-
-  // The ClientSharedImage containing information on the SharedImage
-  // attached to the resource.
-  virtual const scoped_refptr<gpu::ClientSharedImage>& GetClientSharedImage()
-      const = 0;
 
   // A CanvasResource is not thread-safe and does not allow concurrent usage
   // from multiple threads. But it maybe used from any thread. It remains bound
@@ -107,7 +87,6 @@ class PLATFORM_EXPORT CanvasResource
   // Provides a TransferableResource representation of this resource to share it
   // with the compositor.
   bool PrepareTransferableResource(viz::TransferableResource*,
-                                   ReleaseCallback*,
                                    bool needs_verified_synctoken);
 
   // Issues a wait for this sync token on the context used by this resource for
@@ -116,13 +95,6 @@ class PLATFORM_EXPORT CanvasResource
 
   bool OriginClean() const { return is_origin_clean_; }
   void SetOriginClean(bool flag) { is_origin_clean_ = flag; }
-
-  HighEntropyCanvasOpType HighEntropyCanvasOpTypes() const {
-    return high_entropy_canvas_op_types_;
-  }
-  void SetHighEntropyCanvasOpTypes(HighEntropyCanvasOpType types) {
-    high_entropy_canvas_op_types_ = types;
-  }
 
   // Provides a StaticBitmapImage wrapping this resource. Commonly used for
   // snapshots not used in compositing (for instance to draw to another canvas).
@@ -141,10 +113,16 @@ class PLATFORM_EXPORT CanvasResource
     return base::PlatformThread::CurrentRef() != owning_thread_ref_;
   }
 
- protected:
-  CanvasResource();
+  const gpu::SyncToken& sync_token() const { return GetSyncToken(); }
 
-  virtual gfx::HDRMetadata GetHDRMetadata() const { return gfx::HDRMetadata(); }
+ protected:
+  explicit CanvasResource(scoped_refptr<gpu::ClientSharedImage> shared_image);
+
+  static void ReleaseFrameResources(scoped_refptr<CanvasResource>&& resource,
+                                    const gpu::SyncToken& sync_token,
+                                    bool lost_resource);
+
+  virtual const gfx::HDRMetadata& GetHdrMetadata() const = 0;
   virtual viz::TransferableResource::ResourceSource
   GetTransferableResourceSource() const {
     return viz::TransferableResource::ResourceSource::kCanvas;
@@ -161,11 +139,9 @@ class PLATFORM_EXPORT CanvasResource
   const scoped_refptr<base::SingleThreadTaskRunner> owning_thread_task_runner_;
 
  private:
-  friend class CanvasResourceProviderTest;
+  friend class Canvas2DResourceProviderTest;
   friend class WebGPUMailboxTexture;
-
-  static void OnPlaceholderReleasedResourceOnOwningThread(
-      scoped_refptr<CanvasResource> resource);
+  friend class ExportedCanvasResource;
 
   // Returns true if the resource is rastered via the GPU.
   virtual bool UsesAcceleratedRaster() const = 0;
@@ -175,41 +151,54 @@ class PLATFORM_EXPORT CanvasResource
   // token is already verified by GetSyncToken() so this function is no-op for
   // those classes.
   virtual void VerifySyncToken() {}
-  virtual const gpu::SyncToken& sync_token() const = 0;
 
   bool is_origin_clean_ = true;
-  HighEntropyCanvasOpType high_entropy_canvas_op_types_ =
-      HighEntropyCanvasOpType::kNone;
 };
 
 // Resource type for SharedImage
 class PLATFORM_EXPORT CanvasResourceSharedImage final : public CanvasResource {
  public:
-  static scoped_refptr<CanvasResourceSharedImage> CreateSoftware(
+  class Client {
+   public:
+    virtual ~Client() = default;
+    virtual void OnResourceRefReturned(
+        scoped_refptr<CanvasResourceSharedImage>&& resource) = 0;
+    virtual void OnDestroyResource() = 0;
+  };
+
+  explicit CanvasResourceSharedImage(
+      scoped_refptr<gpu::ClientSharedImage> shared_image);
+
+  static scoped_refptr<CanvasResourceSharedImage> CreateForTesting(
       gfx::Size size,
       viz::SharedImageFormat format,
       SkAlphaType alpha_type,
       const gfx::ColorSpace& color_space,
-      base::WeakPtr<CanvasResourceProviderSharedImage>,
+      gpu::SharedImageUsageSet shared_image_usage_flags,
+      bool is_software,
+      bool is_accelerated,
+      base::WeakPtr<Client>,
+      base::WeakPtr<WebGraphicsContext3DProviderWrapper>,
       base::WeakPtr<WebGraphicsSharedImageInterfaceProvider>);
 
-  static scoped_refptr<CanvasResourceSharedImage> Create(
-      gfx::Size size,
-      viz::SharedImageFormat format,
-      SkAlphaType alpha_type,
-      const gfx::ColorSpace& color_space,
-      base::WeakPtr<WebGraphicsContext3DProviderWrapper>,
-      base::WeakPtr<CanvasResourceProviderSharedImage>,
-      bool is_accelerated,
-      gpu::SharedImageUsageSet shared_image_usage_flags);
-  ~CanvasResourceSharedImage() override;
+  void InitializeSoftware(base::WeakPtr<Client> client,
+                          base::WeakPtr<WebGraphicsSharedImageInterfaceProvider>
+                              shared_image_interface_provider,
+                          const gfx::HDRMetadata& hdr_metadata);
+  void Initialize(base::WeakPtr<Client> client,
+                  base::WeakPtr<WebGraphicsContext3DProviderWrapper>
+                      context_provider_wrapper,
+                  const gfx::HDRMetadata& hdr_metadata,
+                  bool is_accelerated);
+  bool IsInitialized() const { return is_initialized_; }
 
   bool CreatesAcceleratedTransferableResources() const override {
-    return !GetClientSharedImage()->is_software();
+    return !GetSharedImage()->is_software();
   }
   void OnRefReturned(scoped_refptr<CanvasResource>&& resource) final;
   bool IsValid() const final;
   scoped_refptr<StaticBitmapImage> Bitmap() final;
+  const gfx::HDRMetadata& GetHdrMetadata() const final { return hdr_metadata_; }
   void Transfer() final;
 
   // Save (and wait on) this sync token on the context used by this resource for
@@ -223,12 +212,13 @@ class PLATFORM_EXPORT CanvasResourceSharedImage final : public CanvasResource {
 
   void NotifyResourceLost() final;
 
-  bool IsLost() const { return owning_thread_data().is_lost; }
+  bool IsLost() const {
+    DCHECK(!is_cross_thread());
+    return resource_is_lost_;
+  }
 
-  const scoped_refptr<gpu::ClientSharedImage>& GetClientSharedImage()
-      const override;
   void OnMemoryDump(base::trace_event::ProcessMemoryDump* pmd,
-                    const std::string& parent_path) const;
+                    const std::string& parent_path) const override;
 
   SkImageInfo CreateSkImageInfo() const;
 
@@ -242,59 +232,21 @@ class PLATFORM_EXPORT CanvasResourceSharedImage final : public CanvasResource {
   // Should be called only if the resource is using software raster.
   void UploadSoftwareRenderingResults(SkSurface* sk_surface);
 
-  void PrepareForWebGPUDummyMailbox();
-
  private:
-  friend class CanvasResourceProviderSharedImage;
-
-  // These members are either only accessed on the owning thread, or are only
-  // updated on the owning thread and then are read on a different thread.
-  // We ensure to correctly update their state in Transfer, which is called
-  // before a resource is used on a different thread.
-  struct OwningThreadData {
-    scoped_refptr<gpu::ClientSharedImage> client_shared_image;
-    gpu::SyncToken sync_token;
-    bool is_lost = false;
-  };
-
   base::WeakPtr<WebGraphicsContext3DProviderWrapper> ContextProviderWrapper()
       const override;
   void VerifySyncToken() override;
   bool UsesAcceleratedRaster() const final { return is_accelerated_; }
 
-  CanvasResourceProviderSharedImage* Provider();
-
-  CanvasResourceSharedImage(
-      gfx::Size size,
-      viz::SharedImageFormat format,
-      SkAlphaType alpha_type,
-      const gfx::ColorSpace& color_space,
-      base::WeakPtr<CanvasResourceProviderSharedImage>,
-      base::WeakPtr<WebGraphicsSharedImageInterfaceProvider>);
-
-  CanvasResourceSharedImage(gfx::Size size,
-                            viz::SharedImageFormat format,
-                            SkAlphaType alpha_type,
-                            const gfx::ColorSpace& color_space,
-                            base::WeakPtr<WebGraphicsContext3DProviderWrapper>,
-                            base::WeakPtr<CanvasResourceProviderSharedImage>,
-                            bool is_accelerated,
-                            gpu::SharedImageUsageSet shared_image_usage_flags);
-
-  OwningThreadData& owning_thread_data() {
-    DCHECK(!is_cross_thread());
-    return owning_thread_data_;
-  }
-  const OwningThreadData& owning_thread_data() const {
-    DCHECK(!is_cross_thread());
-    return owning_thread_data_;
-  }
-
-  const gpu::SyncToken& sync_token() const override {
-    return owning_thread_data_.sync_token;
-  }
+  ~CanvasResourceSharedImage() override;
 
   SkAlphaType GetAlphaType() const { return alpha_type_; }
+
+  // These members are either only accessed on the owning thread, or are only
+  // updated on the owning thread and then are read on a different thread.
+  // We ensure to correctly update their state in Transfer, which is called
+  // before a resource is used on a different thread.
+  bool resource_is_lost_ = false;
 
   // This should only be de-referenced on the owning thread but may be copied
   // on a different thread.
@@ -302,10 +254,11 @@ class PLATFORM_EXPORT CanvasResourceSharedImage final : public CanvasResource {
   gpu::SyncToken acquire_sync_token_;
 
   // Accessed on any thread.
-  const bool is_accelerated_;
+  bool is_accelerated_ = false;
+  bool is_initialized_ = false;
   const SkAlphaType alpha_type_;
-  OwningThreadData owning_thread_data_;
-  base::WeakPtr<CanvasResourceProviderSharedImage> provider_;
+  gfx::HDRMetadata hdr_metadata_;
+  base::WeakPtr<Client> client_;
 };
 
 // Resource type for a given opaque external resource described on construction
@@ -317,25 +270,21 @@ class PLATFORM_EXPORT ExternalCanvasResource final : public CanvasResource {
       scoped_refptr<gpu::ClientSharedImage> client_si,
       const gpu::SyncToken& sync_token,
       viz::TransferableResource::ResourceSource resource_source,
-      gfx::HDRMetadata hdr_metadata,
+      const gfx::HDRMetadata& hdr_metadata,
       viz::ReleaseCallback release_callback,
       base::WeakPtr<WebGraphicsContext3DProviderWrapper>);
 
-  ~ExternalCanvasResource() override;
   bool IsValid() const override;
   bool CreatesAcceleratedTransferableResources() const override { return true; }
   void NotifyResourceLost() override { resource_is_lost_ = true; }
-  const scoped_refptr<gpu::ClientSharedImage>& GetClientSharedImage()
-      const final {
-    return client_si_;
-  }
   void WaitSyncToken(const gpu::SyncToken&) override;
-  void GetSyncToken();
 
   scoped_refptr<StaticBitmapImage> Bitmap() override;
+  const gfx::HDRMetadata& GetHdrMetadata() const override {
+    return hdr_metadata_;
+  }
 
  private:
-  gfx::HDRMetadata GetHDRMetadata() const final { return hdr_metadata_; }
   viz::TransferableResource::ResourceSource GetTransferableResourceSource()
       const final {
     return resource_source_;
@@ -349,22 +298,21 @@ class PLATFORM_EXPORT ExternalCanvasResource final : public CanvasResource {
       scoped_refptr<gpu::ClientSharedImage> client_si,
       const gpu::SyncToken& sync_token,
       viz::TransferableResource::ResourceSource resource_source,
-      gfx::HDRMetadata hdr_metadata,
+      const gfx::HDRMetadata& hdr_metadata,
       viz::ReleaseCallback out_callback,
       base::WeakPtr<WebGraphicsContext3DProviderWrapper>);
+  ~ExternalCanvasResource() override;
 
-  SkAlphaType GetAlphaType() const { return alpha_type_; }
-  const gpu::SyncToken& sync_token() const override { return sync_token_; }
-
-  scoped_refptr<gpu::ClientSharedImage> client_si_;
   const base::WeakPtr<WebGraphicsContext3DProviderWrapper>
       context_provider_wrapper_;
-  gpu::SyncToken sync_token_;
   viz::TransferableResource::ResourceSource resource_source_;
-  gfx::HDRMetadata hdr_metadata_;
+  const gfx::HDRMetadata hdr_metadata_;
   viz::ReleaseCallback release_callback_;
   bool resource_is_lost_ = false;
   const SkAlphaType alpha_type_;
+
+  // SyncToken to wait on at destruction.
+  gpu::SyncToken destruction_sync_token_;
 };
 
 }  // namespace blink

@@ -20,8 +20,20 @@
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "mojo/core/embedder/embedder.h"
+#include "remoting/base/buildflags.h"
 #include "remoting/base/crash/crash_reporting_crashpad.h"
 #include "remoting/base/logging.h"
+
+#if BUILDFLAG(IS_LINUX)
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "base/files/file_util.h"
+#include "base/posix/eintr_wrapper.h"
+#include "remoting/base/file_path_util_linux.h"
+#endif  // BUILDFLAG(IS_LINUX)
+
+#include "remoting/base/memory_consumer_registry.h"
 #include "remoting/host/base/host_exit_codes.h"
 #include "remoting/host/base/switches.h"
 #include "remoting/host/evaluate_capability.h"
@@ -45,19 +57,52 @@
 namespace remoting {
 
 // Known entry points.
-int HostProcessMain();
-#if BUILDFLAG(IS_WIN)
+int SingleProcessHostProcessMain();
+#if BUILDFLAG(REMOTING_MULTI_PROCESS)
+int NetworkProcessMain();
 int DaemonProcessMain();
 int DesktopProcessMain();
+int PeerConnectionProcessMain();
+#endif
+#if BUILDFLAG(IS_WIN)
 int FileChooserMain();
 int RdpDesktopSessionMain();
 int UrlForwarderConfiguratorMain();
 #endif  // BUILDFLAG(IS_WIN)
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX)
 int XSessionChooserMain();
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#endif  // BUILDFLAG(IS_LINUX)
 
 namespace {
+
+#if BUILDFLAG(IS_LINUX)
+void EnsureVarLibDirectory() {
+  if (getuid() != 0) {
+    // Only do this in the daemon process, which is always run as root.
+    return;
+  }
+
+  base::FilePath var_lib_dir = GetVarLibDir();
+  if (base::PathExists(var_lib_dir) && !base::DirectoryExists(var_lib_dir)) {
+    if (!base::DeletePathRecursively(var_lib_dir)) {
+      PLOG(FATAL) << "Failed to delete non-directory " << var_lib_dir;
+    }
+  }
+  base::File::Error error;
+  if (!base::CreateDirectoryAndGetError(var_lib_dir, &error)) {
+    LOG(FATAL) << "Failed to create " << var_lib_dir << ": "
+               << base::File::ErrorToString(error);
+  }
+  // Allow other users to list and read files and directories, but not write to
+  // it.
+  if (HANDLE_EINTR(chmod(var_lib_dir.value().c_str(), 0755)) != 0) {
+    PLOG(ERROR) << "Failed to chmod " << var_lib_dir;
+    if (!base::DeletePathRecursively(var_lib_dir)) {
+      PLOG(FATAL) << "Failed to delete " << var_lib_dir;
+    }
+  }
+}
+#endif  // BUILDFLAG(IS_LINUX)
 
 typedef int (*MainRoutineFn)();
 
@@ -143,13 +188,19 @@ int RunElevated() {
 MainRoutineFn SelectMainRoutine(const std::string& process_type) {
   MainRoutineFn main_routine = nullptr;
 
-  if (process_type == kProcessTypeHost) {
-    main_routine = &HostProcessMain;
-#if BUILDFLAG(IS_WIN)
+  if (process_type == kProcessTypeSingleProcessHost) {
+    main_routine = &SingleProcessHostProcessMain;
+#if BUILDFLAG(REMOTING_MULTI_PROCESS)
+  } else if (process_type == kProcessTypeNetwork) {
+    main_routine = &NetworkProcessMain;
   } else if (process_type == kProcessTypeDaemon) {
     main_routine = &DaemonProcessMain;
   } else if (process_type == kProcessTypeDesktop) {
     main_routine = &DesktopProcessMain;
+  } else if (process_type == kProcessTypePeerConnection) {
+    main_routine = &PeerConnectionProcessMain;
+#endif
+#if BUILDFLAG(IS_WIN)
   } else if (process_type == kProcessTypeFileChooser) {
     main_routine = &FileChooserMain;
   } else if (process_type == kProcessTypeRdpDesktopSession) {
@@ -157,10 +208,10 @@ MainRoutineFn SelectMainRoutine(const std::string& process_type) {
   } else if (process_type == kProcessTypeUrlForwarderConfigurator) {
     main_routine = &UrlForwarderConfiguratorMain;
 #endif  // BUILDFLAG(IS_WIN)
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX)
   } else if (process_type == kProcessTypeXSessionChooser) {
     main_routine = &XSessionChooserMain;
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#endif  // BUILDFLAG(IS_LINUX)
   }
 
   return main_routine;
@@ -169,6 +220,9 @@ MainRoutineFn SelectMainRoutine(const std::string& process_type) {
 }  // namespace
 
 int HostMain(int argc, char** argv) {
+  base::ScopedMemoryConsumerRegistry<remoting::MemoryConsumerRegistry>
+      memory_consumer_registry;
+
 #if BUILDFLAG(IS_APPLE)
   // Needed so we don't leak objects when threads are created.
   base::apple::ScopedNSAutoreleasePool pool;
@@ -196,8 +250,8 @@ int HostMain(int argc, char** argv) {
   }
 #endif  // BUILDFLAG(IS_WIN)
 
-  // Assume the host process by default.
-  std::string process_type = kProcessTypeHost;
+  // Assume the single-process host process by default.
+  std::string process_type = kProcessTypeSingleProcessHost;
   if (command_line->HasSwitch(kProcessTypeSwitchName)) {
     process_type = command_line->GetSwitchValueASCII(kProcessTypeSwitchName);
   }
@@ -217,6 +271,10 @@ int HostMain(int argc, char** argv) {
 
   // Enable debug logs.
   InitHostLogging();
+
+#if BUILDFLAG(IS_LINUX)
+  EnsureVarLibDirectory();
+#endif  // BUILDFLAG(IS_LINUX)
 
 #if defined(REMOTING_ENABLE_CRASH_REPORTING)
   // Initialize crash reporting as early as possible. On Mac the command-line
@@ -263,16 +321,18 @@ int HostMain(int argc, char** argv) {
 
   remoting::LoadResources("");
 
-  mojo::core::Init({
-#if BUILDFLAG(IS_WIN)
-      .is_broker_process = main_routine == &DaemonProcessMain
-#elif BUILDFLAG(IS_MAC)
-      // The broker process on Mac is the agent process broker.
-      .is_broker_process = false
-#else
-      .is_broker_process = main_routine == &HostProcessMain
+  bool is_broker_process = false;
+#if !BUILDFLAG(IS_MAC)
+  // The single-process host process should act as the mojo broker, except on
+  // Mac, where the broker process is the agent process broker.
+  is_broker_process |= main_routine == &SingleProcessHostProcessMain;
 #endif
-  });
+#if BUILDFLAG(REMOTING_MULTI_PROCESS)
+  // For multi-process hosts, the daemon process acts as the broker.
+  is_broker_process |= main_routine == &DaemonProcessMain;
+#endif
+
+  mojo::core::Init({.is_broker_process = is_broker_process});
 
   // Invoke the entry point.
   int exit_code = main_routine();

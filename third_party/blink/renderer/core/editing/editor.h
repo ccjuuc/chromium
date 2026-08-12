@@ -31,6 +31,7 @@
 #include "mojo/public/mojom/base/text_direction.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/webpreferences/web_preferences.mojom-blink.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/editing/commands/edit_command.h"
 #include "third_party/blink/renderer/core/editing/editing_style.h"
 #include "third_party/blink/renderer/core/editing/finder/find_options.h"
 #include "third_party/blink/renderer/core/editing/forward.h"
@@ -62,9 +63,9 @@ class SelectionForUndoStep;
 enum class DeleteDirection;
 enum class DeleteMode { kSimple, kSmart };
 enum class InsertMode { kSimple, kSmart };
-enum class DragSourceType { kHTMLSource, kPlainTextSource };
+enum class DragSourceType { kHtmlSource, kPlainTextSource };
 enum class EditorParagraphSeparator { kIsDiv, kIsP };
-enum class EditorCommandSource { kMenuOrKeyBinding, kDOM };
+enum class EditorCommandSource { kMenuOrKeyBinding, kDom };
 
 class CORE_EXPORT Editor final : public GarbageCollected<Editor> {
  public:
@@ -110,8 +111,8 @@ class CORE_EXPORT Editor final : public GarbageCollected<Editor> {
   void ApplyParagraphStyleToSelection(CSSPropertyValueSet*,
                                       InputEvent::InputType);
 
-  void SetShouldStyleWithCSS(bool flag) { should_style_with_css_ = flag; }
-  bool ShouldStyleWithCSS() const { return should_style_with_css_; }
+  void SetShouldStyleWithCss(bool flag) { should_style_with_css_ = flag; }
+  bool ShouldStyleWithCss() const { return should_style_with_css_; }
 
   EditorCommand CreateCommand(const String& command_name)
       const;  // Command source is CommandFromMenuOrKeyBinding.
@@ -130,6 +131,8 @@ class CORE_EXPORT Editor final : public GarbageCollected<Editor> {
       bool select_inserted_text,
       TextEvent* triggering_event,
       InputEvent::InputType = InputEvent::InputType::kInsertText,
+      EditCommand::PasswordEchoBehavior =
+          EditCommand::PasswordEchoBehavior::kDoNotEcho,
       DataTransfer* = nullptr);
   bool InsertLineBreak();
   bool InsertParagraphSeparator();
@@ -160,7 +163,7 @@ class CORE_EXPORT Editor final : public GarbageCollected<Editor> {
 
   void Clear();
 
-  SelectionInDOMTree SelectionForCommand(Event*);
+  SelectionInDomTree SelectionForCommand(Event*);
 
   KillRing& GetKillRing() const { return *kill_ring_; }
 
@@ -197,11 +200,13 @@ class CORE_EXPORT Editor final : public GarbageCollected<Editor> {
                                     bool smart_replace,
                                     bool match_style,
                                     InputEvent::InputType,
+                                    EditCommand::PasswordEchoBehavior,
                                     DataTransfer* = nullptr);
   void ReplaceSelectionWithText(const String&,
                                 bool select_replacement,
                                 bool smart_replace,
-                                InputEvent::InputType);
+                                InputEvent::InputType,
+                                EditCommand::PasswordEchoBehavior);
 
   // Implementation of WebLocalFrameImpl::ReplaceSelection. Does not use smart
   // replacement.
@@ -210,7 +215,7 @@ class CORE_EXPORT Editor final : public GarbageCollected<Editor> {
   void ReplaceSelectionAfterDragging(DocumentFragment*,
                                      InsertMode,
                                      DragSourceType,
-                                     DataTransfer* = nullptr);
+                                     DataTransfer*);
 
   // Return false if frame was destroyed by event handler, should stop executing
   // remaining actions.
@@ -248,12 +253,15 @@ class CORE_EXPORT Editor final : public GarbageCollected<Editor> {
   Member<LocalFrame> frame_;
   Member<CompositeEditCommand> last_edit_command_;
   const Member<UndoStack> undo_stack_;
-  int prevent_reveal_selection_;
-  bool should_start_new_kill_ring_sequence_;
-  bool should_style_with_css_;
+  int prevent_reveal_selection_ = 0;
+  bool should_start_new_kill_ring_sequence_ = false;
+  // This is off by default, since most editors want this behavior (this
+  // matches IE but not FF).
+  bool should_style_with_css_ = false;
   const std::unique_ptr<KillRing> kill_ring_;
   VisibleSelection mark_;
-  EditorParagraphSeparator default_paragraph_separator_;
+  EditorParagraphSeparator default_paragraph_separator_ =
+      EditorParagraphSeparator::kIsDiv;
   Member<EditingStyle> typing_style_;
   bool mark_is_directional_ = false;
   HeapHashSet<Member<ImageResourceObserver>> image_resource_observers_;

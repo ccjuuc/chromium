@@ -12,9 +12,11 @@
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -24,6 +26,7 @@
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/with_feature_override.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/browsertest_util.h"
@@ -55,6 +58,7 @@
 #include "extensions/common/api/runtime.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/extension_features.h"
+#include "extensions/common/extension_paths.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
 #include "extensions/test/test_extension_dir.h"
@@ -65,6 +69,7 @@
 #include "url/gurl.h"
 
 #if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/extensions/api/messaging/native_messaging_test_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -75,6 +80,20 @@ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 namespace extensions {
 namespace {
 
+const char* kMessageSerializationFormatError =
+    "Could not establish connection. Receiving end uses different message "
+    "serialization format.";
+
+#if !BUILDFLAG(IS_ANDROID)
+// Allows extension to communicate with `ScopedTestNativeMessagingHost`.
+// Extension ID: knldjmfmopnpolahpmmgbagdohdnhkik
+const char* kNativeMessageSerializationManifestKey =
+    "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDcBHwzDvyBQ6bDppkIs9MP4ksKqCMyXQ/"
+    "A52JivHZKh4YO/"
+    "9vJsT3oaYhSpDCE9RPocOEQvwsHsFReW2nUEc6OLLyoCFFxIb7KkLGsmfakkut/"
+    "fFdNJYh0xOTbSN8YvLWcqph09XAY2Y/f0AL7vfO1cuCqtkMt8hFrBGWxDdf9CQIDAQAB";
+#endif  // !BUILDFLAG(IS_ANDROID)
+
 class MessageSender : public ExtensionHostRegistry::Observer {
  public:
   explicit MessageSender(content::BrowserContext* browser_context) {
@@ -83,14 +102,14 @@ class MessageSender : public ExtensionHostRegistry::Observer {
   }
 
  private:
-  static base::Value::List BuildEventArguments(const bool last_message,
-                                               const std::string& data) {
-    return base::Value::List().Append(
-        base::Value::Dict().Set("lastMessage", last_message).Set("data", data));
+  static base::ListValue BuildEventArguments(const bool last_message,
+                                             const std::string& data) {
+    return base::ListValue().Append(
+        base::DictValue().Set("lastMessage", last_message).Set("data", data));
   }
 
   static std::unique_ptr<Event> BuildEvent(
-      base::Value::List event_args,
+      base::ListValue event_args,
       content::BrowserContext* browser_context,
       GURL event_url) {
     auto event =
@@ -281,6 +300,18 @@ IN_PROC_BROWSER_TEST_F(MessagingApiTest, MessagingNoBackground) {
       << message_;
 }
 
+// Tests that a large number of concurrent messages from different frames
+// are all correctly handled when the listener responds asynchronously which
+// results in the queueing of many response callbacks to handle them.
+// Regression test for crbug.com/438884253.
+IN_PROC_BROWSER_TEST_F(MessagingApiTest, SendMessageStressTest) {
+  const GURL url = embedded_test_server()->GetURL("/extensions/test_file.html");
+  ASSERT_TRUE(RunExtensionTest(
+      "messaging/stress_test",
+      {.page_url = url.spec().c_str(), .use_extensions_root_dir = true}))
+      << message_;
+}
+
 // Tests that messages with event_urls are only passed to extensions with
 // appropriate permissions.
 IN_PROC_BROWSER_TEST_F(MessagingApiTest, MessagingEventURL) {
@@ -294,7 +325,7 @@ IN_PROC_BROWSER_TEST_F(MessagingApiTest, MessagingBackgroundOnly) {
 }
 
 // TODO(kalman): Most web messaging tests disabled on windows due to extreme
-// flakiness. See http://crbug.com/350517.
+// flakiness. See http://crbug.com/40354939.
 #if !BUILDFLAG(IS_WIN)
 
 IN_PROC_BROWSER_TEST_F(MessagingApiTest, MessagingUserGesture) {
@@ -557,14 +588,14 @@ IN_PROC_BROWSER_TEST_F(MessagingApiTest, MessagingOnPagehide) {
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // Tests that messages over a certain size are not sent.
-// https://crbug.com/766713.
+// https://crbug.com/40540722.
 IN_PROC_BROWSER_TEST_F(MessagingApiTest, LargeMessages) {
   ASSERT_TRUE(RunExtensionTest("messaging/large_messages"));
 }
 
 // Tests that the channel name used in runtime.connect() cannot redirect the
 // message to another event (like onMessage).
-// See https://crbug.com/1430999.
+// See https://crbug.com/40263335.
 IN_PROC_BROWSER_TEST_F(MessagingApiTest, MessageChannelName) {
   static constexpr char kManifest[] =
       R"({
@@ -596,7 +627,7 @@ IN_PROC_BROWSER_TEST_F(MessagingApiTest, MessageChannelName) {
          });
          chrome.runtime.onMessage.addListener((msg) => {
            // We don't expect anything to hit the `onMessage` listener.
-           // See https://crbug.com/1430999.
+           // See https://crbug.com/40263335.
            chrome.test.fail(`Unexpected onMessage received: ${msg}`);
          });)";
   TestExtensionDir test_dir;
@@ -640,33 +671,88 @@ class MessagingApiTestWithPageUrlLoad
                : testing::AssertionFailure();
   }
 
+  // Runs the extension test located at `extension_dir` but first loads a tab
+  // to //chrome/test/data/extensions/test_file.html.
+  testing::AssertionResult RunMessagingTest(
+      const base::FilePath& extension_dir) {
+    return RunExtensionTest(extension_dir, {.page_url = url_.spec().c_str()},
+                            {})
+               ? testing::AssertionSuccess()
+               : testing::AssertionFailure();
+  }
+
+ protected:
+  const GURL& url() const { return url_; }
+
  private:
   GURL url_;
 };
 
-class MessagingSerializationApiTest : public base::test::WithFeatureOverride,
-                                      public MessagingApiTestWithPageUrlLoad {
- public:
-  MessagingSerializationApiTest()
-      : base::test::WithFeatureOverride(
-            extensions_features::kStructuredCloningForMessaging) {
-    // This feature treats some messaging response failures differently so let's
-    // force it on to have consistent response behavior.
-    scoped_feature_list_.InitAndEnableFeature(
-        extensions_features::kRuntimeOnMessageWebExtensionPolyfillSupport);
-  }
+using MessagingSerializationApiTest = MessagingApiTestWithPageUrlLoad;
 
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-// Tests that various objects can be JSON and Structure Clone serialized to/from
+// Tests that various objects can be Structure Clone serialized to/from
 // v8 for one-time and long-lived messaging APIs. It tests both the `runtime`
 // and `tabs` APIs by sending messages from a content script to the extension
 // background and then vice versa.
 IN_PROC_BROWSER_TEST_P(MessagingSerializationApiTest, MessageSerialization) {
-  // Sets the feature state in the JS tests.
-  SetCustomArg(IsParamFeatureEnabled() ? "true" : "false");
+  bool is_structured_clone = GetParam();
+  // Sets whether to test structured clone serialization or JSON serialization.
+  SetCustomArg(is_structured_clone ? "true" : "false");
+
+  TestExtensionDir test_dir;
+  base::FilePath extension_dir;
+
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    base::FilePath source_dir;
+    base::PathService::Get(extensions::DIR_TEST_DATA, &source_dir);
+    source_dir = source_dir.AppendASCII("api_test/messaging/serialization");
+
+    // Since we want to test both JSON and structured clone serialization
+    // formats using the exact same JavaScript test logic, we dynamically copy
+    // the extension's files into a temporary unpacked directory. We then
+    // dynamically generate the `manifest.json` file to specify the correct
+    // serialization format. This avoids duplicating the test files and
+    // hardcoding the manifest.
+    //
+    // `base::CopyDirectory` creates a `serialization` subdirectory inside
+    // `test_dir.UnpackedPath()`. Therefore, our extension directory and our
+    // dynamic manifest file must reside within this newly created subdirectory.
+    base::CopyDirectory(source_dir, test_dir.UnpackedPath(),
+                        /*recursive=*/true);
+    extension_dir = test_dir.UnpackedPath().AppendASCII("serialization");
+
+    std::string message_serialization_manifest_key =
+        is_structured_clone ? R"("message_serialization": "structured_clone",)"
+                            : R"("message_serialization": "json",)";
+    std::string manifest_content = base::StringPrintf(
+        R"({
+      "name": "messaging_serialization",
+      "version": "1.0",
+      "manifest_version": 3,
+      %s
+      "background": {
+        "service_worker": "background.js",
+         "type": "module"
+      },
+      "content_scripts": [{
+        "matches": ["<all_urls>"],
+        "js": ["content_script.js"],
+        "run_at": "document_start"
+      }],
+      "web_accessible_resources": [{
+         "matches": ["<all_urls>"],
+         "resources": [
+            "serialization_common_tests.js",
+            "test_cases.js"
+         ]
+      }]
+    })",
+        message_serialization_manifest_key.c_str());
+
+    base::WriteFile(extension_dir.AppendASCII("manifest.json"),
+                    manifest_content);
+  }
 
   // Waiters that confirm the background test can run.
   // `content_script_ready_for_background_tests` confirms the message listeners
@@ -681,7 +767,7 @@ IN_PROC_BROWSER_TEST_P(MessagingSerializationApiTest, MessageSerialization) {
 
   // This first runs the `runtime` API tests sending messages from a content
   // script to the extension's background.
-  EXPECT_TRUE(RunMessagingTest("messaging/serialization")) << message_;
+  EXPECT_TRUE(RunMessagingTest(extension_dir)) << message_;
 
   // After the above tests have finished the below runs the `tab` API tests
   // sending messages from the extension's background to the content script in a
@@ -697,18 +783,29 @@ IN_PROC_BROWSER_TEST_P(MessagingSerializationApiTest, MessageSerialization) {
   EXPECT_TRUE(result_catcher.GetNextResult()) << result_catcher.message();
 }
 
-INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(MessagingSerializationApiTest);
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    MessagingSerializationApiTest,
+    testing::Bool(),
+    [](const testing::TestParamInfo<MessagingSerializationApiTest::ParamType>&
+           info) { return info.param ? "StructuredClone" : "Json"; });
 
-class StructuredCloneMessageSerializationApiTest : public MessagingApiTest {
- public:
-  StructuredCloneMessageSerializationApiTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        extensions_features::kStructuredCloningForMessaging);
-  }
+using StructuredCloneMessageSerializationApiTest = MessagingApiTest;
 
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
+// Tests that `SharedArrayBuffer` cannot be serialized correctly with structured
+// clone even when the sending and receiving context are cross-origin isolated.
+//
+// Currently, sending a `SharedArrayBuffer` between two cross-origin isolated
+// extension resource pages via messaging APIs (`chrome.runtime.sendMessage` or
+// `chrome.tabs.sendMessage`) does not succeed. The underlying extension
+// messaging structured clone implementation fails to deserialize it (resulting
+// in `null` being received).
+IN_PROC_BROWSER_TEST_F(StructuredCloneMessageSerializationApiTest,
+                       MessageSerializationSharedArrayBuffer) {
+  ASSERT_TRUE(RunExtensionTest("messaging/serialization_sab",
+                               {.use_extensions_root_dir = true}))
+      << message_;
+}
 
 // Tests that the structured clone serialization format enforces the maximum
 // message size limit.
@@ -723,9 +820,9 @@ IN_PROC_BROWSER_TEST_F(StructuredCloneMessageSerializationApiTest,
         "name": "TestMaximumStructuredMessageSize",
         "version": "1.0",
         "manifest_version": 3,
+        "message_serialization": "structured_clone",
         "background": {
-          "service_worker": "background.js",
-          "type": "module"
+          "service_worker": "background.js"
         }
       })";
   static constexpr char kScript[] = R"(
@@ -755,18 +852,987 @@ IN_PROC_BROWSER_TEST_F(StructuredCloneMessageSerializationApiTest,
                                /*load_options=*/{}));
 }
 
-class OnMessagePromiseReturnMessagingApiTest
-    : public MessagingApiTestWithPageUrlLoad {
- public:
-  OnMessagePromiseReturnMessagingApiTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        extensions_features::kRuntimeOnMessageWebExtensionPolyfillSupport);
+// Tests that an extension must opt-in with the manifest key otherwise they
+// will be unable to send structured clone objects.
+IN_PROC_BROWSER_TEST_F(StructuredCloneMessageSerializationApiTest,
+                       MessageSerialization_OptOut) {
+  static constexpr char kManifest[] = R"(
+      {
+        "name": "MessageSerialization_OptOut",
+        "version": "1.0",
+        "manifest_version": 3,
+        "message_serialization": "json",
+        "background": {
+          "service_worker": "background.js"
+        }
+      })";
+  static constexpr char kScript[] = R"(
+    chrome.test.runTests([
+      function testStructuredCloningFails() {
+        try {
+          chrome.runtime.sendMessage(123n);
+          chrome.test.fail('BigInt should have failed to serialize');
+        } catch (e) {
+          chrome.test.assertTrue(
+              e.message.includes('Could not serialize message.'),
+              'Unexpected error message: ' + e.message);
+          chrome.test.succeed();
+        }
+      }
+    ]);
+  )";
+
+  TestExtensionDir dir;
+  dir.WriteManifest(kManifest);
+  dir.WriteFile(FILE_PATH_LITERAL("background.js"), kScript);
+
+  ASSERT_TRUE(RunExtensionTest(dir.UnpackedPath(), {}, {}));
+}
+
+// -----------------------------------------------------------------------------
+// Message Serialization Interoperability Tests
+// -----------------------------------------------------------------------------
+//
+// The primary goal is to ensure that extensions with mismatched serialization
+// formats cannot communicate, except for specific allowed exceptions like
+// web pages who adapt their message serialization format to the target
+// extension's serialization format.
+//
+// Legend:
+// - JSON: JSON serialization.
+// - SC: Structured Cloning serialization.
+// - Ext: Extension (background service worker).
+// - Web: Web Page (externally_connectable).
+// - Native: Native Messaging Host.
+//
+// | Sender | Receiver | Channel Type | Format Match? | Expected Outcome |
+// |--------|----------|--------------|---------------|------------------|
+// | Ext(J) | Ext(SC)  | sendMessage  | No            | FAIL (Port Close)|
+// | Ext(SC)| Ext(J)   | sendMessage  | No            | FAIL (Port Close)|
+// | Ext(J) | Ext(SC)  | connect      | No            | FAIL (Port Close)|
+// | Ext(SC)| Ext(J)   | connect      | No            | FAIL (Port Close)|
+// | Web    | Ext(J)   | sendMessage  | Yes (Adapts)  | SUCCESS          |
+// | Web    | Ext(SC)  | sendMessage  | Yes (Adapts)  | SUCCESS          |
+// | Ext(SC)| Native   | native       | N/A (Forces J)| FAIL (Render)**  |
+// | Ext(SC)| Native   | native       | N/A (Forces J)| SUCCESS          |
+// | Native | Ext(SC)  | native       | N/A           | SUCCESS          |
+//
+// ** Native messaging channels force JSON serialization in the renderer, so
+//    sending SC-only types (BigInt) fails before hitting the browser.
+
+using MessagingSerializationInteropApiTest =
+    StructuredCloneMessageSerializationApiTest;
+
+// Tests that an extension using JSON serialization cannot send a message to an
+// extension using structured clone serialization, even if the message is JSON
+// compatible. We strictly enforce that the formats match.
+IN_PROC_BROWSER_TEST_F(MessagingSerializationInteropApiTest,
+                       JsonToStructuredClone) {
+  static constexpr char kJsonExtensionManifest[] = R"(
+      {
+        "name": "JsonExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "background": {
+          "service_worker": "background.js"
+        }
+      })";
+  static constexpr char kJsonExtensionBackground[] = R"(
+    chrome.test.runTests([
+      async function sendMessageToStructuredCloneExtension() {
+        chrome.test.getConfig(async (config) => {
+          const extensionId = config.customArg;
+          try {
+            await chrome.runtime.sendMessage(extensionId, {greeting: 'hello'});
+            chrome.test.fail(
+              'Should have failed to send JSON to structured clone extension');
+          } catch (e) {
+            chrome.test.assertEq(
+              e.message, '%s', 'Unexpected error message: ' + e.message);
+            chrome.test.succeed();
+          }
+        });
+      }
+    ]);
+  )";
+
+  static constexpr char kStructuredCloneExtensionManifest[] = R"(
+      {
+        "name": "StructuredCloneExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "message_serialization": "structured_clone",
+        "background": {
+          "service_worker": "background.js"
+        }
+      })";
+  static constexpr char kStructuredCloneExtensionBackground[] = R"(
+    chrome.runtime.onMessageExternal.addListener(
+        (message, sender, sendResponse) => {
+      chrome.test.fail('Should not have received message');
+    });
+  )";
+
+  TestExtensionDir structured_clone_dir;
+  structured_clone_dir.WriteManifest(kStructuredCloneExtensionManifest);
+  structured_clone_dir.WriteFile(FILE_PATH_LITERAL("background.js"),
+                                 kStructuredCloneExtensionBackground);
+  const Extension* structured_clone_extension =
+      LoadExtension(structured_clone_dir.UnpackedPath());
+  ASSERT_TRUE(structured_clone_extension);
+
+  TestExtensionDir json_dir;
+  json_dir.WriteManifest(kJsonExtensionManifest);
+  json_dir.WriteFile(FILE_PATH_LITERAL("background.js"),
+                     base::StringPrintf(kJsonExtensionBackground,
+                                        kMessageSerializationFormatError));
+  ASSERT_TRUE(RunExtensionTest(
+      json_dir.UnpackedPath(),
+      {.custom_arg = structured_clone_extension->id().c_str()}, {}));
+}
+
+// Tests that an extension using structured clone serialization cannot send a
+// structured clone-only object to an extension using JSON serialization.
+IN_PROC_BROWSER_TEST_F(MessagingSerializationInteropApiTest,
+                       StructuredCloneToJson) {
+  static constexpr char kStructuredCloneExtensionManifest[] = R"(
+      {
+        "name": "StructuredCloneExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "message_serialization": "structured_clone",
+        "background": {
+          "service_worker": "background.js"
+        }
+      })";
+  static constexpr char kStructuredCloneExtensionBackground[] = R"(
+    chrome.test.runTests([
+      async function sendMessageToJsonExtension() {
+        chrome.test.getConfig(async (config) => {
+          const extensionId = config.customArg;
+          try {
+            await chrome.runtime.sendMessage(extensionId, 123n);
+            chrome.test.fail(
+              'Should have failed to send from structured clone to JSON' +
+              'extension');
+          } catch (e) {
+            chrome.test.assertEq(
+              e.message, '%s', 'Unexpected error message: ' + e.message);
+            chrome.test.succeed();
+          }
+        });
+      }
+    ]);
+  )";
+
+  static constexpr char kJsonExtensionManifest[] = R"(
+      {
+        "name": "JsonExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "background": {
+          "service_worker": "background.js"
+        }
+      })";
+  static constexpr char kJsonExtensionBackground[] = R"(
+    chrome.runtime.onMessageExternal.addListener(
+        (message, sender, sendResponse) => {
+      chrome.test.fail('Should not have received message');
+    });
+  )";
+
+  TestExtensionDir json_dir;
+  json_dir.WriteManifest(kJsonExtensionManifest);
+  json_dir.WriteFile(FILE_PATH_LITERAL("background.js"),
+                     kJsonExtensionBackground);
+  const Extension* json_extension = LoadExtension(json_dir.UnpackedPath());
+  ASSERT_TRUE(json_extension);
+
+  TestExtensionDir structured_clone_dir;
+  structured_clone_dir.WriteManifest(kStructuredCloneExtensionManifest);
+  structured_clone_dir.WriteFile(
+      FILE_PATH_LITERAL("background.js"),
+      base::StringPrintf(kStructuredCloneExtensionBackground,
+                         kMessageSerializationFormatError));
+  ASSERT_TRUE(RunExtensionTest(structured_clone_dir.UnpackedPath(),
+                               {.custom_arg = json_extension->id().c_str()},
+                               {}));
+}
+
+// Tests that an extension using JSON serialization cannot connect to an
+// extension using structured clone serialization.
+IN_PROC_BROWSER_TEST_F(MessagingSerializationInteropApiTest,
+                       JsonToStructuredClone_Connect) {
+  static constexpr char kJsonExtensionManifest[] = R"(
+      {
+        "name": "JsonExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "background": {
+          "service_worker": "background.js"
+        }
+      })";
+  static constexpr char kJsonExtensionBackground[] = R"(
+    chrome.test.runTests([
+      async function connectToStructuredCloneExtension() {
+        chrome.test.getConfig(async (config) => {
+          const extensionId = config.customArg;
+          const port = chrome.runtime.connect(extensionId);
+          port.onDisconnect.addListener(() => {
+             const lastError = chrome.runtime.lastError;
+             chrome.test.assertTrue(!!lastError, 'No lastError on disconnect');
+             chrome.test.assertEq(
+               lastError.message, '%s',
+              'Unexpected error message: ' + lastError.message);
+             chrome.test.succeed();
+          });
+          port.postMessage({greeting: 'hello'});
+        });
+      }
+    ]);
+  )";
+
+  static constexpr char kStructuredCloneExtensionManifest[] = R"(
+      {
+        "name": "StructuredCloneExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "message_serialization": "structured_clone",
+        "background": {
+          "service_worker": "background.js"
+        }
+      })";
+  static constexpr char kStructuredCloneExtensionBackground[] = R"(
+    chrome.runtime.onConnectExternal.addListener((port) => {
+      chrome.test.fail('Should not have received connection');
+    });
+  )";
+
+  TestExtensionDir structured_clone_dir;
+  structured_clone_dir.WriteManifest(kStructuredCloneExtensionManifest);
+  structured_clone_dir.WriteFile(FILE_PATH_LITERAL("background.js"),
+                                 kStructuredCloneExtensionBackground);
+  const Extension* structured_clone_extension =
+      LoadExtension(structured_clone_dir.UnpackedPath());
+  ASSERT_TRUE(structured_clone_extension);
+
+  TestExtensionDir json_dir;
+  json_dir.WriteManifest(kJsonExtensionManifest);
+  json_dir.WriteFile(FILE_PATH_LITERAL("background.js"),
+                     base::StringPrintf(kJsonExtensionBackground,
+                                        kMessageSerializationFormatError));
+  ASSERT_TRUE(RunExtensionTest(
+      json_dir.UnpackedPath(),
+      {.custom_arg = structured_clone_extension->id().c_str()}, {}));
+}
+
+// Tests that an extension using structured clone serialization cannot connect
+// to an extension using JSON serialization.
+IN_PROC_BROWSER_TEST_F(MessagingSerializationInteropApiTest,
+                       StructuredCloneToJson_Connect) {
+  static constexpr char kStructuredCloneExtensionManifest[] = R"(
+      {
+        "name": "StructuredCloneExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "message_serialization": "structured_clone",
+        "background": {
+          "service_worker": "background.js"
+        }
+      })";
+  static constexpr char kStructuredCloneExtensionBackground[] = R"(
+    chrome.test.runTests([
+      async function connectToJsonExtension() {
+        chrome.test.getConfig(async (config) => {
+          const extensionId = config.customArg;
+          const port = chrome.runtime.connect(extensionId);
+          port.onDisconnect.addListener(() => {
+             const lastError = chrome.runtime.lastError;
+             chrome.test.assertTrue(!!lastError, 'No lastError on disconnect');
+             chrome.test.assertEq(
+               lastError.message, '%s',
+               'Unexpected error message: ' + lastError.message);
+             chrome.test.succeed();
+          });
+          // Even if we send valid JSON, the connection itself should fail.
+          port.postMessage({greeting: 'hello'});
+        });
+      }
+    ]);
+  )";
+
+  static constexpr char kJsonExtensionManifest[] = R"(
+      {
+        "name": "JsonExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "background": {
+          "service_worker": "background.js"
+        }
+      })";
+  static constexpr char kJsonExtensionBackground[] = R"(
+    chrome.runtime.onConnectExternal.addListener((port) => {
+      chrome.test.fail('Should not have received connection');
+    });
+  )";
+
+  TestExtensionDir json_dir;
+  json_dir.WriteManifest(kJsonExtensionManifest);
+  json_dir.WriteFile(FILE_PATH_LITERAL("background.js"),
+                     kJsonExtensionBackground);
+  const Extension* json_extension = LoadExtension(json_dir.UnpackedPath());
+  ASSERT_TRUE(json_extension);
+
+  TestExtensionDir structured_clone_dir;
+  structured_clone_dir.WriteManifest(kStructuredCloneExtensionManifest);
+  structured_clone_dir.WriteFile(
+      FILE_PATH_LITERAL("background.js"),
+      base::StringPrintf(kStructuredCloneExtensionBackground,
+                         kMessageSerializationFormatError));
+  ASSERT_TRUE(RunExtensionTest(structured_clone_dir.UnpackedPath(),
+                               {.custom_arg = json_extension->id().c_str()},
+                               {}));
+}
+
+// Android builds can't use `ui_test_utils` navigation methods or
+// `ScopedTestNativeMessagingHost`.
+#if !BUILDFLAG(IS_ANDROID)
+
+class WebPageMessagingSerializationInteropApiTest
+    : public StructuredCloneMessageSerializationApiTest {
+ protected:
+  std::string GetResponseFromWebPageScriptExecution(
+      content::RenderFrameHost* frame,
+      content::DOMMessageQueue& message_queue) {
+    std::string message;
+    if (!message_queue.WaitForMessage(&message)) {
+      testing::AssertionFailure()
+          << "waiting for response from web page script failed";
+      return std::string();
+    }
+    return message;
+  }
+};
+
+// Tests that a web page uses JSON serialization when messaging a JSON
+// extension. We verify the serialization format used by sending an object with
+// a `toJSON` method, which is respected by JSON.stringify but ignored by
+// structured clone. This confirms that the web page adapts to the extension's
+// preference (JSON).
+IN_PROC_BROWSER_TEST_F(WebPageMessagingSerializationInteropApiTest,
+                       WebPageToJSONExtension) {
+  static constexpr char kManifest[] = R"(
+      {
+        "name": "JsonExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "message_serialization": "json",
+        "background": {
+          "service_worker": "background.js"
+        },
+        "externally_connectable": {
+          "matches": ["*://example.com/*"]
+        }
+      })";
+  static constexpr char kBackground[] = R"(
+    chrome.runtime.onMessageExternal.addListener(
+        (message, sender, sendResponse) => {
+      // If JSON serialization is used, `toJSON` changes `message.value`.
+      // If Structured Clone is used, the original `message.value` is kept.
+      if (message.value === 'from_toJSON') {
+        sendResponse('success');
+      } else {
+        sendResponse('failure: received ' + JSON.stringify(message));
+      }
+    });
+  )";
+
+  TestExtensionDir dir;
+  dir.WriteManifest(kManifest);
+  dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+  const Extension* extension = LoadExtension(dir.UnpackedPath());
+  ASSERT_TRUE(extension);
+
+  GURL url = embedded_test_server()->GetURL("example.com", "/simple.html");
+
+  content::DOMMessageQueue message_queue;
+  content::RenderFrameHost* frame =
+      ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(frame);
+
+  static constexpr char kScript[] = R"(
+    const extensionId = '%s';
+    const obj = {
+      toJSON: () => { return { value: 'from_toJSON' }; },
+      value: 'original'
+    };
+    chrome.runtime.sendMessage(extensionId, obj, (response) => {
+      if (chrome.runtime.lastError) {
+        window.domAutomationController.send(
+          'error: ' + chrome.runtime.lastError.message);
+      } else {
+        window.domAutomationController.send(response);
+      }
+    });
+  )";
+
+  ExecuteScriptAsync(frame,
+                     base::StringPrintf(kScript, extension->id().c_str()));
+  EXPECT_EQ("\"success\"",
+            GetResponseFromWebPageScriptExecution(frame, message_queue));
+}
+
+// Tests that a web page uses structured clone serialization when messaging a
+// structured clone extension. We verify the serialization format used by
+// sending an object that can only be serialized with the structured clone
+// algorithm. This confirms that the web page adapts to the extension's
+// preference (structured clone).
+IN_PROC_BROWSER_TEST_F(WebPageMessagingSerializationInteropApiTest,
+                       WebPageToStructuredCloneExtension) {
+  static constexpr char kManifest[] = R"(
+      {
+        "name": "StructuredCloneExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "message_serialization": "structured_clone",
+        "background": {
+          "service_worker": "background.js"
+        },
+        "externally_connectable": {
+          "matches": ["*://example.com/*"]
+        }
+      })";
+  static constexpr char kBackground[] = R"(
+    chrome.runtime.onMessageExternal.addListener(
+        (message, sender, sendResponse) => {
+      if (message === 123n) {
+        sendResponse('success');
+      } else {
+        sendResponse('failure');
+      }
+    });
+  )";
+  TestExtensionDir dir;
+  dir.WriteManifest(kManifest);
+  dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+  const Extension* extension = LoadExtension(dir.UnpackedPath());
+  ASSERT_TRUE(extension);
+
+  GURL url = embedded_test_server()->GetURL("example.com", "/simple.html");
+
+  content::DOMMessageQueue message_queue;
+  content::RenderFrameHost* frame =
+      ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(frame);
+
+  static constexpr char kScript[] = R"(
+    const extensionId = '%s';
+    try {
+        chrome.runtime.sendMessage(extensionId, 123n, (response) => {
+           if (chrome.runtime.lastError) {
+             window.domAutomationController.send(
+               'fail: ' + chrome.runtime.lastError.message);
+           } else {
+             window.domAutomationController.send(response);
+           }
+        });
+      } catch (e) {
+        window.domAutomationController.send('fail: ' + e.message);
+      }
+  )";
+
+  ExecuteScriptAsync(frame,
+                     base::StringPrintf(kScript, extension->id().c_str()));
+  EXPECT_EQ("\"success\"",
+            GetResponseFromWebPageScriptExecution(frame, message_queue));
+}
+
+// Tests that a web page cannot send a message that can only be serialized by
+// the structured clone algorithm to a JSON extension. This ensures we don't
+// accidentally switch to structured clone for JSON extensions just because the
+// message is structured clone serializable.
+IN_PROC_BROWSER_TEST_F(WebPageMessagingSerializationInteropApiTest,
+                       WebPageSendsStructuredCloneToJSONExtension) {
+  static constexpr char kManifest[] = R"(
+      {
+        "name": "JsonExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "message_serialization": "json",
+        "background": {
+          "service_worker": "background.js"
+        },
+        "externally_connectable": {
+          "matches": ["*://example.com/*"]
+        }
+      })";
+  static constexpr char kBackground[] = R"(
+    chrome.runtime.onMessageExternal.addListener(
+        (message, sender, sendResponse) => {
+      // Should not be reached.
+    });
+  )";
+  TestExtensionDir dir;
+  dir.WriteManifest(kManifest);
+  dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+  const Extension* extension = LoadExtension(dir.UnpackedPath());
+  ASSERT_TRUE(extension);
+
+  GURL url = embedded_test_server()->GetURL("example.com", "/simple.html");
+
+  content::DOMMessageQueue message_queue;
+  content::RenderFrameHost* frame =
+      ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(frame);
+
+  static constexpr char kScript[] = R"(
+    const extensionId = '%s';
+    try {
+        chrome.runtime.sendMessage(extensionId, 123n);
+        window.domAutomationController.send('fail');
+      } catch (e) {
+        window.domAutomationController.send('success');
+      }
+  )";
+
+  ExecuteScriptAsync(frame,
+                     base::StringPrintf(kScript, extension->id().c_str()));
+  EXPECT_EQ("\"success\"",
+            GetResponseFromWebPageScriptExecution(frame, message_queue));
+}
+
+// Tests that a web page will not use JSON serialization even for a message that
+// is JSON serializable when that message is to a structured clone extension.
+// This ensures we don't accidentally switch to JSON serialization for
+// structured clone extensions just because the message is JSON serializable.
+IN_PROC_BROWSER_TEST_F(WebPageMessagingSerializationInteropApiTest,
+                       WebPageSendsJSONToStructuredCloneExtension) {
+  static constexpr char kManifest[] = R"(
+      {
+        "name": "StructuredCloneExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "message_serialization": "structured_clone",
+        "background": {
+          "service_worker": "background.js"
+        },
+        "externally_connectable": {
+          "matches": ["*://example.com/*"]
+        }
+      })";
+  static constexpr char kBackground[] = R"(
+    chrome.runtime.onMessageExternal.addListener(
+        (message, sender, sendResponse) => {
+      // If JSON serialization is used, `toJSON` changes `message.value`.
+      // If Structured Clone is used, the original `message.value` is kept.
+      if (message.value === 'original') {
+        sendResponse('success');
+      } else {
+        sendResponse('failure: received ' + JSON.stringify(message));
+      }
+    });
+  )";
+
+  TestExtensionDir dir;
+  dir.WriteManifest(kManifest);
+  dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+  const Extension* extension = LoadExtension(dir.UnpackedPath());
+  ASSERT_TRUE(extension);
+
+  GURL url = embedded_test_server()->GetURL("example.com", "/simple.html");
+
+  content::DOMMessageQueue message_queue;
+  content::RenderFrameHost* frame =
+      ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(frame);
+
+  static constexpr char kScript[] = R"(
+    const extensionId = '%s';
+    const obj = {
+      value: 'original'
+    };
+    // Structured clone will fail to serialize a function so we must define the
+    // function as an non-enumerable property. `JSON.stringify()` will still
+    // respect `toJSON()` when serializing though.
+    Object.defineProperty(obj, 'toJSON', {
+      value: () => { return { value: 'from_toJSON' }; },
+      enumerable: false
+    });
+    chrome.runtime.sendMessage(extensionId, obj, (response) => {
+      if (chrome.runtime.lastError) {
+        window.domAutomationController.send(
+            'fail: ' + chrome.runtime.lastError.message);
+      } else {
+        window.domAutomationController.send(response);
+      }
+    });
+  )";
+
+  ExecuteScriptAsync(frame,
+                     base::StringPrintf(kScript, extension->id().c_str()));
+  EXPECT_EQ("\"success\"",
+            GetResponseFromWebPageScriptExecution(frame, message_queue));
+}
+
+// Tests that if a web page attempts to message an extension that is not
+// installed, we fallback to default JSON serialization to prevent a web page
+// from being able to determine if an extension is installed.
+IN_PROC_BROWSER_TEST_F(WebPageMessagingSerializationInteropApiTest,
+                       WebPageToNonInstalledExtension) {
+  // Load a helper extension that is connectable to enable `chrome.runtime` for
+  // the web page.
+  static constexpr char kHelperManifest[] = R"(
+      {
+        "name": "HelperExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "background": { "service_worker": "background.js" },
+        "externally_connectable": { "matches": ["*://example.com/*"] }
+      })";
+  TestExtensionDir helper_dir;
+  helper_dir.WriteManifest(kHelperManifest);
+  helper_dir.WriteFile(FILE_PATH_LITERAL("background.js"), "");
+  ASSERT_TRUE(LoadExtension(helper_dir.UnpackedPath()));
+
+  GURL url = embedded_test_server()->GetURL("example.com", "/simple.html");
+
+  content::DOMMessageQueue message_queue;
+  content::RenderFrameHost* frame =
+      ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(frame);
+
+  // Use a valid formatted ID that is definitely not installed.
+  const std::string non_existent_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+  static constexpr char kScript[] = R"(
+    const extensionId = '%s';
+    try {
+      // `123n` requires structured clone to serialize.
+      chrome.runtime.sendMessage(extensionId, 123n, (response) => {});
+      window.domAutomationController.send('fail: serialization succeeded');
+    } catch (e) {
+      if (e.message.includes('Could not serialize message')) {
+        window.domAutomationController.send('success');
+      } else {
+        window.domAutomationController.send('fail: ' + e.message);
+      }
+    }
+  )";
+
+  ExecuteScriptAsync(frame,
+                     base::StringPrintf(kScript, non_existent_id.c_str()));
+  EXPECT_EQ("\"success\"",
+            GetResponseFromWebPageScriptExecution(frame, message_queue));
+}
+
+// Tests that if a web page attempts to message an extension that is installed,
+// but not externally connectable by the web page we fallback to default JSON
+// serialization. This is to prevent a web page from being able to determine if
+// an extension is installed.
+IN_PROC_BROWSER_TEST_F(WebPageMessagingSerializationInteropApiTest,
+                       WebPageToNonConnectableStructuredCloneExtension) {
+  // Load a helper extension that is connectable to enable `chrome.runtime` for
+  // the web page.
+  static constexpr char kHelperManifest[] = R"(
+      {
+        "name": "HelperExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "background": { "service_worker": "background.js" },
+        "externally_connectable": { "matches": ["*://example.com/*"] }
+      })";
+  TestExtensionDir helper_dir;
+  helper_dir.WriteManifest(kHelperManifest);
+  helper_dir.WriteFile(FILE_PATH_LITERAL("background.js"), "");
+  ASSERT_TRUE(LoadExtension(helper_dir.UnpackedPath()));
+
+  static constexpr char kManifest[] = R"(
+      {
+        "name": "NonConnectableExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "message_serialization": "structured_clone",
+        "background": {
+          "service_worker": "background.js"
+        }
+        // No externally_connectable key.
+      })";
+  static constexpr char kBackground[] = "";
+
+  TestExtensionDir dir;
+  dir.WriteManifest(kManifest);
+  dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+  const Extension* extension = LoadExtension(dir.UnpackedPath());
+  ASSERT_TRUE(extension);
+
+  GURL url = embedded_test_server()->GetURL("example.com", "/simple.html");
+
+  content::DOMMessageQueue message_queue;
+  content::RenderFrameHost* frame =
+      ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(frame);
+
+  static constexpr char kScript[] = R"(
+    const extensionId = '%s';
+    try {
+      // `123n` requires structured clone to serialize.
+      chrome.runtime.sendMessage(extensionId, 123n, (response) => {});
+      window.domAutomationController.send('fail: serialization succeeded');
+    } catch (e) {
+      if (e.message.includes('Could not serialize message')) {
+        window.domAutomationController.send('success');
+      } else {
+        window.domAutomationController.send('fail: ' + e.message);
+      }
+    }
+  )";
+
+  ExecuteScriptAsync(frame,
+                     base::StringPrintf(kScript, extension->id().c_str()));
+  EXPECT_EQ("\"success\"",
+            GetResponseFromWebPageScriptExecution(frame, message_queue));
+}
+
+// Tests that if a web page attempts to message an extension that is installed
+// but not externally connectable, and the message format would otherwise
+// mismatch (e.g. sender forced to JSON, receiver expects structured clone), we
+// still return the "does not exist" error rather than the "incompatible format"
+// error. This is to protect extension privacy since if we returned the
+// "incompatible format" error it would indicate the extension is installed even
+// if the sender has no access to send a message to that extension.
+IN_PROC_BROWSER_TEST_F(
+    WebPageMessagingSerializationInteropApiTest,
+    WebPageToNonConnectableStructuredCloneExtension_DoesNotExistError) {
+  // Load a helper extension that is connectable to enable `chrome.runtime` for
+  // the web page.
+  static constexpr char kHelperManifest[] = R"(
+      {
+        "name": "HelperExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "background": { "service_worker": "background.js" },
+        "externally_connectable": { "matches": ["*://example.com/*"] }
+      })";
+  TestExtensionDir helper_dir;
+  helper_dir.WriteManifest(kHelperManifest);
+  helper_dir.WriteFile(FILE_PATH_LITERAL("background.js"), "");
+  ASSERT_TRUE(LoadExtension(helper_dir.UnpackedPath()));
+
+  static constexpr char kManifest[] = R"(
+      {
+        "name": "NonConnectableExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "message_serialization": "structured_clone",
+        "background": {
+          "service_worker": "background.js"
+        }
+        // No externally_connectable key.
+      })";
+  static constexpr char kBackground[] = "";
+  TestExtensionDir dir;
+  dir.WriteManifest(kManifest);
+  dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+  const Extension* extension = LoadExtension(dir.UnpackedPath());
+  ASSERT_TRUE(extension);
+
+  GURL url = embedded_test_server()->GetURL("example.com", "/simple.html");
+  content::DOMMessageQueue message_queue;
+  content::RenderFrameHost* frame =
+      ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(frame);
+
+  static constexpr char kWebPageScript[] = R"(
+    const extensionId = '%s';
+    // We send a message that is serializable, so it leaves the renderer.
+    chrome.runtime.sendMessage(extensionId, {greeting: 'hello'}, (response) => {
+      if (chrome.runtime.lastError) {
+        if (chrome.runtime.lastError.message ===
+            'Could not establish connection. Receiving end does not exist.') {
+          window.domAutomationController.send('success');
+        } else {
+          window.domAutomationController.send(
+              'fail: ' + chrome.runtime.lastError.message);
+        }
+      } else {
+        window.domAutomationController.send('fail: unexpected success');
+      }
+    });
+  )";
+
+  ExecuteScriptAsync(
+      frame, base::StringPrintf(kWebPageScript, extension->id().c_str()));
+  EXPECT_EQ("\"success\"",
+            GetResponseFromWebPageScriptExecution(frame, message_queue));
+}
+
+// Tests compatibility between extensions using structured clone and Native
+// Messaging hosts (which only support JSON).
+class NativeMessagingSerializationInteropApiTest
+    : public StructuredCloneMessageSerializationApiTest {
+ protected:
+  void SetUpOnMainThread() override {
+    StructuredCloneMessageSerializationApiTest::SetUpOnMainThread();
+    test_host_.RegisterTestHost(/*user_level=*/true);
   }
 
  private:
-  base::test::ScopedFeatureList scoped_feature_list_;
+  ScopedTestNativeMessagingHost test_host_;
 };
 
+// Tests that an extension using structured clone serialization cannot send
+// structured clone-only objects to a native messaging host. The message
+// serialization should fail in the renderer because the native port is forced
+// to use JSON.
+IN_PROC_BROWSER_TEST_F(NativeMessagingSerializationInteropApiTest,
+                       StructuredCloneMessageToNativeAppMessage) {
+  static constexpr char kManifest[] = R"(
+      {
+        "name": "StructuredCloneToNativeMessage",
+        "version": "1.0",
+        "manifest_version": 3,
+        "message_serialization": "structured_clone",
+        "permissions": ["nativeMessaging"],
+        "background": {
+          "service_worker": "background.js"
+        }
+      })";
+  // We use the echo host which just echoes back whatever it receives.
+  // The important part is that we try to send a BigInt.
+  static constexpr char kBackground[] = R"(
+    chrome.test.runTests([
+      function testBigIntFails() {
+        const hostName = 'com.google.chrome.test.echo';
+        const port = chrome.runtime.connectNative(hostName);
+        try {
+          port.postMessage(123n);
+          chrome.test.fail('BigInt should have failed to serialize');
+        } catch (e) {
+          // This should fail because the native port is set to JSON format.
+          chrome.test.assertTrue(
+              e.message.includes('BigInt') ||
+              e.message.includes('serialize'),
+              'Unexpected error message: ' + e.message);
+          chrome.test.succeed();
+        }
+      }
+    ]);
+  )";
+
+  TestExtensionDir dir;
+  dir.WriteManifest(kManifest);
+  dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+
+  ASSERT_TRUE(RunExtensionTest(dir.UnpackedPath(), {}, {}));
+}
+
+// Tests that an extension using structured clone serialization can receive
+// JSON messages from a native messaging host. The port is forced to JSON
+// so reception should work fine.
+IN_PROC_BROWSER_TEST_F(NativeMessagingSerializationInteropApiTest,
+                       NativeMessageAppToStructuredCloneExtension) {
+  static constexpr char kManifest[] = R"(
+      {
+        "name": "NativeMessageToStructuredClone",
+        "version": "1.0",
+        "manifest_version": 3,
+        "key": "%s",
+        "message_serialization": "structured_clone",
+        "permissions": ["nativeMessaging"],
+        "background": {
+          "service_worker": "background.js"
+        }
+      })";
+
+  static constexpr char kBackground[] = R"(
+    chrome.test.runTests([
+      async function testNativeMessageReception() {
+        const hostName = 'com.google.chrome.test.echo';
+        const port = chrome.runtime.connectNative(hostName);
+        const message = {text: 'hello'};
+
+        port.onMessage.addListener((response) => {
+          // The test echo host wraps the message in an 'echo' property and adds
+          // an 'id'.
+          // Expected: {'id': 1, 'echo': {'text': 'hello'}, ...}
+          if (response.echo) {
+             chrome.test.assertEq(message.text, response.echo.text);
+             chrome.test.succeed();
+          } else {
+             // Fallback if the host behavior changes, though unlikely for
+             // ScopedTestNativeMessagingHost.
+             chrome.test.fail(
+                 'Received unexpected response: ' + JSON.stringify(response));
+          }
+        });
+
+        port.postMessage(message);
+      }
+    ]);
+  )";
+
+  TestExtensionDir dir;
+  dir.WriteManifest(
+      base::StringPrintf(kManifest, kNativeMessageSerializationManifestKey));
+  dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+
+  ASSERT_TRUE(RunExtensionTest(dir.UnpackedPath(), {}, {}));
+}
+
+// Tests that an extension using structured clone serialization can
+// successfully send a JSON-compatible message to a native messaging host. The
+// port is forced to use JSON, so this should work.
+IN_PROC_BROWSER_TEST_F(NativeMessagingSerializationInteropApiTest,
+                       StructuredCloneExtensionToNativeMessageApp) {
+  static constexpr char kManifest[] = R"(
+      {
+        "name": "StructuredCloneExtensionToNativeMessageApp",
+        "version": "1.0",
+        "manifest_version": 3,
+        "key": "%s",
+        "message_serialization": "structured_clone",
+        "permissions": ["nativeMessaging"],
+        "background": {
+          "service_worker": "background.js"
+        }
+      })";
+
+  static constexpr char kBackground[] = R"(
+    chrome.test.runTests([
+      async function testNativeMessageSuccess() {
+        const hostName = 'com.google.chrome.test.echo';
+        const port = chrome.runtime.connectNative(hostName);
+        const message = {text: 'hello'};
+
+        port.onMessage.addListener((response) => {
+          if (response.echo && response.echo.text === 'hello') {
+             chrome.test.succeed();
+          } else {
+             chrome.test.fail(
+                 'Received unexpected response: ' + JSON.stringify(response));
+          }
+        });
+
+        port.postMessage(message);
+      }
+    ]);
+  )";
+
+  TestExtensionDir dir;
+  dir.WriteManifest(
+      base::StringPrintf(kManifest, kNativeMessageSerializationManifestKey));
+  dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+
+  ASSERT_TRUE(RunExtensionTest(dir.UnpackedPath(), {}, {}));
+}
+
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+// -----------------------------------------------------------------------------
+// End of Message Serialization Interoperability Tests
+// -----------------------------------------------------------------------------
+
+using OnMessagePromiseReturnMessagingApiTest = MessagingApiTestWithPageUrlLoad;
 // Runs multiple test scenarios for runtime.OnMessage() listeners returning
 // promises.
 IN_PROC_BROWSER_TEST_F(OnMessagePromiseReturnMessagingApiTest,
@@ -904,20 +1970,12 @@ IN_PROC_BROWSER_TEST_F(OnMessagePromiseReturnMessagingApiTest,
       << message_;
 }
 
-class OnMessageExternalAsyncMessagingApiTest
-    : public base::test::WithFeatureOverride,
-      public MessagingApiTest {
- public:
-  OnMessageExternalAsyncMessagingApiTest()
-      : base::test::WithFeatureOverride(
-            extensions_features::kRuntimeOnMessageWebExtensionPolyfillSupport) {
-  }
-};
+using OnMessageExternalAsyncMessagingApiTest = MessagingApiTest;
 
 // Tests that the channel for a sole onMessageExternal listener will not stay
 // open if the listener does not respond asynchronously. Regression test for
 // crbug.com/471017626.
-IN_PROC_BROWSER_TEST_P(OnMessageExternalAsyncMessagingApiTest,
+IN_PROC_BROWSER_TEST_F(OnMessageExternalAsyncMessagingApiTest,
                        ExternalMessageChannelLeak) {
   // Load message receiver.
   const Extension* receiver = LoadExtension(test_data_dir_.AppendASCII(
@@ -933,7 +1991,7 @@ IN_PROC_BROWSER_TEST_P(OnMessageExternalAsyncMessagingApiTest,
 // Tests that an onMessageExternal listener can return true to indicate an
 // asynchronous response, regardless of the state of the promise support
 // feature.
-IN_PROC_BROWSER_TEST_P(OnMessageExternalAsyncMessagingApiTest,
+IN_PROC_BROWSER_TEST_F(OnMessageExternalAsyncMessagingApiTest,
                        AsyncReturnTrue) {
   // Load message receiver.
   const Extension* receiver = LoadExtension(test_data_dir_.AppendASCII(
@@ -946,136 +2004,131 @@ IN_PROC_BROWSER_TEST_P(OnMessageExternalAsyncMessagingApiTest,
       << message_;
 }
 
-INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(OnMessageExternalAsyncMessagingApiTest);
+// Tests that an `externally_connectable` web page receives a response when
+// sending a one-time message if the extension's
+// `chrome.runtime.onMessageExternal` listener replies asynchronously by
+// returning a `Promise`.
+IN_PROC_BROWSER_TEST_F(OnMessageExternalAsyncMessagingApiTest,
+                       WebPageReceiveResponseFromAsyncPromise) {
+  // Create an extension manifest and background script where the
+  // `chrome.runtime.onMessageExternal` listener returns a `Promise`.
+  static constexpr char kManifest[] = R"(
+      {
+        "name": "ConnectableExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "background": {
+          "service_worker": "background.js"
+        },
+        "externally_connectable": {
+          "matches": ["*://example.com/*"]
+        }
+      })";
+  static constexpr char kBackground[] = R"(
+    chrome.runtime.onMessageExternal.addListener((message, sender) => {
+      return Promise.resolve('reply_from_promise');
+    });
+  )";
 
-// TODO(crbug.com/439644930): PolyfillSupportMessagingApiTest and its test case
-// becomes unnecessary when the feature becomes the default (there are plenty of
-// other tests that test synchronous responses).
-// Helps test messaging behavior when
-// `extensions_features::kRuntimeOnMessageWebExtensionPolyfillSupport` is
-// enabled or disabled.
-class PolyfillSupportMessagingApiTest : public base::test::WithFeatureOverride,
-                                        public MessagingApiTestWithPageUrlLoad {
- public:
- public:
-  PolyfillSupportMessagingApiTest()
-      : base::test::WithFeatureOverride(
-            extensions_features::kRuntimeOnMessageWebExtensionPolyfillSupport) {
-  }
-};
+  // Load the unpacked extension and verify that it loaded successfully.
+  TestExtensionDir dir;
+  dir.WriteManifest(kManifest);
+  dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+  const Extension* extension = LoadExtension(dir.UnpackedPath());
+  ASSERT_TRUE(extension);
 
-// The PolyfillSupport* tests are testing various runtime.sendMessage()
-// behaviors compared to mozilla/webextension-polyfill
-// (https://github.com/mozilla/webextension-polyfill) when
-// `extensions_features::kRuntimeOnMessageWebExtensionPolyfillSupport` is
-// enabled or disabled. The polyfill doesn't support callbacks so we do not test
-// the sendMessage() callback version
-// (https://github.com/mozilla/webextension-polyfill/issues/102).
-IN_PROC_BROWSER_TEST_P(PolyfillSupportMessagingApiTest,
-                       SendMessageListenerBehavior) {
-  ASSERT_TRUE(RunMessagingTest("messaging/send_message_polyfill_sync"))
-      << message_;
+  // Navigate the browser to a web page whose origin matches the
+  // `externally_connectable` pattern in the extension manifest.
+  GURL url = embedded_test_server()->GetURL("example.com", "/simple.html");
+  content::WebContents* web_contents = GetActiveWebContents();
+  ASSERT_TRUE(content::NavigateToURL(web_contents, url));
+  content::RenderFrameHost* frame = web_contents->GetPrimaryMainFrame();
+  ASSERT_TRUE(frame);
+
+  // Execute a script in the web page that sends a message to the extension
+  // using `await chrome.runtime.sendMessage()` and verify that the `Promise`
+  // resolves with the expected asynchronous reply.
+  static constexpr char kWebPageScript[] = R"(
+    (async () => {
+      const response = await chrome.runtime.sendMessage('%s', 'Hello');
+      return response;
+    })();
+  )";
+
+  EXPECT_EQ(
+      "reply_from_promise",
+      content::EvalJs(
+          frame, base::StringPrintf(kWebPageScript, extension->id().c_str())));
 }
 
-INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PolyfillSupportMessagingApiTest);
+// Tests that an `externally_connectable` web page receives a response when
+// sending a one-time message if the extension's
+// `chrome.runtime.onMessageExternal` listener replies asynchronously by
+// returning `true` and invoking `sendResponse()`.
+IN_PROC_BROWSER_TEST_F(OnMessageExternalAsyncMessagingApiTest,
+                       WebPageReceiveResponseFromAsyncSendResponse) {
+  // Create an extension manifest and background script where the
+  // `chrome.runtime.onMessageExternal` listener returns `true` and calls
+  // `sendResponse()` asynchronously.
+  static constexpr char kManifest[] = R"(
+      {
+        "name": "ConnectableExtension",
+        "version": "1.0",
+        "manifest_version": 3,
+        "background": {
+          "service_worker": "background.js"
+        },
+        "externally_connectable": {
+          "matches": ["*://example.com/*"]
+        }
+      })";
+  static constexpr char kBackground[] = R"(
+    chrome.runtime.onMessageExternal.addListener(
+        (message, sender, sendResponse) => {
+      setTimeout(() => {
+        sendResponse('reply_from_send_response');
+      }, 1);
+      return true;
+    });
+  )";
 
+  // Load the unpacked extension and verify that it loaded successfully.
+  TestExtensionDir dir;
+  dir.WriteManifest(kManifest);
+  dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+  const Extension* extension = LoadExtension(dir.UnpackedPath());
+  ASSERT_TRUE(extension);
+
+  // Navigate the browser to a web page whose origin matches the
+  // `externally_connectable` pattern in the extension manifest.
+  GURL url = embedded_test_server()->GetURL("example.com", "/simple.html");
+  content::WebContents* web_contents = GetActiveWebContents();
+  ASSERT_TRUE(content::NavigateToURL(web_contents, url));
+  content::RenderFrameHost* frame = web_contents->GetPrimaryMainFrame();
+  ASSERT_TRUE(frame);
+
+  // Execute a script in the web page that sends a message to the extension
+  // using `await chrome.runtime.sendMessage()` and verify that the `Promise`
+  // resolves with the expected asynchronous `sendResponse()` reply.
+  static constexpr char kWebPageScript[] = R"(
+    (async () => {
+      const response = await chrome.runtime.sendMessage('%s', 'Hello');
+      return response;
+    })();
+  )";
+
+  EXPECT_EQ(
+      "reply_from_send_response",
+      content::EvalJs(
+          frame, base::StringPrintf(kWebPageScript, extension->id().c_str())));
+}
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-
-// TODO(crbug.com/439644930):PolyfillSupportWithWorkerShutdownMessagingApiTest
-// and its test case becomes unnecessary when the feature becomes the default
-// (the polyfill feature makes it so the errors tested here are handled without
-// worker shutdown).
-// Helps with testing messaging scenarios where the worker background must be
-// stopped in order to elicit a response to message. The polyfill feature
-// handles these scenarios without worker shutdown so we keep it disabled.
-class PolyfillSupportWithWorkerShutdownMessagingApiTest
-    : public MessagingApiTestWithPageUrlLoad {
- public:
-  // Wait until the message listener finishes running and then stop the worker.
-  // Then inform the message sender that the worker shutdown.
-  void OnShutdownMessage(const ExtensionId& extension_id,
-                         const std::string& message) {
-    // Wait for the worker listener to process the message so we don't shutdown
-    // the worker so quickly that the sender's message never gets to the
-    // listener.
-    ASSERT_TRUE(message_processed_listener_.WaitUntilSatisfied(
-        base::RunLoop::Type::kNestableTasksAllowed));
-    message_processed_listener_.Reset();
-    // Shut down the worker to start garbage collection of the sendResponse in
-    // the listener context. This elicits the browser to respond on behalf of
-    // the listener.
-    browsertest_util::StopServiceWorkerForExtensionGlobalScope(
-        profile(), extension_id, base::RunLoop::Type::kNestableTasksAllowed);
-    // Notify the test cases to proceed.
-    worker_shutdown_listener_.Reply("");
-    worker_shutdown_listener_.Reset();
-  }
-
- protected:
-  PolyfillSupportWithWorkerShutdownMessagingApiTest() {
-    scoped_feature_list_.InitAndDisableFeature(
-        extensions_features::kRuntimeOnMessageWebExtensionPolyfillSupport);
-  }
-
-  void SetUpOnMainThread() override {
-    MessagingApiTestWithPageUrlLoad::SetUpOnMainThread();
-    worker_shutdown_listener_.SetOnRepeatedlySatisfied(base::BindRepeating(
-        &PolyfillSupportWithWorkerShutdownMessagingApiTest::OnShutdownMessage,
-        base::Unretained(this), extension_id_));
-  }
-
- private:
-  // Waits for the message listener to finish processing the message it
-  // received.
-  ExtensionTestMessageListener message_processed_listener_ =
-      ExtensionTestMessageListener("listener_processed_message");
-  // Waits for message sender to indicate that it would like for the worker to
-  // shutdown so it can receive a reply.
-  ExtensionTestMessageListener worker_shutdown_listener_ =
-      ExtensionTestMessageListener("shutdown_worker",
-                                   ReplyBehavior::kWillReply);
-  ExtensionId extension_id_ = ExtensionId("iegclhlplifhodhkoafiokenjoapiobj");
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-// Test how does messaging handle when the listener never responds but also
-// never releases its reference to the v8 reply function (when the polyfill
-// feature is disabled). Also see PolyfillSupportMessagingApiTest.
-IN_PROC_BROWSER_TEST_F(PolyfillSupportWithWorkerShutdownMessagingApiTest,
-                       SendMessageListenerBehavior_Asynchronous) {
-  ASSERT_TRUE(RunMessagingTest("messaging/send_message_polyfill_async"))
-      << message_;
-}
-
-// Test class that sets `chrome.test.getConfig()`'s 'customArg' key to the
-// `extensions_features::kRuntimeOnMessageWebExtensionPolyfillSupport` state so
-// the extension test can adjust its expectations at test runtime.
-class PolyfillSupportMessagingErrorsApiTest
-    : public PolyfillSupportMessagingApiTest {
- public:
-
-  void SetUpOnMainThread() override {
-    PolyfillSupportMessagingApiTest::SetUpOnMainThread();
-    // Set "customArg" to be whether the feature is enabled in
-    // chrome.test.getConfig().
-    js_test_config_.Set(
-        "customArg", base::Value(IsParamFeatureEnabled() ? "true" : "false"));
-    extensions::TestGetConfigFunction::set_test_config_state(&js_test_config_);
-  }
-
-  void TearDownOnMainThread() override {
-    PolyfillSupportMessagingApiTest::TearDownOnMainThread();
-    extensions::TestGetConfigFunction::set_test_config_state(nullptr);
-  }
-
- private:
-  base::Value::Dict js_test_config_;
-};
+using PolyfillSupportMessagingErrorsApiTest = MessagingApiTestWithPageUrlLoad;
 
 // Test the sender's promise behavior when there are two listeners and:
 // 1) the first registered throws a synchronous error
 // 2) the second registered responds to the message
-IN_PROC_BROWSER_TEST_P(PolyfillSupportMessagingErrorsApiTest,
+IN_PROC_BROWSER_TEST_F(PolyfillSupportMessagingErrorsApiTest,
                        ListenerErrorHandlingWhenErrorIsFirst) {
   ASSERT_TRUE(
       RunMessagingTest("messaging/one_time_message_handler_error_first"))
@@ -1085,7 +2138,7 @@ IN_PROC_BROWSER_TEST_P(PolyfillSupportMessagingErrorsApiTest,
 // Test the sender's promise behavior when there are two listeners and:
 // 1) the first registered responds to the message
 // 2) the second registered throws a synchronous error
-IN_PROC_BROWSER_TEST_P(PolyfillSupportMessagingErrorsApiTest,
+IN_PROC_BROWSER_TEST_F(PolyfillSupportMessagingErrorsApiTest,
                        ListenerErrorHandlingWhenResponseIsFirst) {
   ASSERT_TRUE(RunMessagingTest(
       "messaging/one_time_message_handler_send_response_first"))
@@ -1094,7 +2147,7 @@ IN_PROC_BROWSER_TEST_P(PolyfillSupportMessagingErrorsApiTest,
 
 // Test the sender's promise behavior when there is one listener that replies
 // and then throws an error immediately afterward.
-IN_PROC_BROWSER_TEST_P(PolyfillSupportMessagingErrorsApiTest,
+IN_PROC_BROWSER_TEST_F(PolyfillSupportMessagingErrorsApiTest,
                        ListenerErrorHandlingWhenOneListenerResponseIsFirst) {
   ASSERT_TRUE(RunMessagingTest(
       "messaging/one_time_message_handler_send_response_first_same_listener"))
@@ -1103,7 +2156,7 @@ IN_PROC_BROWSER_TEST_P(PolyfillSupportMessagingErrorsApiTest,
 
 // Test the sender's promise behavior when there is one listener that throws an
 // error immediately.
-IN_PROC_BROWSER_TEST_P(PolyfillSupportMessagingErrorsApiTest,
+IN_PROC_BROWSER_TEST_F(PolyfillSupportMessagingErrorsApiTest,
                        ListenerErrorHandlingWhenOneListenerErrorFirst) {
   const GURL url = embedded_test_server()->GetURL("/extensions/test_file.html");
   ASSERT_TRUE(RunMessagingTest(
@@ -1114,7 +2167,7 @@ IN_PROC_BROWSER_TEST_P(PolyfillSupportMessagingErrorsApiTest,
 // Test the sender's promise behavior when there are two listeners and:
 // 1) the first registered responds asynchronously (with `return true`)
 // 2) the second registered throws a synchronous error
-IN_PROC_BROWSER_TEST_P(PolyfillSupportMessagingErrorsApiTest,
+IN_PROC_BROWSER_TEST_F(PolyfillSupportMessagingErrorsApiTest,
                        ListenerErrorHandlingWhenAsyncResponseIsFirst) {
   const GURL url = embedded_test_server()->GetURL("/extensions/test_file.html");
   ASSERT_TRUE(RunMessagingTest(
@@ -1125,7 +2178,7 @@ IN_PROC_BROWSER_TEST_P(PolyfillSupportMessagingErrorsApiTest,
 // Test the sender's promise behavior when there are two listeners and:
 // 1) the first registered throws an error synchronously
 // 2) the second registered also throws an error synchronously
-IN_PROC_BROWSER_TEST_P(PolyfillSupportMessagingErrorsApiTest,
+IN_PROC_BROWSER_TEST_F(PolyfillSupportMessagingErrorsApiTest,
                        ListenerErrorHandlingWhenMultipleSyncErrorsThrown) {
   ASSERT_TRUE(
       RunMessagingTest("messaging/one_time_message_handler_sync_errors"))
@@ -1134,7 +2187,7 @@ IN_PROC_BROWSER_TEST_P(PolyfillSupportMessagingErrorsApiTest,
 
 // Test the sender's promise behavior when there is a single listener that
 // throws a variety of error types.
-IN_PROC_BROWSER_TEST_P(PolyfillSupportMessagingErrorsApiTest,
+IN_PROC_BROWSER_TEST_F(PolyfillSupportMessagingErrorsApiTest,
                        ListenerErrorHandlingForManySyncErrorTypesThrown) {
   const GURL url = embedded_test_server()->GetURL("/extensions/test_file.html");
   ASSERT_TRUE(RunMessagingTest(
@@ -1142,24 +2195,12 @@ IN_PROC_BROWSER_TEST_P(PolyfillSupportMessagingErrorsApiTest,
       << message_;
 }
 
-INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PolyfillSupportMessagingErrorsApiTest);
-
-class PolyfillFeatureEnabledMessagingApiTest
-    : public MessagingApiTestWithPageUrlLoad {
- public:
-  PolyfillFeatureEnabledMessagingApiTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        extensions_features::kRuntimeOnMessageWebExtensionPolyfillSupport);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
+using PolyfillSupportMessagingApiTest = MessagingApiTestWithPageUrlLoad;
 
 // Test the sender's promise behavior when there are two listeners and:
 // 1) the first registered responds by returning a promise that resolves
 // 2) the second registered throws a synchronous error
-IN_PROC_BROWSER_TEST_F(PolyfillFeatureEnabledMessagingApiTest,
+IN_PROC_BROWSER_TEST_F(PolyfillSupportMessagingApiTest,
                        ListenerErrorHandlingWhenPromiseResolveIsFirst) {
   ASSERT_TRUE(RunMessagingTest(
       "messaging/one_time_message_handler_promise_resolve_first"))
@@ -1169,30 +2210,15 @@ IN_PROC_BROWSER_TEST_F(PolyfillFeatureEnabledMessagingApiTest,
 // Test the sender's promise behavior when there are two listeners and:
 // 1) the first registered responds by returning a promise that rejects
 // 2) the second registered throws a synchronous error
-IN_PROC_BROWSER_TEST_F(PolyfillFeatureEnabledMessagingApiTest,
+IN_PROC_BROWSER_TEST_F(PolyfillSupportMessagingApiTest,
                        ListenerErrorHandlingWhenPromiseRejectIsFirst) {
   ASSERT_TRUE(RunMessagingTest(
       "messaging/one_time_message_handler_promise_reject_first"))
       << message_;
 }
 
-using PolyfillUnserializableMessageResponseShutdownTest =
-    PolyfillSupportWithWorkerShutdownMessagingApiTest;
-
-// Tests messaging behavior when a listener sends a response that is not JSON
-// serializable and the polyfill feature is not enabled.
-IN_PROC_BROWSER_TEST_F(PolyfillUnserializableMessageResponseShutdownTest,
-                       UnserializableResponse) {
-  ASSERT_TRUE(
-      RunMessagingTest("messaging/send_message_non_polyfill_unserializable"))
-      << message_;
-}
-
-// The tests for when the feature is disabled are in
-// PolyfillUnserializableMessageResponseShutdownTest.UnserializableResponse
-// since they require extra logic to test.
 using PolyfillUnserializableMessageResponseTest =
-    PolyfillFeatureEnabledMessagingApiTest;
+    MessagingApiTestWithPageUrlLoad;
 
 // Tests similar behavior to PolyfillSupportMessagingApiTest, but specifically
 // when the message listener attempts to send unserializable data back to the
@@ -1207,28 +2233,13 @@ IN_PROC_BROWSER_TEST_F(PolyfillUnserializableMessageResponseTest,
       << message_;
 }
 
-// Helps in testing that
-// extensions_features::kRuntimeOnMessageWebExtensionPolyfillSupport doesn't
-// regress asynchronous listener behavior when multiple listeners can return for
-// a single message.
-class OnMessageMultiListenerMessagingApiTest
-    : public MessagingApiTestWithPageUrlLoad,
-      public base::test::WithFeatureOverride {
- public:
-  OnMessageMultiListenerMessagingApiTest()
-      : base::test::WithFeatureOverride(
-            extensions_features::kRuntimeOnMessageWebExtensionPolyfillSupport) {
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
+using OnMessageMultiListenerMessagingApiTest = MessagingApiTestWithPageUrlLoad;
 
 // Tests that, when a synchronous onMessage listener is registered first (it's
 // return value is examined first) and an asynchronous listener is registered
 // second, it doesn't prevent the asynchronous listeners sendResponse() call
 // from getting to the message sender. Regression test for crbug.com/424560420.
-IN_PROC_BROWSER_TEST_P(OnMessageMultiListenerMessagingApiTest,
+IN_PROC_BROWSER_TEST_F(OnMessageMultiListenerMessagingApiTest,
                        OnMessageSyncListenerReturnsFirst) {
   ASSERT_TRUE(RunMessagingTest(
       "messaging/on_message_multi_listener/sync_listener_called_first"))
@@ -1239,14 +2250,12 @@ IN_PROC_BROWSER_TEST_P(OnMessageMultiListenerMessagingApiTest,
 // return value is examined first) and a synchronous listener is registered
 // second, it doesn't prevent the asynchronous listeners sendResponse() call
 // from getting to the message sender. Regression test for crbug.com/424560420.
-IN_PROC_BROWSER_TEST_P(OnMessageMultiListenerMessagingApiTest,
+IN_PROC_BROWSER_TEST_F(OnMessageMultiListenerMessagingApiTest,
                        OnMessageAsyncListenerReturnsFirst) {
   ASSERT_TRUE(RunMessagingTest(
       "messaging/on_message_multi_listener/async_listener_called_first"))
       << message_;
 }
-
-INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(OnMessageMultiListenerMessagingApiTest);
 
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 

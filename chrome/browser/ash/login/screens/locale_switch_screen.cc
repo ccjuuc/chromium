@@ -4,26 +4,27 @@
 
 #include "chrome/browser/ash/login/screens/locale_switch_screen.h"
 
+#include <algorithm>
 #include <optional>
 #include <string>
 
-#include "base/containers/contains.h"
+#include "ash/constants/ash_login_pref_names.h"
+#include "base/check_deref.h"
 #include "base/functional/callback.h"
 #include "base/json/json_reader.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/ash/base/locale_util.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/screens/locale_switch_notification.h"
 #include "chrome/browser/ash/login/users/chrome_user_manager_util.h"
 #include "chrome/browser/ash/login/wizard_context.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/webui/ash/login/locale_switch_screen_handler.h"
 #include "chromeos/ash/components/osauth/public/auth_session_storage.h"
+#include "components/application_locale_storage/application_locale_storage.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/language/core/common/locale_util.h"
 #include "components/prefs/pref_service.h"
@@ -73,25 +74,25 @@ class GetLocaleOAuth2PeopleAPICall : public OAuth2ApiCallFlow {
       response_body.emplace();
     }
 
-    std::optional<base::Value::Dict> value = base::JSONReader::ReadDict(
+    std::optional<base::DictValue> value = base::JSONReader::ReadDict(
         *response_body, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     if (!value) {
       LOG(ERROR) << __func__ << " Bad response format";
       std::move(failure_callback_).Run();
       return;
     }
-    base::Value::List* locales_list = value->FindList("locales");
+    base::ListValue* locales_list = value->FindList("locales");
     if (!locales_list) {
       LOG(ERROR) << __func__ << " No locales available";
       std::move(failure_callback_).Run();
       return;
     }
     for (const auto& locale_dict : *locales_list) {
-      const base::Value::Dict* ld = locale_dict.GetIfDict();
+      const base::DictValue* ld = locale_dict.GetIfDict();
       if (!ld) {
         continue;
       }
-      const base::Value::Dict* metadata = ld->FindDict("metadata");
+      const base::DictValue* metadata = ld->FindDict("metadata");
       if (metadata->FindBool("primary")) {
         const std::string* locale = ld->FindString("value");
         std::move(success_callback_).Run(*locale);
@@ -176,9 +177,14 @@ std::string LocaleSwitchScreen::GetResultString(Result result) {
   // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
-LocaleSwitchScreen::LocaleSwitchScreen(base::WeakPtr<LocaleSwitchView> view,
-                                       const ScreenExitCallback& exit_callback)
+LocaleSwitchScreen::LocaleSwitchScreen(
+    PrefService* local_state,
+    ApplicationLocaleStorage* application_locale_storage,
+    base::WeakPtr<LocaleSwitchView> view,
+    const ScreenExitCallback& exit_callback)
     : BaseScreen(LocaleSwitchView::kScreenId, OobeScreenPriority::DEFAULT),
+      local_state_(CHECK_DEREF(local_state)),
+      application_locale_storage_(CHECK_DEREF(application_locale_storage)),
       view_(std::move(view)),
       exit_callback_(exit_callback) {}
 
@@ -192,11 +198,10 @@ bool LocaleSwitchScreen::MaybeSkip(WizardContext& wizard_context) {
 
   // Skip GAIA language sync if user specifically set language through the UI
   // on the welcome screen.
-  PrefService* local_state = g_browser_process->local_state();
-  if (local_state->GetBoolean(prefs::kOobeLocaleChangedOnWelcomeScreen)) {
+  if (local_state_->GetBoolean(prefs::kOobeLocaleChangedOnWelcomeScreen)) {
     VLOG(1) << "Skipping GAIA language sync because user chose specific"
             << " locale on the Welcome Screen.";
-    local_state->ClearPref(prefs::kOobeLocaleChangedOnWelcomeScreen);
+    local_state_->ClearPref(prefs::kOobeLocaleChangedOnWelcomeScreen);
     exit_callback_.Run(Result::kNotApplicable);
     return true;
   }
@@ -254,7 +259,7 @@ void LocaleSwitchScreen::ShowImpl() {
       identity_manager_->FindExtendedAccountInfoByGaiaId(gaia_id_);
   account_capabilities_loaded_ =
       refresh_token_loaded_ &&
-      account_info.capabilities.AreAllCapabilitiesKnown();
+      account_info.GetAccountCapabilities().AreAllCapabilitiesKnown();
   if (!account_capabilities_loaded_) {
     identity_manager_observer_.Observe(identity_manager_.get());
   }
@@ -290,7 +295,7 @@ void LocaleSwitchScreen::OnExtendedAccountInfoUpdated(
   }
   account_capabilities_loaded_ =
       refresh_token_loaded_ &&
-      account_info.capabilities.AreAllCapabilitiesKnown();
+      account_info.GetAccountCapabilities().AreAllCapabilitiesKnown();
   if (!account_capabilities_loaded_) {
     return;
   }
@@ -367,7 +372,7 @@ void LocaleSwitchScreen::OnRequestFailure() {
 void LocaleSwitchScreen::SwitchLocale() {
   language::ConvertToActualUILocale(&locale_);
 
-  if (locale_.empty() || locale_ == g_browser_process->GetApplicationLocale()) {
+  if (locale_.empty() || locale_ == application_locale_storage_->Get()) {
     exit_callback_.Run(Result::kNoSwitchNeeded);
     return;
   }
@@ -385,7 +390,7 @@ void LocaleSwitchScreen::SwitchLocale() {
   // flow.
   if (!chrome_user_manager_util::IsManagedGuestSessionOrEphemeralLogin() &&
       context()->is_add_person_flow &&
-      base::Contains(kAddPersonUserTypes, user->GetType())) {
+      std::ranges::contains(kAddPersonUserTypes, user->GetType())) {
     VLOG(1) << "Add Person flow detected, delegating locale switch decision"
             << " to the user.";
     // Delegate language switch to the notification. User will be able to
@@ -394,7 +399,8 @@ void LocaleSwitchScreen::SwitchLocale() {
     locale_util::SwitchLanguageCallback callback(base::BindOnce(
         &LocaleSwitchScreen::OnLanguageChangedNotificationCallback,
         weak_factory_.GetWeakPtr()));
-    LocaleSwitchNotification::Show(profile, locale_, std::move(callback));
+    LocaleSwitchNotification::Show(&application_locale_storage_.get(), profile,
+                                   locale_, std::move(callback));
     exit_callback_.Run(Result::kSwitchDelegated);
     return;
   }
@@ -403,7 +409,7 @@ void LocaleSwitchScreen::SwitchLocale() {
       base::BindOnce(&LocaleSwitchScreen::OnLanguageChangedCallback,
                      weak_factory_.GetWeakPtr()));
   locale_util::SwitchLanguage(
-      locale_,
+      &application_locale_storage_.get(), locale_,
       /*enable_locale_keyboard_layouts=*/false,  // The layouts will be synced
                                                  // instead. Also new user could
                                                  // enable required layouts from

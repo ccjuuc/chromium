@@ -13,8 +13,9 @@
 #include "base/files/scoped_file.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/process/launch.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -86,6 +87,22 @@ void RunKernelCrashReporter(base::ScopedFD ramoops_fd,
   }
 }
 
+// Only allow visible ASCII characters as parameters for crash reporter.
+const char kValidCharacters[] =
+    "!\"#$%&'()*+,-./"
+    "0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`"
+    "abcdefghijklmnopqrstuvwxyz{|}~";
+const size_t kMaxValidLength = 255;
+bool ValidateString(const std::string& str) {
+  if (str.empty() || str.length() > kMaxValidLength) {
+    return false;
+  }
+  if (!base::ContainsOnlyChars(str, kValidCharacters)) {
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 namespace arc {
@@ -101,11 +118,12 @@ class ArcCrashCollectorBridgeFactory
   static constexpr const char* kName = "ArcCrashCollectorBridgeFactory";
 
   static ArcCrashCollectorBridgeFactory* GetInstance() {
-    return base::Singleton<ArcCrashCollectorBridgeFactory>::get();
+    static base::NoDestructor<ArcCrashCollectorBridgeFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcCrashCollectorBridgeFactory>;
+  friend base::NoDestructor<ArcCrashCollectorBridgeFactory>;
   ArcCrashCollectorBridgeFactory() = default;
   ~ArcCrashCollectorBridgeFactory() override = default;
 };
@@ -140,6 +158,10 @@ ArcCrashCollectorBridge::~ArcCrashCollectorBridge() {
 void ArcCrashCollectorBridge::DumpCrash(const std::string& type,
                                         mojo::ScopedHandle pipe,
                                         std::optional<base::TimeDelta> uptime) {
+  if (!ValidateString(type)) {
+    LOG(ERROR) << "Invalid type " << type;
+    return;
+  }
   base::ThreadPool::PostTask(
       FROM_HERE, {base::WithBaseSyncPrimitives()},
       base::BindOnce(&RunJavaCrashReporter, type,
@@ -151,6 +173,10 @@ void ArcCrashCollectorBridge::DumpNativeCrash(const std::string& exec_name,
                                               int32_t pid,
                                               int64_t timestamp,
                                               mojo::ScopedHandle minidump_fd) {
+  if (!ValidateString(exec_name)) {
+    LOG(ERROR) << "Invalid exec_name " << exec_name;
+    return;
+  }
   base::ThreadPool::PostTask(
       FROM_HERE, {base::WithBaseSyncPrimitives()},
       base::BindOnce(
@@ -174,10 +200,26 @@ void ArcCrashCollectorBridge::SetBuildProperties(
     const std::string& board,
     const std::string& cpu_abi,
     const std::optional<std::string>& fingerprint) {
-  device_ = device;
-  board_ = board;
-  cpu_abi_ = cpu_abi;
-  fingerprint_ = fingerprint;
+  if (ValidateString(device)) {
+    device_ = device;
+  } else {
+    LOG(ERROR) << "Invalid device " << device;
+  }
+  if (ValidateString(board)) {
+    board_ = board;
+  } else {
+    LOG(ERROR) << "Invalid board " << board;
+  }
+  if (ValidateString(cpu_abi)) {
+    cpu_abi_ = cpu_abi;
+  } else {
+    LOG(ERROR) << "Invalid cpu_abi " << cpu_abi;
+  }
+  if (!fingerprint || ValidateString(fingerprint.value())) {
+    fingerprint_ = fingerprint;
+  } else {
+    LOG(ERROR) << "Invalid fingerprint " << fingerprint.value();
+  }
 }
 
 std::vector<std::string> ArcCrashCollectorBridge::CreateCrashReporterArgs() {

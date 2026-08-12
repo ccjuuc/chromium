@@ -35,20 +35,20 @@ unsigned FontSelectionRequest::GetHash() const {
       width.RawValue(),
       slope.RawValue(),
   };
-  return StringHasher::HashMemory(base::as_byte_span(val));
+  return StringHasher::HashMemory32(base::as_byte_span(val));
 }
 
 unsigned FontSelectionRequestKeyHashTraits::GetHash(
     const FontSelectionRequestKey& key) {
   uint32_t val[] = {key.request.GetHash(), key.isDeletedValue};
-  return StringHasher::HashMemory(base::as_byte_span(val));
+  return StringHasher::HashMemory32(base::as_byte_span(val));
 }
 
 unsigned FontSelectionCapabilitiesHashTraits::GetHash(
     const FontSelectionCapabilities& key) {
   uint32_t val[] = {key.width.UniqueValue(), key.slope.UniqueValue(),
                     key.weight.UniqueValue(), key.IsHashTableDeletedValue()};
-  return StringHasher::HashMemory(base::as_byte_span(val));
+  return StringHasher::HashMemory32(base::as_byte_span(val));
 }
 
 String FontSelectionValue::ToString() const {
@@ -58,7 +58,7 @@ String FontSelectionValue::ToString() const {
 String FontSelectionRequest::ToString() const {
   return String::Format(
       "weight=%s, width=%s, slope=%s", weight.ToString().Ascii().c_str(),
-      width.ToString().Ascii().data(), slope.ToString().Ascii().c_str());
+      width.ToString().Ascii().c_str(), slope.ToString().Ascii().c_str());
 }
 
 }  // namespace blink

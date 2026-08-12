@@ -71,7 +71,7 @@ class OfflinePageBridge : public OfflinePageModel::Observer,
 
   void GetPageByOfflineId(
       JNIEnv* env,
-      jlong offline_id,
+      int64_t offline_id,
       const base::android::JavaRef<jobject>& j_callback_obj);
 
   void DeletePagesByClientId(
@@ -84,7 +84,7 @@ class OfflinePageBridge : public OfflinePageModel::Observer,
       JNIEnv* env,
       const base::android::JavaRef<jobjectArray>& j_namespaces_array,
       const base::android::JavaRef<jobjectArray>& j_ids_array,
-      std::string& origin,
+      const std::string& origin,
       const base::android::JavaRef<jobject>& j_callback_obj);
 
   void DeletePagesByOfflineId(
@@ -102,13 +102,13 @@ class OfflinePageBridge : public OfflinePageModel::Observer,
   void GetPagesByRequestOrigin(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& j_result_obj,
-      std::string& request_origin,
+      const std::string& request_origin,
       const base::android::JavaRef<jobject>& j_callback_obj);
 
   void GetPagesByNamespace(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& j_result_obj,
-      std::string& namespace_str,
+      const std::string& namespace_str,
       const base::android::JavaRef<jobject>& j_callback_obj);
 
   void SelectPageForOnlineUrl(
@@ -120,25 +120,25 @@ class OfflinePageBridge : public OfflinePageModel::Observer,
   void SavePage(JNIEnv* env,
                 const base::android::JavaRef<jobject>& j_callback_obj,
                 const base::android::JavaRef<jobject>& j_web_contents,
-                std::string& namespace_str,
-                std::string& client_id,
-                std::string& origin);
+                const std::string& namespace_str,
+                const std::string& client_id,
+                const std::string& origin);
 
   void PublishInternalPageByOfflineId(
       JNIEnv* env,
-      const jlong j_offline_id,
+      const int64_t j_offline_id,
       const base::android::JavaRef<jobject>& j_published_callback);
 
   void PublishInternalPageByGuid(
       JNIEnv* env,
-      std::string& guid,
+      const std::string& guid,
       const base::android::JavaRef<jobject>& j_published_callback);
 
-  jboolean IsShowingOfflinePreview(
+  bool IsShowingOfflinePreview(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& j_web_contents);
 
-  jboolean IsShowingDownloadButtonInErrorPage(
+  bool IsShowingDownloadButtonInErrorPage(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& j_web_contents);
 
@@ -150,21 +150,19 @@ class OfflinePageBridge : public OfflinePageModel::Observer,
                     const base::android::JavaRef<jobject>& j_web_contents);
   void ScheduleDownload(JNIEnv* env,
                         const base::android::JavaRef<jobject>& j_web_contents,
-                        std::string& namespace_str,
-                        std::string& url_spec,
+                        const std::string& namespace_str,
+                        const std::string& url_spec,
                         int ui_action,
-                        std::string& origin);
+                        const std::string& origin);
 
   base::android::ScopedJavaGlobalRef<jobject> java_ref() { return java_ref_; }
 
-  jboolean IsOfflinePage(JNIEnv* env,
-                         const base::android::JavaRef<jobject>& j_web_contents);
+  bool IsOfflinePage(JNIEnv* env,
+                     const base::android::JavaRef<jobject>& j_web_contents);
 
-  jboolean IsInPrivateDirectory(JNIEnv* env,
-                                std::string& file_path);
+  bool IsInPrivateDirectory(JNIEnv* env, const std::string& file_path);
 
-  jboolean IsTemporaryNamespace(JNIEnv* env,
-                                std::string& name_space);
+  bool IsTemporaryNamespace(JNIEnv* env, const std::string& name_space);
 
   base::android::ScopedJavaLocalRef<jobject> GetOfflinePage(
       JNIEnv* env,
@@ -172,16 +170,16 @@ class OfflinePageBridge : public OfflinePageModel::Observer,
 
   void GetLoadUrlParamsByOfflineId(
       JNIEnv* env,
-      jlong j_offline_id,
-      jint launch_location,
+      int64_t j_offline_id,
+      int32_t launch_location,
       const base::android::JavaRef<jobject>& j_callback_obj);
 
   void GetLoadUrlParamsForOpeningMhtmlFileOrContent(
       JNIEnv* env,
-      std::string& url_spec,
+      const std::string& url_spec,
       const base::android::JavaRef<jobject>& j_callback_obj);
 
-  jboolean IsShowingTrustedOfflinePage(
+  bool IsShowingTrustedOfflinePage(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& j_web_contents);
 

@@ -56,6 +56,11 @@ TestPermissionBubbleViewDelegate::GetAssociatedWebContents() {
   return nullptr;
 }
 
+std::optional<permissions::GeolocationPromptType>
+TestPermissionBubbleViewDelegate::GetGeolocationPromptType() const {
+  return std::nullopt;
+}
+
 base::WeakPtr<permissions::PermissionPrompt::Delegate>
 TestPermissionBubbleViewDelegate::GetWeakPtr() {
   return weak_factory_.GetWeakPtr();

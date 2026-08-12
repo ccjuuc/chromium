@@ -11,6 +11,7 @@
 #include <string_view>
 #include <tuple>
 
+#include "base/check.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/debug/alias.h"
@@ -42,6 +43,7 @@
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/multiprocess_func_list.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include <malloc.h>
@@ -66,6 +68,8 @@
 #endif
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
+
+#include "base/win/access_token.h"
 #endif
 #if BUILDFLAG(IS_APPLE)
 #include <mach/vm_param.h>
@@ -469,7 +473,7 @@ TEST_F(ProcessUtilTest, HandlesToTransferClosedOnSpawnFailure) {
   EXPECT_EQ(
       zx_object_wait_one(handles[1].get(), ZX_CHANNEL_PEER_CLOSED, 0, nullptr),
       ZX_OK);
-  EXPECT_EQ(ZX_ERR_BAD_HANDLE, zx_handle_close(handles[0].get()));
+  EXPECT_EQ(ZX_ERR_NOT_FOUND, zx_handle_check_valid(handles[0].get()));
   std::ignore = handles[0].release();
 }
 
@@ -495,7 +499,7 @@ TEST_F(ProcessUtilTest, HandlesToTransferClosedOnBadPathToMapFailure) {
   EXPECT_EQ(
       zx_object_wait_one(handles[1].get(), ZX_CHANNEL_PEER_CLOSED, 0, nullptr),
       ZX_OK);
-  EXPECT_EQ(ZX_ERR_BAD_HANDLE, zx_handle_close(handles[0].get()));
+  EXPECT_EQ(ZX_ERR_NOT_FOUND, zx_handle_check_valid(handles[0].get()));
   std::ignore = handles[0].release();
 }
 
@@ -1356,18 +1360,17 @@ std::string TestLaunchProcess(const CommandLine& cmdline,
   EXPECT_TRUE(LaunchProcess(cmdline, options).IsValid());
   write_pipe.Close();
 
-  char buf[512];
-  int n = UNSAFE_TODO(read_pipe.ReadAtCurrentPos(buf, sizeof(buf)));
+  uint8_t buf[512];
+  std::optional<size_t> n_opt = read_pipe.ReadAtCurrentPos(buf);
 #if BUILDFLAG(IS_WIN)
   // Closed pipes fail with ERROR_BROKEN_PIPE on Windows, rather than
   // successfully reporting EOF.
-  if (n < 0 && GetLastError() == ERROR_BROKEN_PIPE) {
-    n = 0;
+  if (!n_opt.has_value() && GetLastError() == ERROR_BROKEN_PIPE) {
+    n_opt = 0;
   }
 #endif  // BUILDFLAG(IS_WIN)
-  PCHECK(n >= 0);
-
-  return std::string(buf, n);
+  PCHECK(n_opt.has_value());
+  return std::string(as_string_view(span(buf).first(n_opt.value())));
 }
 
 const char kLargeString[] =
@@ -1430,6 +1433,82 @@ TEST_F(ProcessUtilTest, LaunchProcess) {
   EXPECT_EQ("", TestLaunchProcess(kPrintEnvCommand, env_changes,
                                   true /* clear_environ */, no_clone_flags));
 }
+
+#if BUILDFLAG(IS_WIN)
+MULTIPROCESS_TEST_MAIN(CheckTokenPrivileges) {
+  // The child process should be running with the mutated token.
+  // The test removes SE_CHANGE_NOTIFY_NAME from the token as an indicator to
+  // distinguish it from the original token. Check if the indicator privilege is
+  // missing to verify that the right token was used.
+  std::optional<base::win::AccessToken> token =
+      base::win::AccessToken::FromCurrentProcess();
+  CHECK(token);
+  bool has_privilege = false;
+  for (const auto& priv : token->Privileges()) {
+    if (priv.GetName() == SE_CHANGE_NOTIFY_NAME) {
+      has_privilege = true;
+      break;
+    }
+  }
+
+  std::unique_ptr<base::Environment> env = base::Environment::Create();
+  std::optional<std::string> env_val =
+      env->GetVar("LAUNCH_PROCESS_TOKEN_ENV_TEST");
+  if (!env_val || *env_val != "1") {
+    return 2;
+  }
+
+  // Return 0 if the privilege is successfully removed (which means the mutated
+  // token was used). Return 1 if it is still present.
+  return has_privilege ? 1 : 0;
+}
+
+TEST_F(ProcessUtilTest, LaunchProcessUsingToken) {
+  std::optional<base::win::AccessToken> process_token =
+      base::win::AccessToken::FromCurrentProcess(
+          /*impersonation=*/false, TOKEN_DUPLICATE);
+  ASSERT_TRUE(process_token);
+  std::optional<base::win::AccessToken> mutated_token =
+      process_token->DuplicatePrimary(TOKEN_ALL_ACCESS);
+  ASSERT_TRUE(mutated_token);
+
+  // The child process needs a way to verify it's running with the newly
+  // created token instead of the original process token.
+  // As a trick, the token can be mutated by removing a privilege that is
+  // guaranteed to be there. SE_CHANGE_NOTIFY_NAME is a good candidate because
+  // it is granted to everyone by default. The child process will use this
+  // missing privilege as an indicator to ensure the correct token was used.
+  bool has_privilege = false;
+  for (const auto& priv : mutated_token->Privileges()) {
+    if (priv.GetName() == SE_CHANGE_NOTIFY_NAME) {
+      has_privilege = true;
+      break;
+    }
+  }
+  ASSERT_TRUE(has_privilege);
+
+  ASSERT_TRUE(mutated_token->RemovePrivilege(SE_CHANGE_NOTIFY_NAME));
+
+  // Verify environment is passed correctly.
+  std::unique_ptr<Environment> env = Environment::Create();
+  EXPECT_TRUE(env->SetVar("LAUNCH_PROCESS_TOKEN_ENV_TEST", "1"));
+  absl::Cleanup env_cleanup = [&env] {
+    EXPECT_TRUE(env->UnSetVar("LAUNCH_PROCESS_TOKEN_ENV_TEST"));
+  };
+
+  CommandLine cmd_line = MakeCmdLine("CheckTokenPrivileges");
+  LaunchOptions options;
+  options.start_hidden = true;
+  options.using_token = mutated_token->get();
+
+  Process process = LaunchProcess(cmd_line, options);
+  ASSERT_TRUE(process.IsValid());
+
+  int exit_code = -1;
+  ASSERT_TRUE(process.WaitForExit(&exit_code));
+  EXPECT_EQ(0, exit_code);
+}
+#endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 MULTIPROCESS_TEST_MAIN(CheckPidProcess) {

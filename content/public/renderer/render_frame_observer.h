@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/time/time.h"
@@ -83,10 +83,6 @@ class CONTENT_EXPORT RenderFrameObserver {
   // Called when the RenderFrame visiblity is changed.
   virtual void WasHidden() {}
   virtual void WasShown() {}
-
-  // Called when the RenderFrame's visibility status changes.
-  virtual void OnFrameVisibilityChanged(
-      blink::mojom::FrameVisibility render_status) {}
 
   // Navigation callbacks.
   //
@@ -216,6 +212,7 @@ class CONTENT_EXPORT RenderFrameObserver {
   virtual void DidObserveUserInteraction(
       base::TimeTicks max_event_start,
       base::TimeTicks max_event_queued_main_thread,
+      base::TimeTicks max_event_processing_start,
       base::TimeTicks max_event_commit_finish,
       base::TimeTicks max_event_end,
       uint64_t interaction_offset) {}
@@ -305,7 +302,7 @@ class CONTENT_EXPORT RenderFrameObserver {
   virtual void DidLoadResourceFromMemoryCache(
       const GURL& response_url,
       int request_id,
-      base::ByteCount encoded_body_length,
+      base::ByteSize encoded_body_length,
       const std::string& mime_type,
       bool from_archive) {}
 
@@ -315,7 +312,7 @@ class CONTENT_EXPORT RenderFrameObserver {
   // render frame.
   virtual void DidReceiveTransferSizeUpdate(
       int resource_id,
-      base::ByteCount received_data_length) {}
+      base::ByteSize received_data_length) {}
 
   // Called when the focused element has changed to |element|.
   virtual void FocusedElementChanged(const blink::WebElement& element) {}
@@ -329,26 +326,22 @@ class CONTENT_EXPORT RenderFrameObserver {
   // Called when a worker fetch context will be created.
   virtual void WillCreateWorkerFetchContext(blink::WebWorkerFetchContext*) {}
 
-  // For the main frame, called when the main frame's dimensions have changed,
-  // e.g. resizing a tab causes the document width to change; loading additional
-  // content causes the document height to increase; explicitly changing the
-  // height of the body element.
-  //
-  // For a subframe, called when the intersection rect between the main frame
-  // and the subframe has changed, e.g. the subframe is initially added; the
-  // subframe's position is updated explicitly or inherently (e.g. sticky
-  // position while the page is being scrolled).
-  virtual void OnMainFrameIntersectionChanged(
-      const gfx::Rect& main_frame_intersection_rect) {}
+  // Called when the main frame's document rectangle changed, e.g. resizing a
+  // tab causes the document width to change, or loading additional content
+  // causes the document height to increase. Only invoked on the outermost main
+  // frame.
+  virtual void OnMainFrameRectangleChanged(const gfx::Rect& main_frame_rect) {}
 
   // Called when the main frame's viewport rectangle (the viewport dimensions
   // and the scroll position) changed, e.g. the user scrolled the main frame or
-  // the viewport dimensions themselves changed. Only invoked on the main frame.
+  // the viewport dimensions themselves changed. Only invoked on the outermost
+  // main frame.
   virtual void OnMainFrameViewportRectangleChanged(
       const gfx::Rect& main_frame_viewport_rect) {}
 
   // Called when an ad element's geometry changed. An empty `ad_rect` is used to
-  // signal the removal of the element. Only invoked on the main frame.
+  // signal the removal of the element. Only invoked on the outermost main
+  // frame.
   virtual void OnMainFrameAdRectangleChanged(int element_id,
                                              const gfx::Rect& ad_rect) {}
 
@@ -379,12 +372,6 @@ class CONTENT_EXPORT RenderFrameObserver {
   virtual bool OnAssociatedInterfaceRequestForFrame(
       const std::string& interface_name,
       mojo::ScopedInterfaceEndpointHandle* handle);
-
-  // The dropped frames metrics is shared over shared-memory. The
-  // interested observer should invalidate |shared_memory| (by std::move()'ing
-  // it), and return true. All other observers should return false (default).
-  virtual bool SetUpDroppedFramesReporting(
-      base::ReadOnlySharedMemoryRegion& shared_memory_dropped_frames);
 
   RenderFrame* render_frame() const;
 

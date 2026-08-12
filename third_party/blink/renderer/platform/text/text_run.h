@@ -24,6 +24,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_TEXT_TEXT_RUN_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_TEXT_TEXT_RUN_H_
 
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
@@ -62,14 +63,7 @@ class PLATFORM_EXPORT TextRun final {
   TextRun(TextRun&&) = default;
   TextRun& operator=(TextRun&&) = delete;
 
-  UChar operator[](unsigned i) const { return text_[i]; }
-
-  base::span<const LChar> Span8() const { return text_.Span8(); }
-  base::span<const UChar> Span16() const { return text_.Span16(); }
-
   const StringView& ToStringView() const { return text_; }
-
-  bool Is8Bit() const { return text_.Is8Bit(); }
   unsigned length() const { return text_.length(); }
 
   TextDirection Direction() const {

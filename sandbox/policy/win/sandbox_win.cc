@@ -17,9 +17,8 @@
 #include <utility>
 #include <vector>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -64,7 +63,6 @@
 #include "sandbox/win/src/app_container.h"
 #include "sandbox/win/src/process_mitigations.h"
 #include "sandbox/win/src/sandbox.h"
-#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace sandbox {
 namespace policy {
@@ -83,7 +81,7 @@ BrokerServices* g_broker_services = NULL;
 //
 // If modifying this list, be sure to update WinTroublesomeDllName enum in
 // tools/metrics/histograms/metadata/others/enums.xml.
-const wchar_t* const kTroublesomeDlls[] = {
+const base::wcstring_view kTroublesomeDlls[] = {
     L"btkeyind.dll",       // Widcomm Bluetooth.
     L"dockshellhook.dll",  // Stardock Objectdock.
     L"easyhook32.dll",     // GDIPP and others.
@@ -117,7 +115,7 @@ std::map<std::wstring, std::wstring> GetShortNameModules() {
     base::FilePath module_path(path);
     base::FilePath name = module_path.BaseName();
     if (name.RemoveExtension().value().size() > 8 ||
-        name.Extension().size() > 4 || !base::Contains(name.value(), L"~")) {
+        name.Extension().size() > 4 || !name.value().contains(L"~")) {
       continue;
     }
     base::FilePath fname = base::MakeLongFilePath(module_path);
@@ -133,18 +131,18 @@ std::map<std::wstring, std::wstring> GetShortNameModules() {
 // attempt to map a long name to the actual loaded name, this can be initialized
 // with a call to GetShortNameModules. Returns true if the DLL is loaded and
 // will be blocked in the child.
-bool BlocklistAddOneDll(const wchar_t* module_name,
+bool BlocklistAddOneDll(base::wcstring_view module_name,
                         const std::map<std::wstring, std::wstring>& modules,
                         TargetConfig* config) {
   DCHECK(!config->IsConfigured());
-  if (::GetModuleHandleW(module_name) != nullptr) {
+  if (::GetModuleHandleW(module_name.c_str()) != nullptr) {
     config->AddDllToUnload(module_name);
     DVLOG(1) << "dll to unload found: " << module_name;
     return true;
   } else {
     auto short_name = modules.find(base::ToLowerASCII(module_name));
     if (short_name != modules.end()) {
-      config->AddDllToUnload(short_name->second.c_str());
+      config->AddDllToUnload(short_name->second);
       config->AddDllToUnload(module_name);
       return true;
     }
@@ -164,7 +162,7 @@ ResultCode AddGenericConfig(sandbox::TargetConfig* config) {
   base::FilePath pdb_path = exe.DirName().Append(L"*.pdb");
   {
     ResultCode result = config->AllowFileAccess(FileSemantics::kAllowReadonly,
-                                                pdb_path.value().c_str());
+                                                pdb_path.value());
     if (result != SBOX_ALL_OK) {
       return result;
     }
@@ -187,7 +185,7 @@ ResultCode AddGenericConfig(sandbox::TargetConfig* config) {
         base::FilePath(coverage_dir).Append(L"*.sancov");
     {
       ResultCode result = config->AllowFileAccess(FileSemantics::kAllowAny,
-                                                  sancov_path.value().c_str());
+                                                  sancov_path.value());
       if (result != SBOX_ALL_OK) {
         return result;
       }
@@ -199,7 +197,7 @@ ResultCode AddGenericConfig(sandbox::TargetConfig* config) {
   // Adds policy rules for unloading the known dlls that cause Chrome to crash.
   // Eviction of injected DLLs is done by the sandbox so that the injected
   // module does not get a chance to execute any code.
-  for (const wchar_t* blocklist_dll : kTroublesomeDlls) {
+  for (const auto& blocklist_dll : kTroublesomeDlls) {
     if (BlocklistAddOneDll(blocklist_dll, modules, config)) {
       // Log the module to help with list cleanup.
       base::UmaHistogramSparse("Process.Sandbox.DllBlocked",
@@ -330,34 +328,35 @@ bool IsAppContainerEnabled() {
   return base::FeatureList::IsEnabled(features::kRendererAppContainer);
 }
 
+std::string_view GetAppContainerNameFromType(Sandbox sandbox_type) {
+  switch (sandbox_type) {
+    case Sandbox::kXrCompositing:
+      return "cr.sb.xr";
+    case Sandbox::kMediaFoundationCdm:
+      return "cr.sb.cdm";
+    case Sandbox::kNetwork:
+      return "cr.sb.net";
+    case Sandbox::kOnDeviceModelExecution:
+      return "cr.sb.odm";
+    case Sandbox::kPrintCompositor:
+      return "cr.sb.prnc";
+    case Sandbox::kProxyResolver:
+      return "cr.sb.pxy";
+    case Sandbox::kWebNNModelCompilation:
+      return "cr.sb.wnn";
+    default:
+      return {};
+  }
+}
+
 // Generate a unique sandbox AC profile for the appcontainer based on the SHA1
 // hash of the appcontainer_id. This does not need to be secure so using SHA1
 // isn't a security concern.
-std::wstring GetAppContainerProfileName(const std::string& appcontainer_id,
+std::wstring GetAppContainerProfileName(std::string_view appcontainer_id,
                                         Sandbox sandbox_type) {
-  std::string sandbox_base_name;
-  switch (sandbox_type) {
-    case Sandbox::kXrCompositing:
-      sandbox_base_name = std::string("cr.sb.xr");
-      break;
-    case Sandbox::kMediaFoundationCdm:
-      sandbox_base_name = std::string("cr.sb.cdm");
-      break;
-    case Sandbox::kNetwork:
-      sandbox_base_name = std::string("cr.sb.net");
-      break;
-    case Sandbox::kOnDeviceModelExecution:
-      sandbox_base_name = std::string("cr.sb.odm");
-      break;
-    case Sandbox::kPrintCompositor:
-      sandbox_base_name = std::string("cr.sb.prnc");
-      break;
-    case Sandbox::kProxyResolver:
-      sandbox_base_name = std::string("cr.sb.pxy");
-      break;
-    default:
-      DCHECK(0);
-  }
+  std::string_view sandbox_base_name =
+      GetAppContainerNameFromType(sandbox_type);
+  DCHECK(!sandbox_base_name.empty());
 
   auto sha1 = base::SHA1HashString(appcontainer_id);
   std::string profile_name =
@@ -371,10 +370,10 @@ std::wstring GetAppContainerProfileName(const std::string& appcontainer_id,
 }
 
 void AddCapabilitiesFromString(AppContainer* container,
-                               const std::wstring& caps) {
+                               std::wstring_view caps) {
   for (const std::wstring& cap : base::SplitString(
            caps, L",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
-    container->AddCapability(cap.c_str());
+    container->AddCapability(cap);
   }
 }
 
@@ -388,7 +387,8 @@ ResultCode SetupAppContainerProfile(AppContainer* container,
       !(sandbox_type == Sandbox::kPrintCompositor &&
         base::FeatureList::IsEnabled(
             sandbox::policy::features::kPrintCompositorLPAC)) &&
-      sandbox_type != Sandbox::kProxyResolver) {
+      sandbox_type != Sandbox::kProxyResolver &&
+      sandbox_type != Sandbox::kWebNNModelCompilation) {
     return SBOX_ERROR_UNSUPPORTED;
   }
 
@@ -455,6 +455,15 @@ ResultCode SetupAppContainerProfile(AppContainer* container,
     container->SetEnableLowPrivilegeAppContainer(true);
   }
 
+  if (sandbox_type == Sandbox::kWebNNModelCompilation) {
+    // Needed at impersonation time for access checks against Chrome's
+    // install directory (DLLs alongside chrome.exe, including the
+    // bundled ONNX Runtime and execution-provider framework packages
+    // which carry both the regular and LPAC chromeInstallFiles ACEs).
+    container->AddImpersonationCapability(kChromeInstallFiles);
+    container->SetEnableLowPrivilegeAppContainer(true);
+  }
+
   return SBOX_ALL_OK;
 }
 
@@ -502,7 +511,11 @@ ResultCode GenerateConfigForSandboxedProcess(const base::CommandLine& cmd_line,
     }
 
     if (sandbox_type == Sandbox::kNetwork || sandbox_type == Sandbox::kAudio ||
-        sandbox_type == Sandbox::kIconReader) {
+        sandbox_type == Sandbox::kIconReader ||
+        sandbox_type == Sandbox::kWebNNModelCompilation ||
+        (sandbox_type == Sandbox::kSpeechRecognition &&
+         base::FeatureList::IsEnabled(
+             features::kSpeechRecognitionSandboxHardening))) {
       mitigations |= MITIGATION_DYNAMIC_CODE_DISABLE;
     }
 
@@ -513,6 +526,18 @@ ResultCode GenerateConfigForSandboxedProcess(const base::CommandLine& cmd_line,
     if (const auto result = config->SetDelayedProcessMitigations(mitigations);
         result != SBOX_ALL_OK) {
       return result;
+    }
+  }
+
+  if (const auto security_attribute_name = delegate->GetSecurityAttributeName();
+      security_attribute_name.has_value()) {
+    const auto token = base::win::AccessToken::FromCurrentProcess();
+    // Only pass the name to the sandbox config if the attribute is present on
+    // the current process token, otherwise the restricted token cannot be
+    // created. This can happen if the browser is not running isolated.
+    if (token &&
+        token->GetSecurityAttribute(*security_attribute_name).has_value()) {
+      config->SetSecurityAttributeName(*security_attribute_name);
     }
   }
 
@@ -713,7 +738,7 @@ void SandboxWin::AddBaseHandleClosePolicy(TargetConfig* config) {
 
 // static
 ResultCode SandboxWin::AddAppContainerPolicy(TargetConfig* config,
-                                             const wchar_t* sid) {
+                                             base::wcstring_view sid) {
   DCHECK(!config->IsConfigured());
   if (IsAppContainerEnabled()) {
     ResultCode result = config->SetLowBox(sid);
@@ -750,7 +775,7 @@ ResultCode SandboxWin::AddWin32kLockdownPolicy(TargetConfig* config) {
 ResultCode SandboxWin::AddAppContainerProfileToConfig(
     const base::CommandLine& command_line,
     Sandbox sandbox_type,
-    const std::string& appcontainer_id,
+    std::string_view appcontainer_id,
     TargetConfig* config) {
   DCHECK(!config->IsConfigured());
   if (base::win::GetVersion() < base::win::Version::WIN10_RS1)
@@ -758,7 +783,7 @@ ResultCode SandboxWin::AddAppContainerProfileToConfig(
   std::wstring profile_name =
       GetAppContainerProfileName(appcontainer_id, sandbox_type);
 
-  ResultCode result = config->AddAppContainerProfile(profile_name.c_str());
+  ResultCode result = config->AddAppContainerProfile(profile_name);
   if (result != SBOX_ALL_OK)
     return result;
 
@@ -770,12 +795,11 @@ ResultCode SandboxWin::AddAppContainerProfileToConfig(
   DWORD granted_access;
   BOOL granted_access_status;
   const base::FilePath program = command_line.GetProgram();
-  bool access_check =
-      config->GetAppContainer()->AccessCheck(
-          program.value().c_str(), base::win::SecurityObjectType::kFile,
-          GENERIC_READ | GENERIC_EXECUTE, &granted_access,
-          &granted_access_status) &&
-      granted_access_status;
+  bool access_check = config->GetAppContainer()->AccessCheck(
+                          program.value(), base::win::SecurityObjectType::kFile,
+                          GENERIC_READ | GENERIC_EXECUTE, &granted_access,
+                          &granted_access_status) &&
+                      granted_access_status;
   if (!access_check) {
     PLOG(ERROR) << "Sandbox cannot access executable " << program
                 << ". Check filesystem permissions are valid. See "
@@ -813,6 +837,10 @@ bool SandboxWin::IsAppContainerEnabledForSandbox(
     return true;
   }
 
+  if (sandbox_type == Sandbox::kWebNNModelCompilation) {
+    return true;
+  }
+
   return false;
 }
 
@@ -829,17 +857,7 @@ class BrokerServicesDelegateImpl : public BrokerServicesDelegate {
         std::move(task), std::move(reply));
   }
 
-  void BeforeTargetProcessCreateOnCreationThread(
-      const void* trace_id) override {
-    TRACE_EVENT_BEGIN("startup", "TargetProcess::Create",
-                      perfetto::Track::FromPointer(trace_id));
-  }
-
-  void AfterTargetProcessCreateOnCreationThread(const void* trace_id,
-                                                DWORD process_id) override {
-    TRACE_EVENT_END("startup", perfetto::Track::FromPointer(trace_id), "pid",
-                    process_id);
-  }
+  void BeforeTargetProcessCreateOnCreationThread() override {}
 
   void OnCreateThreadActionCreateFailure(DWORD last_error) override {
     UMA_HISTOGRAM_SPARSE(
@@ -974,8 +992,7 @@ ResultCode SandboxWin::StartSandboxedProcess(
                     perfetto::Track(trace_event_id));
 
   g_broker_services->SpawnTargetAsync(
-      cmd_line.GetProgram().value(), cmd_line.GetCommandLineString(),
-      std::move(policy),
+      cmd_line, std::move(policy),
       base::BindOnce(&SandboxWin::FinishStartSandboxedProcess, delegate,
                      std::move(timer), std::move(result_callback)));
   return SBOX_ALL_OK;
@@ -1026,7 +1043,7 @@ ResultCode SandboxWin::GetPolicyDiagnostics(
   return g_broker_services->GetPolicyDiagnostics(std::move(receiver));
 }
 
-void BlocklistAddOneDllForTesting(const wchar_t* module_name,
+void BlocklistAddOneDllForTesting(base::wcstring_view module_name,
                                   TargetConfig* config) {
   std::map<std::wstring, std::wstring> modules = GetShortNameModules();
   BlocklistAddOneDll(module_name, modules, config);
@@ -1055,6 +1072,8 @@ std::string SandboxWin::GetSandboxTypeInEnglish(
       return "Network";
     case Sandbox::kOnDeviceModelExecution:
       return "On-Device Model Execution";
+    case Sandbox::kWebNNModelCompilation:
+      return "WebNN Model Compilation";
     case Sandbox::kCdm:
       return "CDM";
     case Sandbox::kPrintCompositor:
@@ -1097,31 +1116,46 @@ std::string SandboxWin::GetSandboxTagForDelegate(
 std::optional<size_t> SandboxWin::GetJobMemoryLimit(Sandbox sandbox_type) {
 #if defined(ARCH_CPU_64_BITS)
   constexpr uint64_t GB = 1024 * 1024 * 1024;
-  size_t memory_limit = static_cast<size_t>(kDataSizeLimit);
 
-  if (sandbox_type == Sandbox::kGpu ||
-      sandbox_type == Sandbox::kOnDeviceModelExecution) {
-    // Allow the GPU and ODML process sandboxes to access more physical memory
-    // if it's available on the system, up to 64GB.
-    const base::ByteCount physical_memory =
-        base::SysInfo::AmountOfPhysicalMemory();
-    if (physical_memory > base::GiB(64)) {
-      memory_limit = 64 * GB;
-    } else if (physical_memory > base::GiB(32)) {
-      memory_limit = 32 * GB;
-    } else if (physical_memory > base::GiB(16)) {
-      memory_limit = 16 * GB;
-    } else {
-      memory_limit = 8 * GB;
+  // Returns a memory limit scaled to the available physical memory, up to
+  // 64 GB. Used by GPU and ODML process sandboxes.
+  auto get_scaled_physical_memory_based_limit = []() -> size_t {
+    const base::ByteSize physical_memory =
+        base::SysInfo::AmountOfTotalPhysicalMemory();
+    if (physical_memory > base::GiBU(64)) {
+      return 64 * GB;
+    } else if (physical_memory > base::GiBU(32)) {
+      return 32 * GB;
+    } else if (physical_memory > base::GiBU(16)) {
+      return 16 * GB;
     }
-  }
+    return 8 * GB;
+  };
 
-  if (sandbox_type == Sandbox::kRenderer) {
-    // Allow up to 1 TB for the renderer.
-    memory_limit = 1024 * GB;
+  switch (sandbox_type) {
+    case Sandbox::kGpu:
+      // Allow up to 1 TB for the GPU process when the feature
+      // `kWinSboxHighGPUJobMemoryLimits` is enabled.
+      if (base::FeatureList::IsEnabled(
+              features::kWinSboxHighGPUJobMemoryLimits)) {
+        return 1024 * GB;
+      }
+      // Otherwise, scale based on physical memory, up to 64 GB.
+      return get_scaled_physical_memory_based_limit();
+    case Sandbox::kOnDeviceModelExecution:
+      // Scale based on available physical memory, up to 64 GB.
+      return get_scaled_physical_memory_based_limit();
+    case Sandbox::kWebNNModelCompilation:
+      // Allow up to 1 TB for the WebNN Compiler process, matching the renderer
+      // process limit.
+      return 1024 * GB;
+    case Sandbox::kRenderer:
+      // Allow up to 1 TB for the renderer process.
+      return 1024 * GB;
+    default:
+      // All other sandbox types use the default data size limit.
+      return static_cast<size_t>(kDataSizeLimit);
   }
-
-  return memory_limit;
 #else
   return std::nullopt;
 #endif

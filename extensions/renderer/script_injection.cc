@@ -7,7 +7,6 @@
 #include <map>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/lazy_instance.h"
@@ -30,10 +29,12 @@
 #include "extensions/renderer/scripts_run_info.h"
 #include "extensions/renderer/trace_util.h"
 #include "third_party/blink/public/platform/web_isolated_world_info.h"
+#include "third_party/blink/public/web/extension_script_streamer.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_script_execution_callback.h"
 #include "third_party/blink/public/web/web_script_source.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 using perfetto::protos::pbzero::ChromeTrackEvent;
 
@@ -88,7 +89,8 @@ ScriptInjection::ScriptInjection(
       frame_watcher_(new FrameWatcher(render_frame, this)) {
   CHECK(injection_host_.get());
   TRACE_EVENT_BEGIN(
-      "extensions", "ScriptInjection", perfetto::Track::FromPointer(this),
+      "extensions", "ScriptInjection",
+      perfetto::NamedTrack::FromPointer("extensions::ScriptInjection", this),
       ChromeTrackEvent::kRenderProcessHost, content::RenderThread::Get(),
       ChromeTrackEvent::kChromeExtensionId,
       ExtensionIdForTracing(host_id().id));
@@ -98,11 +100,12 @@ ScriptInjection::~ScriptInjection() {
   if (!complete_)
     NotifyWillNotInject(ScriptInjector::InjectFailureReason::kWontInject);
 
-  TRACE_EVENT_END("extensions", perfetto::Track::FromPointer(this),
-                  ChromeTrackEvent::kRenderProcessHost,
-                  content::RenderThread::Get(),
-                  ChromeTrackEvent::kChromeExtensionId,
-                  ExtensionIdForTracing(injection_host_ ? host_id().id : ""));
+  TRACE_EVENT_END(
+      "extensions",
+      perfetto::NamedTrack::FromPointer("extensions::ScriptInjection", this),
+      ChromeTrackEvent::kRenderProcessHost, content::RenderThread::Get(),
+      ChromeTrackEvent::kChromeExtensionId,
+      ExtensionIdForTracing(injection_host_ ? host_id().id : ""));
 }
 
 ScriptInjection::InjectionResult ScriptInjection::TryToInject(
@@ -208,7 +211,7 @@ ScriptInjection::InjectionResult ScriptInjection::Inject(
 
   // This can happen if the extension specified a script to
   // be run in multiple rules, and the script has already run.
-  // See crbug.com/631247.
+  // See crbug.com/41265796.
   if (!should_inject_js && !should_inject_or_remove_css) {
     return InjectionResult::kFinished;
   }
@@ -236,8 +239,12 @@ void ScriptInjection::InjectJs(std::set<std::string>* executing_scripts,
   TRACE_RENDERER_EXTENSION_EVENT("ScriptInjection::InjectJs", host_id().id);
 
   DCHECK(!did_inject_js_);
+
+  ExtensionFrameHelper* frame_helper = ExtensionFrameHelper::Get(render_frame_);
+  CHECK(frame_helper);
+
   std::vector<blink::WebScriptSource> sources = injector_->GetJsSources(
-      run_location_, executing_scripts, num_injected_js_scripts);
+      run_location_, executing_scripts, num_injected_js_scripts, frame_helper);
   DCHECK(!sources.empty());
 
   base::ElapsedTimer exec_timer;
@@ -258,9 +265,6 @@ void ScriptInjection::InjectJs(std::set<std::string>* executing_scripts,
           ? blink::mojom::EvaluationTiming::kAsynchronous
           : blink::mojom::EvaluationTiming::kSynchronous;
 
-  ExtensionFrameHelper* frame_helper = ExtensionFrameHelper::Get(render_frame_);
-  CHECK(frame_helper);
-
   std::optional<std::string> world_id = injector_->GetExecutionWorldId();
   const std::string& host_string_id = injection_host_->id().id;
   const mojom::ExecutionWorld execution_world = injector_->GetExecutionWorld();
@@ -280,7 +284,7 @@ void ScriptInjection::InjectJs(std::set<std::string>* executing_scripts,
     constexpr size_t kMaxActiveUserScriptWorldCount = 10;
     if (active_user_script_worlds &&
         active_user_script_worlds->size() >= kMaxActiveUserScriptWorldCount &&
-        !base::Contains(*active_user_script_worlds, world_id)) {
+        !active_user_script_worlds->contains(world_id)) {
       // If there are 10 or more active user script worlds, we use the default
       // world for future injections.
       // Note: This *can* mean that up to 11 user script worlds for this
@@ -302,9 +306,9 @@ void ScriptInjection::InjectJs(std::set<std::string>* executing_scripts,
       blink_world_id =
           IsolatedWorldManager::GetInstance().GetOrCreateIsolatedWorldForHost(
               *injection_host_, execution_world, world_id);
-      if (injection_host_->id().type == mojom::HostID::HostType::kExtensions &&
-          log_activity_) {
-        DOMActivityLogger::AttachToWorld(blink_world_id, host_string_id);
+      if (injection_host_->id().type == mojom::HostID::HostType::kExtensions) {
+        DOMActivityLogger::AttachToWorldIfEnabled(blink_world_id,
+                                                  host_string_id);
       }
 
       break;

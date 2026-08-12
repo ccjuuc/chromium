@@ -13,6 +13,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.os.Build;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 
@@ -32,9 +33,7 @@ import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.native_page.ContextMenuManager;
 import org.chromium.chrome.browser.native_page.ContextMenuManager.ContextMenuItemId;
 import org.chromium.chrome.browser.offlinepages.OfflinePageBridge;
@@ -43,6 +42,7 @@ import org.chromium.chrome.browser.preloading.AndroidPrerenderManagerJni;
 import org.chromium.chrome.browser.suggestions.SiteSuggestion;
 import org.chromium.chrome.browser.suggestions.SuggestionsUiDelegate;
 import org.chromium.ui.base.MotionEventTestUtils;
+import org.chromium.ui.mojom.WindowOpenDisposition;
 import org.chromium.url.GURL;
 
 import java.util.concurrent.TimeUnit;
@@ -121,6 +121,58 @@ public class TileInteractionDelegateTest {
                         mCustomTileModificationDelegate,
                         mTile,
                         mTileView);
+    }
+
+    private void setupDelegate() {
+        mDelegate =
+                new TileInteractionDelegateImpl(
+                        mContextMenuManager,
+                        mTileGroupDelegate,
+                        mTileDragDelegate,
+                        mCustomTileModificationDelegate,
+                        mTile,
+                        mTileView);
+    }
+
+    @Test
+    public void testOnClick_NoModifiers() {
+        setupDelegate();
+        MotionEvent event = MotionEvent.obtain(0, 0, MotionEvent.ACTION_DOWN, 0, 0, 0);
+        mDelegate.onTouch(mTileView, event);
+        mDelegate.onClick(mTileView);
+        verify(mTileGroupDelegate).openMostVisitedItem(WindowOpenDisposition.CURRENT_TAB, mTile);
+    }
+
+    @Test
+    public void testOnClick_Ctrl() {
+        setupDelegate();
+        MotionEvent event =
+                MotionEvent.obtain(0, 0, MotionEvent.ACTION_DOWN, 0, 0, KeyEvent.META_CTRL_ON);
+        mDelegate.onTouch(mTileView, event);
+        mDelegate.onClick(mTileView);
+        verify(mTileGroupDelegate)
+                .openMostVisitedItem(WindowOpenDisposition.NEW_BACKGROUND_TAB, mTile);
+    }
+
+    @Test
+    public void testOnClick_CtrlShift() {
+        setupDelegate();
+        int metaState = KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON;
+        MotionEvent event = MotionEvent.obtain(0, 0, MotionEvent.ACTION_DOWN, 0, 0, metaState);
+        mDelegate.onTouch(mTileView, event);
+        mDelegate.onClick(mTileView);
+        verify(mTileGroupDelegate)
+                .openMostVisitedItem(WindowOpenDisposition.NEW_FOREGROUND_TAB, mTile);
+    }
+
+    @Test
+    public void testOnClick_Shift() {
+        setupDelegate();
+        MotionEvent event =
+                MotionEvent.obtain(0, 0, MotionEvent.ACTION_DOWN, 0, 0, KeyEvent.META_SHIFT_ON);
+        mDelegate.onTouch(mTileView, event);
+        mDelegate.onClick(mTileView);
+        verify(mTileGroupDelegate).openMostVisitedItem(WindowOpenDisposition.NEW_WINDOW, mTile);
     }
 
     @Test
@@ -239,7 +291,6 @@ public class TileInteractionDelegateTest {
     }
 
     @Test
-    @EnableFeatures({ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION})
     public void testIsItemSupported_MoveUp_FirstTile() {
         setupForCustomTileTests();
         when(mTileDragDelegate.isFirstDraggableTile(mTileView)).thenReturn(true);
@@ -247,7 +298,6 @@ public class TileInteractionDelegateTest {
     }
 
     @Test
-    @EnableFeatures({ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION})
     public void testIsItemSupported_MoveUp_NotFirstTile() {
         setupForCustomTileTests();
         when(mTileDragDelegate.isFirstDraggableTile(mTileView)).thenReturn(false);
@@ -255,7 +305,6 @@ public class TileInteractionDelegateTest {
     }
 
     @Test
-    @EnableFeatures({ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION})
     public void testIsItemSupported_MoveDown_LastTile() {
         setupForCustomTileTests();
         when(mTileDragDelegate.isLastDraggableTile(mTileView)).thenReturn(true);
@@ -263,7 +312,6 @@ public class TileInteractionDelegateTest {
     }
 
     @Test
-    @EnableFeatures({ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION})
     public void testIsItemSupported_MoveDown_NotLastTile() {
         setupForCustomTileTests();
         when(mTileDragDelegate.isLastDraggableTile(mTileView)).thenReturn(false);
@@ -271,7 +319,6 @@ public class TileInteractionDelegateTest {
     }
 
     @Test
-    @EnableFeatures({ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION})
     public void testMoveItemUp() {
         setupForCustomTileTests();
         mDelegate.moveItemUp();
@@ -279,7 +326,6 @@ public class TileInteractionDelegateTest {
     }
 
     @Test
-    @EnableFeatures({ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION})
     public void testMoveItemDown() {
         setupForCustomTileTests();
         mDelegate.moveItemDown();

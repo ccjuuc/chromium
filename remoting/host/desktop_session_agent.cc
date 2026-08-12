@@ -12,12 +12,14 @@
 
 #include "base/check.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/notreached.h"
 #include "base/process/process_handle.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "ipc/ipc_channel_proxy.h"
@@ -36,7 +38,6 @@
 #include "remoting/host/desktop_environment.h"
 #include "remoting/host/input_injector.h"
 #include "remoting/host/keyboard_layout_monitor.h"
-#include "remoting/host/mojom/desktop_session.mojom-shared.h"
 #include "remoting/host/mojom/desktop_session.mojom.h"
 #include "remoting/host/mouse_shape_pump.h"
 #include "remoting/host/remote_input_filter.h"
@@ -52,6 +53,10 @@
 #include "third_party/webrtc/modules/desktop_capture/desktop_geometry.h"
 #include "third_party/webrtc/modules/desktop_capture/mouse_cursor.h"
 #include "ui/events/types/event_type.h"
+
+#if BUILDFLAG(IS_POSIX)
+#include "remoting/host/security_key/security_key_auth_handler_posix.h"
+#endif
 
 namespace remoting {
 
@@ -215,6 +220,23 @@ void DesktopSessionAgent::OnDesktopDisplayChanged(
   }
 }
 
+void DesktopSessionAgent::OnMicrophoneControl(
+    const protocol::MicrophoneControl& control) {
+  DCHECK(caller_task_runner_->BelongsToCurrentThread());
+
+  if (desktop_session_event_handler_) {
+    desktop_session_event_handler_->OnMicrophoneControl(control);
+  }
+}
+
+void DesktopSessionAgent::OnAudioInjectorConsumersChanged(bool has_consumers) {
+  DCHECK(caller_task_runner_->BelongsToCurrentThread());
+
+  protocol::MicrophoneControl control;
+  control.set_enable(has_consumers);
+  OnMicrophoneControl(control);
+}
+
 void DesktopSessionAgent::Start(
     const std::string& authenticated_jid,
     const ScreenResolution& resolution,
@@ -245,6 +267,37 @@ void DesktopSessionAgent::Start(
       &desktop_session_event_handler_);
   network_channel_->GetRemoteAssociatedInterface(
       &desktop_session_state_handler_);
+
+#if BUILDFLAG(IS_POSIX)
+  if (options.enable_security_key()) {
+    const base::FilePath& socket_name =
+        SecurityKeyAuthHandlerPosix::GetSecurityKeySocketName();
+    if (!socket_name.empty()) {
+      // Since all socket operations in SecurityKeyAuthHandlerPosix are done on
+      // the caller's sequence, we wrap it with a SequenceBound to run it on the
+      // IO thread.
+      security_key_auth_handler_ =
+          base::SequenceBound<SecurityKeyAuthHandlerPosix>(io_task_runner_);
+
+      // We pass `base::Unretained(this)` as the `client_id` token. This is
+      // safe because the handler only uses it as an opaque key for
+      // comparison and never dereferences it.
+      security_key_auth_handler_
+          .AsyncCall(&SecurityKeyAuthHandler::SetSendMessageCallback)
+          .WithArgs(base::BindPostTaskToCurrentDefault(base::BindRepeating(
+                        &DesktopSessionAgent::OnSecurityKeyMessage,
+                        weak_factory_.GetWeakPtr())),
+                    base::Unretained(this));
+
+      security_key_auth_handler_.AsyncCall(
+          &SecurityKeyAuthHandler::CreateSecurityKeyConnection);
+    } else {
+      LOG(WARNING) << "Security key forwarding is enabled, but the socket name "
+                   << "is empty (e.g. XDG_RUNTIME_DIR is not set). "
+                   << "Forwarding will be disabled.";
+    }
+  }
+#endif
 
   // Create a desktop environment for the new session.
   delegate_->desktop_environment_factory().Create(
@@ -321,7 +374,7 @@ mojo::ScopedMessagePipeHandle DesktopSessionAgent::Initialize(
 
   mojo::MessagePipe pipe;
   network_channel_ = IPC::ChannelProxy::Create(
-      pipe.handle0.release(), IPC::Channel::MODE_SERVER, this, io_task_runner_,
+      std::move(pipe.handle0), IPC::Channel::MODE_SERVER, this, io_task_runner_,
       base::SingleThreadTaskRunner::GetCurrentDefault());
   return std::move(pipe.handle1);
 }
@@ -361,6 +414,9 @@ void DesktopSessionAgent::Stop() {
     input_injector_.reset();
     screen_controls_.reset();
     keyboard_layout_monitor_.reset();
+    audio_injector_.reset();
+    security_key_auth_handler_ = {};
+    security_key_remotes_.clear();
 
     // Stop the audio capturer.
     audio_capture_task_runner_->PostTask(
@@ -466,12 +522,22 @@ void DesktopSessionAgent::OnKeyboardLayoutChange(
 }
 
 void DesktopSessionAgent::SetScreenResolution(
-    const ScreenResolution& resolution) {
+    const ScreenResolution& resolution,
+    std::optional<std::int64_t> screen_id) {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
   CHECK(started_);
 
   if (screen_controls_) {
-    screen_controls_->SetScreenResolution(resolution, std::nullopt);
+    screen_controls_->SetScreenResolution(resolution, screen_id);
+  }
+}
+
+void DesktopSessionAgent::SetVideoLayout(const protocol::VideoLayout& layout) {
+  DCHECK(caller_task_runner_->BelongsToCurrentThread());
+  CHECK(started_);
+
+  if (screen_controls_) {
+    screen_controls_->SetVideoLayout(layout);
   }
 }
 
@@ -536,6 +602,47 @@ void DesktopSessionAgent::SetHostCursorRenderedByClient() {
   }
 }
 
+void DesktopSessionAgent::StartAudioInjector(
+    std::unique_ptr<IpcFifoBufferReader> audio_reader) {
+  DCHECK(caller_task_runner_->BelongsToCurrentThread());
+
+  if (audio_injector_) {
+    return;
+  }
+
+  audio_injector_ =
+      desktop_environment_->CreateAudioInjector(std::move(audio_reader));
+  if (!audio_injector_) {
+    LOG(ERROR) << "Cannot start audio injector because it is not supported.";
+    return;
+  }
+  if (pending_audio_sample_info_) {
+    base::OnceCallback<void(bool)> done =
+        pending_audio_sample_info_callback_
+            ? std::move(pending_audio_sample_info_callback_)
+            : base::DoNothing();
+    audio_injector_->SetSampleInfo(*pending_audio_sample_info_,
+                                   std::move(done));
+    pending_audio_sample_info_.reset();
+  }
+  audio_injector_->Start(weak_factory_.GetWeakPtr());
+}
+
+void DesktopSessionAgent::SetAudioInjectorSampleInfo(
+    const protocol::AudioSampleInfo& info,
+    SetAudioInjectorSampleInfoCallback callback) {
+  DCHECK(caller_task_runner_->BelongsToCurrentThread());
+  if (audio_injector_) {
+    audio_injector_->SetSampleInfo(info, std::move(callback));
+  } else {
+    if (pending_audio_sample_info_callback_) {
+      std::move(pending_audio_sample_info_callback_).Run(false);
+    }
+    pending_audio_sample_info_ = info;
+    pending_audio_sample_info_callback_ = std::move(callback);
+  }
+}
+
 void DesktopSessionAgent::OnDesktopEnvironmentCreated(
     const ScreenResolution& resolution,
     StartCallback callback,
@@ -547,7 +654,7 @@ void DesktopSessionAgent::OnDesktopEnvironmentCreated(
 
   // Create the session controller and set the initial screen resolution.
   screen_controls_ = desktop_environment_->CreateScreenControls();
-  SetScreenResolution(resolution);
+  SetScreenResolution(resolution, std::nullopt);
 
   // Create the input injector.
   input_injector_ = desktop_environment_->CreateInputInjector();
@@ -666,4 +773,34 @@ void DesktopSessionAgent::OnUrlForwarderSetUpStateChanged(
   desktop_session_event_handler_->OnUrlForwarderStateChange(mojo_state);
 }
 
+void DesktopSessionAgent::OnSecurityKeyMessage(int connection_id,
+                                               const std::string& data) {
+  DCHECK(caller_task_runner_->BelongsToCurrentThread());
+
+  auto& remote = security_key_remotes_[connection_id];
+  if (!remote.is_bound()) {
+    desktop_session_event_handler_->OnSecurityKeyConnection(
+        remote.BindNewPipeAndPassReceiver());
+    remote.set_disconnect_handler(
+        base::BindOnce(&DesktopSessionAgent::OnSecurityKeyRemoteDisconnected,
+                       weak_factory_.GetWeakPtr(), connection_id));
+  }
+
+  remote->OnSecurityKeyRequest(
+      data, base::BindOnce(&DesktopSessionAgent::OnSecurityKeyResponse,
+                           weak_factory_.GetWeakPtr(), connection_id));
+}
+
+void DesktopSessionAgent::OnSecurityKeyResponse(int connection_id,
+                                                const std::string& data) {
+  DCHECK(caller_task_runner_->BelongsToCurrentThread());
+  security_key_auth_handler_
+      .AsyncCall(&SecurityKeyAuthHandler::SendClientResponse)
+      .WithArgs(connection_id, data);
+}
+
+void DesktopSessionAgent::OnSecurityKeyRemoteDisconnected(int connection_id) {
+  DCHECK(caller_task_runner_->BelongsToCurrentThread());
+  security_key_remotes_.erase(connection_id);
+}
 }  // namespace remoting

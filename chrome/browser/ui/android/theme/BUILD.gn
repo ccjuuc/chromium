@@ -11,6 +11,7 @@ android_library("java") {
     "java/src/org/chromium/chrome/browser/theme/ThemeColorProvider.java",
     "java/src/org/chromium/chrome/browser/theme/ThemeModuleUtils.java",
     "java/src/org/chromium/chrome/browser/theme/ThemeUtils.java",
+    "java/src/org/chromium/chrome/browser/theme/ToolbarThemeColorProvider.java",
     "java/src/org/chromium/chrome/browser/theme/TopUiThemeColorProvider.java",
     "java/src/org/chromium/chrome/browser/ui/theme/BrandedColorScheme.java",
     "java/src/org/chromium/chrome/browser/ui/theme/ChromeSemanticColorUtils.java",
@@ -22,8 +23,10 @@ android_library("java") {
     "//chrome/browser/android/lifecycle:java",
     "//chrome/browser/browser_controls/android:java",
     "//chrome/browser/flags:java",
+    "//chrome/browser/ntp_customization:public_java",
     "//chrome/browser/tab:java",
     "//chrome/browser/tabmodel:java",
+    "//chrome/browser/ui/android/bottombar:config_java",
     "//chrome/browser/ui/android/desktop_windowing:java",
     "//chrome/browser/ui/android/native_page:java",
     "//components/browser_ui/styles/android:java",
@@ -55,6 +58,8 @@ robolectric_library("junit") {
     "java/src/org/chromium/chrome/browser/theme/AdjustedTopUiThemeColorProviderUnitTest.java",
     "java/src/org/chromium/chrome/browser/theme/BottomUiThemeColorProviderTest.java",
     "java/src/org/chromium/chrome/browser/theme/ThemeUtilsUnitTest.java",
+    "java/src/org/chromium/chrome/browser/theme/ToolbarThemeColorProviderTest.java",
+    "java/src/org/chromium/chrome/browser/theme/TopUiThemeColorProviderUnitTest.java",
   ]
   deps = [
     ":java",
@@ -66,6 +71,7 @@ robolectric_library("junit") {
     "//chrome/android:chrome_app_java_resources",
     "//chrome/browser/browser_controls/android:java",
     "//chrome/browser/flags:java",
+    "//chrome/browser/ntp_customization:public_java",
     "//chrome/browser/tab:java",
     "//chrome/browser/tabmodel:java",
     "//chrome/browser/ui/android/native_page:java",
@@ -81,6 +87,7 @@ robolectric_library("junit") {
     "//third_party/hamcrest:hamcrest_library_java",
     "//third_party/junit",
     "//third_party/mockito:mockito_java",
+    "//ui/android:ui_java_test_support",
     "//ui/android:ui_no_recycler_view_java",
   ]
   resources_package = "org.chromium.chrome.browser.theme"

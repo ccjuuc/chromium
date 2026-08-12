@@ -6,7 +6,7 @@
 #define BASE_MAC_MAC_UTIL_H_
 
 #include <AvailabilityMacros.h>
-#import <CoreGraphics/CoreGraphics.h>
+#include <CoreGraphics/CoreGraphics.h>
 #include <stdint.h>
 
 #include <string>
@@ -51,8 +51,9 @@ BASE_EXPORT bool WasLaunchedAsLoginItemRestoreState();
 // 'Login Item' with 'hide on startup' flag. Used to suppress opening windows.
 BASE_EXPORT bool WasLaunchedAsHiddenLoginItem();
 
-// Remove the quarantine xattr from the given file. Returns false if there was
-// an error, or true otherwise.
+// Remove the quarantine attribute from the given file, and returns true if
+// successful. It is not an error to attempt to remove a quarantine attribute
+// from a file if that file exists but does not have a quarantine attribute.
 BASE_EXPORT bool RemoveQuarantineAttribute(const FilePath& file_path);
 
 // Sets the tags on a given file or folder.
@@ -61,8 +62,8 @@ BASE_EXPORT void SetFileTags(const FilePath& file_path,
 
 // The following two functions return the version of the macOS currently
 // running. MacOSVersion() returns the full trio of version numbers, packed into
-// one int (e.g. macOS 12.6.5 returns 12'06'05), and MacOSMajorVersion() returns
-// only the major version number (e.g. macOS 12.6.5 returns 12). Use for runtime
+// one int (e.g. macOS 14.8.7 returns 14'08'07), and MacOSMajorVersion() returns
+// only the major version number (e.g. macOS 14.8.7 returns 14). Use for runtime
 // OS version checking. Prefer to use @available in Objective-C files. Note that
 // this does not include any Rapid Security Response (RSR) suffixes (the "(a)"
 // at the end of version numbers.)
@@ -73,6 +74,21 @@ inline __attribute__((const)) int MacOSMajorVersion() {
 
 // Returns true if Mac is running in a virtual machine.
 BASE_EXPORT bool IsVirtualMachine();
+
+// LINT.IfChange(MacOS26LiquidGlassPreferredLook)
+enum class MacOS26LiquidGlassPreferredLook {
+  kDefault = 0,
+  kClear = 1,
+  kTint = 2,
+  kMaxValue = kTint,
+};
+// LINT.ThenChange(/tools/metrics/histograms/metadata/mac/enums.xml:MacOS26LiquidGlassPreferredLook)
+
+// Returns the preferred look for the macOS 26 liquid glass effect (clear or
+// tint). CHECKs on non macOS 26 os versions since there is no expectation that
+// this setting exists or is valid outside of version 26.
+BASE_EXPORT MacOS26LiquidGlassPreferredLook
+GetMacOS26LiquidGlassPreferredLook();
 
 enum class CPUType {
   kIntel,
@@ -96,13 +112,16 @@ BASE_EXPORT std::string GetPlatformSerialNumber();
 
 // System Settings (née System Preferences) pane or subpanes to open via
 // `OpenSystemSettingsPane()`, below. The naming is based on the naming in the
-// System Settings app in the latest macOS release, macOS 13 Ventura.
+// System Settings app in the latest macOS release, macOS 26.
 enum class SystemSettingsPane {
   // Accessibility > Captions
   kAccessibility_Captions,
 
-  // Date & Time
-  kDateTime,
+  // General > Date & Time
+  kGeneral_DateTime,
+
+  // General > Login Items & Extensions > Extensions > Sharing
+  kGeneral_LoginItems_Extensions_Sharing,
 
   // Network > Proxies
   kNetwork_Proxies,
@@ -126,20 +145,17 @@ enum class SystemSettingsPane {
   // Privacy & Security > Camera
   kPrivacySecurity_Camera,
 
-  // Privacy & Security > Extensions > Sharing
-  kPrivacySecurity_Extensions_Sharing,
-
   // Privacy & Security > Location Services
   kPrivacySecurity_LocationServices,
 
   // Privacy & Security > Microphone
   kPrivacySecurity_Microphone,
 
-  // Privacy & Security > Screen Recording
-  kPrivacySecurity_ScreenRecording,
+  // Privacy & Security > Paste from Other Apps
+  kPrivacySecurity_PasteFromOtherApps,
 
-  // Privacy & Security > Pasteboard
-  kPrivacySecurity_Pasteboard,
+  // Privacy & Security > Screen & System Audio Recording
+  kPrivacySecurity_ScreenRecording,
 
   // Trackpad
   kTrackpad,

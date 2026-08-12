@@ -9,9 +9,11 @@
 #import <UIKit/UIKit.h>
 #import <UserNotifications/UserNotifications.h>
 
+#import <optional>
 #import <string>
 #import <string_view>
 
+#import "base/callback_list.h"
 #import "base/memory/raw_ptr.h"
 #import "ios/chrome/browser/push_notification/model/push_notification_client_id.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
@@ -26,6 +28,12 @@ struct ScheduledNotificationRequest {
   NSString* identifier;
   UNNotificationContent* content;
   base::TimeDelta time_interval;
+};
+
+// Holds the forced debug notification payload.
+struct ForcedNotificationPayload {
+  NSString* title;
+  NSString* body;
 };
 
 // The PushNotificationClient class is an abstract class that provides a
@@ -112,6 +120,11 @@ class PushNotificationClient {
       NSDictionary<NSString*, NSString*>* data,
       PushNotificationClientId clientId);
 
+  // Executes the given action once an active foreground browser is ready.
+  // If a browser is already available, the action is executed immediately.
+  base::CallbackListSubscription ExecuteActionWhenBrowserReady(
+      base::OnceCallback<void(Browser*)> action);
+
   // Schedules a notification `request` associated with a specific
   // `profile_name`. The `profile_name` will be embedded in the notification
   // metadata, ensuring it's routed to the correct notification client during
@@ -129,6 +142,17 @@ class PushNotificationClient {
   void CheckRateLimitBeforeSchedulingNotification(
       ScheduledNotificationRequest request,
       base::OnceCallback<void(NSError*)> completion);
+
+  // Builds a mock notification payload, title, and body for forced debugging
+  // of this client. Returns the payload if successfully built, std::nullopt
+  // otherwise.
+  //
+  // NOTE: If you implement this method to add forced triggering for a new push
+  // notification client, you must also update the settings bundle plist file
+  // (Experimental.plist) to expose the new type/subtype option in the iOS
+  // Experimental Settings menu.
+  virtual std::optional<ForcedNotificationPayload>
+  BuildForcedNotificationPayload(int subtype, NSMutableDictionary* user_info);
 
  protected:
   // The unique string that is used to associate incoming push notifications to
@@ -158,8 +182,14 @@ class PushNotificationClient {
   // (`client_scope_` is `PushNotificationClientScope::kPerProfile`).
   base::WeakPtr<ProfileIOS> profile_;
 
-  std::vector<std::pair<GURL, base::OnceCallback<void(Browser*)>>>
-      urls_delayed_for_loading_;
+  // Stores actions (callbacks) that should be executed once an active
+  // foreground browser is ready. This is used when a notification is interacted
+  // with but the app is not yet in a state to handle it (e.g., still
+  // initializing or in the background).
+  base::OnceCallbackList<void(Browser*)> actions_delayed_for_loading_;
+
+  // Stores subscriptions for actions delayed for loading.
+  std::vector<base::CallbackListSubscription> delayed_url_subscriptions_;
 
   // Stores whether or not the feedback view controller should be shown when a
   // Browser is ready.
@@ -174,9 +204,9 @@ class PushNotificationClient {
   base::WeakPtrFactory<PushNotificationClient> weak_ptr_factory_{this};
 
   // Loads a url in a new tab for a given browser.
-  void LoadUrlInNewTab(const GURL& url,
-                       Browser* browser,
-                       base::OnceCallback<void(Browser*)> callback);
+  void ExecuteLoadUrlInNewTab(const GURL& url,
+                              base::OnceCallback<void(Browser*)> callback,
+                              Browser* browser);
 
   // Receives the result of getting all scheduled notifications as a part of
   // scheduling notification `notif_request`.

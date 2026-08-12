@@ -64,6 +64,10 @@ IN_PROC_BROWSER_TEST_F(WebUiJsTest, Store) {
 // are received twice while the test expects only one.
 #if !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_F(WebUiJsTest, TrackedElement) {
+  // TrackedElement needs a host that enables BindingsPolicyValue::kMojoWebUi.
+  // Any WebUI host should work, except chrome://webui-test since it is just a
+  // WebUIDataSource.
+  set_test_loader_host(chrome::kChromeUIChromeURLsHost);
   RunTest("js/tracked_element/tracked_element_test.js",
           "runMochaSuite('TrackedElementTest');");
 }
@@ -83,4 +87,8 @@ IN_PROC_BROWSER_TEST_F(WebUiJsTest, MockTimer) {
 
 IN_PROC_BROWSER_TEST_F(WebUiJsTest, MojoTypeUtil) {
   RunTest("js/mojo_type_util_test.js", "mocha.run();");
+}
+
+IN_PROC_BROWSER_TEST_F(WebUiJsTest, TestMock) {
+  RunTest("test_mock_test.js", "mocha.run();");
 }

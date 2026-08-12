@@ -28,7 +28,6 @@ import org.junit.runner.RunWith;
 
 import org.chromium.android_webview.AwContents;
 import org.chromium.android_webview.AwSettings;
-import org.chromium.android_webview.AwSettings.LayoutAlgorithm;
 import org.chromium.android_webview.AwWebResourceRequest;
 import org.chromium.android_webview.common.AwFeatureMap;
 import org.chromium.android_webview.common.AwFeatures;
@@ -152,7 +151,7 @@ public class AwSettingsTest {
 
         protected abstract void doEnsureSettingHasValue(T value) throws Throwable;
 
-        protected String getTitleOnUiThread() throws Exception {
+        protected String getTitleOnUiThread() {
             return mActivityTestRule.getTitleOnUiThread(mAwContents);
         }
 
@@ -914,13 +913,10 @@ public class AwSettingsTest {
         protected static final float PARAGRAPH_FONT_SIZE = 14.0f;
 
         AwSettingsTextAutosizingTestHelper(
-                AwTestContainerView containerView,
-                TestAwContentsClient contentViewClient,
-                boolean isAutosizingEnabled)
+                AwTestContainerView containerView, TestAwContentsClient contentViewClient)
                 throws Throwable {
             super(containerView, contentViewClient, true);
             mNeedToWaitForFontSizeChange = false;
-            mAutosizingEnabled = isAutosizingEnabled;
             loadDataSync(getData());
         }
 
@@ -983,65 +979,7 @@ public class AwSettingsTest {
         }
 
         protected boolean mNeedToWaitForFontSizeChange;
-        protected boolean mAutosizingEnabled;
         private float mOldFontSize;
-    }
-
-    class AwSettingsLayoutAlgorithmTestHelper extends AwSettingsTextAutosizingTestHelper<Integer> {
-        AwSettingsLayoutAlgorithmTestHelper(
-                AwTestContainerView containerView,
-                TestAwContentsClient contentViewClient,
-                boolean isAutosizingEnabled)
-                throws Throwable {
-            super(containerView, contentViewClient, isAutosizingEnabled);
-            // Font autosizing doesn't step in for narrow layout widths.
-            mAwSettings.setUseWideViewPort(true);
-        }
-
-        @LayoutAlgorithm
-        @Override
-        protected Integer getAlteredValue() {
-            return AwSettings.LAYOUT_ALGORITHM_TEXT_AUTOSIZING;
-        }
-
-        @LayoutAlgorithm
-        @Override
-        protected Integer getInitialValue() {
-            return AwSettings.LAYOUT_ALGORITHM_NARROW_COLUMNS;
-        }
-
-        @LayoutAlgorithm
-        @Override
-        protected Integer getCurrentValue() {
-            return mAwSettings.getLayoutAlgorithm();
-        }
-
-        @Override
-        protected void setCurrentValue(@LayoutAlgorithm Integer value) throws Throwable {
-            super.setCurrentValue(value);
-            mAwSettings.setLayoutAlgorithm(value);
-            if (!mAutosizingEnabled) {
-                mNeedToWaitForFontSizeChange = false;
-            }
-        }
-
-        @Override
-        protected void doEnsureSettingHasValue(@LayoutAlgorithm Integer value) throws Throwable {
-            final float actualFontSize = getActualFontSize();
-            if (value == AwSettings.LAYOUT_ALGORITHM_TEXT_AUTOSIZING && mAutosizingEnabled) {
-                Assert.assertNotEquals(
-                        "Actual font size: " + actualFontSize,
-                        actualFontSize,
-                        PARAGRAPH_FONT_SIZE,
-                        0.1);
-            } else {
-                Assert.assertEquals(
-                        "Actual font size: " + actualFontSize,
-                        actualFontSize,
-                        PARAGRAPH_FONT_SIZE,
-                        0.1);
-            }
-        }
     }
 
     class AwSettingsTextZoomTestHelper extends AwSettingsTextAutosizingTestHelper<Integer> {
@@ -1049,73 +987,9 @@ public class AwSettingsTest {
         private final float mInitialActualFontSize;
 
         AwSettingsTextZoomTestHelper(
-                AwTestContainerView containerView,
-                TestAwContentsClient contentViewClient,
-                boolean isAutosizingEnabled)
+                AwTestContainerView containerView, TestAwContentsClient contentViewClient)
                 throws Throwable {
-            super(containerView, contentViewClient, isAutosizingEnabled);
-            mInitialActualFontSize = getActualFontSize();
-        }
-
-        @Override
-        protected Integer getAlteredValue() {
-            return INITIAL_TEXT_ZOOM * 2;
-        }
-
-        @Override
-        protected Integer getInitialValue() {
-            return INITIAL_TEXT_ZOOM;
-        }
-
-        @Override
-        protected Integer getCurrentValue() {
-            return mAwSettings.getTextZoom();
-        }
-
-        @Override
-        protected void setCurrentValue(Integer value) throws Throwable {
-            super.setCurrentValue(value);
-            mAwSettings.setTextZoom(value);
-        }
-
-        @Override
-        protected void doEnsureSettingHasValue(Integer value) throws Throwable {
-            final float actualFontSize = getActualFontSize();
-            // Ensure that actual vs. initial font size ratio is similar to actual vs. initial
-            // text zoom values ratio.
-            final float ratiosDelta =
-                    Math.abs(
-                            (actualFontSize / mInitialActualFontSize)
-                                    - (value / (float) INITIAL_TEXT_ZOOM));
-            Assert.assertTrue(
-                    "|("
-                            + actualFontSize
-                            + " / "
-                            + mInitialActualFontSize
-                            + ") - ("
-                            + value
-                            + " / "
-                            + INITIAL_TEXT_ZOOM
-                            + ")| = "
-                            + ratiosDelta,
-                    ratiosDelta <= 0.2f);
-        }
-    }
-
-    class AwSettingsTextZoomAutosizingTestHelper
-            extends AwSettingsTextAutosizingTestHelper<Integer> {
-        private static final int INITIAL_TEXT_ZOOM = 100;
-        private final float mInitialActualFontSize;
-
-        AwSettingsTextZoomAutosizingTestHelper(
-                AwTestContainerView containerView,
-                TestAwContentsClient contentViewClient,
-                boolean isAutosizingEnabled)
-                throws Throwable {
-            super(containerView, contentViewClient, isAutosizingEnabled);
-            mAwSettings.setLayoutAlgorithm(AwSettings.LAYOUT_ALGORITHM_TEXT_AUTOSIZING);
-            // The initial font size can be adjusted by font autosizer depending on the page's
-            // viewport width.
+            super(containerView, contentViewClient);
             mInitialActualFontSize = getActualFontSize();
         }
 
@@ -2915,76 +2789,12 @@ public class AwSettingsTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(BlinkFeatures.FORCE_OFF_TEXT_AUTOSIZING)
-    @Feature({"AndroidWebView", "Preferences"})
-    public void testLayoutAlgorithmWithTwoViewsWithTextAutosizingDisabled() throws Throwable {
-        ViewPair views = createViews();
-        runPerViewSettingsTest(
-                new AwSettingsLayoutAlgorithmTestHelper(
-                        views.getContainer0(), views.getClient0(), false),
-                new AwSettingsLayoutAlgorithmTestHelper(
-                        views.getContainer1(), views.getClient1(), false));
-    }
-
-    @Test
-    @SmallTest
-    @DisableFeatures(BlinkFeatures.FORCE_OFF_TEXT_AUTOSIZING)
-    @Feature({"AndroidWebView", "Preferences"})
-    public void testLayoutAlgorithmWithTwoViewsWithTextAutosizingEnabled() throws Throwable {
-        ViewPair views = createViews();
-        runPerViewSettingsTest(
-                new AwSettingsLayoutAlgorithmTestHelper(
-                        views.getContainer0(), views.getClient0(), true),
-                new AwSettingsLayoutAlgorithmTestHelper(
-                        views.getContainer1(), views.getClient1(), true));
-    }
-
-    @Test
-    @SmallTest
-    @EnableFeatures(BlinkFeatures.FORCE_OFF_TEXT_AUTOSIZING)
     @Feature({"AndroidWebView", "Preferences"})
     public void testTextZoomWithTwoViewsWithTextAutosizingDisabled() throws Throwable {
         ViewPair views = createViews();
         runPerViewSettingsTest(
-                new AwSettingsTextZoomTestHelper(views.getContainer0(), views.getClient0(), false),
-                new AwSettingsTextZoomTestHelper(views.getContainer1(), views.getClient1(), false));
-    }
-
-    @Test
-    @SmallTest
-    @DisableFeatures(BlinkFeatures.FORCE_OFF_TEXT_AUTOSIZING)
-    @Feature({"AndroidWebView", "Preferences"})
-    public void testTextZoomWithTwoViewsWithTextAutosizingEnabled() throws Throwable {
-        ViewPair views = createViews();
-        runPerViewSettingsTest(
-                new AwSettingsTextZoomTestHelper(views.getContainer0(), views.getClient0(), true),
-                new AwSettingsTextZoomTestHelper(views.getContainer1(), views.getClient1(), true));
-    }
-
-    @Test
-    @SmallTest
-    @EnableFeatures(BlinkFeatures.FORCE_OFF_TEXT_AUTOSIZING)
-    @Feature({"AndroidWebView", "Preferences"})
-    public void testTextZoomAutosizingWithTwoViewsWithTextAutosizingDisabled() throws Throwable {
-        ViewPair views = createViews();
-        runPerViewSettingsTest(
-                new AwSettingsTextZoomAutosizingTestHelper(
-                        views.getContainer0(), views.getClient0(), false),
-                new AwSettingsTextZoomAutosizingTestHelper(
-                        views.getContainer1(), views.getClient1(), false));
-    }
-
-    @Test
-    @SmallTest
-    @DisableFeatures(BlinkFeatures.FORCE_OFF_TEXT_AUTOSIZING)
-    @Feature({"AndroidWebView", "Preferences"})
-    public void testTextZoomAutosizingWithTwoViewsWithTextAutosizingEnabled() throws Throwable {
-        ViewPair views = createViews();
-        runPerViewSettingsTest(
-                new AwSettingsTextZoomAutosizingTestHelper(
-                        views.getContainer0(), views.getClient0(), true),
-                new AwSettingsTextZoomAutosizingTestHelper(
-                        views.getContainer1(), views.getClient1(), true));
+                new AwSettingsTextZoomTestHelper(views.getContainer0(), views.getClient0()),
+                new AwSettingsTextZoomTestHelper(views.getContainer1(), views.getClient1()));
     }
 
     @Test
@@ -3724,9 +3534,15 @@ public class AwSettingsTest {
         }
 
         @Override
-        public AwSettings createAwSettings(Context context, boolean supportsLegacyQuirks) {
+        public AwSettings createAwSettings(
+                AwContents awContents,
+                boolean isAccessFromFileUrlsGrantedByDefault,
+                boolean supportsLegacyQuirks,
+                boolean allowEmptyDocumentPersistence,
+                boolean allowGeolocationOnInsecureOrigins,
+                boolean doNotUpdateSelectionOnMutatingSelectionRange) {
             return new AwSettings(
-                    context,
+                    awContents,
                     /* isAccessFromFileUrlsGrantedByDefault= */ false,
                     supportsLegacyQuirks,
                     mAllow,
@@ -3739,9 +3555,9 @@ public class AwSettingsTest {
         mOverriddenFactory = new EmptyDocumentPersistenceTestDependencyFactory(allow);
 
         final TestAwContentsClient client = new TestAwContentsClient();
-        final AwTestContainerView mContainerView =
+        final AwTestContainerView containerView =
                 mActivityTestRule.createAwTestContainerViewOnMainSync(client);
-        final AwContents awContents = mContainerView.getAwContents();
+        final AwContents awContents = containerView.getAwContents();
         AwActivityTestRule.enableJavaScriptOnUiThread(awContents);
         JSUtils.executeJavaScriptAndWaitForResult(
                 InstrumentationRegistry.getInstrumentation(),
@@ -3775,17 +3591,16 @@ public class AwSettingsTest {
         doAllowEmptyDocumentPersistenceTest(false);
     }
 
-    @Test
-    @SmallTest
-    @Feature({"AndroidWebView", "Preferences"})
-    public void testCssHexAlphaColorEnabled() throws Throwable {
+    private void doTestCssHexAlphaColor(boolean enabled) throws Throwable {
         final TestAwContentsClient client = new TestAwContentsClient();
         final AwTestContainerView view =
                 mActivityTestRule.createAwTestContainerViewOnMainSync(client);
         final AwContents awContents = view.getAwContents();
+        InstrumentationRegistry.getInstrumentation()
+                .runOnMainSync(() -> awContents.getSettings().setCssHexAlphaColorEnabled(enabled));
         CallbackHelper onPageFinishedHelper = client.getOnPageFinishedHelper();
         AwActivityTestRule.enableJavaScriptOnUiThread(awContents);
-        final String expectedTitle = "false"; // https://crbug.com/618472
+        final String expectedTitle = enabled ? "true" : "false"; // https://crbug.com/618472
         final String page =
                 "<!doctype html>"
                         + "<script>"
@@ -3800,6 +3615,20 @@ public class AwSettingsTest {
         Assert.assertEquals(expectedTitle, actualTitle);
     }
 
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView", "Preferences"})
+    public void testCssHexAlphaColorEnabled() throws Throwable {
+        doTestCssHexAlphaColor(true);
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView", "Preferences"})
+    public void testCssHexAlphaColorDisabled() throws Throwable {
+        doTestCssHexAlphaColor(false);
+    }
+
     private static class SelectionRangeTestDependencyFactory extends TestDependencyFactory {
         private final boolean mDoNotUpdate;
 
@@ -3808,9 +3637,15 @@ public class AwSettingsTest {
         }
 
         @Override
-        public AwSettings createAwSettings(Context context, boolean supportsLegacyQuirks) {
+        public AwSettings createAwSettings(
+                AwContents awContents,
+                boolean isAccessFromFileUrlsGrantedByDefault,
+                boolean supportsLegacyQuirks,
+                boolean allowEmptyDocumentPersistence,
+                boolean allowGeolocationOnInsecureOrigins,
+                boolean doNotUpdateSelectionOnMutatingSelectionRange) {
             return new AwSettings(
-                    context,
+                    awContents,
                     /* isAccessFromFileUrlsGrantedByDefault= */ false,
                     supportsLegacyQuirks,
                     /* allowEmptyDocumentPersistence= */ false,
@@ -3823,9 +3658,9 @@ public class AwSettingsTest {
         mOverriddenFactory = new SelectionRangeTestDependencyFactory(doNotUpdate);
 
         final TestAwContentsClient client = new TestAwContentsClient();
-        final AwTestContainerView mContainerView =
+        final AwTestContainerView containerView =
                 mActivityTestRule.createAwTestContainerViewOnMainSync(client);
-        final AwContents awContents = mContainerView.getAwContents();
+        final AwContents awContents = containerView.getAwContents();
         AwActivityTestRule.enableJavaScriptOnUiThread(awContents);
         final String testPageHtml =
                 "<html><head></head><body><div id='a' contenteditable></div><script>"
@@ -4075,5 +3910,226 @@ public class AwSettingsTest {
 
     private boolean isTablet() {
         return DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivityTestRule.getActivity());
+    }
+
+    class AwSettingsTextScaleMetaTagTestHelper extends AwSettingsTextAutosizingTestHelper<Integer> {
+        protected final float mInitialActualFontSize;
+        protected static final int INITIAL_TEXT_ZOOM = 100;
+
+        AwSettingsTextScaleMetaTagTestHelper(
+                AwTestContainerView containerView, TestAwContentsClient contentViewClient)
+                throws Throwable {
+            super(containerView, contentViewClient);
+            // Enable JavaScript for reading font size.
+            mAwSettings.setJavaScriptEnabled(true);
+            // Always set autosizing here, but we control it via flags later.
+            mAwSettings.setLayoutAlgorithm(AwSettings.LAYOUT_ALGORITHM_TEXT_AUTOSIZING);
+            mInitialActualFontSize = getActualFontSize();
+        }
+
+        @Override
+        protected String getData() {
+            return "<html>"
+                    + "<head>"
+                    + "<meta name=\"text-scale\" content=\"scale\">"
+                    + "<script>"
+                    + "function setTitleToActualFontSize() {"
+                    + "  document.title = parseFloat(getComputedStyle("
+                    + "    document.getElementById('par'))"
+                    + ".getPropertyValue('font-size'));"
+                    + "}</script></head>"
+                    + "<body>"
+                    + "<p id=\"par\">"
+                    + "Hello, World! Hello, World! "
+                    + "</p>"
+                    + "<p id=\"fixed\" style=\"font-size: 20px\">Fixed Text</p>"
+                    + "<div id=\"env-test\" style=\"width: calc(100px *"
+                    + " env(preferred-text-scale));\"></div>"
+                    + "</body></html>";
+        }
+
+        @Override
+        protected Integer getAlteredValue() {
+            return INITIAL_TEXT_ZOOM * 2;
+        }
+
+        @Override
+        protected Integer getInitialValue() {
+            return INITIAL_TEXT_ZOOM;
+        }
+
+        @Override
+        protected Integer getCurrentValue() {
+            return mAwSettings.getTextZoom();
+        }
+
+        @Override
+        protected void setCurrentValue(Integer value) throws Throwable {
+            super.setCurrentValue(value);
+            mAwSettings.setTextZoom(value);
+        }
+
+        @Override
+        protected void doEnsureSettingHasValue(Integer value) throws Throwable {
+            final float actualFontSize = getActualFontSize();
+            // With OR without the meta tag, setTextZoom should scale the default font size of
+            // medium.
+            float expectedRatio = value / (float) INITIAL_TEXT_ZOOM;
+
+            final float ratiosDelta =
+                    Math.abs((actualFontSize / mInitialActualFontSize) - expectedRatio);
+            Assert.assertTrue(
+                    "|("
+                            + actualFontSize
+                            + " / "
+                            + mInitialActualFontSize
+                            + ") - ("
+                            + expectedRatio
+                            + ")| = "
+                            + ratiosDelta,
+                    ratiosDelta <= 0.2f);
+
+            // Retrieve the size of the text that had a fixed font size.
+            String fixedSizeStr =
+                    executeJavaScriptAndWaitForResult(
+                            "parseFloat(getComputedStyle(document.getElementById('fixed'))"
+                                    + ".getPropertyValue('font-size'))");
+            float fixedSize = Float.parseFloat(fixedSizeStr);
+
+            // Retrieve the value of the environment variable.
+            String envWidthStr =
+                    executeJavaScriptAndWaitForResult(
+                            "parseFloat(getComputedStyle(document.getElementById"
+                                    + "('env-test')).width)");
+            float envWidth = Float.parseFloat(envWidthStr);
+
+            if (AwFeatureMap.isEnabled(BlinkFeatures.TEXT_SCALE_META_TAG)) {
+                Assert.assertEquals("Fixed font size should NOT scale", 20.0f, fixedSize, 0.5f);
+
+                // The meta tag makes us populate env(preferred-text-scale).
+                float expectedWidth = value;
+                Assert.assertEquals(
+                        "env(preferred-text-scale) width", expectedWidth, envWidth, 1.0f);
+
+            } else {
+                // TextScaleMetaTag Disabled: Fixed font size SHOULD scale (legacy behavior).
+                float expectedFixedSize = 20.0f * (value / (float) INITIAL_TEXT_ZOOM);
+                Assert.assertEquals(
+                        "Fixed font size should scale", expectedFixedSize, fixedSize, 2.0f);
+
+                Assert.assertEquals(
+                        "no meta & no autosizing? env(preferred-text-scale) should be 1 ",
+                        100.0f,
+                        envWidth,
+                        1.0f);
+            }
+        }
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures(BlinkFeatures.TEXT_SCALE_META_TAG)
+    @Feature({"AndroidWebView", "Preferences"})
+    public void testTextScaleMetaTagWithTwoViews() throws Throwable {
+        ViewPair views = createViews();
+        runPerViewSettingsTest(
+                new AwSettingsTextScaleMetaTagTestHelper(views.getContainer0(), views.getClient0()),
+                new AwSettingsTextScaleMetaTagTestHelper(
+                        views.getContainer1(), views.getClient1()));
+    }
+
+    @Test
+    @SmallTest
+    @DisableFeatures(BlinkFeatures.TEXT_SCALE_META_TAG)
+    @Feature({"AndroidWebView", "Preferences"})
+    public void testTextScaleMetaTagWithTwoViewsDisabled() throws Throwable {
+        ViewPair views = createViews();
+        runPerViewSettingsTest(
+                new AwSettingsTextScaleMetaTagTestHelper(views.getContainer0(), views.getClient0()),
+                new AwSettingsTextScaleMetaTagTestHelper(
+                        views.getContainer1(), views.getClient1()));
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures(AwFeatures.WEBVIEW_GATE_TEXT_SIZE_ADJUST_ON_TEXT_AUTOSIZING)
+    @Feature({"AndroidWebView", "Preferences"})
+    public void testTextSizeAdjustGatedByTextAutosizing() throws Throwable {
+        final TestAwContentsClient contentClient = new TestAwContentsClient();
+        final AwTestContainerView testContainerView =
+                mActivityTestRule.createAwTestContainerViewOnMainSync(contentClient);
+        final AwContents awContents = testContainerView.getAwContents();
+        final AwSettings settings = mActivityTestRule.getAwSettingsOnUiThread(awContents);
+
+        // Enable JS to read computed styles.
+        settings.setJavaScriptEnabled(true);
+
+        final String html =
+                "<html><head><style>"
+                        + "body { font-size: 10px; text-size-adjust: 200%; }"
+                        + "</style></head><body><div id='target'>test</div></body></html>";
+
+        mActivityTestRule.loadDataSync(
+                awContents, contentClient.getOnPageFinishedHelper(), html, "text/html", false);
+
+        String fontSizeStr =
+                mActivityTestRule.executeJavaScriptAndWaitForResult(
+                        awContents,
+                        contentClient,
+                        "window.getComputedStyle(document.getElementById('target')).fontSize");
+
+        Assert.assertEquals(
+                "Before LAYOUT_ALGORITHM_TEXT_AUTOSIZING is set, text-size-adjust is ignored.",
+                "\"10px\"",
+                fontSizeStr);
+
+        settings.setLayoutAlgorithm(AwSettings.LAYOUT_ALGORITHM_TEXT_AUTOSIZING);
+
+        // We must reload the page so the WebPreferences update applies.
+        mActivityTestRule.loadDataSync(
+                awContents, contentClient.getOnPageFinishedHelper(), html, "text/html", false);
+
+        fontSizeStr =
+                mActivityTestRule.executeJavaScriptAndWaitForResult(
+                        awContents,
+                        contentClient,
+                        "window.getComputedStyle(document.getElementById('target')).fontSize");
+
+        Assert.assertEquals(
+                "After LAYOUT_ALGORITHM_TEXT_AUTOSIZING is set, text-size-adjust is obeyed.",
+                "\"20px\"",
+                fontSizeStr);
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView", "Preferences"})
+    public void testTextSizeAdjustAlwaysObeyed() throws Throwable {
+        final TestAwContentsClient contentClient = new TestAwContentsClient();
+        final AwTestContainerView testContainerView =
+                mActivityTestRule.createAwTestContainerViewOnMainSync(contentClient);
+        final AwContents awContents = testContainerView.getAwContents();
+        final AwSettings settings = mActivityTestRule.getAwSettingsOnUiThread(awContents);
+
+        settings.setJavaScriptEnabled(true);
+
+        final String html =
+                "<html><head><style>"
+                        + "body { font-size: 10px; text-size-adjust: 200%; }"
+                        + "</style></head><body><div id='target'>test</div></body></html>";
+
+        mActivityTestRule.loadDataSync(
+                awContents, contentClient.getOnPageFinishedHelper(), html, "text/html", false);
+
+        String fontSizeStr =
+                mActivityTestRule.executeJavaScriptAndWaitForResult(
+                        awContents,
+                        contentClient,
+                        "window.getComputedStyle(document.getElementById('target')).fontSize");
+
+        Assert.assertEquals(
+                "Even without LAYOUT_ALGORITHM_TEXT_AUTOSIZING set, text-size-adjust is obeyed.",
+                "\"20px\"",
+                fontSizeStr);
     }
 }

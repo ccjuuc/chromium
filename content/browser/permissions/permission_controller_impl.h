@@ -92,6 +92,16 @@ class CONTENT_EXPORT PermissionControllerImpl : public PermissionController {
   void UnsubscribeFromPermissionResultChange(
       SubscriptionId subscription_id) override;
 
+  SubscriptionId SubscribeToContentSettingsTypeChange(
+      ContentSettingsType content_settings_type,
+      RenderProcessHost* render_process_host,
+      RenderFrameHost* render_frame_host,
+      const GURL& requesting_origin,
+      bool should_include_device_status,
+      const base::RepeatingCallback<void(const PermissionSetting&)>& callback);
+
+  void UnsubscribeFromContentSettingsTypeChange(SubscriptionId subscription_id);
+
   // If there's currently a permission prompt bubble for the given WebContents,
   // returns the bounds of the bubble view as exclusion area in screen
   // coordinates.
@@ -156,13 +166,6 @@ class CONTENT_EXPORT PermissionControllerImpl : public PermissionController {
       const url::Origin& embedding_origin) override;
   // WARNING: Permission requests order is not guaranteed.
   // TODO(crbug.com/40864728): Migrate to `std::set`.
-  // TODO(crbug.com/40275129): `RequestPermissions` and
-  // `RequestPermissionsFromCurrentDocument` do exactly the same things.
-  // Merge them together.
-  void RequestPermissions(
-      RenderFrameHost* render_frame_host,
-      PermissionRequestDescription request_description,
-      base::OnceCallback<void(const std::vector<PermissionResult>&)> callback);
   void RequestPermissionFromCurrentDocument(
       RenderFrameHost* render_frame_host,
       PermissionRequestDescription request_description,

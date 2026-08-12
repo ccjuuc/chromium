@@ -25,22 +25,22 @@
 #import "ios/chrome/browser/reader_mode/model/features.h"
 #import "ios/chrome/browser/reader_mode/ui/constants.h"
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/translate/model/translate_app_interface.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
+#import "ios/chrome/test/earl_grey/chrome_test_case.h"
 #import "ios/chrome/test/earl_grey/scoped_disable_timer_tracking.h"
 #import "ios/chrome/test/earl_grey/test_switches.h"
-#import "ios/chrome/test/earl_grey/web_http_server_chrome_test_case.h"
 #import "ios/chrome/test/scoped_eg_synchronization_disabler.h"
 #import "ios/components/webui/web_ui_url_constants.h"
 #import "ios/testing/earl_grey/app_launch_manager.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
-#import "ios/web/public/test/http_server/data_response_provider.h"
-#import "ios/web/public/test/http_server/http_server.h"
-#import "ios/web/public/test/http_server/http_server_util.h"
 #import "net/base/url_util.h"
+#import "net/test/embedded_test_server/embedded_test_server.h"
+#import "net/test/embedded_test_server/http_response.h"
 #import "ui/base/l10n/l10n_util_mac.h"
 #import "url/gurl.h"
 
@@ -109,7 +109,7 @@ const char kHttpServerDomain[] = "127.0.0.1";
 const char kLanguagePath[] = "/languagepath/";
 const char kLinkPath[] = "/linkpath/";
 const char kSubresourcePath[] = "/subresourcepath/";
-const char kSomeLanguageUrl[] = "http://languagepath/?http=es";
+const char kSomeLanguageUrl[] = "/languagepath/?http=es";
 const char kFrenchPagePath[] = "/frenchpage/";
 const char kFrenchPageDistillablePath[] = "/frenchpagedistillable/";
 const char kFrenchPageWithLinkPath[] = "/frenchpagewithlink/";
@@ -183,139 +183,109 @@ std::string GetFrenchPageDistillableHtml() {
 
 // A ResponseProvider that provides html responses of texts in different
 // languages or links.
-class TestResponseProvider : public web::DataResponseProvider {
+class TestResponseProvider {
  public:
-  // TestResponseProvider implementation.
-  bool CanHandleRequest(const Request& request) override;
-  void GetResponseHeadersAndBody(
-      const Request& request,
-      scoped_refptr<net::HttpResponseHeaders>* headers,
-      std::string* response_body) override;
+  static std::unique_ptr<net::test_server::HttpResponse> GetResponse(
+      net::test_server::EmbeddedTestServer* testServer,
+      const net::test_server::HttpRequest& request) {
+    GURL url("http://" + std::string(kHttpServerDomain) + request.relative_url);
 
- private:
-  // Generates a page with a HTTP "Content-Language" header and "httpEquiv" meta
-  // tag.
-  // The URL in `request` has two parameters, "http" and "meta", that can be
-  // used to set the values of the header and the meta tag. For example:
-  // http://someurl?http=en&meta=fr generates a page with a "en" HTTP header and
-  // a "fr" meta tag.
-  void GetLanguageResponse(const Request& request,
-                           scoped_refptr<net::HttpResponseHeaders>* headers,
-                           std::string* response_body);
+    // Check if we can handle it (equivalent to CanHandleRequest)
+    if (!(url.GetPath() == kLanguagePath || url.GetPath() == kLinkPath ||
+          url.GetPath() == kSubresourcePath ||
+          url.GetPath() == kFrenchPagePath ||
+          url.GetPath() == kFrenchPageDistillablePath ||
+          url.GetPath() == kFrenchPageWithLinkPath ||
+          url.GetPath() == kFrenchPageNoTranslateContent ||
+          url.GetPath() == kFrenchPageNoTranslateValue ||
+          url.GetPath() == kTranslateScriptPath)) {
+      return nullptr;
+    }
+
+    auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+    response->set_code(net::HTTP_OK);
+    response->set_content_type("text/html");
+
+    if (url.GetPath() == kLanguagePath) {
+      // HTTP header and meta tag read from parameters.
+      std::string http;
+      net::GetValueForKeyInQuery(url, "http", &http);
+      if (!http.empty()) {
+        response->AddCustomHeader("Content-Language", http);
+      }
+      std::string meta;
+      net::GetValueForKeyInQuery(url, "meta", &meta);
+      std::string response_body = "<html>";
+      if (!meta.empty()) {
+        response_body += "<head>"
+                         "<meta http-equiv='content-language' content='" +
+                         meta +
+                         "'>"
+                         "</head>";
+      }
+      response_body +=
+          base::StringPrintf("<html><body>%s</body></html>", kLanguagePathText);
+      response->set_content(response_body);
+      return response;
+    } else if (url.GetPath() == kSubresourcePath) {
+      // Different "Content-Language" headers in the main page and subresource.
+      response->AddCustomHeader("Content-Language", "fr");
+      response->set_content(base::StringPrintf(
+          "<html><body><img src=%s></body></html>", kSomeLanguageUrl));
+      return response;
+    } else if (url.GetPath() == kLinkPath) {
+      // Link to a page with "Content Language" headers.
+      GURL some_language_url = testServer->GetURL("/languagepath/?http=es");
+      response->set_content(base::StringPrintf(
+          "<html><body><a href='%s' id='click'>Click</a></body></html>",
+          some_language_url.spec().c_str()));
+      return response;
+    } else if (url.GetPath() == kFrenchPagePath) {
+      response->set_content(GetFrenchPageHtml(kHtmlAttribute, ""));
+      return response;
+    } else if (url.GetPath() == kFrenchPageDistillablePath) {
+      response->set_content(GetFrenchPageDistillableHtml());
+      return response;
+    } else if (url.GetPath() == kFrenchPageWithLinkPath) {
+      GURL page_path_url = testServer->GetURL(kFrenchPagePath);
+      response->set_content(
+          base::StringPrintf("<html lang=\"fr\"><body>%s<br/><a href='%s' "
+                             "id='link'>link</a></body></html>",
+                             kFrenchText, page_path_url.spec().c_str()));
+      return response;
+    } else if (url.GetPath() == kFrenchPageNoTranslateContent) {
+      response->set_content(
+          GetFrenchPageHtml(kHtmlAttribute, kMetaNotranslateContent));
+      return response;
+    } else if (url.GetPath() == kFrenchPageNoTranslateValue) {
+      response->set_content(
+          GetFrenchPageHtml(kHtmlAttribute, kMetaNotranslateValue));
+      return response;
+    } else if (url.GetPath() == kTranslateScriptPath) {
+      response->set_content(kTranslateScript);
+      return response;
+    }
+    NOTREACHED();
+  }
 };
-
-bool TestResponseProvider::CanHandleRequest(const Request& request) {
-  const GURL& url = request.url;
-  return (url.GetHost() == kHttpServerDomain &&
-          (url.GetPath() == kLanguagePath || url.GetPath() == kLinkPath ||
-           url.GetPath() == kSubresourcePath ||
-           url.GetPath() == kFrenchPagePath ||
-           url.GetPath() == kFrenchPageDistillablePath ||
-           url.GetPath() == kFrenchPageWithLinkPath ||
-           url.GetPath() == kFrenchPageNoTranslateContent ||
-           url.GetPath() == kFrenchPageNoTranslateValue ||
-           url.GetPath() == kTranslateScriptPath)) ||
-         url.SchemeIs(kChromeUIScheme);
-}
-
-void TestResponseProvider::GetResponseHeadersAndBody(
-    const Request& request,
-    scoped_refptr<net::HttpResponseHeaders>* headers,
-    std::string* response_body) {
-  const GURL& url = request.url;
-  *headers = web::ResponseProvider::GetDefaultResponseHeaders();
-  if (url.SchemeIs(kChromeUIScheme)) {
-    *response_body = url.spec();
-    return;
-  } else if (url.GetPath() == kLanguagePath) {
-    // HTTP header and meta tag read from parameters.
-    return GetLanguageResponse(request, headers, response_body);
-  } else if (url.GetPath() == kSubresourcePath) {
-    // Different "Content-Language" headers in the main page and subresource.
-    (*headers)->AddHeader("Content-Language", "fr");
-    *response_body = base::StringPrintf(
-        "<html><body><img src=%s></body></html>", kSomeLanguageUrl);
-    return;
-  } else if (url.GetPath() == kLinkPath) {
-    // Link to a page with "Content Language" headers.
-    GURL some_language_url = web::test::HttpServer::MakeUrl(kSomeLanguageUrl);
-    *response_body = base::StringPrintf(
-        "<html><body><a href='%s' id='click'>Click</a></body></html>",
-        some_language_url.spec().c_str());
-    return;
-  } else if (url.GetPath() == kFrenchPagePath) {
-    *response_body = GetFrenchPageHtml(kHtmlAttribute, "");
-    return;
-  } else if (url.GetPath() == kFrenchPageDistillablePath) {
-    *response_body = GetFrenchPageDistillableHtml();
-    return;
-  } else if (url.GetPath() == kFrenchPageWithLinkPath) {
-    GURL page_path_url = web::test::HttpServer::MakeUrl(
-        base::StringPrintf("http://%s", kFrenchPagePath));
-    *response_body =
-        base::StringPrintf("<html lang=\"fr\"><body>%s<br/><a href='%s' "
-                           "id='link'>link</a></body></html>",
-                           kFrenchText, page_path_url.spec().c_str());
-    return;
-  } else if (url.GetPath() == kFrenchPageNoTranslateContent) {
-    GURL page_path_url = web::test::HttpServer::MakeUrl(
-        base::StringPrintf("http://%s", kFrenchPagePath));
-    // A page with French text and a 'content' attribute with "notranslate".
-    *response_body = GetFrenchPageHtml(kHtmlAttribute, kMetaNotranslateContent);
-    return;
-  } else if (url.GetPath() == kFrenchPageNoTranslateValue) {
-    GURL page_path_url = web::test::HttpServer::MakeUrl(
-        base::StringPrintf("http://%s", kFrenchPagePath));
-    // A page with French text and a 'value' attribute with "notranslate".
-    *response_body = GetFrenchPageHtml(kHtmlAttribute, kMetaNotranslateValue);
-    return;
-  } else if (url.GetPath() == kTranslateScriptPath) {
-    *response_body = kTranslateScript;
-    return;
-  }
-  NOTREACHED();
-}
-
-void TestResponseProvider::GetLanguageResponse(
-    const Request& request,
-    scoped_refptr<net::HttpResponseHeaders>* headers,
-    std::string* response_body) {
-  const GURL& url = request.url;
-  // HTTP headers.
-  std::string http;
-  net::GetValueForKeyInQuery(url, "http", &http);
-  if (!http.empty()) {
-    (*headers)->AddHeader("Content-Language", http);
-  }
-  // Response body.
-  std::string meta;
-  net::GetValueForKeyInQuery(url, "meta", &meta);
-  *response_body = "<html>";
-  if (!meta.empty()) {
-    *response_body += "<head>"
-                      "<meta http-equiv='content-language' content='" +
-                      meta +
-                      "'>"
-                      "</head>";
-  }
-  *response_body +=
-      base::StringPrintf("<html><body>%s</body></html>", kLanguagePathText);
-}
 
 }  // namespace
 
 #pragma mark - TranslateInfobarTestCase
 
 // Tests for translate.
-@interface TranslateInfobarTestCase : WebHttpServerChromeTestCase
+@interface TranslateInfobarTestCase : ChromeTestCase
+@end
+
+@interface TranslateInfobarTestCase () {
+  std::map<std::string, std::string> _responses;
+}
 @end
 
 @implementation TranslateInfobarTestCase
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config;
-  config.features_enabled.push_back(kEnableReaderModeTranslation);
-  config.features_enabled.push_back(kEnableReaderModeTranslationWithInfobar);
   config.additional_args.push_back(std::string("-") +
                                    test_switches::kUseDefaultInfobarDuration);
 
@@ -329,14 +299,11 @@ void TestResponseProvider::GetLanguageResponse(
       [self isRunningTest:@selector(testTranslateBadgeInReaderMode)] ||
       [self isRunningTest:@selector(testTranslateInClosedReaderMode)] ||
       [self isRunningTest:@selector
-            (testTranslateBadgeWithReaderModeBadgeSupport)]) {
-    config.features_enabled.push_back(kEnableReaderMode);
-    config.features_enabled.push_back(kEnableReaderModeInUS);
-  }
-
-  if ([self isRunningTest:@selector
-            (testTranslateBadgeWithReaderModeBadgeSupport)]) {
-    config.features_enabled.push_back(kEnableReaderModeBadgeSupport);
+            (testTranslateBadgeWithReaderModeBadgeSupport)] ||
+      [self
+          isRunningTest:@selector(testTranslateInReaderModeAndNavigatesBack)]) {
+    config.features_enabled.push_back(kProactiveSuggestionsFramework);
+    config.features_enabled.push_back(kPageActionMenu);
   }
 
   if ([self isRunningTest:@selector(testInfobarTranslateRevert)] ||
@@ -352,9 +319,31 @@ void TestResponseProvider::GetLanguageResponse(
 - (void)setUp {
   [super setUp];
 
+  self.testServer->RegisterRequestHandler(base::BindRepeating(
+      &TestResponseProvider::GetResponse, base::Unretained(self.testServer)));
+
+  auto* responses = &_responses;
+  self.testServer->RegisterRequestHandler(base::BindRepeating(
+      [](std::map<std::string, std::string>* responses,
+         const net::test_server::HttpRequest& request)
+          -> std::unique_ptr<net::test_server::HttpResponse> {
+        auto it = responses->find(request.relative_url);
+        if (it != responses->end()) {
+          auto response =
+              std::make_unique<net::test_server::BasicHttpResponse>();
+          response->set_code(net::HTTP_OK);
+          response->set_content_type("text/html");
+          response->set_content(it->second);
+          return response;
+        }
+        return nullptr;
+      },
+      responses));
+
+  GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
+
   // Set up the fake URL for the translate script to hit the mock HTTP server.
-  GURL translateScriptURL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kTranslateScriptPath));
+  GURL translateScriptURL = self.testServer->GetURL(kTranslateScriptPath);
   NSString* translateScriptSwitchValue =
       base::SysUTF8ToNSString(translateScriptURL.spec());
   [TranslateAppInterface setUpWithScriptServer:translateScriptSwitchValue];
@@ -369,14 +358,11 @@ void TestResponseProvider::GetLanguageResponse(
 
 // Tests that different language signals are detected correctly.
 - (void)testLanguageDetection {
-  const GURL URL =
-      web::test::HttpServer::MakeUrl("http://scenarioLanguageDetection");
-  std::map<GURL, std::string> responses;
+  const GURL URL = self.testServer->GetURL("/scenarioLanguageDetection");
   // A page with French text, German "lang" attribute and Italian content
   // language.
-  responses[URL] =
+  _responses["/scenarioLanguageDetection"] =
       GetFrenchPageHtml(kHtmlAttributeWithDeLang, kMetaItContentLanguage);
-  web::test::SetUpSimpleHttpServer(responses);
 
   [ChromeEarlGrey loadURL:URL];
   [self assertContentLanguage:@"it"
@@ -387,13 +373,11 @@ void TestResponseProvider::GetLanguageResponse(
 
 // Tests that hidden text is not considered during detection.
 - (void)testLanguageDetectionIgnoreHiddenText {
-  const GURL URL = web::test::HttpServer::MakeUrl(
-      "http://scenarioLanguageDetectionIgnoreHiddenText");
-  std::map<GURL, std::string> responses;
+  const GURL URL =
+      self.testServer->GetURL("/scenarioLanguageDetectionIgnoreHiddenText");
   // A page with French text that's hidden via CSS.
-  responses[URL] = base::StringPrintf(
+  _responses["/scenarioLanguageDetectionIgnoreHiddenText"] = base::StringPrintf(
       "<html><body style='display:none'>%s</body></html>", kFrenchText);
-  web::test::SetUpSimpleHttpServer(responses);
 
   [ChromeEarlGrey loadURL:URL];
   // Check for no language detected.
@@ -406,14 +390,10 @@ void TestResponseProvider::GetLanguageResponse(
 // Tests that language detection is still performed when the page specifies the
 // notranslate meta tag.
 - (void)testLanguageDetectionNoTranslate {
-  // Start the HTTP server.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
-  const GURL noTranslateContentURL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPageNoTranslateContent));
-  const GURL noTranslateValueURL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPageNoTranslateValue));
+  const GURL noTranslateContentURL =
+      self.testServer->GetURL(kFrenchPageNoTranslateContent);
+  const GURL noTranslateValueURL =
+      self.testServer->GetURL(kFrenchPageNoTranslateValue);
 
   // Load some french page with `content="notranslate"| meta tag.
   [ChromeEarlGrey loadURL:noTranslateContentURL];
@@ -432,12 +412,11 @@ void TestResponseProvider::GetLanguageResponse(
 
 // Tests that history.pushState triggers a new detection.
 - (void)testLanguageDetectionWithPushState {
-  const GURL URL = web::test::HttpServer::MakeUrl(
-      "http://scenarioLanguageDetectionPushState");
-  std::map<GURL, std::string> responses;
+  const GURL URL =
+      self.testServer->GetURL("/scenarioLanguageDetectionPushState");
   // Page without meaningful text, language should be undefined ("und").
-  responses[URL] = "<html><body>Blahrg :)</body></html>";
-  web::test::SetUpSimpleHttpServer(responses);
+  _responses["/scenarioLanguageDetectionPushState"] =
+      "<html><body>Blahrg :)</body></html>";
 
   [ChromeEarlGrey loadURL:URL];
   // Check for no language detected.
@@ -477,11 +456,8 @@ void TestResponseProvider::GetLanguageResponse(
       kEnglishText, kFrenchText);
 
   // Set up the mock server.
-  std::map<GURL, std::string> responses;
-  const GURL URL =
-      web::test::HttpServer::MakeUrl("http://hashChangeLanguageDetected");
-  responses[URL] = html;
-  web::test::SetUpSimpleHttpServer(responses);
+  const GURL URL = self.testServer->GetURL("/hashChangeLanguageDetected");
+  _responses["/hashChangeLanguageDetected"] = html;
 
   [ChromeEarlGrey loadURL:URL];
   // Check that language has been detected.
@@ -497,56 +473,43 @@ void TestResponseProvider::GetLanguageResponse(
 
 // Tests that language in http content is detected.
 - (void)testLanguageDetectionHttpContentLanguage {
-  // Start the HTTP server.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
   // The HTTP header is detected.
-  GURL URL = web::test::HttpServer::MakeUrl(std::string("http://") +
-                                            kLanguagePath + "?http=fr");
+  GURL URL = self.testServer->GetURL(std::string(kLanguagePath) + "?http=fr");
   [ChromeEarlGrey loadURL:URL];
   [self assertContentLanguage:@"fr" htmlRootLanguage:@"" adoptedLanguage:@"fr"];
 
   // Resets state before triggering a new round of language detection.
   [TranslateAppInterface resetLanguageDetectionTabHelperObserver];
   // Everything after the comma is truncated.
-  URL = web::test::HttpServer::MakeUrl(std::string("http://") + kLanguagePath +
-                                       "?http=fr,ornot");
+  URL = self.testServer->GetURL(std::string(kLanguagePath) + "?http=fr,ornot");
   [ChromeEarlGrey loadURL:URL];
   [self assertContentLanguage:@"fr" htmlRootLanguage:@"" adoptedLanguage:@"fr"];
 
   // Resets state before triggering a new round of language detection.
   [TranslateAppInterface resetLanguageDetectionTabHelperObserver];
   // The HTTP header is overriden by meta tag.
-  URL = web::test::HttpServer::MakeUrl(std::string("http://") + kLanguagePath +
-                                       "?http=fr&meta=it");
+  URL =
+      self.testServer->GetURL(std::string(kLanguagePath) + "?http=fr&meta=it");
   [ChromeEarlGrey loadURL:URL];
   [self assertContentLanguage:@"it" htmlRootLanguage:@"" adoptedLanguage:@"it"];
 
   // Resets state before triggering a new round of language detection.
   [TranslateAppInterface resetLanguageDetectionTabHelperObserver];
   // Only the header of the main page is detected.
-  URL =
-      web::test::HttpServer::MakeUrl(std::string("http://") + kSubresourcePath);
+  URL = self.testServer->GetURL(kSubresourcePath);
   [ChromeEarlGrey loadURL:URL];
   [self assertContentLanguage:@"fr" htmlRootLanguage:@"" adoptedLanguage:@"fr"];
 }
 
 // Tests that language in http content is detected when navigating to a link.
 - (void)testLanguageDetectionHttpContentLanguageBehindLink {
-  // Start the HTTP server.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
   // Detection works when clicking on a link.
-  GURL URL = web::test::HttpServer::MakeUrl(std::string("http://") + kLinkPath);
-  GURL someLanguageURL = web::test::HttpServer::MakeUrl(kSomeLanguageUrl);
+  GURL URL = self.testServer->GetURL(kLinkPath);
+  GURL someLanguageURL = self.testServer->GetURL("/languagepath/?http=es");
   [ChromeEarlGrey loadURL:URL];
   [ChromeEarlGrey tapWebStateElementWithID:@"click"];
   [ChromeEarlGrey waitForWebStateContainingText:kLanguagePathText];
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::OmniboxText(
-                                          someLanguageURL.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [ChromeEarlGrey waitForWebStateVisibleURL:someLanguageURL];
   [self assertContentLanguage:@"es" htmlRootLanguage:@"" adoptedLanguage:@"es"];
 }
 
@@ -564,11 +527,8 @@ void TestResponseProvider::GetLanguageResponse(
   html.append("</body></html>");
 
   // Create map of canned responses and set up the test HTML server.
-  std::map<GURL, std::string> responses;
-  const GURL URL =
-      web::test::HttpServer::MakeUrl("http://languageDetectionLargePage");
-  responses[URL] = html;
-  web::test::SetUpSimpleHttpServer(responses);
+  const GURL URL = self.testServer->GetURL("/languageDetectionLargePage");
+  _responses["/languageDetectionLargePage"] = html;
   [ChromeEarlGrey loadURL:URL];
 
   // Check that language has been detected.
@@ -578,12 +538,8 @@ void TestResponseProvider::GetLanguageResponse(
 // Tests that language detection is performed but no infobar is triggered when
 // translate is disabled.
 - (void)testLanguageDetectionDisabled {
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
   // Load a page with French text.
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPagePath));
+  GURL URL = self.testServer->GetURL(kFrenchPagePath);
 
   // Disable translate.
   [ChromeEarlGrey setBoolValue:NO
@@ -608,13 +564,8 @@ void TestResponseProvider::GetLanguageResponse(
 // Tests that the infobar banner persists as the page scrolls mode and that the
 // banner can be dimissed.
 - (void)testInfobarShowHideDismiss {
-  // Start the HTTP server.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
   // Load a page with French text.
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPagePath));
+  GURL URL = self.testServer->GetURL(kFrenchPagePath);
   [ChromeEarlGrey loadURL:URL];
 
   // Check Banner was presented.
@@ -643,13 +594,8 @@ void TestResponseProvider::GetLanguageResponse(
 // Tests that the page can be translated and that translation can be reverted
 // using the banner and modal.
 - (void)testInfobarTranslateRevert {
-  // Start the HTTP server.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
   // Load a page with French text.
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPagePath));
+  GURL URL = self.testServer->GetURL(kFrenchPagePath);
   [ChromeEarlGrey loadURL:URL];
 
   // Check Banner was presented.
@@ -730,13 +676,8 @@ void TestResponseProvider::GetLanguageResponse(
 // Test that the Show Original banner dismisses with a longer delay since it is
 // a high priority banner.
 - (void)testInfobarAcceptedBannerDismissWithHighPriorityDelay {
-  // Start the HTTP server.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
   // Load a page with French text.
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPagePath));
+  GURL URL = self.testServer->GetURL(kFrenchPagePath);
   [ChromeEarlGrey loadURL:URL];
 
   // Check Banner was presented.
@@ -776,13 +717,8 @@ void TestResponseProvider::GetLanguageResponse(
 // Tests that the page can be translated and that translation can be reverted
 // in incognito mode.
 - (void)testInfobarTranslateRevertIncognito {
-  // Start the HTTP server.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
   // Load a page with French text.
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPagePath));
+  GURL URL = self.testServer->GetURL(kFrenchPagePath);
   [TranslateAppInterface tearDownLanguageDetectionTabHelperObserver];
   [ChromeEarlGrey openNewIncognitoTab];
   [ChromeEarlGrey loadURL:URL];
@@ -822,13 +758,8 @@ void TestResponseProvider::GetLanguageResponse(
 // Tests that the target language can be changed. TODO(crbug.com/40670920):
 // implement test for changing source language.
 - (void)testInfobarChangeTargetLanguage {
-  // Start the HTTP server.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
   // Load a page with French text and a link.
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPageWithLinkPath));
+  GURL URL = self.testServer->GetURL(kFrenchPageWithLinkPath);
   [ChromeEarlGrey loadURL:URL];
 
   // Check Translate banner is presented.
@@ -877,13 +808,8 @@ void TestResponseProvider::GetLanguageResponse(
 // Tests that the "Always Translate" options can be toggled and the prefs are
 // updated accordingly.
 - (void)testInfobarAlwaysTranslate {
-  // Start the HTTP server.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
   // Load a page with French text.
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPagePath));
+  GURL URL = self.testServer->GetURL(kFrenchPagePath);
   [ChromeEarlGrey loadURL:URL];
 
   // Make sure that French to English translation is not automatic.
@@ -939,13 +865,8 @@ void TestResponseProvider::GetLanguageResponse(
 // Tests that the "Never Translate ..." options dismisses the infobar and
 // updates the prefs accordingly.
 - (void)testInfobarNeverTranslate {
-  // Start the HTTP server.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
   // Load a page with French text.
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPagePath));
+  GURL URL = self.testServer->GetURL(kFrenchPagePath);
   [ChromeEarlGrey loadURL:URL];
 
   // Make sure that French to English translation is not automatic.
@@ -1000,13 +921,8 @@ void TestResponseProvider::GetLanguageResponse(
 // Tests that the "Never Translate this site" option dismisses the infobar and
 // updates the prefs accordingly.
 - (void)testInfobarNeverTranslateSite {
-  // Start the HTTP server.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
   // Load a page with French text.
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPagePath));
+  GURL URL = self.testServer->GetURL(kFrenchPagePath);
   [ChromeEarlGrey loadURL:URL];
 
   NSString* URLHost = base::SysUTF8ToNSString(URL.HostNoBrackets());
@@ -1062,13 +978,8 @@ void TestResponseProvider::GetLanguageResponse(
 // translate is available and it brings up the Translate infobar and translates
 // the page when tapped.
 - (void)testTranslateManualTrigger {
-  // Start the HTTP server.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
   // Load a page with French text.
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPagePath));
+  GURL URL = self.testServer->GetURL(kFrenchPagePath);
   [ChromeEarlGrey loadURL:URL];
 
   // Check Translate banner is presented.
@@ -1083,9 +994,7 @@ void TestResponseProvider::GetLanguageResponse(
   [ChromeEarlGreyUI openToolsMenu];
 
   id<GREYMatcher> tableViewMatcher =
-      [ChromeEarlGrey isNewOverflowMenuEnabled]
-          ? grey_accessibilityID(kPopupMenuToolsMenuActionListId)
-          : grey_accessibilityID(kPopupMenuToolsMenuTableViewId);
+      grey_accessibilityID(kPopupMenuToolsMenuActionListId);
   [[[[EarlGrey selectElementWithMatcher:grey_allOf(grey_accessibilityID(
                                                        kToolsMenuTranslateId),
                                                    grey_interactable(), nil)]
@@ -1103,13 +1012,13 @@ void TestResponseProvider::GetLanguageResponse(
 // Test that tapping cancel in the Modal doesn't save changes to source/target
 // languages and doesn't start a Translate
 - (void)testTranslateModalCancel {
-  // Start the HTTP server.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
+  // TODO(crbug.com/516439940): Re-enable this flaky test on iOS below 26.
+  if (!base::ios::IsRunningOnIOS26OrLater()) {
+    EARL_GREY_TEST_DISABLED(@"Flaky on iOS below 26.");
+  }
 
   // Load a page with French text.
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPagePath));
+  GURL URL = self.testServer->GetURL(kFrenchPagePath);
   [ChromeEarlGrey loadURL:URL];
 
   // Check Translate banner is presented.
@@ -1286,11 +1195,7 @@ void TestResponseProvider::GetLanguageResponse(
 // Tests that triggering translate after opening and closing reader mode works.
 - (void)testTranslateAfterReaderMode {
   // Set up server with a French page.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPageDistillablePath));
+  GURL URL = self.testServer->GetURL(kFrenchPageDistillablePath);
 
   // Load URL.
   [ChromeEarlGrey loadURL:URL];
@@ -1317,9 +1222,7 @@ void TestResponseProvider::GetLanguageResponse(
   [ChromeEarlGreyUI openToolsMenu];
 
   id<GREYMatcher> tableViewMatcher =
-      [ChromeEarlGrey isNewOverflowMenuEnabled]
-          ? grey_accessibilityID(kPopupMenuToolsMenuActionListId)
-          : grey_accessibilityID(kPopupMenuToolsMenuTableViewId);
+      grey_accessibilityID(kPopupMenuToolsMenuActionListId);
   [[[EarlGrey
       selectElementWithMatcher:grey_allOf(
                                    grey_accessibilityID(kToolsMenuTranslateId),
@@ -1337,11 +1240,7 @@ void TestResponseProvider::GetLanguageResponse(
 // translate infobars are suppressed when reader mode is activated.
 - (void)testTranslatePriorToReaderMode {
   // Set up server with a French page.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPageDistillablePath));
+  GURL URL = self.testServer->GetURL(kFrenchPageDistillablePath);
 
   // Load URL.
   [ChromeEarlGrey loadURL:URL];
@@ -1371,9 +1270,7 @@ void TestResponseProvider::GetLanguageResponse(
   [ChromeEarlGreyUI openToolsMenu];
 
   id<GREYMatcher> tableViewMatcher =
-      [ChromeEarlGrey isNewOverflowMenuEnabled]
-          ? grey_accessibilityID(kPopupMenuToolsMenuActionListId)
-          : grey_accessibilityID(kPopupMenuToolsMenuTableViewId);
+      grey_accessibilityID(kPopupMenuToolsMenuActionListId);
   [[[EarlGrey
       selectElementWithMatcher:grey_allOf(
                                    grey_accessibilityID(kToolsMenuTranslateId),
@@ -1403,11 +1300,7 @@ void TestResponseProvider::GetLanguageResponse(
 // translation is applied when selected.
 - (void)testTranslateInReaderMode {
   // Set up server with a French page.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPageDistillablePath));
+  GURL URL = self.testServer->GetURL(kFrenchPageDistillablePath);
 
   // Load URL.
   [ChromeEarlGrey loadURL:URL];
@@ -1431,9 +1324,7 @@ void TestResponseProvider::GetLanguageResponse(
   [ChromeEarlGreyUI openToolsMenu];
 
   id<GREYMatcher> tableViewMatcher =
-      [ChromeEarlGrey isNewOverflowMenuEnabled]
-          ? grey_accessibilityID(kPopupMenuToolsMenuActionListId)
-          : grey_accessibilityID(kPopupMenuToolsMenuTableViewId);
+      grey_accessibilityID(kPopupMenuToolsMenuActionListId);
   [[[EarlGrey
       selectElementWithMatcher:grey_allOf(
                                    grey_accessibilityID(kToolsMenuTranslateId),
@@ -1483,16 +1374,62 @@ void TestResponseProvider::GetLanguageResponse(
                  @"Show Original Banner was not found.");
 }
 
+// Tests that translation settings in Reader Mode are not applied when
+// navigating to a different page on the navigation stack.
+- (void)testTranslateInReaderModeAndNavigatesBack {
+  // Set up server with a French page.
+  GURL URL = self.testServer->GetURL(kFrenchPageDistillablePath);
+
+  // Load URL.
+  [ChromeEarlGrey loadURL:URL];
+
+  // Open Reader Mode.
+  GREYAssertTrue(
+      [ChromeEarlGrey showReaderModeAndWaitUntilReaderModeWebStateIsReady],
+      @"Reader mode content could not be loaded.");
+
+  // Verify Reader Mode is active.
+  [ChromeEarlGrey
+      waitForSufficientlyVisibleElementWithMatcher:
+          grey_accessibilityID(kReaderModeViewAccessibilityIdentifier)];
+
+  // iOS26 introduces latency in the UI detection logic, which results in the
+  // infobar disappearing before the EG test attempts to detect it.
+  // Temporarily disabling synchronization allows the infobar to be detected
+  // within the expected latency.
+  ScopedSynchronizationDisabler disabler;
+  // Select translation in the tools menu.
+  [ChromeEarlGreyUI openToolsMenu];
+
+  id<GREYMatcher> tableViewMatcher =
+      grey_accessibilityID(kPopupMenuToolsMenuActionListId);
+  [[[EarlGrey
+      selectElementWithMatcher:grey_allOf(
+                                   grey_accessibilityID(kToolsMenuTranslateId),
+                                   grey_sufficientlyVisible(), nil)]
+         usingSearchAction:grey_scrollInDirection(kGREYDirectionDown, 150)
+      onElementWithMatcher:tableViewMatcher] performAction:grey_tap()];
+
+  // Check Translate banner is presented.
+  GREYAssertTrue([self isBeforeTranslateBannerVisible],
+                 @"Before Translate banner was not found");
+  // Tap banner button to translate.
+  GREYAssertTrue([self selectTranslateButton],
+                 @"Could not tap on Translate banner action button");
+
+  // Verify page is translated.
+  [ChromeEarlGrey waitForWebStateContainingText:"Translated"];
+
+  // Close Reader Mode by navigating back.
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::BackButton()]
+      performAction:grey_tap()];
+}
+
 // Tests that autotranslate applies to both the original page and the Reading
 // Mode page.
 - (void)testAutotranslateInReaderMode {
-  // Start the HTTP server.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
   // Load a page with French text.
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPageDistillablePath));
+  GURL URL = self.testServer->GetURL(kFrenchPageDistillablePath);
   [ChromeEarlGrey loadURL:URL];
 
   // Make sure that French to English translation is not automatic.
@@ -1539,13 +1476,8 @@ void TestResponseProvider::GetLanguageResponse(
 // Tests that if the original page is not translated, the Reading Mode page is
 // not either, regardless of the autotranslate settings.
 - (void)testNoAutotranslateInReaderMode {
-  // Start the HTTP server.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
   // Load a page with French text.
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPageDistillablePath));
+  GURL URL = self.testServer->GetURL(kFrenchPageDistillablePath);
   [ChromeEarlGrey loadURL:URL];
 
   // Make sure that French to English translation is not automatic.
@@ -1605,11 +1537,7 @@ void TestResponseProvider::GetLanguageResponse(
 // translate badge.
 - (void)testTranslateBadgeInReaderMode {
   // Set up server with a French page.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPageDistillablePath));
+  GURL URL = self.testServer->GetURL(kFrenchPageDistillablePath);
 
   // Load URL.
   [ChromeEarlGrey loadURL:URL];
@@ -1643,11 +1571,7 @@ void TestResponseProvider::GetLanguageResponse(
 // of the original web state correctly closes Reading Mode state.
 - (void)testTranslateInClosedReaderMode {
   // Set up server with a French page.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPageDistillablePath));
+  GURL URL = self.testServer->GetURL(kFrenchPageDistillablePath);
 
   // Load URL.
   [ChromeEarlGrey loadURL:URL];
@@ -1682,11 +1606,7 @@ void TestResponseProvider::GetLanguageResponse(
 // Reader mode if badge support is enabled.
 - (void)testTranslateBadgeWithReaderModeBadgeSupport {
   // Set up server with a French page.
-  std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
-  web::test::SetUpHttpServer(std::move(provider));
-
-  GURL URL = web::test::HttpServer::MakeUrl(
-      base::StringPrintf("http://%s", kFrenchPageDistillablePath));
+  GURL URL = self.testServer->GetURL(kFrenchPageDistillablePath);
 
   // Load URL.
   [ChromeEarlGrey loadURL:URL];
@@ -1704,11 +1624,15 @@ void TestResponseProvider::GetLanguageResponse(
   GREYAssertTrue([self selectTranslateButton],
                  @"Could not tap on Translate banner action button");
 
+  id<GREYMatcher> translateAcceptedAccessibilityIdentifier =
+      grey_allOf(grey_accessibilityID(
+                     kBadgeButtonTranslateAcceptedAccessibilityIdentifier),
+                 grey_sufficientlyVisible(), nil);
+
   // Check that the translate badge is visible and accepted.
   [ChromeEarlGrey
       waitForUIElementToAppearWithMatcher:
-          grey_accessibilityID(
-              kBadgeButtonTranslateAcceptedAccessibilityIdentifier)
+          translateAcceptedAccessibilityIdentifier
                                   timeout:kWaitForUIElement3xTimeout];
 
   // Open Reader Mode.
@@ -1724,8 +1648,7 @@ void TestResponseProvider::GetLanguageResponse(
   // Check that the translate badge is visible and accepted.
   [ChromeEarlGrey
       waitForUIElementToAppearWithMatcher:
-          grey_accessibilityID(
-              kBadgeButtonTranslateAcceptedAccessibilityIdentifier)
+          translateAcceptedAccessibilityIdentifier
                                   timeout:kWaitForUIElement3xTimeout];
 
   // Close Reader Mode.
@@ -1739,8 +1662,7 @@ void TestResponseProvider::GetLanguageResponse(
   // Check that the translate badge is visible and accepted.
   [ChromeEarlGrey
       waitForUIElementToAppearWithMatcher:
-          grey_accessibilityID(
-              kBadgeButtonTranslateAcceptedAccessibilityIdentifier)
+          translateAcceptedAccessibilityIdentifier
                                   timeout:kWaitForUIElement3xTimeout];
 }
 

@@ -6,13 +6,15 @@
 
 #include "base/check.h"
 #include "base/feature_list.h"
-#include "base/metrics/histogram_macros.h"
 #include "build/build_config.h"
 #include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
 #include "chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_ui_interface.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/browser/ssl/chrome_security_state_util.h"
 #include "chrome/browser/ui/login/login_tab_helper.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
@@ -28,7 +30,6 @@
 #include "components/safe_browsing/core/common/features.h"
 #include "components/search/ntp_features.h"
 #include "components/security_interstitials/content/security_interstitial_tab_helper.h"
-#include "components/security_state/content/security_state_tab_helper.h"
 #include "components/security_state/core/security_state.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -36,8 +37,11 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/common/constants.h"
+#include "ui/base/ui_base_features.h"
+#include "url/gurl.h"
 
 #if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/extensions/extension_ui_util.h"
 #include "components/omnibox/browser/vector_icons.h"  // nogncheck
 #include "components/vector_icons/vector_icons.h"     // nogncheck
 #endif
@@ -123,17 +127,16 @@ bool ChromeLocationBarModelDelegate::ShouldDisplayURL() const {
            url.spec() == chrome::kChromeUISplitViewNewTabPageURL;
   };
 
-  const auto is_contextual_tasks = [](const GURL& url) {
-    return url.SchemeIs(content::kChromeUIScheme) &&
-           url.GetHost() == chrome::kChromeUIContextualTasksHost &&
-           base::FeatureList::IsEnabled(contextual_tasks::kContextualTasks);
-  };
-
   GURL url = entry->GetURL();
-  if (is_ntp(entry->GetVirtualURL()) || is_ntp(url) ||
-      is_contextual_tasks(entry->GetVirtualURL()) || is_contextual_tasks(url)) {
+  if (is_ntp(entry->GetVirtualURL()) || is_ntp(url)) {
     return false;
   }
+
+#if !BUILDFLAG(IS_ANDROID)
+  if (IsContextualTasksPage()) {
+    return false;
+  }
+#endif
 
   Profile* profile = GetProfile();
   return !profile || !search::IsInstantNTPURL(url, profile);
@@ -147,8 +150,7 @@ security_state::SecurityLevel ChromeLocationBarModelDelegate::GetSecurityLevel()
   if (!web_contents) {
     return security_state::NONE;
   }
-  auto* helper = SecurityStateTabHelper::FromWebContents(web_contents);
-  return helper->GetSecurityLevel();
+  return chrome_security_state::GetSecurityLevel(web_contents);
 }
 
 net::CertStatus ChromeLocationBarModelDelegate::GetCertStatus() const {
@@ -158,8 +160,8 @@ net::CertStatus ChromeLocationBarModelDelegate::GetCertStatus() const {
   if (!web_contents) {
     return 0;
   }
-  auto* helper = SecurityStateTabHelper::FromWebContents(web_contents);
-  return helper->GetVisibleSecurityState()->cert_status;
+  return chrome_security_state::GetVisibleSecurityState(web_contents)
+      ->cert_status;
 }
 
 std::unique_ptr<security_state::VisibleSecurityState>
@@ -170,8 +172,7 @@ ChromeLocationBarModelDelegate::GetVisibleSecurityState() const {
   if (!web_contents) {
     return std::make_unique<security_state::VisibleSecurityState>();
   }
-  auto* helper = SecurityStateTabHelper::FromWebContents(web_contents);
-  return helper->GetVisibleSecurityState();
+  return chrome_security_state::GetVisibleSecurityState(web_contents);
 }
 
 scoped_refptr<net::X509Certificate>
@@ -189,12 +190,25 @@ const gfx::VectorIcon* ChromeLocationBarModelDelegate::GetVectorIconOverride()
   GURL url;
   GetURL(&url);
 
-  if (url.SchemeIs(content::kChromeUIScheme)) {
-    return &omnibox::kProductChromeRefreshIcon;
+  if (IsContextualTasksPage()) {
+    return &vector_icons::kGoogleColorIcon;
   }
 
-  if (url.SchemeIs(extensions::kExtensionScheme)) {
-    return &vector_icons::kExtensionChromeRefreshIcon;
+  if (url.SchemeIs(content::kChromeUIScheme)) {
+    return &(features::IsRoundedIconsEnabled()
+                 ? omnibox::kChromeProductIcon
+                 : omnibox::kProductChromeRefreshOldIcon);
+  }
+
+  // If there is no active WebContents (which can happen during toolbar
+  // initialization), no extension chip is shown.
+  content::WebContents* web_contents = GetActiveWebContents();
+  if (web_contents &&
+      !extensions::ui_util::GetEnabledExtensionNameForUrl(url, *web_contents)
+           .empty()) {
+    return &(features::IsRoundedIconsEnabled()
+                 ? vector_icons::kChromeExtensionIcon
+                 : vector_icons::kExtensionChromeRefreshOldIcon);
   }
 #endif
 
@@ -227,13 +241,14 @@ bool ChromeLocationBarModelDelegate::IsNewTabPage() const {
     return false;
   }
 
-  GURL ntp_url(chrome::kChromeUINewTabPageURL);
+  const GURL& ntp_url = chrome::ChromeUINewTabPageURLAsGURL();
   return ntp_url.scheme() == entry->GetURL().scheme() &&
          ntp_url.host() == entry->GetURL().host();
 }
 
 bool ChromeLocationBarModelDelegate::IsNewTabPageURL(const GURL& url) const {
-  return url.spec() == chrome::kChromeUINewTabURL;
+  const GURL& ntp_url = chrome::ChromeUINewTabURLAsGURL();
+  return ntp_url.scheme() == url.scheme() && ntp_url.host() == url.host();
 }
 
 bool ChromeLocationBarModelDelegate::IsHomePage(const GURL& url) const {
@@ -243,6 +258,31 @@ bool ChromeLocationBarModelDelegate::IsHomePage(const GURL& url) const {
   }
 
   return url.spec() == profile->GetPrefs()->GetString(prefs::kHomePage);
+}
+
+bool ChromeLocationBarModelDelegate::IsContextualTasksPage() const {
+  content::NavigationEntry* entry = GetNavigationEntry();
+  if (!entry || entry->IsInitialEntry()) {
+    return false;
+  }
+
+  const auto is_contextual_tasks = [](const GURL& url) {
+    return url.SchemeIs(content::kChromeUIScheme) &&
+           url.GetHost() == chrome::kChromeUIContextualTasksHost &&
+           base::FeatureList::IsEnabled(contextual_tasks::kContextualTasks);
+  };
+  return is_contextual_tasks(entry->GetVirtualURL()) ||
+         is_contextual_tasks(entry->GetURL());
+}
+
+GURL ChromeLocationBarModelDelegate::GetContextualTasksInnerFrameURL() const {
+  if (!IsContextualTasksPage()) {
+    return GURL();
+  }
+
+  auto* contextual_tasks_ui =
+      contextual_tasks::GetWebUiInterface(GetActiveWebContents());
+  return contextual_tasks_ui ? contextual_tasks_ui->GetInnerFrameUrl() : GURL();
 }
 
 content::NavigationController*

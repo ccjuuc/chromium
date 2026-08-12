@@ -9,11 +9,18 @@
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/permissions/permission_decision.h"
+#include "components/permissions/permission_prompt_decision.h"
 #include "components/permissions/permission_request_data.h"
 #include "components/permissions/permission_request_id.h"
+#include "components/permissions/request_type.h"
 #include "components/permissions/resolvers/content_setting_permission_resolver.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/blink/public/mojom/permissions/permission.mojom.h"
+
+#if BUILDFLAG(IS_MAC)
+#include "base/mac/mac_util.h"
+#endif
 
 namespace {
 
@@ -43,14 +50,14 @@ class TestIdleDetectionPermissionContext
       const permissions::PermissionRequestData& request_data,
       permissions::BrowserPermissionCallback callback,
       bool persist,
-      PermissionDecision decision,
-      bool is_final_decision) override {
+      const content::PermissionResult* permission_result,
+      const permissions::PermissionPromptDecision& decision) override {
     permission_set_count_++;
     last_permission_set_persisted_ = persist;
-    last_set_decision_ = decision;
+    last_set_decision_ = decision.overall_decision;
     IdleDetectionPermissionContext::NotifyPermissionSet(
-        request_data, std::move(callback), persist, decision,
-        is_final_decision);
+        request_data, std::move(callback), persist, permission_result,
+        decision);
   }
 
   int permission_set_count_ = 0;
@@ -70,6 +77,13 @@ class IdleDetectionPermissionContextTest
 
 // Tests auto-denial after a time delay in incognito.
 TEST_F(IdleDetectionPermissionContextTest, TestDenyInIncognitoAfterDelay) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
   TestIdleDetectionPermissionContext permission_context(
       profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true));
   GURL url("https://www.example.com");
@@ -85,8 +99,9 @@ TEST_F(IdleDetectionPermissionContextTest, TestDenyInIncognitoAfterDelay) {
 
   permission_context.RequestPermission(
       std::make_unique<permissions::PermissionRequestData>(
-          std::make_unique<permissions::ContentSettingPermissionResolver>(
-              ContentSettingsType::IDLE_DETECTION),
+          blink::mojom::PermissionDescriptor::New(
+              blink::mojom::PermissionName::IDLE_DETECTION,
+              /*extension=*/nullptr),
           id,
           /*user_gesture=*/true, url),
       base::DoNothing());
@@ -106,10 +121,11 @@ TEST_F(IdleDetectionPermissionContextTest, TestDenyInIncognitoAfterDelay) {
   // Time elapsed whilst hidden is not counted.
   // n.b. This line also clears out any old scheduled timer tasks. This is
   // important, because otherwise Timer::Reset (triggered by
-  // VisibilityTimerTabHelper::WasShown) may choose to re-use an existing
-  // scheduled task, and when it fires Timer::RunScheduledTask will call
-  // TimeTicks::Now() (which unlike task_environment()->NowTicks(), we can't
-  // fake), and miscalculate the remaining delay at which to fire the timer.
+  // visibility_timer::VisibilityTimerTabHelper::WasShown) may choose to re-use
+  // an existing scheduled task, and when it fires Timer::RunScheduledTask will
+  // call TimeTicks::Now() (which unlike task_environment()->NowTicks(), we
+  // can't fake), and miscalculate the remaining delay at which to fire the
+  // timer.
   task_environment()->FastForwardBy(base::Days(1));
 
   EXPECT_EQ(0, permission_context.permission_set_count());
@@ -157,14 +173,16 @@ TEST_F(IdleDetectionPermissionContextTest, TestParallelDenyInIncognito) {
 
   permission_context.RequestPermission(
       std::make_unique<permissions::PermissionRequestData>(
-          std::make_unique<permissions::ContentSettingPermissionResolver>(
-              ContentSettingsType::IDLE_DETECTION),
+          blink::mojom::PermissionDescriptor::New(
+              blink::mojom::PermissionName::IDLE_DETECTION,
+              /*extension=*/nullptr),
           id1, /*user_gesture=*/true, url),
       base::DoNothing());
   permission_context.RequestPermission(
       std::make_unique<permissions::PermissionRequestData>(
-          std::make_unique<permissions::ContentSettingPermissionResolver>(
-              ContentSettingsType::IDLE_DETECTION),
+          blink::mojom::PermissionDescriptor::New(
+              blink::mojom::PermissionName::IDLE_DETECTION,
+              /*extension=*/nullptr),
           id2, /*user_gesture=*/true, url),
       base::DoNothing());
 
@@ -181,7 +199,7 @@ TEST_F(IdleDetectionPermissionContextTest, TestParallelDenyInIncognito) {
     }
   }
 
-  // Only the first permission request receives a response (crbug.com/577336).
+  // Only the first permission request receives a response (crbug.com/40452210).
   EXPECT_EQ(1, permission_context.permission_set_count());
   EXPECT_TRUE(permission_context.last_permission_set_persisted());
   EXPECT_EQ(PermissionDecision::kDeny, permission_context.last_set_decision());

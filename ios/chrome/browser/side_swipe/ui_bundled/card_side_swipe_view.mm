@@ -11,8 +11,8 @@
 #import "base/metrics/user_metrics.h"
 #import "base/metrics/user_metrics_action.h"
 #import "base/strings/sys_string_conversions.h"
-#import "ios/chrome/browser/lens_overlay/coordinator/lens_overlay_availability.h"
 #import "ios/chrome/browser/lens_overlay/model/lens_overlay_tab_helper.h"
+#import "ios/chrome/browser/lens_overlay/public/lens_overlay_availability.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/ui/util/rtl_geometry.h"
@@ -76,6 +76,7 @@ const CGFloat kResizeFactor = 4;
 
 - (instancetype)initWithFrame:(CGRect)frame
                     topMargin:(CGFloat)topMargin
+                 bottomMargin:(CGFloat)bottomMargin
                  webStateList:(WebStateList*)webStateList
          snapshotBrowserAgent:(SnapshotBrowserAgent*)snapshotBrowserAgent {
   self = [super initWithFrame:frame];
@@ -84,6 +85,7 @@ const CGFloat kResizeFactor = 4;
     _snapshotBrowserAgent = snapshotBrowserAgent;
     _currentPoint = CGPointZero;
     _topMargin = topMargin;
+    _bottomMargin = bottomMargin;
 
     UIView* background = [[UIView alloc] initWithFrame:CGRectZero];
     [self addSubview:background];
@@ -103,11 +105,13 @@ const CGFloat kResizeFactor = 4;
     background.backgroundColor = [UIColor colorNamed:kGridBackgroundColor];
 
     _rightCard = [[SwipeView alloc] initWithFrame:CGRectZero
-                                        topMargin:topMargin];
+                                        topMargin:topMargin
+                                     bottomMargin:bottomMargin];
     _rightCard.layer.cornerRadius = kCardCornerRadius;
     _rightCard.layer.masksToBounds = YES;
     _leftCard = [[SwipeView alloc] initWithFrame:CGRectZero
-                                       topMargin:topMargin];
+                                       topMargin:topMargin
+                                    bottomMargin:bottomMargin];
     _leftCard.layer.cornerRadius = kCardCornerRadius;
     _leftCard.layer.masksToBounds = YES;
     [_rightCard setTranslatesAutoresizingMaskIntoConstraints:NO];
@@ -180,6 +184,12 @@ const CGFloat kResizeFactor = 4;
   _rightCard.topMargin = topMargin;
 }
 
+- (void)setBottomMargin:(CGFloat)bottomMargin {
+  _bottomMargin = bottomMargin;
+  _leftCard.bottomMargin = bottomMargin;
+  _rightCard.bottomMargin = bottomMargin;
+}
+
 #pragma mark - UIView
 
 - (void)updateConstraints {
@@ -226,29 +236,17 @@ const CGFloat kResizeFactor = 4;
   [card setHidden:NO];
 
   web::WebState* webState = _webStateList->GetWebStateAt(index);
-  PrefService* prefs =
-      ProfileIOS::FromBrowserState(webState->GetBrowserState())->GetPrefs();
   // Lens overlay displays content fullscreen and hides the vertical toolbars.
-  if (IsLensOverlayAvailable(prefs)) {
-    if (LensOverlayTabHelper* lensOverlayTabHelper =
-            LensOverlayTabHelper::FromWebState(webState)) {
-      BOOL lensOverlayShown;
+  if (LensOverlayTabHelper* lensOverlayTabHelper =
+          LensOverlayTabHelper::FromWebState(webState)) {
+    BOOL lensOverlayShown =
+        lensOverlayTabHelper->IsLensOverlayInvokedOnCurrentNavigationItem();
 
-      if (IsLensOverlaySameTabNavigationEnabled(prefs)) {
-        lensOverlayShown =
-            lensOverlayTabHelper->IsLensOverlayInvokedOnCurrentNavigationItem();
-      } else {
-        lensOverlayShown =
-            lensOverlayTabHelper->IsLensOverlayUIAttachedAndAlive();
-      }
-
-      UIImage* lensOverlaySnapshot =
-          lensOverlayTabHelper->GetViewportSnapshot();
-      if (lensOverlayShown && lensOverlaySnapshot) {
-        [self enableFullscreenCard:card];
-        [card setImage:lensOverlaySnapshot];
-        return;
-      }
+    UIImage* lensOverlaySnapshot = lensOverlayTabHelper->GetViewportSnapshot();
+    if (lensOverlayShown && lensOverlaySnapshot) {
+      [self enableFullscreenCard:card];
+      [card setImage:lensOverlaySnapshot];
+      return;
     }
   }
 

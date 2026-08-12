@@ -29,6 +29,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
@@ -38,7 +39,6 @@ import org.chromium.chrome.browser.keyboard_accessory.AccessorySuggestionType;
 import org.chromium.chrome.browser.keyboard_accessory.AccessoryTabType;
 import org.chromium.chrome.browser.keyboard_accessory.R;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData;
-import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.PlusAddressInfo;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.UserInfo;
 import org.chromium.chrome.browser.keyboard_accessory.data.UserInfoField;
 import org.chromium.chrome.browser.keyboard_accessory.sheet_component.AccessorySheetCoordinator;
@@ -56,6 +56,7 @@ import java.util.concurrent.atomic.AtomicReference;
 /** View tests for the address accessory sheet. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@Batch(Batch.PER_CLASS)
 public class AddressAccessorySheetViewTest {
     private WebPageStation mPage;
     private AccessorySheetTabItemsModel mModel;
@@ -82,7 +83,7 @@ public class AddressAccessorySheetViewTest {
                             new KeyboardAccessoryData.Tab[] {
                                 new KeyboardAccessoryData.Tab(
                                         "Addresses",
-                                        null,
+                                        0,
                                         null,
                                         R.layout.address_accessory_sheet,
                                         AccessoryTabType.ADDRESSES,
@@ -198,38 +199,6 @@ public class AddressAccessorySheetViewTest {
         assertThat(clicked.get(), is(true));
     }
 
-    @Test
-    @MediumTest
-    public void testAddingPlusAddressInfoToTheModelRendersClickableActions()
-            throws ExecutionException {
-        final AtomicBoolean clicked = new AtomicBoolean();
-
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    mModel.add(
-                            new AccessorySheetDataPiece(
-                                    new PlusAddressInfo(
-                                            /* origin= */ "google.com",
-                                            new UserInfoField.Builder()
-                                                    .setSuggestionType(
-                                                            AccessorySuggestionType.PLUS_ADDRESS)
-                                                    .setDisplayText("example@gmail.com")
-                                                    .setTextToFill("example@gmail.com")
-                                                    .setIsObfuscated(false)
-                                                    .setCallback(unused -> clicked.set(true))
-                                                    .build()),
-                                    AccessorySheetDataPiece.Type.PLUS_ADDRESS_SECTION));
-                });
-
-        CriteriaHelper.pollUiThread(
-                () -> Criteria.checkThat(mView.get().getChildCount(), greaterThan(0)));
-
-        assertThat(getChipText(R.id.plus_address), is("example@gmail.com"));
-
-        // Plus address chip is clickable:
-        ThreadUtils.runOnUiThreadBlocking(findChipView(R.id.plus_address)::performClick);
-        assertThat(clicked.get(), is(true));
-    }
 
     private UserInfo createInfo(
             String nameFull,

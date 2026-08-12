@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-
 assert(is_chromeos)
 
 static_library("cert_provisioning") {
@@ -47,6 +45,7 @@ static_library("cert_provisioning") {
     "//chrome/browser/ash/platform_keys/key_permissions",
     "//chrome/browser/ash/policy/core",
     "//chrome/browser/ash/profiles",
+    "//chrome/browser/invalidation",
     "//chrome/common:constants",
     "//chromeos/ash/components/cryptohome",
     "//chromeos/ash/components/dbus/attestation",
@@ -118,8 +117,6 @@ static_library("test_support") {
     "mock_cert_provisioning_client.h",
     "mock_cert_provisioning_invalidator.cc",
     "mock_cert_provisioning_invalidator.h",
-    "mock_cert_provisioning_scheduler.cc",
-    "mock_cert_provisioning_scheduler.h",
     "mock_cert_provisioning_worker.cc",
     "mock_cert_provisioning_worker.h",
   ]

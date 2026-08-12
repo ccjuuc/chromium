@@ -12,7 +12,6 @@
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/sync/base/features.h"
 
 namespace autofill {
 
@@ -42,21 +41,14 @@ ValuablesDataManagerFactory::~ValuablesDataManagerFactory() = default;
 std::unique_ptr<KeyedService>
 ValuablesDataManagerFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  if (!base::FeatureList::IsEnabled(
-          features::kAutofillEnableLoyaltyCardsFilling)) {
-    return nullptr;
-  }
   Profile* profile = Profile::FromBrowserContext(context);
   // The AutofillImageFetcherFactory redirects to the original profile.
   AutofillImageFetcherBase* image_fetcher =
       AutofillImageFetcherFactory::GetForProfile(profile);
 
-  scoped_refptr<autofill::AutofillWebDataService> storage =
-      base::FeatureList::IsEnabled(syncer::kSyncMoveValuablesToProfileDb)
-          ? WebDataServiceFactory::GetAutofillWebDataForProfile(
-                profile, ServiceAccessType::EXPLICIT_ACCESS)
-          : WebDataServiceFactory::GetAutofillWebDataForAccount(
-                profile, ServiceAccessType::EXPLICIT_ACCESS);
+  scoped_refptr<AutofillWebDataService> storage =
+      WebDataServiceFactory::GetAutofillWebDataForProfile(
+          profile, ServiceAccessType::EXPLICIT_ACCESS);
   if (!storage) {
     // This happens in tests because
     // WebDataServiceFactory::ServiceIsNULLWhileTesting() is true.

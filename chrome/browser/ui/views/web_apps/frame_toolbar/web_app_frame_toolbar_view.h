@@ -5,13 +5,13 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_WEB_APPS_FRAME_TOOLBAR_WEB_APP_FRAME_TOOLBAR_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_WEB_APPS_FRAME_TOOLBAR_WEB_APP_FRAME_TOOLBAR_VIEW_H_
 
+#include <optional>
 #include <utility>
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
-#include "chrome/browser/ui/views/toolbar/reload_button_web_view.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/gfx/color_palette.h"
@@ -28,9 +28,8 @@ class View;
 }  // namespace views
 
 class BrowserView;
+class ExtensionsContainerViews;
 class ContentSettingImageView;
-class PageActionIconController;
-class PinnedToolbarActionsContainer;
 class WebAppNavigationButtonContainer;
 class WebAppToolbarButtonContainer;
 class WebAppFrameToolbarView;
@@ -77,29 +76,29 @@ class WebAppFrameToolbarView : public views::AccessiblePaneView,
   }
 
   // ToolbarButtonProvider:
-  ExtensionsToolbarContainer* GetExtensionsToolbarContainer() override;
-  PinnedToolbarActionsContainer* GetPinnedToolbarActionsContainer() override;
+  ExtensionsContainerViews* GetExtensionsContainerViews() override;
+  PinnedToolbarActions* GetPinnedToolbarActions() override;
   gfx::Size GetToolbarButtonSize() const override;
-  views::View* GetDefaultExtensionDialogAnchorView() override;
-  PageActionIconView* GetPageActionIconView(PageActionIconType type) override;
-  IconLabelBubbleView* GetPageActionView(actions::ActionId action_id) override;
-  AppMenuButton* GetAppMenuButton() override;
+  views::BubbleAnchor GetDefaultExtensionDialogAnchor() override;
+  page_actions::PageActionViewInterface* GetPageActionViewInterface(
+      actions::ActionId action_id) override;
+  AppMenuControl* GetAppMenuControl() override;
   gfx::Rect GetFindBarBoundingBox(int contents_bottom) override;
   void FocusToolbar() override;
   views::AccessiblePaneView* GetAsAccessiblePaneView() override;
-  views::View* GetAnchorView(
-      std::optional<actions::ActionId> action_id) override;
   views::BubbleAnchor GetBubbleAnchor(
       std::optional<actions::ActionId> action_id) override;
+  views::BubbleAnchor GetPageActionBubbleAnchor(
+      actions::ActionId action_id) override;
   void ZoomChangedForActiveTab(bool can_show_bubble) override;
-  AvatarToolbarButton* GetAvatarToolbarButton() override;
+  AvatarToolbarButtonInterface* GetAvatarToolbarButtonInterface() override;
   ToolbarButton* GetBackButton() override;
   ReloadControl* GetReloadButton() override;
-  IntentChipButton* GetIntentChipButton() override;
   ToolbarButton* GetDownloadButton() override;
+  WebUIToolbarWebView* GetWebUIToolbarViewForTesting() override;
 
   void OnWindowControlsOverlayEnabledChanged();
-  void UpdateBorderlessModeEnabled();
+  void UpdateUnframedModeEnabled();
   void SetWindowControlsOverlayToggleVisible(bool visible);
 
   WebAppNavigationButtonContainer* get_left_container_for_testing() {
@@ -108,10 +107,16 @@ class WebAppFrameToolbarView : public views::AccessiblePaneView,
   WebAppToolbarButtonContainer* get_right_container_for_testing() {
     return right_container_;
   }
-  PageActionIconController* GetPageActionIconControllerForTesting();
 
  protected:
   // views::AccessiblePaneView:
+  // Adds logic to ensure that the buttons to be focused follow these rules
+  // when the toolbar is focused:
+  // 1. Any content settings based buttons are focused first, falling back to
+  //    the three-dot menu if not found.
+  // 2. For minimal-ui, focus on the leftmost navigation control (e.g. reload or
+  //    back button) on the frame.
+  views::View* GetDefaultFocusableChild() override;
   void ChildPreferredSizeChanged(views::View* child) override;
   void OnThemeChanged() override;
 
@@ -137,6 +142,7 @@ class WebAppFrameToolbarView : public views::AccessiblePaneView,
 
   // The containing browser view.
   const raw_ptr<BrowserView> browser_view_;
+  ui::ScopedUnownedUserData<ToolbarButtonProvider> scoped_unowned_user_data_;
 
   // Button and text colors.
   bool paint_as_active_ = true;

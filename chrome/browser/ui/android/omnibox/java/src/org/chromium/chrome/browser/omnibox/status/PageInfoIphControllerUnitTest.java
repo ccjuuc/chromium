@@ -39,10 +39,10 @@ public class PageInfoIphControllerUnitTest {
     private static final int IPH_RES_ID = R.string.accessibility_omnibox_btn_refine;
     private static final int TIMEOUT = 12345;
 
-    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
-    private @Mock UserEducationHelper mHelper;
-    private @Mock Profile mProfile;
-    private @Mock Tracker mTracker;
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock private UserEducationHelper mHelper;
+    @Mock private Profile mProfile;
+    @Mock private Tracker mTracker;
     private View mView;
     private PageInfoIphController mController;
     private final ArgumentCaptor<IphCommand> mIphCmdCaptor =
@@ -87,22 +87,6 @@ public class PageInfoIphControllerUnitTest {
         assertEquals(TIMEOUT, cmd.autoDismissTimeout);
         assertEquals(IPH_RES_ID, cmd.stringId);
         assertEquals(FeatureConstants.PAGE_INFO_STORE_INFO_FEATURE, cmd.featureName);
-        assertEquals(STATUS_INSETS, cmd.insetRect);
-        assertTrue(cmd.dismissOnTouch);
-        assertNull(cmd.anchorRect);
-        assertEquals(mView, cmd.anchorView);
-    }
-
-    @Test
-    public void showCookieControlsIph() {
-        mController.showCookieControlsIph(TIMEOUT, IPH_RES_ID);
-        verify(mHelper).requestShowIph(mIphCmdCaptor.capture());
-        var cmd = mIphCmdCaptor.getValue();
-        cmd.fetchFromResources();
-
-        assertEquals(TIMEOUT, cmd.autoDismissTimeout);
-        assertEquals(IPH_RES_ID, cmd.stringId);
-        assertEquals(FeatureConstants.COOKIE_CONTROLS_FEATURE, cmd.featureName);
         assertEquals(STATUS_INSETS, cmd.insetRect);
         assertTrue(cmd.dismissOnTouch);
         assertNull(cmd.anchorRect);

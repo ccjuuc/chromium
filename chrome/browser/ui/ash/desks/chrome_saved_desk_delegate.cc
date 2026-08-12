@@ -4,18 +4,19 @@
 
 #include "chrome/browser/ui/ash/desks/chrome_saved_desk_delegate.h"
 
+#include "ash/constants/chrome_webui_url_constants.h"
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/constants/web_app_id_constants.h"
 #include "ash/public/cpp/desk_template.h"
 #include "ash/public/cpp/system/toast_data.h"
 #include "ash/public/cpp/system/toast_manager.h"
 #include "ash/public/cpp/window_properties.h"
+#include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/i18n/number_formatting.h"
 #include "base/trace_event/trace_event.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/icon_standardizer.h"
@@ -27,7 +28,6 @@
 #include "chrome/browser/ui/ash/desks/chrome_desks_util.h"
 #include "chrome/browser/ui/ash/desks/desks_client.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/theme_resources.h"
 #include "components/app_constants/constants.h"
 #include "components/app_restore/app_launch_info.h"
@@ -43,7 +43,9 @@
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/intent.h"
 #include "components/services/app_service/public/cpp/types_util.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/user_manager/user_manager.h"
+#include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_registry.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
@@ -68,8 +70,8 @@ TabStripModel* GetTabstripModelForWindowIfAny(aura::Window* window) {
 // Returns the list of URLs that are open in `tab_strip_model`.
 std::vector<GURL> GetURLsIfApplicable(TabStripModel& tab_strip_model) {
   std::vector<GURL> urls;
-  for (int i = 0; i < tab_strip_model.count(); ++i) {
-    urls.push_back(tab_strip_model.GetWebContentsAt(i)->GetLastCommittedURL());
+  for (tabs::TabInterface* tab : tab_strip_model) {
+    urls.push_back(tab->GetContents()->GetLastCommittedURL());
   }
   return urls;
 }
@@ -294,11 +296,16 @@ void ChromeSavedDeskDelegate::GetAppLaunchDataForSavedDesk(
         app_restore_data->browser_extra_info.app_type_browser;
   }
 
+  if (!app_launch_info->event_flag.has_value()) {
+    // Ensure event_flag is present even if `app_restore_data` is missing.
+    app_launch_info->event_flag = 0;
+  }
+
   if (app_id != app_constants::kChromeAppId &&
       (app_type == apps::AppType::kChromeApp ||
        app_type == apps::AppType::kWeb)) {
     // If these values are not present, we will not be able to restore the
-    // application. See http://crbug.com/1232520 for more information.
+    // application. See http://crbug.com/40191158 for more information.
     if (!app_launch_info->container.has_value() ||
         !app_launch_info->disposition.has_value()) {
       std::move(callback).Run({});
@@ -355,7 +362,7 @@ ChromeSavedDeskDelegate::MaybeRetrieveIconForSpecialIdentifier(
     const ui::ColorProvider* color_provider) const {
   TRACE_EVENT0(
       "ui", "ChromeSavedDeskDelegate::MaybeRetrieveIconForSpecialIdentifier");
-  if (identifier == chrome::kChromeUINewTabURL) {
+  if (identifier == ash::chrome_urls::kChromeUINewTabURL) {
     ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
     return apps::CreateStandardIconImage(
         rb.GetImageNamed(IDR_PRODUCT_LOGO_32).AsImageSkia());
@@ -363,7 +370,7 @@ ChromeSavedDeskDelegate::MaybeRetrieveIconForSpecialIdentifier(
     DCHECK(color_provider);
     gfx::ImageSkia icon =
         ui::ThemedVectorIcon(
-            ui::ImageModel::FromVectorIcon(kIncognitoProfileIcon,
+            ui::ImageModel::FromVectorIcon(ash::kIncognitoProfileIcon,
                                            ui::kColorAvatarIconIncognito)
                 .GetVectorIcon())
             .GetImageSkia(color_provider);

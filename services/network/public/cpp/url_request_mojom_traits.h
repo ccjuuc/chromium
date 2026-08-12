@@ -29,7 +29,6 @@
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/resource_request_body.h"
 #include "services/network/public/cpp/source_type_mojom_traits.h"
-#include "services/network/public/mojom/attribution.mojom-forward.h"
 #include "services/network/public/mojom/chunked_data_pipe_getter.mojom.h"
 #include "services/network/public/mojom/client_security_state.mojom-forward.h"
 #include "services/network/public/mojom/cookie_access_observer.mojom-forward.h"
@@ -43,6 +42,7 @@
 #include "services/network/public/mojom/url_loader.mojom-forward.h"
 #include "services/network/public/mojom/url_loader_network_service_observer.mojom-forward.h"
 #include "services/network/public/mojom/url_request.mojom-forward.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "services/network/public/mojom/web_bundle_handle.mojom-forward.h"
 #include "services/network/public/mojom/web_client_hints_types.mojom-forward.h"
 #include "url/mojom/origin_mojom_traits.h"
@@ -189,6 +189,25 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE)
             .shared_dictionary_observer);
   }
 
+  static mojo::ScopedDataPipeProducerHandle response_body_stream(
+      const network::ResourceRequest::TrustedParams& trusted_params) {
+    if (!trusted_params.response_body_stream) {
+      return mojo::ScopedDataPipeProducerHandle();
+    }
+    return std::move(trusted_params.response_body_stream->pipe);
+  }
+
+  static const scoped_refptr<net::HttpResponseHeaders>&
+  expected_response_headers_for_synthetic_response(
+      const network::ResourceRequest::TrustedParams& trusted_params) {
+    return trusted_params.expected_response_headers_for_synthetic_response;
+  }
+
+  static bool is_ad_auction_trusted_signals_request(
+      const network::ResourceRequest::TrustedParams& trusted_params) {
+    return trusted_params.is_ad_auction_trusted_signals_request;
+  }
+
   static bool Read(network::mojom::TrustedUrlRequestParamsDataView data,
                    network::ResourceRequest::TrustedParams* out);
 };
@@ -322,16 +341,6 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE)
   static bool keepalive(const network::ResourceRequest& request) {
     return request.keepalive;
   }
-  static bool browsing_topics(const network::ResourceRequest& request) {
-    return request.browsing_topics;
-  }
-  static bool ad_auction_headers(const network::ResourceRequest& request) {
-    return request.ad_auction_headers;
-  }
-  static bool shared_storage_writable_eligible(
-      const network::ResourceRequest& request) {
-    return request.shared_storage_writable_eligible;
-  }
   static bool has_user_gesture(const network::ResourceRequest& request) {
     return request.has_user_gesture;
   }
@@ -350,6 +359,9 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE)
   static int32_t transition_type(const network::ResourceRequest& request) {
     return request.transition_type;
   }
+  static bool is_reload_navigation(const network::ResourceRequest& request) {
+    return request.is_reload_navigation;
+  }
   static int32_t previews_state(const network::ResourceRequest& request) {
     return request.previews_state;
   }
@@ -358,6 +370,14 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE)
   }
   static bool is_revalidating(const network::ResourceRequest& request) {
     return request.is_revalidating;
+  }
+  static const std::optional<std::string>& revalidation_etag(
+      const network::ResourceRequest& request) {
+    return request.revalidation_etag;
+  }
+  static const std::optional<std::string>& revalidation_last_modified(
+      const network::ResourceRequest& request) {
+    return request.revalidation_last_modified;
   }
   static const std::optional<base::UnguessableToken>& throttling_profile_id(
       const network::ResourceRequest& request) {
@@ -420,18 +440,6 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE)
       const network::ResourceRequest& request) {
     return request.storage_access_api_status;
   }
-  static network::mojom::AttributionSupport attribution_reporting_support(
-      const network::ResourceRequest& request) {
-    return request.attribution_reporting_support;
-  }
-  static network::mojom::AttributionReportingEligibility
-  attribution_reporting_eligibility(const network::ResourceRequest& request) {
-    return request.attribution_reporting_eligibility;
-  }
-  static const std::optional<base::UnguessableToken>&
-  attribution_reporting_src_token(const network::ResourceRequest& request) {
-    return request.attribution_reporting_src_token;
-  }
   static const std::optional<base::UnguessableToken>& keepalive_token(
       const network::ResourceRequest& request) {
     return request.keepalive_token;
@@ -455,9 +463,9 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE)
       const network::ResourceRequest& request) {
     return request.socket_tag;
   }
-  static bool allows_device_bound_session_registration(
+  static bool allows_device_bound_sessions(
       const network::ResourceRequest& request) {
-    return request.allows_device_bound_session_registration;
+    return request.allows_device_bound_sessions;
   }
   static const std::optional<network::PermissionsPolicy>& permissions_policy(
       const network::ResourceRequest& request) {

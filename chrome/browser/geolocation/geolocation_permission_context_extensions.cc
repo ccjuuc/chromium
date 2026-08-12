@@ -4,13 +4,21 @@
 
 #include "chrome/browser/geolocation/geolocation_permission_context_extensions.h"
 
+#include <variant>
+
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/logging.h"
+#include "components/content_settings/core/common/features.h"
 #include "components/permissions/permission_decision.h"
+#include "components/permissions/permission_prompt_decision.h"
+#include "components/permissions/resolvers/permission_prompt_options.h"
 #include "content/public/browser/permission_result.h"
+#include "content/public/common/child_process_id.h"
 #include "extensions/buildflags/buildflags.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "chrome/browser/profiles/profile.h"
 #include "components/permissions/permission_request_id.h"
 #include "extensions/browser/extension_registry.h"
@@ -27,7 +35,7 @@ using extensions::ExtensionRegistry;
 
 namespace {
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 void CallbackPermissionStatusWrapper(
     base::OnceCallback<void(content::PermissionResult)> callback,
     bool allowed) {
@@ -35,29 +43,28 @@ void CallbackPermissionStatusWrapper(
       allowed ? PermissionStatus::GRANTED : PermissionStatus::DENIED,
       content::PermissionStatusSource::UNSPECIFIED));
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 }  // anonymous namespace
 
 GeolocationPermissionContextExtensions::GeolocationPermissionContextExtensions(
     Profile* profile)
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
     : profile_(profile)
-#endif
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 {
 }
 
 GeolocationPermissionContextExtensions::
     ~GeolocationPermissionContextExtensions() = default;
 
-bool GeolocationPermissionContextExtensions::DecidePermission(
+std::optional<GeolocationPermissionContextExtensions::Decision>
+GeolocationPermissionContextExtensions::DecidePermission(
     const permissions::PermissionRequestID& request_id,
     const GURL& requesting_frame,
     bool user_gesture,
-    base::OnceCallback<void(content::PermissionResult)>* callback,
-    bool* permission_set,
-    bool* new_permission) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+    base::OnceCallback<void(content::PermissionResult)>* callback) {
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
   content::RenderFrameHost* rfh = content::RenderFrameHost::FromID(
       request_id.global_render_frame_host_id());
@@ -73,9 +80,7 @@ bool GeolocationPermissionContextExtensions::DecidePermission(
     web_view_permission_helper->RequestGeolocationPermission(
         requesting_frame, user_gesture,
         base::BindOnce(&CallbackPermissionStatusWrapper, std::move(*callback)));
-    *permission_set = false;
-    *new_permission = false;
-    return true;
+    return Decision{.permission_set = false};
   }
 
   ExtensionRegistry* extension_registry = ExtensionRegistry::Get(profile_);
@@ -87,13 +92,25 @@ bool GeolocationPermissionContextExtensions::DecidePermission(
             extensions::mojom::APIPermissionID::kGeolocation, extension,
             web_contents->GetPrimaryMainFrame())) {
       // Make sure the extension is in the calling process.
-      // TODO(crbug.com/379869738) Remove GetUnsafeValue.
       if (extensions::ProcessMap::Get(profile_)->Contains(
-              extension->id(), request_id.global_render_frame_host_id()
-                                   .child_id.GetUnsafeValue())) {
-        *permission_set = true;
-        *new_permission = true;
-        return true;
+              extension->id(),
+              request_id.global_render_frame_host_id().child_id)) {
+        return Decision{
+            .permission_set = true,
+            .decision = permissions::PermissionPromptDecision{
+                .overall_decision = PermissionDecision::kAllow,
+                // TODO(https://crbug.com/475096920): For now, extensions are
+                // only granted precise location. Potentially implement support
+                // for a granular approximate geolocation permission for
+                // extensions in the future.
+                .prompt_options = base::FeatureList::IsEnabled(
+                                      content_settings::features::
+                                          kApproximateGeolocationPermission)
+                                      ? PromptOptions(GeolocationPromptOptions{
+                                            .selected_accuracy =
+                                                GeolocationAccuracy::kPrecise})
+                                      : std::monostate(),
+                .is_final = true}};
       }
     }
   }
@@ -108,10 +125,12 @@ bool GeolocationPermissionContextExtensions::DecidePermission(
     LOG(WARNING) << "Attempt to use geolocation tabless renderer: "
                  << request_id.ToString()
                  << " (can't prompt user without a visible tab)";
-    *permission_set = true;
-    *new_permission = false;
-    return true;
+    return Decision{.permission_set = true,
+                    .decision = permissions::PermissionPromptDecision{
+                        .overall_decision = PermissionDecision::kDeny,
+                        .prompt_options = std::monostate(),
+                        .is_final = true}};
   }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
-  return false;
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  return std::nullopt;
 }

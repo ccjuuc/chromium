@@ -21,8 +21,6 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/google/core/common/google_util.h"
 #include "components/live_caption/caption_util.h"
-#include "components/plus_addresses/core/browser/grit/plus_addresses_strings.h"
-#include "components/plus_addresses/core/common/features.h"
 #include "components/soda/constants.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/sync/base/features.h"
@@ -66,6 +64,12 @@ void AddAxAnnotationsSectionStrings(content::WebUIDataSource* html_source) {
   html_source->AddBoolean(
       "mainNodeAnnotationsEnabled",
       base::FeatureList::IsEnabled(features::kMainNodeAnnotations));
+#if BUILDFLAG(IS_CHROMEOS)
+  html_source->AddBoolean(
+      "japaneseBrailleEnabled",
+      base::FeatureList::IsEnabled(
+          features::kAccessibilityChromeVoxJapaneseBraille));
+#endif
 }
 
 void AddCaptionSubpageStrings(content::WebUIDataSource* html_source) {
@@ -214,11 +218,7 @@ void AddSharedSyncPageStrings(content::WebUIDataSource* html_source) {
   html_source->AddString("syncErrorsHelpUrl", chrome::kSyncErrorsHelpURL);
 
   const bool updateAccountSettingsStrings =
-#if BUILDFLAG(IS_CHROMEOS)
-      false;
-#else
-      base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos);
-#endif
+      syncer::IsReplaceSyncPromosWithSignInPromosEnabled();
 
   html_source->AddLocalizedString(
       "encryptWithGoogleCredentialsLabel",
@@ -260,9 +260,6 @@ void AddSharedSyncPageStrings(content::WebUIDataSource* html_source) {
       l10n_util::GetStringFUTF8(
           updateAccountSettingsStrings
               ? IDS_SETTINGS_ENCRYPT_ACCOUNT_DATA_WITH_PASSPHRASE_LABEL
-          : base::FeatureList::IsEnabled(
-                plus_addresses::features::kPlusAddressesEnabled)
-              ? IDS_SETTINGS_ENCRYPT_WITH_SYNC_PASSPHRASE_INCLUDING_PLUS_ADDRESS_LABEL
               : IDS_SETTINGS_ENCRYPT_WITH_SYNC_PASSPHRASE_LABEL,
 #if BUILDFLAG(IS_CHROMEOS)
           GetHelpUrlWithBoard(chrome::kSyncEncryptionHelpURL)));

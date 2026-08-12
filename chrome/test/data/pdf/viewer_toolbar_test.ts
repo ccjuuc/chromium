@@ -32,8 +32,8 @@ const tests = [
   async function testFitButton() {
     const toolbar = createToolbar();
     const fitButton = getCrIconButtons(toolbar, 'center')[2]!;
-    const fitWidthIcon = 'pdf:fit-to-width';
-    const fitHeightIcon = 'pdf:fit-to-height';
+    const fitWidthIcon = 'pdf:fit-page-width';
+    const fitHeightIcon = 'pdf:fit-page-height';
 
     let lastFitType = '';
     let numEvents = 0;
@@ -147,7 +147,7 @@ const tests = [
   async function testRotateButton() {
     const toolbar = createToolbar();
     const rotateButton = getCrIconButtons(toolbar, 'center')[3]!;
-    chrome.test.assertEq('pdf:rotate-left', rotateButton.ironIcon);
+    chrome.test.assertEq('pdf:rotate-90-degrees-ccw', rotateButton.ironIcon);
 
     const whenRotateLeft = eventToPromise('rotate-left', toolbar);
     rotateButton.click();
@@ -176,7 +176,8 @@ const tests = [
     chrome.test.assertEq('53%', zoomField.value);
 
     // Setting a value that is over the max zoom clips to the max value.
-    const whenSent = eventToPromise('zoom-changed', toolbar);
+    const whenSent =
+        eventToPromise<CustomEvent<number>>('zoom-changed', toolbar);
     zoomField.value = '90000%';
     zoomField.dispatchEvent(new CustomEvent('change'));
     let event = await whenSent;
@@ -195,7 +196,8 @@ const tests = [
     chrome.test.assertEq('500%', zoomField.value);
 
     // Setting a new value sends the value in a zoom-changed event.
-    const whenSentNew = eventToPromise('zoom-changed', toolbar);
+    const whenSentNew =
+        eventToPromise<CustomEvent<number>>('zoom-changed', toolbar);
     zoomField.value = '110%';
     zoomField.dispatchEvent(new CustomEvent('change'));
     event = await whenSentNew;
@@ -204,7 +206,8 @@ const tests = [
     // Setting a new value and blurring sends the value in a zoom-changed
     // event. If the value is below the minimum, this sends the minimum
     // zoom.
-    const whenSentFromBlur = eventToPromise('zoom-changed', toolbar);
+    const whenSentFromBlur =
+        eventToPromise<CustomEvent<number>>('zoom-changed', toolbar);
     zoomField.value = '18%';
     zoomField.dispatchEvent(new CustomEvent('blur'));
     event = await whenSentFromBlur;
@@ -240,11 +243,11 @@ const tests = [
 
     toolbar.twoUpViewEnabled = false;
     await microtasksFinished();
-    const button =
-        toolbar.shadowRoot.querySelector<HTMLElement>('#two-page-view-button')!;
+    const button = toolbar.$.twoPageViewButton;
     assertCheckboxMenuButton(toolbar, button, false);
 
-    let whenChanged = eventToPromise('two-up-view-changed', toolbar);
+    let whenChanged =
+        eventToPromise<CustomEvent<boolean>>('two-up-view-changed', toolbar);
     button.click();
     let event = await whenChanged;
 
@@ -256,7 +259,8 @@ const tests = [
     await microtasksFinished();
     chrome.test.assertEq(true, event.detail);
     assertCheckboxMenuButton(toolbar, button, true);
-    whenChanged = eventToPromise('two-up-view-changed', toolbar);
+    whenChanged =
+        eventToPromise<CustomEvent<boolean>>('two-up-view-changed', toolbar);
     button.click();
     event = await whenChanged;
 
@@ -280,7 +284,8 @@ const tests = [
         '#show-annotations-button')!;
     assertCheckboxMenuButton(toolbar, button, true);
 
-    let whenChanged = eventToPromise('display-annotations-changed', toolbar);
+    let whenChanged = eventToPromise<CustomEvent<boolean>>(
+        'display-annotations-changed', toolbar);
     button.click();
     let event = await whenChanged;
 
@@ -289,7 +294,8 @@ const tests = [
 
     chrome.test.assertEq(false, event.detail);
     assertCheckboxMenuButton(toolbar, button, false);
-    whenChanged = eventToPromise('display-annotations-changed', toolbar);
+    whenChanged = eventToPromise<CustomEvent<boolean>>(
+        'display-annotations-changed', toolbar);
     button.click();
     event = await whenChanged;
 
@@ -321,19 +327,16 @@ const tests = [
 
   async function testPresentButton() {
     const toolbar = createToolbar();
-    const button =
-        toolbar.shadowRoot.querySelector<HTMLElement>('#present-button');
-    chrome.test.assertTrue(!!button);
 
-    chrome.test.assertFalse(toolbar.$['present-button'].disabled);
+    chrome.test.assertFalse(toolbar.$.presentButton.disabled);
     const whenFired = eventToPromise('present-click', toolbar);
-    button.click();
+    toolbar.$.presentButton.click();
     await whenFired;
 
     // The present button should be disabled if the PDF Viewer is embedded.
     toolbar.embeddedViewer = true;
     await microtasksFinished();
-    chrome.test.assertTrue(toolbar.$['present-button'].disabled);
+    chrome.test.assertTrue(toolbar.$.presentButton.disabled);
     chrome.test.succeed();
   },
 

@@ -9,9 +9,9 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.ApplicationInfo;
 import android.os.Binder;
 import android.os.Build;
+import android.os.Debug;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -22,6 +22,7 @@ import android.text.TextUtils;
 import android.util.SparseArray;
 
 import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.AndroidInfo;
@@ -117,17 +118,6 @@ public class ChildProcessService {
         mApplicationContext = applicationContext;
     }
 
-    // These are the strings we will use to compare a child to parent process to ensure they are
-    // running the same code.
-    public static String[] convertToStrings(ApplicationInfo appInfo) {
-        String sourceDir = appInfo.sourceDir;
-        String sharedLibraryFiles = null;
-        if (appInfo.sharedLibraryFiles != null) {
-            sharedLibraryFiles = TextUtils.join(":", appInfo.sharedLibraryFiles);
-        }
-        return new String[] {sourceDir, sharedLibraryFiles};
-    }
-
     // Binder object used by clients for this service.
     private final IChildProcessService.Stub mBinder =
             new IChildProcessService.Stub() {
@@ -160,9 +150,8 @@ public class ChildProcessService {
                 }
 
                 @Override
-                public String[] getAppInfoStrings() {
-                    ApplicationInfo appInfo = mApplicationContext.getApplicationInfo();
-                    return convertToStrings(appInfo);
+                public String getSourceDir() {
+                    return mApplicationContext.getApplicationInfo().sourceDir;
                 }
 
                 @Override
@@ -286,7 +275,9 @@ public class ChildProcessService {
         // lifecycle events, and create a separate thread to serve as the main renderer. This
         // affects the thread stack size: instead of getting the kernel default we get the Java
         // default, which can be much smaller. So, explicitly set up a larger stack here.
+        // LINT.IfChange
         long stackSize = ContextUtils.isProcess64Bit() ? 8 * 1024 * 1024 : 4 * 1024 * 1024;
+        // LINT.ThenChange(//content/app/android/javaless_child_process_service.cc)
 
         mMainThread =
                 new Thread(
@@ -320,7 +311,7 @@ public class ChildProcessService {
             }
 
             if (CommandLine.getInstance().hasSwitch(BaseSwitches.RENDERER_WAIT_FOR_JAVA_DEBUGGER)) {
-                android.os.Debug.waitForDebugger();
+                Debug.waitForDebugger();
             }
 
             EarlyTraceEvent.onCommandLineAvailableInChildProcess();
@@ -330,6 +321,7 @@ public class ChildProcessService {
                 mLibraryInitialized = true;
                 mLibraryInitializedLock.notifyAll();
             }
+            RecordHistogram.recordBooleanHistogram("Android.ChildProcess.JavalessStarted", false);
             sendBuildInfoToNative();
             SparseArray<String> idsToKeys = mDelegate.getFileDescriptorsIdsToKeys();
 
@@ -358,9 +350,7 @@ public class ChildProcessService {
         } catch (Throwable e) {
             try {
                 mParentProcess.reportExceptionInInit(
-                        ChildProcessService.class.getName()
-                                + "\n"
-                                + android.util.Log.getStackTraceString(e));
+                        ChildProcessService.class.getName() + "\n" + Log.getStackTraceString(e));
             } catch (RemoteException re) {
                 Log.e(TAG, "Failed to call reportExceptionInInit.", re);
             }
@@ -448,11 +438,15 @@ public class ChildProcessService {
     interface Natives {
         /**
          * Helper for registering FileDescriptorInfo objects with GlobalFileDescriptors or
-         * FileDescriptorStore.
-         * This includes the IPC channel, the crash dump signals and resource related
-         * files.
+         * FileDescriptorStore. This includes the IPC channel, the crash dump signals and resource
+         * related files.
          */
-        void registerFileDescriptors(String[] keys, int[] id, int[] fd, long[] offset, long[] size);
+        void registerFileDescriptors(
+                @JniType("std::vector<std::optional<std::string>>") String[] keys,
+                @JniType("std::vector<int32_t>") int[] id,
+                @JniType("std::vector<int32_t>") int[] fd,
+                @JniType("std::vector<int64_t>") long[] offset,
+                @JniType("std::vector<int64_t>") long[] size);
 
         /** Force the child process to exit. */
         void exitChildProcess();

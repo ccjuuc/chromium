@@ -10,6 +10,7 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/logging.h"
 #include "base/values.h"
 #include "components/version_info/version_info.h"
 #include "extensions/buildflags/buildflags.h"
@@ -69,7 +70,7 @@ class StorageSchemaManifestHandlerTest : public testing::Test {
 
   base::ScopedTempDir temp_dir_;
   ScopedCurrentChannel scoped_channel_;
-  base::Value::Dict manifest_;
+  base::DictValue manifest_;
 };
 
 TEST_F(StorageSchemaManifestHandlerTest, Parse) {
@@ -88,7 +89,7 @@ TEST_F(StorageSchemaManifestHandlerTest, Parse) {
 }
 
 TEST_F(StorageSchemaManifestHandlerTest, Validate) {
-  base::Value::List permissions;
+  base::ListValue permissions;
   permissions.Append("storage");
   manifest_.Set("permissions", std::move(permissions));
 

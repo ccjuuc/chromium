@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "base/files/file_path.h"
+#include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -29,7 +30,7 @@ scoped_refptr<Extension> CreateTestExtension(const std::string& name,
 #endif
   path = path.AppendASCII(name);
 
-  auto manifest = base::Value::Dict()
+  auto manifest = base::DictValue()
                       .Set("name", name)
                       .Set("version", "1")
                       .Set("manifest_version", 2);
@@ -38,7 +39,7 @@ scoped_refptr<Extension> CreateTestExtension(const std::string& name,
     manifest.SetByDottedPath("app.launch.web_url", launch_url);
 
   if (!extent.empty()) {
-    base::Value::List urls;
+    base::ListValue urls;
     urls.Append(extent);
     manifest.SetByDottedPath("app.urls", std::move(urls));
   }

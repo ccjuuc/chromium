@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -74,24 +75,18 @@ PixelTest::PixelTest(GraphicsBackend backend)
     auto* command_line = base::CommandLine::ForCurrentProcess();
     bool use_gpu = command_line->HasSwitch(::switches::kUseGpuInTests);
     // Force the use of Graphite even if disallowed for other reasons e.g.
-    // ANGLE Metal is not enabled on Mac. Use dawn-swiftshader backend if
+    // ANGLE Metal is not enabled on Mac. Use swiftshader backend if
     // kUseGpuInTests is not set.
     command_line->AppendSwitch(::switches::kEnableSkiaGraphite);
-    command_line->AppendSwitchASCII(
-        ::switches::kSkiaGraphiteBackend,
-        use_gpu ? ::switches::kSkiaGraphiteBackendDawn
-                : ::switches::kSkiaGraphiteBackendDawnSwiftshader);
+    if (!use_gpu) {
+      command_line->AppendSwitchASCII(
+          ::switches::kSkiaGraphiteDawnBackend,
+          ::switches::kSkiaGraphiteDawnBackendSwiftshader);
+    }
     init_dawn = true;
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     init_vulkan = true;
 #endif
-  } else if (backend == kSkiaGraphiteMetal) {
-    scoped_feature_list_.InitAndEnableFeature(features::kSkiaGraphite);
-    auto* command_line = base::CommandLine::ForCurrentProcess();
-    // Force the use of Graphite even if disallowed for other reasons.
-    command_line->AppendSwitch(::switches::kEnableSkiaGraphite);
-    command_line->AppendSwitchASCII(::switches::kSkiaGraphiteBackend,
-                                    ::switches::kSkiaGraphiteBackendMetal);
   } else {
     // Ensure that we don't accidentally have vulkan or graphite enabled.
     scoped_feature_list_.InitWithFeatures(
@@ -140,7 +135,8 @@ void PixelTest::RenderReadbackTargetAndAreaToResultBitmap(
   float device_scale_factor = 1.f;
   renderer_->DrawFrame(pass_list, device_scale_factor, device_viewport_size_,
                        display_color_spaces_,
-                       std::move(surface_damage_rect_list_));
+                       std::move(surface_damage_rect_list_),
+                       initial_tracked_element_rects_);
 
   if (use_copy_request) {
     // Call SwapBuffersSkipped(), so the renderer can have a chance to release
@@ -214,15 +210,8 @@ bool PixelTest::RunPixelTest(viz::AggregatedRenderPassList* pass_list,
       SkImageInfo::MakeN32Premul(result_bitmap_->width(),
                                  result_bitmap_->height()),
       ref_pixels->data(), result_bitmap_->width() * sizeof(SkColor));
-  bool result = comparator.Compare(*result_bitmap_, ref_pixels_bitmap);
-  if (!result) {
-    std::string res_bmp_data_url = GetPNGDataUrl(*result_bitmap_);
-    std::string ref_bmp_data_url = GetPNGDataUrl(ref_pixels_bitmap);
-    LOG(ERROR) << "Pixels do not match!";
-    LOG(ERROR) << "Actual: " << res_bmp_data_url;
-    LOG(ERROR) << "Expected: " << ref_bmp_data_url;
-  }
-  return result;
+
+  return MatchesBitmap(*result_bitmap_, ref_pixels_bitmap, comparator);
 }
 
 bool PixelTest::RunPixelTest(viz::AggregatedRenderPassList* pass_list,
@@ -231,15 +220,7 @@ bool PixelTest::RunPixelTest(viz::AggregatedRenderPassList* pass_list,
   RenderReadbackTargetAndAreaToResultBitmap(pass_list, pass_list->back().get(),
                                             nullptr);
 
-  bool result = comparator.Compare(*result_bitmap_, ref_bitmap);
-  if (!result) {
-    std::string res_bmp_data_url = GetPNGDataUrl(*result_bitmap_);
-    std::string ref_bmp_data_url = GetPNGDataUrl(ref_bitmap);
-    LOG(ERROR) << "Pixels do not match!";
-    LOG(ERROR) << "Actual: " << res_bmp_data_url;
-    LOG(ERROR) << "Expected: " << ref_bmp_data_url;
-  }
-  return result;
+  return MatchesBitmap(*result_bitmap_, ref_bitmap, comparator);
 }
 
 bool PixelTest::RunPixelTest(viz::AggregatedRenderPassList* pass_list,
@@ -257,9 +238,13 @@ void PixelTest::ReadbackResult(base::OnceClosure quit_run_loop,
   EXPECT_EQ(result->format(), viz::CopyOutputResult::Format::RGBA);
   EXPECT_EQ(result->destination(),
             viz::CopyOutputResult::Destination::kSystemMemory);
-  auto scoped_sk_bitmap = result->ScopedAccessSkBitmap();
+  auto scoped_sk_bitmap_and_metadata =
+      result->ScopedAccessSkBitmap().GetOutScopedBitmapAndMetadata();
+  ASSERT_TRUE(scoped_sk_bitmap_and_metadata.has_value());
   result_bitmap_ =
-      std::make_unique<SkBitmap>(scoped_sk_bitmap.GetOutScopedBitmap());
+      std::make_unique<SkBitmap>(scoped_sk_bitmap_and_metadata->bitmap);
+  result_tracked_element_rects_ =
+      std::move(scoped_sk_bitmap_and_metadata->tracked_element_rects);
   EXPECT_TRUE(result_bitmap_->readyToDraw());
   std::move(quit_run_loop).Run();
 }

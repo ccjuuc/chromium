@@ -133,6 +133,7 @@ enum class CtapDeviceResponseCode : uint8_t {
   kCtap2ErrOther = 0x7F,
   kCtap2ErrSpecLast = 0xDF,
   kCtap2ErrExtensionFirst = 0xE0,
+  kCtap2ErrFallbackUrlProcessed = 0xE0,
   kCtap2ErrExtensionLast = 0xEF,
   kCtap2ErrVendorFirst = 0xF0,
   kCtap2ErrVendorLast = 0xFF
@@ -393,6 +394,13 @@ inline constexpr uint8_t kP1CheckOnly = 0x07;
 inline constexpr uint8_t kP1IndividualAttestation = 0x80;
 inline constexpr size_t kMaxKeyHandleLength = 255;
 
+inline constexpr size_t kCableEphemeralIdSize = 16;
+
+using CableEidArray = std::array<uint8_t, kCableEphemeralIdSize>;
+// CableAuthenticatorIdentityKey is a P-256 public value used to authenticate a
+// paired phone.
+using CableAuthenticatorIdentityKey = std::array<uint8_t, kP256X962Length>;
+
 // kCableWebSocketProtocol is the name of the WebSocket subprotocol used by
 // caBLEv2. See https://tools.ietf.org/html/rfc6455#section-1.9.
 inline constexpr char kCableWebSocketProtocol[] = "fido.cable";
@@ -455,6 +463,8 @@ COMPONENT_EXPORT(FIDO_PUBLIC) extern const char kCableClientHelloMessage[];
 inline constexpr Ctap2Version kCtap2Versions2_0[] = {Ctap2Version::kCtap2_0};
 inline constexpr Ctap2Version kCtap2Versions2_1[] = {Ctap2Version::kCtap2_0,
                                                      Ctap2Version::kCtap2_1};
+inline constexpr Ctap2Version kCtap2Versions2_2[] = {
+    Ctap2Version::kCtap2_0, Ctap2Version::kCtap2_1, Ctap2Version::kCtap2_2};
 
 // Protocol version strings.
 // https://fidoalliance.org/specs/fido-v2.0-ps-20190130/fido-client-to-authenticator-protocol-v2.0-ps-20190130.html#authenticatorGetInfo
@@ -465,7 +475,14 @@ COMPONENT_EXPORT(FIDO_PUBLIC) extern const char kU2fVersion[];
 // TODO(nsatragno): link to the spec once this is standardized.
 COMPONENT_EXPORT(FIDO_PUBLIC) extern const char kCtap2_1Version[];
 
+// The version identifier for CTAP 2.2.
+// https://fidoalliance.org/specs/fido-v2.2-rd-20241003/fido-client-to-authenticator-protocol-v2.2-rd-20241003.html#authenticatorGetInfo
+COMPONENT_EXPORT(FIDO_PUBLIC) extern const char kCtap2_2Version[];
+
 COMPONENT_EXPORT(FIDO_PUBLIC) extern const char kExtensionHmacSecret[];
+COMPONENT_EXPORT(FIDO_PUBLIC)
+extern const char kExtensionCrossDeviceFallbackUrl[];
+COMPONENT_EXPORT(FIDO_PUBLIC) extern const char kExtensionHmacSecretMc[];
 COMPONENT_EXPORT(FIDO_PUBLIC) extern const char kExtensionCredProtect[];
 COMPONENT_EXPORT(FIDO_PUBLIC) extern const char kExtensionLargeBlob[];
 COMPONENT_EXPORT(FIDO_PUBLIC) extern const char kExtensionLargeBlobKey[];
@@ -481,6 +498,7 @@ COMPONENT_EXPORT(FIDO_PUBLIC) extern const char kExtensionPRFEvalByCredential[];
 COMPONENT_EXPORT(FIDO_PUBLIC) extern const char kExtensionPRFFirst[];
 COMPONENT_EXPORT(FIDO_PUBLIC) extern const char kExtensionPRFResults[];
 COMPONENT_EXPORT(FIDO_PUBLIC) extern const char kExtensionPRFSecond[];
+COMPONENT_EXPORT(FIDO_PUBLIC) extern const char kExtensionCmtgKey[];
 
 // Constants for the largeBlob extension
 COMPONENT_EXPORT(FIDO_PUBLIC) extern const char kExtensionLargeBlobBlob[];

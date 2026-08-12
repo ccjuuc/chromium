@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
@@ -47,7 +46,7 @@ SkBitmap CreateSquareIcon(int size_px, SkColor solid_color) {
   return bitmap;
 }
 
-void AddGeneratedIcon(std::map<SquareSizePx, SkBitmap>* icon_bitmaps,
+void AddGeneratedIcon(OrderedSizeToBitmap* icon_bitmaps,
                       int size_px,
                       SkColor solid_color) {
   (*icon_bitmaps)[size_px] = CreateSquareIcon(size_px, solid_color);
@@ -130,13 +129,11 @@ base::span<const int> GetIconSizes() {
   return kIconSizes;
 }
 
-bool ContainsOneIconOfEachSize(
-    const std::map<SquareSizePx, SkBitmap>& icon_bitmaps) {
+bool ContainsOneIconOfEachSize(const OrderedSizeToBitmap& icon_bitmaps) {
   for (int size_px : kIconSizes) {
-    int num_icons_for_size = std::ranges::count(
-        icon_bitmaps, size_px, &std::pair<const SquareSizePx, SkBitmap>::first);
-    if (num_icons_for_size != 1)
+    if (!icon_bitmaps.contains(size_px)) {
       return false;
+    }
   }
 
   return true;
@@ -169,10 +166,9 @@ blink::Manifest::ImageResource CreateSquareImageResource(
   return r;
 }
 
-std::map<SquareSizePx, SkBitmap> ReadPngsFromDirectory(
-    FileUtilsWrapper* file_utils,
-    const base::FilePath& icons_dir) {
-  std::map<SquareSizePx, SkBitmap> pngs;
+OrderedSizeToBitmap ReadPngsFromDirectory(FileUtilsWrapper* file_utils,
+                                          const base::FilePath& icons_dir) {
+  OrderedSizeToBitmap pngs;
 
   base::FileEnumerator enumerator(icons_dir, true, base::FileEnumerator::FILES);
   for (base::FilePath path = enumerator.Next(); !path.empty();
@@ -184,7 +180,7 @@ std::map<SquareSizePx, SkBitmap> ReadPngsFromDirectory(
     EXPECT_EQ(bitmap.width(), bitmap.height());
 
     const int size_px = bitmap.width();
-    EXPECT_FALSE(base::Contains(pngs, size_px));
+    EXPECT_FALSE(pngs.contains(size_px));
 
     base::FilePath size_file_name;
     size_file_name =
@@ -230,7 +226,7 @@ void AddIconsToWebAppInstallInfo(
   for (const GeneratedIconsInfo& info : icons_info) {
     DCHECK_EQ(info.sizes_px.size(), info.colors.size());
 
-    std::map<SquareSizePx, SkBitmap> generated_bitmaps;
+    OrderedSizeToBitmap generated_bitmaps;
 
     for (size_t i = 0; i < info.sizes_px.size(); ++i) {
       apps::IconInfo apps_icon_info =
@@ -258,7 +254,7 @@ void IconManagerWriteGeneratedIcons(
   for (const GeneratedIconsInfo& info : icons_info) {
     DCHECK_EQ(info.sizes_px.size(), info.colors.size());
 
-    std::map<SquareSizePx, SkBitmap> generated_bitmaps;
+    OrderedSizeToBitmap generated_bitmaps;
 
     for (size_t i = 0; i < info.sizes_px.size(); ++i)
       AddGeneratedIcon(&generated_bitmaps, info.sizes_px[i], info.colors[i]);
@@ -288,7 +284,7 @@ SkColor IconManagerReadAppIconPixel(WebAppIconManager& icon_manager,
   icon_manager.ReadTrustedIconsWithFallbackToManifestIcons(
       app_id, {size_px}, IconPurpose::ANY,
       base::BindLambdaForTesting([&](IconMetadataFromDisk icon_metadata) {
-        DCHECK(base::Contains(icon_metadata.icons_map, size_px));
+        DCHECK(icon_metadata.icons_map.contains(size_px));
         result = icon_metadata.icons_map.at(size_px).getColor(x, y);
         run_loop.Quit();
       }));

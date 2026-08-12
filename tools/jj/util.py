@@ -5,13 +5,16 @@
 import collections
 import logging
 import re
+import shutil
+import shlex
 import subprocess
 
 # CSV-file like separators. The templating language doesn't support escaping,
 # so we use
 # https://en.wikipedia.org/wiki/C0_and_C1_control_codes#Field_separators
-_NEWLINE = '\x1e'
-_COMMA = '\x1f'
+_NEWLINE = '\x1c'
+_COMMA = '\x1d'
+_LIST = '\x1e'
 
 _TRAILER = re.compile(r'([a-zA-Z0-9\-_]+): (.*)')
 _CHANGE_PRETTY = '''change_id.short() ++
@@ -20,16 +23,35 @@ if(current_working_copy, " (@)") ++
 description.first_line()
 '''
 
-MUTABLE_PARENTS = '''parents
-.filter(|c| !c.immutable())
-.map(|p| p.change_id())
-.join(",")'''
+
+def list_template(expr: str) -> str:
+  """Wraps a list-valued expression so `jj_log` returns it as list[str].
+
+  Use this for any template which produces a list (eg. parents, bookmarks).
+  """
+  # List items are separated with _LIST. We also prefix the list with _LIST as a
+  # sentinel so that empty and single-item lists are also detected as lists.
+  return f'"{_LIST}" ++ ({expr}).join("{_LIST}")'
+
+
+MUTABLE_PARENTS = list_template(
+    'parents.filter(|c| !c.immutable()).map(|p| p.change_id())')
+
+IMMUTABLE_PARENTS = list_template(
+    'parents.filter(|p| p.immutable()).map(|p| p.commit_id())')
 
 
 def run_command(args: list[str],
                 check=True,
                 **kwargs) -> subprocess.CompletedProcess:
-  logging.debug('Running command %s', ' '.join(map(str, args)))
+  # Resolve the binary path, or in the case of Windows, the batch script path,
+  # including the .bat extension.
+  resolved = shutil.which(args[0])
+  if not resolved:
+    logging.error('Could not find %s on PATH', args[0])
+    exit(1)
+  args = [resolved] + args[1:]
+  logging.debug('Running command %s', shlex.join(map(str, args)))
   ps = subprocess.run(args, **kwargs, check=False)
   if check and ps.returncode:
     # Don't create a stack trace.
@@ -52,14 +74,14 @@ def _log(args: list[str], templates: dict[str, str],
 
   The user will provide templates such as {
     'change_id': 'change_id',
-    'parents': 'parents.map(|c| c.change_id())',
+    'parents': list_template('parents.map(|c| c.change_id())'),
   }
 
   And a set of revisions to lookup (eg. 'a|b').
 
   And it would then return [
-     {'change_id': 'a', 'parents': '<parent of a's id>'}
-     {'change_id': 'b', 'parents': '<parent of b's id>'}
+     {'change_id': 'a', 'parents': ['<parent of a's id>', ..]}
+     {'change_id': 'b', 'parents': ['<parent of b's id>', ..]}
   ]
   """
   templates.setdefault('name', _CHANGE_PRETTY)
@@ -76,9 +98,18 @@ def _log(args: list[str], templates: dict[str, str],
       **kwargs,
   ).stdout
 
+  def _parse_field(value: str):
+    # Fields starting with _LIST are list-valued and split into list[str].
+    if value.startswith(_LIST):
+      rest = value[len(_LIST):]
+      return rest.split(_LIST) if rest else []
+
+    # Everything else is a str.
+    return value
+
   # Now we parse our CSV file.
   return [{
-      field: value
+      field: _parse_field(value)
       for field, value in zip(fields, change.split(_COMMA))
   } for change in stdout.rstrip(_NEWLINE).split(_NEWLINE)]
 
@@ -145,3 +176,24 @@ def add_trailers(rev: dict[str, str], trailers: dict[str, list[str]],
         ignore_working_copy=True,
     )
   return new_desc
+
+
+def percent_encode_for_git_ref(original: str) -> str:
+  """Pulled from the PercentEncodeForGitRef function in gerrit_util.py.
+
+    Applies percent-encoding for strings sent to Gerrit via git ref metadata.
+
+    The encoding used is based on but stricter than URL encoding (Section 2.1 of
+    RFC 3986). The only non-escaped characters are alphanumerics, and 'SPACE'
+    (U+0020) can be represented as 'LOW LINE' (U+005F) or 'PLUS SIGN' (U+002B).
+
+    For more information, see the Gerrit docs here:
+
+    https://gerrit-review.googlesource.com/Documentation/user-upload.html#message
+    """
+  safe = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 '
+  encoded = ''.join(c if c in safe else '%%%02X' % ord(c) for c in original)
+
+  # Spaces are not allowed in git refs; gerrit will interpret either '_' or
+  # '+' (or '%20') as space. Use '_' since that has been supported the longest.
+  return encoded.replace(' ', '_')

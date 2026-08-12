@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/ash/test_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/webui_url_constants.h"
@@ -44,13 +45,11 @@ class TabletModePageBehaviorTest : public ChromeOSBrowserUITest {
     EXPECT_FALSE(web_prefs.double_tap_to_zoom_enabled);
 
     if (tablet_mode_enabled) {
-      EXPECT_TRUE(web_prefs.text_autosizing_enabled);
       EXPECT_TRUE(web_prefs.shrinks_viewport_contents_to_fit);
       EXPECT_TRUE(web_prefs.main_frame_resizes_are_orientation_changes);
       EXPECT_FLOAT_EQ(web_prefs.default_minimum_page_scale_factor, 0.25f);
       EXPECT_FLOAT_EQ(web_prefs.default_maximum_page_scale_factor, 5.0f);
     } else {
-      EXPECT_FALSE(web_prefs.text_autosizing_enabled);
       EXPECT_FALSE(web_prefs.shrinks_viewport_contents_to_fit);
       EXPECT_FALSE(web_prefs.main_frame_resizes_are_orientation_changes);
       EXPECT_FLOAT_EQ(web_prefs.default_minimum_page_scale_factor, 1.0f);
@@ -79,7 +78,7 @@ IN_PROC_BROWSER_TEST_F(TabletModePageBehaviorTest,
   ValidateWebPrefs(web_contents, true /* tablet_mode_enabled */);
 
   // Any newly added pages should have the correct tablet mode prefs.
-  Browser* browser_2 = CreateBrowser(browser()->profile());
+  Browser* browser_2 = CreateBrowser(browser()->GetProfile());
   auto* web_contents_2 = GetActiveWebContents(browser_2);
   ASSERT_TRUE(web_contents_2);
   ValidateWebPrefs(web_contents_2, true /* tablet_mode_enabled */);
@@ -106,17 +105,18 @@ IN_PROC_BROWSER_TEST_F(TabletModePageBehaviorTest, ExcludeInternalPages) {
 }
 
 IN_PROC_BROWSER_TEST_F(TabletModePageBehaviorTest, ExcludeHostedApps) {
-  browser()->window()->Close();
+  browser()->GetWindow()->Close();
 
   // Open a new app window.
-  Browser::CreateParams params = Browser::CreateParams::CreateForApp(
-      "test_browser_app", true /* trusted_source */, gfx::Rect(),
-      browser()->profile(), true);
+  BrowserWindowCreateParams params = BrowserWindowCreateParams::CreateForApp(
+      "test_browser_app", /*trusted_source=*/true, gfx::Rect(),
+      browser()->GetProfile(), /*user_gesture=*/true);
   params.initial_show_state = ui::mojom::WindowShowState::kDefault;
-  Browser* browser = Browser::Create(params);
+  Browser* browser =
+      CreateBrowserWindow(std::move(params))->GetBrowserForMigrationOnly();
   AddBlankTabAndShow(browser);
 
-  ASSERT_TRUE(browser->is_type_app());
+  ASSERT_EQ(browser->GetType(), BrowserWindowInterface::Type::TYPE_APP);
   auto* web_contents = GetActiveWebContents(browser);
   ASSERT_TRUE(web_contents);
 
@@ -128,12 +128,12 @@ IN_PROC_BROWSER_TEST_F(TabletModePageBehaviorTest, ExcludeHostedApps) {
 
 IN_PROC_BROWSER_TEST_F(TabletModePageBehaviorTest, IncludeNTPs) {
   ASSERT_TRUE(AddTabAtIndexToBrowser(
-      browser(), 0, GURL(chrome::kChromeUINewTabPageURL),
+      browser(), 0, chrome::ChromeUINewTabPageURLAsGURL(),
       ui::PAGE_TRANSITION_LINK, false /* check_navigation_success */));
   auto* web_contents = GetActiveWebContents(browser());
   ASSERT_TRUE(web_contents);
-  EXPECT_STREQ(web_contents->GetLastCommittedURL().spec().c_str(),
-               chrome::kChromeUINewTabPageURL);
+  EXPECT_EQ(web_contents->GetLastCommittedURL(),
+            chrome::ChromeUINewTabPageURLAsGURL());
 
   // Mobile-style Blink prefs should be applied to the NTP in tablet mode.
   EnterTabletMode();

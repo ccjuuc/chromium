@@ -8,21 +8,19 @@
 #include <string>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
-#include "base/metrics/histogram_macros.h"
 #include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/extensions/external_install_manager_factory.h"
-#include "chrome/browser/extensions/managed_installation_mode.h"
 #include "components/version_info/version_info.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_util.h"
+#include "extensions/browser/managed_installation_mode.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/feature_switch.h"
 #include "extensions/common/features/feature_channel.h"
 #include "extensions/common/manifest.h"
-#include "extensions/common/manifest_url_handlers.h"
+#include "extensions/common/manifest_handlers/manifest_url_handlers.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/extensions/external_install_error_desktop.h"
@@ -105,7 +103,7 @@ void ExternalInstallManager::Shutdown() {
 void ExternalInstallManager::AddExternalInstallError(const Extension* extension,
                                                      bool is_new_profile) {
   // Error already exists or has been previously shown.
-  if (base::Contains(errors_, extension->id()) ||
+  if (errors_.contains(extension->id()) ||
       shown_ids_.count(extension->id()) > 0) {
     return;
   }
@@ -156,7 +154,7 @@ void ExternalInstallManager::UpdateExternalExtensionAlert() {
   // The list of ids can be mutated during this loop, so make a copy.
   const std::set<ExtensionId> ids_copy = unacknowledged_ids_;
   for (const auto& id : ids_copy) {
-    if (base::Contains(errors_, id) || shown_ids_.count(id) > 0) {
+    if (errors_.contains(id) || shown_ids_.count(id) > 0) {
       continue;
     }
 
@@ -263,7 +261,7 @@ void ExternalInstallManager::OnExtensionUninstalled(
     content::BrowserContext* browser_context,
     const Extension* extension,
     extensions::UninstallReason reason) {
-  if (base::Contains(errors_, extension->id())) {
+  if (errors_.contains(extension->id())) {
     RemoveExternalInstallError(extension->id());
   }
   unacknowledged_ids_.erase(extension->id());

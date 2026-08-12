@@ -22,6 +22,15 @@ suite('cr-toolbar-search-field', function() {
     field.onSearchTermSearch();
   }
 
+  async function addSlottedChild() {
+    const child = document.createElement('div');
+    child.slot = 'suffixElement';
+    child.textContent = 'Ctrl+Shift+A';
+    field.appendChild(child);
+    await field.updateComplete;
+    return child;
+  }
+
   setup(function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     field = document.createElement('cr-toolbar-search-field');
@@ -257,7 +266,8 @@ suite('cr-toolbar-search-field', function() {
     simulateSearch('a');
     const inputEvent = new InputEvent('input', {data: 'a'});
     const searchTermInputEventPromise =
-        eventToPromise('search-term-native-input', field);
+        eventToPromise<CustomEvent<{e: InputEvent, inputValue: string}>>(
+            'search-term-native-input', field);
     field.$.searchInput.dispatchEvent(inputEvent);
     const searchTermInputEvent = await searchTermInputEventPromise;
     assertEquals(inputEvent, searchTermInputEvent.detail.e);
@@ -267,9 +277,40 @@ suite('cr-toolbar-search-field', function() {
   test('fires a custom event for native beforeinput event', async () => {
     const beforeInputEvent = new InputEvent('beforeinput', {data: 'a'});
     const searchTermBeforeInputEventPromise =
-        eventToPromise('search-term-native-before-input', field);
+        eventToPromise<CustomEvent<{e: InputEvent}>>(
+            'search-term-native-before-input', field);
     field.$.searchInput.dispatchEvent(beforeInputEvent);
     const searchTermBeforeInputEvent = await searchTermBeforeInputEventPromise;
     assertEquals(beforeInputEvent, searchTermBeforeInputEvent.detail.e);
+  });
+
+  test('renders slotted content', async () => {
+    const child = await addSlottedChild();
+
+    const slot = field.shadowRoot.querySelector<HTMLSlotElement>(
+        'slot[name=suffixElement]');
+    assertTrue(!!slot);
+    const assignedNodes = slot.assignedNodes();
+    assertEquals(1, assignedNodes.length);
+    assertEquals(child, assignedNodes[0]);
+  });
+
+  test('hides slotted content when searching for text', async () => {
+    await addSlottedChild();
+
+    // Slot is present when there is no search text.
+    assertTrue(!!field.shadowRoot.querySelector('slot[name=suffixElement]'));
+
+    // Searching for text removes slot and shows clear search button.
+    simulateSearch('query');
+    await field.updateComplete;
+    assertFalse(!!field.shadowRoot.querySelector('slot[name=suffixElement]'));
+    assertTrue(!!field.shadowRoot.querySelector('#clearSearch'));
+
+    // Clearing search text restores slot.
+    field.setValue('');
+    await field.updateComplete;
+    assertTrue(!!field.shadowRoot.querySelector('slot[name=suffixElement]'));
+    assertFalse(!!field.shadowRoot.querySelector('#clearSearch'));
   });
 });

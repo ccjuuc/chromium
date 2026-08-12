@@ -11,11 +11,14 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_login_pref_names.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "ash/public/cpp/login_screen.h"
+#include "base/check.h"
 #include "base/check_deref.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/feature_list.h"
@@ -30,6 +33,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/syslog_logging.h"
 #include "base/system/sys_info.h"
 #include "base/task/thread_pool.h"
 #include "base/timer/timer.h"
@@ -40,7 +44,6 @@
 #include "chrome/browser/ash/certificate_provider/pin_dialog_manager.h"
 #include "chrome/browser/ash/login/error_screens_histogram_helper.h"
 #include "chrome/browser/ash/login/helper.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/profile_auth_data.h"
 #include "chrome/browser/ash/login/reauth_stats.h"
 #include "chrome/browser/ash/login/saml/public_saml_url_fetcher.h"
@@ -49,16 +52,14 @@
 #include "chrome/browser/ash/login/screens/saml_confirm_password_screen.h"
 #include "chrome/browser/ash/login/screens/signin_fatal_error_screen.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
-#include "chrome/browser/ash/login/signin_partition_manager.h"
+#include "chrome/browser/ash/login/signin_partition_manager_factory.h"
 #include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/browser/ash/login/users/chrome_user_manager_util.h"
 #include "chrome/browser/ash/login/wizard_context.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/profiles/signin_profile_handler.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/net/nss_temp_certs_cache_chromeos.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/policy/networking/device_network_configuration_updater_ash.h"
@@ -68,7 +69,6 @@
 #include "chrome/browser/ui/ash/login/login_display_host_webui.h"
 #include "chrome/browser/ui/ash/login/signin_ui.h"
 #include "chrome/browser/ui/ash/login/user_adding_screen.h"
-#include "chrome/browser/ui/webui/ash/login/cookie_waiter.h"
 #include "chrome/browser/ui/webui/ash/login/enrollment_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/error_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/network_state_informer.h"
@@ -81,10 +81,10 @@
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/installer/util/google_update_settings.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
 #include "chromeos/ash/components/login/auth/auth_events_recorder.h"
 #include "chromeos/ash/components/login/auth/challenge_response/cert_utils.h"
 #include "chromeos/ash/components/login/auth/public/challenge_response_key.h"
@@ -94,6 +94,7 @@
 #include "chromeos/ash/components/login/auth/public/user_context.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
+#include "chromeos/ash/services/auth_factor_config/auth_factor_config_utils.h"
 #include "chromeos/components/onc/certificate_scope.h"
 #include "chromeos/components/security_token_pin/constants.h"
 #include "chromeos/components/security_token_pin/error_generator.h"
@@ -152,7 +153,7 @@ bool HasLeadingOrTrailingWhitespaces(const std::string& str) {
 }
 
 std::optional<SyncTrustedVaultKeys> GetSyncTrustedVaultKeysForUserContext(
-    const base::Value::Dict& js_object,
+    const base::DictValue& js_object,
     const GaiaId& gaia_id) {
   SyncTrustedVaultKeys parsed_keys = SyncTrustedVaultKeys::FromJs(js_object);
   if (parsed_keys.gaia_id() != gaia_id) {
@@ -222,7 +223,7 @@ std::string GetChromeType() {
   }
 }
 
-void UpdateAuthParams(base::Value::Dict& params) {
+void UpdateAuthParams(base::DictValue& params) {
   CrosSettings* cros_settings = CrosSettings::Get();
   bool allow_new_user = true;
   cros_settings->GetBoolean(kAccountsPrefAllowNewUser, &allow_new_user);
@@ -253,11 +254,11 @@ chromeos::PinDialogManager* GetLoginScreenPinDialogManager() {
   return certificate_provider_service->pin_dialog_manager();
 }
 
-base::Value::Dict MakeSecurityTokenPinDialogParameters(
+base::DictValue MakeSecurityTokenPinDialogParameters(
     bool enable_user_input,
     chromeos::security_token_pin::ErrorLabel error_label,
     int attempts_left) {
-  base::Value::Dict params;
+  base::DictValue params;
 
   params.Set("enableUserInput", enable_user_input);
   params.Set("hasError",
@@ -355,17 +356,79 @@ bool IsOfflineLoginAllowed() {
 
   return !(is_gaia_reauth_flow && IsDeviceOwnedByChild());
 }
+// Callback for fetching the auth factors configuration
+
+void OnGetAuthFactorsConfiguration(std::unique_ptr<UserContext> user_context,
+                                   std::optional<AuthenticationError> error) {
+  CHECK(user_context);
+  CHECK(user_context->GetRequiresPasswordConfirmation());
+  bool has_online_password = false;
+  bool has_local_password = false;
+  bool has_pin = false;
+  if (error.has_value()) {
+    // Note: In case of error we will continue and treat this user as though
+    // they don't have an online password. In practice the errors happen when
+    // you try to get auth factors for a non existent or already deleted
+    // cryptohome.
+    LOG(WARNING) << "Failed to get auth factors configuration, "
+                 << error->get_cryptohome_error();
+  } else {
+    const auto& config = user_context->GetAuthFactorsConfiguration();
+    auto* password_factor =
+        config.FindFactorByType(cryptohome::AuthFactorType::kPassword);
+    has_online_password =
+        password_factor && auth::IsGaiaPassword(*password_factor);
+    has_local_password =
+        password_factor && auth::IsLocalPassword(*password_factor);
+    has_pin = config.FindFactorByType(cryptohome::AuthFactorType::kPin);
+  }
+  auto* wizard_context = LoginDisplayHost::default_host()->GetWizardContext();
+  bool has_any_knowledge_factor =
+      has_local_password || has_online_password || has_pin;
+
+  // If we are in the `kInitialSetup` flow, we should change it to Reauth as a
+  // user can only have an existing auth factor if they are reauthenticating.
+  // This can happen if the user tries to go through the Add User flow for an
+  // existing user.
+  if (has_any_knowledge_factor &&
+      wizard_context->knowledge_factor_setup.auth_setup_flow ==
+          WizardContext::AuthChangeFlow::kInitialSetup) {
+    SYSLOG(INFO) << "(LOGIN)AuthChangeFlow::kInitialSetup changing to "
+                 << "kReauthentication during SAML";
+    wizard_context->knowledge_factor_setup.auth_setup_flow =
+        WizardContext::AuthChangeFlow::kReauthentication;
+  }
+  // TODO: b/481345917 - Handle cryptohome deleted edge cases.
+
+  // If this is an existing user with an online password, we can confirm the
+  // password now. Otherwise, if it's an initial setup, password confirmation
+  // might still happen later once we know if the user is expected to set a
+  // local factor or not.
+  if (has_online_password) {
+    LoginDisplayHost::default_host()->GetSigninUI()->ShowSamlConfirmPassword(
+        std::move(user_context));
+    return;
+  }
+  LoginDisplayHost::default_host()->CompleteLogin(*user_context);
+}
 
 }  // namespace
 
 GaiaScreenHandler::GaiaScreenHandler(
+    PrefService* local_state,
+    policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
     const scoped_refptr<NetworkStateInformer>& network_state_informer,
     ErrorScreen* error_screen)
     : BaseScreenHandler(kScreenId),
+      browser_policy_connector_ash_(CHECK_DEREF(browser_policy_connector_ash)),
+      shared_url_loader_factory_(std::move(shared_url_loader_factory)),
       network_state_informer_(network_state_informer),
       error_screen_(error_screen),
       histogram_helper_(std::make_unique<ErrorScreensHistogramHelper>(
-          ErrorScreensHistogramHelper::ErrorParentScreen::kSignin)) {
+          ErrorScreensHistogramHelper::ErrorParentScreen::kSignin)),
+      auth_flow_auto_reload_manager_(local_state) {
+  CHECK(shared_url_loader_factory_);
   DCHECK(network_state_informer_.get());
   DCHECK(error_screen_);
   HttpAuthDialog::AddObserver(this);
@@ -391,8 +454,9 @@ void GaiaScreenHandler::LoadGaia(const login::GaiaContext& context) {
 
     if (user && user->using_saml() &&
         user->GetType() == user_manager::UserType::kPublicAccount) {
-      public_saml_url_fetcher_ =
-          std::make_unique<PublicSamlUrlFetcher>(account_id);
+      public_saml_url_fetcher_ = std::make_unique<PublicSamlUrlFetcher>(
+          &browser_policy_connector_ash_.get(), shared_url_loader_factory_,
+          account_id);
       public_saml_url_fetcher_->Fetch(std::move(partition_call));
       return;
     }
@@ -416,7 +480,7 @@ void GaiaScreenHandler::LoadGaiaWithPartition(
   // modification of the cookie header. So manually write the GAPS cookie into
   // the CookieManager.
   login::SigninPartitionManager* signin_partition_manager =
-      login::SigninPartitionManager::Factory::GetForBrowserContext(
+      login::SigninPartitionManagerFactory::GetForBrowserContext(
           Profile::FromWebUI(web_ui()));
 
   login::SetCookieForPartition(context, signin_partition_manager,
@@ -446,7 +510,7 @@ void GaiaScreenHandler::LoadGaiaWithPartitionAndVersionAndConsent(
     const std::string& partition_name,
     const std::string* platform_version,
     const bool* collect_stats_consent) {
-  base::Value::Dict params;
+  base::DictValue params;
 
   params.Set("gaiaId", context.gaia_id.ToString());
   params.Set("readOnlyEmail", true);
@@ -742,7 +806,7 @@ void GaiaScreenHandler::HandleWebviewLoadAborted(int error_code) {
   }
   if (error_code == net::ERR_INVALID_AUTH_CREDENTIALS) {
     // Silently ignore this error - it is used as an intermediate state for
-    // committed interstitials (see https://crbug.com/1049349 for details).
+    // committed interstitials (see https://crbug.com/40672487 for details).
     return;
   }
   if (error_code == net::ERR_ABORTED) {
@@ -774,12 +838,12 @@ void GaiaScreenHandler::HandleCompleteAuthenticationEvent(
     const std::string& gaia_id,
     const std::string& email,
     const std::string& password_value,
-    const base::Value::List& scraped_saml_passwords_value,
+    const base::ListValue& scraped_saml_passwords_value,
     bool using_saml,
-    const base::Value::List& services_list,
+    const base::ListValue& services_list,
     bool services_provided,
-    const base::Value::Dict& password_attributes,
-    const base::Value::Dict& sync_trusted_vault_keys) {
+    const base::DictValue& password_attributes,
+    const base::DictValue& sync_trusted_vault_keys) {
   absl::Cleanup run_callback_on_return = [this] {
     auth_flow_auto_reload_manager_.Terminate();
   };
@@ -838,7 +902,7 @@ void GaiaScreenHandler::HandleCompleteAuthenticationEvent(
 
   // Retrieve cookies and continue with authentication
   login::SigninPartitionManager* signin_partition_manager =
-      login::SigninPartitionManager::Factory::GetForBrowserContext(
+      login::SigninPartitionManagerFactory::GetForBrowserContext(
           Profile::FromWebUI(web_ui()));
   gaia_cookie_retriever_ = std::make_unique<GaiaCookieRetriever>(
       signin_partition_name_, signin_partition_manager,
@@ -975,8 +1039,29 @@ void GaiaScreenHandler::CompleteAuthentication(
     auto scraped_saml_passwords =
         signin_artifacts.scraped_saml_passwords.value_or(::login::StringList{});
     CHECK_NE(scraped_saml_passwords.size(), 1u);
-    LoginDisplayHost::default_host()->GetSigninUI()->SAMLConfirmPassword(
-        std::move(scraped_saml_passwords), std::move(user_context));
+    if (features::IsManagedLocalPinAndPasswordEnabled()) {
+      user_context->SetScrapedSamlPasswords(std::move(scraped_saml_passwords));
+      user_context->SetRequiresPasswordConfirmation(true);
+      // For device ephemeral users, immediately show the saml confirm password
+      // screen if it is required.
+      if (user_manager::UserManager::Get()->IsUserNonCryptohomeDataEphemeral(
+              user_context->GetAccountId())) {
+        LoginDisplayHost::default_host()
+            ->GetSigninUI()
+            ->ShowSamlConfirmPassword(std::move(user_context));
+      } else {
+        if (!auth_factor_editor_) {
+          auth_factor_editor_ =
+              std::make_unique<AuthFactorEditor>(UserDataAuthClient::Get());
+        }
+        auth_factor_editor_->GetAuthFactorsConfiguration(
+            std::move(user_context),
+            base::BindOnce(&OnGetAuthFactorsConfiguration));
+      }
+    } else {
+      LoginDisplayHost::default_host()->GetSigninUI()->SAMLConfirmPassword(
+          std::move(scraped_saml_passwords), std::move(user_context));
+    }
   } else {
     LoginDisplayHost::default_host()->CompleteLogin(*user_context);
   }
@@ -1024,19 +1109,20 @@ void GaiaScreenHandler::HandleRecordSAMLProvider(
 
 void GaiaScreenHandler::HandleSamlChallengeMachineKey(
     const std::string& callback_id,
-    const std::string& url,
+    const std::string& source_url,
+    const std::string& destination_url,
     const std::string& challenge) {
   CreateSamlChallengeKeyHandler();
   saml_challenge_key_handler_->Run(
       Profile::FromWebUI(web_ui()),
       base::BindOnce(&GaiaScreenHandler::HandleSamlChallengeMachineKeyResult,
                      weak_factory_.GetWeakPtr(), base::Value(callback_id)),
-      GURL(url), challenge);
+      GURL(source_url), GURL(destination_url), challenge);
 }
 
 void GaiaScreenHandler::HandleSamlChallengeMachineKeyResult(
     base::Value callback_id,
-    base::Value::Dict result) {
+    base::DictValue result) {
   ResolveJavascriptCallback(callback_id, result);
 }
 
@@ -1058,7 +1144,8 @@ void GaiaScreenHandler::HandleGaiaUIReady() {
   if (LoginDisplayHost::default_host()) {
     LoginDisplayHost::default_host()->OnGaiaScreenReady();
   } else {
-    // Used to debug crbug.com/902315. Feel free to remove after that is fixed.
+    // Used to debug crbug.com/41424664. Feel free to remove after that is
+    // fixed.
     LOG(ERROR) << "HandleGaiaUIReady: There is no LoginDisplayHost";
   }
 }
@@ -1111,7 +1198,7 @@ void GaiaScreenHandler::HandleSecurityTokenPinEntered(
 }
 
 void GaiaScreenHandler::HandleOnFatalError(int error_code,
-                                           const base::Value::Dict& params) {
+                                           const base::DictValue& params) {
   if (!LoginDisplayHost::default_host()) {
     return;
   }
@@ -1197,7 +1284,8 @@ void GaiaScreenHandler::StartClearingCookies(
     base::OnceClosure on_clear_callback) {
   cookies_cleared_ = false;
   LOG_ASSERT(Profile::FromWebUI(web_ui()) ==
-             ProfileHelper::Get()->GetSigninProfile());
+             Profile::FromBrowserContext(
+                 BrowserContextHelper::Get()->GetSigninBrowserContext()));
   SigninProfileHandler::Get()->ClearSigninProfile(
       base::BindOnce(&GaiaScreenHandler::OnCookiesCleared,
                      weak_factory_.GetWeakPtr(), std::move(on_clear_callback)));
@@ -1267,7 +1355,7 @@ void GaiaScreenHandler::Show() {
   // Start listening for HTTP login requests.
   enable_system_httpauth_ = HttpAuthDialog::Enable();
 
-  base::Value::Dict data;
+  base::DictValue data;
   if (LoginDisplayHost::default_host()) {
     data.Set("hasUserPods", LoginDisplayHost::default_host()->HasUserPods());
   }
@@ -1284,16 +1372,19 @@ void GaiaScreenHandler::Hide() {
 }
 
 void GaiaScreenHandler::LoadGaiaAsync(const AccountId& account_id) {
+  // TODO(crbug.com/489929275): Avoid using g_browser_process.
+  PrefService& local_state = CHECK_DEREF(g_browser_process->local_state());
+
   // TODO(https://crbug.com/1317991): Investigate why the call is making Gaia
   // loading slowly.
   // CallExternalAPI("onBeforeLoad");
   populated_account_id_ = account_id;
-
   login_request_variant_ = GaiaLoginVariant::kUnknown;
   if (account_id.is_valid()) {
     login_request_variant_ = GaiaLoginVariant::kOnlineSignin;
   } else {
-    if (StartupUtils::IsOobeCompleted() && StartupUtils::IsDeviceOwned()) {
+    if (StartupUtils::IsOobeCompleted(local_state) &&
+        StartupUtils::IsDeviceOwned()) {
       login_request_variant_ = GaiaLoginVariant::kAddUser;
     } else {
       login_request_variant_ = GaiaLoginVariant::kOobe;
@@ -1437,7 +1528,7 @@ void GaiaScreenHandler::ShowGaiaScreenIfReady() {
 
   // TODO(crbug.com/1105387): Part of initial screen logic.
   PrefService* prefs = g_browser_process->local_state();
-  if (prefs->GetBoolean(::prefs::kFactoryResetRequested)) {
+  if (prefs->GetBoolean(ash::prefs::kFactoryResetRequested)) {
     DCHECK(LoginDisplayHost::default_host());
     LoginDisplayHost::default_host()->StartWizard(ResetView::kScreenId);
   }

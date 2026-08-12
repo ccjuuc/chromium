@@ -7,17 +7,17 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
-#include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/views/chrome_widget_sublevel.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
-#include "chrome/browser/ui/web_applications/app_browser_controller.h"
+#include "chrome/browser/ui/views/sub_apps_permission_explanation.h"
+#include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/permission_request.h"
 #include "components/permissions/permission_uma_util.h"
 #include "components/permissions/permission_util.h"
@@ -47,7 +47,7 @@ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PermissionPromptBubbleBaseView,
                                       kAllowOnceButtonElementId);
 
 namespace {
-std::string GetPermissionActionString(
+std::string_view GetPermissionActionString(
     PermissionPromptBubbleBaseView::PermissionDialogButton button) {
   switch (button) {
     case PermissionPromptBubbleBaseView::PermissionDialogButton::kAccept:
@@ -63,10 +63,10 @@ std::string GetPermissionActionString(
 }  // namespace
 
 PermissionPromptBubbleBaseView::PermissionPromptBubbleBaseView(
-    Browser* browser,
+    content::WebContents* web_contents,
     base::WeakPtr<permissions::PermissionPrompt::Delegate> delegate,
     PermissionPromptStyle prompt_style)
-    : PermissionPromptBaseView(browser, delegate),
+    : PermissionPromptBaseView(web_contents, delegate),
       delegate_(delegate),
       is_one_time_permission_(IsOneTimePermission(*delegate.get())) {
   // Note that browser() may be null in unit tests.
@@ -88,6 +88,24 @@ PermissionPromptBubbleBaseView::~PermissionPromptBubbleBaseView() = default;
 void PermissionPromptBubbleBaseView::CreatePermissionButtons(
     const std::u16string& allow_always_text,
     const std::u16string& block_text) {
+  if (delegate_) {
+    if (std::optional<std::u16string> explanation =
+            GetSubAppsPermissionExplanation(
+                delegate_->GetAssociatedWebContents())) {
+      auto custom_label = std::make_unique<views::Label>(
+          *explanation, views::style::CONTEXT_DIALOG_BODY_TEXT,
+          views::style::STYLE_BODY_4);
+      custom_label->SetMultiLine(true);
+      custom_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+      custom_label->SetProperty(
+          views::kMarginsKey,
+          gfx::Insets::VH(views::LayoutProvider::Get()->GetDistanceMetric(
+                              views::DISTANCE_RELATED_CONTROL_VERTICAL),
+                          0));
+      AddChildView(std::move(custom_label));
+    }
+  }
+
   if (is_one_time_permission_) {
     SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
 
@@ -183,7 +201,7 @@ void PermissionPromptBubbleBaseView::Show() {
 }
 
 void PermissionPromptBubbleBaseView::CreateWidget() {
-  CHECK(browser()->window());
+  CHECK(GetNativeWindow());
 
   UpdateAnchorPosition();
 
@@ -200,9 +218,13 @@ void PermissionPromptBubbleBaseView::CreateWidget() {
 }
 
 void PermissionPromptBubbleBaseView::ShowWidget() {
-  // If a browser window (or popup) other than the bubble parent has focus,
+  // If a host window (or popup) other than the bubble parent has focus,
   // don't take focus.
-  if (browser()->window()->IsActive()) {
+  views::Widget* host_widget =
+      GetNativeWindow()
+          ? views::Widget::GetWidgetForNativeWindow(GetNativeWindow())
+          : nullptr;
+  if (host_widget && host_widget->ShouldPaintAsActive()) {
     GetWidget()->Show();
   } else {
     GetWidget()->ShowInactive();
@@ -239,8 +261,8 @@ void PermissionPromptBubbleBaseView::ClosingPermission() {
 
   if (delegate_) {
     permissions::PermissionUmaUtil::RecordActionBrowserAlwaysActive(
-        request_type(), "Dismissed", record_browser_always_active_value());
-    delegate_->Dismiss();
+        request_type(), "Dismissed", record_host_always_active_value());
+    delegate_->Dismiss(/*prompt_options=*/std::monostate());
   }
 }
 
@@ -248,8 +270,13 @@ void PermissionPromptBubbleBaseView::RunButtonCallback(int button_id) {
   PermissionDialogButton button = GetPermissionDialogButton(button_id);
   permissions::PermissionUmaUtil::RecordActionBrowserAlwaysActive(
       request_type(), GetPermissionActionString(button),
-      record_browser_always_active_value());
-  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+      record_host_always_active_value());
+  // `GetBrowser()` can be null for hosts that are not backed by a Browser, such
+  // as a standalone Document Picture-in-Picture window. Guard against it since
+  // `GetBrowserViewForBrowser()` dereferences its argument.
+  auto* browser = GetBrowser();
+  BrowserView* browser_view =
+      browser ? BrowserView::GetBrowserViewForBrowser(browser) : nullptr;
 #if BUILDFLAG(IS_CHROMEOS)
   // `PERMISSION_SMART_CARD` is essentially a chooser permission without an
   // actual chooser - thus, there is no blocklist of devices and no real
@@ -258,15 +285,13 @@ void PermissionPromptBubbleBaseView::RunButtonCallback(int button_id) {
   const bool is_deny_supported =
       request_type() != permissions::RequestTypeForUma::PERMISSION_SMART_CARD;
 #endif  // BUILDFLAG(IS_CHROMEOS)
-  if (browser_view && browser_view->GetLocationBarView()->GetChipController() &&
-      browser_view->GetLocationBarView()
+  if (browser_view && browser_view->GetLocationBar()->GetChipController() &&
+      browser_view->GetLocationBar()
           ->GetChipController()
           ->IsPermissionPromptChipVisible() &&
-      browser_view->GetLocationBarView()
-          ->GetChipController()
-          ->IsBubbleShowing()) {
+      browser_view->GetLocationBar()->GetChipController()->IsBubbleShowing()) {
     ChipController* chip_controller =
-        browser_view->GetLocationBarView()->GetChipController();
+        browser_view->GetLocationBar()->GetChipController();
     switch (button) {
       case PermissionDialogButton::kAccept:
         chip_controller->PromptDecided(permissions::PermissionAction::GRANTED);
@@ -290,18 +315,27 @@ void PermissionPromptBubbleBaseView::RunButtonCallback(int button_id) {
     }
   }
 
+  // Approximate location is not implemented on desktop yet.
+  //
+  // TODO(crbug.com/465377568): Pass the appropriate PromptOptions below once we
+  // implement it.
+  CHECK_NE(delegate_->Requests().front()->GetContentSettingsType(),
+           ContentSettingsType::GEOLOCATION_WITH_OPTIONS);
+
   switch (button) {
     case PermissionDialogButton::kAccept:
-      delegate_->Accept();
+      delegate_->Accept(/*prompt_options=*/std::monostate());
       return;
     case PermissionDialogButton::kAcceptOnce:
-      delegate_->AcceptThisTime();
+      delegate_->AcceptThisTime(/*prompt_options=*/std::monostate());
       return;
     case PermissionDialogButton::kDeny:
 #if BUILDFLAG(IS_CHROMEOS)
-      is_deny_supported ? delegate_->Deny() : delegate_->Dismiss();
+      is_deny_supported
+          ? delegate_->Deny(/*prompt_options=*/std::monostate())
+          : delegate_->Dismiss(/*prompt_options=*/std::monostate());
 #else
-      delegate_->Deny();
+      delegate_->Deny(/*prompt_options=*/std::monostate());
 #endif  // BUILDFLAG(IS_CHROMEOS)
       return;
   }

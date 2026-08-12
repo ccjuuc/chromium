@@ -10,13 +10,13 @@
 
 #include "partition_alloc/build_config.h"
 #include "partition_alloc/in_slot_metadata.h"
+#include "partition_alloc/internal/partition_page_internal.h"
+#include "partition_alloc/internal/partition_root_internal.h"
 #include "partition_alloc/page_allocator_constants.h"
 #include "partition_alloc/partition_alloc_base/no_destructor.h"
 #include "partition_alloc/partition_alloc_check.h"
 #include "partition_alloc/partition_bucket.h"
 #include "partition_alloc/partition_lock.h"
-#include "partition_alloc/partition_page.h"
-#include "partition_alloc/partition_root.h"
 
 namespace partition_alloc {
 
@@ -48,7 +48,7 @@ void* GwpAsanSupport::MapRegion(size_t slot_count,
   const size_t kSlotSize = 2 * internal::SystemPageSize();
   uint16_t bucket_index = PartitionRoot::SizeToBucketIndex(
       kSlotSize, root->GetBucketDistribution());
-  auto* bucket = PA_UNSAFE_TODO(root->buckets + bucket_index);
+  auto* bucket = PA_UNSAFE_TODO(root->buckets_ + bucket_index);
 
   const size_t kSuperPagePayloadStartOffset =
       internal::SuperPagePayloadStartOffset();
@@ -65,7 +65,7 @@ void* GwpAsanSupport::MapRegion(size_t slot_count,
 
   size_t super_page_count = 1 + ((slot_count - 1) / kSlotsPerSuperPage);
   PA_CHECK(super_page_count <=
-           std::numeric_limits<size_t>::max() / kSuperPageSize);
+           std::numeric_limits<size_t>::max() / internal::kSuperPageSize);
   uintptr_t super_page_span_start;
   {
     internal::ScopedGuard locker{internal::PartitionRootLock(root)};
@@ -86,11 +86,12 @@ void* GwpAsanSupport::MapRegion(size_t slot_count,
 #endif  // PA_BUILDFLAG(PA_ARCH_CPU_64_BITS)
 
     uintptr_t super_page_span_end =
-        super_page_span_start + super_page_count * kSuperPageSize;
+        super_page_span_start + super_page_count * internal::kSuperPageSize;
     PA_CHECK(super_page_span_start < super_page_span_end);
 
     for (uintptr_t super_page = super_page_span_start;
-         super_page < super_page_span_end; super_page += kSuperPageSize) {
+         super_page < super_page_span_end;
+         super_page += internal::kSuperPageSize) {
       auto* page_metadata =
           internal::PartitionSuperPageToMetadataArea(super_page, root);
 

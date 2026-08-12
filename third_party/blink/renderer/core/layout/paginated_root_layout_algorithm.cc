@@ -61,7 +61,7 @@ const LayoutResult* PaginatedRootLayoutAlgorithm::Layout() {
                             counters_context.DeepClone(), page_area_params);
     // Lay out one page. Each page will become a fragment.
 
-    if (page_name != result.fragment->PageName()) {
+    if (page_name != result.fragment->PropagatedPageName()) {
       // The page name changed. This may mean that the page size has changed as
       // well. We need to re-match styles and try again.
       //
@@ -73,10 +73,10 @@ const LayoutResult* PaginatedRootLayoutAlgorithm::Layout() {
       // in all cases where named pages are involved, rather than having two
       // separate mechanisms. We could revisit this approach if it turns out to
       // be a performance problem (although that seems very unlikely).
-      page_name = result.fragment->PageName();
+      page_name = result.fragment->PropagatedPageName();
       result = LayoutPageContainer(page_index, total_page_count, page_name,
                                    counters_context, page_area_params);
-      DCHECK_EQ(page_name, result.fragment->PageName());
+      DCHECK_EQ(page_name, result.fragment->PropagatedPageName());
     }
 
     // Each page container establishes its own coordinate system, without any
@@ -136,12 +136,12 @@ const LayoutResult* PaginatedRootLayoutAlgorithm::Layout() {
           *To<PhysicalBoxFragment>(old_container.fragment.Get());
 
       // At least this time we know the page name up-front.
-      const AtomicString& name = old_fragment.PageName();
+      const AtomicString& name = old_fragment.PropagatedPageName();
 
       PageContainerResult result = LayoutPageContainer(
           page_index, total_page_count, name, counters_context,
           page_area_params, &old_fragment);
-      DCHECK_EQ(result.fragment->PageName(), name);
+      DCHECK_EQ(result.fragment->PropagatedPageName(), name);
 
       // We went on this mission for one reason only: to provide the total page
       // count. So the algorithm should have its needs satisfied this time.
@@ -180,7 +180,7 @@ const PhysicalBoxFragment& PaginatedRootLayoutAlgorithm::CreateEmptyPage(
   // keep track of whether someone needs to know the total.
   PageContainerResult result = LayoutPageContainer(
       node, parent_space, page_index, /*total_page_count=*/0,
-      previous_fragmentainer.PageName(), dummy_counters_context,
+      previous_fragmentainer.PropagatedPageName(), dummy_counters_context,
       page_area_params);
   *needs_total_page_count = result.needs_total_page_count;
   return *result.fragment;
@@ -228,12 +228,18 @@ PaginatedRootLayoutAlgorithm::LayoutPageContainer(
   BoxStrut margins;
   LogicalSize page_containing_block_size =
       DesiredPageContainingBlockSize(document, *page_container_style);
-  ResolvePageBoxGeometry(page_container_node, page_containing_block_size,
-                         &geometry, &margins);
+
+  ResolvePageContainerGeometry(page_container_node, page_containing_block_size,
+                               &geometry, &margins);
 
   // Check if the resulting page area size is usable.
+  FragmentGeometry page_border_box_geometry;
+  ResolvePageBorderBoxGeometry(page_container_node, page_containing_block_size,
+                               CalculateSafePrintableInset(document),
+                               &page_border_box_geometry);
   LogicalSize desired_page_area_size =
-      geometry.border_box_size - geometry.border - geometry.padding;
+      page_border_box_geometry.border_box_size -
+      page_border_box_geometry.border - page_border_box_geometry.padding;
   bool ignore_author_page_style = false;
   if (desired_page_area_size.inline_size < LayoutUnit(1) ||
       desired_page_area_size.block_size < LayoutUnit(1)) {
@@ -248,8 +254,8 @@ PaginatedRootLayoutAlgorithm::LayoutPageContainer(
                              LayoutObject::ApplyStyleChanges::kNo);
     page_containing_block_size =
         DesiredPageContainingBlockSize(document, *page_container_style);
-    ResolvePageBoxGeometry(page_container_node, page_containing_block_size,
-                           &geometry, &margins);
+    ResolvePageContainerGeometry(
+        page_container_node, page_containing_block_size, &geometry, &margins);
   }
 
   // Convert from border box size to margin box size, and use that to calculate
@@ -272,7 +278,7 @@ PaginatedRootLayoutAlgorithm::LayoutPageContainer(
                                               page_container_size};
 
   LayoutAlgorithmParams params(page_container_node, margin_box_geometry,
-                               child_space, /*break_token=*/nullptr);
+                               child_space);
   PageContainerLayoutAlgorithm child_algorithm(
       params, page_index, total_page_count, page_name, root_node,
       counters_context, page_area_params, ignore_author_page_style,

@@ -9,17 +9,18 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import android.graphics.Bitmap;
 
 import androidx.annotation.ColorInt;
-import androidx.annotation.Nullable;
 import androidx.annotation.Px;
 
 import org.chromium.base.Callback;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.data_sharing.DataSharingUIDelegate;
 import org.chromium.components.data_sharing.configs.DataSharingAvatarBitmapConfig;
 import org.chromium.components.data_sharing.configs.DataSharingCreateUiConfig;
 import org.chromium.components.data_sharing.configs.DataSharingJoinUiConfig;
 import org.chromium.components.data_sharing.configs.DataSharingManageUiConfig;
 import org.chromium.components.data_sharing.configs.DataSharingRuntimeDataConfig;
+import org.chromium.components.sync.protocol.GroupData;
 import org.chromium.google_apis.gaia.GaiaId;
 import org.chromium.ui.UiUtils;
 import org.chromium.url.GURL;
@@ -111,8 +112,8 @@ public class FakeDataSharingUIDelegateImpl implements DataSharingUIDelegate {
 
     /* Creates group data and calls onGroupCreatedWithWait when showCreateFlow() is called. */
     public void forceGroupCreation(String collaborationId, String accessToken) {
-        org.chromium.components.sync.protocol.GroupData groupData =
-                org.chromium.components.sync.protocol.GroupData.newBuilder()
+        GroupData groupData =
+                GroupData.newBuilder()
                         .setGroupId(collaborationId)
                         .setAccessToken(accessToken)
                         .build();
@@ -135,5 +136,16 @@ public class FakeDataSharingUIDelegateImpl implements DataSharingUIDelegate {
     /** Avatar bitmap will the given color for the given user. */
     public void overrideAvatarColor(GaiaId gaiaId, @ColorInt int color) {
         mGaiaIdToAvatarColor.put(gaiaId, color);
+    }
+
+    /** Resets all configs and callbacks to prevent memory leaks. */
+    public void resetForTesting() {
+        mCreateUiConfig = null;
+        mJoinUiConfig = null;
+        mManageUiConfig = null;
+        mShowCreateFlowCallback = null;
+        mShowJoinFlowCallback = null;
+        mShowManageFlowCallback = null;
+        mGaiaIdToAvatarColor.clear();
     }
 }

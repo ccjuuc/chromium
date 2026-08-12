@@ -16,6 +16,7 @@
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
 
@@ -25,7 +26,7 @@ class HTMLIFrameElementTest : public testing::Test {
  public:
   scoped_refptr<const SecurityOrigin> GetOriginForPermissionsPolicy(
       HTMLIFrameElement* element) {
-    return element->GetOriginForPermissionsPolicy();
+    return element->MakeOriginForPermissionsPolicy();
   }
 
   void SetUp() final {
@@ -319,7 +320,7 @@ TEST_F(HTMLIFrameElementSimTest, PolicyAttributeParsingError) {
   EXPECT_EQ(ConsoleMessages().size(), 2u);
   for (const auto& message : ConsoleMessages()) {
     EXPECT_TRUE(
-        message.StartsWith("Unrecognized document policy feature name"));
+        message.starts_with("Unrecognized document policy feature name"));
   }
 }
 
@@ -338,7 +339,7 @@ TEST_F(HTMLIFrameElementSimTest, AllowAttributeParsingError) {
       << "Allow attribute parsing should only generate console message once, "
          "even though there might be multiple call to "
          "PermissionsPolicyParser::ParseAttribute.";
-  EXPECT_TRUE(ConsoleMessages().front().StartsWith("Unrecognized feature"))
+  EXPECT_TRUE(ConsoleMessages().front().starts_with("Unrecognized feature"))
       << "Expect permissions policy parser raising error for unrecognized "
          "feature but got: "
       << ConsoleMessages().front();
@@ -362,43 +363,36 @@ TEST_F(HTMLIFrameElementSimTest, Adauctionheaders_InsecureContext_NotAllowed) {
   )");
 
   EXPECT_EQ(ConsoleMessages().size(), 1u);
-  EXPECT_TRUE(ConsoleMessages().front().StartsWith(
+  EXPECT_TRUE(ConsoleMessages().front().starts_with(
       "adAuctionHeaders: Protected Audience APIs "
       "are only available in secure contexts."))
       << "Unexpected error; got: " << ConsoleMessages().front();
 }
 
-TEST_F(HTMLIFrameElementSimTest, Sharedstoragewritable_SecureContext_Allowed) {
-  WebRuntimeFeaturesBase::EnableSharedStorageAPI(true);
+
+TEST_F(HTMLIFrameElementSimTest, SetTrackedElement) {
+  ScopedAIPageContentTrackedElementsIframeForTest scoped_feature(true);
   SimRequest main_resource("https://example.com", "text/html");
   LoadURL("https://example.com");
   main_resource.Complete(R"(
-    <iframe
-      allow="shared-storage"
-      sharedstoragewritable></iframe>
+    <iframe id="my-iframe" src="https://iframe.com"></iframe>
   )");
 
-  EXPECT_TRUE(ConsoleMessages().empty());
-}
+  auto* iframe = To<HTMLIFrameElement>(
+      GetDocument().getElementById(AtomicString("my-iframe")));
 
-TEST_F(HTMLIFrameElementSimTest,
-       Sharedstoragewritable_InsecureContext_NotAllowed) {
-  WebRuntimeFeaturesBase::EnableSharedStorageAPI(true);
-  SimRequest main_resource("http://example.com", "text/html");
-  LoadURL("http://example.com");
-  main_resource.Complete(R"(
-    <iframe
-      allow="shared-storage"
-      sharedstoragewritable></iframe>
-  )");
+  viz::TrackedElementFeature tracking_feature =
+      viz::TrackedElementFeature::kIframeTracking;
+  const auto* tracked_rect = iframe->GetTrackedElementSubRect(tracking_feature);
 
-  EXPECT_EQ(ConsoleMessages().size(), 1u);
-  EXPECT_TRUE(ConsoleMessages().front().StartsWith(
-      "sharedStorageWritable: sharedStorage operations are only available in "
-      "secure contexts."))
-      << "Expect error that Shared Storage operations are not allowed in "
-         "insecure contexts but got: "
-      << ConsoleMessages().front();
+  ASSERT_TRUE(tracked_rect);
+  EXPECT_TRUE(tracked_rect->should_add_to_compositor_frame_metadata);
+  EXPECT_EQ(tracked_rect->frame_token, iframe->ContentFrame()->GetFrameToken());
+  EXPECT_EQ(tracked_rect->parent_frame_token,
+            iframe->GetDocument().GetFrame()->GetLocalFrameToken());
+
+  iframe->remove();
+  EXPECT_FALSE(iframe->GetTrackedElementSubRect(tracking_feature));
 }
 
 }  // namespace blink

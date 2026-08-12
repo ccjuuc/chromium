@@ -36,6 +36,8 @@ const CGFloat kMostVisitedBottomMargin = 13;
 
 const CGFloat kMagicStackFaviconWidth = 28;
 
+const NSUInteger kContentSuggestionsMostVisitedTilesMax = 8;
+
 ContentSuggestionsModuleType SetUpListModuleTypeForSetUpListType(
     SetUpListItemType type) {
   switch (type) {
@@ -73,6 +75,7 @@ bool IsTipsModuleType(ContentSuggestionsModuleType type) {
     case ContentSuggestionsModuleType::kPriceTrackingPromo:
     case ContentSuggestionsModuleType::kSendTabPromo:
     case ContentSuggestionsModuleType::kShopCard:
+    case ContentSuggestionsModuleType::kLevelUp:
       return false;
   }
 }

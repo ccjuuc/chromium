@@ -57,12 +57,12 @@ class MIDIPort : public EventTarget,
   ~MIDIPort() override = default;
 
   V8MIDIPortConnectionState connection() const;
-  String id() const { return id_; }
-  String manufacturer() const { return manufacturer_; }
-  String name() const { return name_; }
+  const String& id() const { return id_; }
+  const String& manufacturer() const { return manufacturer_; }
+  const String& name() const { return name_; }
   V8MIDIPortDeviceState state() const;
   V8MIDIPortType type() const;
-  String version() const { return version_; }
+  const String& version() const { return version_; }
 
   ScriptPromise<MIDIPort> open(ScriptState*);
   ScriptPromise<MIDIPort> close(ScriptState*);
@@ -97,7 +97,7 @@ class MIDIPort : public EventTarget,
            midi::mojom::PortState);
 
   void open();
-  bool IsOpening() { return running_open_count_; }
+  bool IsOpening() const { return running_open_count_; }
   MIDIAccess* midiAccess() const { return access_.Get(); }
 
  private:
@@ -116,7 +116,7 @@ class MIDIPort : public EventTarget,
   String version_;
   Member<MIDIAccess> access_;
   midi::mojom::PortState state_;
-  MIDIPortConnectionState connection_;
+  MIDIPortConnectionState connection_ = MIDIPortConnectionState::kClosed;
   unsigned running_open_count_ = 0;
 };
 

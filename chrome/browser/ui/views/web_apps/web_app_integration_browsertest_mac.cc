@@ -43,7 +43,7 @@ IN_PROC_BROWSER_TEST_F(WebAppIntegration,
   // the profile the app is installed in.
   profiles::SetLastUsedProfile(base::FilePath("Default"));
   EXPECT_EQ(g_browser_process->profile_manager()->GetLastUsedProfile(),
-            browser()->profile());
+            browser()->GetProfile());
 
   helper_.LaunchFromAppShimFallback(Site::kStandalone);
   helper_.CheckWindowCreated();
@@ -125,6 +125,7 @@ IN_PROC_BROWSER_TEST_F(
   helper_.CheckAppInListWindowed(Site::kNotPromotable);
   helper_.CheckPlatformShortcutAndIcon(Site::kNotPromotable);
   helper_.LaunchFromPlatformShortcut(Site::kNotPromotable);
+  helper_.CheckAppTitle(Site::kNotPromotable, Title::kNotPromotableOriginal);
   helper_.CheckWindowNotCreated();
 }
 

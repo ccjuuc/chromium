@@ -8,7 +8,6 @@
 #include <cmath>
 #include <optional>
 
-#include "base/check_op.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/cstring_view.h"
@@ -28,7 +27,7 @@
 #include "ui/color/color_provider.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/insets_f.h"
-#include "ui/gfx/geometry/outsets.h"
+#include "ui/gfx/geometry/outsets_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/rrect_f.h"
@@ -37,6 +36,9 @@
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/geometry/vector2d_f.h"
 #include "ui/native_theme/features/native_theme_features.h"
+#include "ui/native_theme/native_theme.h"
+#include "ui/native_theme/native_theme_base.h"
+#include "ui/native_theme/os_settings_provider.h"
 
 namespace ui {
 
@@ -64,7 +66,9 @@ void NativeThemeFluent::SetArrowIconsAvailableForTesting(bool available) {
 }
 
 NativeThemeFluent::NativeThemeFluent() {
-  set_use_overlay_scrollbar(IsFluentOverlayScrollbarEnabled());
+  set_use_overlay_scrollbar(
+      IsFluentOverlayScrollbarEnabled() &&
+      OsSettingsProvider::Get().PrefersOverlayScrollbars());
 }
 
 NativeThemeFluent::~NativeThemeFluent() = default;
@@ -132,6 +136,20 @@ std::optional<ColorId> NativeThemeFluent::GetScrollbarThumbColorId(
 float NativeThemeFluent::GetScrollbarPartContrastRatioForState(
     State state) const {
   return 1.8f;
+}
+
+SkColor NativeThemeFluent::GetScrollbarArrowBackgroundColor(
+    const ScrollbarArrowExtraParams& extra_params,
+    State state,
+    bool dark_mode,
+    PreferredContrast contrast,
+    const ColorProvider* color_provider) const {
+  static constexpr auto kScrollbarArrowBackgroundColors = std::to_array(
+      {kScrollbarArrowBackgroundDisabled, kScrollbarArrowBackgroundHovered,
+       kScrollbarArrowBackground, kScrollbarArrowBackgroundPressed});
+  return extra_params.track_color.value_or(
+      GetControlColorForState(kScrollbarArrowBackgroundColors, state, dark_mode,
+                              contrast, color_provider));
 }
 
 void NativeThemeFluent::PaintArrowButton(

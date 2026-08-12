@@ -15,24 +15,17 @@ import {loadTimeData} from '//resources/js/load_time_data.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 
-import {BrowserProxyImpl} from './browser_proxy.js';
 import {getCss} from './cluster.css.js';
 import {getHtml} from './cluster.html.js';
 import type {Cluster, SearchQuery, URLVisit} from './history_cluster_types.mojom-webui.js';
+import {browserProxyFactory, ClusterAction, VisitAction} from './history_clusters.mojom-webui.js';
 import type {PageCallbackRouter} from './history_clusters.mojom-webui.js';
-import {ClusterAction, VisitAction} from './history_clusters.mojom-webui.js';
 import {MetricsProxyImpl} from './metrics_proxy.js';
 import {insertHighlightedTextWithMatchesIntoElement} from './utils.js';
 
 /**
  * @fileoverview This file provides a custom element displaying a cluster.
  */
-
-declare global {
-  interface HTMLElementTagNameMap {
-    'history-cluster': ClusterElement;
-  }
-}
 
 const ClusterElementBase = I18nMixinLit(CrLitElement);
 
@@ -126,7 +119,7 @@ export class ClusterElement extends ClusterElementBase {
 
   constructor() {
     super();
-    this.callbackRouter_ = BrowserProxyImpl.getInstance().callbackRouter;
+    this.callbackRouter_ = browserProxyFactory.getInstance().callbackRouter;
   }
 
   override connectedCallback() {
@@ -157,7 +150,7 @@ export class ClusterElement extends ClusterElementBase {
     if (changedProperties.has('cluster')) {
       assert(this.cluster);
       this.label_ = this.cluster.label ? this.cluster.label : 'no_label';
-      this.imageUrl_ = this.cluster.imageUrl ? this.cluster.imageUrl.url : '';
+      this.imageUrl_ = this.cluster.imageUrl ? this.cluster.imageUrl : '';
       this.relatedSearches_ = this.cluster.relatedSearches.filter(
           (query: SearchQuery, index: number) => {
             return query && !(this.inSidePanel && index > 2);
@@ -202,7 +195,7 @@ export class ClusterElement extends ClusterElementBase {
 
   /* Clears selection on non alt mouse clicks. Need to wait for browser to
    *  update the DOM fully. */
-  protected clearSelection_(event: MouseEvent) {
+  protected onHorizontalCarouselPointerdown_(event: MouseEvent) {
     this.onBrowserIdle_().then(() => {
       if (window.getSelection() && !event.altKey) {
         window.getSelection()?.empty();
@@ -227,7 +220,7 @@ export class ClusterElement extends ClusterElementBase {
 
   protected onOpenAllVisits_() {
     assert(this.cluster);
-    BrowserProxyImpl.getInstance().handler.openVisitUrlsInTabGroup(
+    browserProxyFactory.getInstance().handler.openVisitUrlsInTabGroup(
         this.cluster.visits, this.cluster.tabGroupName ?? null);
 
     MetricsProxyImpl.getInstance().recordClusterAction(
@@ -288,7 +281,7 @@ export class ClusterElement extends ClusterElementBase {
     assert(this.cluster);
     const visitHasBeenRemoved = (visit: URLVisit) => {
       return removedVisits.findIndex((removedVisit) => {
-        if (visit.normalizedUrl.url !== removedVisit.normalizedUrl.url) {
+        if (visit.normalizedUrl !== removedVisit.normalizedUrl) {
           return false;
         }
 
@@ -349,6 +342,12 @@ export class ClusterElement extends ClusterElementBase {
 
   protected visits_(): URLVisit[] {
     return this.cluster ? this.cluster.visits : [];
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'history-cluster': ClusterElement;
   }
 }
 

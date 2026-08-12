@@ -14,15 +14,15 @@ import type {CrDialogElement} from 'chrome://settings/lazy_load.js';
 import type {CrCollapseElement} from 'chrome://settings/lazy_load.js';
 import type {CrButtonElement, CrRadioButtonElement, CrRadioGroupElement} from 'chrome://settings/settings.js';
 import {MetricsBrowserProxyImpl} from 'chrome://settings/settings.js';
-import {loadTimeData, OpenWindowProxyImpl, PageStatus, Router, routes, SignedInState, StatusAction, SyncBrowserProxyImpl} from 'chrome://settings/settings.js';
+import {loadTimeData, OpenWindowProxyImpl, PageStatus, PrefService, PrefsBrowserProxy, resetRouterForTesting, Router, routes, SignedInState, StatusAction, SyncBrowserProxyImpl} from 'chrome://settings/settings.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {flushTasks, waitBeforeNextRender} from 'chrome://webui-test/polymer_test_util.js';
 import {TestOpenWindowProxy} from 'chrome://webui-test/test_open_window_proxy.js';
 import {isChildVisible, eventToPromise} from 'chrome://webui-test/test_util.js';
 
+import {TestPrefsBrowserProxy} from './test_prefs_browser_proxy.js';
 // <if expr="not is_chromeos">
 import {simulateStoredAccounts} from './sync_test_util.js';
-import {resetRouterForTesting} from 'chrome://settings/settings.js';
 // </if>
 
 import {getSyncAllPrefs} from './sync_test_util.js';
@@ -30,6 +30,26 @@ import {TestMetricsBrowserProxy} from './test_metrics_browser_proxy.js';
 import {TestSyncBrowserProxy} from './test_sync_browser_proxy.js';
 
 // clang-format on
+
+function getInitialPrefs(): chrome.settingsPrivate.PrefObject[] {
+  return [
+    {
+      key: 'signin.allowed_on_next_startup',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: true,
+    },
+    {
+      key: 'import_dialog_bookmarks',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: true,
+    },
+    {
+      key: 'spellcheck.dictionaries',
+      type: chrome.settingsPrivate.PrefType.LIST,
+      value: ['en-US'],
+    },
+  ];
+}
 
 suite('SyncSettings', function() {
   let syncPage: SettingsSyncPageElement;
@@ -39,22 +59,16 @@ suite('SyncSettings', function() {
   let encryptWithGoogle: CrRadioButtonElement;
   let encryptWithPassphrase: CrRadioButtonElement;
 
-  function setupSyncPage() {
+  async function setupSyncPage() {
+    const prefsBrowserProxy = new TestPrefsBrowserProxy(getInitialPrefs());
+    PrefsBrowserProxy.setInstance(prefsBrowserProxy);
+    PrefService.resetInstanceForTesting();
+    await PrefService.getInstance().whenInitialized();
+
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     syncPage = document.createElement('settings-sync-page');
     const router = Router.getInstance();
     router.navigateTo(router.getRoutes().SYNC);
-    // Preferences should exist for embedded
-    // 'personalization_options.html'. We don't perform tests on them.
-    syncPage.prefs = {
-      profile: {password_manager_leak_detection: {value: true}},
-      signin: {
-        allowed_on_next_startup:
-            {type: chrome.settingsPrivate.PrefType.BOOLEAN, value: true},
-      },
-      safebrowsing:
-          {enabled: {value: true}, scout_reporting_enabled: {value: true}},
-    };
 
     document.body.appendChild(syncPage);
 
@@ -86,7 +100,7 @@ suite('SyncSettings', function() {
     browserProxy = new TestSyncBrowserProxy();
     SyncBrowserProxyImpl.setInstance(browserProxy);
 
-    setupSyncPage();
+    await setupSyncPage();
 
     await waitBeforeNextRender(syncPage);
     encryptionElement =
@@ -228,6 +242,20 @@ suite('SyncSettings', function() {
       disabled: false,
       hasError: true,
       statusAction: StatusAction.CONFIRM_SYNC_SETTINGS,
+    });
+    flush();
+    assertFalse(syncSection.hidden);
+  });
+
+  test('SyncSectionLayout_BookmarksLimitError', function() {
+    const syncSection =
+        syncPage.shadowRoot!.querySelector<HTMLElement>('#sync-section')!;
+
+    webUIListenerCallback('sync-status-changed', {
+      signedInState: SignedInState.SYNCING,
+      disabled: false,
+      hasError: true,
+      statusAction: StatusAction.SHOW_BOOKMARKS_LIMIT_HELP_ARTICLE,
     });
     flush();
     assertFalse(syncSection.hidden);
@@ -602,7 +630,7 @@ suite('SyncSettings', function() {
   });
 
   // Tests that entering existing passhrase doesn't abort the sync setup.
-  // Regression test for https://crbug.com/1279483.
+  // Regression test for https://crbug.com/40810886.
   test('SyncSetupEnterExistingCorrectPassphrase', async function() {
     // Simulate sync setup in progress.
     webUIListenerCallback('sync-status-changed', {
@@ -650,7 +678,7 @@ suite('SyncSettings', function() {
   });
 
   // Tests that creating a new passhrase doesn't abort the sync setup.
-  // Regression test for https://crbug.com/1279483.
+  // Regression test for https://crbug.com/40810886.
   test('SyncSetupCreatingValidPassphrase', async function() {
     // Simulate sync setup in progress.
     webUIListenerCallback('sync-status-changed', {
@@ -737,9 +765,9 @@ suite('SyncSettings', function() {
         !!syncPage.shadowRoot!.querySelector('settings-sync-account-control'));
   });
 
-  test('ShowAccountRow_SigninAllowedFalse', function() {
+  test('ShowAccountRow_SigninAllowedFalse', async function() {
     loadTimeData.overrideValues({signinAllowed: false});
-    setupSyncPage();
+    await setupSyncPage();
 
     assertFalse(
         !!syncPage.shadowRoot!.querySelector('settings-sync-account-control'));
@@ -761,7 +789,6 @@ suite('SyncSettings', function() {
   // </if>
 });
 
-// <if expr="not is_chromeos">
 suite('SyncSettingsWithReplaceSyncPromosWithSignInPromos', function() {
   suiteSetup(function() {
     loadTimeData.overrideValues({
@@ -788,7 +815,6 @@ suite('SyncSettingsWithReplaceSyncPromosWithSignInPromos', function() {
     assertEquals(routes.PEOPLE, Router.getInstance().getCurrentRoute());
   });
 });
-// </if>
 
 suite('EEAChoiceCountry', function() {
   let syncPage: SettingsSyncPageElement;

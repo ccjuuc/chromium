@@ -140,7 +140,7 @@ IN_PROC_BROWSER_TEST_P(StubResolverConfigReaderBrowsertest, ConfigFromPrefs) {
 #if BUILDFLAG(IS_CHROMEOS)
   // On ChromeOS, the local_state is shared between all users so the user-set
   // pref is stored in the profile's pref service.
-  pref_service_for_user_settings = browser()->profile()->GetPrefs();
+  pref_service_for_user_settings = browser()->GetProfile()->GetPrefs();
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   pref_service_for_user_settings->SetString(prefs::kDnsOverHttpsMode,
@@ -334,7 +334,7 @@ IN_PROC_BROWSER_TEST_P(StubResolverConfigReaderBrowsertest,
   EXPECT_EQ(secure_dns_config.mode(), net::SecureDnsMode::kSecure);
   EXPECT_THAT(secure_dns_config.doh_servers().servers(), testing::IsEmpty());
   // Deterministic regression test for flaky failures seen in
-  // https://crbug.com/1326526. This induces a DNS resolution while in secure
+  // https://crbug.com/40840601. This induces a DNS resolution while in secure
   // mode with zero DoH server templates to use.
   ASSERT_TRUE(embedded_test_server()->Start());
   ASSERT_TRUE(ui_test_utils::NavigateToURL(

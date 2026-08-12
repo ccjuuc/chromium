@@ -78,21 +78,39 @@ class SigninPrefs {
   ChromeSigninUserChoice GetChromeSigninInterceptionUserChoice(
       const GaiaId& gaia_id) const;
 
+  // Sets the stable account ID for the given account.
+  void SetAccountMetricsId(const GaiaId& gaia_id, int id);
+  // Returns the stable account ID for the given account, or std::nullopt if not
+  // set.
+  std::optional<int> GetAccountMetricsId(const GaiaId& gaia_id) const;
+
+  // Sets that the account is capped for metrics ID allocation.
+  // Being capped means no new IDs will be allocated because the limit of 100
+  // accounts has been reached.
+  void SetAccountMetricsIdCapped(const GaiaId& gaia_id);
+  bool IsAccountMetricsIdCapped(const GaiaId& gaia_id) const;
+
+  // Gets the next unassigned account metrics ID.
+  int GetNextAccountMetricsUnassignedId() const;
+  // Sets the next unassigned account metrics ID.
+  void SetNextAccountMetricsUnassignedId(int id);
+
   // Last signout time.
   void SetChromeLastSignoutTime(const GaiaId& gaia_id,
                                 base::Time last_signout_time);
   std::optional<base::Time> GetChromeLastSignoutTime(
       const GaiaId& gaia_id) const;
 
-  // This pref is expected to be used with the reprompt logic for the Chrome
-  // Signin bubble. The reprompt should only be possible after bubble declines,
-  // meaning that this pref and other related prefs will be cleared when the
-  // user explicitly sets the setting to not signin to chrome automatically.
+  // This pref is primarily used for the reprompt logic of the Chrome Signin
+  // bubble. It could be used for other purposes but may be altered unexpectedly
+  // when settings related to the Chrome Signin bubble are modified by the user.
+  // Note: This pref will be cleared when the user explicitly sets the setting
+  // to not signin to chrome automatically.
   //
   // Last Chrome Signin Bubble Decline time.
   void SetChromeSigninInterceptionLastBubbleDeclineTime(
       const GaiaId& gaia_id,
-      base::Time last_repromt_time);
+      base::Time last_decline_time);
   void ClearChromeSigninInterceptionLastBubbleDeclineTime(
       const GaiaId& gaia_id);
   std::optional<base::Time> GetChromeSigninInterceptionLastBubbleDeclineTime(
@@ -115,6 +133,9 @@ class SigninPrefs {
   void IncrementBookmarkSigninPromoImpressionCount(const GaiaId& gaia_id);
   int GetBookmarkSigninPromoImpressionCount(const GaiaId& gaia_id) const;
 
+  void IncrementSearchAIModeSigninPromoImpressionCount(const GaiaId& gaia_id);
+  int GetSearchAIModeSigninPromoImpressionCount(const GaiaId& gaia_id) const;
+
   void IncrementAutofillSigninPromoDismissCount(const GaiaId& gaia_id);
   int GetAutofillSigninPromoDismissCount(const GaiaId& gaia_id) const;
 
@@ -127,6 +148,9 @@ class SigninPrefs {
   void IncrementPasswordSigninPromoDismissCount(const GaiaId& gaia_id);
   int GetPasswordSigninPromoDismissCount(const GaiaId& gaia_id) const;
 
+  void IncrementSearchAIModeSigninPromoDismissCount(const GaiaId& gaia_id);
+  int GetSearchAIModeSigninPromoDismissCount(const GaiaId& gaia_id) const;
+
   void SetExtensionsExplicitBrowserSignin(const GaiaId& gaia_id, bool enabled);
   bool GetExtensionsExplicitBrowserSignin(const GaiaId& gaia_id) const;
 
@@ -138,6 +162,12 @@ class SigninPrefs {
       base::Time last_registration_failure_time);
   void ClearPolicyDisclaimerLastRegistrationFailureTime(const GaiaId& gaia_id);
   std::optional<base::Time> GetPolicyDisclaimerLastRegistrationFailureTime(
+      const GaiaId& gaia_id) const;
+
+  void SetSearchAIModeSigninPromoLastImpressionTime(
+      const GaiaId& gaia_id,
+      base::Time last_impression_time);
+  std::optional<base::Time> GetSearchAIModeSigninPromoLastImpressionTime(
       const GaiaId& gaia_id) const;
 
   // Sync promo on the avatar button.
@@ -168,6 +198,13 @@ class SigninPrefs {
   // `ScopedDictPrefUpdate` instead.
   base::DictValue& GetOrCreateAvatarButtonPromoCountDictionary(
       const GaiaId& gaia_id);
+
+  // Returns a dictionary of the cross-device promo preferences for `gaia_id`,
+  // if the dictionary didn't exist it will create it.
+  // The returned dictionary will not notify observers for underlying pref
+  // changes. If this will be required later on, consider returning a
+  // `ScopedDictPrefUpdate` instead.
+  base::DictValue& GetOrCreateCrossDevicePromoPrefs(const GaiaId& gaia_id);
 
   // Updates the dismiss count of the promo and last time it was dismissed.
   void IncrementBookmarkBatchUploadPromoDismissCountWithLastTime(
@@ -205,6 +242,11 @@ class SigninPrefs {
   // Gets any specified `pref` of type int for the given `gaia_id`.
   // Returns 0 if the corresponding `pref` doesn't exist for `gaia_id`.
   int GetIntPrefForAccount(const GaiaId& gaia_id, std::string_view pref) const;
+
+  // Sets any specified `pref` of type int for the given `gaia_id` to `value`.
+  void SetIntPrefForAccount(const GaiaId& gaia_id,
+                            std::string_view pref,
+                            int value);
 
   // Sets any specified `pref` of type bool for the given `gaia_id` to
   // `enabled`.

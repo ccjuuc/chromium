@@ -4,11 +4,13 @@
 
 #import "ios/web/content/js_messaging/content_web_frame.h"
 
+#import "base/feature_list.h"
 #import "base/json/json_writer.h"
 #import "base/strings/string_util.h"
 #import "base/strings/stringprintf.h"
 #import "base/strings/utf_string_conversions.h"
 #import "content/public/browser/render_frame_host.h"
+#import "ios/web/content/js_messaging/content_java_script_feature_manager.h"
 #import "ios/web/content/web_state/content_web_state.h"
 
 namespace web {
@@ -29,7 +31,7 @@ void WebWithErrorToContentJavaScriptCallbackAdapter(
 
 std::u16string CreateFunctionCallWithParameters(
     const std::string& name,
-    const base::Value::List& parameters) {
+    const base::ListValue& parameters) {
   std::vector<std::string> parameter_strings(parameters.size());
   for (size_t i = 0; i < parameters.size(); ++i) {
     parameter_strings[i] = base::WriteJson(parameters[i]).value_or("");
@@ -77,7 +79,6 @@ GURL ContentWebFrame::GetUrl() const {
 
 BrowserState* ContentWebFrame::GetBrowserState() {
   return content_web_state_->GetBrowserState();
-  ;
 }
 
 base::WeakPtr<WebFrame> ContentWebFrame::AsWeakPtr() {
@@ -86,15 +87,21 @@ base::WeakPtr<WebFrame> ContentWebFrame::AsWeakPtr() {
 
 bool ContentWebFrame::CallJavaScriptFunction(
     const std::string& name,
-    const base::Value::List& parameters) {
+    const base::ListValue& parameters) {
+  if (!base::FeatureList::IsEnabled(kContentEnableInjectedFeatureScripts)) {
+    return false;
+  }
   return ExecuteJavaScript(CreateFunctionCallWithParameters(name, parameters));
 }
 
 bool ContentWebFrame::CallJavaScriptFunction(
     const std::string& name,
-    const base::Value::List& parameters,
+    const base::ListValue& parameters,
     base::OnceCallback<void(const base::Value*)> callback,
     base::TimeDelta timeout) {
+  if (!base::FeatureList::IsEnabled(kContentEnableInjectedFeatureScripts)) {
+    return false;
+  }
   // TODO(crbug.com/40260088): Handle timeouts.
   return ExecuteJavaScript(CreateFunctionCallWithParameters(name, parameters),
                            std::move(callback));
@@ -102,18 +109,24 @@ bool ContentWebFrame::CallJavaScriptFunction(
 
 bool ContentWebFrame::CallJavaScriptFunctionInContentWorld(
     const std::string& name,
-    const base::Value::List& parameters,
+    const base::ListValue& parameters,
     JavaScriptContentWorld* content_world) {
+  if (!base::FeatureList::IsEnabled(kContentEnableInjectedFeatureScripts)) {
+    return false;
+  }
   // TODO(crbug.com/40260088): Handle injecting into an isolated world.
   return ExecuteJavaScript(CreateFunctionCallWithParameters(name, parameters));
 }
 
 bool ContentWebFrame::CallJavaScriptFunctionInContentWorld(
     const std::string& name,
-    const base::Value::List& parameters,
+    const base::ListValue& parameters,
     JavaScriptContentWorld* content_world,
     base::OnceCallback<void(const base::Value*)> callback,
     base::TimeDelta timeout) {
+  if (!base::FeatureList::IsEnabled(kContentEnableInjectedFeatureScripts)) {
+    return false;
+  }
   // TODO(crbug.com/40260088): Handle timeouts and injecting into an isolated
   // world.
   return ExecuteJavaScript(CreateFunctionCallWithParameters(name, parameters),
@@ -163,6 +176,40 @@ void ContentWebFrame::DetachFromWebState() {
 
 void ContentWebFrame::WebStateDestroyed(web::WebState* web_state) {
   DetachFromWebState();
+}
+
+bool ContentWebFrame::ExecuteAsyncJavaScript(
+    const std::u16string& script,
+    const base::DictValue& parameters,
+    ExecuteJavaScriptCallbackWithError callback) {
+  // TODO(crbug.com/507056709): Implement async JavaScript execution.
+  return false;
+}
+
+bool ContentWebFrame::ExecuteAsyncJavaScriptInContentWorld(
+    const std::u16string& script,
+    const base::DictValue& parameters,
+    JavaScriptContentWorld* content_world,
+    ExecuteJavaScriptCallbackWithError callback) {
+  // TODO(crbug.com/507056709): Implement async JavaScript execution.
+  return false;
+}
+
+bool ContentWebFrame::CallAsyncJavaScriptFunction(
+    const std::string& name,
+    const base::DictValue& parameters,
+    ExecuteJavaScriptCallbackWithError callback) {
+  // TODO(crbug.com/507056709): Implement async JavaScript execution.
+  return false;
+}
+
+bool ContentWebFrame::CallAsyncJavaScriptFunctionInContentWorld(
+    const std::string& name,
+    const base::DictValue& parameters,
+    JavaScriptContentWorld* content_world,
+    ExecuteJavaScriptCallbackWithError callback) {
+  // TODO(crbug.com/507056709): Implement async JavaScript execution.
+  return false;
 }
 
 }  // namespace web

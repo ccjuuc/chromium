@@ -18,6 +18,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/vector_icons/vector_icons.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/views/test/views_test_utils.h"
 
@@ -39,7 +40,9 @@ class MockFeaturePodController : public FeaturePodControllerBase {
         /*togglable=*/true,
         compact ? FeatureTile::TileType::kCompact
                 : FeatureTile::TileType::kPrimary);
-    tile->SetVectorIcon(vector_icons::kDogfoodIcon);
+    tile->SetVectorIcon(::features::IsRoundedIconsEnabled()
+                            ? vector_icons::kPetsIcon
+                            : vector_icons::kDogfoodOldIcon);
     return tile;
   }
 
@@ -85,6 +88,7 @@ class FeatureTilesContainerViewTest : public AshTestBase,
 
   void TearDown() override {
     container_->RemoveObserver(this);
+    container_ = nullptr;
     widget_.reset();
     tray_controller_.reset();
     tray_model_.reset();
@@ -154,7 +158,7 @@ class FeatureTilesContainerViewTest : public AshTestBase,
   std::unique_ptr<views::Widget> widget_;
   std::unique_ptr<UnifiedSystemTrayController> tray_controller_;
   scoped_refptr<UnifiedSystemTrayModel> tray_model_;
-  raw_ptr<FeatureTilesContainerView, DanglingUntriaged> container_;
+  raw_ptr<FeatureTilesContainerView> container_;
 };
 
 // Tests `CalculateRowsFromHeight()` which returns the number of max displayable

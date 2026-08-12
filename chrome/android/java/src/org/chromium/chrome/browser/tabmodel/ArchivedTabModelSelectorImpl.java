@@ -77,16 +77,15 @@ public class ArchivedTabModelSelectorImpl extends TabModelSelectorBase implement
         TabRemover tabRemover =
                 new PassthroughTabRemover(
                         () -> {
-                            TabGroupModelFilter regularFilter =
-                                    getTabGroupModelFilter(/* isIncognito= */ false);
-                            assumeNonNull(regularFilter);
-                            return regularFilter;
+                            TabModel regularTabModel = getModel(/* incognito= */ false);
+                            return regularTabModel;
                         });
 
-        TabModelHolder normalModelHolder =
-                TabModelHolderFactory.createTabModelHolder(
+        TabModelInternal normalModel =
+                TabModelFactory.createTabModel(
                         mProfile,
                         ActivityType.TABBED,
+                        /* customTabProfileType= */ null,
                         tabCreator,
                         // Never used.
                         /* incognitoTabCreator= */ assumeNonNull(null),
@@ -97,26 +96,26 @@ public class ArchivedTabModelSelectorImpl extends TabModelSelectorBase implement
                         this,
                         tabRemover,
                         /* supportUndo= */ true,
-                        /* isArchivedTabModel= */ true,
-                        ArchivedTabModelSelectorImpl::createTabUngrouper);
+                        TabModelType.ARCHIVED,
+                        ArchivedTabModelSelectorImpl::createTabUngrouper,
+                        SupportedProfileType.MIXED);
         if (tabCreator instanceof NeedsTabModel needsTabModel) {
-            needsTabModel.setTabModel(normalModelHolder.tabModel);
+            needsTabModel.setTabModel(normalModel);
         }
 
-        IncognitoTabModelHolder incognitoModelHolder =
-                TabModelHolderFactory.createEmptyIncognitoTabModelHolder();
+        IncognitoTabModelInternal incognitoModel = TabModelFactory.createEmptyIncognitoTabModel();
 
-        onNativeLibraryReadyInternal(tabContentProvider, normalModelHolder, incognitoModelHolder);
+        onNativeLibraryReadyInternal(tabContentProvider, normalModel, incognitoModel);
     }
 
     @EnsuresNonNull("mTabContentManager")
     @VisibleForTesting
     void onNativeLibraryReadyInternal(
             TabContentManager tabContentProvider,
-            TabModelHolder normalModelHolder,
-            IncognitoTabModelHolder incognitoModelHolder) {
+            TabModelInternal normalModel,
+            IncognitoTabModelInternal incognitoModel) {
         mTabContentManager = tabContentProvider;
-        initialize(normalModelHolder, incognitoModelHolder);
+        initialize(normalModel, incognitoModel);
 
         new TabModelSelectorTabObserver(this) {
             @Override
@@ -143,12 +142,12 @@ public class ArchivedTabModelSelectorImpl extends TabModelSelectorBase implement
     /**
      * Exposed to allow tests to initialize the selector with different tab models.
      *
-     * @param normalModelHolder The normal tab model.
-     * @param incognitoModelHolder The incognito tab model.
+     * @param normalModel The normal tab model.
+     * @param incognitoModel The incognito tab model.
      */
     public void initializeForTesting(
-            TabModelHolder normalModelHolder, IncognitoTabModelHolder incognitoModelHolder) {
-        initialize(normalModelHolder, incognitoModelHolder);
+            TabModelInternal normalModel, IncognitoTabModelInternal incognitoModel) {
+        initialize(normalModel, incognitoModel);
     }
 
     @Override
@@ -169,8 +168,14 @@ public class ArchivedTabModelSelectorImpl extends TabModelSelectorBase implement
         return isTabStateInitialized();
     }
 
+    @Override
+    public @Nullable Profile getProfile(boolean offTheRecord) {
+        if (mProfile.isOffTheRecord() != offTheRecord) return null;
+        return mProfile;
+    }
+
     private static TabUngrouper createTabUngrouper(
-            boolean isIncognitoBranded, Supplier<TabGroupModelFilter> tabGroupModelFilterSupplier) {
-        return new PassthroughTabUngrouper(tabGroupModelFilterSupplier);
+            boolean isIncognitoBranded, Supplier<@Nullable TabModel> tabModelSupplier) {
+        return new PassthroughTabUngrouper(tabModelSupplier);
     }
 }

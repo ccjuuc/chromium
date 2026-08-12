@@ -18,6 +18,8 @@
 
 void AddTabStripColorMixer(ui::ColorProvider* provider,
                            const ui::ColorProviderKey& key) {
+  const bool dark_mode =
+      key.color_mode == ui::ColorProviderKey::ColorMode::kDark;
   using TP = ThemeProperties;
   struct ColorPropertiesMapEntry {
     int property_id;
@@ -191,45 +193,29 @@ void AddTabStripColorMixer(ui::ColorProvider* provider,
   mixer[kColorNewTabButtonInkDropFrameInactive] =
       ui::GetColorWithMaxContrast(kColorNewTabButtonBackgroundFrameInactive);
 
-  // TODO (crbug.com/1399942): consolidate the new tab button color ids once the
-  // refresh flag is enabled by default.
-  mixer[kColorNewTabButtonCRForegroundFrameActive] = {kColorToolbarButtonIcon};
+  // TODO (crbug.com/40883407): consolidate the new tab button color ids once
+  // the refresh flag is enabled by default.
+  mixer[kColorNewTabButtonCRForegroundFrameActive] = {
+      kColorTabForegroundInactiveFrameActive};
   mixer[kColorNewTabButtonCRForegroundFrameInactive] = {
       kColorToolbarButtonIconInactive};
-  mixer[kColorNewTabButtonCRBackgroundFrameActive] = {kColorToolbar};
-  mixer[kColorNewTabButtonCRBackgroundFrameInactive] = {kColorToolbar};
+  mixer[kColorNewTabButtonCRBackgroundFrameActive] = {
+      kColorTabBackgroundInactiveFrameActive};
+  mixer[kColorNewTabButtonCRBackgroundFrameInactive] = {
+      kColorTabBackgroundInactiveFrameInactive};
   mixer[kColorTabSearchButtonCRForegroundFrameActive] = {
-      kColorToolbarButtonIcon};
+      kColorNewTabButtonCRForegroundFrameActive};
   mixer[kColorTabSearchButtonCRForegroundFrameInactive] = {
-      kColorToolbarButtonIconInactive};
+      kColorNewTabButtonCRForegroundFrameInactive};
   mixer[kColorTabStripComboButtonSeparator] = {ui::kColorSeparator};
   mixer[kColorTabStripControlButtonInkDrop] = ui::SetAlpha(
       kColorNewTabButtonInkDropFrameActive, std::ceil(0.16f * 255.0f));
   mixer[kColorTabStripControlButtonInkDropRipple] = ui::SetAlpha(
       kColorNewTabButtonInkDropFrameActive, std::ceil(0.14f * 255.0f));
+
   /* Vertical Tab Strip colors. */
-  mixer[kColorVerticalTabStripBottomButtonBackground] = {kColorToolbar};
-  /* WebUI Tab Strip colors. */
-  // TODO(crbug.com/40678998): Update the tab strip color to respond
-  // appopriately to activation changes.
-  mixer[kColorWebUiTabStripBackground] = {ui::kColorFrameActive};
-  mixer[kColorWebUiTabStripFocusOutline] = {ui::kColorFocusableBorderFocused};
-  mixer[kColorWebUiTabStripIndicatorRecording] = {ui::kColorAlertHighSeverity};
-  mixer[kColorWebUiTabStripIndicatorPip] = {kColorTabThrobber};
-  mixer[kColorWebUiTabStripIndicatorCapturing] = {kColorTabThrobber};
-  mixer[kColorWebUiTabStripScrollbarThumb] =
-      ui::SetAlpha(ui::GetColorWithMaxContrast(ui::kColorFrameActive),
-                   /* 70% opacity */ 0.7 * 255);
-  mixer[kColorWebUiTabStripTabActiveTitleBackground] = {
-      kColorThumbnailTabBackground};
-  mixer[kColorWebUiTabStripTabActiveTitleContent] = {
-      kColorThumbnailTabForeground};
-  mixer[kColorWebUiTabStripTabBackground] = {kColorToolbar};
-  mixer[kColorWebUiTabStripTabBlocked] = {ui::kColorButtonBackgroundProminent};
-  mixer[kColorWebUiTabStripTabLoadingSpinning] = {kColorTabThrobber};
-  mixer[kColorWebUiTabStripTabSeparator] =
-      ui::SetAlpha(kColorTabForegroundActiveFrameActive,
-                   /* 16% opacity */ 0.16 * 255);
-  mixer[kColorWebUiTabStripTabText] = {kColorTabForegroundActiveFrameActive};
-  mixer[kColorWebUiTabStripTabWaitingSpinning] = {kColorTabThrobberPreconnect};
+  mixer[kColorVerticalTabStripShadow] =
+      SetAlpha(ui::kColorSysNeutralOutline, std::ceil(0.60f * 255.0f));
+  mixer[kColorVerticalTabPinnedOutline] = {
+      dark_mode ? kColorVerticalTabStripShadow : kColorTabDividerFrameActive};
 }

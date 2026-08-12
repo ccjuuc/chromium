@@ -30,12 +30,21 @@ ExclusiveAccessManagerAndroid::ExclusiveAccessManagerAndroid(
 
 ExclusiveAccessManagerAndroid::~ExclusiveAccessManagerAndroid() = default;
 
+bool ExclusiveAccessManagerAndroid::CanEnterFullscreenModeForTab(
+    JNIEnv* env,
+    const jni_zero::JavaRef<jobject>& jrender_frame_host_android) {
+  content::RenderFrameHost* rfh =
+      content::RenderFrameHost::FromJavaRenderFrameHost(
+          jrender_frame_host_android);
+  return eam_.fullscreen_controller()->CanEnterFullscreenModeForTab(rfh);
+}
+
 void ExclusiveAccessManagerAndroid::EnterFullscreenModeForTab(
     JNIEnv* env,
     const jni_zero::JavaRef<jobject>& jrender_frame_host_android,
     bool prefersNavigationBar,
     bool prefersStatusBar,
-    jlong displayId) {
+    int64_t displayId) {
   FullscreenTabParams fullscreen_tab_params{displayId, prefersNavigationBar,
                                             prefersStatusBar};
   content::RenderFrameHost* rfh =
@@ -75,7 +84,7 @@ bool ExclusiveAccessManagerAndroid::IsFullscreenForTabOrPending(
 
 bool ExclusiveAccessManagerAndroid::PreHandleKeyboardEvent(
     JNIEnv* env,
-    jlong nativeKeyEvent) {
+    int64_t nativeKeyEvent) {
   return eam_.HandleUserKeyEvent(
       *reinterpret_cast<input::NativeWebKeyboardEvent*>(nativeKeyEvent));
 }
@@ -154,10 +163,15 @@ void ExclusiveAccessManagerAndroid::ForceActiveTab(
 }
 
 void ExclusiveAccessManagerAndroid::Destroy(JNIEnv* env) {
+  if (eac_) {
+    // Notify the Java counterpart to drop its native pointer before
+    // the C++ object is destroyed, preventing a use-after-free.
+    eac_->Destroy(env);
+  }
   delete this;
 }
 
-static jlong JNI_ExclusiveAccessManager_Init(
+static int64_t JNI_ExclusiveAccessManager_Init(
     JNIEnv* env,
     const jni_zero::JavaRef<jobject>& jeam,
     const jni_zero::JavaRef<jobject>& j_context,

@@ -4,21 +4,30 @@
 
 #include "chrome/browser/direct_sockets/chrome_direct_sockets_delegate.h"
 
+#include "base/containers/fixed_flat_set.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
-#include "chrome/browser/profiles/profile.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/webapps/isolated_web_apps/scheme.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/common/socket_permission_request.h"
+#include "extensions/buildflags/buildflags.h"
+#include "url/gurl.h"
+#include "url/origin.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+#include "extensions/browser/extension_registry.h"
 #include "extensions/browser/process_map.h"
 #include "extensions/common/api/sockets/sockets_manifest_data.h"
+#endif
 
 namespace {
 
 using ProtocolType = content::DirectSocketsDelegate::ProtocolType;
 using RequestDetails = content::DirectSocketsDelegate::RequestDetails;
 
+#if BUILDFLAG(ENABLE_EXTENSIONS)
 bool ValidateAddressAndPortForChromeApp(const extensions::Extension* extension,
                                         const RequestDetails& request) {
   switch (request.protocol) {
@@ -50,6 +59,7 @@ bool ValidateAddressAndPortForChromeApp(const extensions::Extension* extension,
                                   request.address, request.port});
   }
 }
+#endif
 
 bool ValidateAddressAndPortForIwa(const RequestDetails& request) {
   switch (request.protocol) {
@@ -77,19 +87,64 @@ bool IsContentSettingAllowedForUrl(content::BrowserContext* browser_context,
          CONTENT_SETTING_ALLOW;
 }
 
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+// Returns true if |extension_id| is allowed to use the Direct Sockets API.
+bool IsExtensionIdAllowedToUseDirectSockets(
+    const extensions::Extension* extension) {
+  constexpr auto kAllowedDirectSocketsExtensionIds =
+      base::MakeFixedFlatSet<std::string_view>({
+          "algkcnfjnajfhgimadimbjhmpaeohhln",  // Secure Shell Extension (dev)
+          "iodihamcpbpeioajjeobimgagajmlibd",  // Secure Shell Extension
+                                               // (stable)
+      });
+  return kAllowedDirectSocketsExtensionIds.contains(extension->id());
+}
+#endif
+
 }  // namespace
+
+bool ChromeDirectSocketsDelegate::AreDirectSocketsAllowed(
+    content::BrowserContext* browser_context,
+    const url::Origin& origin) {
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  const GURL& url = origin.GetURL();
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Allow restricted context APIs in special pages.
+  if (url.SchemeIs("chrome-untrusted") && url.host() == "terminal") {
+    return true;
+  }
+#endif
+
+  // This function might be called for profiles that do not support extensions.
+  auto* registry = extensions::ExtensionRegistry::Get(browser_context);
+  if (!registry) {
+    return false;
+  }
+
+  // Allow Direct Sockets in Chrome Apps and selected extensions.
+  auto* extension = registry->enabled_extensions().GetExtensionOrAppByURL(url);
+  return extension &&
+         (IsExtensionIdAllowedToUseDirectSockets(extension) ||
+          extension->is_platform_app()) &&
+         extensions::SocketsManifestData::Get(extension);
+#else
+  return false;
+#endif
+}
 
 bool ChromeDirectSocketsDelegate::ValidateRequest(
     content::RenderFrameHost& rfh,
     const RequestDetails& request) {
+#if BUILDFLAG(ENABLE_EXTENSIONS)
   // If we're running an extension, follow the chrome.sockets.* permission
   // model.
   if (const extensions::Extension* extension =
           extensions::ProcessMap::Get(rfh.GetBrowserContext())
-              ->GetEnabledExtensionByProcessID(
-                  rfh.GetProcess()->GetDeprecatedID())) {
+              ->GetEnabledExtensionByProcessID(rfh.GetProcess()->GetID())) {
     return ValidateAddressAndPortForChromeApp(extension, request);
   }
+#endif
 
   const GURL& url = rfh.GetMainFrame()->GetLastCommittedURL();
   if (!IsContentSettingAllowedForUrl(rfh.GetBrowserContext(), url,
@@ -100,6 +155,13 @@ bool ChromeDirectSocketsDelegate::ValidateRequest(
   if (url.SchemeIs(webapps::kIsolatedAppScheme)) {
     return ValidateAddressAndPortForIwa(request);
   }
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Allow restricted context APIs in special pages.
+  if (url.SchemeIs("chrome-untrusted") && url.host() == "terminal") {
+    return true;
+  }
+#endif
 
   return false;
 }
@@ -120,38 +182,4 @@ bool ChromeDirectSocketsDelegate::ValidateRequestForServiceWorker(
   return IsContentSettingAllowedForUrl(browser_context, origin.GetURL(),
                                        ContentSettingsType::DIRECT_SOCKETS) &&
          ValidateAddressAndPortForIwa(request);
-}
-
-void ChromeDirectSocketsDelegate::RequestPrivateNetworkAccess(
-    content::RenderFrameHost& rfh,
-    base::OnceCallback<void(bool)> callback) {
-  // No additional rules for Chrome Apps.
-  if (extensions::ProcessMap::Get(rfh.GetBrowserContext())
-          ->Contains(rfh.GetProcess()->GetDeprecatedID())) {
-    std::move(callback).Run(/*allow_access=*/true);
-    return;
-  }
-
-  // TODO(crbug.com/368266657): Show a permission prompt for DS-PNA &
-  // ponder whether this requires transient activation.
-  std::move(callback).Run(IsContentSettingAllowedForUrl(
-      rfh.GetBrowserContext(), rfh.GetMainFrame()->GetLastCommittedURL(),
-      ContentSettingsType::DIRECT_SOCKETS_PRIVATE_NETWORK_ACCESS));
-}
-
-bool ChromeDirectSocketsDelegate::IsPrivateNetworkAccessAllowedForSharedWorker(
-    content::BrowserContext* browser_context,
-    const GURL& shared_worker_url) {
-  return IsContentSettingAllowedForUrl(
-      browser_context, shared_worker_url,
-      ContentSettingsType::DIRECT_SOCKETS_PRIVATE_NETWORK_ACCESS);
-}
-
-bool ChromeDirectSocketsDelegate::IsPrivateNetworkAccessAllowedForServiceWorker(
-    content::BrowserContext* browser_context,
-    const url::Origin& origin) {
-  const GURL& url = origin.GetURL();
-  return IsContentSettingAllowedForUrl(
-      browser_context, url,
-      ContentSettingsType::DIRECT_SOCKETS_PRIVATE_NETWORK_ACCESS);
 }

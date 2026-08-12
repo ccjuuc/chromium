@@ -17,7 +17,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/memory/memory_pressure_monitor.h"
 #include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
@@ -311,25 +310,14 @@ const DefaultCommandLineSwitch kDefaultSwitches[] = {
     // GPU shader disk cache disabling is largely to conserve disk space.
     {switches::kDisableGpuShaderDiskCache, ""},
 #endif
-#if BUILDFLAG(IS_CAST_AUDIO_ONLY)
-    {switches::kDisableGpu, ""},
-    {switches::kDisableSoftwareRasterizer, ""},
-    {switches::kDisableGpuCompositing, ""},
-#if BUILDFLAG(IS_ANDROID)
-    {switches::kDisableFrameRateLimit, ""},
-    {switches::kDisableGLDrawingForTests, ""},
-    {switches::kDisableThreadedAnimation, ""},
-#endif  // BUILDFLAG(IS_ANDROID)
-#endif  // BUILDFLAG(IS_CAST_AUDIO_ONLY)
+
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #if defined(ARCH_CPU_X86_FAMILY)
     // This is needed for now to enable the x11 Ozone platform to work with
     // current Linux/NVidia OpenGL drivers.
     {switches::kIgnoreGpuBlocklist, ""},
 #elif defined(ARCH_CPU_ARM_FAMILY)
-#if !BUILDFLAG(IS_CAST_AUDIO_ONLY)
     {switches::kEnableHardwareOverlays, "cast"},
-#endif
 #endif
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     // It's better to start GPU process on demand. For example, for TV platforms
@@ -559,13 +547,9 @@ void CastBrowserMainParts::PostCreateThreads() {
 
 int CastBrowserMainParts::PreMainMessageLoopRun() {
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_FUCHSIA)
-  // static_cast is safe because this is the only implementation of
-  // MemoryPressureMonitor.
-  auto* monitor =
-      static_cast<memory_pressure::MultiSourceMemoryPressureMonitor*>(
-          base::MemoryPressureMonitor::Get());
   // |monitor| may be nullptr in browser tests.
-  if (monitor) {
+  if (auto* monitor =
+          memory_pressure::MultiSourceMemoryPressureMonitor::Get()) {
     monitor->SetSystemEvaluator(
         std::make_unique<CastSystemMemoryPressureEvaluator>(
             monitor->CreateVoter()));
@@ -674,9 +658,6 @@ int CastBrowserMainParts::PreMainMessageLoopRun() {
   // initialized by cast service.
   cast_browser_process_->cast_browser_metrics()->Initialize();
   cast_content_browser_client_->InitializeURLLoaderThrottleDelegate();
-
-  cast_content_browser_client_->CreateGeneralAudienceBrowsingService();
-
   // Disable RenderFrameHost's Javascript injection restrictions so that the
   // Cast Web Service can implement its own JS injection policy at a higher
   // level.

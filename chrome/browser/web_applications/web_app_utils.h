@@ -9,6 +9,7 @@
 
 #include <set>
 #include <string>
+#include <string_view>
 #include <tuple>
 
 #include "chrome/browser/web_applications/web_app_constants.h"
@@ -16,9 +17,11 @@
 #include "components/services/app_service/public/cpp/file_handler.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/common/alternative_error_page_override_info.mojom-forward.h"
+#include "third_party/blink/public/common/safe_url_pattern.h"
 
 class GURL;
 class Profile;
+class PrefService;
 
 namespace apps {
 enum class LaunchContainer;
@@ -45,8 +48,15 @@ namespace web_app {
 // hard-coded as OTR).
 bool AreWebAppsEnabled(Profile* profile);
 
+// Returns WebAppInstallByUserEnabled policy configuration. Returns true if this
+// policy is not set or enabled. Returns false if this policy is disabled.
+bool IsWebAppInstallByUserPolicyEnabled(Profile* profile);
+
 // Is user allowed to install web apps from UI:
 bool AreWebAppsUserInstallable(Profile* profile);
+
+// Returns if force installation of web apps is allowed
+bool AreWebAppsForceInstallable(Profile* profile);
 
 // Get BrowserContext to use for a WebApp KeyedService creation. This will
 // return a `nullptr` if `AreWebAppsEnabled` returns false for the given
@@ -88,7 +98,7 @@ base::FilePath GetWebAppsTempDirectory(
 // The return value (profile categories) are used to report metrics. They are
 // persisted to logs and should not be renamed. If new names are added, update
 // tool/metrics/histograms/histograms.xml: "SystemWebAppProfileCategory".
-std::string GetProfileCategoryForLogging(Profile* profile);
+std::string_view GetProfileCategoryForLogging(Profile* profile);
 
 // Returns true if the WebApp should have `WebAppChromeOsData()`.
 bool IsChromeOsDataMandatory();
@@ -150,7 +160,8 @@ enum class AppSettingsPageEntryPoint {
   kSubAppsInstallPrompt = 3,
   kNotificationSettingsButton = 4,
   kSiteDataDialog = 5,
-  kMaxValue = kSiteDataDialog,
+  kNavigationCapturingIphBubble = 6,
+  kMaxValue = kNavigationCapturingIphBubble,
 };
 
 apps::LaunchContainer ConvertDisplayModeToAppLaunchContainer(
@@ -171,14 +182,12 @@ content::mojom::AlternativeErrorPageOverrideInfoPtr ConstructWebAppErrorPage(
 
 bool IsValidScopeForLinkCapturing(const GURL& scope);
 
-// Resets all content settings for the given `app_scope` to their default
-// values.
-void ResetAllContentSettingsForWebApp(Profile* profile, const GURL& app_scope);
-
 // TODO(http://b/331208955): Remove after migration.
 // Returns whether |app_id| will soon refer to a system web app given |sources|.
 bool WillBeSystemWebApp(const webapps::AppId& app_id,
                         WebAppManagementTypes sources);
+
+void ClearWebAppProfilePrefs(PrefService* profile_prefs);
 
 }  // namespace web_app
 

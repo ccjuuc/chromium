@@ -4,6 +4,7 @@
 
 package org.chromium.chrome.browser.bookmarks;
 
+import android.app.Activity;
 import android.content.ComponentName;
 
 import org.chromium.build.annotations.NullMarked;
@@ -15,7 +16,12 @@ import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.native_page.BasicNativePage;
 import org.chromium.chrome.browser.ui.native_page.NativePageHost;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.embedder_support.util.UrlConstants;
+import org.chromium.ui.base.ActivityResultTracker;
+import org.chromium.ui.base.WindowAndroid;
+
+import java.util.function.Supplier;
 
 /** A native page holding a {@link BookmarkManagerCoordinator} on _tablet_. */
 @NullMarked
@@ -24,16 +30,28 @@ public class BookmarkPage extends BasicNativePage {
     private final BookmarkOpener mBookmarkOpener;
     private final String mTitle;
 
+    // Nullable after destruction of BookmarkPage.
+    private @Nullable BookmarkUiPrefs mBookmarkUiPrefs;
+
     /**
      * Create a new instance of the bookmarks page.
      *
-     * @param componentName The current activity component, used to open bookmarks.
+     * @param windowAndroid The current {@link WindowAndroid} showing the bookmark UI.
+     * @param activity The current {@link Activity} used to obtain resources or inflate views.
      * @param snackbarManager Allows control over the app snackbar.
+     * @param bottomSheetControllerSupplier Supplier of the controller used to interact with the
+     *     bottom sheet.
+     * @param activityResultTracker Tracker of activity results.
      * @param profile The Profile associated with the bookmark UI.
      * @param host A NativePageHost to load urls.
+     * @param componentName The current activity component, used to open bookmarks.
      */
     public BookmarkPage(
+            WindowAndroid windowAndroid,
+            Activity activity,
             SnackbarManager snackbarManager,
+            Supplier<BottomSheetController> bottomSheetControllerSupplier,
+            ActivityResultTracker activityResultTracker,
             Profile profile,
             NativePageHost host,
             @Nullable ComponentName componentName,
@@ -46,18 +64,23 @@ public class BookmarkPage extends BasicNativePage {
                 new BookmarkOpenerImpl(
                         () -> BookmarkModel.getForProfile(profile),
                         /* context= */ host.getContext(),
-                        componentName);
+                        componentName,
+                        /* multiInstanceManager= */ null);
 
+        mBookmarkUiPrefs = new BookmarkUiPrefs(ChromeSharedPreferences.getInstance());
         // Provide the BackPressManager to the coordinator so it can manage itself.
         // The logic in the coordinator ensures that there is only one NATIVE_PAGE handler set
         // at a time.
         mBookmarkManagerCoordinator =
                 new BookmarkManagerCoordinator(
-                        host.getContext(),
+                        windowAndroid,
+                        activity,
                         false,
                         snackbarManager,
+                        bottomSheetControllerSupplier,
+                        activityResultTracker,
                         profile,
-                        new BookmarkUiPrefs(ChromeSharedPreferences.getInstance()),
+                        mBookmarkUiPrefs,
                         mBookmarkOpener,
                         new BookmarkManagerOpenerImpl(),
                         PriceDropNotificationManagerFactory.create(profile),
@@ -95,6 +118,11 @@ public class BookmarkPage extends BasicNativePage {
     public void destroy() {
         super.destroy();
         mBookmarkManagerCoordinator.onDestroyed();
+
+        if (mBookmarkUiPrefs != null) {
+            mBookmarkUiPrefs.destroy();
+            mBookmarkUiPrefs = null;
+        }
     }
 
     public BookmarkManagerCoordinator getManagerForTesting() {

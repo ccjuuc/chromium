@@ -49,15 +49,16 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.Callback;
 import org.chromium.base.Token;
 import org.chromium.base.supplier.NonNullObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
 import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
+import org.chromium.base.supplier.SettableNullableObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
@@ -70,7 +71,10 @@ import org.chromium.chrome.browser.data_sharing.DataSharingServiceFactory;
 import org.chromium.chrome.browser.data_sharing.DataSharingTabManager;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.glic.GlicEnabling;
 import org.chromium.chrome.browser.hub.SingleChildViewManager;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceOrchestrator;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceOrchestratorFactory;
 import org.chromium.chrome.browser.price_tracking.PriceTrackingFeatures;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileProvider;
@@ -78,16 +82,17 @@ import org.chromium.chrome.browser.tab.MockTab;
 import org.chromium.chrome.browser.tab.TabCreationState;
 import org.chromium.chrome.browser.tab.TabId;
 import org.chromium.chrome.browser.tab.TabLaunchType;
+import org.chromium.chrome.browser.tab.state.PersistedTabDataConfiguration;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncFeatures;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncFeaturesJni;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
+import org.chromium.chrome.browser.tab_ui.TabListMode;
 import org.chromium.chrome.browser.tab_ui.TabSwitcherCustomViewManager;
 import org.chromium.chrome.browser.tab_ui.TabThumbnailView;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
+import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tasks.tab_management.TabGridDialogMediator.DialogController;
-import org.chromium.chrome.browser.tasks.tab_management.TabListCoordinator.TabListMode;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelper;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelperJni;
@@ -102,6 +107,7 @@ import org.chromium.components.collaboration.messaging.MessagingBackendService;
 import org.chromium.components.data_sharing.DataSharingService;
 import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.components.tab_group_sync.TabGroupSyncService;
+import org.chromium.components.tab_groups.TabGroupsFeatureMap;
 import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -116,6 +122,12 @@ import java.util.function.Supplier;
  * nothing will crash since the bulk of the behaviors from the coordinator are either unit tested by
  * classes hosted insider the coordinator or have to be verified in an integration test.
  */
+@EnableFeatures({
+    ChromeFeatureList.GLIC,
+    ChromeFeatureList.FAVICON_DISABLE_HOST_FALLBACK,
+    ChromeFeatureList.SEND_TAB_TO_SELF_AUTO_OPEN
+})
+@DisableFeatures({TabGroupsFeatureMap.UPDATE_TAB_GROUP_COLORS})
 @RunWith(BaseRobolectricTestRunner.class)
 public class TabSwitcherPaneCoordinatorUnitTest {
 
@@ -128,7 +140,6 @@ public class TabSwitcherPaneCoordinatorUnitTest {
     @Mock private ProfileProvider mProfileProvider;
     @Mock private Profile mProfile;
     @Mock private TabGroupSyncFeatures.Natives mTabGroupSyncFeaturesJniMock;
-    @Mock private TabGroupModelFilter mTabGroupModelFilter;
     @Mock private TabContentManager mTabContentManager;
     @Mock private BrowserControlsStateProvider mBrowserControlsStateProvider;
     @Mock private ScrimManager mScrimManager;
@@ -152,21 +163,22 @@ public class TabSwitcherPaneCoordinatorUnitTest {
     @Mock private TabGridContextMenuCoordinator mTabGridContextMenuCoordinator;
     @Mock private TabListGroupMenuCoordinator mTabListGroupMenuCoordinator;
     @Mock private PriceWelcomeMessageController mPriceWelcomeMessageController;
+    @Mock private MultiInstanceOrchestrator mMultiInstanceOrchestrator;
 
     private final SettableNonNullObservableSupplier<Boolean> mHubSearchBoxVisibilitySupplier =
             ObservableSuppliers.createNonNull(false);
-    private final ObservableSupplierImpl<TabGroupModelFilter> mTabGroupModelFilterSupplier =
-            new ObservableSupplierImpl<>();
-    private final ObservableSupplierImpl<Boolean> mIsVisibleSupplier =
-            new ObservableSupplierImpl<>();
-    private final ObservableSupplierImpl<Boolean> mIsAnimatingSupplier =
-            new ObservableSupplierImpl<>();
-    private final ObservableSupplierImpl<EdgeToEdgeController> mEdgeToEdgeSupplier =
-            new ObservableSupplierImpl<>();
-    private final ObservableSupplierImpl<TabBookmarker> mTabBookmarkerSupplier =
-            new ObservableSupplierImpl<>(mTabBookmarker);
-    private final ObservableSupplierImpl<View> mOverlayViewSupplier =
-            new ObservableSupplierImpl<>();
+    private final SettableMonotonicObservableSupplier<TabModel> mTabModelSupplier =
+            ObservableSuppliers.createMonotonic();
+    private final SettableNonNullObservableSupplier<Boolean> mIsVisibleSupplier =
+            ObservableSuppliers.createNonNull(false);
+    private final SettableNonNullObservableSupplier<Boolean> mIsAnimatingSupplier =
+            ObservableSuppliers.createNonNull(false);
+    private final SettableMonotonicObservableSupplier<EdgeToEdgeController> mEdgeToEdgeSupplier =
+            ObservableSuppliers.createMonotonic();
+    private final SettableNonNullObservableSupplier<TabBookmarker> mTabBookmarkerSupplier =
+            ObservableSuppliers.createNonNull(mTabBookmarker);
+    private final SettableNullableObservableSupplier<View> mOverlayViewSupplier =
+            ObservableSuppliers.createNullable();
 
     private SingleChildViewManager mOverlayViewManager;
     private MockTabModel mTabModel;
@@ -180,11 +192,15 @@ public class TabSwitcherPaneCoordinatorUnitTest {
 
     @Before
     public void setUp() {
+        // Required to allow SendTabToSelfTabCardLabelData to be initialized.
+        PersistedTabDataConfiguration.setUseTestConfig(true);
+
         when(mFaviconHelperJniMock.init()).thenReturn(1L);
         FaviconHelperJni.setInstanceForTesting(mFaviconHelperJniMock);
 
         TabGroupSyncFeaturesJni.setInstanceForTesting(mTabGroupSyncFeaturesJniMock);
         when(mTabGroupSyncFeaturesJniMock.isTabGroupSyncEnabled(mProfile)).thenReturn(true);
+        MultiInstanceOrchestratorFactory.setInstanceForTesting(mMultiInstanceOrchestrator);
         TabGroupSyncServiceFactory.setForTesting(mTabGroupSyncService);
         DataSharingServiceFactory.setForTesting(mDataSharingService);
         MessagingBackendServiceFactory.setForTesting(mMessagingBackendService);
@@ -201,14 +217,11 @@ public class TabSwitcherPaneCoordinatorUnitTest {
 
         PriceTrackingFeatures.setPriceAnnotationsEnabledForTesting(true);
         PriceTrackingFeatures.setIsSignedInAndSyncEnabledForTesting(true);
+        GlicEnabling.setEnabledForTesting(false);
 
         mTabModel = spy(new MockTabModel(mProfile, null));
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
-        when(mTabGroupModelFilter.isTabModelRestored()).thenReturn(true);
-
-        mTabGroupModelFilterSupplier.set(mTabGroupModelFilter);
-        mIsVisibleSupplier.set(false);
-        mIsAnimatingSupplier.set(false);
+        when(mTabModel.isTabModelRestored()).thenReturn(true);
+        mTabModelSupplier.set(mTabModel);
 
         BookmarkModel.setInstanceForTesting(mBookmarkModel);
 
@@ -237,7 +250,7 @@ public class TabSwitcherPaneCoordinatorUnitTest {
                 new TabSwitcherPaneCoordinator(
                         activity,
                         mProfileProvider,
-                        mTabGroupModelFilterSupplier,
+                        mTabModelSupplier,
                         mTabContentManager,
                         mBrowserControlsStateProvider,
                         mScrimManager,
@@ -289,9 +302,9 @@ public class TabSwitcherPaneCoordinatorUnitTest {
                 tab, index, TabLaunchType.FROM_CHROME_UI, TabCreationState.LIVE_IN_FOREGROUND);
         Token tabGroupId = new Token(1L, 2L);
         tab.setTabGroupId(tabGroupId);
-        when(mTabGroupModelFilter.representativeIndexOf(tab)).thenReturn(index);
-        when(mTabGroupModelFilter.getRepresentativeTabAt(index)).thenReturn(tab);
-        when(mTabGroupModelFilter.getTabsInGroup(tabGroupId)).thenReturn(List.of(tab));
+        when(mTabModel.representativeIndexOf(tab)).thenReturn(index);
+        when(mTabModel.getRepresentativeTabAt(index)).thenReturn(tab);
+        when(mTabModel.getTabsInGroup(tabGroupId)).thenReturn(List.of(tab));
         controller.resetWithListOfTabs(Collections.singletonList(tab));
 
         return controller;
@@ -301,7 +314,7 @@ public class TabSwitcherPaneCoordinatorUnitTest {
     public void tearDown() {
         mCoordinator.destroy();
         // Force animation to complete.
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertTrue(mDestroyed);
         mOverlayViewManager.destroy();
     }
@@ -326,7 +339,7 @@ public class TabSwitcherPaneCoordinatorUnitTest {
     @Test
     public void testSetInitialScrollIndexOffset() {
         int index = 8;
-        when(mTabGroupModelFilter.getCurrentRepresentativeTabIndex()).thenReturn(index);
+        when(mTabModel.getCurrentRepresentativeTabIndex()).thenReturn(index);
         mCoordinator.setInitialScrollIndexOffset();
 
         assertEquals(
@@ -340,7 +353,7 @@ public class TabSwitcherPaneCoordinatorUnitTest {
     @Test
     public void testRequestAccessibilityFocusOnCurrentTab() {
         int index = 2;
-        when(mTabGroupModelFilter.getCurrentRepresentativeTabIndex()).thenReturn(index);
+        when(mTabModel.getCurrentRepresentativeTabIndex()).thenReturn(index);
         mCoordinator.requestAccessibilityFocusOnCurrentTab();
 
         assertEquals(
@@ -401,11 +414,10 @@ public class TabSwitcherPaneCoordinatorUnitTest {
         int index = 0;
         mTabModel.addTab(
                 tab, index, TabLaunchType.FROM_CHROME_UI, TabCreationState.LIVE_IN_FOREGROUND);
-        when(mTabGroupModelFilter.representativeIndexOf(tab)).thenReturn(index);
-        when(mTabGroupModelFilter.getRepresentativeTabAt(index)).thenReturn(tab);
-        when(mTabGroupModelFilter.getIndividualTabAndGroupCount()).thenReturn(1);
-        when(mTabGroupModelFilter.getRelatedTabList(tabId))
-                .thenReturn(Collections.singletonList(tab));
+        when(mTabModel.representativeIndexOf(tab)).thenReturn(index);
+        when(mTabModel.getRepresentativeTabAt(index)).thenReturn(tab);
+        when(mTabModel.getIndividualTabAndGroupCount()).thenReturn(1);
+        when(mTabModel.getRelatedTabList(tabId)).thenReturn(Collections.singletonList(tab));
 
         Bitmap bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
         doCallback(2, (Callback<Bitmap> callback) -> callback.onResult(bitmap))
@@ -479,7 +491,6 @@ public class TabSwitcherPaneCoordinatorUnitTest {
 
         @TabId int tabId = 1;
         MockTab tab = MockTab.createAndInitialize(tabId, mProfile);
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
         mTabModel.addTab(tab, 0, TabLaunchType.FROM_CHROME_UI, TabCreationState.LIVE_IN_FOREGROUND);
 
         mCoordinator.onLongPressOnTabCard(
@@ -499,7 +510,6 @@ public class TabSwitcherPaneCoordinatorUnitTest {
 
         MockTab tab = MockTab.createAndInitialize(tabId, mProfile);
         tab.setTabGroupId(groupId);
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
         mTabModel.addTab(tab, 0, TabLaunchType.FROM_CHROME_UI, TabCreationState.LIVE_IN_FOREGROUND);
 
         mCoordinator.onLongPressOnTabCard(
@@ -512,7 +522,6 @@ public class TabSwitcherPaneCoordinatorUnitTest {
     public void testOnLongPressOnTabCard_FeatureEnabled_NullCardView() {
         @TabId int tabId = 1;
         MockTab tab = MockTab.createAndInitialize(tabId, mProfile);
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
         mTabModel.addTab(tab, 0, TabLaunchType.FROM_CHROME_UI, TabCreationState.LIVE_IN_FOREGROUND);
 
         mCoordinator.onLongPressOnTabCard(
@@ -554,7 +563,6 @@ public class TabSwitcherPaneCoordinatorUnitTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
     public void testPinnedTabStrip_FeatureEnabled() {
         assertNotNull(mCoordinator.getPinnedTabsCoordinatorForTesting());
 
@@ -572,22 +580,6 @@ public class TabSwitcherPaneCoordinatorUnitTest {
     }
 
     @Test
-    @DisableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
-    public void testPinnedTabStrip_FeatureDisabled() {
-        assertNull(mCoordinator.getPinnedTabsCoordinatorForTesting());
-
-        // Verify that the container is a LinearLayout with the original TabListRecyclerView.
-        ViewGroup container = (ViewGroup) mContainerView.getChildAt(0);
-        assertTrue(container instanceof FrameLayout);
-        FrameLayout pinnedTabsContainer = container.findViewById(R.id.pinned_tabs_container);
-        FrameLayout tabListContainer = container.findViewById(R.id.tab_list_container);
-        assertEquals(0, pinnedTabsContainer.getChildCount());
-        assertEquals(1, tabListContainer.getChildCount());
-        assertTrue(tabListContainer.getChildAt(0) instanceof TabListRecyclerView);
-    }
-
-    @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
     public void testTabModelObserver_didChangePinState_noPinnedTabs() {
         MockTab tab = new MockTab(1, mProfile);
 
@@ -595,19 +587,18 @@ public class TabSwitcherPaneCoordinatorUnitTest {
         mHubSearchBoxVisibilitySupplier.set(true);
 
         mTabModelObserver.didChangePinState(tab);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         assertTrue(mHubSearchBoxVisibilitySupplier.get());
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
     public void testTabModelObserver_didChangePinState_withPinnedTabs_searchNotVisible() {
         MockTab tab = new MockTab(1, mProfile);
 
         doReturn(1).when(mTabModel).getPinnedTabsCount();
 
         mTabModelObserver.didChangePinState(tab);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         assertFalse(mHubSearchBoxVisibilitySupplier.get());
     }
 

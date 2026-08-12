@@ -8,6 +8,7 @@
 
 #import "base/strings/sys_string_conversions.h"
 #import "base/test/scoped_feature_list.h"
+#import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/first_run/public/best_features_item.h"
 #import "ios/chrome/browser/first_run/public/features.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
@@ -15,11 +16,13 @@
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_manager_ios.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
-#import "ios/chrome/browser/signin/model/avatar_provider.h"
+#import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service_factory.h"
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/browser/welcome_back/model/features.h"
 #import "ios/chrome/browser/welcome_back/model/welcome_back_prefs.h"
 #import "ios/chrome/browser/welcome_back/ui/welcome_back_screen_consumer.h"
@@ -45,8 +48,10 @@ class WelcomeBackMediatorTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
 
     profile_ = std::move(builder).Build();
     prefs_ = profile_.get()->GetPrefs();
@@ -268,7 +273,7 @@ TEST_F(WelcomeBackMediatorTest, ConfirmUserInformationRetrieved) {
   AuthenticationService* auth_service_ =
       AuthenticationServiceFactory::GetForProfile(profile_.get());
   auth_service_->SignIn(fake_system_identity_,
-                        signin_metrics::AccessPoint::kUnknown);
+                        signin_metrics::AccessPoint::kStartPage);
 
   // Expect Lens, Enhanced Safe Browsing, and Autofill Passwords in Other Apps
   // and the personalized title.

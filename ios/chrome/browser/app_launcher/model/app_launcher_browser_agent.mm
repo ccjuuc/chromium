@@ -98,6 +98,11 @@ void RecordAppLaunchRequestMetrics(
       UMA_HISTOGRAM_BOOLEAN("Tab.ExternalApplicationOpened.Failed",
                             user_accepted);
       break;
+    case app_launcher_overlays::AppLaunchConfirmationRequestCause::
+        kShortcutsURL:
+      UMA_HISTOGRAM_BOOLEAN("Tab.ExternalApplicationOpened.ShortcutsURL",
+                            user_accepted);
+      break;
   }
 }
 
@@ -147,6 +152,9 @@ RequestCauseFromActionCause(AppLauncherAlertCause cause) {
     case AppLauncherAlertCause::kAppLaunchFailed:
       return app_launcher_overlays::AppLaunchConfirmationRequestCause::
           kAppLaunchFailed;
+    case AppLauncherAlertCause::kShortcutsURL:
+      return app_launcher_overlays::AppLaunchConfirmationRequestCause::
+          kShortcutsURL;
   }
 }
 
@@ -156,7 +164,7 @@ RequestCauseFromActionCause(AppLauncherAlertCause cause) {
 
 AppLauncherBrowserAgent::AppLauncherBrowserAgent(Browser* browser)
     : BrowserUserData(browser), tab_helper_delegate_(browser) {
-  StartObserving(browser_, Policy::kAccordingToFeature);
+  StartObserving(browser_);
   app_launcher_scene_state_observer_ = [[AppLauncherSceneStateObserver alloc]
       initWithTransitionCallback:
           base::BindRepeating(&AppLauncherBrowserAgent::TabHelperDelegate::

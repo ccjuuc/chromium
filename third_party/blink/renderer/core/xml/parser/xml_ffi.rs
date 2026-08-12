@@ -10,7 +10,7 @@ use xml::{
     common::{Position, TextPosition},
     namespace::{Namespace, NS_XMLNS_URI, NS_XML_URI},
     reader::{
-        EventReader as XmlEventReader,
+        ErrorKind, EventReader as XmlEventReader,
         XmlEvent::{
             CData, Characters, Comment, Doctype, EndDocument, EndElement, ProcessingInstruction,
             StartDocument, StartElement, Whitespace,
@@ -19,7 +19,7 @@ use xml::{
     Encoding, ParserConfig,
 };
 
-use crate::ffi::{AttributeNameValue, StandaloneInfo, XmlCallbacks};
+use crate::ffi::{AttributeNameValue, AttributeView, StandaloneInfo, XmlCallbacks};
 use entities::{HTML5_MAP, LAT1_MAP, SPECIAL_MAP, SYMBOL_MAP};
 use std::pin::Pin;
 
@@ -42,11 +42,12 @@ fn create_reader() -> XmlEventReader<Cursor<Vec<u8>>> {
         .override_encoding(Some(Encoding::Utf8))
         .ignore_invalid_encoding_declarations(true)
         .ignore_comments(false)
+        .ignore_end_of_stream(true)
         .allow_multiple_root_elements(false);
-    return XmlEventReader::new_with_config(cursor, parser_config);
+    XmlEventReader::new_with_config(cursor, parser_config)
 }
 
-fn create_read_state<'a>(callbacks: Pin<&mut XmlCallbacks>) -> Box<XmlReadState<'_>> {
+fn create_read_state(callbacks: Pin<&mut XmlCallbacks>) -> Box<XmlReadState<'_>> {
     let event_reader = create_reader();
     Box::new(XmlReadState {
         event_reader,
@@ -78,7 +79,7 @@ fn new_namespaces(existing: &Namespace, new: &Namespace, seen_first_event: bool)
         // it likely did not come from the input document.
         // See: https://github.com/kornelski/xml-rs/issues/48
         if existing.get(new_prefix).is_none_or(|uri| uri != new_uri)
-            && (seen_first_event || new_prefix != "" || new_uri != "")
+            && (seen_first_event || !new_prefix.is_empty() || !new_uri.is_empty())
         {
             result.put(new_prefix, new_uri);
         }
@@ -139,7 +140,7 @@ fn process_next_event(read_state: &mut XmlReadState) {
                 ProcessingInstruction { name, data } => {
                     let data = data.unwrap_or_default();
                     let data = data.trim_start();
-                    read_state.parser_callbacks.as_mut().ProcessingInstruction(&name, &data);
+                    read_state.parser_callbacks.as_mut().ProcessingInstruction(&name, data);
                 }
                 StartElement { name, attributes, namespace } => {
                     let local_name: &str = &name.local_name;
@@ -149,7 +150,7 @@ fn process_next_event(read_state: &mut XmlReadState) {
                     let ns: &str = &name.namespace.unwrap_or_default();
 
                     let new_namespaces = new_namespaces(
-                        &read_state.namespace_stack.last().unwrap_or(&Namespace::empty()),
+                        read_state.namespace_stack.last().unwrap_or(&Namespace::empty()),
                         &namespace,
                         read_state.seen_first_event,
                     );
@@ -209,7 +210,6 @@ fn process_next_event(read_state: &mut XmlReadState) {
         }
         Err(failure) => {
             read_state.error_details = Some(failure.clone());
-            return;
         }
     }
 }
@@ -257,60 +257,82 @@ fn saw_error(read_state: &XmlReadState) -> bool {
     read_state.error_details.is_some()
 }
 
+fn is_error_resumable(read_state: &XmlReadState) -> bool {
+    // See XML crate's parser.rs handle_eof() handling.
+    // which returns SyntaxError::UnbalancedRootElement on
+    // temporary end of read stream situations.
+    matches!(read_state.error_details.as_ref().map(|error| error.kind()),
+             Some(ErrorKind::Syntax(msg)) if
+             msg.starts_with("Unexpected end of stream"))
+}
+
+fn reset_error(read_state: &mut XmlReadState) {
+    read_state.error_details = None;
+}
+
 fn attributes_next<'a>(
     attributes: &mut AttributesIterator<'a>,
-    local_name: &mut String,
-    ns: &mut String,
-    prefix: &mut String,
-    value: &'a mut String,
+    mut attribute_view: Pin<&mut AttributeView>,
 ) -> bool {
     if let Some(attribute) = attributes.attributes.next() {
         let name = &attribute.name;
-        *local_name = name.local_name.clone();
-        *ns = name.namespace.clone().unwrap_or_default();
-        *prefix = name.prefix.clone().unwrap_or_default();
-        *value = attribute.value.clone();
+        // Prepare qualified name according to expectations of QualifiedName
+        // parser, concatenate here to avoid extra string conversions and
+        // allocations on the Blink C++ side.
+        match &name.prefix {
+            Some(pref) => {
+                let mut q_name = String::with_capacity(pref.len() + 1 + name.local_name.len());
+                q_name.push_str(pref);
+                q_name.push(':');
+                q_name.push_str(&name.local_name);
+                attribute_view.as_mut().Populate(
+                    &q_name,
+                    name.namespace.as_deref().unwrap_or_default(),
+                    &attribute.value,
+                );
+            }
+            _ => {
+                attribute_view.as_mut().Populate(
+                    &name.local_name,
+                    name.namespace.as_deref().unwrap_or_default(),
+                    &attribute.value,
+                );
+            }
+        }
         return true;
     }
     false
 }
 
-fn namespaces_next<'a>(
-    namespaces_iterator: &'a mut NamespacesIterator,
+fn namespaces_next(
+    namespaces_iterator: &mut NamespacesIterator,
     prefix: &mut String,
     uri: &mut String,
 ) -> bool {
-    loop {
-        if let Some(namespace) = namespaces_iterator.namespaces.next() {
-            // TODO(drott): Why does the library generate these default ones?
-            // TODO(drott): Why do we see an empty namespace here for
-            // fast/dom/attribute-namespaces-get-set.html and XML like:
-            // <root xmlns:foo=\"http://www.example.com\" attr=\"test2\" foo:attr=\"test\" />
-            // and virtual/rust-xml/fast/xmlhttprequest/xmlhttprequest-get.xhtml
-            // Filed as: https://github.com/kornelski/xml-rs/issues/50
+    for namespace in namespaces_iterator.namespaces.by_ref() {
+        // TODO(drott): Why does the library generate these default ones?
+        // TODO(drott): Why do we see an empty namespace here for
+        // fast/dom/attribute-namespaces-get-set.html and XML like:
+        // <root xmlns:foo=\"http://www.example.com\" attr=\"test2\" foo:attr=\"test\" />
+        // and virtual/rust-xml/fast/xmlhttprequest/xmlhttprequest-get.xhtml
+        // Filed as: https://github.com/kornelski/xml-rs/issues/50
 
-            // Letting the empty namespace and empty URL pass through here
-            // is important to reset the default namespace to none.
-            if (namespace.0 == "xml" && namespace.1 == NS_XML_URI)
-                || (namespace.0 == "xmlns" && namespace.1 == NS_XMLNS_URI)
-            {
-                continue;
-            }
-
-            *prefix = namespace.0.to_string();
-            *uri = namespace.1.to_string();
-            return true;
-        } else {
-            break;
+        // Letting the empty namespace and empty URL pass through here
+        // is important to reset the default namespace to none.
+        if (namespace.0 == "xml" && namespace.1 == NS_XML_URI)
+            || (namespace.0 == "xmlns" && namespace.1 == NS_XMLNS_URI)
+        {
+            continue;
         }
+
+        *prefix = namespace.0.to_string();
+        *uri = namespace.1.to_string();
+        return true;
     }
     false
 }
 
-fn parse_attributes<'a>(
-    attributes_string: &'a [u8],
-    success: &mut bool,
-) -> Vec<AttributeNameValue> {
+fn parse_attributes(attributes_string: &[u8], success: &mut bool) -> Vec<AttributeNameValue> {
     let mut reader = create_reader();
 
     let buffer = reader.source_mut().get_mut();
@@ -375,6 +397,7 @@ mod ffi {
         // strings, so one way to convey that to the C++ side is to carry an
         // extra boolean - which we require to be able to distinguish between a
         // null and an empty namespace URI.
+        #[allow(clippy::too_many_arguments)]
         fn StartElementNs(
             self: Pin<&mut XmlCallbacks>,
             local_name: &str,
@@ -391,12 +414,20 @@ mod ffi {
         fn Comment(self: Pin<&mut XmlCallbacks>, comment: &str);
         fn DocType(self: Pin<&mut XmlCallbacks>, name: &str, public_id: &str, system_id: &str);
         fn EndDocument(self: Pin<&mut XmlCallbacks>);
+
+        type AttributeView;
+        fn Populate(self: Pin<&mut AttributeView>, q_name: &str, attr_ns: &str, value: &str);
     }
 
     extern "Rust" {
         type XmlReadState<'a>;
         type AttributesIterator<'a>;
         type NamespacesIterator<'a>;
+
+        /// # Safety
+        ///
+        /// Marked unsafe because functions with explicit lifetimes in a cxx
+        /// bridge require unsafe qualification.
         unsafe fn create_read_state<'a>(
             callbacks: Pin<&'a mut XmlCallbacks>,
         ) -> Box<XmlReadState<'a>>;
@@ -415,19 +446,27 @@ mod ffi {
             col: &mut u64,
         ) -> bool;
         fn saw_error(read_state: &XmlReadState) -> bool;
+        fn is_error_resumable(read_state: &XmlReadState) -> bool;
+        fn reset_error(read_state: &mut XmlReadState);
 
-        unsafe fn parse_attributes<'a>(
-            attributes_string: &'a [u8],
+        fn parse_attributes(
+            attributes_string: &[u8],
             success: &mut bool,
         ) -> Vec<AttributeNameValue>;
 
+        /// # Safety
+        ///
+        /// Marked unsafe because functions with explicit lifetimes in a cxx
+        /// bridge require unsafe qualification.
         unsafe fn attributes_next<'a>(
             attributes: &mut AttributesIterator<'a>,
-            local_name: &mut String,
-            ns: &mut String,
-            prefix: &mut String,
-            value: &'a mut String,
+            mut attribute_view: Pin<&mut AttributeView>,
         ) -> bool;
+
+        /// # Safety
+        ///
+        /// Marked unsafe because functions with explicit lifetimes in a cxx
+        /// bridge require unsafe qualification.
         unsafe fn namespaces_next<'a>(
             namespaces_iterator: &mut NamespacesIterator<'a>,
             prefix: &mut String,

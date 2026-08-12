@@ -201,7 +201,7 @@ suite('Basic', function() {
         Router.getInstance().getQueryParameters().toString());
 
     Router.getInstance().navigateTo(
-        routes.SEARCH_ENGINES, undefined,
+        routes.SEARCH, undefined,
         /* removeSearch */ true);
     assertEquals('', Router.getInstance().getQueryParameters().toString());
   });
@@ -281,7 +281,7 @@ suite('Basic', function() {
   test('pageVisibility affects route availability', function() {
     resetPageVisibilityForTesting({
       appearance: false,
-      autofill: false,
+      yourSavedInfo: false,
       defaultBrowser: false,
       onStartup: false,
       reset: false,
@@ -331,84 +331,7 @@ suite('Basic', function() {
     assertEquals(routes, routesLocal2);
   });
 
-  test('autofillAi route defined', function() {
-    resetPageVisibilityForTesting({
-      autofill: true,
-    });
-    loadTimeData.overrideValues({
-      enableYourSavedInfoSettingsPage: false,
-      showAutofillAiControl: true,
-    });
-    resetRouterForTesting();
-    assertTrue(!!routes.AUTOFILL_AI);
-  });
 
-  test('autofillAi route not defined', function() {
-    resetPageVisibilityForTesting({
-      autofill: true,
-    });
-    loadTimeData.overrideValues({
-      showAutofillAiControl: false,
-    });
-    resetRouterForTesting();
-    assertFalse(!!routes.AUTOFILL_AI);
-  });
-
-  test('privacySandbox routes defined', function() {
-    // Case 1
-    loadTimeData.overrideValues({
-      isPrivacySandboxRestricted: true,
-      isPrivacySandboxRestrictedNoticeEnabled: false,
-    });
-    resetPageVisibilityForTesting();
-    resetRouterForTesting();
-
-    assertFalse(!!routes.PRIVACY_SANDBOX);
-    assertFalse(!!routes.PRIVACY_SANDBOX_TOPICS);
-    assertFalse(!!routes.PRIVACY_SANDBOX_MANAGE_TOPICS);
-    assertFalse(!!routes.PRIVACY_SANDBOX_FLEDGE);
-    assertFalse(!!routes.PRIVACY_SANDBOX_AD_MEASUREMENT);
-
-    // Case 2
-    loadTimeData.overrideValues({
-      isPrivacySandboxRestricted: false,
-      isPrivacySandboxRestrictedNoticeEnabled: false,
-    });
-    resetPageVisibilityForTesting();
-    resetRouterForTesting();
-
-    assertTrue(!!routes.PRIVACY_SANDBOX);
-    assertTrue(!!routes.PRIVACY_SANDBOX_TOPICS);
-    assertTrue(!!routes.PRIVACY_SANDBOX_MANAGE_TOPICS);
-    assertTrue(!!routes.PRIVACY_SANDBOX_FLEDGE);
-    assertTrue(!!routes.PRIVACY_SANDBOX_AD_MEASUREMENT);
-
-    // Case 3
-    loadTimeData.overrideValues({
-      isPrivacySandboxRestricted: true,
-      isPrivacySandboxRestrictedNoticeEnabled: true,
-    });
-    resetPageVisibilityForTesting();
-    resetRouterForTesting();
-
-    assertTrue(!!routes.PRIVACY_SANDBOX);
-    assertFalse(!!routes.PRIVACY_SANDBOX_TOPICS);
-    assertFalse(!!routes.PRIVACY_SANDBOX_MANAGE_TOPICS);
-    assertFalse(!!routes.PRIVACY_SANDBOX_FLEDGE);
-    assertTrue(!!routes.PRIVACY_SANDBOX_AD_MEASUREMENT);
-  });
-
-  test('Your saved info route existence', function() {
-    loadTimeData.overrideValues({enableYourSavedInfoSettingsPage: false});
-    resetPageVisibilityForTesting();
-    resetRouterForTesting();
-    assertFalse(!!routes.YOUR_SAVED_INFO);
-
-    loadTimeData.overrideValues({enableYourSavedInfoSettingsPage: true});
-    resetPageVisibilityForTesting();
-    resetRouterForTesting();
-    assertTrue(!!routes.YOUR_SAVED_INFO);
-  });
 
   // <if expr="not is_chromeos">
   test('account route existence', function() {
@@ -435,6 +358,18 @@ suite('Basic', function() {
     assertTrue(!!routes.GOOGLE_SERVICES);
   });
   // </if>
+
+  test('search engines route existence', function() {
+    loadTimeData.overrideValues({searchSettingsUpdate: false});
+    resetPageVisibilityForTesting();
+
+    resetRouterForTesting();
+    assertTrue(!!routes.SEARCH_ENGINES);
+
+    loadTimeData.overrideValues({searchSettingsUpdate: true});
+    resetRouterForTesting();
+    assertFalse(!!routes.SEARCH_ENGINES);
+  });
 });
 
 suite('DynamicParameters', function() {
@@ -453,8 +388,8 @@ suite('DynamicParameters', function() {
     const params = new URLSearchParams();
     params.set('bar', 'b=z');
     params.set('biz', '3');
-    Router.getInstance().navigateTo(routes.SEARCH_ENGINES, params);
-    assertEquals(routes.SEARCH_ENGINES, Router.getInstance().getCurrentRoute());
+    Router.getInstance().navigateTo(routes.BASIC, params);
+    assertEquals(routes.BASIC, Router.getInstance().getCurrentRoute());
     assertEquals('b=z', Router.getInstance().getQueryParameters().get('bar'));
     assertEquals('3', Router.getInstance().getQueryParameters().get('biz'));
     assertEquals('?bar=b%3Dz&biz=3', window.location.search);

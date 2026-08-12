@@ -10,6 +10,7 @@
 
 #include "base/memory/scoped_refptr.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "base/types/pass_key.h"
 #include "components/viz/common/view_transition_element_resource_id.h"
 #include "third_party/blink/public/common/frame/view_transition_state.h"
@@ -24,6 +25,7 @@
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/view_transition/view_transition_request_forward.h"
+#include "third_party/blink/renderer/core/view_transition/view_transition_skip_reason.h"
 #include "third_party/blink/renderer/core/view_transition/view_transition_style_tracker.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/graphics/paint/clip_paint_property_node.h"
@@ -45,6 +47,15 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
                                    public ChromeClient::CommitObserver {
  public:
   using PassKey = base::PassKey<ViewTransition>;
+
+  // Indicates how the promise should be handled.
+  enum class PromiseResponse {
+    kResolve,
+    kRejectAbort,
+    kRejectInvalidState,
+    kRejectTimeout
+  };
+
   class Delegate {
    public:
     virtual ~Delegate() = default;
@@ -54,6 +65,8 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
     virtual void OnSkipTransitionWithPendingCallback(ViewTransition*) = 0;
     virtual void OnSkippedTransitionDOMCallback(ViewTransition*) = 0;
     virtual void OnTransitionCaptured(ViewTransition*) = 0;
+    virtual void OnCaptureCommitted(ViewTransition*) = 0;
+    virtual bool IsEarlyCallbackEnabled() const { return false; }
   };
 
   // Creates and starts a same-document ViewTransition initiated using the
@@ -65,8 +78,12 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
       Delegate*,
       ViewTransition* previously_active);
 
-  // Creates a skipped transition that still runs the specified callbacks.
-  static ViewTransition* CreateSkipped(Element*, V8ViewTransitionCallback*);
+  static ViewTransition* CreateSkipped(
+      Element*,
+      V8ViewTransitionCallback*,
+      PromiseResponse response,
+      ViewTransitionSkipReason reason,
+      const std::optional<Vector<String>>& types = std::nullopt);
 
   // Creates a ViewTransition to cache the state of a Document before a
   // navigation. The cached state is provided to the caller using the
@@ -87,6 +104,12 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
                                                          ViewTransitionState,
                                                          Delegate*);
 
+  // Creates a ViewTransition to display a preview of a cross-document
+  // navigation.
+  static ViewTransition* CreatePreview(Document*,
+                                       const Vector<String>& types,
+                                       Delegate*);
+
   // Script-based constructor.
   ViewTransition(PassKey,
                  Element*,
@@ -94,8 +117,10 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
                  const std::optional<Vector<String>>& types,
                  Delegate*,
                  ViewTransition* previously_active);
-  // Skipped transition constructor.
-  ViewTransition(PassKey, Element*, V8ViewTransitionCallback*);
+  ViewTransition(PassKey,
+                 Element*,
+                 V8ViewTransitionCallback*,
+                 const std::optional<Vector<String>>& types);
   // Navigation-initiated for-snapshot constructor.
   ViewTransition(PassKey,
                  Document*,
@@ -105,6 +130,8 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
                  Delegate*);
   // Navigation-initiated from-snapshot constructor.
   ViewTransition(PassKey, Document*, ViewTransitionState, Delegate*);
+  // Navigation preview constructor.
+  ViewTransition(PassKey, Document*, const Vector<String>& types, Delegate*);
 
   DOMViewTransition* GetScriptDelegate() { return script_delegate_.Get(); }
 
@@ -214,7 +241,13 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
 
   bool IsDone() const { return IsTerminalState(state_); }
 
+  bool NavigationSnapshotComplete() {
+    return state_ == State::kTransitionStateCallbackDispatched;
+  }
+
   bool HasActiveAnimations() const;
+
+  bool HasIncompatibleStyle() const;
 
   // Returns true if this object was created to cache a snapshot of the current
   // Document for a navigation.
@@ -234,6 +267,8 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
     return creation_type_ == CreationType::kFromSnapshot;
   }
 
+  bool IsPreview() const { return creation_type_ == CreationType::kPreview; }
+
   // Notifies the transition that frames are being produced and that the
   // transition can start the animation phase (starting by capturing the
   // incoming elements). No-op unless the transition is created from a
@@ -244,18 +279,13 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
   // block concept, has up to date style.
   void UpdateSnapshotContainingBlockStyle();
 
-  // Indicates how the promise should be handled.
-  enum class PromiseResponse {
-    kResolve,
-    kRejectAbort,
-    kRejectInvalidState,
-    kRejectTimeout
-  };
-  void SkipTransition(PromiseResponse response = PromiseResponse::kRejectAbort);
+  void SkipTransition(PromiseResponse response,
+                      ViewTransitionSkipReason reason);
 
   // This can be called inside of the lifecycle. It will skip the transition
   // whenever view transition steps are run within the lifecycle.
-  void SkipTransitionSoon();
+  void SkipTransitionSoon(PromiseResponse response,
+                          ViewTransitionSkipReason reason);
 
   // Dispatched when the promise returned from the author's update callback has
   // resolved and start phase of the animation can be initiated. Note: this is
@@ -270,7 +300,8 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
   bool IsGeneratingPseudo(
       const ViewTransitionPseudoElementBase& pseudo_element) const;
 
-  Element* Scope() const { return scope_.Get(); }
+  Element* Scope() const;
+  bool NeedsContainmentForDurationOfCapture() const;
 
   // The start of a VT cancels the previous transition; however, first VT's
   // DOM callback must still run. To avoid capturing its DOM changes are part
@@ -278,8 +309,10 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
   // has started the DOM callback. We do not wait for completion as the callback
   // may be asynchronous and might never complete.
   void NotifySkippedTransitionDOMCallbackScheduled();
+  void OnCaptureCommitted();
   void NotifyInvokeDOMChangeCallback();
   bool PendingDomCallback();
+  void OnCaptureRectsReceived();
 
   // Notifies the view transition object when we start or stop style processing
   // for getComputedStyle.
@@ -310,6 +343,7 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
  private:
   friend class ViewTransitionTest;
   friend class AXViewTransitionTest;
+  friend class ViewTransitionTestUtils;
 
   // Tracks how the ViewTransition object was created.
   enum class CreationType {
@@ -321,6 +355,10 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
     // Created when a navigation is initiated to the Document associated with
     // this ViewTransition.
     kFromSnapshot,
+
+    // Created when displaying a preview in preparation for a cross-document
+    // navigation.
+    kPreview
   };
 
   // Note the states are possibly overly verbose, and several states can
@@ -336,15 +374,18 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
     kCaptureTagDiscovery,
     kCaptureRequestPending,
     kCapturing,
+    kCaptureCommitted,
     kCaptured,
 
     // Navigation specific states.
     kTransitionStateCallbackDispatched,
     kWaitForRenderBlock,
+    kPreview,
 
     // Callback states.
     kDOMCallbackRunning,
     kDOMCallbackFinished,
+    kWaitingForCaptureRects,
 
     // Animate states.
     kAnimateTagDiscovery,
@@ -362,6 +403,8 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
   // Advance to the new state. This returns true if the state should be
   // processed immediately.
   bool AdvanceTo(State state);
+  bool NeedsContainmentForDurationOfCapture(State state) const;
+  void SaveRememberedSizeIfNeeded(State old_state, State new_state);
 
   bool CanAdvanceTo(State state) const;
   static bool StateRunsInViewTransitionStepsDuringMainFrame(State state);
@@ -402,8 +445,6 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
   // API are never cross frame sink.
   bool MaybeCrossFrameSink() const;
 
-  void LogIfDocumentElementChanged() const;
-
   static int NextId() { return next_id_++; }
 
   State state_ = State::kInitial;
@@ -412,11 +453,10 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
   Member<Document> document_;
 
   // For a scoped transition, this is the element scope.
-  // For a document transition, this is the document element at the time the
-  // ViewTransition was created.
+  // For a document transition, this is null.
   // TODO(crbug.com/394052227): Consider skipping the transition if the identity
   // of the document element changes.
-  Member<Element> scope_;
+  Member<Element> scope_ = nullptr;
   bool has_document_scope_ = false;
 
   Delegate* const delegate_ = nullptr;
@@ -437,10 +477,11 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
   // selectively pausing animations for a CC instance is difficult.
   class ScopedPauseRendering {
    public:
-    explicit ScopedPauseRendering(const Element&, bool has_document_scope);
+    explicit ScopedPauseRendering(const Document&, bool has_document_scope);
     ~ScopedPauseRendering();
 
     bool ShouldThrottleRendering() const;
+    void SetDelayUntilVisibilityChange();
 
    private:
     std::unique_ptr<cc::ScopedPauseRendering> cc_paused_;
@@ -470,10 +511,34 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
   bool in_main_lifecycle_update_ = false;
   bool dom_callback_succeeded_ = false;
   bool first_animating_frame_ = true;
-  bool context_destroyed_ = false;
   bool pending_skip_view_transitions_ = false;
+  PromiseResponse pending_skip_response_ = PromiseResponse::kRejectAbort;
+  ViewTransitionSkipReason pending_skip_reason_ =
+      ViewTransitionSkipReason::kExpected;
+  bool capture_rects_received_ = false;
 
   int wait_until_pending_promise_count_ = 0;
+
+  // Time at which we processed the initial state, used for metrics.
+  base::TimeTicks initial_state_processing_time_;
+
+  // The following timing variables are only set and used for script-based
+  // transitions (CreationType::kScript).
+
+  // Time at which we started capture tag discovery, used for metrics.
+  base::TimeTicks capture_tag_discovery_start_time_;
+
+  // Time at which we started capturing, used for metrics.
+  base::TimeTicks capture_request_start_time_;
+
+  // Time at which we started running the DOM callback, used for metrics.
+  base::TimeTicks dom_callback_start_time_;
+
+  // Time at which the DOM callback finished, used for metrics.
+  base::TimeTicks dom_callback_finished_time_;
+
+  // Time at which we sent the animate request, used for metrics.
+  base::TimeTicks animate_request_time_;
 
   static int next_id_;
 };

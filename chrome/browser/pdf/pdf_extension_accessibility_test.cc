@@ -13,7 +13,6 @@
 #include <variant>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -34,6 +33,7 @@
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/pdf/pdf_extension_test_base.h"
 #include "chrome/browser/pdf/pdf_extension_test_util.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_browsertest_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/common/pref_names.h"
@@ -130,7 +130,7 @@ std::string DumpPdfAccessibilityTree(const ui::AXTreeUpdate& ax_tree,
 
     // Exclude the status subtree from `ax_tree_dump` if they exist in the tree.
     // Tests don't expect them to be included in the dump.
-    if (base::Contains(status_subtree_ids, node.id)) {
+    if (status_subtree_ids.contains(node.id)) {
       continue;
     }
 
@@ -335,7 +335,7 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionAccessibilityTestWithOopifOverride,
   ASSERT_MULTILINE_STREQ(kExpectedPDFAXTree, ax_tree_dump);
 }
 
-// Flaky on ChromiumOS MSan. See https://crbug.com/1484869.
+// Flaky on ChromiumOS MSan. See https://crbug.com/40932967.
 // Flaky on Mac: https://crbug.com/334099836.
 #if (BUILDFLAG(IS_CHROMEOS) && defined(MEMORY_SANITIZER)) || BUILDFLAG(IS_MAC)
 #define MAYBE_PdfAccessibilityWordBoundaries \
@@ -515,7 +515,7 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionAccessibilityTestWithOopifOverride,
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
 // Test a particular PDF encountered in the wild that triggered a crash
-// when accessibility is enabled.  (http://crbug.com/668724)
+// when accessibility is enabled.  (http://crbug.com/40086082)
 IN_PROC_BROWSER_TEST_P(PDFExtensionAccessibilityTestWithOopifOverride,
                        PdfAccessibilityTextRunCrash) {
   content::ScopedAccessibilityModeOverride mode_override(ui::kAXModeComplete);
@@ -680,7 +680,7 @@ class PDFExtensionAccessibilityTextExtractionTest
   void FindAXNodes(ui::AXNode* current,
                    const base::flat_set<ax::mojom::Role>& roles,
                    std::vector<ui::AXNode*>* results) {
-    if (base::Contains(roles, current->GetRole())) {
+    if (roles.contains(current->GetRole())) {
       results->push_back(current);
     }
     for (ui::AXNode* child : current->children()) {
@@ -976,12 +976,9 @@ class PDFExtensionAccessibilityTreeDumpTest
       case ui::AXApiType::kFuchsia:
         return;
     }
-    EXPECT_TRUE(base::Contains(output_lines[1], banner_role))
-        << output_lines[1];
-    EXPECT_TRUE(base::Contains(output_lines[2], status_role))
-        << output_lines[2];
-    EXPECT_TRUE(base::Contains(output_lines[3], static_text_role))
-        << output_lines[3];
+    EXPECT_TRUE(output_lines[1].contains(banner_role)) << output_lines[1];
+    EXPECT_TRUE(output_lines[2].contains(status_role)) << output_lines[2];
+    EXPECT_TRUE(output_lines[3].contains(static_text_role)) << output_lines[3];
 
     output_lines.erase(output_lines.begin() + 1, output_lines.begin() + 4);
   }
@@ -1130,6 +1127,34 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionAccessibilityNavigationTest,
   // Test that navigation occurred correctly.
   const GURL& expected_url = GetActiveWebContents()->GetLastCommittedURL();
   EXPECT_EQ("https://bing.com/", expected_url.spec());
+}
+
+class PDFExtensionAccessibilityHeuristicsTreeDumpTest
+    : public PDFExtensionAccessibilityTreeDumpTest {
+ public:
+  PDFExtensionAccessibilityHeuristicsTreeDumpTest() = default;
+  ~PDFExtensionAccessibilityHeuristicsTreeDumpTest() override = default;
+
+ protected:
+  std::vector<base::test::FeatureRefAndParams> GetEnabledFeatures()
+      const override {
+    std::vector<base::test::FeatureRefAndParams> enabled =
+        PDFExtensionAccessibilityTreeDumpTest::GetEnabledFeatures();
+    enabled.push_back({features::kPdfAccessibilityHeuristicEnhancements, {}});
+    return enabled;
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         PDFExtensionAccessibilityHeuristicsTreeDumpTest,
+                         testing::Combine(testing::ValuesIn(GetAXTestValues()),
+                                          testing::Bool()),
+                         PDFExtensionAccessibilityTreeDumpTestPassToString());
+
+IN_PROC_BROWSER_TEST_P(PDFExtensionAccessibilityHeuristicsTreeDumpTest,
+                       HeadingHeuristics) {
+  RunPDFTest(FILE_PATH_LITERAL("heading-heuristics.pdf"),
+             /*expected_subtext=*/"Page 1");
 }
 
 // This test suite contains simple tests for the PDF OCR feature.
@@ -1298,6 +1323,15 @@ class PdfSearchifyIntegrationTest
     }
 
     EnableScreenReader();
+
+    base::test::TestFuture<bool> future;
+    auto* router =
+        screen_ai::ScreenAIServiceRouterFactory::GetForBrowserContext(
+            browser()->GetProfile());
+    router->GetServiceStateAsync(
+        screen_ai::ScreenAIServiceRouter::Service::kOCR, future.GetCallback());
+    ASSERT_TRUE(future.Wait());
+    ASSERT_EQ(future.Get(), IsOcrAvailable());
   }
 
   void TearDownOnMainThread() override {
@@ -1449,14 +1483,7 @@ IN_PROC_BROWSER_TEST_P(PdfSearchifyIntegrationTest, EnsureScreenAIInitializes) {
   // Since screen reader is on, library download is triggered and if it is
   // successful, initialization of Screen AI OCR service will be successful.
 
-  // Wait for Screen AI OCR service to either get ready or fail.
-  base::test::TestFuture<bool> future;
-  auto* router = screen_ai::ScreenAIServiceRouterFactory::GetForBrowserContext(
-      browser()->profile());
-  router->GetServiceStateAsync(screen_ai::ScreenAIServiceRouter::Service::kOCR,
-                               future.GetCallback());
-  ASSERT_TRUE(future.Wait());
-  ASSERT_EQ(future.Get(), IsOcrAvailable());
+  // OCR service readiness is already checked in SetUpOnMainThread().
 
   // Library download state should not depend on OcrService availability.
   screen_ai::ScreenAIInstallState::State expected_state =

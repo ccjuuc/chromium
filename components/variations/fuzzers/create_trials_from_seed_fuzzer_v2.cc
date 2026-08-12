@@ -19,6 +19,7 @@
 #include "components/variations/client_filterable_state.h"
 #include "components/variations/entropy_provider.h"
 #include "components/variations/fuzzers/create_trials_from_seed_test_case.pb.h"
+#include "components/variations/fuzzers/create_trials_from_seed_test_case_fuzzable.pb.h"
 #include "components/variations/proto/study.pb.h"
 #include "components/variations/service/limited_entropy_randomization.h"
 #include "components/variations/variations_layers.h"
@@ -47,6 +48,10 @@ std::unique_ptr<ClientFilterableState> CreateClientFilterableState(
       base::BindLambdaForTesting([spec]() {
         return base::flat_set<uint64_t>(spec.google_groups().begin(),
                                         spec.google_groups().end());
+      }),
+      base::BindLambdaForTesting([spec]() {
+        return base::flat_set<std::string>(spec.enterprise_groups().begin(),
+                                           spec.enterprise_groups().end());
       }));
 
   if (spec.has_locale()) {
@@ -165,7 +170,6 @@ void CreateTrialsFromSeedFuzzer(
   StickyActivationManager sticky_activation_manager(/*local_state=*/nullptr);
   VariationsSeedProcessor(sticky_activation_manager)
       .CreateTrialsFromSeed(seed, *client_state,
-                            base::BindRepeating(NoopUIStringOverrideCallback),
                             *entropy_providers, layers, &feature_list);
 
   // There are numerous conditions for which the seed could be rejected. They
@@ -182,9 +186,14 @@ void CreateTrialsFromSeedFuzzer(
 
 }  // namespace
 
-DEFINE_PROTO_FUZZER(const variations::CreateTrialsFromSeedTestCase& test_case) {
+DEFINE_PROTO_FUZZER(
+    const fuzzable::variations::CreateTrialsFromSeedTestCase& test_case) {
+  variations::CreateTrialsFromSeedTestCase lite_test_case;
+  if (!lite_test_case.ParseFromString(test_case.SerializeAsString())) {
+    return;
+  }
   static Environment env;
-  CreateTrialsFromSeedFuzzer(test_case, &env.pref_service,
+  CreateTrialsFromSeedFuzzer(lite_test_case, &env.pref_service,
                              &env.enabled_state_provider);
 }
 

@@ -26,7 +26,6 @@
 #include "net/dns/public/resolve_error_info.h"
 #include "net/http/http_connection_info.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
-#include "third_party/blink/public/common/navigation/impression.h"
 #include "third_party/blink/public/mojom/loader/mixed_content.mojom.h"
 #include "third_party/blink/public/mojom/loader/referrer.mojom-forward.h"
 #include "url/gurl.h"
@@ -172,10 +171,6 @@ class NavigationSimulatorImpl : public NavigationSimulator,
 
   void set_origin(const url::Origin& origin) { origin_ = origin; }
 
-  void set_impression(const blink::Impression& impression) {
-    impression_ = impression;
-  }
-
   void set_skip_service_worker(bool skip_service_worker) {
     skip_service_worker_ = skip_service_worker;
   }
@@ -220,12 +215,6 @@ class NavigationSimulatorImpl : public NavigationSimulator,
   void set_insecure_navigations_set(
       const std::vector<uint32_t> insecure_navigations_set) {
     insecure_navigations_set_ = insecure_navigations_set;
-  }
-
-  void set_has_potentially_trustworthy_unique_origin(
-      bool has_potentially_trustworthy_unique_origin) {
-    has_potentially_trustworthy_unique_origin_ =
-        has_potentially_trustworthy_unique_origin;
   }
 
   void set_supports_loading_mode_header(std::string value) {
@@ -395,7 +384,6 @@ class NavigationSimulatorImpl : public NavigationSimulator,
   std::optional<net::SSLInfo> ssl_info_;
   std::optional<blink::PageState> page_state_;
   std::optional<url::Origin> origin_;
-  std::optional<blink::Impression> impression_;
   int64_t post_id_ = -1;
   bool skip_service_worker_ = false;
   std::optional<url::Origin> initiator_origin_;
@@ -411,7 +399,6 @@ class NavigationSimulatorImpl : public NavigationSimulator,
   blink::mojom::InsecureRequestPolicy insecure_request_policy_ =
       blink::mojom::InsecureRequestPolicy::kLeaveInsecureRequestsAlone;
   std::vector<uint32_t> insecure_navigations_set_;
-  bool has_potentially_trustworthy_unique_origin_ = false;
 
   // Any DNS aliases, as read from CNAME records, for the request URL that
   // would be in the network::mojom::URLResponseHead. The alias chain order

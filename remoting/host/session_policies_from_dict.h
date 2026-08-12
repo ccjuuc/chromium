@@ -12,13 +12,13 @@
 
 namespace remoting {
 
-// Create SessionPolicies from the policy dictionary. nullopt is returned if
-// the dictionary contains invalid entries.
+// Create SessionPolicies from the policy dictionary. Returns `std::nullopt`
+// if any policy in `dict` is malformed or violates validation rules.
 // Note: When using PolicyWatcher, please pass the dictionary returned by
 // GetPlatformPolicies(). The dictionary passed to the PolicyUpdatedCallback is
 // a delta, but this function takes the full policy dictionary.
 std::optional<SessionPolicies> SessionPoliciesFromDict(
-    const base::Value::Dict& dict);
+    const base::DictValue& dict);
 
 }  // namespace remoting
 

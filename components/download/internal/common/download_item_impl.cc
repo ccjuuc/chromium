@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "base/check_is_test.h"
+#include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/format_macros.h"
 #include "base/functional/bind.h"
@@ -36,7 +37,6 @@
 #include "base/json/string_escape.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/observer_list.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -67,6 +67,7 @@
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/url_request/referrer_policy.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 #if BUILDFLAG(IS_ANDROID)
@@ -75,6 +76,7 @@
 
 #if BUILDFLAG(IS_MAC)
 #include "base/mac/mac_util.h"
+#include "base/time/time.h"
 #endif  // BUILDFLAG(IS_MAC)
 
 namespace download {
@@ -101,11 +103,26 @@ base::FilePath DownloadFileDetach(std::unique_ptr<DownloadFile> download_file) {
 
 base::FilePath MakeCopyOfDownloadFile(DownloadFile* download_file) {
   DCHECK(GetDownloadTaskRunner()->RunsTasksInCurrentSequence());
-  base::FilePath temp_file_path;
-  if (!base::CreateTemporaryFile(&temp_file_path))
+  base::FilePath temp_dir;
+  if (!base::GetTempDir(&temp_dir)) {
     return base::FilePath();
+  }
 
-  if (!base::CopyFile(download_file->FullPath(), temp_file_path)) {
+  base::FilePath temp_file_path;
+  base::File temp_file =
+      base::CreateAndOpenTemporaryFileInDir(temp_dir, &temp_file_path);
+  if (!temp_file.IsValid()) {
+    return base::FilePath();
+  }
+
+  base::File source_file(download_file->FullPath(),
+                         base::File::FLAG_OPEN | base::File::FLAG_READ);
+  if (!source_file.IsValid()) {
+    DeleteDownloadedFile(temp_file_path);
+    return base::FilePath();
+  }
+
+  if (!base::CopyFileContents(source_file, temp_file)) {
     DeleteDownloadedFile(temp_file_path);
     return base::FilePath();
   }
@@ -190,6 +207,8 @@ std::string GetDownloadDangerNames(DownloadDangerType type) {
       return "BLOCKED_SCAN_FAILED";
     case DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE:
       return "FORCE_SAVE_TO_GDRIVE";
+    case DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_ONEDRIVE:
+      return "FORCE_SAVE_TO_ONEDRIVE";
     case DOWNLOAD_DANGER_TYPE_MAX:
       NOTREACHED();
   }
@@ -421,6 +440,8 @@ DownloadItemImpl::DownloadItemImpl(
     request_headers_ = download_entry->request_headers;
     ukm_download_id_ = download_entry->ukm_download_id;
     bytes_wasted_ = download_entry->bytes_wasted;
+    request_info_.fetched_via_service_worker =
+        download_entry->fetched_via_service_worker;
   } else {
     ukm_download_id_ = ukm::NoURLSourceId();
   }
@@ -478,11 +499,12 @@ DownloadItemImpl::DownloadItemImpl(DownloadItemImplDelegate* delegate,
       allow_auto_open_after_completion_(info.allow_auto_open_after_completion)
 #endif  // BUILDFLAG(IS_ANDROID)
 {
+  request_info_.fetched_via_service_worker = info.fetched_via_service_worker;
   delegate_->Attach();
   Init(true /* actively downloading */, TYPE_ACTIVE_DOWNLOAD);
   allow_metered_ |= delegate_->IsActiveNetworkMetered();
 
-  TRACE_EVENT_INSTANT0("download", "DownloadStarted", TRACE_EVENT_SCOPE_THREAD);
+  TRACE_EVENT_INSTANT("download", "DownloadStarted");
 }
 
 // Constructing for the "Save Page As..." feature:
@@ -565,9 +587,9 @@ void DownloadItemImpl::ValidateDangerousDownload() {
 
   danger_type_ = DOWNLOAD_DANGER_TYPE_USER_VALIDATED;
 
-  TRACE_EVENT_INSTANT1("download", "DownloadItemSaftyStateUpdated",
-                       TRACE_EVENT_SCOPE_THREAD, "danger_type",
-                       GetDownloadDangerNames(danger_type_).c_str());
+  TRACE_EVENT_INSTANT("download", "DownloadItemSaftyStateUpdated",
+                      "danger_type",
+                      GetDownloadDangerNames(danger_type_).c_str());
 
   UpdateObservers();  // TODO(asanka): This is potentially unsafe. The download
                       // may not be in a consistent state or around at all after
@@ -590,6 +612,26 @@ void DownloadItemImpl::ValidateInsecureDownload() {
                       // invoking observers, but we keep it here because it is
                       // used in ValidateDangerousDownload(), too.
                       // http://crbug.com/586610
+
+  MaybeCompleteDownload();
+}
+
+void DownloadItemImpl::ConfirmNonDangerousDownload() {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK(!IsDone());
+  DCHECK(!IsDangerous());
+
+  DVLOG(20) << __func__ << "() download=" << DebugString(true);
+
+  if (IsDone() || IsDangerous()) {
+    return;
+  }
+
+  is_user_confirmed_ = true;
+
+  UpdateObservers();  // TODO(asanka): This is potentially unsafe. The download
+                      // may not be in a consistent state or around at all after
+                      // invoking observers. http://crbug.com/586610
 
   MaybeCompleteDownload();
 }
@@ -897,6 +939,11 @@ const std::vector<GURL>& DownloadItemImpl::GetUrlChain() const {
   return request_info_.url_chain;
 }
 
+void DownloadItemImpl::SetURLLoaderFactory(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
+  url_loader_factory_ = std::move(url_loader_factory);
+}
+
 const GURL& DownloadItemImpl::GetOriginalUrl() const {
   // Be careful about taking the front() of possibly-empty vectors!
   // http://crbug.com/190096
@@ -1058,6 +1105,10 @@ bool DownloadItemImpl::AllowAutoOpenAfterCompletion() {
 }
 #endif  // BUILDFLAG(IS_ANDROID)
 
+bool DownloadItemImpl::IsUserConfirmed() const {
+  return is_user_confirmed_;
+}
+
 bool DownloadItemImpl::IsDangerous() const {
   switch (danger_type_) {
     case DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE:
@@ -1076,6 +1127,7 @@ bool DownloadItemImpl::IsDangerous() const {
     case DOWNLOAD_DANGER_TYPE_PROMPT_FOR_LOCAL_PASSWORD_SCANNING:
     case DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED:
     case DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE:
+    case DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_ONEDRIVE:
       return true;
     case DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS:
     case DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT:
@@ -1510,9 +1562,8 @@ void DownloadItemImpl::DestinationUpdate(
 
   UpdateProgress(bytes_so_far, bytes_per_sec);
   received_slices_ = received_slices;
-  TRACE_EVENT_INSTANT1("download", "DownloadItemUpdated",
-                       TRACE_EVENT_SCOPE_THREAD, "bytes_so_far",
-                       GetReceivedBytes());
+  TRACE_EVENT_INSTANT("download", "DownloadItemUpdated", "bytes_so_far",
+                      GetReceivedBytes());
 
   if (IsPaused() && destination_info_.received_bytes == bytes_so_far)
     return;
@@ -1602,9 +1653,8 @@ void DownloadItemImpl::Init(bool active,
                       "download_item", std::move(active_data));
     ukm_download_id_ = ukm::NoURLSourceId();
   } else {
-    TRACE_EVENT_INSTANT1("download", "DownloadItemActive",
-                         TRACE_EVENT_SCOPE_THREAD, "download_item",
-                         std::move(active_data));
+    TRACE_EVENT_INSTANT("download", "DownloadItemActive", "download_item",
+                        std::move(active_data));
   }
 
   DVLOG(20) << __func__ << "() " << DebugString(true);
@@ -1690,11 +1740,6 @@ void DownloadItemImpl::Start(
                                         IsParallelDownloadEnabled());
     }
     RecordDownloadMimeType(mime_type_, transient_);
-    DownloadContent file_type = DownloadContentFromMimeType(mime_type_, false);
-    DownloadConnectionSecurity state = CheckDownloadConnectionSecurity(
-        new_create_info.url(), new_create_info.url_chain);
-    RecordDownloadValidationMetrics(DownloadMetricsCallsite::kDownloadItem,
-                                    state, file_type);
 
     if (!delegate_->IsOffTheRecord()) {
       RecordDownloadCountWithSource(NEW_DOWNLOAD_COUNT_NORMAL_PROFILE,
@@ -2389,6 +2434,10 @@ void DownloadItemImpl::TransitionTo(DownloadInternalState new_state) {
   DownloadInternalState old_state = state_;
   state_ = new_state;
 
+  if (IsDownloadDone(GetURL(), InternalToExternalState(new_state),
+                     last_reason_)) {
+    TruncateDataUrlAtTheEndIfNeeded(&request_info_.url_chain);
+  }
   DCHECK(IsSavePackageDownload()
              ? IsValidSavePackageStateTransition(old_state, new_state)
              : IsValidStateTransition(old_state, new_state))
@@ -2429,39 +2478,35 @@ void DownloadItemImpl::TransitionTo(DownloadInternalState new_state) {
       DCHECK(GetFullPath() == GetTargetFilePath())
           << "Current output path must match target path.";
 
-      TRACE_EVENT_INSTANT2("download", "DownloadItemCompleting",
-                           TRACE_EVENT_SCOPE_THREAD, "bytes_so_far",
-                           GetReceivedBytes(), "final_hash",
-                           destination_info_.hash);
+      TRACE_EVENT_INSTANT("download", "DownloadItemCompleting", "bytes_so_far",
+                          GetReceivedBytes(), "final_hash",
+                          destination_info_.hash);
       break;
 
     case COMPLETE_INTERNAL:
-      TRACE_EVENT_INSTANT1("download", "DownloadItemFinished",
-                           TRACE_EVENT_SCOPE_THREAD, "auto_opened",
-                           auto_opened_ ? "yes" : "no");
+      TRACE_EVENT_INSTANT("download", "DownloadItemFinished", "auto_opened",
+                          auto_opened_ ? "yes" : "no");
       break;
 
     case INTERRUPTED_INTERNAL:
       DCHECK(!download_file_)
           << "Download file must be released prior to interruption.";
       DCHECK_NE(last_reason_, DOWNLOAD_INTERRUPT_REASON_NONE);
-      TRACE_EVENT_INSTANT2("download", "DownloadItemInterrupted",
-                           TRACE_EVENT_SCOPE_THREAD, "interrupt_reason",
-                           DownloadInterruptReasonToString(last_reason_),
-                           "bytes_so_far", GetReceivedBytes());
+      TRACE_EVENT_INSTANT("download", "DownloadItemInterrupted",
+                          "interrupt_reason",
+                          DownloadInterruptReasonToString(last_reason_),
+                          "bytes_so_far", GetReceivedBytes());
       break;
 
     case RESUMING_INTERNAL:
-      TRACE_EVENT_INSTANT2("download", "DownloadItemResumed",
-                           TRACE_EVENT_SCOPE_THREAD, "interrupt_reason",
-                           DownloadInterruptReasonToString(last_reason_),
-                           "bytes_so_far", GetReceivedBytes());
+      TRACE_EVENT_INSTANT("download", "DownloadItemResumed", "interrupt_reason",
+                          DownloadInterruptReasonToString(last_reason_),
+                          "bytes_so_far", GetReceivedBytes());
       break;
 
     case CANCELLED_INTERNAL:
-      TRACE_EVENT_INSTANT1("download", "DownloadItemCancelled",
-                           TRACE_EVENT_SCOPE_THREAD, "bytes_so_far",
-                           GetReceivedBytes());
+      TRACE_EVENT_INSTANT("download", "DownloadItemCancelled", "bytes_so_far",
+                          GetReceivedBytes());
       break;
 
     case MAX_DOWNLOAD_INTERNAL_STATE:
@@ -2498,9 +2543,9 @@ void DownloadItemImpl::TransitionTo(DownloadInternalState new_state) {
 
 void DownloadItemImpl::SetDangerType(DownloadDangerType danger_type) {
   if (danger_type != danger_type_) {
-    TRACE_EVENT_INSTANT1("download", "DownloadItemSaftyStateUpdated",
-                         TRACE_EVENT_SCOPE_THREAD, "danger_type",
-                         GetDownloadDangerNames(danger_type).c_str());
+    TRACE_EVENT_INSTANT("download", "DownloadItemSaftyStateUpdated",
+                        "danger_type",
+                        GetDownloadDangerNames(danger_type).c_str());
   }
   danger_type_ = danger_type;
 }
@@ -2511,10 +2556,9 @@ void DownloadItemImpl::SetFullPath(const base::FilePath& new_path) {
             << DebugString(true);
   DCHECK(!new_path.empty());
 
-  TRACE_EVENT_INSTANT2("download", "DownloadItemRenamed",
-                       TRACE_EVENT_SCOPE_THREAD, "old_filename",
-                       destination_info_.current_path.AsUTF8Unsafe(),
-                       "new_filename", new_path.AsUTF8Unsafe());
+  TRACE_EVENT_INSTANT("download", "DownloadItemRenamed", "old_filename",
+                      destination_info_.current_path.AsUTF8Unsafe(),
+                      "new_filename", new_path.AsUTF8Unsafe());
 
   destination_info_.current_path = new_path;
 }
@@ -2547,6 +2591,13 @@ void DownloadItemImpl::ResumeInterruptedDownload(
 
   // Reset the appropriate state if restarting.
   ResumeMode mode = GetResumeMode();
+  if (request_info_.fetched_via_service_worker) {
+    // SW responses can't be range-served, so resumption must restart from
+    // offset 0 and re-dispatch the fetch event.
+    mode = (source == ResumptionRequestSource::USER)
+               ? ResumeMode::USER_RESTART
+               : ResumeMode::IMMEDIATE_RESTART;
+  }
   if (mode == ResumeMode::IMMEDIATE_RESTART ||
       mode == ResumeMode::USER_RESTART) {
     LOG_IF(ERROR, !GetFullPath().empty())
@@ -2589,6 +2640,13 @@ void DownloadItemImpl::ResumeInterruptedDownload(
   // associated renderer) goes away before a response is received.
   std::unique_ptr<DownloadUrlParameters> download_params(
       new DownloadUrlParameters(GetURL(), traffic_annotation));
+  // A resume of a network-fetched download must not be routed through the
+  // SW interceptor: the SW response is a single full body that would be
+  // appended at the resume offset (or restart from network mismatched).
+  // A restart of a SW-fetched download keeps SW interception so the fetch
+  // event runs again from offset 0.
+  download_params->set_skip_service_worker_interception(
+      !request_info_.fetched_via_service_worker);
   download_params->set_file_path(GetFullPath());
   int64_t offset = 0;
   if (received_slices_.size() > 0) {
@@ -2605,6 +2663,10 @@ void DownloadItemImpl::ResumeInterruptedDownload(
   download_params->set_hash_of_partial_file(GetHash());
   download_params->set_hash_state(std::move(hash_state_));
   download_params->set_guid(guid_);
+
+  if (url_loader_factory_) {
+    download_params->set_url_loader_factory(url_loader_factory_->Clone());
+  }
   if (!HasStrongValidators() &&
       base::FeatureList::IsEnabled(
           features::kAllowDownloadResumptionWithoutStrongValidators)) {
@@ -2621,6 +2683,7 @@ void DownloadItemImpl::ResumeInterruptedDownload(
       // There is not enough data for validation, simply overwrites the
       // existing data from the beginning.
       download_params->set_offset(0);
+      download_params->set_hash_state(nullptr);
     }
   }
 

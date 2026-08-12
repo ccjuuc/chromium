@@ -18,6 +18,8 @@
 
 namespace ash {
 
+using chromeos::AppType;
+
 class SplitViewMetricsControllerTest : public AshTestBase {
  public:
   SplitViewMetricsControllerTest()
@@ -25,10 +27,10 @@ class SplitViewMetricsControllerTest : public AshTestBase {
 
   void SetUp() override {
     AshTestBase::SetUp();
-    window1_ = CreateAppWindow();
-    window2_ = CreateAppWindow();
-    window3_ = CreateAppWindow();
-    window4_ = CreateAppWindow();
+    window1_ = CreateWindowWithAppType(AppType::SYSTEM_APP);
+    window2_ = CreateWindowWithAppType(AppType::SYSTEM_APP);
+    window3_ = CreateWindowWithAppType(AppType::SYSTEM_APP);
+    window4_ = CreateWindowWithAppType(AppType::SYSTEM_APP);
   }
 
   void TearDown() override {
@@ -40,8 +42,9 @@ class SplitViewMetricsControllerTest : public AshTestBase {
   }
 
   void AdvanceClock(base::TimeDelta delta) {
-    task_environment()->AdvanceClock(delta);
-    task_environment()->RunUntilIdle();
+    // Run mock time by the exact elapsed duration under test so any delayed
+    // work due in that interval completes before histogram assertions.
+    task_environment()->FastForwardBy(delta);
   }
 
  protected:

@@ -11,10 +11,12 @@
 #include <string>
 #include <vector>
 
+#include "base/check.h"
 #include "base/containers/flat_map.h"
 #include "base/enterprise_util.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/rand_util.h"
 #include "base/sequence_checker.h"
@@ -24,9 +26,11 @@
 #include "base/version.h"
 #include "build/build_config.h"
 #include "chrome/updater/activity.h"
+#include "chrome/updater/branded_constants.h"
 #include "chrome/updater/constants.h"
 #include "chrome/updater/crx_downloader_factory.h"
 #include "chrome/updater/external_constants.h"
+#include "chrome/updater/get_updater_scope.h"
 #include "chrome/updater/net/network.h"
 #include "chrome/updater/out_of_process_patcher.h"
 #include "chrome/updater/out_of_process_unzipper.h"
@@ -258,15 +262,13 @@ Configurator::GetProtocolHandlerFactory() const {
 
 std::optional<bool> Configurator::IsMachineExternallyManaged() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  const std::optional<bool> is_managed_overridden =
-      external_constants_->IsMachineManaged();
-  return is_managed_overridden.has_value() ? is_managed_overridden
-                                           : is_managed_device_;
+  return external_constants_->IsMachineManaged().or_else(
+      [this] { return is_managed_device_; });
 }
 
 scoped_refptr<PolicyService> Configurator::GetPolicyService() const {
   // The policy service is accessed by RPC on a different sequence and this
-  // function can't enforce the sequence check for now: crbug.com/1517079.
+  // function can't enforce the sequence check for now: crbug.com/41490062.
   return policy_service_;
 }
 
@@ -297,6 +299,13 @@ scoped_refptr<update_client::CrxCache> Configurator::GetCrxCache() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return crx_cache_;
 }
+
+#if BUILDFLAG(CHROME_FOR_TESTING)
+std::vector<std::string> Configurator::GetRequiredComponents() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return {};
+}
+#endif
 
 bool Configurator::IsConnectionMetered() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);

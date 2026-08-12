@@ -82,13 +82,14 @@ Vp9Parser::Result Vp9Decoder::ReadNextFrame(Vp9FrameHeader& vp9_frame_header,
         vp9_parser_->ParseNextFrame(&vp9_frame_header, &size, &null_config);
     if (res == Vp9Parser::kEOStream) {
       IvfFrameHeader ivf_frame_header{};
-      const uint8_t* ivf_frame_data;
+      base::span<const uint8_t> ivf_frame_data =
+          ivf_parser_->ParseNextFrame(&ivf_frame_header);
 
-      if (!ivf_parser_->ParseNextFrame(&ivf_frame_header, &ivf_frame_data))
+      if (ivf_frame_data.empty()) {
         return Vp9Parser::kEOStream;
+      }
 
-      vp9_parser_->SetStream(ivf_frame_data, ivf_frame_header.frame_size,
-                             /*stream_config=*/nullptr);
+      vp9_parser_->SetStream(ivf_frame_data, /*stream_config=*/nullptr);
       continue;
     }
 
@@ -246,10 +247,10 @@ VideoDecoder::Result Vp9Decoder::DecodeNextFrame() {
 
     SafeArrayMemcpy(seg_param.filter_level, UNSAFE_TODO(lf.lvl[i]));
 
-    seg_param.luma_dc_quant_scale = UNSAFE_TODO(seg.y_dequant[i])[0];
-    seg_param.luma_ac_quant_scale = UNSAFE_TODO(seg.y_dequant[i])[1];
-    seg_param.chroma_dc_quant_scale = UNSAFE_TODO(seg.uv_dequant[i])[0];
-    seg_param.chroma_ac_quant_scale = UNSAFE_TODO(seg.uv_dequant[i])[1];
+    seg_param.luma_dc_quant_scale = seg.y_dequant[i][0];
+    seg_param.luma_ac_quant_scale = seg.y_dequant[i][1];
+    seg_param.chroma_dc_quant_scale = seg.uv_dequant[i][0];
+    seg_param.chroma_ac_quant_scale = seg.uv_dequant[i][1];
   }
 
   res = vaCreateBuffer(

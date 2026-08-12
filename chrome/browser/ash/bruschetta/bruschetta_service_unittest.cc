@@ -12,6 +12,8 @@
 #include "chrome/browser/ash/guest_os/dbus_test_helper.h"
 #include "chrome/browser/ash/guest_os/guest_os_pref_names.h"
 #include "chrome/browser/ash/guest_os/public/guest_os_service.h"
+#include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/concierge/fake_concierge_client.h"
 #include "chromeos/ash/components/dbus/dlcservice/fake_dlcservice_client.h"
@@ -43,18 +45,19 @@ class BruschettaServiceTest : public testing::Test,
   void SetUp() override {
     SetupPrefs();
 
-    service_ = std::make_unique<BruschettaService>(&profile_);
+    service_ = std::make_unique<BruschettaService>(
+        TestingBrowserProcess::GetGlobal()->local_state(), &profile_);
   }
 
   void TearDown() override {}
 
   void SetupPrefs() {
-    base::Value::Dict pref;
-    base::Value::Dict config;
+    base::DictValue pref;
+    base::DictValue config;
     config.Set(prefs::kPolicyEnabledKey,
                static_cast<int>(prefs::PolicyEnabledState::RUN_ALLOWED));
 
-    base::Value::Dict vtpm;
+    base::DictValue vtpm;
     vtpm.Set(prefs::kPolicyVTPMEnabledKey, false);
     vtpm.Set(prefs::kPolicyVTPMUpdateActionKey,
              static_cast<int>(

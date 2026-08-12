@@ -25,14 +25,13 @@
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller_util.h"
 #include "chrome/browser/ui/ash/shelf/shelf_context_menu.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/extensions/extension_constants.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
 #include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
 #include "components/account_id/account_id.h"
 #include "components/app_constants/constants.h"
+#include "components/user_manager/user_names.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/browser/extension_prefs.h"
@@ -242,7 +241,7 @@ void BrowserShortcutShelfItemController::ItemSelected(
   // bug. http://b/315364997.
   //
   // A bug is filed to track future works for fixing this confusing naming
-  // disparity. https://crbug.com/1473895
+  // disparity. https://crbug.com/40279151
   if (event && event->type() == ui::EventType::kKeyReleased) {
     std::move(callback).Run(ActivateOrAdvanceToNextBrowser(), std::move(items));
     return;
@@ -286,7 +285,7 @@ ash::ShelfItemDelegate::AppMenuItems
 BrowserShortcutShelfItemController::GetAppMenuItems(
     int event_flags,
     const ItemFilterPredicate& filter_predicate) {
-  std::vector<std::pair<Browser*, size_t>> app_menu_items;
+  std::vector<std::pair<BrowserWindowInterface*, size_t>> app_menu_items;
   AppMenuItems items;
   bool found_tabbed_browser = false;
   ChromeShelfController* controller = ChromeShelfController::instance();
@@ -308,18 +307,19 @@ BrowserShortcutShelfItemController::GetAppMenuItems(
       auto* tab = browser->GetActiveWebContents();
       const gfx::Image& icon =
           ui::ResourceBundle::GetSharedInstance().GetImageNamed(
-              (browser->GetBrowser().profile() &&
-               browser->GetBrowser().profile()->IsIncognitoProfile())
+              (browser->IsOffTheRecord() &&
+               browser->GetAccountId() != user_manager::GuestAccountId())
                   ? IDR_ASH_SHELF_LIST_INCOGNITO_BROWSER
                   : IDR_ASH_SHELF_LIST_BROWSER);
 
       // Set the title of the app menu item to the browser window title if the
       // user set one on the window. Otherwise, use the title defined in
       // ChromeShelfController.
-      std::string browser_title = browser->GetBrowser().user_title();
-      std::u16string item_title = browser_title.empty()
-                                      ? controller->GetAppMenuTitle(tab)
-                                      : base::UTF8ToUTF16(browser_title);
+      std::optional<std::string> browser_title =
+          browser->GetUserDefinedWindowTitle();
+      std::u16string item_title = browser_title.has_value()
+                                      ? base::UTF8ToUTF16(*browser_title)
+                                      : controller->GetAppMenuTitle(tab);
 
       items.push_back({static_cast<int>(app_menu_items.size() - 1), item_title,
                        icon.AsImageSkia()});
@@ -360,14 +360,14 @@ void BrowserShortcutShelfItemController::ExecuteCommand(bool from_context_menu,
   DCHECK(!from_context_menu);
 
   // Check that the index is valid and the browser has not been closed.
-  // It's unclear why, but the browser's window may be null: crbug.com/937088
+  // It's unclear why, but the browser's window may be null: crbug.com/41444285
   if (command_id < static_cast<int64_t>(app_menu_items_.size()) &&
       app_menu_items_[command_id].first &&
-      app_menu_items_[command_id].first->window()) {
+      app_menu_items_[command_id].first->GetWindow()) {
     ash::BrowserDelegate* browser =
         ash::BrowserController::GetInstance()->GetDelegate(
             app_menu_items_[command_id].first);
-    TabStripModel* tab_strip = browser->GetBrowser().tab_strip_model();
+    TabStripModel* tab_strip = browser->GetBrowser().GetTabStripModel();
     const int tab_index = app_menu_items_[command_id].second;
     if (event_flags & (ui::EF_SHIFT_DOWN | ui::EF_MIDDLE_MOUSE_BUTTON)) {
       if (tab_index == kNoTab) {
@@ -462,7 +462,7 @@ void BrowserShortcutShelfItemController::OnBrowserCreated(
       });
 
   if (!browser_found) {
-    extensions::ExtensionPrefs::Get(browser->GetBrowser().profile())
+    extensions::ExtensionPrefs::Get(browser->GetBrowser().GetProfile())
         ->SetLastLaunchTime(shelf_id().app_id, base::Time::Now());
   }
 }

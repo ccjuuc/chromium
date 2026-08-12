@@ -33,13 +33,13 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/safety_checks.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "third_party/blink/public/mojom/indexeddb/indexeddb.mojom-blink.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-shared.h"
 #include "third_party/blink/public/platform/web_blob_info.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value_factory.h"
 #include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_microtasks_scope.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_binding_for_modules.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_idb_get_all_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_union_idbcursor_idbindex_idbobjectstore.h"
@@ -565,11 +565,6 @@ IDBRequest* IDBObjectStore::DoPut(ScriptState* script_state,
         .keys = GenerateIndexKeysForValue(script_state->GetIsolate(),
                                           Metadata(), *it.value, clone)});
   }
-  // Records 1KB to 1GB.
-  UMA_HISTOGRAM_COUNTS_1M(
-      "WebCore.IndexedDB.PutValueSize2",
-      base::saturated_cast<base::HistogramBase::Sample32>(
-          value_wrapper.DataLengthBeforeWrapInBytes() / 1024));
 
   IDBRequest* request = IDBRequest::Create(
       script_state, source, transaction_.Get(), std::move(metrics));
@@ -740,8 +735,7 @@ class IndexPopulator final : public NativeEventListener {
     // This event would be dispatched by native code, so create scopes required
     // by possible V8 usage within.
     ScriptState::Scope scope(script_state_);
-    v8::MicrotasksScope microtasksScope(
-        script_state_->GetContext(), v8::MicrotasksScope::kDoNotRunMicrotasks);
+    V8DoNotRunMicrotasksScope microtasksScope(script_state_);
     IDBAny* cursor_any = request->ResultAsAny();
     IDBCursorWithValue* cursor = nullptr;
     if (cursor_any->GetType() == IDBAny::kIDBCursorWithValueType)

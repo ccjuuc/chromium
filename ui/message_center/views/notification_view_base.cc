@@ -15,9 +15,9 @@
 #include "base/functional/bind.h"
 #include "base/i18n/case_conversion.h"
 #include "base/memory/raw_ptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/observer_list.h"
 #include "base/strings/string_util.h"
+#include "base/time/time.h"
 #include "components/url_formatter/elide_url.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "ui/base/class_property.h"
@@ -778,7 +778,11 @@ bool NotificationViewBase::IsExpanded() const {
 }
 
 void NotificationViewBase::SetExpanded(bool expanded) {
+  auto weak_ptr = weak_ptr_factory_.GetWeakPtr();
   MessageView::SetExpanded(expanded);
+  if (!weak_ptr) {
+    return;
+  }
   if (expanded_ == expanded)
     return;
   expanded_ = expanded;

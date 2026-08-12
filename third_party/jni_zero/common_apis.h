@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// IWYU pragma: private, include "third_party/jni_zero/jni_zero.h"
+
 #ifndef JNI_ZERO_COMMON_APIS_H_
 #define JNI_ZERO_COMMON_APIS_H_
 
@@ -13,6 +15,11 @@
 #include "third_party/jni_zero/type_conversions.h"
 
 namespace jni_zero {
+
+// A wrapper around NewStringUTF(), so technically accepts MUTF-8.
+JNI_ZERO_COMPONENT_BUILD_EXPORT ScopedJavaLocalRef<jstring>
+NewAsciiString(JNIEnv* env, const char* str);
+
 // Wraps Collection.toArray().
 JNI_ZERO_COMPONENT_BUILD_EXPORT ScopedJavaLocalRef<jobjectArray>
 CollectionToArray(JNIEnv* env, const JavaRef<jobject>& collection);
@@ -29,23 +36,31 @@ JNI_ZERO_COMPONENT_BUILD_EXPORT ScopedJavaLocalRef<jobject> ArrayToMap(
     const JavaRef<jobjectArray>& array);
 
 //
+// java.lang.Runnable
+//
+
+// Does not accept "env" to allow it to be used with base::Bind(), and do not
+// offer such an overload to not make &RunRunnable hard to work with.
+JNI_ZERO_COMPONENT_BUILD_EXPORT void RunRunnable(const JavaRef<>& runnable);
+
+//
 // java.util.List
 //
 
 JNI_ZERO_COMPONENT_BUILD_EXPORT ScopedJavaLocalRef<jobject>
-ListGet(JNIEnv* env, const JavaRef<jobject>& list, jint idx);
+ListGet(JNIEnv* env, const JavaRef<jobject>& list, int32_t idx);
 
 JNI_ZERO_COMPONENT_BUILD_EXPORT ScopedJavaLocalRef<jobject> ListSet(
     JNIEnv* env,
     const JavaRef<jobject>& list,
-    jint idx,
+    int32_t idx,
     const JavaRef<jobject>& value);
-// Use ToJniType on the value.
+// Helper that calls ToJniType on the value before calling ListSet.
 template <typename V>
-  requires(!internal::IsJavaRef<V>)
+  requires(!IsJavaRef<V>)
 inline ScopedJavaLocalRef<jobject> ListSet(JNIEnv* env,
                                            const JavaRef<jobject>& list,
-                                           jint idx,
+                                           int32_t idx,
                                            const V& value) {
   return ListSet(env, list, idx, ToJniType(env, value));
 }
@@ -57,9 +72,9 @@ JNI_ZERO_COMPONENT_BUILD_EXPORT bool CollectionAdd(
     JNIEnv* env,
     const JavaRef<jobject>& collection,
     const JavaRef<jobject>& value);
-// Use ToJniType on the value.
+// Helper that calls ToJniType on the value before calling CollectionAdd.
 template <typename V>
-  requires(!internal::IsJavaRef<V>)
+  requires(!IsJavaRef<V>)
 inline ScopedJavaLocalRef<jobject>
 CollectionAdd(JNIEnv* env, const JavaRef<jobject>& collection, const V& value) {
   return CollectionAdd(env, collection, ToJniType(env, value));
@@ -79,7 +94,7 @@ JNI_ZERO_COMPONENT_BUILD_EXPORT bool CollectionContains(
     const JavaRef<jobject>& collection,
     const JavaRef<jobject>& value);
 
-JNI_ZERO_COMPONENT_BUILD_EXPORT jint
+JNI_ZERO_COMPONENT_BUILD_EXPORT int32_t
 CollectionSize(JNIEnv* env, const JavaRef<jobject>& collection);
 
 //
@@ -95,9 +110,9 @@ JNI_ZERO_COMPONENT_BUILD_EXPORT ScopedJavaLocalRef<jobject> MapPut(
     const JavaRef<jobject>& key,
     const JavaRef<jobject>& value);
 
-// Use ToJniType on the key/value.
+// Helper that calls ToJniType on the key and value before calling MapPut.
 template <typename K, typename V>
-  requires(!internal::IsJavaRef<K> && !internal::IsJavaRef<V>)
+  requires(!IsJavaRef<K> || !IsJavaRef<V>)
 inline ScopedJavaLocalRef<jobject> MapPut(JNIEnv* env,
                                           const JavaRef<jobject>& map,
                                           const K& key,
@@ -115,32 +130,63 @@ JNI_ZERO_COMPONENT_BUILD_EXPORT ScopedJavaLocalRef<jobject> MapRemove(
     const JavaRef<jobject>& map,
     const JavaRef<jobject>& key);
 
-JNI_ZERO_COMPONENT_BUILD_EXPORT jint MapSize(JNIEnv* env,
-                                             const JavaRef<jobject>& map);
+JNI_ZERO_COMPONENT_BUILD_EXPORT int32_t MapSize(JNIEnv* env,
+                                                const JavaRef<jobject>& map);
 //
 // Boxed types
 //
 JNI_ZERO_COMPONENT_BUILD_EXPORT bool FromJavaBoolean(
     JNIEnv* env,
-    const JavaRef<jobject>& j_bool);
+    const JavaRef<jobject>& val);
 
 JNI_ZERO_COMPONENT_BUILD_EXPORT ScopedJavaLocalRef<jobject> ToJavaBoolean(
     JNIEnv* env,
     bool val);
 
 JNI_ZERO_COMPONENT_BUILD_EXPORT int32_t
-FromJavaInteger(JNIEnv* env, const JavaRef<jobject>& j_int);
+FromJavaInteger(JNIEnv* env, const JavaRef<jobject>& val);
 
 JNI_ZERO_COMPONENT_BUILD_EXPORT ScopedJavaLocalRef<jobject> ToJavaInteger(
     JNIEnv* env,
     int32_t val);
 
 JNI_ZERO_COMPONENT_BUILD_EXPORT int64_t
-FromJavaLong(JNIEnv* env, const JavaRef<jobject>& j_long);
+FromJavaLong(JNIEnv* env, const JavaRef<jobject>& val);
 
 JNI_ZERO_COMPONENT_BUILD_EXPORT ScopedJavaLocalRef<jobject> ToJavaLong(
     JNIEnv* env,
     int64_t val);
+
+JNI_ZERO_COMPONENT_BUILD_EXPORT float FromJavaFloat(
+    JNIEnv* env,
+    const JavaRef<jobject>& val);
+
+JNI_ZERO_COMPONENT_BUILD_EXPORT ScopedJavaLocalRef<jobject> ToJavaFloat(
+    JNIEnv* env,
+    float val);
+
+JNI_ZERO_COMPONENT_BUILD_EXPORT double FromJavaDouble(
+    JNIEnv* env,
+    const JavaRef<jobject>& val);
+
+JNI_ZERO_COMPONENT_BUILD_EXPORT ScopedJavaLocalRef<jobject> ToJavaDouble(
+    JNIEnv* env,
+    double val);
+
+//
+// android.os.Process
+//
+
+JNI_ZERO_COMPONENT_BUILD_EXPORT bool ProcessIsIsolated(JNIEnv* env);
+
+//
+// java.nio.ByteBuffer
+//
+
+// This returns nullptr in the case of an exception.
+JNI_ZERO_COMPONENT_BUILD_EXPORT ScopedJavaLocalRef<jobject>
+ByteBufferAllocateDirect(JNIEnv* env, int size);
+
 }  // namespace jni_zero
 
 #endif  // JNI_ZERO_COMMON_APIS_H_

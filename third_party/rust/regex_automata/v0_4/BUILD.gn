@@ -39,8 +39,10 @@ cargo_crate("lib") {
     "//third_party/rust/chromium_crates_io/vendor/regex-automata-v0_4/src/meta/limited.rs",
     "//third_party/rust/chromium_crates_io/vendor/regex-automata-v0_4/src/meta/literal.rs",
     "//third_party/rust/chromium_crates_io/vendor/regex-automata-v0_4/src/meta/mod.rs",
+    "//third_party/rust/chromium_crates_io/vendor/regex-automata-v0_4/src/meta/prefix.rs",
     "//third_party/rust/chromium_crates_io/vendor/regex-automata-v0_4/src/meta/regex.rs",
     "//third_party/rust/chromium_crates_io/vendor/regex-automata-v0_4/src/meta/reverse_inner.rs",
+    "//third_party/rust/chromium_crates_io/vendor/regex-automata-v0_4/src/meta/reverse_suffix.rs",
     "//third_party/rust/chromium_crates_io/vendor/regex-automata-v0_4/src/meta/stopat.rs",
     "//third_party/rust/chromium_crates_io/vendor/regex-automata-v0_4/src/meta/strategy.rs",
     "//third_party/rust/chromium_crates_io/vendor/regex-automata-v0_4/src/meta/wrappers.rs",
@@ -95,11 +97,40 @@ cargo_crate("lib") {
   cargo_pkg_description =
       "Automata construction and matching using regular expressions."
   cargo_pkg_repository = "https://github.com/rust-lang/regex"
-  cargo_pkg_version = "0.4.13"
+  cargo_pkg_version = "0.4.16"
 
   allow_unsafe = true
 
-  features = [ "dfa-search" ]
+  deps = [
+    "//third_party/rust/aho_corasick/v1:lib",
+    "//third_party/rust/memchr/v2:lib",
+    "//third_party/rust/regex_syntax/v0_8:lib",
+  ]
+  features = [
+    "alloc",
+    "dfa-onepass",
+    "dfa-search",
+    "hybrid",
+    "meta",
+    "nfa-backtrack",
+    "nfa-pikevm",
+    "nfa-thompson",
+    "perf-inline",
+    "perf-literal",
+    "perf-literal-multisubstring",
+    "perf-literal-substring",
+    "std",
+    "syntax",
+    "unicode",
+    "unicode-age",
+    "unicode-bool",
+    "unicode-case",
+    "unicode-gencat",
+    "unicode-perl",
+    "unicode-script",
+    "unicode-segment",
+    "unicode-word-boundary",
+  ]
 
   # Only for usage from third-party crates. Add the crate to
   # //third_party/rust/chromium_crates_io/Cargo.toml to use

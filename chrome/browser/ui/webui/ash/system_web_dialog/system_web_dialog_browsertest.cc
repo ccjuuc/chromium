@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ash/constants/webui_url_constants.h"
 #include "ash/public/cpp/test/shell_test_api.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
@@ -11,7 +12,6 @@
 #include "chrome/browser/ui/webui/ash/system_web_dialog/system_web_dialog_delegate.h"
 #include "chrome/browser/ui/zoom/chrome_zoom_level_prefs.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/account_id/account_id.h"
 #include "components/prefs/pref_service.h"
@@ -31,7 +31,7 @@ namespace {
 class MockSystemWebDialog : public SystemWebDialogDelegate {
  public:
   explicit MockSystemWebDialog(const char* id = nullptr)
-      : SystemWebDialogDelegate(GURL(chrome::kChromeUIInternetConfigDialogURL),
+      : SystemWebDialogDelegate(GURL(ash::kChromeUIInternetConfigDialogURL),
                                 std::u16string()) {
     if (id) {
       id_ = std::string(id);
@@ -98,7 +98,7 @@ IN_PROC_BROWSER_TEST_F(SystemWebDialogTest, InstanceTest) {
   EXPECT_EQ(dialog, found_dialog);
   // Closing (deleting) the dialog causes a crash in WebDialogView when the main
   // loop is run. TODO(stevenjb): Investigate, fix, and test closing the dialog.
-  // https://crbug.com/855344.
+  // https://crbug.com/40581911.
 }
 
 IN_PROC_BROWSER_TEST_F(SystemWebDialogTest, FontSize) {
@@ -107,14 +107,14 @@ IN_PROC_BROWSER_TEST_F(SystemWebDialogTest, FontSize) {
   const int kDefaultFixedFontSize = kDefaultPrefs.default_fixed_font_size;
 
   // Set the browser font sizes to non-default values.
-  PrefService* profile_prefs = browser()->profile()->GetPrefs();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
   profile_prefs->SetInteger(prefs::kWebKitDefaultFontSize,
                             kDefaultFontSize + 2);
   profile_prefs->SetInteger(prefs::kWebKitDefaultFixedFontSize,
                             kDefaultFixedFontSize + 1);
 
   // Open a system dialog and ensure it has successfully committed.
-  const GURL expected_url = GURL(chrome::kChromeUIInternetConfigDialogURL);
+  const GURL expected_url = GURL(ash::kChromeUIInternetConfigDialogURL);
   content::TestNavigationObserver navigation_observer(expected_url);
   navigation_observer.StartWatchingNewWebContents();
   MockSystemWebDialog* dialog = new MockSystemWebDialog();
@@ -134,7 +134,7 @@ IN_PROC_BROWSER_TEST_F(SystemWebDialogTest, FontSize) {
 IN_PROC_BROWSER_TEST_F(SystemWebDialogTest, PageZoom) {
   // Set the default browser page zoom to 150%.
   double level = blink::ZoomFactorToZoomLevel(1.5);
-  browser()->profile()->GetZoomLevelPrefs()->SetDefaultZoomLevelPref(level);
+  browser()->GetProfile()->GetZoomLevelPrefs()->SetDefaultZoomLevelPref(level);
 
   // Open a system dialog.
   MockSystemWebDialog* dialog = new MockSystemWebDialog();

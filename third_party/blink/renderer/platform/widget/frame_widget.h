@@ -5,15 +5,19 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_WIDGET_FRAME_WIDGET_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_WIDGET_FRAME_WIDGET_H_
 
+#include <memory>
 #include <optional>
 #include <vector>
 
 #include "base/time/time.h"
 #include "base/types/optional_ref.h"
 #include "cc/input/browser_controls_offset_tag_modifications.h"
+#include "cc/metrics/begin_main_frame_metrics.h"
+#include "cc/trees/layer_tree_host.h"
 #include "mojo/public/mojom/base/text_direction.mojom-blink.h"
 #include "services/viz/public/mojom/compositing/frame_sink_id.mojom-blink.h"
 #include "third_party/blink/public/mojom/input/input_handler.mojom-blink.h"
+#include "third_party/blink/public/mojom/manifest/application_context.mojom-blink.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom-blink.h"
 #include "third_party/blink/public/platform/web_text_input_info.h"
 #include "third_party/blink/public/platform/web_text_input_type.h"
@@ -33,6 +37,7 @@ class Layer;
 class LayerTreeSettings;
 class LayerTreeDebugState;
 struct ElementId;
+class ScopedRequestHighFramerate;
 }  // namespace cc
 
 namespace display {
@@ -68,6 +73,7 @@ class PLATFORM_EXPORT FrameWidget {
   // Returns the compositors's AnimationTimeline for the widget.
   virtual cc::AnimationTimeline* ScrollAnimationTimeline() const = 0;
 
+  virtual void SendEarlyFinalBeginMainFrame() = 0;
   // Set the browser's behavior when overscroll happens, e.g. whether to glow
   // or navigate.
   virtual void SetOverscrollBehavior(
@@ -77,6 +83,10 @@ class PLATFORM_EXPORT FrameWidget {
   // the compositor (ie LayerTreeHost::SetNeedsAnimate()).
   virtual void RequestAnimationAfterDelay(const base::TimeDelta&,
                                           bool urgent) = 0;
+
+  virtual void RequestAnimationAfterDelay(cc::BeginMainFrameReason,
+                                          const base::TimeDelta&,
+                                          bool urgent);
 
   // Sets the root layer. The |layer| can be null when detaching the root layer.
   virtual void SetRootLayer(scoped_refptr<cc::Layer> layer) = 0;
@@ -124,6 +134,10 @@ class PLATFORM_EXPORT FrameWidget {
 
   // Returns the DisplayMode in use for the widget.
   virtual mojom::blink::DisplayMode DisplayMode() const = 0;
+
+  // Returns how the top-level browsing context is presented to the user (a
+  // standalone web application window vs ordinary browser UI).
+  virtual mojom::blink::ApplicationContext ApplicationContext() const = 0;
 
   // Returns the WindowShowState in use for the widget.
   virtual ui::mojom::blink::WindowShowState WindowShowState() const = 0;
@@ -197,14 +211,21 @@ class PLATFORM_EXPORT FrameWidget {
                               const Vector<ui::ImeTextSpan>& ime_text_spans,
                               const gfx::Range& replacement_range,
                               int selection_start,
-                              int selection_end) = 0;
+                              int selection_end,
+                              mojom::blink::ImeState ime_state,
+                              DOMNodeIdType target_dom_node_id) = 0;
 
   // This message deletes the current composition, inserts specified text, and
   // moves the cursor.
   virtual void CommitText(const String& text,
                           const Vector<ui::ImeTextSpan>& ime_text_spans,
                           const gfx::Range& replacement_range,
-                          int relative_cursor_pos) = 0;
+                          int relative_cursor_pos,
+                          DOMNodeIdType target_dom_node_id) = 0;
+
+  // This message pastes the text into the target node.
+  virtual void PasteIntoNode(const String& text,
+                             DOMNodeIdType target_dom_node_id) = 0;
 
   // This message inserts the ongoing composition.
   virtual void FinishComposingText(bool keep_selection) = 0;
@@ -259,6 +280,9 @@ class PLATFORM_EXPORT FrameWidget {
   // Mouse capture has been lost.
   virtual void MouseCaptureLost() = 0;
 
+  // Pointer lock has been acquired or released.
+  virtual void SetPointerLocked(bool is_locked) = 0;
+
   // Determines whether composition can happen inline.
   virtual bool CanComposeInline() = 0;
 
@@ -309,6 +333,13 @@ class PLATFORM_EXPORT FrameWidget {
   virtual void SetMayThrottleIfUndrawnFrames(
       bool may_throttle_if_undrawn_frames) = 0;
 
+  // Requests a high framerate for this widget. This is intended to override
+  // cases where rendering happens at a lower frame rate, when there is a use
+  // case that warrants it. For instance, VR/XR or gaming use cases may request
+  // this.
+  virtual std::unique_ptr<cc::ScopedRequestHighFramerate>
+  RequestHighFramerate() = 0;
+
   // Returns, in physical pixels, the amount that the widget has been resized
   // by the virtual keyboard. The virtual keyboard always insets a widget from
   // the bottom so only the height can be affected. Only the outermost main
@@ -324,9 +355,17 @@ class PLATFORM_EXPORT FrameWidget {
   // other parameters are recorded earlier).
   virtual AnimationFrameTimingInfo* RecordRenderingUpdateEndTime(
       base::TimeTicks) = 0;
+  // https://github.com/MicrosoftEdge/MSEdgeExplainers/blob/main/ConditionalTracing/explainer-for-loaf.md
+  virtual void MarkConditional(const AtomicString& name,
+                               base::TimeTicks start_time) = 0;
 
-  virtual void OnFirstContentfulPaint(
-      const base::TimeTicks& first_paint_time) = 0;
+  virtual void OnFirstContentfulPaint() = 0;
+
+  // Whether or not the widget is in the process of handling input events.
+  virtual bool HandlingInputEvent() = 0;
+
+  // Set state that the widget is in the process of handling input events.
+  virtual void SetHandlingInputEvent(bool handling) = 0;
 };
 
 }  // namespace blink

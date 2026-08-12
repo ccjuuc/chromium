@@ -12,9 +12,9 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.cc.input.BrowserControlsState;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsOffsetTagsInfo;
 import org.chromium.chrome.browser.tab.Tab.LoadUrlResult;
-import org.chromium.chrome.browser.tab.Tab.MediaState;
 import org.chromium.components.find_in_page.FindMatchRectsDetails;
 import org.chromium.components.find_in_page.FindNotificationDetails;
+import org.chromium.components.tabs.TabAlert;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.NavigationHandle;
 import org.chromium.content_public.browser.WebContents;
@@ -235,14 +235,23 @@ public interface TabObserver {
     /**
      * Called when a navigation is finished i.e. committed, aborted or replaced by a new one, in the
      * primary main frame.
+     *
      * @param tab The notifying {@link Tab}.
-     * @param navigationHandle Pointer to a NavigationHandle representing the navigation.
-     *                         Its lifetime end at the end of this function.
+     * @param navigationHandle Pointer to a NavigationHandle representing the navigation. Its
+     *     lifetime end at the end of this function.
      */
     void onDidFinishNavigationInPrimaryMainFrame(Tab tab, NavigationHandle navigation);
 
     /**
+     * Called when the document has finished loading for the primary main frame.
+     *
+     * @param tab The notifying {@link Tab}.
+     */
+    default void onDocumentLoadedInPrimaryMainFrame(Tab tab) {}
+
+    /**
      * Called when the page has painted something non-empty.
+     *
      * @param tab The notifying {@link Tab}.
      */
     void didFirstVisuallyNonEmptyPaint(Tab tab);
@@ -410,7 +419,7 @@ public interface TabObserver {
     // TODO(crbug.com/41497290): deprecate RootId once TabGroupId has finished replacing it.
     /**
      * Broadcast that root identifier on a {@link Tab} has changed. This method will be functionally
-     * replaced by onTabGroupIdChanged as part of https://crbug.com/1523745.
+     * replaced by onTabGroupIdChanged as part of https://crbug.com/41496693.
      *
      * @param tab {@link Tab} root identifier has changed on
      * @param newRootId new value of new root id
@@ -450,4 +459,12 @@ public interface TabObserver {
      * @param isPinned boolean indicator to represent whether tab is pinned or unpinned.
      */
     default void onTabPinnedStateChanged(Tab tab, boolean isPinned) {}
+
+    /**
+     * Called when the alert state of the tab changes.
+     *
+     * @param tab The notifying {@link Tab}.
+     * @param alertState The {@link TabAlert} state of the tab, or {@code null} if no alerts apply.
+     */
+    default void onAlertStateChanged(Tab tab, @Nullable @TabAlert Integer alertState) {}
 }

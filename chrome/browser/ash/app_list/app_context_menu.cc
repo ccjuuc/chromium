@@ -11,15 +11,16 @@
 #include "ash/public/cpp/app_menu_constants.h"
 #include "ash/public/cpp/shelf_model.h"
 #include "ash/resources/vector_icons/vector_icons.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/apps/app_service/menu_util.h"
 #include "chrome/browser/ash/app_list/app_context_menu_delegate.h"
 #include "chrome/browser/ash/app_list/app_list_controller_delegate.h"
 #include "chrome/browser/ash/app_list/app_list_syncable_service_factory.h"
 #include "chrome/browser/ash/app_list/chrome_app_list_model_updater.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "ui/views/vector_icons.h"
@@ -115,29 +116,43 @@ const gfx::VectorIcon& AppContextMenu::GetMenuItemVectorIcon(int command_id,
   switch (command_id) {
     case ash::LAUNCH_NEW:
       if (string_id == IDS_APP_LIST_CONTEXT_MENU_NEW_WINDOW)
-        return views::kNewWindowIcon;
+        return features::IsRoundedIconsEnabled() ? views::kNewWindowIcon
+                                                 : views::kNewWindowOldIcon;
       if (string_id == IDS_APP_LIST_CONTEXT_MENU_NEW_TAB)
-        return views::kNewTabIcon;
+        return features::IsRoundedIconsEnabled() ? views::kTabIcon
+                                                 : views::kNewTabOldIcon;
       // The LAUNCH_NEW command is for an ARC app.
-      return views::kLaunchIcon;
+      return features::IsRoundedIconsEnabled()   ? views::kOpenInNewIcon
+                                                 : views::kLaunchOldIcon;
     case ash::TOGGLE_PIN:
-      return string_id == IDS_APP_LIST_CONTEXT_MENU_PIN ? views::kPinIcon
-                                                        : views::kUnpinIcon;
+      return string_id == IDS_APP_LIST_CONTEXT_MENU_PIN
+                 ? features::IsRoundedIconsEnabled() ? views::kKeepIcon
+                                                     : views::kPinOldIcon
+             : features::IsRoundedIconsEnabled() ? views::kKeepFilledIcon
+                                                 : views::kUnpinOldIcon;
     case ash::SHOW_APP_INFO:
-      return views::kInfoIcon;
+      return features::IsRoundedIconsEnabled() ? views::kInfoIcon
+                                               : views::kInfoOldIcon;
     case ash::OPTIONS:
-      return views::kOptionsIcon;
+      return features::IsRoundedIconsEnabled() ? views::kMoreHorizIcon
+                                               : views::kOptionsOldIcon;
     case ash::UNINSTALL:
-      return views::kUninstallIcon;
+      return features::IsRoundedIconsEnabled() ? views::kDeleteIcon
+                                               : views::kUninstallOldIcon;
     case ash::APP_CONTEXT_MENU_NEW_WINDOW:
-      return views::kNewWindowIcon;
+      return features::IsRoundedIconsEnabled() ? views::kNewWindowIcon
+                                               : views::kNewWindowOldIcon;
     case ash::APP_CONTEXT_MENU_NEW_INCOGNITO_WINDOW:
-      return views::kNewIncognitoWindowIcon;
+      return features::IsRoundedIconsEnabled()
+                 ? views::kIncognitoIcon
+                 : views::kNewIncognitoWindowOldIcon;
     case ash::INSTALL:
       // Deprecated.
       return gfx::VectorIcon::EmptyIcon();
     case ash::SETTINGS:
-      return vector_icons::kSettingsIcon;
+      return features::IsRoundedIconsEnabled()
+                 ? vector_icons::kSettingsFilledIcon
+                 : vector_icons::kSettingsOldIcon;
     case ash::USE_LAUNCH_TYPE_REGULAR:
     case ash::USE_LAUNCH_TYPE_WINDOW:
     case ash::USE_LAUNCH_TYPE_TABBED_WINDOW:
@@ -157,7 +172,7 @@ const gfx::VectorIcon& AppContextMenu::GetMenuItemVectorIcon(int command_id,
                       "added to the model by NotificationMenuController.";
     case ash::SHUTDOWN_GUEST_OS:
     case ash::SHUTDOWN_BRUSCHETTA_OS:
-      return kShutdownGuestOsIcon;
+      return ash::kShutdownGuestOsIcon;
     default:
       NOTREACHED() << "No icon for command_id: " << command_id;
   }

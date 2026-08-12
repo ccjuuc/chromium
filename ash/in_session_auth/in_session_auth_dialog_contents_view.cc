@@ -24,9 +24,9 @@
 #include "chromeos/ash/components/auth_panel/impl/factor_auth_view_factory.h"
 #include "chromeos/ash/components/osauth/public/auth_hub.h"
 #include "components/account_id/account_id.h"
-#include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/font.h"
 #include "ui/gfx/font_list.h"
@@ -153,7 +153,8 @@ void InSessionAuthDialogContentsView::AddCloseButton() {
           base::BindRepeating(
               &InSessionAuthDialogContentsView::OnCloseButtonPressed,
               weak_ptr_factory_.GetWeakPtr()),
-          views::kIcCloseIcon);
+          ::features::IsRoundedIconsEnabled() ? views::kCloseIcon
+                                              : views::kIcCloseOldIcon);
 
   close_button->SetTooltipText(l10n_util::GetStringUTF16(IDS_APP_CLOSE));
   close_button->GetViewAccessibility().SetName(

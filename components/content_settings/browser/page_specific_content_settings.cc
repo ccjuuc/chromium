@@ -4,6 +4,7 @@
 
 #include "components/content_settings/browser/page_specific_content_settings.h"
 
+#include <algorithm>
 #include <list>
 #include <variant>
 #include <vector>
@@ -22,9 +23,8 @@
 #include "build/build_config.h"
 #include "components/browsing_data/content/cookie_helper.h"
 #include "components/content_settings/common/content_settings_agent.mojom.h"
-#include "components/content_settings/core/browser/content_settings_info.h"
-#include "components/content_settings/core/browser/content_settings_registry.h"
 #include "components/content_settings/core/browser/content_settings_utils.h"
+#include "components/content_settings/core/browser/permission_settings_info.h"
 #include "components/content_settings/core/browser/permission_settings_registry.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_pattern_parser.h"
@@ -42,6 +42,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/trust_token_access_details.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
@@ -82,6 +83,8 @@ constexpr auto kBlockedMediaIndicatorDismissDelayPhase2 = base::Seconds(4);
 constexpr auto kDeviceInUseIndicatorHideDelay = base::Seconds(15);
 #endif
 
+bool ignore_blocked_media_indicator_timer_for_testing_ = false;
+
 // Determines which taxonomy is used to generate sample topics for the Topics
 // API.
 constexpr int kTopicsAPISampleDataTaxonomy = 1;
@@ -94,14 +97,13 @@ bool WillNavigationCreateNewPageSpecificContentSettingsOnCommit(
          !navigation_handle->IsPrerenderedPageActivation();
 }
 
-// Keeps track of cookie and service worker access during a navigation.
-// These types of access can happen for the current page or for a new
-// navigation (think cookies sent in the HTTP request or service worker
-// being run to serve a fetch request). A navigation might fail to
-// commit in which case we have to handle it as if it had never
-// occurred. So we cache all cookies and service worker accesses that
-// happen during a navigation and only apply the changes if the
-// navigation commits.
+// Keeps track of cookie, service worker, and geolocation usage indicator access
+// during a navigation. These types of access can happen for the current page or
+// for a new navigation (think cookies sent in the HTTP request or service
+// worker being run to serve a fetch request). A navigation might fail to commit
+// in which case we have to handle it as if it had never occurred. So we cache
+// all cookies and service worker accesses that happen during a navigation and
+// only apply the changes if the navigation commits.
 class InflightNavigationContentSettings
     : public content::NavigationHandleUserData<
           InflightNavigationContentSettings> {
@@ -115,6 +117,7 @@ class InflightNavigationContentSettings
       shared_dictionary_accesses;
   std::vector<net::device_bound_sessions::SessionAccess>
       device_bound_session_accesses;
+  bool geolocation_header_attached = false;
 
  private:
   explicit InflightNavigationContentSettings(
@@ -296,6 +299,13 @@ void WebContentsHandler::TransferNavigationContentSettingsToCommittedDocument(
   for (const auto& device_bound_session_access :
        navigation_settings.device_bound_session_accesses) {
     OnDeviceBoundSessionAccessed(rfh, device_bound_session_access);
+  }
+
+  if (navigation_settings.geolocation_header_attached) {
+    auto* pscs = PageSpecificContentSettings::GetForFrame(rfh);
+    if (pscs) {
+      pscs->OnContentAllowed(ContentSettingsType::GEOLOCATION);
+    }
   }
 }
 
@@ -700,6 +710,31 @@ PageSpecificContentSettings::GetDelegateForWebContents(
   auto* handler = WebContentsHandler::FromWebContents(web_contents);
   return handler ? handler->delegate() : nullptr;
 }
+// static
+void PageSpecificContentSettings::GeolocationHeaderAttachedToNavigation(
+    content::NavigationHandle* navigation) {
+  // This indicator is only supported for cross-document main-frame navigations
+  // that create a new PageSpecificContentSettings on commit. Same-document
+  // navigations (e.g. SPA history pushes) do not re-attach the header and thus
+  // do not re-trigger the indicator.
+  if (WillNavigationCreateNewPageSpecificContentSettingsOnCommit(navigation)) {
+    auto* inflight_navigation_settings =
+        content::NavigationHandleUserData<InflightNavigationContentSettings>::
+            GetOrCreateForNavigationHandle(*navigation);
+
+    inflight_navigation_settings->geolocation_header_attached = true;
+  }
+}
+
+// static
+void PageSpecificContentSettings::GeolocationHeaderRemovedFromNavigation(
+    content::NavigationHandle* navigation) {
+  auto* inflight_navigation_settings = content::NavigationHandleUserData<
+      InflightNavigationContentSettings>::GetForNavigationHandle(*navigation);
+  if (inflight_navigation_settings) {
+    inflight_navigation_settings->geolocation_header_attached = false;
+  }
+}
 
 // static
 void PageSpecificContentSettings::StorageAccessed(
@@ -744,8 +779,9 @@ void PageSpecificContentSettings::StorageAccessed(
       auto* web_contents = content::WebContents::FromRenderFrameHost(rfh);
       const auto& session_storage_namespace_map =
           web_contents->GetController().GetSessionStorageNamespaceMap();
-      const auto& storage_partition_config =
-          web_contents->GetSiteInstance()->GetStoragePartitionConfig();
+      const auto& storage_partition_config = web_contents->GetSiteInstance()
+                                                 ->GetSecurityPrincipal()
+                                                 .GetStoragePartitionConfig();
       const auto& namespace_id =
           session_storage_namespace_map.at(storage_partition_config);
 
@@ -946,7 +982,7 @@ void PageSpecificContentSettings::OnContentBlocked(ContentSettingsType type) {
     return;
   }
 
-  if (!content_settings::ContentSettingsRegistry::GetInstance()->Get(type)) {
+  if (!content_settings::PermissionSettingsRegistry::GetInstance()->Get(type)) {
     return;
   }
 
@@ -1034,8 +1070,8 @@ void PageSpecificContentSettings::OnTwoSitePermissionChanged(
   switch (content_setting) {
     case CONTENT_SETTING_ASK:
     case CONTENT_SETTING_DEFAULT:
-      if (site_map.contains(requesting_site)) {
-        site_map.erase(requesting_site);
+      if (auto it = site_map.find(requesting_site); it != site_map.end()) {
+        site_map.erase(it);
         access_changed = true;
       }
       break;
@@ -1476,9 +1512,9 @@ void PageSpecificContentSettings::ClearContentSettingsChangedViaPageInfo() {
 }
 
 void PageSpecificContentSettings::BlockAllContentForTesting() {
-  content_settings::ContentSettingsRegistry* registry =
-      content_settings::ContentSettingsRegistry::GetInstance();
-  for (const content_settings::ContentSettingsInfo* info : *registry) {
+  content_settings::PermissionSettingsRegistry* registry =
+      content_settings::PermissionSettingsRegistry::GetInstance();
+  for (const content_settings::PermissionSettingsInfo* info : *registry) {
     ContentSettingsType type = info->website_settings_info()->type();
     if (type != ContentSettingsType::MEDIASTREAM_MIC &&
         type != ContentSettingsType::MEDIASTREAM_CAMERA) {
@@ -1492,6 +1528,12 @@ void PageSpecificContentSettings::BlockAllContentForTesting() {
                                       kCameraAccessed, kCameraBlocked};
   OnMediaStreamPermissionSet(page().GetMainDocument().GetLastCommittedURL(),
                              media_blocked);
+}
+
+// static
+void PageSpecificContentSettings::SetIgnoreBlockedMediaIndicatorTimerForTesting(
+    bool ignore) {
+  ignore_blocked_media_indicator_timer_for_testing_ = ignore;
 }
 
 void PageSpecificContentSettings::ContentSettingChangedViaPageInfo(
@@ -1516,10 +1558,8 @@ PageSpecificContentSettings::GetAccessedTopics() const {
       page().GetMainDocument().GetLastCommittedURL().GetHost() ==
           "example.com") {
     // TODO(crbug.com/40210776): Remove sample topic when API is ready.
-    return {privacy_sandbox::CanonicalTopic(browsing_topics::Topic(3),
-                                            kTopicsAPISampleDataTaxonomy),
-            privacy_sandbox::CanonicalTopic(browsing_topics::Topic(4),
-                                            kTopicsAPISampleDataTaxonomy)};
+    return {privacy_sandbox::CanonicalTopic(3, kTopicsAPISampleDataTaxonomy),
+            privacy_sandbox::CanonicalTopic(4, kTopicsAPISampleDataTaxonomy)};
   }
   return {accessed_topics_.begin(), accessed_topics_.end()};
 }
@@ -1568,8 +1608,11 @@ void PageSpecificContentSettings::OnCapturingStateChanged(
 
   // If `is_capturing` is true, we should not hide an indicator. Erasing an
   // entry from `indicators_hiding_delay_timer_` will stop a dedicated timer.
-  if (indicators_hiding_delay_timer_.contains(type) && is_capturing) {
-    indicators_hiding_delay_timer_.erase(type);
+  if (is_capturing) {
+    if (auto it = indicators_hiding_delay_timer_.find(type);
+        it != indicators_hiding_delay_timer_.end()) {
+      indicators_hiding_delay_timer_.erase(it);
+    }
   }
 
   // Check if media indicators should be hidden.
@@ -1652,6 +1695,37 @@ void PageSpecificContentSettings::OnLastDeviceConnectionLost(
 
 bool PageSpecificContentSettings::IsInUse(ContentSettingsType type) const {
   return in_use_.contains(type);
+}
+
+void PageSpecificContentSettings::SetRequestedSensorIsAvailable(
+    bool is_available) {
+  if (!any_requested_sensor_is_available_ && is_available) {
+    any_requested_sensor_is_available_ = true;
+    MaybeUpdateLocationBar();
+    MaybeUpdateParent(
+        &PageSpecificContentSettings::SetRequestedSensorIsAvailable, true);
+  }
+}
+
+void PageSpecificContentSettings::OnSensorStarted() {
+  active_available_sensors_++;
+  if (active_available_sensors_ == 1) {
+    MaybeUpdateLocationBar();
+  }
+  MaybeUpdateParent(&PageSpecificContentSettings::OnSensorStarted);
+}
+
+void PageSpecificContentSettings::OnSensorStopped() {
+  CHECK_GT(active_available_sensors_, 0);
+  active_available_sensors_--;
+  if (active_available_sensors_ == 0) {
+    MaybeUpdateLocationBar();
+  }
+  MaybeUpdateParent(&PageSpecificContentSettings::OnSensorStopped);
+}
+
+int PageSpecificContentSettings::active_available_sensors() const {
+  return active_available_sensors_;
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -1753,6 +1827,13 @@ bool PageSpecificContentSettings::IsIndicatorVisible(
   return visible_indicators_.contains(type);
 }
 
+bool PageSpecificContentSettings::IsAnyIndicatorVisible(
+    base::span<const ContentSettingsType> types) const {
+  return std::ranges::any_of(types, [this](ContentSettingsType type) {
+    return visible_indicators_.contains(type);
+  });
+}
+
 void PageSpecificContentSettings::OnPermissionIndicatorShown(
     ContentSettingsType type) {
   visible_indicators_.insert(type);
@@ -1765,6 +1846,9 @@ void PageSpecificContentSettings::OnPermissionIndicatorHidden(
 
 void PageSpecificContentSettings::StartBlockedIndicatorTimer(
     ContentSettingsType type) {
+  if (ignore_blocked_media_indicator_timer_for_testing_) {
+    return;
+  }
   base::TimeDelta blocked_indicator_delay;
   if (base::FeatureList::IsEnabled(
           content_settings::features::kLeftHandSideActivityIndicators)) {

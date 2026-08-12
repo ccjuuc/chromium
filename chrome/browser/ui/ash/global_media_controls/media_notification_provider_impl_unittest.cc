@@ -21,8 +21,10 @@
 #include "components/global_media_controls/public/constants.h"
 #include "components/global_media_controls/public/media_item_manager.h"
 #include "components/global_media_controls/public/media_session_item_producer.h"
+#include "components/global_media_controls/public/media_session_notification_item.h"
 #include "components/global_media_controls/public/mojom/device_service.mojom.h"
 #include "components/global_media_controls/public/test/mock_device_service.h"
+#include "components/global_media_controls/public/views/media_item_ui_detailed_view.h"
 #include "components/global_media_controls/public/views/media_item_ui_footer.h"
 #include "components/global_media_controls/public/views/media_item_ui_list_view.h"
 #include "components/global_media_controls/public/views/media_item_ui_view.h"
@@ -39,8 +41,11 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/test/button_test_api.h"
 #include "ui/views/view.h"
+#include "url/gurl.h"
+#include "url/origin.h"
 
 using global_media_controls::mojom::DeviceListClient;
 using global_media_controls::mojom::DeviceListHost;
@@ -141,13 +146,20 @@ class MediaNotificationProviderImplTest : public ChromeAshTestBase {
 
     provider_ = static_cast<MediaNotificationProviderImpl*>(
         MediaNotificationProvider::Get());
-    provider_->SetColorTheme(media_message_center::NotificationTheme());
     observer_ = std::make_unique<MockMediaNotificationProviderObserver>();
     provider_->AddObserver(observer_.get());
     layout_provider_ = std::make_unique<ChromeLayoutProvider>();
+
+    profile_ = testing_profile_manager_.CreateTestingProfile("Profile");
+    provider_->set_profile_for_testing(profile_);
   }
 
   void TearDown() override {
+    profile_ = nullptr;
+    // This is needed for avoiding a DCHECK failure caused by
+    // TestNetworkConnectionTracker having an observer when it's destroyed.
+    media_router::DnsSdRegistry::GetInstance()->ResetForTest();
+
     provider_->RemoveObserver(observer_.get());
     observer_.reset();
     ChromeAshTestBase::TearDown();
@@ -205,6 +217,7 @@ class MediaNotificationProviderImplTest : public ChromeAshTestBase {
   raw_ptr<MediaTestShellDelegate, DanglingUntriaged> shell_delegate_ = nullptr;
   TestingProfileManager testing_profile_manager_{
       TestingBrowserProcess::GetGlobal()};
+  raw_ptr<Profile> profile_ = nullptr;
 };
 
 TEST_F(MediaNotificationProviderImplTest, NotificationListTest) {
@@ -238,7 +251,7 @@ TEST_F(MediaNotificationProviderImplTest, NotifyObserverOnListChangeTest) {
   SimulateHideNotification(id);
 }
 
-// Regression test for https://crbug.com/1312419. This should not crash on ASan
+// Regression test for https://crbug.com/40059272. This should not crash on ASan
 // builds (or any other build of course).
 TEST_F(MediaNotificationProviderImplTest, DontUseDeletedListView) {
   // Simulate a media session item.
@@ -267,47 +280,26 @@ TEST_F(MediaNotificationProviderImplTest, RefreshMediaItem) {
   EXPECT_EQ(notification_list_view->items_for_testing().size(), 1u);
 }
 
-// Tests the `kGlobalMediaControlsCastStartStop` feature.
-// TODO(crbug.com/1407071): Merge this test class into
-// MediaNotificationProviderImplTest once the feature is enabled by default on
-// Chrome OS.
-class CastStartStopMediaNotificationProviderImplTest
-    : public MediaNotificationProviderImplTest {
- public:
-  void SetUp() override {
-    // This must be called before MediaNotificationProviderImplTest::SetUp()
-    // starts the GPU service thread.
-    MediaNotificationProviderImplTest::SetUp();
+TEST_F(MediaNotificationProviderImplTest, UpdateMediaItemSourceOrigin) {
+  auto id = base::UnguessableToken::Create();
+  SimulateShowNotification(id);
+  auto notification_list_view = CreateNotificationListView();
 
-    profile_ = testing_profile_manager_.CreateTestingProfile("Profile");
-    InitProvider();
-  }
+  url::Origin origin = url::Origin::Create(GURL("https://example.com"));
+  provider_->UpdateMediaItemSourceOrigin(id.ToString(), origin);
 
-  void TearDown() override {
-    profile_ = nullptr;
-    // This is needed for avoiding a DCHECK failure caused by
-    // TestNetworkConnectionTracker having an observer when it's destroyed.
-    media_router::DnsSdRegistry::GetInstance()->ResetForTest();
+  auto items = notification_list_view->items_for_testing();
+  ASSERT_EQ(1u, items.size());
 
-    MediaNotificationProviderImplTest::TearDown();
-  }
+  auto media_item_ui_view = items.begin()->second;
+  EXPECT_EQ(media_item_ui_view->view_for_testing()
+                ->GetSourceLabelForTesting()
+                ->GetText(),
+            u"example.com");
+}
 
- protected:
-  void InitProvider() {
-    provider_->set_profile_for_testing(profile_);
-    // We must initialize the list view before we can show individual media
-    // items.
-    list_view_ = provider_->GetMediaNotificationListView(
-        1, /*should_clip_height=*/true,
-        global_media_controls::GlobalMediaControlsEntryPoint::kSystemTray,
-        /*show_devices_for_item_id=*/"");
-  }
-
-  raw_ptr<Profile> profile_ = nullptr;
-  std::unique_ptr<views::View> list_view_;
-};
-
-TEST_F(CastStartStopMediaNotificationProviderImplTest, ShowCastFooterView) {
+TEST_F(MediaNotificationProviderImplTest, ShowCastFooterView) {
+  auto notification_list_view = CreateNotificationListView();
   MockCastMediaNotificationItem item{
       media_router::MediaRoute{}, provider_->GetMediaItemManager(), profile_};
   auto* media_item_ui_view =
@@ -328,7 +320,8 @@ TEST_F(CastStartStopMediaNotificationProviderImplTest, ShowCastFooterView) {
           ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON, 0));
 }
 
-TEST_F(CastStartStopMediaNotificationProviderImplTest, ShowDeviceSelectorView) {
+TEST_F(MediaNotificationProviderImplTest, ShowDeviceSelectorView) {
+  auto notification_list_view = CreateNotificationListView();
   MockDeviceService device_service;
   TestMediaNotificationItem item;
   provider_->set_device_service_for_testing(&device_service);

@@ -42,11 +42,10 @@
 #import "ios/chrome/browser/shared/model/web_state_list/test/fake_web_state_list_delegate.h"
 #import "ios/chrome/browser/shared/model/web_state_list/test/web_state_list_builder_from_description.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/tab_grid_commands.h"
 #import "ios/chrome/browser/shared/public/commands/tab_groups_commands.h"
-#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/tab_insertion/model/tab_insertion_browser_agent.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
 #import "ios/web/public/test/web_task_environment.h"
@@ -83,8 +82,6 @@ void FakeUpdateLocalTabId(web::WebState* web_state,
 class IOSTabGroupSyncDelegateTest : public PlatformTest {
  public:
   IOSTabGroupSyncDelegateTest() {
-    app_state_ = OCMClassMock([AppState class]);
-
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(TabGroupSyncServiceFactory::GetInstance(),
                               base::BindRepeating(&CreateMockSyncService));
@@ -96,23 +93,20 @@ class IOSTabGroupSyncDelegateTest : public PlatformTest {
     mock_service_ = static_cast<MockTabGroupSyncService*>(
         TabGroupSyncServiceFactory::GetForProfile(profile_.get()));
 
-    scene_state_ = [[FakeSceneState alloc] initWithAppState:app_state_
-                                                    profile:profile_.get()];
+    scene_state_ = [[FakeSceneState alloc] initWithProfile:profile_.get()];
     browser_ =
         scene_state_.browserProviderInterface.mainBrowserProvider.browser;
     TabInsertionBrowserAgent::CreateForBrowser(browser_);
 
     scene_state_same_profile_ =
-        [[FakeSceneState alloc] initWithAppState:app_state_
-                                         profile:profile_.get()];
+        [[FakeSceneState alloc] initWithProfile:profile_.get()];
     browser_same_profile_ = scene_state_same_profile_.browserProviderInterface
                                 .mainBrowserProvider.browser;
     TabInsertionBrowserAgent::CreateForBrowser(browser_same_profile_);
 
     other_profile_ = TestProfileIOS::Builder().Build();
     other_scene_state_ =
-        [[FakeSceneState alloc] initWithAppState:app_state_
-                                         profile:other_profile_.get()];
+        [[FakeSceneState alloc] initWithProfile:other_profile_.get()];
     other_browser_ =
         other_scene_state_.browserProviderInterface.mainBrowserProvider.browser;
     TabInsertionBrowserAgent::CreateForBrowser(other_browser_);
@@ -129,14 +123,13 @@ class IOSTabGroupSyncDelegateTest : public PlatformTest {
     delegate_ = std::make_unique<IOSTabGroupSyncDelegate>(
         browser_list_, mock_service_, std::move(local_observer));
 
-    mock_application_handler_ =
-        OCMStrictProtocolMock(@protocol(ApplicationCommands));
+    mock_scene_handler_ = OCMStrictProtocolMock(@protocol(SceneCommands));
     mock_tab_groups_handler_ =
         OCMStrictProtocolMock(@protocol(TabGroupsCommands));
     mock_tab_grid_handler_ = OCMStrictProtocolMock(@protocol(TabGridCommands));
     CommandDispatcher* dispatcher = browser_->GetCommandDispatcher();
-    [dispatcher startDispatchingToTarget:mock_application_handler_
-                             forProtocol:@protocol(ApplicationCommands)];
+    [dispatcher startDispatchingToTarget:mock_scene_handler_
+                             forProtocol:@protocol(SceneCommands)];
     [dispatcher startDispatchingToTarget:mock_tab_groups_handler_
                              forProtocol:@protocol(TabGroupsCommands)];
     [dispatcher startDispatchingToTarget:mock_tab_grid_handler_
@@ -226,7 +219,6 @@ class IOSTabGroupSyncDelegateTest : public PlatformTest {
 
  protected:
   web::WebTaskEnvironment task_environment_;
-  id app_state_;
   FakeSceneState* scene_state_;
   FakeSceneState* scene_state_same_profile_;
   FakeSceneState* other_scene_state_;
@@ -251,7 +243,7 @@ class IOSTabGroupSyncDelegateTest : public PlatformTest {
   const std::u16string kGroupTitle = u"my group title";
   const TabGroupColorId kGroupColor = TabGroupColorId::kPurple;
 
-  id mock_application_handler_;
+  id mock_scene_handler_;
   id mock_tab_groups_handler_;
   id mock_tab_grid_handler_;
 };
@@ -267,7 +259,6 @@ TEST_F(IOSTabGroupSyncDelegateTest,
 
   // Enable feature flag and enable user pref
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(kIOSAutoOpenRemoteTabGroupsSettings);
   PrefService* pref_service = browser_same_profile_->GetProfile()->GetPrefs();
   pref_service->SetBoolean(prefs::kAutomaticallyOpenTabGroupsEnabled, true);
 
@@ -316,7 +307,6 @@ TEST_F(IOSTabGroupSyncDelegateTest,
 
   // Enable feature flag but disable user pref
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(kIOSAutoOpenRemoteTabGroupsSettings);
   PrefService* pref_service = browser_same_profile_->GetProfile()->GetPrefs();
   pref_service->SetBoolean(prefs::kAutomaticallyOpenTabGroupsEnabled, false);
 
@@ -357,7 +347,6 @@ TEST_F(IOSTabGroupSyncDelegateTest,
 
   // Enable feature flag and enable user pref
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(kIOSAutoOpenRemoteTabGroupsSettings);
   PrefService* pref_service = browser_->GetProfile()->GetPrefs();
   pref_service->SetBoolean(prefs::kAutomaticallyOpenTabGroupsEnabled, true);
 
@@ -403,7 +392,6 @@ TEST_F(IOSTabGroupSyncDelegateTest,
 
   // Enable feature flag but disable user pref
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(kIOSAutoOpenRemoteTabGroupsSettings);
   PrefService* pref_service = browser_->GetProfile()->GetPrefs();
   pref_service->SetBoolean(prefs::kAutomaticallyOpenTabGroupsEnabled, false);
 
@@ -443,7 +431,6 @@ TEST_F(IOSTabGroupSyncDelegateTest, CreateTabGroupBackgroundSceneWithAutoOpen) {
 
   // Enable feature flag and enable user pref
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(kIOSAutoOpenRemoteTabGroupsSettings);
   PrefService* pref_service = browser_->GetProfile()->GetPrefs();
   pref_service->SetBoolean(prefs::kAutomaticallyOpenTabGroupsEnabled, true);
 
@@ -491,7 +478,6 @@ TEST_F(IOSTabGroupSyncDelegateTest,
 
   // Enable feature flag but disable user pref
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(kIOSAutoOpenRemoteTabGroupsSettings);
   PrefService* pref_service = browser_->GetProfile()->GetPrefs();
   pref_service->SetBoolean(prefs::kAutomaticallyOpenTabGroupsEnabled, false);
 
@@ -778,8 +764,8 @@ TEST_F(IOSTabGroupSyncDelegateTest,
 
   __block const TabGroup* tab_group_shown = nullptr;
   __block const TabGroup* tab_group_for_grid = nullptr;
-  OCMStub([mock_application_handler_
-      displayTabGridInMode:TabGridOpeningMode::kRegular]);
+  OCMStub(
+      [mock_scene_handler_ displayTabGridInMode:TabGridOpeningMode::kRegular]);
 
   OCMStub(
       [mock_tab_groups_handler_ showTabGroup:ios::OCM::AnyPointer<TabGroup>()])
@@ -803,7 +789,7 @@ TEST_F(IOSTabGroupSyncDelegateTest,
   EXPECT_EQ(browser_->GetWebStateList(), local_tab_group_info.web_state_list);
   const auto groups = local_tab_group_info.web_state_list->GetGroups();
   EXPECT_EQ(1u, groups.size());
-  EXPECT_OCMOCK_VERIFY(mock_application_handler_);
+  EXPECT_OCMOCK_VERIFY(mock_scene_handler_);
   EXPECT_OCMOCK_VERIFY(mock_tab_groups_handler_);
   // The grid operation is happening with a delay.
   EXPECT_TRUE(
@@ -836,8 +822,8 @@ TEST_F(IOSTabGroupSyncDelegateTest,
                             std::make_optional(0), saved_tab_group_id);
   saved_group.SetLocalGroupId(local_id_group_0);
 
-  OCMStub([mock_application_handler_
-      displayTabGridInMode:TabGridOpeningMode::kRegular]);
+  OCMStub(
+      [mock_scene_handler_ displayTabGridInMode:TabGridOpeningMode::kRegular]);
 
   OCMStub([mock_tab_groups_handler_ showTabGroup:local_group]);
 
@@ -855,7 +841,7 @@ TEST_F(IOSTabGroupSyncDelegateTest,
   auto local_group_ids = delegate_->GetLocalTabGroupIds();
   EXPECT_EQ(1u, local_group_ids.size());
   EXPECT_EQ(1u, web_state_list->GetGroups().size());
-  EXPECT_OCMOCK_VERIFY(mock_application_handler_);
+  EXPECT_OCMOCK_VERIFY(mock_scene_handler_);
   EXPECT_OCMOCK_VERIFY(mock_tab_groups_handler_);
   // The grid operation is happening with a delay.
   EXPECT_TRUE(
@@ -900,8 +886,8 @@ TEST_F(IOSTabGroupSyncDelegateTest,
       .andDo(^(NSInvocation* invocation) {
         scene_state.UIEnabled = YES;
       });
-  OCMStub([mock_application_handler_
-      displayTabGridInMode:TabGridOpeningMode::kRegular]);
+  OCMStub(
+      [mock_scene_handler_ displayTabGridInMode:TabGridOpeningMode::kRegular]);
   OCMStub([mock_tab_groups_handler_ showTabGroup:local_tab_group]);
 
   EXPECT_CALL(*mock_service_, GetGroup(saved_tab_group_id))
@@ -914,7 +900,7 @@ TEST_F(IOSTabGroupSyncDelegateTest,
   auto local_group_ids = delegate_->GetLocalTabGroupIds();
   EXPECT_EQ(1u, local_group_ids.size());
   EXPECT_EQ(1u, web_state_list->GetGroups().size());
-  EXPECT_OCMOCK_VERIFY(mock_application_handler_);
+  EXPECT_OCMOCK_VERIFY(mock_scene_handler_);
   EXPECT_OCMOCK_VERIFY(mock_tab_groups_handler_);
 }
 

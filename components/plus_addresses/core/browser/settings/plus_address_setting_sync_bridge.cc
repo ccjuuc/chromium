@@ -14,7 +14,6 @@
 #include "components/sync/base/data_type.h"
 #include "components/sync/model/client_tag_based_data_type_processor.h"
 #include "components/sync/model/data_type_store.h"
-#include "components/sync/model/in_memory_metadata_change_list.h"
 #include "components/sync/model/mutable_data_batch.h"
 #include "components/sync/protocol/entity_data.h"
 #include "components/sync/protocol/plus_address_setting_specifics.pb.h"
@@ -93,18 +92,12 @@ void PlusAddressSettingSyncBridge::WriteSetting(
                           metadata_change_list.get());
   // Update the `store_`'s data and metadata.
   std::unique_ptr<syncer::DataTypeStore::WriteBatch> batch =
-      store_->CreateWriteBatch();
+      store_->CreateWriteBatch(std::move(metadata_change_list));
   batch->WriteData(storage_key, specifics.SerializeAsString());
-  batch->TakeMetadataChangesFrom(std::move(metadata_change_list));
   store_->CommitWriteBatch(
       std::move(batch),
       base::BindOnce(&PlusAddressSettingSyncBridge::ReportErrorIfSet,
                      weak_factory_.GetWeakPtr()));
-}
-
-std::unique_ptr<syncer::MetadataChangeList>
-PlusAddressSettingSyncBridge::CreateMetadataChangeList() {
-  return std::make_unique<syncer::InMemoryMetadataChangeList>();
 }
 
 std::optional<syncer::ModelError>
@@ -124,8 +117,7 @@ PlusAddressSettingSyncBridge::ApplyIncrementalSyncChanges(
     syncer::EntityChangeList entity_changes) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   std::unique_ptr<syncer::DataTypeStore::WriteBatch> batch =
-      store_->CreateWriteBatch();
-  batch->TakeMetadataChangesFrom(std::move(metadata_change_list));
+      store_->CreateWriteBatch(std::move(metadata_change_list));
   for (const std::unique_ptr<syncer::EntityChange>& change : entity_changes) {
     switch (change->type()) {
       case syncer::EntityChange::ACTION_ADD:
@@ -154,6 +146,7 @@ void PlusAddressSettingSyncBridge::ApplyDisableSyncChanges(
     std::unique_ptr<syncer::MetadataChangeList> delete_metadata_change_list) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   store_->DeleteAllDataAndMetadata(
+      std::move(delete_metadata_change_list),
       base::BindOnce(&PlusAddressSettingSyncBridge::ReportErrorIfSet,
                      weak_factory_.GetWeakPtr()));
   settings_.clear();
@@ -179,6 +172,14 @@ PlusAddressSettingSyncBridge::GetAllDataForDebugging() {
     batch->Put(name, CreateEntityData(specifics));
   }
   return batch;
+}
+
+sync_pb::EntitySpecifics
+PlusAddressSettingSyncBridge::TrimAllSupportedFieldsFromRemoteSpecifics(
+    const sync_pb::EntitySpecifics& entity_specifics) const {
+  // Clears all fields by default to avoid the memory and I/O overhead of an
+  // additional copy of the data.
+  return sync_pb::EntitySpecifics();
 }
 
 bool PlusAddressSettingSyncBridge::IsEntityDataValid(

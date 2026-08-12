@@ -121,7 +121,10 @@ using ::testing::Return;
 @interface DownloadListTableViewController (Testing)
 - (void)updateUI;
 - (void)performPeriodicUpdate;
+- (void)updateSearchResultsForSearchController:
+    (UISearchController*)searchController;
 @property(nonatomic, readonly) DownloadListTableViewHeader* filterHeaderView;
+@property(nonatomic, readonly) UISearchController* searchController;
 @end
 
 namespace {
@@ -291,25 +294,35 @@ TEST_F(DownloadListTableViewControllerTest, TestSetDownloadListItemsMultiple) {
 
 /// Tests setEmptyState behavior for both enabled and disabled states.
 TEST_F(DownloadListTableViewControllerTest, TestSetEmptyState) {
-  // Test enabling empty state.
+  // Test enabling empty state with header hidden (no records at all).
+  [controller_ setDownloadListHeaderShown:NO];
   [controller_ setEmptyState:YES];
 
-  // Verify navigation item is configured for empty state.
+  // Verify navigation item is configured to never show large title.
   EXPECT_EQ(UINavigationItemLargeTitleDisplayModeNever,
             controller_.navigationItem.largeTitleDisplayMode);
 
   // Verify background view is set.
   EXPECT_TRUE(controller_.tableView.backgroundView);
 
-  // Test disabling empty state.
+  // Verify search bar is hidden when empty.
+  EXPECT_FALSE(controller_.navigationItem.searchController);
+
+  // Test disabling empty state with header shown (records exist).
+  [controller_ setDownloadListHeaderShown:YES];
   [controller_ setEmptyState:NO];
 
-  // Verify navigation item is configured for normal state.
-  EXPECT_EQ(UINavigationItemLargeTitleDisplayModeAlways,
+  // Verify navigation item is configured to show large title automatically.
+  EXPECT_EQ(UINavigationItemLargeTitleDisplayModeAutomatic,
             controller_.navigationItem.largeTitleDisplayMode);
 
   // Verify background view is cleared.
   EXPECT_FALSE(controller_.tableView.backgroundView);
+
+  // Verify search bar is shown when not empty.
+  EXPECT_TRUE(controller_.navigationItem.searchController);
+  EXPECT_EQ(controller_.navigationItem.searchController,
+            controller_.searchController);
 }
 
 /// Tests setLoadingState method exists and doesn't crash.
@@ -414,13 +427,50 @@ TEST_F(DownloadListTableViewControllerTest, TestNavigationItemConfiguration) {
   EXPECT_TRUE(controller_.navigationItem.rightBarButtonItem);
 }
 
-/// Tests presentationControllerWillDismiss calls download list handler.
+/// Tests that search controller is configured correctly after viewDidLoad.
+TEST_F(DownloadListTableViewControllerTest, TestSearchControllerConfiguration) {
+  // Verify search controller is created and set on navigationItem.
+  EXPECT_TRUE(controller_.searchController);
+  EXPECT_EQ(controller_.navigationItem.searchController,
+            controller_.searchController);
+
+  // Verify search controller properties.
+  EXPECT_FALSE(
+      controller_.searchController.obscuresBackgroundDuringPresentation);
+  EXPECT_EQ(controller_.searchController.searchResultsUpdater, (id)controller_);
+}
+
+/// Tests that filterRecordsWithKeyword is called when search text changes.
 TEST_F(DownloadListTableViewControllerTest,
-       TestPresentationControllerWillDismiss) {
+       TestSearchControllerCallsMutatorOnUpdate) {
+  // Track the last keyword passed to filterRecordsWithKeyword.
+  __block NSString* lastKeyword = nil;
+  id mockMutator = OCMProtocolMock(@protocol(DownloadListMutator));
+  OCMExpect([mockMutator filterRecordsWithKeyword:[OCMArg any]])
+      .andDo(^(NSInvocation* invocation) {
+        __weak NSString* keyword;
+        [invocation getArgument:&keyword atIndex:2];
+        lastKeyword = keyword;
+      });
+  OCMStub([mockMutator loadDownloadRecords]);
+  controller_.mutator = mockMutator;
+
+  // Simulate search text change via UISearchResultsUpdating.
+  [controller_
+      updateSearchResultsForSearchController:controller_.searchController];
+
+  // filterRecordsWithKeyword should have been called with the current
+  // (empty) search bar text.
+  [(OCMockObject*)mockMutator verify];
+}
+
+/// Tests presentationControllerDidDismiss calls download list handler.
+TEST_F(DownloadListTableViewControllerTest,
+       TestPresentationControllerDidDismiss) {
   id mockPresentationController =
       OCMClassMock([UIPresentationController class]);
 
-  [controller_ presentationControllerWillDismiss:mockPresentationController];
+  [controller_ presentationControllerDidDismiss:mockPresentationController];
 
   EXPECT_TRUE(mock_download_list_handler_.hideDownloadListCalled);
 }

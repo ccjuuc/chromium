@@ -9,19 +9,25 @@
 
 #include "base/check.h"
 #include "base/time/time.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/content_settings/content_setting_image_model.h"
+#include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/content_setting_bubble_contents.h"
-#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_bubble_specification.h"
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
+#include "chrome/browser/ui/views/permissions/chip/permission_chip_interface.h"
+#include "chrome/browser/ui/views/permissions/chip/permission_chip_view.h"
+#include "chrome/browser/ui/views/permissions/chip/permission_dashboard_interface.h"
 #include "chrome/browser/ui/views/permissions/chip/permission_prompt_chip_model.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/dom_distiller/core/url_constants.h"
 #include "components/permissions/permission_indicators_tab_data.h"
 #include "components/permissions/permission_request_manager.h"
 #include "components/permissions/permission_uma_util.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -33,7 +39,7 @@ namespace {
 
 // This method updates indicators' visibility set in
 // `PageSpecificContentSettings`.
-void UpdateIndicatorsVisibilityFlags(LocationBarView* location_bar) {
+void UpdateIndicatorsVisibilityFlags(LocationBar* location_bar) {
   if (!location_bar->GetWebContents()) {
     return;
   }
@@ -58,6 +64,16 @@ void UpdateIndicatorsVisibilityFlags(LocationBarView* location_bar) {
     pscs->OnPermissionIndicatorShown(ContentSettingsType::MEDIASTREAM_MIC);
   } else {
     pscs->OnPermissionIndicatorHidden(ContentSettingsType::MEDIASTREAM_MIC);
+  }
+
+  bool should_show_sensors =
+      (pscs->active_available_sensors() > 0) ||
+      (pscs->IsContentBlocked(ContentSettingsType::SENSORS) &&
+       pscs->is_any_requested_sensor_available());
+  if (should_show_sensors) {
+    pscs->OnPermissionIndicatorShown(ContentSettingsType::SENSORS);
+  } else {
+    pscs->OnPermissionIndicatorHidden(ContentSettingsType::SENSORS);
   }
 }
 
@@ -86,7 +102,25 @@ bool ShouldExpandChipIndicator(
     return false;
   }
 
+  if (pscs->active_available_sensors() > 0 &&
+      pscs->IsIndicatorVisible(ContentSettingsType::SENSORS)) {
+    return false;
+  }
+
   return true;
+}
+
+permissions::PermissionIndicatorsTabData::IndicatorsType GetIndicatorsType(
+    ContentSettingImageModel::ImageType image_type) {
+  switch (image_type) {
+    case ContentSettingImageModel::ImageType::kSensors:
+      return permissions::PermissionIndicatorsTabData::IndicatorsType::kSensors;
+    case ContentSettingImageModel::ImageType::kMediaStream:
+      return permissions::PermissionIndicatorsTabData::IndicatorsType::
+          kMediaStream;
+    default:
+      NOTREACHED();
+  }
 }
 
 void RecordIndicators(ContentSettingImageModel* indicator_model,
@@ -100,6 +134,11 @@ void RecordIndicators(ContentSettingImageModel* indicator_model,
   if (pscs->GetMicrophoneCameraState().Has(
           content_settings::PageSpecificContentSettings::kMicrophoneAccessed)) {
     permissions.insert(ContentSettingsType::MEDIASTREAM_MIC);
+  }
+  if ((pscs->active_available_sensors() > 0) ||
+      (pscs->IsContentBlocked(ContentSettingsType::SENSORS) &&
+       pscs->is_any_requested_sensor_available())) {
+    permissions.insert(ContentSettingsType::SENSORS);
   }
 
   permissions::PermissionUmaUtil::RecordActivityIndicator(
@@ -124,9 +163,10 @@ bool SuppressVerboseState(ChipController* request_chip_controller) {
   ContentSettingsType prompt_type = prompt_model->content_settings_type();
 
   // If currently displayed permission request chip is not for media
-  // permissions, the expand animation should be suppressed.
+  // or sensor permissions, the expand animation should be suppressed.
   if (prompt_type != ContentSettingsType::MEDIASTREAM_CAMERA &&
-      prompt_type != ContentSettingsType::MEDIASTREAM_MIC) {
+      prompt_type != ContentSettingsType::MEDIASTREAM_MIC &&
+      prompt_type != ContentSettingsType::SENSORS) {
     return true;
   }
 
@@ -140,34 +180,45 @@ bool SuppressVerboseState(ChipController* request_chip_controller) {
 }  // namespace
 
 PermissionDashboardController::PermissionDashboardController(
-    LocationBarView* location_bar_view,
-    PermissionDashboardView* permission_dashboard_view)
-    : location_bar_view_(location_bar_view),
-      permission_dashboard_view_(permission_dashboard_view) {
+    LocationBar* location_bar,
+    ContentSettingImageViewDelegate* content_settings_image_delegate,
+    PermissionDashboardInterface* permission_dashboard)
+    : location_bar_(location_bar),
+      content_setting_image_delegate_(content_settings_image_delegate),
+      permission_dashboard_(permission_dashboard) {
   request_chip_controller_ = std::make_unique<ChipController>(
-      location_bar_view, permission_dashboard_view_->GetRequestChip(),
-      permission_dashboard_view_, this);
-  observation_.Observe(permission_dashboard_view_->GetIndicatorChip());
+      location_bar, content_setting_image_delegate_,
+      permission_dashboard_->GetRequestChip(), permission_dashboard_, this);
+  observation_.Observe(permission_dashboard_->GetIndicatorChip());
 
-  permission_dashboard_view->GetIndicatorChip()->SetCallback(
+  permission_dashboard->GetIndicatorChip()->SetPressedCallback(
       base::BindRepeating(
           &PermissionDashboardController::OnIndicatorsChipButtonPressed,
           weak_factory_.GetWeakPtr()));
-  permission_dashboard_view->SetVisible(false);
+  permission_dashboard->SetVisible(false);
 }
 
 PermissionDashboardController::~PermissionDashboardController() = default;
 
 bool PermissionDashboardController::Update(
-    ContentSettingImageModel* indicator_model,
-    ContentSettingImageView::Delegate* delegate) {
-  indicator_model->Update(delegate->ShouldHideContentSettingImage()
-                              ? nullptr
-                              : location_bar_view_->GetWebContents());
+    ContentSettingImageModel* indicator_model) {
+  CHECK(indicator_model);
 
-  PermissionChipView* indicator_chip =
-      permission_dashboard_view_->GetIndicatorChip();
+  indicator_model->Update(
+      content_setting_image_delegate_->ShouldHideContentSettingImage()
+          ? nullptr
+          : location_bar_->GetWebContents());
 
+  PermissionChipInterface* indicator_chip =
+      permission_dashboard_->GetIndicatorChip();
+
+  // This method can be called multiple times. If the indicator's model is not
+  // visible, then we need to hide the indicators. It can happen in two
+  // scenarios:
+  // 1. The indicator's model is not visible, but the chip is visible. In this
+  // case we need to hide the indicators.
+  // 2. The indicator's model is not visible, and the chip is not visible. In
+  // this case we can return early.
   if (!indicator_model->is_visible()) {
     if (!indicator_chip->GetVisible()) {
       return false;
@@ -175,16 +226,16 @@ bool PermissionDashboardController::Update(
 
     // When `WebContents` is nullptr, `indicator_model->is_visible()` is always
     // false.
-    if (!location_bar_view_->GetWebContents()) {
+    if (!location_bar_->GetWebContents()) {
       HideIndicators();
       return true;
     }
 
     // In case `GetPrimaryMainFrame()` changed, we should immediately hide
     // indicators without the collapse animation.
-    bool same_frame = main_frame_id_ == location_bar_view_->GetWebContents()
-                                            ->GetPrimaryMainFrame()
-                                            ->GetGlobalId();
+    bool same_frame =
+        main_frame_id_ ==
+        location_bar_->GetWebContents()->GetPrimaryMainFrame()->GetGlobalId();
 
     if (is_verbose_ && same_frame) {
       // At first show the collapse animation and then hide indicators.
@@ -197,13 +248,11 @@ bool PermissionDashboardController::Update(
   }
 
   content_setting_image_model_ = indicator_model;
-  delegate_ = delegate;
   // Save the currently displayed frame id to avoid unnecessary animation if the
   // main frame gets changed.
-  main_frame_id_ = location_bar_view_->GetWebContents()
-                       ->GetPrimaryMainFrame()
-                       ->GetGlobalId();
-  permission_dashboard_view_->SetVisible(true);
+  main_frame_id_ =
+      location_bar_->GetWebContents()->GetPrimaryMainFrame()->GetGlobalId();
+  permission_dashboard_->SetVisible(true);
 
   // Always update the icon and the message as they may change based on used
   // permissions.
@@ -226,7 +275,7 @@ bool PermissionDashboardController::Update(
 
   content_settings::PageSpecificContentSettings* content_settings =
       content_settings::PageSpecificContentSettings::GetForFrame(
-          location_bar_view_->GetWebContents()->GetPrimaryMainFrame());
+          location_bar_->GetWebContents()->GetPrimaryMainFrame());
 
   indicator_chip->SetVisible(true);
 
@@ -234,100 +283,110 @@ bool PermissionDashboardController::Update(
     is_verbose_ = false;
     if (SuppressVerboseState(request_chip_controller())) {
       // Permission request chip is visible it was drawn without a divider.
-      // Add the divider between an indicator and the request chip.
-      permission_dashboard_view_->UpdateDividerViewVisibility();
+      // The divider will be automatically added because of the
+      // ChildVisibilityChanged observer.
     } else {
       // Suppress LHS indicator's verbose animation if it was already displayed.
       // Blocked on the system level is an error case and should always be
       // animated.
-      permissions::PermissionIndicatorsTabData* permission_indicators_tab_data =
-          location_bar_view_->browser()
-              ->tab_strip_model()
-              ->GetActiveTab()
-              ->GetTabFeatures()
-              ->permission_indicators_tab_data();
+      const permissions::PermissionIndicatorsTabData*
+          permission_indicators_tab_data =
+              location_bar_->GetBrowser()
+                  ->tab_strip_model()
+                  ->GetActiveTab()
+                  ->GetTabFeatures()
+                  ->permission_indicators_tab_data();
+      const permissions::PermissionIndicatorsTabData::IndicatorsType type =
+          GetIndicatorsType(indicator_model->image_type());
       if (permission_indicators_tab_data &&
-          permission_indicators_tab_data->IsVerboseIndicatorAllowed(
-              permissions::PermissionIndicatorsTabData::IndicatorsType::
-                  kMediaStream)) {
-        indicator_chip->ResetAnimation();
+          permission_indicators_tab_data->IsVerboseIndicatorAllowed(type)) {
+        indicator_chip->ResetAnimation(
+            PermissionChipInterface::AnimationState::kCollapsed);
         indicator_chip->AnimateExpand(
             gfx::Animation::RichAnimationDuration(base::Milliseconds(350)));
       }
     }
   }
 
-  UpdateIndicatorsVisibilityFlags(location_bar_view_);
+  UpdateIndicatorsVisibilityFlags(location_bar_);
+
+  // Set the tooltip regardless of the `ShouldNotifyAccessibility`. The tooltip
+  // can be changed independently of the A11Y announcements.
+  indicator_chip->SetTooltipText(indicator_model->get_tooltip());
 
   if (indicator_model->ShouldNotifyAccessibility(
-          location_bar_view_->GetWebContents())) {
-    indicator_chip->SetTooltipText(indicator_model->get_tooltip());
-
+          location_bar_->GetWebContents())) {
     std::u16string name = l10n_util::GetStringUTF16(
         indicator_model->AccessibilityAnnouncementStringId());
-    permission_dashboard_view_->GetViewAccessibility().SetName(name);
+    indicator_chip->SetAccessibilityName(name);
 
-    permission_dashboard_view_->GetViewAccessibility().AnnounceAlert(
-        l10n_util::GetStringFUTF16(
-            IDS_A11Y_INDICATORS_ANNOUNCEMENT, name,
-            l10n_util::GetStringUTF16(IDS_A11Y_OMNIBOX_CHIP_HINT)));
+    indicator_chip->AnnounceAlert(l10n_util::GetStringFUTF16(
+        IDS_A11Y_INDICATORS_ANNOUNCEMENT, name,
+        l10n_util::GetStringUTF16(IDS_A11Y_OMNIBOX_CHIP_HINT)));
 
     RecordIndicators(indicator_model, content_settings, /*clicked=*/false);
 
-    indicator_model->AccessibilityWasNotified(
-        location_bar_view_->GetWebContents());
+    indicator_model->AccessibilityWasNotified(location_bar_->GetWebContents());
   }
 
   return true;
 }
 
+void PermissionDashboardController::DoNotCollapseForTesting() {
+  do_no_collapse_for_testing_ = true;
+  content_settings::PageSpecificContentSettings::
+      SetIgnoreBlockedMediaIndicatorTimerForTesting(true);
+}
+
 void PermissionDashboardController::OnChipVisibilityChanged(bool is_visible) {}
 
 void PermissionDashboardController::OnExpandAnimationEnded() {
-  if (!location_bar_view_->GetWebContents()) {
+  if (!location_bar_->GetWebContents()) {
     HideIndicators();
     return;
   }
 
   is_verbose_ = true;
 
-  UpdateIndicatorsVisibilityFlags(location_bar_view_);
+  UpdateIndicatorsVisibilityFlags(location_bar_);
 
   StartCollapseTimer();
 }
 
 void PermissionDashboardController::OnCollapseAnimationEnded() {
-  if (!location_bar_view_->GetWebContents()) {
+  if (!location_bar_->GetWebContents()) {
     HideIndicators();
     return;
   }
 
   permissions::PermissionIndicatorsTabData* permission_indicators_tab_data =
-      location_bar_view_->browser()
+      location_bar_->GetBrowser()
           ->tab_strip_model()
           ->GetActiveTab()
           ->GetTabFeatures()
           ->permission_indicators_tab_data();
 
-  if (permission_indicators_tab_data) {
-    permission_indicators_tab_data->SetVerboseIndicatorDisplayed(
-        permissions::PermissionIndicatorsTabData::IndicatorsType::kMediaStream);
+  if (permission_indicators_tab_data && content_setting_image_model_) {
+    permissions::PermissionIndicatorsTabData::IndicatorsType type =
+        GetIndicatorsType(content_setting_image_model_->image_type());
+    permission_indicators_tab_data->SetVerboseIndicatorDisplayed(type);
   }
 
   is_verbose_ = false;
   content_settings::PageSpecificContentSettings* content_settings =
       content_settings::PageSpecificContentSettings::GetForFrame(
-          location_bar_view_->GetWebContents()->GetPrimaryMainFrame());
-  if (!content_settings || (!content_settings->IsIndicatorVisible(
-                                ContentSettingsType::MEDIASTREAM_CAMERA) &&
-                            !content_settings->IsIndicatorVisible(
-                                ContentSettingsType::MEDIASTREAM_MIC))) {
+          location_bar_->GetWebContents()->GetPrimaryMainFrame());
+  if (!content_settings || !content_settings->IsAnyIndicatorVisible(
+                               {ContentSettingsType::MEDIASTREAM_CAMERA,
+                                ContentSettingsType::MEDIASTREAM_MIC,
+                                ContentSettingsType::SENSORS})) {
     HideIndicators();
   }
 }
 
 void PermissionDashboardController::OnMousePressed() {
-  should_suppress_reopening_page_info_ = !!page_info_bubble_tracker_.view();
+  should_suppress_reopening_page_info_ =
+      page_info_bubble_suppressor_.ShouldSuppress();
 }
 
 bool PermissionDashboardController::SuppressVerboseIndicator() {
@@ -351,41 +410,39 @@ void PermissionDashboardController::StartCollapseTimer() {
 }
 
 void PermissionDashboardController::Collapse(bool hide) {
-  if (hide) {
-    UpdateIndicatorsVisibilityFlags(location_bar_view_);
+  if (do_no_collapse_for_testing_ && !hide) {
+    return;
   }
-  if (!permission_dashboard_view_->GetIndicatorChip()->is_animating()) {
-    permission_dashboard_view_->GetIndicatorChip()->AnimateCollapse(
+  if (hide) {
+    UpdateIndicatorsVisibilityFlags(location_bar_);
+  }
+  if (!permission_dashboard_->GetIndicatorChip()->IsAnimating()) {
+    permission_dashboard_->GetIndicatorChip()->AnimateCollapse(
         gfx::Animation::RichAnimationDuration(base::Milliseconds(250)));
   }
 }
 
 void PermissionDashboardController::HideIndicators() {
   collapse_timer_.Stop();
-  permission_dashboard_view_->GetIndicatorChip()->ResetAnimation();
+  permission_dashboard_->GetIndicatorChip()->ResetAnimation(
+      PermissionChipInterface::AnimationState::kCollapsed);
   is_verbose_ = false;
-  permission_dashboard_view_->GetIndicatorChip()
-      ->GetViewAccessibility()
-      .SetIsIgnored(true);
-  permission_dashboard_view_->GetIndicatorChip()->SetVisible(false);
+  permission_dashboard_->GetIndicatorChip()->SetAccessibilityIgnored(true);
+  permission_dashboard_->GetIndicatorChip()->SetVisible(false);
   content_setting_image_model_ = nullptr;
-  delegate_ = nullptr;
-  permission_dashboard_view_->GetDividerView()->SetVisible(false);
-  if (permission_dashboard_view_->GetRequestChip()->GetVisible()) {
-    // After the indicator view is gone, remove the divider padding if the
-    // request chip is visible.
-    permission_dashboard_view_->GetRequestChip()->UpdateForDividerVisibility(
-        false);
-  } else {
-    permission_dashboard_view_->SetVisible(false);
+
+  // This method hides the indicator chip. If the request chip is not visible,
+  // then hide the parent permission_dashboard_ view as well.
+  if (!permission_dashboard_->GetRequestChip()->GetVisible()) {
+    permission_dashboard_->SetVisible(false);
   }
 
   // If blocked on the system level, then the indicators will not be shown as
   // blocked in PSCS. Reset them manually.
-  if (blocked_on_system_level_ && location_bar_view_->GetWebContents()) {
+  if (blocked_on_system_level_ && location_bar_->GetWebContents()) {
     content_settings::PageSpecificContentSettings* pscs =
         content_settings::PageSpecificContentSettings::GetForFrame(
-            location_bar_view_->GetWebContents()->GetPrimaryMainFrame());
+            location_bar_->GetWebContents()->GetPrimaryMainFrame());
     if (!pscs) {
       return;
     }
@@ -407,31 +464,33 @@ void PermissionDashboardController::HideIndicators() {
     }
   }
 
-  UpdateIndicatorsVisibilityFlags(location_bar_view_);
+  UpdateIndicatorsVisibilityFlags(location_bar_);
 }
 
 void PermissionDashboardController::ShowBubble() {
-  content::WebContents* web_contents = location_bar_view_->GetWebContents();
-  if (web_contents && !page_info_bubble_tracker_) {
-    views::View* const anchor = permission_dashboard_view_->GetIndicatorChip();
+  content::WebContents* web_contents = location_bar_->GetWebContents();
+  if (web_contents && !page_info_bubble_suppressor_.IsShowing()) {
     ContentSettingBubbleContents* bubble_view_ =
         new ContentSettingBubbleContents(
             content_setting_image_model_->CreateBubbleModel(
-                delegate_->GetContentSettingBubbleModelDelegate(),
+                content_setting_image_delegate_
+                    ->GetContentSettingBubbleModelDelegate(),
                 web_contents),
-            web_contents, anchor, views::BubbleBorder::TOP_LEFT);
-    bubble_view_->SetHighlightedButton(
-        permission_dashboard_view_->GetIndicatorChip());
+            web_contents,
+            permission_dashboard_->GetIndicatorChip()->GetAnchor(),
+            views::BubbleBorder::TOP_LEFT);
+    bubble_view_->SetHighlightedElement(
+        PermissionChipView::kIndicatorChipElementId);
     views::Widget* bubble_widget =
         views::BubbleDialogDelegateView::CreateBubble(bubble_view_);
     bubble_widget->Show();
-    delegate_->OnContentSettingImageBubbleShown(
+    content_setting_image_delegate_->OnContentSettingImageBubbleShown(
         content_setting_image_model_->image_type());
   }
 }
 
 void PermissionDashboardController::ShowPageInfoDialog() {
-  content::WebContents* contents = location_bar_view_->GetWebContents();
+  content::WebContents* contents = location_bar_->GetWebContents();
   if (!contents) {
     return;
   }
@@ -447,8 +506,8 @@ void PermissionDashboardController::ShowPageInfoDialog() {
   // different mouse click event propagation flow. In other words the mouse
   // click listener will be called before the PageInfo dialog receives a focus
   // change event. Hence the dialog will not be closed on time.
-  if (page_info_bubble_tracker_) {
-    page_info_bubble_tracker_.view()->GetWidget()->CloseWithReason(
+  if (page_info_bubble_suppressor_.IsShowing()) {
+    page_info_bubble_suppressor_.Close(
         views::Widget::ClosedReason::kUnspecified);
     return;
   }
@@ -461,27 +520,22 @@ void PermissionDashboardController::ShowPageInfoDialog() {
   }
 
   std::unique_ptr<PageInfoBubbleSpecification> specification =
-      PageInfoBubbleSpecification::Builder(
-          permission_dashboard_view_,
-          permission_dashboard_view_->GetWidget()->GetNativeWindow(), contents,
-          entry->GetVirtualURL())
-          .AddPageInfoClosingCallback(base::BindOnce(
-              &PermissionDashboardController::OnPageInfoBubbleClosed,
-              weak_factory_.GetWeakPtr()))
+      PageInfoBubbleSpecification::Builder(permission_dashboard_->GetAnchor(),
+                                           contents->GetTopLevelNativeWindow(),
+                                           contents, entry->GetVirtualURL())
           .Build();
 
   views::BubbleDialogDelegateView* const bubble =
       PageInfoBubbleView::CreatePageInfoBubble(std::move(specification));
+  bubble->SetHighlightedElement(PermissionChipView::kIndicatorChipElementId);
   bubble->GetWidget()->Show();
-  page_info_bubble_tracker_.SetView(bubble);
+  page_info_bubble_suppressor_.Observe(bubble->GetWidget());
 }
 
-void PermissionDashboardController::OnPageInfoBubbleClosed(
-    views::Widget::ClosedReason closed_reason,
-    bool reload_prompt) {}
+
 
 void PermissionDashboardController::OnIndicatorsChipButtonPressed() {
-  content::WebContents* contents = location_bar_view_->GetWebContents();
+  content::WebContents* contents = location_bar_->GetWebContents();
   if (!contents) {
     return;
   }
@@ -504,7 +558,7 @@ void PermissionDashboardController::OnIndicatorsChipButtonPressed() {
   if (content_setting_image_model_) {
     content_settings::PageSpecificContentSettings* pscs =
         content_settings::PageSpecificContentSettings::GetForFrame(
-            location_bar_view_->GetWebContents()->GetPrimaryMainFrame());
+            location_bar_->GetWebContents()->GetPrimaryMainFrame());
     if (!pscs) {
       return;
     }
@@ -515,14 +569,30 @@ void PermissionDashboardController::OnIndicatorsChipButtonPressed() {
 
 std::u16string PermissionDashboardController::GetIndicatorTitle(
     ContentSettingImageModel* model) {
-  // Currently PermissionDashboardController supports only Camera and
-  // Microphone.
-  DCHECK(model->image_type() ==
-         ContentSettingImageModel::ImageType::MEDIASTREAM);
+  switch (model->image_type()) {
+    case ContentSettingImageModel::ImageType::kSensors:
+      return GetSensorsIndicatorTitle(model);
+    case ContentSettingImageModel::ImageType::kMediaStream:
+      return GetMediaStreamIndicatorTitle(model);
+    default:
+      DUMP_WILL_BE_NOTREACHED();
+      return std::u16string();
+  }
+}
 
+std::u16string PermissionDashboardController::GetSensorsIndicatorTitle(
+    ContentSettingImageModel* model) {
+  if (model->is_blocked()) {
+    return l10n_util::GetStringUTF16(IDS_SENSORS_BLOCKED);
+  }
+  return l10n_util::GetStringUTF16(IDS_SENSORS_IN_USE);
+}
+
+std::u16string PermissionDashboardController::GetMediaStreamIndicatorTitle(
+    ContentSettingImageModel* model) {
   content_settings::PageSpecificContentSettings* content_settings =
       content_settings::PageSpecificContentSettings::GetForFrame(
-          location_bar_view_->GetWebContents()->GetPrimaryMainFrame());
+          location_bar_->GetWebContents()->GetPrimaryMainFrame());
   if (!content_settings) {
     return std::u16string();
   }

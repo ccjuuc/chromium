@@ -31,7 +31,7 @@ class GLTexturePassthroughD3DImageRepresentation
   bool NeedsSuspendAccessForDXGIKeyedMutex() const override;
 
   const scoped_refptr<gles2::TexturePassthrough>& GetTexturePassthrough(
-      int plane_index) override;
+      size_t plane_index) override;
 
   void* GetEGLImage();
 
@@ -99,6 +99,7 @@ class WebNND3DTensorRepresentation : public WebNNTensorRepresentation {
   void EndAccess() override;
 
   Microsoft::WRL::ComPtr<ID3D12Resource> GetD3D12Buffer() const override;
+  base::win::ScopedHandle GetD3D12HeapHandle() const override;
   scoped_refptr<gfx::D3DSharedFence> GetAcquireFence() const override;
   void SetReleaseFence(
       scoped_refptr<gfx::D3DSharedFence> release_fence) override;
@@ -126,15 +127,14 @@ class OverlayD3DImageRepresentation : public OverlayImageRepresentation {
   Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device_;
 };
 
-class D3D11VideoImageRepresentation : public VideoImageRepresentation {
+class D3DVideoImageRepresentation : public VideoImageRepresentation {
  public:
-  D3D11VideoImageRepresentation(
-      SharedImageManager* manager,
-      SharedImageBacking* backing,
-      MemoryTypeTracker* tracker,
-      Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device,
-      D3D11TextureAndArrayIndex d3d11_texture);
-  ~D3D11VideoImageRepresentation() override;
+  D3DVideoImageRepresentation(SharedImageManager* manager,
+                              SharedImageBacking* backing,
+                              MemoryTypeTracker* tracker,
+                              Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device,
+                              D3D11TextureAndArrayIndex d3d11_texture);
+  ~D3DVideoImageRepresentation() override;
 
  private:
   bool BeginWriteAccess() override;

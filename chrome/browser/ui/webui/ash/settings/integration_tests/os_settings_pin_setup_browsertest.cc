@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/in_session_auth_dialog_controller.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -12,22 +13,23 @@
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_factory.h"
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_storage.h"
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_utils.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/ash/settings/test_support/os_settings_lock_screen_browser_test_base.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/data/webui/chromeos/settings/os_people_page/password_settings_api.test-mojom-test-utils.h"
 #include "chrome/test/data/webui/chromeos/settings/os_people_page/pin_settings_api.test-mojom-test-utils.h"
 #include "chrome/test/data/webui/chromeos/settings/test_api.test-mojom-test-utils.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/osauth/impl/auth_hub_common.h"
 #include "chromeos/ash/components/osauth/impl/auth_surface_registry.h"
 #include "chromeos/ash/components/osauth/public/auth_engine_api.h"
 #include "chromeos/ash/components/osauth/public/auth_parts.h"
 #include "chromeos/ash/components/osauth/public/common_types.h"
+#include "chromeos/ash/services/auth_factor_config/public/mojom/auth_factor_config.mojom.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_types.h"
+#include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
 
@@ -99,13 +101,16 @@ class OSSettingsPinSetupTest : public OSSettingsLockScreenBrowserTestBase,
 
   PrefService& Prefs() {
     PrefService* service =
-        ProfileHelper::Get()->GetProfileByAccountId(GetAccountId())->GetPrefs();
+        Profile::FromBrowserContext(
+            BrowserContextHelper::Get()->GetBrowserContextByAccountId(
+                GetAccountId()))
+            ->GetPrefs();
     CHECK(service);
     return *service;
   }
 
   bool GetPinAutoSubmitState() {
-    return Prefs().GetBoolean(::prefs::kPinUnlockAutosubmitEnabled);
+    return Prefs().GetBoolean(ash::prefs::kPinUnlockAutosubmitEnabled);
   }
 
   // Returns whether or not a PIN is configured in the backend.
@@ -158,8 +163,8 @@ class OSSettingsPinSetupTest : public OSSettingsLockScreenBrowserTestBase,
 
   void SetPinDisabledPolicy(bool disabled) {
     policy::PolicyMap policies;
-    base::Value policy_value{disabled ? base::Value::List()
-                                      : base::Value::List().Append("PIN")};
+    base::Value policy_value{disabled ? base::ListValue()
+                                      : base::ListValue().Append("PIN")};
 
     policies.Set("QuickUnlockModeAllowlist", policy::POLICY_LEVEL_MANDATORY,
                  policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
@@ -169,6 +174,11 @@ class OSSettingsPinSetupTest : public OSSettingsLockScreenBrowserTestBase,
     policies.Set("WebAuthnFactors", policy::POLICY_LEVEL_MANDATORY,
                  policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
                  policy_value.Clone(),
+                 /*external_data_fetcher=*/nullptr);
+
+    policies.Set(policy::key::kAllowedLocalAuthFactors,
+                 policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+                 policy::POLICY_SOURCE_CLOUD, policy_value.Clone(),
                  /*external_data_fetcher=*/nullptr);
 
     provider_.UpdateChromePolicy(policies);
@@ -604,6 +614,70 @@ IN_PROC_BROWSER_TEST_F(OSSettingsPinOnlySetupTest, PinOnlyRemobalDisabled) {
   auto pin_settings = GoToPinSettings(lock_screen_settings);
 
   pin_settings.AssertMoreButtonDisabled(true);
+}
+
+// Test fixture for PIN complexity policies.
+class OSSettingsPinSetupComplexityTest : public OSSettingsPinSetupTest {
+ public:
+  void SetComplexityPolicy(ash::LocalAuthFactorsComplexity complexity) {
+    Prefs().SetInteger(ash::prefs::kLocalAuthFactorsComplexity,
+                       static_cast<int>(complexity));
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         OSSettingsPinSetupComplexityTest,
+                         testing::Values(PinType::kPrefs,
+                                         PinType::kCryptohome));
+
+// Tests that when the complexity policy is set, a weak PIN is blocked
+// from submission with a hard error state.
+IN_PROC_BROWSER_TEST_P(OSSettingsPinSetupComplexityTest,
+                       FailsComplexityRequirements) {
+  SetComplexityPolicy(ash::LocalAuthFactorsComplexity::kHigh);
+
+  auto lock_screen_settings = OpenLockScreenSettingsAndAuthenticate();
+  auto pin_settings = GoToPinSettings(lock_screen_settings);
+
+  // 'kWeakPin' (111111) should be blocked by the High complexity policy.
+  // 'kMaximumLengthPin' (1122334455) should pass.
+  pin_settings.SetPinButFailsComplexity(kWeakPin, kMaximumLengthPin);
+}
+
+// Tests that when the complexity policy is NOT set, the system correctly falls
+// back to the legacy `quickUnlockPrivateCheckCredential_` behavior.
+IN_PROC_BROWSER_TEST_P(OSSettingsPinSetupComplexityTest,
+                       LegacyFlowUsedWhenPolicyUnset) {
+  auto lock_screen_settings = OpenLockScreenSettingsAndAuthenticate();
+  auto pin_settings = GoToPinSettings(lock_screen_settings);
+
+  // In the legacy flow, 'kWeakPin' generates a WARNING, but still allows the
+  // user to submit and set the PIN. `SetPinWithWarning` asserts exactly this,
+  // proving the new flow (which generates an ERROR) was not triggered.
+  pin_settings.SetPinWithWarning(kWeakPin);
+
+  pin_settings.AssertHasPin(true);
+  EXPECT_EQ(true, IsPinConfigured());
+}
+
+// Tests that when the complexity policy is set to High, a strong PIN
+// passes the `checkPinComplexity_` flow and is successfully configured.
+IN_PROC_BROWSER_TEST_P(OSSettingsPinSetupComplexityTest,
+                       PassesComplexityRequirements) {
+  // 1. Enforce the new policy flow.
+  SetComplexityPolicy(ash::LocalAuthFactorsComplexity::kHigh);
+
+  auto lock_screen_settings = OpenLockScreenSettingsAndAuthenticate();
+  auto pin_settings = GoToPinSettings(lock_screen_settings);
+
+  // 2. Use the existing SetPin API. This method automatically enters the PIN,
+  // checks that submission is allowed (which proves checkPinComplexity_
+  // returned kOk), confirms the PIN, and waits for the dialog to close.
+  pin_settings.SetPin(kMaximumLengthPin);
+
+  // 3. Verify the frontend and backend states confirm the setup was successful.
+  pin_settings.AssertHasPin(true);
+  EXPECT_TRUE(IsPinConfigured());
 }
 
 }  // namespace ash::settings

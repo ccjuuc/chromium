@@ -37,10 +37,8 @@ namespace user_education {
 
 namespace {
 BASE_FEATURE(kTestIPHFeature,
-             "TestIPHFeature",
              base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kTestIPHFeature2,
-             "TestIPHFeature2",
              base::FEATURE_ENABLED_BY_DEFAULT);
 constexpr char kAppName[] = "App1";
 constexpr char kAppName2[] = "App2";
@@ -137,8 +135,8 @@ class FeaturePromoLifecycleTest : public testing::Test {
     auto result =
         std::make_unique<test::TestHelpBubble>(&element_, HelpBubbleParams());
     help_bubble_subscriptions_.emplace_back(
-        result->AddOnCloseCallback(base::BindLambdaForTesting(
-            [this](HelpBubble*, HelpBubble::CloseReason) {
+        result->AddOnClosingCallback(base::BindLambdaForTesting(
+            [this](const HelpBubble*, HelpBubble::CloseReason) {
               --num_open_bubbles_;
             })));
     return result;

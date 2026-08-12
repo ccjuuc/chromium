@@ -4,10 +4,12 @@
 
 #include "third_party/blink/renderer/modules/webrtc/webrtc_audio_device_impl.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/stringprintf.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "media/base/audio_bus.h"
 #include "media/base/audio_parameters.h"
@@ -17,6 +19,8 @@
 #include "third_party/blink/public/platform/modules/webrtc/webrtc_logging.h"
 #include "third_party/blink/renderer/modules/mediastream/processed_local_audio_source.h"
 #include "third_party/blink/renderer/modules/webrtc/webrtc_audio_renderer.h"
+#include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 
 using media::AudioParameters;
 using media::ChannelLayout;
@@ -92,7 +96,6 @@ void WebRtcAudioDeviceImpl::RenderData(
       audio_bus->Zero();
       return;
     }
-    DCHECK(audio_transport_callback_);
     // Store the reported audio delay locally.
     output_delay_ = audio_delay;
   }
@@ -111,20 +114,25 @@ void WebRtcAudioDeviceImpl::RenderData(
   int64_t ntp_time_ms = -1;
   int16_t* audio_data = render_buffer_.data();
 
-  TRACE_EVENT_BEGIN1("audio", "VoE::PullRenderData", "frames",
-                     frames_per_10_ms);
-  audio_transport_callback_->PullRenderData(
-      kBytesPerSample * 8, sample_rate, audio_bus->channels(), frames_per_10_ms,
-      audio_data, &elapsed_time_ms, &ntp_time_ms);
-  TRACE_EVENT_END2("audio", "VoE::PullRenderData", "elapsed_time_ms",
-                   elapsed_time_ms, "ntp_time_ms", ntp_time_ms);
-  if (elapsed_time_ms >= 0)
+  TRACE_EVENT_BEGIN("audio", "VoE::PullRenderData", "frames", frames_per_10_ms);
+  {
+    base::AutoLock callback_lock(audio_transport_callback_lock_);
+    if (audio_transport_callback_) {
+      audio_transport_callback_->PullRenderData(
+          kBytesPerSample * 8, sample_rate, audio_bus->channels(),
+          frames_per_10_ms, audio_data, &elapsed_time_ms, &ntp_time_ms);
+    }
+  }
+  TRACE_EVENT_END("audio", "elapsed_time_ms", elapsed_time_ms, "ntp_time_ms",
+                  ntp_time_ms);
+  if (elapsed_time_ms >= 0) {
     *current_time = base::Milliseconds(elapsed_time_ms);
+  }
 
   // De-interleave each channel and convert to 32-bit floating-point
   // with nominal range -1.0 -> +1.0 to match the callback format.
   audio_bus->FromInterleaved<media::SignedInt16SampleTypeTraits>(
-      audio_data, audio_bus->frames());
+      render_buffer_);
 
   // Pass the render data to the playout sinks.
   base::AutoLock auto_lock(lock_);
@@ -177,6 +185,7 @@ int32_t WebRtcAudioDeviceImpl::RegisterAudioCallback(
   DCHECK_CALLED_ON_VALID_THREAD(signaling_thread_checker_);
   SendLogMessage(base::StringPrintf("%s()", __func__));
   base::AutoLock lock(lock_);
+  base::AutoLock callback_lock(audio_transport_callback_lock_);
   DCHECK_EQ(!audio_transport_callback_, !!audio_callback);
   audio_transport_callback_ = audio_callback;
   return 0;
@@ -205,11 +214,29 @@ int32_t WebRtcAudioDeviceImpl::Terminate() {
   StopRecording();
   StopPlayout();
 
+  // Temporarily hold the audio renderer so that we can disconnect the source
+  // from it after we have released the lock, avoiding a deadlock.
+  scoped_refptr<blink::WebRtcAudioRenderer> renderer_to_disconnect;
   {
     base::AutoLock auto_lock(lock_);
-    DCHECK(!renderer_ || !renderer_->IsStarted())
-        << "The shared audio renderer shouldn't be running";
+    renderer_to_disconnect = std::move(renderer_);
     capturers_.clear();
+  }
+
+  if (renderer_to_disconnect) {
+    renderer_to_disconnect->DisconnectSource();
+
+    // WebRtcAudioRenderer holds strictly main-thread Oilpan handles and asserts
+    // its destruction sequence. If the main thread drops its reference while
+    // we hold this local reference, the off-thread destruction causes memory
+    // corruption. Bounce the final reference to the main thread using the
+    // renderer's own frame-associated task runner to safely die.
+    if (scoped_refptr<base::SingleThreadTaskRunner> task_runner =
+            renderer_to_disconnect->GetTaskRunner()) {
+      // ReleaseSoon is required over PostCrossThreadTask to handle task queue
+      // shutdown safely during iframe detachment.
+      task_runner->ReleaseSoon(FROM_HERE, std::move(renderer_to_disconnect));
+    }
   }
 
   initialized_ = false;
@@ -250,6 +277,7 @@ int32_t WebRtcAudioDeviceImpl::StartPlayout() {
   DVLOG(1) << "WebRtcAudioDeviceImpl::StartPlayout()";
   DCHECK_CALLED_ON_VALID_THREAD(worker_thread_checker_);
   base::AutoLock auto_lock(lock_);
+  base::AutoLock callback_lock(audio_transport_callback_lock_);
   if (!audio_transport_callback_) {
     LOG(ERROR) << "Audio transport is missing";
     return 0;
@@ -289,6 +317,7 @@ int32_t WebRtcAudioDeviceImpl::StartRecording() {
   DCHECK(initialized_);
   SendLogMessage(base::StringPrintf("%s()", __func__));
   base::AutoLock auto_lock(lock_);
+  base::AutoLock callback_lock(audio_transport_callback_lock_);
   if (!audio_transport_callback_) {
     LOG(ERROR) << "Audio transport is missing";
     return -1;
@@ -377,7 +406,7 @@ void WebRtcAudioDeviceImpl::AddAudioCapturer(
   DCHECK(!capturer->device().id.empty());
 
   base::AutoLock auto_lock(lock_);
-  DCHECK(!base::Contains(capturers_, capturer));
+  DCHECK(!std::ranges::contains(capturers_, capturer));
   capturers_.push_back(capturer);
   capturer->SetOutputDeviceForAec(output_device_id_for_aec_.Utf8());
 }
@@ -397,7 +426,7 @@ void WebRtcAudioDeviceImpl::AddPlayoutSink(
   DVLOG(1) << "WebRtcAudioDeviceImpl::AddPlayoutSink()";
   DCHECK(sink);
   base::AutoLock auto_lock(lock_);
-  DCHECK(!base::Contains(playout_sinks_, sink));
+  DCHECK(!std::ranges::contains(playout_sinks_, sink));
   playout_sinks_.push_back(sink);
 }
 

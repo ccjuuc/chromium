@@ -8,14 +8,14 @@
 
 #include "base/stl_util.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/guest_view/buildflags/buildflags.h"
 #include "content/public/browser/web_contents.h"
-#include "extensions/buildflags/buildflags.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_GUEST_VIEW)
 #include "components/guest_view/browser/guest_view_base.h"
 #endif
 
@@ -42,11 +42,18 @@ PopunderPreventer::PopunderPreventer(content::WebContents* activating_contents)
 
 PopunderPreventer::~PopunderPreventer() {
   for (base::WeakPtr<content::WebContents>& popup : popups_) {
-    auto* browser = popup ? chrome::FindBrowserWithTab(popup.get()) : nullptr;
+    auto* browser =
+        popup ? GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+                    popup.get())
+              : nullptr;
     // Only popup, app, or app-popup browser windows are potential popunders.
-    if (browser && (browser->is_type_app() || browser->is_type_popup() ||
-                    browser->is_type_app_popup())) {
-      browser->ActivateContents(popup.get());
+    if (browser &&
+        (browser->GetType() == BrowserWindowInterface::Type::TYPE_APP ||
+         browser->GetType() == BrowserWindowInterface::Type::TYPE_POPUP ||
+         browser->GetType() == BrowserWindowInterface::Type::TYPE_APP_POPUP)) {
+      if (popup->GetDelegate()) {
+        popup->GetDelegate()->ActivateContents(popup.get());
+      }
     }
   }
 }
@@ -64,7 +71,7 @@ void PopunderPreventer::WillActivateWebContents(
 void PopunderPreventer::AddPotentialPopunder(content::WebContents* popup) {
   content::WebContents* top_level_activating_contents =
       activating_contents_.get();
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_GUEST_VIEW)
   // If the dialog was triggered via an PDF, get the top level web contents that
   // embeds the PDF.
   top_level_activating_contents =

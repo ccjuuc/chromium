@@ -8,11 +8,14 @@
 #include <variant>
 
 #include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/metrics/field_trial.h"
+#include "base/pickle.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
@@ -27,15 +30,28 @@
 #include "components/performance_manager/scenario_api/performance_scenario_test_support.h"
 #include "net/base/features.h"
 #include "net/base/io_buffer.h"
+#include "net/base/net_errors.h"
+#include "net/base/network_isolation_key.h"
+#include "net/base/schemeful_site.h"
 #include "net/base/test_completion_callback.h"
+#include "net/disk_cache/backend_cleanup_tracker.h"
 #include "net/disk_cache/disk_cache_test_util.h"
+#include "net/disk_cache/sql/entry_db_handle.h"
+#include "net/disk_cache/sql/sql_async_task_manager.h"
 #include "net/disk_cache/sql/sql_backend_constants.h"
 #include "net/disk_cache/sql/sql_entry_impl.h"
+#include "net/disk_cache/sql/sql_shared_cache.h"
+#include "net/disk_cache/sql/sql_shared_cache_handle.h"
+#include "net/disk_cache/sql/sql_shared_cache_manager.h"
+#include "net/http/http_cache.h"
+#include "net/http/http_response_headers.h"
+#include "net/http/http_response_info.h"
 #include "net/test/gtest_util.h"
 #include "sql/database.h"
 #include "sql/statement.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 using net::test::IsError;
 using net::test::IsOk;
@@ -46,6 +62,9 @@ using performance_scenarios::PerformanceScenarioTestHelper;
 using performance_scenarios::ScenarioScope;
 
 namespace disk_cache {
+
+using OperationHandle = ExclusiveOperationCoordinator::OperationHandle;
+
 namespace {
 
 using testing::ElementsAre;
@@ -90,8 +109,16 @@ size_t GetShardCount() {
                   1);
 }
 std::string GetExpectedFakeIndexContents() {
+  base::FieldTrial* backend_field_trial =
+      net::features::kDiskCacheBackendResetCacheOnGroupChange.Get()
+          ? base::FeatureList::GetFieldTrial(
+                net::features::kDiskCacheBackendExperiment)
+          : nullptr;
   return base::StrCat(
-      {kSqlBackendFakeIndexPrefix, base::NumberToString(GetShardCount())});
+      {kSqlBackendFakeIndexPrefix,
+       net::features::kSqlDiskCacheWalMode.Get() ? "Wal" : "Truncate",
+       base::NumberToString(GetShardCount()),
+       backend_field_trial ? backend_field_trial->group_name() : ""});
 }
 
 class SqlBackendImplTest : public testing::Test {
@@ -103,34 +130,39 @@ class SqlBackendImplTest : public testing::Test {
   void SetUp() override { ASSERT_TRUE(temp_dir_.CreateUniqueTempDir()); }
 
  protected:
-  std::unique_ptr<SqlBackendImpl> CreateBackend() {
+  void RunSparseDataExceedsMaxFileSizeTest(bool doom_entry);
+
+  std::unique_ptr<SqlBackendImpl> CreateBackend(
+      scoped_refptr<BackendCleanupTracker> cleanup_tracker = nullptr) {
     return std::make_unique<SqlBackendImpl>(
-        temp_dir_.GetPath(), kDefaultMaxBytes, net::CacheType::DISK_CACHE);
+        temp_dir_.GetPath(), kDefaultMaxBytes, net::CacheType::DISK_CACHE,
+        std::move(cleanup_tracker));
+  }
+
+  void WaitForCleanup(scoped_refptr<BackendCleanupTracker> cleanup_tracker) {
+    CHECK(cleanup_tracker);
+    base::RunLoop run_loop;
+    cleanup_tracker->AddPostCleanupCallback(run_loop.QuitClosure());
+    cleanup_tracker = nullptr;
+    run_loop.Run();
   }
 
   std::unique_ptr<SqlBackendImpl> CreateBackendAndInit(
       int64_t max_bytes = kDefaultMaxBytes) {
     auto backend = std::make_unique<SqlBackendImpl>(
-        temp_dir_.GetPath(), max_bytes, net::CacheType::DISK_CACHE);
+        temp_dir_.GetPath(), max_bytes, net::CacheType::DISK_CACHE,
+        /*cleanup_tracker=*/nullptr);
     base::test::TestFuture<int> future;
     backend->Init(future.GetCallback());
     CHECK_EQ(future.Get(), net::OK);
     return backend;
   }
-  void WaitUntilInitialized(
-      SqlBackendImpl& backend,
-      const scoped_refptr<SqlBackendImpl::ResIdOrErrorHolder>&
-          res_id_or_error) {
-    CHECK(res_id_or_error);
-    while (!res_id_or_error->data.has_value()) {
-      FlushQueue(backend);
+  void WaitUntilInitialized(SqlBackendImpl& backend,
+                            const scoped_refptr<EntryDbHandle>& db_handle) {
+    CHECK(db_handle);
+    while (!db_handle->IsFinished()) {
+      backend.RunUntilAllTasksCompleteForTest();
     }
-  }
-
-  void FlushQueue(SqlBackendImpl& backend) {
-    net::TestCompletionCallback flush_cb;
-    backend.FlushQueueForTest(flush_cb.callback());
-    EXPECT_THAT(flush_cb.WaitForResult(), IsOk());
   }
 
   void FlushQueueInTaskRunners(
@@ -146,12 +178,67 @@ class SqlBackendImplTest : public testing::Test {
   bool LoadInMemoryIndex(SqlBackendImpl& backend) {
     auto* store = backend.GetSqlStoreForTest();
     base::test::TestFuture<SqlPersistentStore::Error> future;
-    auto ret = store->MaybeLoadInMemoryIndex(future.GetCallback());
-    if (ret) {
-      CHECK_EQ(future.Get(), SqlPersistentStore::Error::kOk);
-      return true;
-    }
-    return false;
+    store->MaybeLoadInMemoryIndex(future.GetCallback());
+    return future.Get() == SqlPersistentStore::Error::kOk;
+  }
+
+  SqlSharedCacheResourceId CreateEntryInSharedCache(SqlBackendImpl& backend,
+                                                    std::string_view key,
+                                                    std::string_view data) {
+    TestEntryResultCompletionCallback cb_create;
+    disk_cache::EntryResult create_result =
+        cb_create.GetResult(backend.CreateEntry(std::string(key), net::HIGHEST,
+                                                cb_create.callback()));
+    EXPECT_THAT(create_result.net_error(), IsOk());
+    auto* entry = create_result.ReleaseEntry();
+    CHECK(entry);
+
+    net::HttpResponseInfo response_info;
+    response_info.response_time = base::Time::Now();
+    response_info.headers =
+        base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 200 OK\0\0");
+    auto pickle = response_info.MakePickle(false, false);
+    std::string pickle_data(reinterpret_cast<const char*>(pickle->data()),
+                            pickle->size());
+    auto pickle_buffer = base::MakeRefCounted<net::StringIOBuffer>(pickle_data);
+    net::TestCompletionCallback cb_write_pickle;
+    EXPECT_EQ(cb_write_pickle.GetResult(
+                  entry->WriteData(0, 0, pickle_buffer.get(), pickle->size(),
+                                   cb_write_pickle.callback(), false)),
+              static_cast<int>(pickle->size()));
+
+    auto write_buf = base::MakeRefCounted<net::IOBufferWithSize>(data.size());
+    write_buf->span().copy_from(base::as_byte_span(data));
+    net::TestCompletionCallback cb_write;
+    EXPECT_EQ(
+        cb_write.GetResult(entry->WriteData(1, 0, write_buf.get(), data.size(),
+                                            cb_write.callback(), false)),
+        static_cast<int>(data.size()));
+    entry->Close();
+    backend.RunUntilAllTasksCompleteForTest();
+
+    GURL url("https://example.com");
+    net::SchemefulSite site(url);
+    net::NetworkIsolationKey nik(site, site);
+    backend.OnEntryEligibleForSharedCache(
+        std::string(key), url,
+        std::make_unique<net::HttpResponseInfo>(response_info), nik);
+
+    base::RunLoop process_run_loop;
+    backend.ProcessSharedCacheEligibleEntriesForTest(
+        base::ScopedClosureRunner(process_run_loop.QuitClosure()),
+        base::NullCallback());
+    process_run_loop.Run();
+    backend.RunUntilAllTasksCompleteForTest();
+
+    CacheEntryKey cache_key{std::string(key)};
+    auto* store = backend.GetSqlStoreForTest();
+    base::test::TestFuture<SqlPersistentStore::EntryInfoOrError> open_future;
+    store->OpenEntry(cache_key, open_future.GetCallback());
+    auto open_res = open_future.Take();
+    CHECK(open_res.has_value());
+    return open_res->shared_cache_resource_id.value_or(
+        SqlSharedCacheResourceId{});
   }
 
   // Gets the total size of all entries.
@@ -165,11 +252,9 @@ class SqlBackendImplTest : public testing::Test {
                                        SqlPersistentStore::ResId res_id) {
     auto db = std::make_unique<sql::Database>(
         sql::DatabaseOptions()
-            .set_exclusive_locking(true)
 #if BUILDFLAG(IS_WIN)
             .set_exclusive_database_file_lock(true)
 #endif  // IS_WIN
-            .set_preload(true)
             .set_wal_mode(true),
         sql::Database::Tag("HttpCacheDiskCache"));
     CHECK(db->Open(temp_dir_.GetPath().AppendASCII(
@@ -224,6 +309,186 @@ TEST_F(SqlBackendImplTest, InitWithFakeIndexFile) {
   ASSERT_EQ(future.Get(), net::OK);
   histogram_tester.ExpectUniqueSample("Net.SqlDiskCache.FakeIndexFileError",
                                       FakeIndexFileError::kOkExisting, 1);
+}
+
+TEST_F(SqlBackendImplTest, ExperimentGroupChangeResetsCacheWhenParamSet) {
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitFromCommandLine(
+        "DiskCacheBackendExperiment<DiskCacheBackendExperiment.GroupA:"
+        "DiskCacheBackendResetCacheOnGroupChange/true",
+        "FeatureParamWithCache");
+
+    auto cleanup_tracker = BackendCleanupTracker::TryCreate(temp_dir_.GetPath(),
+                                                            base::DoNothing());
+    CHECK(cleanup_tracker);
+
+    // Create and init backend. This should create fake index with "GroupA".
+    auto backend = CreateBackend(cleanup_tracker);
+    base::test::TestFuture<int> future;
+    backend->Init(future.GetCallback());
+    ASSERT_EQ(future.Get(), net::OK);
+
+    backend.reset();
+    WaitForCleanup(std::move(cleanup_tracker));
+  }
+
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitFromCommandLine(
+        "DiskCacheBackendExperiment<DiskCacheBackendExperiment.GroupB:"
+        "DiskCacheBackendResetCacheOnGroupChange/true",
+        "FeatureParamWithCache");
+
+    // Initialize backend on same directory. It should fail because the group
+    // changed and reset on group change is enabled.
+    auto backend = CreateBackend();
+    base::test::TestFuture<int> future;
+    base::HistogramTester histogram_tester;
+    backend->Init(future.GetCallback());
+    EXPECT_EQ(future.Get(), net::ERR_FAILED);
+
+    // "GroupA" and "GroupB" have same length, so it should be
+    // kWrongMagicNumber.
+    histogram_tester.ExpectUniqueSample("Net.SqlDiskCache.FakeIndexFileError",
+                                        FakeIndexFileError::kWrongMagicNumber,
+                                        1);
+  }
+}
+
+TEST_F(SqlBackendImplTest,
+       ExperimentGroupChangeDoesNotResetCacheWhenParamNotSet) {
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitFromCommandLine(
+        "DiskCacheBackendExperiment<TrialC.GroupA:dummy/1",
+        "FeatureParamWithCache");
+
+    auto cleanup_tracker = BackendCleanupTracker::TryCreate(temp_dir_.GetPath(),
+                                                            base::DoNothing());
+    CHECK(cleanup_tracker);
+
+    // Create and init backend.
+    auto backend = CreateBackend(cleanup_tracker);
+    base::test::TestFuture<int> future;
+    backend->Init(future.GetCallback());
+    ASSERT_EQ(future.Get(), net::OK);
+
+    backend.reset();
+    WaitForCleanup(std::move(cleanup_tracker));
+  }
+
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitFromCommandLine(
+        "DiskCacheBackendExperiment<TrialD.GroupB:dummy/1",
+        "FeatureParamWithCache");
+
+    // Initialize backend on same directory. It should succeed because reset on
+    // group change is disabled by default.
+    auto backend = CreateBackend();
+    base::test::TestFuture<int> future;
+    base::HistogramTester histogram_tester;
+    backend->Init(future.GetCallback());
+    EXPECT_EQ(future.Get(), net::OK);
+
+    histogram_tester.ExpectUniqueSample("Net.SqlDiskCache.FakeIndexFileError",
+                                        FakeIndexFileError::kOkExisting, 1);
+  }
+}
+
+TEST_F(SqlBackendImplTest, WalModeChangeResetsCache) {
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeatureWithParameters(
+        net::features::kDiskCacheBackendExperiment,
+        {{"SqlDiskCacheWalMode", "false"}});
+
+    auto cleanup_tracker = BackendCleanupTracker::TryCreate(temp_dir_.GetPath(),
+                                                            base::DoNothing());
+    CHECK(cleanup_tracker);
+
+    auto backend = CreateBackend(cleanup_tracker);
+    base::test::TestFuture<int> future;
+    backend->Init(future.GetCallback());
+    ASSERT_EQ(future.Get(), net::OK);
+
+    backend.reset();
+    WaitForCleanup(std::move(cleanup_tracker));
+  }
+
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeatureWithParameters(
+        net::features::kDiskCacheBackendExperiment,
+        {{"SqlDiskCacheWalMode", "true"}});
+
+    auto backend = CreateBackend();
+    base::test::TestFuture<int> future;
+    base::HistogramTester histogram_tester;
+    backend->Init(future.GetCallback());
+    EXPECT_EQ(future.Get(), net::ERR_FAILED);
+
+    histogram_tester.ExpectUniqueSample("Net.SqlDiskCache.FakeIndexFileError",
+                                        FakeIndexFileError::kWrongFileSize, 1);
+  }
+}
+
+TEST_F(SqlBackendImplTest, SerialInit) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{"SqlDiskCacheSerialInitialize", "true"},
+       {"SqlDiskCacheShardCount", "2"}});
+
+  auto backend = CreateBackend();
+  base::test::TestFuture<int> future;
+  base::HistogramTester histogram_tester;
+  backend->Init(future.GetCallback());
+  ASSERT_EQ(future.Get(), net::OK);
+
+  histogram_tester.ExpectTotalCount("Net.SqlDiskCache.Init.SuccessTime", 1);
+  histogram_tester.ExpectTotalCount("Net.SqlDiskCache.Init.FailureTime", 0);
+}
+
+TEST_F(SqlBackendImplTest, SerialInitShardFail) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{"SqlDiskCacheSerialInitialize", "true"},
+       {"SqlDiskCacheShardCount", "2"}});
+
+  auto backend = CreateBackend();
+  // Fail the second shard.
+  backend->GetSqlStoreForTest()->SetSimulateDbShardFailureForTesting(1, true);
+
+  base::test::TestFuture<int> future;
+  base::HistogramTester histogram_tester;
+  backend->Init(future.GetCallback());
+  ASSERT_EQ(future.Get(), net::ERR_FAILED);
+
+  histogram_tester.ExpectTotalCount("Net.SqlDiskCache.Init.SuccessTime", 0);
+  histogram_tester.ExpectTotalCount("Net.SqlDiskCache.Init.FailureTime", 1);
+}
+
+TEST_F(SqlBackendImplTest, SerialInitFail) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{"SqlDiskCacheSerialInitialize", "true"}});
+
+  auto backend = CreateBackend();
+  // Make fake index file check fail by creating a directory where the file
+  // should be.
+  base::CreateDirectory(
+      temp_dir_.GetPath().Append(kSqlBackendFakeIndexFileName));
+
+  base::test::TestFuture<int> future;
+  base::HistogramTester histogram_tester;
+  backend->Init(future.GetCallback());
+  ASSERT_EQ(future.Get(), net::ERR_FAILED);
+  histogram_tester.ExpectTotalCount("Net.SqlDiskCache.Init.SuccessTime", 0);
+  histogram_tester.ExpectTotalCount("Net.SqlDiskCache.Init.FailureTime", 1);
 }
 
 TEST_F(SqlBackendImplTest, InitWithCorruptedFakeIndexFile) {
@@ -304,7 +569,8 @@ TEST_F(SqlBackendImplTest, InitWithFailedToCreateDirectory) {
   ASSERT_TRUE(base::WriteFile(cache_dir, ""));
 
   auto backend = std::make_unique<SqlBackendImpl>(cache_dir, kDefaultMaxBytes,
-                                                  net::CacheType::DISK_CACHE);
+                                                  net::CacheType::DISK_CACHE,
+                                                  /*cleanup_tracker=*/nullptr);
   base::test::TestFuture<int> future;
   backend->Init(future.GetCallback());
   ASSERT_EQ(future.Get(), net::ERR_FAILED);
@@ -996,7 +1262,7 @@ TEST_F(SqlBackendImplTest, MultipleDoomsOnSameEntry) {
 
   // When the entry was created speculatively, the doomed flag is updated
   // asynchronously. So need to flush the pending database operations.
-  FlushQueue(*backend);
+  backend->RunUntilAllTasksCompleteForTest();
 
   EXPECT_TRUE(static_cast<SqlEntryImpl*>(entry)->doomed());
   entry->Close();
@@ -1218,6 +1484,11 @@ TEST_F(SqlBackendImplTest, AbortPendingReadData) {
 // Tests that if a pending WriteData operation is aborted (e.g., due to backend
 // destruction), the callback is invoked with net::ERR_ABORTED.
 TEST_F(SqlBackendImplTest, AbortPendingWriteData) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{net::features::kSqlDiskCacheMaxWriteBufferTotalSize.name, "0"}});
+
   auto backend = CreateBackendAndInit();
 
   // Create an entry.
@@ -1227,9 +1498,7 @@ TEST_F(SqlBackendImplTest, AbortPendingWriteData) {
   ASSERT_THAT(create_result.net_error(), IsOk());
   auto* entry = create_result.ReleaseEntry();
 
-  net::TestCompletionCallback flush_cb;
-  backend->FlushQueueForTest(flush_cb.callback());
-  EXPECT_THAT(flush_cb.WaitForResult(), IsOk());
+  backend->RunUntilAllTasksCompleteForTest();
 
   // Initiate a WriteData operation, which will be pending.
   auto write_buffer = base::MakeRefCounted<net::StringIOBuffer>("data");
@@ -1243,16 +1512,13 @@ TEST_F(SqlBackendImplTest, AbortPendingWriteData) {
   // Destroy the backend while the write is in flight.
   backend.reset();
 
-  auto res_id_or_error = static_cast<SqlEntryImpl*>(entry)->res_id_or_error();
-  while (!(res_id_or_error->data.has_value() &&
-           std::holds_alternative<SqlPersistentStore::Error>(
-               *res_id_or_error->data))) {
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
+  while (!db_handle->GetError().has_value()) {
     FlushQueueInTaskRunners(task_runners);
   }
 
-  // The res_id_or_error should have been set to aborted.
-  EXPECT_EQ(std::get<SqlPersistentStore::Error>(*res_id_or_error->data),
-            SqlPersistentStore::Error::kAborted);
+  // The db_handle should have been set to aborted.
+  EXPECT_EQ(db_handle->GetError(), SqlPersistentStore::Error::kAborted);
 
   entry->Close();
 }
@@ -1299,9 +1565,9 @@ TEST_F(SqlBackendImplTest, DoomedEntriesCleanup) {
   auto* entry2 = CreateEntryAndWriteData(backend.get(), kKey2, kData);
   auto* entry3 = CreateEntryAndWriteData(backend.get(), kKey3, kData);
   WaitUntilInitialized(*backend,
-                       static_cast<SqlEntryImpl*>(entry3)->res_id_or_error());
-  auto res_id = std::get<SqlPersistentStore::ResId>(
-      static_cast<SqlEntryImpl*>(entry3)->res_id_or_error()->data.value());
+                       static_cast<SqlEntryImpl*>(entry3)->db_handle());
+  auto res_id =
+      static_cast<SqlEntryImpl*>(entry3)->db_handle()->GetResId().value();
   entry1->Close();
   entry2->Close();
   entry3->Close();
@@ -1313,16 +1579,19 @@ TEST_F(SqlBackendImplTest, DoomedEntriesCleanup) {
   // 2. Open the database directly via SqlPersistentStore and doom the third
   // entry.
   {
+    SqlAsyncTaskManager async_task_manager;
     auto store = std::make_unique<SqlPersistentStore>(
         temp_dir_.GetPath(), kDefaultMaxBytes, net::CacheType::DISK_CACHE,
-        task_runners);
+        task_runners, async_task_manager, /*cleanup_tracker=*/nullptr);
 
     base::test::TestFuture<disk_cache::SqlPersistentStore::Error> future_init;
     store->Initialize(future_init.GetCallback());
     ASSERT_EQ(future_init.Get(), disk_cache::SqlPersistentStore::Error::kOk);
 
     base::test::TestFuture<SqlPersistentStore::Error> future_doom;
-    store->DoomEntry(CacheEntryKey(kKey3), res_id, future_doom.GetCallback());
+    store->DoomEntry(CacheEntryKey(kKey3), res_id,
+                     /*accept_index_mismatch=*/false,
+                     future_doom.GetCallback());
     EXPECT_EQ(future_doom.Get(), SqlPersistentStore::Error::kOk);
 
     store.reset();
@@ -1351,9 +1620,7 @@ TEST_F(SqlBackendImplTest, DoomedEntriesCleanup) {
   backend->OnBrowserIdle();
 
   // Flush the queue to ensure that cleanup task is completed.
-  net::TestCompletionCallback flush_cb;
-  backend->FlushQueueForTest(flush_cb.callback());
-  EXPECT_THAT(flush_cb.WaitForResult(), IsOk());
+  backend->RunUntilAllTasksCompleteForTest();
 
   // Verify that `DeleteDoomedEntriesCount` UMA was recorded in the histogram.
   histogram_tester.ExpectUniqueSample(
@@ -1373,8 +1640,8 @@ TEST_F(SqlBackendImplTest, SpeculativeCreateEntry) {
 
   const std::string kKey = "my-key";
 
-  // 1. Create an entry. This should return immediately with a speculatively
-  //    created entry.
+  // Create an entry. This should return immediately with a speculatively
+  // created entry.
   TestEntryResultCompletionCallback cb_create;
   disk_cache::EntryResult create_result =
       backend->CreateEntry(kKey, net::HIGHEST, cb_create.callback());
@@ -1382,31 +1649,38 @@ TEST_F(SqlBackendImplTest, SpeculativeCreateEntry) {
   auto* entry = create_result.ReleaseEntry();
   ASSERT_TRUE(entry);
 
-  // 2. The res_id should not be available yet.
-  auto* sql_entry = static_cast<SqlEntryImpl*>(entry);
-  EXPECT_FALSE(sql_entry->res_id_or_error()->data.has_value());
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
 
-  // 3. Wait for the database operation to complete.
-  WaitUntilInitialized(*backend, sql_entry->res_id_or_error());
+  // The db_handle should be in the initial state
+  EXPECT_TRUE(db_handle->IsInitialState());
 
-  // 4. Now the res_id should be available.
-  ASSERT_TRUE(sql_entry->res_id_or_error()->data.has_value());
-  EXPECT_TRUE(std::holds_alternative<SqlPersistentStore::ResId>(
-      sql_entry->res_id_or_error()->data.value()));
+  // Even after flushing all DB tasks, it should still be in the initial state.
+  backend->RunUntilAllTasksCompleteForTest();
+  EXPECT_TRUE(db_handle->IsInitialState());
 
-  // 5. Doom the entry.
-  entry->Doom();
-  EXPECT_TRUE(sql_entry->doomed());
   entry->Close();
 
-  // 6. Verify that the entry is gone.
+  // Once closed, the DB side entry creation process starts.
+  EXPECT_TRUE(db_handle->IsCreatingState());
+
+  // After flushing all DB tasks, it enters the finished (created) state and the
+  // ResID is set.
+  backend->RunUntilAllTasksCompleteForTest();
+  EXPECT_TRUE(db_handle->IsFinished());
+  // Now the res_id should be available.
+  EXPECT_TRUE(db_handle->GetResId().has_value());
+
+  // The entry must be available
   TestEntryResultCompletionCallback cb_open;
   disk_cache::EntryResult open_result = cb_open.GetResult(
       backend->OpenEntry(kKey, net::HIGHEST, cb_open.callback()));
-  EXPECT_THAT(open_result.net_error(), IsError(net::ERR_FAILED));
+  ASSERT_THAT(open_result.net_error(), IsOk());
+  entry = open_result.ReleaseEntry();
+  ASSERT_TRUE(entry);
+  entry->Close();
 }
 
-TEST_F(SqlBackendImplTest, SpeculativeCreateEntrySyncClose) {
+TEST_F(SqlBackendImplTest, SpeculativeCreateEntryDoomClose) {
   auto backend = CreateBackendAndInit();
   EXPECT_TRUE(LoadInMemoryIndex(*backend));
   const std::string kKey = "my-key";
@@ -1417,6 +1691,32 @@ TEST_F(SqlBackendImplTest, SpeculativeCreateEntrySyncClose) {
   ASSERT_THAT(create_result.net_error(), IsOk());
   auto* entry = create_result.ReleaseEntry();
   ASSERT_TRUE(entry);
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
+
+  entry->Doom();
+  entry->Close();
+
+  // Verify that the entry is gone.
+  TestEntryResultCompletionCallback cb_open;
+  disk_cache::EntryResult open_result = cb_open.GetResult(
+      backend->OpenEntry(kKey, net::HIGHEST, cb_open.callback()));
+  EXPECT_THAT(open_result.net_error(), IsError(net::ERR_FAILED));
+
+  EXPECT_TRUE(db_handle->IsInitialState());
+}
+
+TEST_F(SqlBackendImplTest, SpeculativeCreateEntryClose) {
+  auto backend = CreateBackendAndInit();
+  EXPECT_TRUE(LoadInMemoryIndex(*backend));
+  const std::string kKey = "my-key";
+
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result =
+      backend->CreateEntry(kKey, net::HIGHEST, cb_create.callback());
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+  ASSERT_TRUE(entry);
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
 
   entry->Close();
 
@@ -1427,9 +1727,12 @@ TEST_F(SqlBackendImplTest, SpeculativeCreateEntrySyncClose) {
   entry = open_result.ReleaseEntry();
   ASSERT_TRUE(entry);
   entry->Close();
+
+  // The res_id should be available.
+  EXPECT_TRUE(db_handle->GetResId().has_value());
 }
 
-TEST_F(SqlBackendImplTest, SpeculativeCreateEntrySyncDoom) {
+TEST_F(SqlBackendImplTest, SpeculativeCreateEntryAndRead) {
   auto backend = CreateBackendAndInit();
   EXPECT_TRUE(LoadInMemoryIndex(*backend));
   const std::string kKey = "my-key";
@@ -1440,17 +1743,22 @@ TEST_F(SqlBackendImplTest, SpeculativeCreateEntrySyncDoom) {
   ASSERT_THAT(create_result.net_error(), IsOk());
   auto* entry = create_result.ReleaseEntry();
   ASSERT_TRUE(entry);
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
 
-  entry->Doom();
+  auto read_buffer = base::MakeRefCounted<net::IOBufferWithSize>(10);
+  EXPECT_EQ(entry->ReadData(1, 0, read_buffer.get(), read_buffer->size(),
+                            base::DoNothing()),
+            0);
+
+  EXPECT_TRUE(db_handle->IsInitialState());
   entry->Close();
-
-  TestEntryResultCompletionCallback cb_open;
-  disk_cache::EntryResult open_result = cb_open.GetResult(
-      backend->OpenEntry(kKey, net::HIGHEST, cb_open.callback()));
-  EXPECT_THAT(open_result.net_error(), IsError(net::ERR_FAILED));
+  EXPECT_TRUE(db_handle->IsCreatingState());
+  backend->RunUntilAllTasksCompleteForTest();
+  // The res_id should be available now.
+  EXPECT_TRUE(db_handle->GetResId().has_value());
 }
 
-TEST_F(SqlBackendImplTest, SpeculativeCreateEntrySyncWrite) {
+TEST_F(SqlBackendImplTest, SpeculativeCreateEntryWriteWithinBufferLimit) {
   auto backend = CreateBackendAndInit();
   EXPECT_TRUE(LoadInMemoryIndex(*backend));
   const std::string kKey = "my-key";
@@ -1462,24 +1770,193 @@ TEST_F(SqlBackendImplTest, SpeculativeCreateEntrySyncWrite) {
   ASSERT_THAT(create_result.net_error(), IsOk());
   auto* entry = create_result.ReleaseEntry();
   ASSERT_TRUE(entry);
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
 
   net::TestCompletionCallback write_cb;
   auto write_buffer = base::MakeRefCounted<net::StringIOBuffer>(kData);
+  ASSERT_LT(write_buffer->size(),
+            net::features::kSqlDiskCacheMaxWriteBufferSizePerEntry.Get());
   EXPECT_EQ(write_cb.GetResult(entry->WriteData(1, 0, write_buffer.get(),
                                                 write_buffer->size(),
                                                 write_cb.callback(), false)),
             static_cast<int>(write_buffer->size()));
 
+  // If the written data is less than kSqlDiskCacheMaxWriteBufferSizePerEntry,
+  // the DB side write process only starts when the entry is closed.
+  EXPECT_TRUE(db_handle->IsInitialState());
+  entry->Close();
+  EXPECT_TRUE(db_handle->IsCreatingState());
+
+  TestEntryResultCompletionCallback cb_open;
+  disk_cache::EntryResult open_result = cb_open.GetResult(
+      backend->OpenEntry(kKey, net::HIGHEST, cb_open.callback()));
+  ASSERT_THAT(open_result.net_error(), IsOk());
+
+  // The res_id should be available.
+  EXPECT_TRUE(db_handle->GetResId().has_value());
+
+  entry = open_result.ReleaseEntry();
+  ASSERT_TRUE(entry);
+
+  auto read_buffer = base::MakeRefCounted<net::IOBufferWithSize>(10);
+
+  base::test::TestFuture<int> read_future;
+  int rv = entry->ReadData(1, 0, read_buffer.get(), read_buffer->size(),
+                           read_future.GetCallback());
+  ASSERT_THAT(rv, IsError(net::ERR_IO_PENDING));
+  ASSERT_EQ(read_future.Get(), write_buffer->size());
+
+  EXPECT_EQ(std::string_view(read_buffer->data(), kData.size()), kData);
+  entry->Close();
+}
+
+TEST_F(SqlBackendImplTest,
+       SpeculativeCreateEntryWriteWithinBufferLimitAndDoom) {
+  auto backend = CreateBackendAndInit();
+  EXPECT_TRUE(LoadInMemoryIndex(*backend));
+  const std::string kKey = "my-key";
+  const std::string kData = "some data";
+
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result =
+      backend->CreateEntry(kKey, net::HIGHEST, cb_create.callback());
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+  ASSERT_TRUE(entry);
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
+
+  net::TestCompletionCallback write_cb;
+  auto write_buffer = base::MakeRefCounted<net::StringIOBuffer>(kData);
+  ASSERT_LT(write_buffer->size(),
+            net::features::kSqlDiskCacheMaxWriteBufferSizePerEntry.Get());
+  EXPECT_EQ(write_cb.GetResult(entry->WriteData(1, 0, write_buffer.get(),
+                                                write_buffer->size(),
+                                                write_cb.callback(), false)),
+            static_cast<int>(write_buffer->size()));
+
+  entry->Doom();
+  entry->Close();
+
+  // Verify that the entry is gone.
+  TestEntryResultCompletionCallback cb_open;
+  disk_cache::EntryResult open_result = cb_open.GetResult(
+      backend->OpenEntry(kKey, net::HIGHEST, cb_open.callback()));
+  EXPECT_THAT(open_result.net_error(), IsError(net::ERR_FAILED));
+
+  // If the written data is less than kSqlDiskCacheMaxWriteBufferSizePerEntry,
+  // the DB side write process does not start if the entry is doomed before
+  // being closed.
+  EXPECT_TRUE(db_handle->IsInitialState());
+}
+
+TEST_F(SqlBackendImplTest, SpeculativeCreateEntryOptimisticWriteOnBufferFlush) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{net::features::kSqlDiskCacheMaxWriteBufferSizePerEntry.name, "10"}});
+  auto backend = CreateBackendAndInit();
+  EXPECT_TRUE(LoadInMemoryIndex(*backend));
+
+  const std::string kKey = "my-key";
+
+  // Create an entry. This should return immediately with a speculatively
+  // created entry.
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result =
+      backend->CreateEntry(kKey, net::HIGHEST, cb_create.callback());
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+  ASSERT_TRUE(entry);
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
+
+  const std::string k1ByteData = "X";
+  auto buffer = base::MakeRefCounted<net::StringIOBuffer>(k1ByteData);
+
+  // Write 10 bytes. These are all buffered in memory within the entry.
+  for (int64_t i = 0; i < 10; ++i) {
+    EXPECT_EQ(entry->WriteData(1, i, buffer.get(), buffer->size(),
+                               base::DoNothing(), false),
+              1);
+  }
+  // Even after flushing all DB tasks, it should still be in the initial state.
+  backend->RunUntilAllTasksCompleteForTest();
+  EXPECT_TRUE(db_handle->IsInitialState());
+
+  // Writing one more byte triggers the buffered content to be passed to
+  // SqlBackendImpl, starting the optimistic write process. Then, `db_handle`
+  // enters the creating state.
+  EXPECT_EQ(entry->WriteData(1, 10, buffer.get(), buffer->size(),
+                             base::DoNothing(), false),
+            1);
+  EXPECT_TRUE(db_handle->IsCreatingState());
+
+  // After flushing all DB tasks, it enters the finished (created) state and the
+  // ResID is set.
+  backend->RunUntilAllTasksCompleteForTest();
+  EXPECT_TRUE(db_handle->IsFinished());
+  EXPECT_TRUE(db_handle->GetResId().has_value());
+
+  // Doom the entry.
+  entry->Doom();
+  entry->Close();
+
+  // Verify that the entry is gone.
+  TestEntryResultCompletionCallback cb_open;
+  disk_cache::EntryResult open_result = cb_open.GetResult(
+      backend->OpenEntry(kKey, net::HIGHEST, cb_open.callback()));
+  EXPECT_THAT(open_result.net_error(), IsError(net::ERR_FAILED));
+}
+
+TEST_F(SqlBackendImplTest, SpeculativeCreateEntryNonOptmisticWrite) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{net::features::kSqlDiskCacheOptimisticWriteBufferSize.name, "10"},
+       {net::features::kSqlDiskCacheMaxWriteBufferTotalSize.name, "10"}});
+  auto backend = CreateBackendAndInit();
+  const std::string kKey = "my-key";
+  EXPECT_TRUE(LoadInMemoryIndex(*backend));
+  TestEntryResultCompletionCallback cb;
+  disk_cache::EntryResult entry_result =
+      backend->CreateEntry(kKey, net::HIGHEST, cb.callback());
+  ASSERT_THAT(entry_result.net_error(), IsOk());
+  auto* entry = entry_result.ReleaseEntry();
+  ASSERT_TRUE(entry);
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
+
+  // When WriteData is called with data larger than
+  // kSqlDiskCacheMaxWriteBufferTotalSize, and
+  // kSqlDiskCacheOptimisticWriteBufferSize, SqlBackendImpl starts the
+  // non-optimistic write process, and the `db_handle` enters the creating
+  // state.
+  const std::string kData = "1234567890A";
+  auto write_buffer = base::MakeRefCounted<net::StringIOBuffer>(kData);
+  ASSERT_GT(write_buffer->size(),
+            net::features::kSqlDiskCacheOptimisticWriteBufferSize.Get());
+  ASSERT_GT(write_buffer->size(),
+            net::features::kSqlDiskCacheMaxWriteBufferTotalSize.Get());
+  EXPECT_TRUE(db_handle->IsInitialState());
+
+  net::TestCompletionCallback write_cb;
+  EXPECT_EQ(entry->WriteData(1, 0, write_buffer.get(), write_buffer->size(),
+                             write_cb.callback(), false),
+            net::ERR_IO_PENDING);
+  EXPECT_TRUE(db_handle->IsCreatingState());
+  EXPECT_EQ(write_cb.WaitForResult(), write_buffer->size());
+  EXPECT_TRUE(db_handle->IsFinished());
+  EXPECT_TRUE(db_handle->GetResId().has_value());
   entry->Close();
 
   TestEntryResultCompletionCallback cb_open;
   disk_cache::EntryResult open_result = cb_open.GetResult(
       backend->OpenEntry(kKey, net::HIGHEST, cb_open.callback()));
   ASSERT_THAT(open_result.net_error(), IsOk());
+
   entry = open_result.ReleaseEntry();
   ASSERT_TRUE(entry);
 
-  auto read_buffer = base::MakeRefCounted<net::IOBufferWithSize>(10);
+  auto read_buffer =
+      base::MakeRefCounted<net::IOBufferWithSize>(kData.size() + 1);
 
   base::test::TestFuture<int> read_future;
   int rv = entry->ReadData(1, 0, read_buffer.get(), read_buffer->size(),
@@ -1497,8 +1974,8 @@ TEST_F(SqlBackendImplTest, SpeculativeCreateEntryWithDbFailure) {
   backend->GetSqlStoreForTest()->SetSimulateDbFailureForTesting(true);
   const std::string kKey = "my-key";
 
-  // 1. Create an entry. This should return immediately with a speculatively
-  //    created entry.
+  // Create an entry. This should return immediately with a speculatively
+  // created entry.
   TestEntryResultCompletionCallback cb_create;
   disk_cache::EntryResult create_result =
       backend->CreateEntry(kKey, net::HIGHEST, cb_create.callback());
@@ -1506,25 +1983,21 @@ TEST_F(SqlBackendImplTest, SpeculativeCreateEntryWithDbFailure) {
   auto* entry = create_result.ReleaseEntry();
   ASSERT_TRUE(entry);
 
-  // 2. The res_id should not be available yet.
-  auto* sql_entry = static_cast<SqlEntryImpl*>(entry);
-  EXPECT_FALSE(sql_entry->res_id_or_error()->data.has_value());
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
 
-  // 3. Wait for the database operation to complete.
-  WaitUntilInitialized(*backend, sql_entry->res_id_or_error());
+  // The db_handle should be in the initial state
+  EXPECT_TRUE(db_handle->IsInitialState());
 
-  // 4. Now the res_id should be available and hold a kFailedForTesting.
-  ASSERT_TRUE(sql_entry->res_id_or_error()->data.has_value());
-  ASSERT_TRUE(std::holds_alternative<SqlPersistentStore::Error>(
-      sql_entry->res_id_or_error()->data.value()));
-  EXPECT_EQ(std::get<SqlPersistentStore::Error>(
-                sql_entry->res_id_or_error()->data.value()),
-            SqlPersistentStore::Error::kFailedForTesting);
-
-  // 5. Doom the entry.
-  entry->Doom();
-  EXPECT_TRUE(sql_entry->doomed());
   entry->Close();
+
+  // Once closed, the DB side entry creation process starts.
+  EXPECT_TRUE(db_handle->IsCreatingState());
+  backend->RunUntilAllTasksCompleteForTest();
+
+  // After flushing all DB tasks, the db_handle should hold a kFailedForTesting
+  // error.
+  EXPECT_THAT(db_handle->GetError(),
+              SqlPersistentStore::Error::kFailedForTesting);
 
   // 6. Verify that the entry is not found.
   TestEntryResultCompletionCallback cb_open;
@@ -1533,8 +2006,12 @@ TEST_F(SqlBackendImplTest, SpeculativeCreateEntryWithDbFailure) {
   EXPECT_THAT(open_result.net_error(), IsError(net::ERR_FAILED));
 }
 
-TEST_F(SqlBackendImplTest,
-       SpeculativeCreateEntryDbFailureOperationsBeforeErrorSet) {
+TEST_F(SqlBackendImplTest, SpeculativeCreateEntryDbFailureOnOptmisticWrite) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{net::features::kSqlDiskCacheOptimisticWriteBufferSize.name, "20"},
+       {net::features::kSqlDiskCacheMaxWriteBufferTotalSize.name, "10"}});
   auto backend = CreateBackendAndInit();
   EXPECT_TRUE(LoadInMemoryIndex(*backend));
   backend->GetSqlStoreForTest()->SetSimulateDbFailureForTesting(true);
@@ -1544,12 +2021,30 @@ TEST_F(SqlBackendImplTest,
   ASSERT_THAT(entry_result.net_error(), IsOk());
   auto* entry = entry_result.ReleaseEntry();
   ASSERT_TRUE(entry);
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
 
-  auto write_buffer = base::MakeRefCounted<net::StringIOBuffer>("data");
-  EXPECT_EQ(
-      entry->WriteData(1, 0, write_buffer.get(), write_buffer->size(),
-                       base::BindOnce([](int rv) { NOTREACHED(); }), false),
-      write_buffer->size());
+  // When WriteData is called with data larger than
+  // kSqlDiskCacheMaxWriteBufferTotalSize, and smaller than
+  // kSqlDiskCacheOptimisticWriteBufferSize, SqlBackendImpl starts the
+  // optimistic write process, and the `db_handle` enters the creating state.
+  auto write_buffer = base::MakeRefCounted<net::StringIOBuffer>("1234567890A");
+  ASSERT_LE(write_buffer->size(),
+            net::features::kSqlDiskCacheOptimisticWriteBufferSize.Get());
+  ASSERT_GT(write_buffer->size(),
+            net::features::kSqlDiskCacheMaxWriteBufferTotalSize.Get());
+  EXPECT_TRUE(db_handle->IsInitialState());
+  EXPECT_EQ(entry->WriteData(1, 0, write_buffer.get(), write_buffer->size(),
+                             base::DoNothing(), false),
+            write_buffer->size());
+  EXPECT_TRUE(db_handle->IsCreatingState());
+
+  // The second write exceeds the optimistic write limit, so it becomes async.
+  ASSERT_GT(write_buffer->size() * 2,
+            net::features::kSqlDiskCacheOptimisticWriteBufferSize.Get());
+  net::TestCompletionCallback write_cb;
+  EXPECT_EQ(entry->WriteData(1, write_buffer->size(), write_buffer.get(),
+                             write_buffer->size(), write_cb.callback(), false),
+            net::ERR_IO_PENDING);
 
   net::TestCompletionCallback read_cb;
   auto read_buffer = base::MakeRefCounted<net::IOBufferWithSize>(10);
@@ -1562,13 +2057,24 @@ TEST_F(SqlBackendImplTest,
       entry->GetAvailableRange(0, 10, range_future.GetCallback()).net_error,
       net::ERR_IO_PENDING);
 
+  EXPECT_THAT(write_cb.WaitForResult(), IsError(net::ERR_FAILED));
   EXPECT_THAT(read_cb.WaitForResult(), IsError(net::ERR_FAILED));
   EXPECT_THAT(range_future.Get().net_error, IsError(net::ERR_FAILED));
+
+  // After finishing all DB tasks, the db_handle should hold a kFailedForTesting
+  // error.
+  EXPECT_THAT(db_handle->GetError(),
+              SqlPersistentStore::Error::kFailedForTesting);
+
   entry->Close();
 }
 
-TEST_F(SqlBackendImplTest,
-       SpeculativeCreateEntryDbFailureOperationsAfterErrorSet) {
+TEST_F(SqlBackendImplTest, SpeculativeCreateEntryDbFailureOnNonOptmisticWrite) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{net::features::kSqlDiskCacheOptimisticWriteBufferSize.name, "10"},
+       {net::features::kSqlDiskCacheMaxWriteBufferTotalSize.name, "10"}});
   auto backend = CreateBackendAndInit();
   EXPECT_TRUE(LoadInMemoryIndex(*backend));
   backend->GetSqlStoreForTest()->SetSimulateDbFailureForTesting(true);
@@ -1578,40 +2084,36 @@ TEST_F(SqlBackendImplTest,
   ASSERT_THAT(entry_result.net_error(), IsOk());
   auto* entry = entry_result.ReleaseEntry();
   ASSERT_TRUE(entry);
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
 
-  auto* sql_entry = static_cast<SqlEntryImpl*>(entry);
-  WaitUntilInitialized(*backend, sql_entry->res_id_or_error());
-  auto write_buffer = base::MakeRefCounted<net::StringIOBuffer>("data");
-  EXPECT_EQ(entry->WriteData(0, 0, write_buffer.get(), write_buffer->size(),
-                             base::DoNothing(), false),
-            static_cast<int>(write_buffer->size()));
+  // When WriteData is called with data larger than
+  // kSqlDiskCacheMaxWriteBufferTotalSize, and
+  // kSqlDiskCacheOptimisticWriteBufferSize, SqlBackendImpl starts the
+  // non-optimistic write process, and the `db_handle` enters the creating
+  // state.
+  auto write_buffer = base::MakeRefCounted<net::StringIOBuffer>("1234567890A");
+  ASSERT_GT(write_buffer->size(),
+            net::features::kSqlDiskCacheOptimisticWriteBufferSize.Get());
+  ASSERT_GT(write_buffer->size(),
+            net::features::kSqlDiskCacheMaxWriteBufferTotalSize.Get());
+  EXPECT_TRUE(db_handle->IsInitialState());
 
   net::TestCompletionCallback write_cb;
-  EXPECT_EQ(
-      entry->WriteData(1, 0, write_buffer.get(), write_buffer->size(),
-                       base::BindOnce([](int rv) { NOTREACHED(); }), false),
-      net::ERR_FAILED);
-
-  auto read_buffer = base::MakeRefCounted<net::IOBufferWithSize>(10);
-  EXPECT_EQ(entry->ReadData(1, 0, read_buffer.get(), read_buffer->size(),
-                            base::BindOnce([](int) { NOTREACHED(); })),
-            net::ERR_FAILED);
-
-  EXPECT_EQ(
-      entry
-          ->GetAvailableRange(
-              0, 10, base::BindOnce([](const RangeResult&) { NOTREACHED(); }))
-          .net_error,
-      net::ERR_FAILED);
-  EXPECT_EQ(backend->DoomEntry("key", net::HIGHEST,
-                               base::BindOnce([](int) { NOTREACHED(); })),
-            net::ERR_FAILED);
+  EXPECT_EQ(entry->WriteData(1, 0, write_buffer.get(), write_buffer->size(),
+                             write_cb.callback(), false),
+            net::ERR_IO_PENDING);
+  EXPECT_TRUE(db_handle->IsCreatingState());
+  EXPECT_EQ(write_cb.WaitForResult(), net::ERR_FAILED);
+  EXPECT_THAT(db_handle->GetError(),
+              SqlPersistentStore::Error::kFailedForTesting);
   entry->Close();
-
-  EXPECT_EQ(backend->GetSizeOfInFlightEntryModificationsMapForTesting(), 0u);
 }
 
 TEST_F(SqlBackendImplTest, SpeculativeCreateEntryDbFailureDoom) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{net::features::kSqlDiskCacheMaxWriteBufferTotalSize.name, "10"}});
   auto backend = CreateBackendAndInit();
   EXPECT_TRUE(LoadInMemoryIndex(*backend));
   backend->GetSqlStoreForTest()->SetSimulateDbFailureForTesting(true);
@@ -1621,9 +2123,25 @@ TEST_F(SqlBackendImplTest, SpeculativeCreateEntryDbFailureDoom) {
   ASSERT_THAT(entry_result.net_error(), IsOk());
   auto* entry = entry_result.ReleaseEntry();
   ASSERT_TRUE(entry);
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
 
-  auto* sql_entry = static_cast<SqlEntryImpl*>(entry);
-  WaitUntilInitialized(*backend, sql_entry->res_id_or_error());
+  // When WriteData is called with data larger than
+  // kSqlDiskCacheMaxWriteBufferTotalSize, SqlBackendImpl starts the optimistic
+  // write process, and the `db_handle` enters the creating state.
+  auto write_buffer = base::MakeRefCounted<net::StringIOBuffer>("1234567890A");
+  ASSERT_GT(write_buffer->size(),
+            net::features::kSqlDiskCacheMaxWriteBufferTotalSize.Get());
+  EXPECT_TRUE(db_handle->IsInitialState());
+  EXPECT_EQ(
+      entry->WriteData(1, 0, write_buffer.get(), write_buffer->size(),
+                       base::BindOnce([](int rv) { NOTREACHED(); }), false),
+      write_buffer->size());
+  EXPECT_TRUE(db_handle->IsCreatingState());
+  // After flushing all DB tasks, the db_handle should hold a kFailedForTesting
+  // error.
+  backend->RunUntilAllTasksCompleteForTest();
+  EXPECT_THAT(db_handle->GetError(),
+              SqlPersistentStore::Error::kFailedForTesting);
 
   entry->Doom();
   EXPECT_TRUE(static_cast<SqlEntryImpl*>(entry)->doomed());
@@ -1640,7 +2158,8 @@ TEST_F(SqlBackendImplTest, OptimisticWriteBufferSize) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeatureWithParameters(
       net::features::kDiskCacheBackendExperiment,
-      {{net::features::kSqlDiskCacheOptimisticWriteBufferSize.name, "100"}});
+      {{net::features::kSqlDiskCacheOptimisticWriteBufferSize.name, "100"},
+       {net::features::kSqlDiskCacheMaxWriteBufferTotalSize.name, "0"}});
 
   auto backend = CreateBackendAndInit();
   EXPECT_TRUE(LoadInMemoryIndex(*backend));
@@ -1679,7 +2198,8 @@ TEST_F(SqlBackendImplTest, OptimisticWriteBufferLifecycle) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeatureWithParameters(
       net::features::kDiskCacheBackendExperiment,
-      {{net::features::kSqlDiskCacheOptimisticWriteBufferSize.name, "100"}});
+      {{net::features::kSqlDiskCacheOptimisticWriteBufferSize.name, "100"},
+       {net::features::kSqlDiskCacheMaxWriteBufferTotalSize.name, "0"}});
 
   auto backend = CreateBackendAndInit();
   EXPECT_TRUE(LoadInMemoryIndex(*backend));
@@ -1720,9 +2240,7 @@ TEST_F(SqlBackendImplTest, OptimisticWriteBufferLifecycle) {
   // Flush the queue. This will ensure the first two optimistic writes complete
   // on the background thread, which will free up the buffer and allow the
   // pending write to proceed.
-  net::TestCompletionCallback flush_cb1;
-  backend->FlushQueueForTest(flush_cb1.callback());
-  EXPECT_THAT(flush_cb1.WaitForResult(), IsOk());
+  backend->RunUntilAllTasksCompleteForTest();
 
   EXPECT_EQ(backend->GetOptimisticWriteBufferTotalSizeForTesting(), 0);
 
@@ -1741,9 +2259,7 @@ TEST_F(SqlBackendImplTest, OptimisticWriteBufferLifecycle) {
 
   entry->Close();
 
-  net::TestCompletionCallback flush_cb2;
-  backend->FlushQueueForTest(flush_cb2.callback());
-  EXPECT_THAT(flush_cb2.WaitForResult(), IsOk());
+  backend->RunUntilAllTasksCompleteForTest();
 
   EXPECT_EQ(backend->GetOptimisticWriteBufferTotalSizeForTesting(), 0);
 }
@@ -1752,7 +2268,8 @@ TEST_F(SqlBackendImplTest, OptimisticWriteFailure) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeatureWithParameters(
       net::features::kDiskCacheBackendExperiment,
-      {{net::features::kSqlDiskCacheOptimisticWriteBufferSize.name, "100"}});
+      {{net::features::kSqlDiskCacheOptimisticWriteBufferSize.name, "100"},
+       {net::features::kSqlDiskCacheMaxWriteBufferTotalSize.name, "0"}});
 
   auto backend = CreateBackendAndInit();
   EXPECT_TRUE(LoadInMemoryIndex(*backend));
@@ -1786,17 +2303,12 @@ TEST_F(SqlBackendImplTest, OptimisticWriteFailure) {
   backend->GetSqlStoreForTest()->SetSimulateDbFailureForTesting(false);
 
   // 6. Wait for the background write to fail and update the entry's state.
-  net::TestCompletionCallback flush_cb1;
-  backend->FlushQueueForTest(flush_cb1.callback());
-  EXPECT_THAT(flush_cb1.WaitForResult(), IsOk());
+  backend->RunUntilAllTasksCompleteForTest();
 
   // 7. Verify that the entry is now in an error state.
-  ASSERT_TRUE(sql_entry->res_id_or_error()->data.has_value());
-  ASSERT_TRUE(std::holds_alternative<SqlPersistentStore::Error>(
-      sql_entry->res_id_or_error()->data.value()));
-  EXPECT_EQ(std::get<SqlPersistentStore::Error>(
-                sql_entry->res_id_or_error()->data.value()),
-            SqlPersistentStore::Error::kFailedForTesting);
+  EXPECT_TRUE(sql_entry->db_handle()->IsFinished());
+  EXPECT_THAT(sql_entry->db_handle()->GetError(),
+              SqlPersistentStore::Error::kFailedForTesting);
   EXPECT_EQ(backend->GetOptimisticWriteBufferTotalSizeForTesting(), 0);
 
   // 8. Subsequent writes should fail immediately.
@@ -1815,133 +2327,11 @@ TEST_F(SqlBackendImplTest, OptimisticWriteFailure) {
   ASSERT_THAT(open_result.net_error(), IsError(net::ERR_FAILED));
 }
 
-TEST_F(SqlBackendImplTest, OptimisticWriteAfterSpeculativeCreateEntry) {
-  auto backend = CreateBackendAndInit();
-  EXPECT_TRUE(LoadInMemoryIndex(*backend));
-
-  // 1. Enable failure simulation.
-  backend->GetSqlStoreForTest()->SetSimulateDbFailureForTesting(true);
-
-  const std::string kKey = "my-key";
-
-  // 2. Create an entry. This should return immediately with a speculatively
-  //    created entry.
-  TestEntryResultCompletionCallback cb_create;
-  disk_cache::EntryResult create_result =
-      backend->CreateEntry(kKey, net::HIGHEST, cb_create.callback());
-  ASSERT_THAT(create_result.net_error(), IsOk());
-  auto* entry = create_result.ReleaseEntry();
-  ASSERT_TRUE(entry);
-
-  // 2. Disable failure simulation.
-  backend->GetSqlStoreForTest()->SetSimulateDbFailureForTesting(false);
-
-  // 3. This write should be optimistic, filling the buffer.
-  auto write_buffer1 =
-      base::MakeRefCounted<net::StringIOBuffer>(std::string(50, 'a'));
-  EXPECT_EQ(entry->WriteData(1, 0, write_buffer1.get(), write_buffer1->size(),
-                             base::DoNothing(), false),
-            static_cast<int>(write_buffer1->size()));
-  EXPECT_EQ(backend->GetOptimisticWriteBufferTotalSizeForTesting(),
-            write_buffer1->size());
-
-  // 4. Wait for the background creation and write to fail and update the
-  //    entry's state.
-  net::TestCompletionCallback flush_cb;
-  backend->FlushQueueForTest(flush_cb.callback());
-  EXPECT_THAT(flush_cb.WaitForResult(), IsOk());
-
-  auto* sql_entry = static_cast<SqlEntryImpl*>(entry);
-
-  // 6. Verify that the entry is now in an error state.
-  ASSERT_TRUE(sql_entry->res_id_or_error()->data.has_value());
-  ASSERT_TRUE(std::holds_alternative<SqlPersistentStore::Error>(
-      sql_entry->res_id_or_error()->data.value()));
-  EXPECT_EQ(std::get<SqlPersistentStore::Error>(
-                sql_entry->res_id_or_error()->data.value()),
-            SqlPersistentStore::Error::kFailedForTesting);
-
-  // 7. The buffer size should be set to 0.
-  EXPECT_EQ(backend->GetOptimisticWriteBufferTotalSizeForTesting(), 0);
-
-  entry->Close();
-}
-
-TEST_F(SqlBackendImplTest,
-       SpeculativeCreateEntryDbFailureAndNonOptimisticWrite) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
-      net::features::kDiskCacheBackendExperiment,
-      {{net::features::kSqlDiskCacheOptimisticWriteBufferSize.name, "100"}});
-
-  auto backend = CreateBackendAndInit();
-  EXPECT_TRUE(LoadInMemoryIndex(*backend));
-
-  // Create the first entry.
-  disk_cache::EntryResult entry_result1 = backend->CreateEntry(
-      "key1", net::HIGHEST, base::BindOnce([](EntryResult) { NOTREACHED(); }));
-  ASSERT_THAT(entry_result1.net_error(), IsOk());
-  auto* entry1 = entry_result1.ReleaseEntry();
-  ASSERT_TRUE(entry1);
-
-  // Flush the queue to make sure the first entry is written to the database.
-  net::TestCompletionCallback flush_cb;
-  backend->FlushQueueForTest(flush_cb.callback());
-  EXPECT_THAT(flush_cb.WaitForResult(), IsOk());
-
-  // Check that the first entry has a valid resource ID.
-  auto* sql_entry1 = static_cast<SqlEntryImpl*>(entry1);
-  ASSERT_TRUE(sql_entry1->res_id_or_error()->data.has_value());
-  ASSERT_TRUE(std::holds_alternative<SqlPersistentStore::ResId>(
-      sql_entry1->res_id_or_error()->data.value()));
-
-  // Simulate a database failure for subsequent operations.
-  backend->GetSqlStoreForTest()->SetSimulateDbFailureForTesting(true);
-
-  // Attempt to create a second entry speculatively, but it will fail due to
-  // the database failure.
-  disk_cache::EntryResult entry_result2 = backend->CreateEntry(
-      "key2", net::HIGHEST, base::BindOnce([](EntryResult) { NOTREACHED(); }));
-  ASSERT_THAT(entry_result2.net_error(), IsOk());
-  auto* entry2 = entry_result2.ReleaseEntry();
-  ASSERT_TRUE(entry2);
-
-  // Disable the database failure simulation.
-  backend->GetSqlStoreForTest()->SetSimulateDbFailureForTesting(false);
-
-  // Write to the first entry. This should be an optimistic write.
-  auto write_buffer1 =
-      base::MakeRefCounted<net::StringIOBuffer>(std::string(100, 'a'));
-  EXPECT_EQ(entry1->WriteData(1, 0, write_buffer1.get(), write_buffer1->size(),
-                              base::BindOnce([](int) { NOTREACHED(); }), false),
-            static_cast<int>(write_buffer1->size()));
-
-  EXPECT_EQ(backend->GetOptimisticWriteBufferTotalSizeForTesting(),
-            write_buffer1->size());
-
-  // Write to the second entry. This should return ERR_IO_PENDING since the
-  // buffer size exceeds kSqlDiskCacheOptimisticWriteBufferSize.
-  net::TestCompletionCallback write_cb;
-  auto write_buffer2 =
-      base::MakeRefCounted<net::StringIOBuffer>(std::string(50, 'b'));
-  EXPECT_EQ(entry2->WriteData(1, 0, write_buffer2.get(), write_buffer2->size(),
-                              write_cb.callback(), false),
-            net::ERR_IO_PENDING);
-  EXPECT_EQ(backend->GetOptimisticWriteBufferTotalSizeForTesting(),
-            write_buffer1->size());
-
-  // The write operation should asynchronously fail.
-  EXPECT_EQ(write_cb.GetResult(net::ERR_IO_PENDING), net::ERR_FAILED);
-
-  entry1->Close();
-  entry2->Close();
-}
-
 TEST_F(SqlBackendImplTest, IdleTimeEviction) {
-  const int64_t kMaxBytes = 10000;
+  const int64_t kMaxBytes = 100000;
   const int64_t kIdleTimeHighWatermark =
       kMaxBytes * kSqlBackendIdleTimeEvictionHighWaterMarkPermille /
-      1000;  // 9250
+      1000;  // 92500
   auto buffer =
       base::MakeRefCounted<net::StringIOBuffer>(std::string(1000, 'x'));
 
@@ -1961,7 +2351,7 @@ TEST_F(SqlBackendImplTest, IdleTimeEviction) {
                                             write_cb.callback(), false)),
         buffer->size());
     entry->Close();
-    FlushQueue(*backend);
+    backend->RunUntilAllTasksCompleteForTest();
   }
 
   auto test_helper = PerformanceScenarioTestHelper::Create();
@@ -1975,14 +2365,10 @@ TEST_F(SqlBackendImplTest, IdleTimeEviction) {
   backend->OnBrowserIdle();
 
   // The eviction process involves multiple asynchronous steps across different
-  // shards. The first FlushQueue ensures that all shards have processed their
-  // eviction candidates and posted their results to the
-  // EvictionCandidateAggregator. The second FlushQueue ensures that the
-  // EvictionCandidateAggregator has aggregated the results and posted the final
-  // eviction tasks back to the individual shards, and that those tasks have
-  // been processed.
-  FlushQueue(*backend);
-  FlushQueue(*backend);
+  // shards and the EvictionCandidateAggregator. Since all these steps are
+  // tracked by SqlAsyncTaskManager, a single RunUntilAllTasksCompleteForTest()
+  // is sufficient to wait for the entire process to complete.
+  backend->RunUntilAllTasksCompleteForTest();
 
   // Eviction should have run and reduced the size.
   const int64_t kLowWatermark =
@@ -2004,16 +2390,15 @@ void SqlBackendImplTest::RunDelayedPostInitializationTasksTest() {
   // Create two entries and write some data to them.
   auto* entry1 = CreateEntryAndWriteData(backend.get(), kKey1.string(), kData);
   auto* entry2 = CreateEntryAndWriteData(backend.get(), kKey2.string(), kData);
-  WaitUntilInitialized(*backend,
-                       static_cast<SqlEntryImpl*>(entry1)->res_id_or_error());
-  WaitUntilInitialized(*backend,
-                       static_cast<SqlEntryImpl*>(entry2)->res_id_or_error());
-  auto res_id1 = std::get<SqlPersistentStore::ResId>(
-      static_cast<SqlEntryImpl*>(entry1)->res_id_or_error()->data.value());
-  auto res_id2 = std::get<SqlPersistentStore::ResId>(
-      static_cast<SqlEntryImpl*>(entry2)->res_id_or_error()->data.value());
+  auto db_handle1 = static_cast<SqlEntryImpl*>(entry1)->db_handle();
+  auto db_handle2 = static_cast<SqlEntryImpl*>(entry1)->db_handle();
   entry1->Close();
   entry2->Close();
+  backend->RunUntilAllTasksCompleteForTest();
+  ASSERT_TRUE(db_handle1->GetResId().has_value());
+  ASSERT_TRUE(db_handle2->GetResId().has_value());
+  auto res_id1 = db_handle1->GetResId().value();
+  auto res_id2 = db_handle2->GetResId().value();
 
   // Close the backend to ensure everything is written to disk.
   backend.reset();
@@ -2023,9 +2408,10 @@ void SqlBackendImplTest::RunDelayedPostInitializationTasksTest() {
   // This block simulates a previous session where an entry was doomed but not
   // fully cleaned up.
   {
+    SqlAsyncTaskManager async_task_manager;
     auto store = std::make_unique<SqlPersistentStore>(
         temp_dir_.GetPath(), kDefaultMaxBytes, net::CacheType::DISK_CACHE,
-        task_runners);
+        task_runners, async_task_manager, /*cleanup_tracker=*/nullptr);
 
     base::test::TestFuture<disk_cache::SqlPersistentStore::Error> future_init;
     store->Initialize(future_init.GetCallback());
@@ -2033,7 +2419,8 @@ void SqlBackendImplTest::RunDelayedPostInitializationTasksTest() {
 
     // Doom one of the entries.
     base::test::TestFuture<SqlPersistentStore::Error> future_doom;
-    store->DoomEntry(kKey1, res_id1, future_doom.GetCallback());
+    store->DoomEntry(kKey1, res_id1, /*accept_index_mismatch=*/false,
+                     future_doom.GetCallback());
     EXPECT_EQ(future_doom.Get(), SqlPersistentStore::Error::kOk);
 
     store.reset();
@@ -2051,6 +2438,8 @@ void SqlBackendImplTest::RunDelayedPostInitializationTasksTest() {
   base::test::TestFuture<int> future;
   backend->Init(future.GetCallback());
   ASSERT_EQ(future.Get(), net::OK);
+
+  backend->RunUntilAllTasksCompleteForTest();
 
   if (net::features::kSqlDiskCacheLoadIndexOnInit.Get()) {
     // When the SqlDiskCacheLoadIndexOnInit is enabled, the index should have
@@ -2071,7 +2460,7 @@ void SqlBackendImplTest::RunDelayedPostInitializationTasksTest() {
   // Fast forward time to trigger the delayed post-initialization tasks.
   task_environment_.FastForwardBy(kSqlBackendPostInitializationTasksDelay);
 
-  FlushQueue(*backend);
+  backend->RunUntilAllTasksCompleteForTest();
 
   // Now, the index should be loaded even if SqlDiskCacheLoadIndexOnInit is
   // disabled. The doomed entry should be gone, and the other entry should be
@@ -2196,6 +2585,73 @@ TEST_F(SqlBackendImplTest, DoomEntryWithInMemoryIndex) {
   EXPECT_THAT(open_result.net_error(), IsError(net::ERR_FAILED));
 }
 
+// Tests that dooming a non-existent key whose hash collides with an existing
+// entry's key does not affect the existing entry. The in-memory index is keyed
+// by hash only, so a single-entry hash bucket may resolve to a different key's
+// `res_id`; the backend must still keep the existing entry openable and avoid
+// creating duplicate rows for it.
+TEST_F(SqlBackendImplTest, DoomEntryWithInMemoryIndexHashCollision) {
+  // Two distinct keys with the same `CacheEntryKey::hash()`.
+  const std::string kExistingKey = "colliding-key-2018";
+  const std::string kCollidingKey = "colliding-key-3000";
+  const CacheEntryKey kExistingEntryKey(kExistingKey);
+  ASSERT_EQ(kExistingEntryKey.hash(), CacheEntryKey(kCollidingKey).hash());
+
+  auto backend = CreateBackendAndInit();
+
+  // 1. Create an entry for `kExistingKey` and close it so it is no longer
+  //    active.
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result = cb_create.GetResult(
+      backend->CreateEntry(kExistingKey, net::HIGHEST, cb_create.callback()));
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  create_result.ReleaseEntry()->Close();
+  backend->RunUntilAllTasksCompleteForTest();
+
+  // 2. Load the in-memory index. `kExistingKey` is the sole occupant of its
+  //    hash bucket.
+  ASSERT_TRUE(LoadInMemoryIndex(*backend));
+  ASSERT_EQ(backend->GetSqlStoreForTest()->GetIndexStateForHash(
+                kExistingEntryKey.hash()),
+            SqlPersistentStore::IndexState::kHashFound);
+
+  // 3. Doom `kCollidingKey`, which does not exist but shares its hash with
+  //    `kExistingKey`.
+  net::TestCompletionCallback cb_doom;
+  EXPECT_THAT(cb_doom.GetResult(backend->DoomEntry(kCollidingKey, net::HIGHEST,
+                                                   cb_doom.callback())),
+              IsOk());
+  backend->RunUntilAllTasksCompleteForTest();
+
+  // 4. The existing entry must remain in the in-memory index.
+  EXPECT_EQ(backend->GetSqlStoreForTest()->GetIndexStateForHash(
+                kExistingEntryKey.hash()),
+            SqlPersistentStore::IndexState::kHashFound);
+
+  // 5. Opening `kExistingKey` must still succeed.
+  TestEntryResultCompletionCallback cb_open;
+  disk_cache::EntryResult open_result = cb_open.GetResult(
+      backend->OpenEntry(kExistingKey, net::HIGHEST, cb_open.callback()));
+  ASSERT_THAT(open_result.net_error(), IsOk());
+  open_result.ReleaseEntry()->Close();
+
+  // 6. OpenOrCreateEntry must open the existing entry rather than creating a
+  //    duplicate row.
+  TestEntryResultCompletionCallback cb_ooc;
+  disk_cache::EntryResult ooc_result =
+      cb_ooc.GetResult(backend->OpenOrCreateEntry(kExistingKey, net::HIGHEST,
+                                                  cb_ooc.callback()));
+  ASSERT_THAT(ooc_result.net_error(), IsOk());
+  EXPECT_TRUE(ooc_result.opened());
+  ooc_result.ReleaseEntry()->Close();
+  backend->RunUntilAllTasksCompleteForTest();
+
+  base::test::TestFuture<int32_t> count_future;
+  EXPECT_EQ(backend->GetEntryCount(count_future.GetCallback()),
+            base::unexpected(net::ERR_IO_PENDING));
+  EXPECT_EQ(count_future.Get(), 1);
+}
+
 TEST_F(SqlBackendImplTest, SetDataHintsAndDoomAndWriteOptimistically) {
   auto backend = CreateBackendAndInit();
   const std::string kKey = "my-key";
@@ -2210,22 +2666,27 @@ TEST_F(SqlBackendImplTest, SetDataHintsAndDoomAndWriteOptimistically) {
 
   // 2. Set an in-memory hint.
   entry->SetEntryInMemoryData(kUnusableHint);
+  EXPECT_EQ(backend->GetEntryInMemoryData(kKey), kUnusableHint);
   entry->Close();
 
-  // 3. Call OnBrowserIdle() to trigger in-memory index loading.
-  backend->OnBrowserIdle();
-  FlushQueue(*backend);
-
-  // 4. Verify the hint is set in the backend.
+  // 3. While write is in flight, it should still be returned from
+  //    `in_flight_entry_modifications_`.
   EXPECT_EQ(backend->GetEntryInMemoryData(kKey), kUnusableHint);
 
-  // 5. Doom the entry.
+  // 4. Call OnBrowserIdle() to trigger in-memory index loading.
+  backend->OnBrowserIdle();
+  backend->RunUntilAllTasksCompleteForTest();
+
+  // 5. Verify the hint is set in the backend.
+  EXPECT_EQ(backend->GetEntryInMemoryData(kKey), kUnusableHint);
+
+  // 6. Doom the entry.
   base::test::TestFuture<int> doom_future;
   int doom_rv =
       backend->DoomEntry(kKey, net::HIGHEST, doom_future.GetCallback());
   EXPECT_EQ(doom_rv, net::ERR_IO_PENDING);
 
-  // 6. OpenOrCreateEntry should complete synchronously and create a new entry.
+  // 7. OpenOrCreateEntry should complete synchronously and create a new entry.
   TestEntryResultCompletionCallback cb_open_or_create;
   EntryResult open_or_create_result = backend->OpenOrCreateEntry(
       kKey, net::HIGHEST, cb_open_or_create.callback());
@@ -2237,37 +2698,1733 @@ TEST_F(SqlBackendImplTest, SetDataHintsAndDoomAndWriteOptimistically) {
 }
 
 TEST_F(SqlBackendImplTest, SetEntryDataHintsWithSpeculativeCreateEntryFailure) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{net::features::kSqlDiskCacheMaxWriteBufferTotalSize.name, "10"}});
   auto backend = CreateBackendAndInit();
   EXPECT_TRUE(LoadInMemoryIndex(*backend));
   backend->GetSqlStoreForTest()->SetSimulateDbFailureForTesting(true);
   const std::string kKey = "my-key";
 
-  // 1. Create an entry. This should return immediately with a speculatively
-  //    created entry.
+  // Create an entry. This should return immediately with a speculatively
+  // created entry.
   TestEntryResultCompletionCallback cb_create;
   disk_cache::EntryResult create_result =
       backend->CreateEntry(kKey, net::HIGHEST, cb_create.callback());
   ASSERT_THAT(create_result.net_error(), IsOk());
   auto* entry = create_result.ReleaseEntry();
   ASSERT_TRUE(entry);
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
 
-  // 2. Wait for the database operation to complete.
-  auto* sql_entry = static_cast<SqlEntryImpl*>(entry);
-  WaitUntilInitialized(*backend, sql_entry->res_id_or_error());
-  backend->GetSqlStoreForTest()->SetSimulateDbFailureForTesting(false);
+  // When WriteData is called with data larger than
+  // kSqlDiskCacheMaxWriteBufferTotalSize, SqlBackendImpl starts the optimistic
+  // write process, and the `db_handle` enters the creating state.
+  auto write_buffer = base::MakeRefCounted<net::StringIOBuffer>("1234567890A");
+  ASSERT_GT(write_buffer->size(),
+            net::features::kSqlDiskCacheMaxWriteBufferTotalSize.Get());
+  EXPECT_TRUE(db_handle->IsInitialState());
+  EXPECT_EQ(entry->WriteData(1, 0, write_buffer.get(), write_buffer->size(),
+                             base::DoNothing(), false),
+            write_buffer->size());
+  EXPECT_TRUE(db_handle->IsCreatingState());
+  // After flushing all DB tasks, the db_handle should hold a kFailedForTesting
+  // error.
+  backend->RunUntilAllTasksCompleteForTest();
+  EXPECT_THAT(db_handle->GetError(),
+              SqlPersistentStore::Error::kFailedForTesting);
 
-  // 3. Set an in-memory hint. This should fail silently because the entry has
-  //    an error.
+  // Set an in-memory hint. This should fail silently because the entry has an
+  // error.
   const uint8_t kUnusableHint = 1;
   entry->SetEntryInMemoryData(kUnusableHint);
   entry->Close();
 
-  // 4. Flush the queue to make sure the SetEntryInMemoryData operation is
-  //    processed.
-  FlushQueue(*backend);
+  // Flush the queue to make sure the SetEntryInMemoryData operation is
+  // processed.
+  backend->RunUntilAllTasksCompleteForTest();
 
-  // 5. Verify the hint is not set in the backend.
+  // Verify the hint is not set in the backend.
   EXPECT_EQ(backend->GetEntryInMemoryData(kKey), 0);
+}
+
+// Regression test for https://crbug.com/473912285.
+// Tests that an optimistic write failure does not cause an index mismatch error
+// (which can lead to a CHECK failure in strict mode) if the entry has already
+// been doomed by DoomAllEntries.
+TEST_F(SqlBackendImplTest, OptimisticWriteIndexMismatchAfterDoomAllEntries) {
+  auto backend = CreateBackendAndInit();
+  EXPECT_TRUE(LoadInMemoryIndex(*backend));
+  backend->EnableStrictCorruptionCheckForTesting();
+
+  // 1. Create a speculative entry.
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result =
+      backend->CreateEntry("key", net::HIGHEST, cb_create.callback());
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+  ASSERT_TRUE(entry);
+
+  // 2. Doom all entries.
+  net::TestCompletionCallback doom_cb;
+  int rv_doom = backend->DoomAllEntries(doom_cb.callback());
+  EXPECT_EQ(rv_doom, net::ERR_IO_PENDING);
+  EXPECT_THAT(doom_cb.WaitForResult(), IsOk());
+
+  // 3. Set DB failure to force OptimisticWrite to fail.
+  backend->GetSqlStoreForTest()->SetSimulateDbFailureForTesting(true);
+
+  // 4. Write data optimistically.
+  auto buffer = base::MakeRefCounted<net::StringIOBuffer>("data");
+  int rv_write =
+      entry->WriteData(1, 100, buffer.get(), 4, base::DoNothing(), false);
+  EXPECT_EQ(rv_write, 4);
+
+  // 4. Wait for operations to complete.
+  // Previously, this would trigger an index mismatch error (and a CHECK failure
+  // in RecordIndexMismatch).
+  backend->RunUntilAllTasksCompleteForTest();
+
+  entry->Close();
+}
+
+TEST_F(SqlBackendImplTest, WriteBuffering) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{net::features::kSqlDiskCacheMaxWriteBufferTotalSize.name, "10240"},
+       {net::features::kSqlDiskCacheMaxWriteBufferSizePerEntry.name, "1024"},
+       {net::features::kSqlDiskCacheOptimisticWriteBufferSize.name, "250"}});
+
+  auto backend = CreateBackendAndInit();
+
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result = cb_create.GetResult(
+      backend->CreateEntry("key", net::HIGHEST, cb_create.callback()));
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+
+  // Write small chunk, should be buffered.
+  auto buffer1 =
+      base::MakeRefCounted<net::StringIOBuffer>(std::string(100, 'a'));
+  EXPECT_EQ(entry->WriteData(1, 0, buffer1.get(), buffer1->size(),
+                             base::DoNothing(), false),
+            buffer1->size());
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), buffer1->size());
+
+  // Write another small chunk, should be buffered.
+  auto buffer2 =
+      base::MakeRefCounted<net::StringIOBuffer>(std::string(100, 'b'));
+  EXPECT_EQ(entry->WriteData(1, 100, buffer2.get(), buffer2->size(),
+                             base::DoNothing(), false),
+            buffer2->size());
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(),
+            buffer1->size() + buffer2->size());
+  EXPECT_EQ(backend->GetOptimisticWriteBufferTotalSizeForTesting(), 0);
+
+  // Write exceeding per-entry limit, should trigger flush of previous buffer.
+  // The new data is too large to buffer, so it should be written directly.
+  std::string large_data(2000, 'c');
+  auto buffer3 = base::MakeRefCounted<net::StringIOBuffer>(large_data);
+  net::TestCompletionCallback cb_write;
+  int rv = entry->WriteData(1, 200, buffer3.get(), buffer3->size(),
+                            cb_write.callback(), false);
+  EXPECT_EQ(rv, net::ERR_IO_PENDING);
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), 0);
+  EXPECT_EQ(backend->GetOptimisticWriteBufferTotalSizeForTesting(),
+            buffer1->size() + buffer2->size());
+
+  entry->Close();
+
+  backend->RunUntilAllTasksCompleteForTest();
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), 0);
+  EXPECT_EQ(backend->GetOptimisticWriteBufferTotalSizeForTesting(), 0);
+}
+
+TEST_F(SqlBackendImplTest, WriteBufferingReadFromBuffer) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{net::features::kSqlDiskCacheMaxWriteBufferTotalSize.name, "10240"},
+       {net::features::kSqlDiskCacheMaxWriteBufferSizePerEntry.name, "1024"}});
+
+  auto backend = CreateBackendAndInit();
+
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result = cb_create.GetResult(
+      backend->CreateEntry("key", net::HIGHEST, cb_create.callback()));
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+
+  // Buffer some data.
+  std::string data = "hello world";
+  auto buffer = base::MakeRefCounted<net::StringIOBuffer>(data);
+  entry->WriteData(1, 0, buffer.get(), buffer->size(), base::DoNothing(),
+                   false);
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), data.size());
+
+  // Read it back.
+  auto read_buffer = base::MakeRefCounted<net::IOBufferWithSize>(data.size());
+  net::TestCompletionCallback cb_read;
+  int rv_read = entry->ReadData(1, 0, read_buffer.get(), read_buffer->size(),
+                                cb_read.callback());
+  // Should be synchronous
+  EXPECT_EQ(rv_read, static_cast<int>(data.size()));
+  EXPECT_EQ(std::string_view(read_buffer->data(), data.size()), data);
+
+  // Buffer should still be there.
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), data.size());
+
+  entry->Close();
+
+  backend->RunUntilAllTasksCompleteForTest();
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), 0);
+}
+
+TEST_F(SqlBackendImplTest, WriteBufferingReadOverlapFlush) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{net::features::kSqlDiskCacheMaxWriteBufferTotalSize.name, "10240"},
+       {net::features::kSqlDiskCacheMaxWriteBufferSizePerEntry.name, "1024"}});
+
+  auto backend = CreateBackendAndInit();
+
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result = cb_create.GetResult(
+      backend->CreateEntry("key", net::HIGHEST, cb_create.callback()));
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+
+  // Buffer some data.
+  std::string data = "hello world";
+  auto buffer = base::MakeRefCounted<net::StringIOBuffer>(data);
+  // Write at 0 to ensure buffering (sequential).
+  entry->WriteData(1, 0, buffer.get(), buffer->size(), base::DoNothing(),
+                   false);
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), data.size());
+
+  // Read range that overlaps but is larger than buffer (e.g. from 0 to 20)
+  // This should force flush.
+  auto read_buffer = base::MakeRefCounted<net::IOBufferWithSize>(20);
+  net::TestCompletionCallback cb_read;
+  int rv_read = entry->ReadData(1, 0, read_buffer.get(), read_buffer->size(),
+                                cb_read.callback());
+  // Should return data.size() (11).
+  EXPECT_EQ(cb_read.GetResult(rv_read), static_cast<int>(data.size()));
+  EXPECT_EQ(std::string_view(read_buffer->data(), data.size()), data);
+
+  // Buffer should be flushed.
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), 0);
+
+  entry->Close();
+}
+
+TEST_F(SqlBackendImplTest, WriteBufferingGlobalLimit) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{net::features::kSqlDiskCacheMaxWriteBufferTotalSize.name, "100"},
+       {net::features::kSqlDiskCacheMaxWriteBufferSizePerEntry.name, "1000"}});
+
+  auto backend = CreateBackendAndInit();
+
+  // Create entry 1
+  TestEntryResultCompletionCallback cb_create1;
+  disk_cache::EntryResult create_result1 = cb_create1.GetResult(
+      backend->CreateEntry("key1", net::HIGHEST, cb_create1.callback()));
+  ASSERT_THAT(create_result1.net_error(), IsOk());
+  auto* entry1 = create_result1.ReleaseEntry();
+
+  // Create entry 2
+  TestEntryResultCompletionCallback cb_create2;
+  disk_cache::EntryResult create_result2 = cb_create2.GetResult(
+      backend->CreateEntry("key2", net::HIGHEST, cb_create2.callback()));
+  ASSERT_THAT(create_result2.net_error(), IsOk());
+  auto* entry2 = create_result2.ReleaseEntry();
+
+  // Write 60 bytes to entry 1. Buffered.
+  auto buffer1 =
+      base::MakeRefCounted<net::StringIOBuffer>(std::string(60, 'a'));
+  entry1->WriteData(1, 0, buffer1.get(), buffer1->size(), base::DoNothing(),
+                    false);
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), 60);
+
+  // Write 60 bytes to entry 2. Should flush entry 2 immediately because global
+  // limit (100) would be exceeded (60+60=120).
+  auto buffer2 =
+      base::MakeRefCounted<net::StringIOBuffer>(std::string(60, 'b'));
+  net::TestCompletionCallback cb_write;
+  int rv = entry2->WriteData(1, 0, buffer2.get(), buffer2->size(),
+                             cb_write.callback(), false);
+  EXPECT_EQ(cb_write.GetResult(rv), 60);
+
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(),
+            60);  // Entry 1 still buffered.
+
+  entry1->Close();
+  entry2->Close();
+
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), 60);
+  backend->RunUntilAllTasksCompleteForTest();
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), 0);
+}
+
+TEST_F(SqlBackendImplTest, WriteBufferingFlushOnClose) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{net::features::kSqlDiskCacheMaxWriteBufferTotalSize.name, "10240"},
+       {net::features::kSqlDiskCacheMaxWriteBufferSizePerEntry.name, "1024"}});
+
+  auto backend = CreateBackendAndInit();
+
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result = cb_create.GetResult(
+      backend->CreateEntry("key", net::HIGHEST, cb_create.callback()));
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+
+  // Buffer some data.
+  std::string data = "hello world";
+  auto buffer = base::MakeRefCounted<net::StringIOBuffer>(data);
+  entry->WriteData(1, 0, buffer.get(), buffer->size(), base::DoNothing(),
+                   false);
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), data.size());
+
+  entry->Close();
+
+  // Closing should asynchronously flush buffer.
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), data.size());
+  backend->RunUntilAllTasksCompleteForTest();
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), 0);
+
+  // Verify data on disk by opening again.
+  TestEntryResultCompletionCallback cb_open;
+  disk_cache::EntryResult open_result = cb_open.GetResult(
+      backend->OpenEntry("key", net::HIGHEST, cb_open.callback()));
+  ASSERT_THAT(open_result.net_error(), IsOk());
+  entry = open_result.ReleaseEntry();
+
+  auto read_buffer = base::MakeRefCounted<net::IOBufferWithSize>(data.size());
+  net::TestCompletionCallback cb_read;
+  int rv_read = entry->ReadData(1, 0, read_buffer.get(), read_buffer->size(),
+                                cb_read.callback());
+  EXPECT_EQ(cb_read.GetResult(rv_read), static_cast<int>(data.size()));
+  EXPECT_EQ(std::string_view(read_buffer->data(), data.size()), data);
+
+  entry->Close();
+}
+
+TEST_F(SqlBackendImplTest, WriteBufferingOptimisticBoundary) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{net::features::kSqlDiskCacheMaxWriteBufferTotalSize.name, "10240"},
+       {net::features::kSqlDiskCacheMaxWriteBufferSizePerEntry.name, "1000"},
+       {net::features::kSqlDiskCacheOptimisticWriteBufferSize.name, "3000"}});
+
+  auto backend = CreateBackendAndInit();
+
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result = cb_create.GetResult(
+      backend->CreateEntry("key", net::HIGHEST, cb_create.callback()));
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+
+  // 1. Write 500 bytes. Should be buffered.
+  auto buffer1 =
+      base::MakeRefCounted<net::StringIOBuffer>(std::string(500, 'a'));
+  EXPECT_EQ(entry->WriteData(1, 0, buffer1.get(), buffer1->size(),
+                             base::DoNothing(), false),
+            buffer1->size());
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), 500);
+  // Optimistic buffer usage: 0 (buffered in entry, not sent to backend)
+  EXPECT_EQ(backend->GetOptimisticWriteBufferTotalSizeForTesting(), 0);
+
+  // 2. Write 600 bytes. 500 + 600 > 1000.
+  // Should flush buffer (500) -> Optimistic (size 500).
+  // Then write new data (600) to the new buffer.
+  auto buffer2 =
+      base::MakeRefCounted<net::StringIOBuffer>(std::string(600, 'b'));
+  EXPECT_EQ(entry->WriteData(1, 500, buffer2.get(), buffer2->size(),
+                             base::DoNothing(), false),
+            buffer2->size());
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), 600);
+  EXPECT_EQ(backend->GetOptimisticWriteBufferTotalSizeForTesting(), 500);
+
+  // 3. Write 2000 bytes. 2000 > 1000.
+  // Since 2000 > 1000 (entry limit), it CANNOT be buffered.
+  // It flushes the previous buffer (600) -> Optimistic: 500 + 600 = 1100 <=
+  // 3000. Then writes 2000 bytes directly (async).
+  auto buffer3 =
+      base::MakeRefCounted<net::StringIOBuffer>(std::string(2000, 'c'));
+  net::TestCompletionCallback cb_write3;
+  EXPECT_EQ(entry->WriteData(1, 1100, buffer3.get(), buffer3->size(),
+                             cb_write3.callback(), false),
+            net::ERR_IO_PENDING);
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), 0);
+  EXPECT_EQ(backend->GetOptimisticWriteBufferTotalSizeForTesting(), 1100);
+  EXPECT_EQ(cb_write3.WaitForResult(), 2000);
+  EXPECT_EQ(backend->GetOptimisticWriteBufferTotalSizeForTesting(), 0);
+
+  // 4. Write 9000 bytes.
+  // Total buffer usage: 0 + 9000.
+  // Cannot buffer because 9000 > 1000 (entry limit).
+  // Writes 9000 bytes directly.
+  // Optimistic check for new write: 0 + 9000 > 3000. Non-optimistic write.
+  // Should be pending.
+  auto buffer4 =
+      base::MakeRefCounted<net::StringIOBuffer>(std::string(9000, 'd'));
+  net::TestCompletionCallback cb_write4;
+  EXPECT_EQ(entry->WriteData(1, 3100, buffer4.get(), buffer4->size(),
+                             cb_write4.callback(), false),
+            net::ERR_IO_PENDING);
+  EXPECT_EQ(cb_write4.WaitForResult(), static_cast<int>(buffer4->size()));
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), 0);
+  EXPECT_EQ(backend->GetOptimisticWriteBufferTotalSizeForTesting(), 0);
+
+  entry->Close();
+}
+
+TEST_F(SqlBackendImplTest, WriteBufferingReadAcrossChunks) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{net::features::kSqlDiskCacheMaxWriteBufferTotalSize.name, "10240"},
+       {net::features::kSqlDiskCacheMaxWriteBufferSizePerEntry.name, "1024"}});
+
+  auto backend = CreateBackendAndInit();
+
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result = cb_create.GetResult(
+      backend->CreateEntry("key", net::HIGHEST, cb_create.callback()));
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+
+  // Write chunk 1: "AAAAA"
+  std::string data1 = "AAAAA";
+  auto buffer1 = base::MakeRefCounted<net::StringIOBuffer>(data1);
+  entry->WriteData(1, 0, buffer1.get(), buffer1->size(), base::DoNothing(),
+                   false);
+
+  // Write chunk 2: "BBBBB"
+  std::string data2 = "BBBBB";
+  auto buffer2 = base::MakeRefCounted<net::StringIOBuffer>(data2);
+  entry->WriteData(1, 5, buffer2.get(), buffer2->size(), base::DoNothing(),
+                   false);
+
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(),
+            data1.size() + data2.size());
+
+  // Read across chunks: Offset 3, Length 4. Should get "AABB".
+  auto read_buffer = base::MakeRefCounted<net::IOBufferWithSize>(4);
+  net::TestCompletionCallback cb_read;
+  int rv_read = entry->ReadData(1, 3, read_buffer.get(), read_buffer->size(),
+                                cb_read.callback());
+  EXPECT_EQ(cb_read.GetResult(rv_read), 4);
+  EXPECT_EQ(std::string_view(read_buffer->data(), 4), "AABB");
+
+  // Buffer should still be there.
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(),
+            data1.size() + data2.size());
+
+  entry->Close();
+
+  backend->RunUntilAllTasksCompleteForTest();
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), 0);
+}
+
+TEST_F(SqlBackendImplTest, CombinedWriteAndMetadataUpdate) {
+  auto backend = CreateBackendAndInit();
+
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result = cb_create.GetResult(
+      backend->CreateEntry("key", net::HIGHEST, cb_create.callback()));
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+
+  // Write to stream 0 (header) - this will be buffered in SqlEntryImpl.
+  std::string header_data = "header";
+  auto header_buffer = base::MakeRefCounted<net::StringIOBuffer>(header_data);
+  entry->WriteData(0, 0, header_buffer.get(), header_buffer->size(),
+                   base::DoNothing(), false);
+
+  // Write to stream 1 (body) - this will be buffered in write buffer.
+  std::string body_data = "body";
+  auto body_buffer = base::MakeRefCounted<net::StringIOBuffer>(body_data);
+  entry->WriteData(1, 0, body_buffer.get(), body_buffer->size(),
+                   base::DoNothing(), false);
+
+  // Close the entry. This should trigger a single WriteEntryDataAndMetadata
+  // call that persists both header and body.
+  entry->Close();
+
+  // Flush background tasks.
+  backend->RunUntilAllTasksCompleteForTest();
+
+  // Re-open and verify.
+  TestEntryResultCompletionCallback cb_open;
+  disk_cache::EntryResult open_result = cb_open.GetResult(
+      backend->OpenEntry("key", net::HIGHEST, cb_open.callback()));
+  ASSERT_THAT(open_result.net_error(), IsOk());
+  entry = open_result.ReleaseEntry();
+
+  // Check header.
+  auto read_header_buffer =
+      base::MakeRefCounted<net::IOBufferWithSize>(header_data.size());
+  net::TestCompletionCallback cb_read_header;
+  int rv_read_header =
+      entry->ReadData(0, 0, read_header_buffer.get(),
+                      read_header_buffer->size(), cb_read_header.callback());
+  EXPECT_EQ(cb_read_header.GetResult(rv_read_header),
+            static_cast<int>(header_data.size()));
+  EXPECT_EQ(std::string_view(read_header_buffer->data(), header_data.size()),
+            header_data);
+
+  // Check body.
+  auto read_body_buffer =
+      base::MakeRefCounted<net::IOBufferWithSize>(body_data.size());
+  net::TestCompletionCallback cb_read_body;
+  int rv_read_body =
+      entry->ReadData(1, 0, read_body_buffer.get(), read_body_buffer->size(),
+                      cb_read_body.callback());
+  EXPECT_EQ(cb_read_body.GetResult(rv_read_body),
+            static_cast<int>(body_data.size()));
+  EXPECT_EQ(std::string_view(read_body_buffer->data(), body_data.size()),
+            body_data);
+
+  entry->Close();
+}
+
+TEST_F(SqlBackendImplTest, ReadCaching) {
+  auto backend = CreateBackendAndInit();
+
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result = cb_create.GetResult(
+      backend->CreateEntry("key", net::HIGHEST, cb_create.callback()));
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+
+  // 1. Write some data to stream 1.
+  std::string data = "0123456789ABCDEF";
+  auto buffer = base::MakeRefCounted<net::StringIOBuffer>(data);
+  net::TestCompletionCallback cb_write;
+  int rv_write = entry->WriteData(1, 0, buffer.get(), buffer->size(),
+                                  cb_write.callback(), false);
+  EXPECT_EQ(cb_write.GetResult(rv_write), static_cast<int>(data.size()));
+
+  // Close and re-open the entry to ensure data is written to the DB and we
+  // don't read from the write buffer.
+  entry->Close();
+  TestEntryResultCompletionCallback cb_open;
+  disk_cache::EntryResult open_result = cb_open.GetResult(
+      backend->OpenEntry("key", net::HIGHEST, cb_open.callback()));
+  ASSERT_THAT(open_result.net_error(), IsOk());
+  entry = open_result.ReleaseEntry();
+
+  // 2. Read only the first 5 bytes.
+  // The backend should read the whole blob (since it's a single blob in DB)
+  // and cache the remaining 11 bytes.
+  auto read_buffer1 = base::MakeRefCounted<net::IOBufferWithSize>(5);
+  net::TestCompletionCallback cb_read1;
+  int rv_read1 =
+      entry->ReadData(1, 0, read_buffer1.get(), 5, cb_read1.callback());
+  EXPECT_EQ(cb_read1.GetResult(rv_read1), 5);
+  EXPECT_EQ(std::string_view(read_buffer1->data(), 5), "01234");
+
+  // Verify that the read_cache_buffer is populated.
+  EXPECT_TRUE(static_cast<SqlEntryImpl*>(entry)->read_cache_buffer_for_test());
+  EXPECT_EQ(
+      static_cast<SqlEntryImpl*>(entry)->read_cache_buffer_offset_for_test(),
+      5);
+
+  // 3. Read the next 5 bytes.
+  // This should be fulfilled from the cache synchronously (no IO pending).
+  auto read_buffer2 = base::MakeRefCounted<net::IOBufferWithSize>(5);
+  int rv_read2 =
+      entry->ReadData(1, 5, read_buffer2.get(), 5, base::DoNothing());
+  // If it's cached, it returns immediately.
+  EXPECT_EQ(rv_read2, 5);
+  EXPECT_EQ(std::string_view(read_buffer2->data(), 5), "56789");
+
+  // 4. Read crossing the cache boundary.
+  // The cache has "56789ABCDEF" (offset 5 to 16).
+  // Request 5 bytes from offset 14: "EF" + 3 more.
+  // It should return 2 bytes synchronously if it uses partial cache,
+  // or return the whole thing if it triggers a new read.
+  // Current implementation returns copy_size = min(buf_len, cache_end -
+  // offset). So it should return 2 bytes synchronously.
+  auto read_buffer3 = base::MakeRefCounted<net::IOBufferWithSize>(5);
+  int rv_read3 =
+      entry->ReadData(1, 14, read_buffer3.get(), 5, base::DoNothing());
+  EXPECT_EQ(rv_read3, 2);
+  EXPECT_EQ(std::string_view(read_buffer3->data(), 2), "EF");
+
+  // 5. Write data should invalidate read cache.
+  entry->WriteData(1, 16, buffer.get(), 1, base::DoNothing(), false);
+  auto read_buffer4 = base::MakeRefCounted<net::IOBufferWithSize>(5);
+  int rv_read4 =
+      entry->ReadData(1, 5, read_buffer4.get(), 5, base::DoNothing());
+  // Now it should be pending because cache was invalidated.
+  EXPECT_EQ(rv_read4, net::ERR_IO_PENDING);
+
+  entry->Close();
+}
+
+TEST_F(SqlBackendImplTest, ReadCachingSparse) {
+  auto backend = CreateBackendAndInit();
+
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result = cb_create.GetResult(
+      backend->CreateEntry("key", net::HIGHEST, cb_create.callback()));
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+
+  // 1. Write some data to stream 1.
+  std::string data = "0123456789ABCDEF";
+  auto buffer = base::MakeRefCounted<net::StringIOBuffer>(data);
+  net::TestCompletionCallback cb_write;
+  int rv_write = entry->WriteData(1, 0, buffer.get(), buffer->size(),
+                                  cb_write.callback(), false);
+  EXPECT_EQ(cb_write.GetResult(rv_write), static_cast<int>(data.size()));
+
+  // Close and re-open the entry to ensure data is written to the DB and we
+  // don't read from the write buffer.
+  entry->Close();
+  TestEntryResultCompletionCallback cb_open;
+  disk_cache::EntryResult open_result = cb_open.GetResult(
+      backend->OpenEntry("key", net::HIGHEST, cb_open.callback()));
+  ASSERT_THAT(open_result.net_error(), IsOk());
+  entry = open_result.ReleaseEntry();
+
+  // 2. Read sparse data.
+  auto read_buffer1 = base::MakeRefCounted<net::IOBufferWithSize>(5);
+  net::TestCompletionCallback cb_read1;
+  int rv_read1 =
+      entry->ReadSparseData(0, read_buffer1.get(), 5, cb_read1.callback());
+  EXPECT_EQ(cb_read1.GetResult(rv_read1), 5);
+  EXPECT_EQ(std::string_view(read_buffer1->data(), 5), "01234");
+
+  // Verify that the read_cache_buffer IS populated even for sparse reads.
+  EXPECT_TRUE(static_cast<SqlEntryImpl*>(entry)->read_cache_buffer_for_test());
+  EXPECT_EQ(
+      static_cast<SqlEntryImpl*>(entry)->read_cache_buffer_offset_for_test(),
+      5);
+
+  // Subsequent read (could be normal or sparse) should use the cache.
+  auto read_buffer2 = base::MakeRefCounted<net::IOBufferWithSize>(5);
+  int rv_read2 =
+      entry->ReadData(1, 5, read_buffer2.get(), 5, base::DoNothing());
+  EXPECT_EQ(rv_read2, 5);
+  EXPECT_EQ(std::string_view(read_buffer2->data(), 5), "56789");
+
+  entry->Close();
+}
+
+TEST_F(SqlBackendImplTest, ReadCachingGlobalLimit) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{net::features::kSqlDiskCacheMaxReadBufferTotalSize.name, "90"}});
+
+  auto backend = CreateBackendAndInit();
+
+  std::string data(60, 'a');
+  auto buffer = base::MakeRefCounted<net::StringIOBuffer>(data);
+
+  // Create entry 1
+  TestEntryResultCompletionCallback cb_create1;
+  disk_cache::EntryResult create_result1 = cb_create1.GetResult(
+      backend->CreateEntry("key1", net::HIGHEST, cb_create1.callback()));
+  ASSERT_THAT(create_result1.net_error(), IsOk());
+  auto* entry1 = create_result1.ReleaseEntry();
+  entry1->WriteData(1, 0, buffer.get(), buffer->size(), base::DoNothing(),
+                    false);
+  entry1->Close();
+
+  // Create entry 2
+  TestEntryResultCompletionCallback cb_create2;
+  disk_cache::EntryResult create_result2 = cb_create2.GetResult(
+      backend->CreateEntry("key2", net::HIGHEST, cb_create2.callback()));
+  ASSERT_THAT(create_result2.net_error(), IsOk());
+  auto* entry2 = create_result2.ReleaseEntry();
+  entry2->WriteData(1, 0, buffer.get(), buffer->size(), base::DoNothing(),
+                    false);
+  entry2->Close();
+
+  // Open both
+  TestEntryResultCompletionCallback cb_open1;
+  auto* entry1_open = cb_open1
+                          .GetResult(backend->OpenEntry("key1", net::HIGHEST,
+                                                        cb_open1.callback()))
+                          .ReleaseEntry();
+  TestEntryResultCompletionCallback cb_open2;
+  auto* entry2_open = cb_open2
+                          .GetResult(backend->OpenEntry("key2", net::HIGHEST,
+                                                        cb_open2.callback()))
+                          .ReleaseEntry();
+
+  // Read from entry 1. 10 bytes. 50 bytes cached. Total 50.
+  auto read_buf = base::MakeRefCounted<net::IOBufferWithSize>(10);
+  net::TestCompletionCallback cb_read1;
+  int rv1 =
+      entry1_open->ReadData(1, 0, read_buf.get(), 10, cb_read1.callback());
+  EXPECT_EQ(cb_read1.GetResult(rv1), 10);
+  EXPECT_TRUE(
+      static_cast<SqlEntryImpl*>(entry1_open)->read_cache_buffer_for_test());
+
+  // Read from entry 2. 10 bytes. 50 bytes to cache. Total would be 100 > 90.
+  // Should NOT be cached.
+  net::TestCompletionCallback cb_read2;
+  int rv2 =
+      entry2_open->ReadData(1, 0, read_buf.get(), 10, cb_read2.callback());
+  EXPECT_EQ(cb_read2.GetResult(rv2), 10);
+  EXPECT_FALSE(
+      static_cast<SqlEntryImpl*>(entry2_open)->read_cache_buffer_for_test());
+
+  entry1_open->Close();  // Releases 50 bytes. Total 0.
+
+  // Read again from entry 2 (offset 10).
+  // This will trigger a new read from DB. Since total is 0, the remaining 40
+  // bytes (60-10-10) should be cached?
+  net::TestCompletionCallback cb_read3;
+  int rv3 =
+      entry2_open->ReadData(1, 10, read_buf.get(), 10, cb_read3.callback());
+  EXPECT_EQ(cb_read3.GetResult(rv3), 10);
+  EXPECT_TRUE(
+      static_cast<SqlEntryImpl*>(entry2_open)->read_cache_buffer_for_test());
+
+  entry2_open->Close();
+}
+
+TEST_F(SqlBackendImplTest, GetAvailableRangeWithBufferedWrite) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{net::features::kSqlDiskCacheOptimisticWriteBufferSize.name, "1024"},
+       {net::features::kSqlDiskCacheMaxWriteBufferTotalSize.name, "1024"}});
+
+  auto backend = CreateBackendAndInit();
+  const std::string kKey = "my-key";
+  const std::string kData = "some data";
+
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result = cb_create.GetResult(
+      backend->CreateEntry(kKey, net::HIGHEST, cb_create.callback()));
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+  ASSERT_TRUE(entry);
+
+  // Write data. This should be buffered because it's small and write buffering
+  // is enabled.
+  auto write_buffer = base::MakeRefCounted<net::StringIOBuffer>(kData);
+  EXPECT_EQ(entry->WriteData(1, 0, write_buffer.get(), write_buffer->size(),
+                             base::DoNothing(), false),
+            static_cast<int>(write_buffer->size()));
+
+  // Verify it is buffered.
+  EXPECT_EQ(backend->GetWriteBufferTotalSizeForTesting(), write_buffer->size());
+
+  // Check GetAvailableRange.
+  base::test::TestFuture<const RangeResult&> range_future;
+  RangeResult result =
+      entry->GetAvailableRange(0, kData.size(), range_future.GetCallback());
+
+  ASSERT_THAT(result.net_error, IsError(net::ERR_IO_PENDING));
+
+  result = range_future.Get();
+  EXPECT_THAT(result.net_error, IsOk());
+  EXPECT_EQ(result.start, 0);
+  EXPECT_EQ(result.available_len, static_cast<int>(kData.size()));
+
+  entry->Close();
+}
+
+TEST_F(SqlBackendImplTest, CreateIteratorFlushesBuffers) {
+  auto backend = CreateBackendAndInit();
+  EXPECT_TRUE(LoadInMemoryIndex(*backend));
+  const std::string kKey = "my-key";
+  const std::string kData = "data";
+
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result = cb_create.GetResult(
+      backend->CreateEntry(kKey, net::HIGHEST, cb_create.callback()));
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+  ASSERT_TRUE(entry);
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
+
+  auto buffer = base::MakeRefCounted<net::StringIOBuffer>(kData);
+  EXPECT_EQ(entry->WriteData(1, 0, buffer.get(), buffer->size(),
+                             base::DoNothing(), false),
+            static_cast<int>(buffer->size()));
+
+  // The entry is in kInitial state and has buffered data.
+  // It is NOT in the DB yet.
+  EXPECT_TRUE(db_handle->IsInitialState());
+
+  auto iter = backend->CreateIterator();
+
+  // CreateIterator should have triggered FlushBuffer(true).
+  // Which starts the creation in DB.
+  EXPECT_TRUE(db_handle->IsCreatingState());
+
+  TestEntryResultCompletionCallback cb_iter;
+  EntryResult iter_res = iter->OpenNextEntry(cb_iter.callback());
+
+  iter_res = cb_iter.GetResult(std::move(iter_res));
+  ASSERT_THAT(iter_res.net_error(), IsOk());
+  auto* entry_from_iter = iter_res.ReleaseEntry();
+  EXPECT_EQ(entry_from_iter->GetKey(), kKey);
+  EXPECT_EQ(entry_from_iter->GetDataSize(1), static_cast<int>(kData.size()));
+
+  entry->Close();
+  entry_from_iter->Close();
+}
+
+TEST_F(SqlBackendImplTest, GetEntryCountFlushesBuffers) {
+  auto backend = CreateBackendAndInit();
+  EXPECT_TRUE(LoadInMemoryIndex(*backend));
+  const std::string kKey = "my-key";
+
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result = cb_create.GetResult(
+      backend->CreateEntry(kKey, net::HIGHEST, cb_create.callback()));
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+  ASSERT_TRUE(entry);
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
+
+  // The entry is in kInitial state and has buffered data.
+  // It is NOT in the DB yet.
+  EXPECT_TRUE(db_handle->IsInitialState());
+  base::test::TestFuture<int32_t> future;
+
+  EXPECT_EQ(backend->GetEntryCount(future.GetCallback()),
+            base::unexpected(net::ERR_IO_PENDING));
+
+  // GetEntryCount should have triggered FlushBuffer(true).
+  // Which starts the creation in DB.
+  EXPECT_TRUE(db_handle->IsCreatingState());
+
+  CHECK_EQ(future.Get(), 1);
+  EXPECT_TRUE(db_handle->IsFinished());
+
+  entry->Close();
+}
+
+TEST_F(SqlBackendImplTest, CalculateSizeOfEntriesBetweenFlushesBuffers) {
+  auto backend = CreateBackendAndInit();
+  EXPECT_TRUE(LoadInMemoryIndex(*backend));
+  const std::string kKey = "my-key";
+  const std::string kData = "data";
+
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result = cb_create.GetResult(
+      backend->CreateEntry(kKey, net::HIGHEST, cb_create.callback()));
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+  ASSERT_TRUE(entry);
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
+
+  auto buffer = base::MakeRefCounted<net::StringIOBuffer>(kData);
+  EXPECT_EQ(entry->WriteData(1, 0, buffer.get(), buffer->size(),
+                             base::DoNothing(), false),
+            static_cast<int>(buffer->size()));
+
+  // The entry is in kInitial state and has buffered data.
+  // It is NOT in the DB yet.
+  EXPECT_TRUE(db_handle->IsInitialState());
+  base::test::TestFuture<int64_t> future;
+
+  EXPECT_EQ(backend->CalculateSizeOfEntriesBetween(
+                base::Time::Min(), base::Time::Max(), future.GetCallback()),
+            net::ERR_IO_PENDING);
+
+  // CalculateSizeOfEntriesBetween should have triggered FlushBuffer(true).
+  // Which starts the creation in DB.
+  EXPECT_TRUE(db_handle->IsCreatingState());
+
+  EXPECT_EQ(future.Get(),
+            kKey.length() + kData.length() + kSqlBackendStaticResourceSize);
+  EXPECT_TRUE(db_handle->IsFinished());
+
+  entry->Close();
+}
+
+// Tests a race condition where Doom runs while a WriteData operation
+// is pending (blocked by another operation) and the entry is in 'Creating'
+// state.
+TEST_F(SqlBackendImplTest, AsyncDoomEntryAndWrite) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{net::features::kSqlDiskCacheMaxWriteBufferSizePerEntry.name, "250"}});
+  auto backend = CreateBackendAndInit();
+  EXPECT_TRUE(LoadInMemoryIndex(*backend));
+
+  const std::string kKey = "my-key";
+
+  // Create an entry.
+  disk_cache::EntryResult create_result =
+      backend->CreateEntry(kKey, net::HIGHEST, base::DoNothing());
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
+
+  // Start an exclusive operation (CalculateSizeOfAllEntries).
+  // This will block subsequent operations.
+  net::TestInt64CompletionCallback cb_calculate;
+  EXPECT_EQ(backend->CalculateSizeOfAllEntries(cb_calculate.callback()),
+            net::ERR_IO_PENDING);
+
+  // Doom the entry.
+  entry->Doom();
+
+  // Write data to the entry.
+  // Since it is larger than kSqlDiskCacheMaxWriteBufferSizePerEntry, the task
+  // for writing to the DB (WriteData) is queued.
+  const int kDataSize = 1024;
+  auto kData = std::string(kDataSize, 'a');
+  auto buffer = base::MakeRefCounted<net::StringIOBuffer>(kData);
+  EXPECT_EQ(
+      entry->WriteData(1, 0, buffer.get(), kDataSize, base::DoNothing(), false),
+      kDataSize);
+  EXPECT_TRUE(db_handle->IsCreatingState());
+
+  // The CalculateSizeOfAllEntries should complete.
+  EXPECT_GE(cb_calculate.WaitForResult(), 0);
+
+  // Verify that the data is readable.
+  ReadAndVerifyData(entry, kData);
+
+  entry->Close();
+
+  // Verify that the entry is not found.
+  TestEntryResultCompletionCallback cb_open;
+  disk_cache::EntryResult open_result = cb_open.GetResult(
+      backend->OpenEntry(kKey, net::HIGHEST, cb_open.callback()));
+  EXPECT_THAT(open_result.net_error(), IsError(net::ERR_FAILED));
+}
+
+// Tests a race condition where Doom runs while a WriteEntryDataAndMetadata
+// operation is pending (blocked by another operation) and the entry is in
+// 'Creating' state.
+TEST_F(SqlBackendImplTest, AsyncDoomEntryAndFlushBuffer) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{net::features::kSqlDiskCacheMaxWriteBufferSizePerEntry.name, "250"}});
+  auto backend = CreateBackendAndInit();
+  EXPECT_TRUE(LoadInMemoryIndex(*backend));
+
+  const std::string kKey = "my-key";
+
+  // Create an entry.
+  disk_cache::EntryResult create_result =
+      backend->CreateEntry(kKey, net::HIGHEST, base::DoNothing());
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+  auto db_handle = static_cast<SqlEntryImpl*>(entry)->db_handle();
+
+  // Start an exclusive operation (CalculateSizeOfAllEntries).
+  // This will block subsequent operations.
+  net::TestInt64CompletionCallback cb_calculate;
+  EXPECT_EQ(backend->CalculateSizeOfAllEntries(cb_calculate.callback()),
+            net::ERR_IO_PENDING);
+
+  // Doom the entry.
+  entry->Doom();
+
+  // Calling CreateIterator() queues the task for writing to the DB
+  // (WriteEntryDataAndMetadata).
+  auto iter = backend->CreateIterator();
+  EXPECT_TRUE(db_handle->IsCreatingState());
+
+  // The CalculateSizeOfAllEntries should complete.
+  EXPECT_GE(cb_calculate.WaitForResult(), 0);
+
+  TestEntryResultCompletionCallback cb_iter;
+  EntryResult iter_res = iter->OpenNextEntry(cb_iter.callback());
+
+  // The iterator shouldn't see the entry.
+  iter_res = cb_iter.GetResult(std::move(iter_res));
+  ASSERT_THAT(iter_res.net_error(), IsError(net::ERR_FAILED));
+
+  entry->Close();
+
+  // Verify that the entry is not found.
+  TestEntryResultCompletionCallback cb_open;
+  disk_cache::EntryResult open_result = cb_open.GetResult(
+      backend->OpenEntry(kKey, net::HIGHEST, cb_open.callback()));
+  EXPECT_THAT(open_result.net_error(), IsError(net::ERR_FAILED));
+}
+
+void SqlBackendImplTest::RunSparseDataExceedsMaxFileSizeTest(bool doom_entry) {
+  auto backend = CreateBackendAndInit();
+  EXPECT_TRUE(LoadInMemoryIndex(*backend));
+  backend->EnableStrictCorruptionCheckForTesting();
+  const std::string kKey = "my-key";
+
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result = cb_create.GetResult(
+      backend->CreateEntry(kKey, net::HIGHEST, cb_create.callback()));
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+  ASSERT_TRUE(entry);
+
+  if (doom_entry) {
+    entry->Doom();
+  }
+
+  const int chunk_size = 32 * 1024;
+  const int num_chunks = backend->GetSqlStoreForTest()->MaxSize() / chunk_size;
+  auto buf = base::MakeRefCounted<net::IOBufferWithSize>(chunk_size);
+  std::ranges::fill(buf->span(), 'a');
+
+  base::HistogramTester histogram_tester;
+
+  for (int i = 0; i < num_chunks; ++i) {
+    net::TestCompletionCallback cb;
+    EXPECT_EQ(cb.GetResult(entry->WriteSparseData(i * chunk_size, buf.get(),
+                                                  chunk_size, cb.callback())),
+              chunk_size);
+    backend->RunUntilAllTasksCompleteForTest();
+  }
+
+  // Truncating older sparse data prevents a single entry from exceeding the
+  // cache size limit and causing excessive evictions on every write. Ensure
+  // eviction was not triggered.
+  histogram_tester.ExpectTotalCount(
+      "Net.SqlDiskCache.Backend.RunEviction.ScannedEntriesCount.Success", 0);
+
+  // Check if the first chunk is truncated.
+  TestRangeResultCompletionCallback cb_range;
+  EXPECT_EQ(cb_range
+                .GetResult(entry->GetAvailableRange(0, chunk_size,
+                                                    cb_range.callback()))
+                .available_len,
+            0);
+
+  entry->Close();
+}
+
+TEST_F(SqlBackendImplTest, SparseDataExceedsMaxFileSize) {
+  RunSparseDataExceedsMaxFileSizeTest(/*doom_entry=*/false);
+}
+
+TEST_F(SqlBackendImplTest, SparseDataExceedsMaxFileSizeDoomedEntry) {
+  RunSparseDataExceedsMaxFileSizeTest(/*doom_entry=*/true);
+}
+
+TEST_F(SqlBackendImplTest, SparseDataExceedsMaxFileSizeBackwards) {
+  auto backend = CreateBackendAndInit();
+  EXPECT_TRUE(LoadInMemoryIndex(*backend));
+  backend->EnableStrictCorruptionCheckForTesting();
+  const std::string kKey = "my-key";
+
+  TestEntryResultCompletionCallback cb_create;
+  disk_cache::EntryResult create_result = cb_create.GetResult(
+      backend->CreateEntry(kKey, net::HIGHEST, cb_create.callback()));
+  ASSERT_THAT(create_result.net_error(), IsOk());
+  auto* entry = create_result.ReleaseEntry();
+  ASSERT_TRUE(entry);
+
+  const int chunk_size = 32 * 1024;
+  const int num_chunks = backend->GetSqlStoreForTest()->MaxSize() / chunk_size;
+  auto buf = base::MakeRefCounted<net::IOBufferWithSize>(chunk_size);
+  std::ranges::fill(buf->span(), 'a');
+
+  base::HistogramTester histogram_tester;
+
+  // Write chunks in reverse order.
+  for (int i = num_chunks - 1; i >= 0; --i) {
+    net::TestCompletionCallback cb;
+    EXPECT_EQ(cb.GetResult(entry->WriteSparseData(i * chunk_size, buf.get(),
+                                                  chunk_size, cb.callback())),
+              chunk_size);
+    backend->RunUntilAllTasksCompleteForTest();
+  }
+
+  histogram_tester.ExpectTotalCount(
+      "Net.SqlDiskCache.Backend.RunEviction.ScannedEntriesCount.Success", 0);
+
+  // The truncation logic trims data before and after the current write when
+  // the size limit is exceeded. Since we wrote backwards, the last written
+  // chunk was at offset 0. Thus, the previously written chunks at higher
+  // offsets were truncated to keep the total size within the limit.
+  TestRangeResultCompletionCallback cb_range;
+  EXPECT_EQ(
+      cb_range
+          .GetResult(entry->GetAvailableRange((num_chunks - 1) * chunk_size,
+                                              chunk_size, cb_range.callback()))
+          .available_len,
+      0);
+
+  entry->Close();
+}
+
+TEST_F(SqlBackendImplTest, ReadFromSharedCacheViaOpenEntry) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      net::features::kRendererAccessibleHttpCache);
+  auto backend = CreateBackendAndInit();
+  EXPECT_TRUE(LoadInMemoryIndex(*backend));
+
+  const std::string kKey = "shared-cache-key";
+  const std::string kData = "Data stored in shared cache";
+
+  SqlSharedCacheResourceId expected_resource_id =
+      CreateEntryInSharedCache(*backend, kKey, kData);
+  ASSERT_TRUE(expected_resource_id.db_id.value());
+
+  // Now open the entry using OpenEntry.
+  TestEntryResultCompletionCallback cb_open;
+  disk_cache::EntryResult open_result = cb_open.GetResult(
+      backend->OpenEntry(kKey, net::HIGHEST, cb_open.callback()));
+  ASSERT_THAT(open_result.net_error(), IsOk());
+  auto* opened_entry = open_result.ReleaseEntry();
+  ASSERT_TRUE(opened_entry);
+
+  // Check db_handle has shared_cache_resource_id.
+  auto* opened_sql_entry = static_cast<SqlEntryImpl*>(opened_entry);
+  EXPECT_TRUE(
+      opened_sql_entry->db_handle()->shared_cache_resource_id().has_value());
+  EXPECT_EQ(opened_sql_entry->db_handle()->shared_cache_resource_id()->db_id,
+            expected_resource_id.db_id);
+  EXPECT_EQ(opened_sql_entry->db_handle()->shared_cache_resource_id()->row_id,
+            expected_resource_id.row_id);
+
+  // Read data stream 1 from opened entry and verify content matches kData.
+  auto read_buf = base::MakeRefCounted<net::IOBufferWithSize>(kData.size());
+  net::TestCompletionCallback cb_read;
+  EXPECT_EQ(cb_read.GetResult(opened_entry->ReadData(
+                1, 0, read_buf.get(), kData.size(), cb_read.callback())),
+            static_cast<int>(kData.size()));
+  EXPECT_EQ(std::string_view(read_buf->data(), kData.size()), kData);
+
+  opened_entry->Close();
+  backend->RunUntilAllTasksCompleteForTest();
+}
+
+TEST_F(SqlBackendImplTest, ReadFromSharedCacheViaOpenNextEntry) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      net::features::kRendererAccessibleHttpCache);
+  auto backend = CreateBackendAndInit();
+  EXPECT_TRUE(LoadInMemoryIndex(*backend));
+
+  const std::string kKey = "shared-cache-iter-key";
+  const std::string kData = "Data stored in shared cache for iterator";
+
+  SqlSharedCacheResourceId expected_resource_id =
+      CreateEntryInSharedCache(*backend, kKey, kData);
+  ASSERT_TRUE(expected_resource_id.db_id.value());
+
+  // Open entry via iterator (CreateIterator & OpenNextEntry).
+  auto iterator = backend->CreateIterator();
+  ASSERT_TRUE(iterator);
+
+  TestEntryResultCompletionCallback cb_next;
+  disk_cache::EntryResult next_result =
+      cb_next.GetResult(iterator->OpenNextEntry(cb_next.callback()));
+  ASSERT_THAT(next_result.net_error(), IsOk());
+  auto* next_entry = next_result.ReleaseEntry();
+  ASSERT_TRUE(next_entry);
+  EXPECT_EQ(next_entry->GetKey(), kKey);
+
+  // Check db_handle has shared_cache_resource_id.
+  auto* next_sql_entry = static_cast<SqlEntryImpl*>(next_entry);
+  EXPECT_TRUE(
+      next_sql_entry->db_handle()->shared_cache_resource_id().has_value());
+  EXPECT_EQ(next_sql_entry->db_handle()->shared_cache_resource_id()->db_id,
+            expected_resource_id.db_id);
+  EXPECT_EQ(next_sql_entry->db_handle()->shared_cache_resource_id()->row_id,
+            expected_resource_id.row_id);
+
+  // Read data stream 1 from iterator-opened entry and verify content matches
+  // kData.
+  auto read_buf = base::MakeRefCounted<net::IOBufferWithSize>(kData.size());
+  net::TestCompletionCallback cb_read;
+  EXPECT_EQ(cb_read.GetResult(next_entry->ReadData(
+                1, 0, read_buf.get(), kData.size(), cb_read.callback())),
+            static_cast<int>(kData.size()));
+  EXPECT_EQ(std::string_view(read_buf->data(), kData.size()), kData);
+
+  next_entry->Close();
+  backend->RunUntilAllTasksCompleteForTest();
+}
+
+TEST_F(SqlBackendImplTest, ReadFromSharedCacheWithLargerBuffer) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      net::features::kRendererAccessibleHttpCache);
+  auto backend = CreateBackendAndInit();
+  EXPECT_TRUE(LoadInMemoryIndex(*backend));
+
+  const std::string kKey = "shared-cache-drainable-key";
+  const std::string kData = "0123456789";
+
+  SqlSharedCacheResourceId expected_resource_id =
+      CreateEntryInSharedCache(*backend, kKey, kData);
+  ASSERT_TRUE(expected_resource_id.db_id.value());
+
+  TestEntryResultCompletionCallback cb_open;
+  disk_cache::EntryResult open_result = cb_open.GetResult(
+      backend->OpenEntry(kKey, net::HIGHEST, cb_open.callback()));
+  ASSERT_THAT(open_result.net_error(), IsOk());
+  auto* opened_entry = open_result.ReleaseEntry();
+  ASSERT_TRUE(opened_entry);
+
+  // Pass a buffer larger than kData.size() (20 bytes > 10 bytes) to ensure
+  // buffer->size() != bytes_to_read branch is taken.
+  auto read_buf = base::MakeRefCounted<net::IOBufferWithSize>(20);
+  net::TestCompletionCallback cb_read;
+  EXPECT_EQ(cb_read.GetResult(opened_entry->ReadData(1, 0, read_buf.get(), 20,
+                                                     cb_read.callback())),
+            static_cast<int>(kData.size()));
+  EXPECT_EQ(std::string_view(read_buf->data(), kData.size()), kData);
+
+  opened_entry->Close();
+  backend->RunUntilAllTasksCompleteForTest();
+}
+
+TEST_F(SqlBackendImplTest, ReadFromSharedCacheHandleNotFound) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      net::features::kRendererAccessibleHttpCache);
+  auto backend = CreateBackendAndInit();
+  EXPECT_TRUE(LoadInMemoryIndex(*backend));
+
+  const std::string kKey = "shared-cache-not-found-key";
+  const std::string kData = "Data in shared cache";
+
+  SqlSharedCacheResourceId expected_resource_id =
+      CreateEntryInSharedCache(*backend, kKey, kData);
+  ASSERT_TRUE(expected_resource_id.db_id.value());
+
+  TestEntryResultCompletionCallback cb_open;
+  disk_cache::EntryResult open_result = cb_open.GetResult(
+      backend->OpenEntry(kKey, net::HIGHEST, cb_open.callback()));
+  ASSERT_THAT(open_result.net_error(), IsOk());
+  auto* opened_entry = open_result.ReleaseEntry();
+  ASSERT_TRUE(opened_entry);
+
+  // Set a non-existent shared_cache_resource_id so GetCacheByDbId will fail and
+  // pass a null handle.
+  auto* opened_sql_entry = static_cast<SqlEntryImpl*>(opened_entry);
+  opened_sql_entry->db_handle()->set_shared_cache_resource_id(
+      SqlSharedCacheResourceId{SqlSharedCacheDbId(9999),
+                               SqlSharedCacheRowId(1)});
+
+  auto read_buf = base::MakeRefCounted<net::IOBufferWithSize>(kData.size());
+  net::TestCompletionCallback cb_read;
+  int read_res = opened_entry->ReadData(1, 0, read_buf.get(), kData.size(),
+                                        cb_read.callback());
+  if (read_res == net::ERR_IO_PENDING) {
+    backend->RunUntilAllTasksCompleteForTest();
+    read_res = cb_read.WaitForResult();
+  }
+  EXPECT_EQ(read_res, net::ERR_FAILED);
+
+  opened_entry->Close();
+  backend->RunUntilAllTasksCompleteForTest();
+}
+
+class SqlBackendImplSharedCacheTest : public SqlBackendImplTest {
+ public:
+  SqlBackendImplSharedCacheTest() {
+    feature_list_.InitAndEnableFeature(
+        net::features::kRendererAccessibleHttpCache);
+  }
+
+ protected:
+  void WriteResponseInfoToEntry(disk_cache::Entry* entry,
+                                const net::HttpResponseInfo& info) {
+    auto pickle = info.MakePickle(false, false);
+    std::string pickle_data(reinterpret_cast<const char*>(pickle->data()),
+                            pickle->size());
+    auto buffer = base::MakeRefCounted<net::StringIOBuffer>(pickle_data);
+    net::TestCompletionCallback cb;
+    EXPECT_EQ(cb.GetResult(entry->WriteData(0, 0, buffer.get(),
+                                            static_cast<int>(pickle->size()),
+                                            cb.callback(), false)),
+              static_cast<int>(pickle->size()));
+  }
+
+  // Helper to create an entry in store, write data and response info,
+  // optionally close it, and register it to shared cache.
+  disk_cache::Entry* CreateAndRegisterSharedCacheEntry(
+      SqlBackendImpl* backend,
+      const std::string& key,
+      const std::string& data,
+      const net::NetworkIsolationKey& nik,
+      base::Time response_time = base::Time::Now(),
+      bool close_entry = true) {
+    auto* entry = CreateEntryAndWriteData(backend, key, data);
+    net::HttpResponseInfo info;
+    info.response_time = response_time;
+    info.headers =
+        base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 200 OK\0\0");
+    WriteResponseInfoToEntry(entry, info);
+    if (close_entry) {
+      entry->Close();
+    }
+    GURL url{net::HttpCache::GetResourceURLFromHttpCacheKey(key)};
+    backend->OnEntryEligibleForSharedCache(
+        key, url, std::make_unique<net::HttpResponseInfo>(info), nik);
+    return close_entry ? nullptr : entry;
+  }
+
+  void VerifySharedCacheResourceIdExists(SqlBackendImpl* backend,
+                                         const std::string& key) {
+    base::test::TestFuture<SqlPersistentStore::EntryInfoOrError> future;
+    backend->GetSqlStoreForTest()->OpenEntry(CacheEntryKey(key),
+                                             future.GetCallback());
+    auto result = future.Take();
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->shared_cache_resource_id.has_value());
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+TEST_F(SqlBackendImplSharedCacheTest,
+       ProcessSharedCacheEligibleEntriesMultipleNiks) {
+  auto backend = CreateBackendAndInit();
+
+  const net::SchemefulSite kSite1(GURL("https://site1.test"));
+  const net::NetworkIsolationKey kNik1(kSite1, kSite1);
+  const net::SchemefulSite kSite2(GURL("https://site2.test"));
+  const net::NetworkIsolationKey kNik2(kSite2, kSite2);
+
+  const std::string kKey1 = "0/0/https://example1.test";
+  const std::string kKey2 = "0/0/https://example2.test";
+
+  CreateAndRegisterSharedCacheEntry(backend.get(), kKey1, "Data 1", kNik1);
+  CreateAndRegisterSharedCacheEntry(backend.get(), kKey2, "Data 2", kNik2);
+  backend->RunUntilAllTasksCompleteForTest();
+
+  EXPECT_EQ(backend->GetSharedCacheEligibleEntriesCountForTest(), 2u);
+
+  base::RunLoop process_run_loop;
+  backend->ProcessSharedCacheEligibleEntriesForTest(
+      base::ScopedClosureRunner(process_run_loop.QuitClosure()),
+      /*on_entry_copied_callback=*/base::NullCallback());
+
+  process_run_loop.Run();
+  backend->RunUntilAllTasksCompleteForTest();
+
+  VerifySharedCacheResourceIdExists(backend.get(), kKey1);
+  VerifySharedCacheResourceIdExists(backend.get(), kKey2);
+}
+
+TEST_F(SqlBackendImplSharedCacheTest,
+       ProcessSharedCacheEligibleEntriesDbFailure) {
+  auto backend = CreateBackendAndInit();
+  auto* manager =
+      backend->GetSqlStoreForTest()->shared_cache_manager_for_testing();
+  manager->SetSimulateDbFailureForTesting(true);
+
+  const net::SchemefulSite kSite(GURL("https://example.test"));
+  const net::NetworkIsolationKey kNik(kSite, kSite);
+  const std::string kKey = "0/0/https://example.test";
+
+  CreateAndRegisterSharedCacheEntry(backend.get(), kKey, "Hello Shared Cache",
+                                    kNik);
+  EXPECT_EQ(backend->GetSharedCacheEligibleEntriesCountForTest(), 1u);
+
+  base::RunLoop process_run_loop;
+  backend->ProcessSharedCacheEligibleEntriesForTest(
+      base::ScopedClosureRunner(process_run_loop.QuitClosure()),
+      base::NullCallback());
+  process_run_loop.Run();
+
+  // On DB failure, processing fails and the entries are dropped, leaving 0
+  // pending eligible entries.
+  EXPECT_EQ(backend->GetSharedCacheEligibleEntriesCountForTest(), 0u);
+}
+
+TEST_F(SqlBackendImplSharedCacheTest,
+       ProcessSharedCacheEligibleEntriesSkipsActiveEntry) {
+  auto backend = CreateBackendAndInit();
+
+  const net::SchemefulSite kSite1(GURL("https://site1.test"));
+  const net::NetworkIsolationKey kNik1(kSite1, kSite1);
+  const net::SchemefulSite kSite2(GURL("https://site2.test"));
+  const net::NetworkIsolationKey kNik2(kSite2, kSite2);
+
+  const std::string kKey1 = "0/0/https://example1.test";
+  const std::string kKey2 = "0/0/https://example2.test";
+
+  // Create entry1 and entry2 and keep BOTH open (active).
+  auto* entry1 = CreateAndRegisterSharedCacheEntry(
+      backend.get(), kKey1, "Data 1", kNik1, base::Time::Now(),
+      /*close_entry=*/false);
+  auto* entry2 = CreateAndRegisterSharedCacheEntry(
+      backend.get(), kKey2, "Data 2", kNik2, base::Time::Now(),
+      /*close_entry=*/false);
+  backend->RunUntilAllTasksCompleteForTest();
+
+  EXPECT_EQ(backend->GetSharedCacheEligibleEntriesCountForTest(), 2u);
+
+  // 1. When ALL entries are active, HandleProcessSharedCacheEligibleEntries
+  // finds entries_to_process is empty and returns early without processing.
+  base::RunLoop process_run_loop_all_active;
+  backend->ProcessSharedCacheEligibleEntriesForTest(
+      base::ScopedClosureRunner(process_run_loop_all_active.QuitClosure()),
+      /*on_entry_copied_callback=*/base::NullCallback());
+  process_run_loop_all_active.Run();
+  backend->RunUntilAllTasksCompleteForTest();
+
+  // Both entries were active, so 0 entries were processed, leaving 2 eligible
+  // entries.
+  EXPECT_EQ(backend->GetSharedCacheEligibleEntriesCountForTest(), 2u);
+
+  // 2. Close entry2, keep entry1 open.
+  entry2->Close();
+  backend->RunUntilAllTasksCompleteForTest();
+
+  base::RunLoop process_run_loop;
+  backend->ProcessSharedCacheEligibleEntriesForTest(
+      base::ScopedClosureRunner(process_run_loop.QuitClosure()),
+      /*on_entry_copied_callback=*/base::NullCallback());
+
+  process_run_loop.Run();
+  backend->RunUntilAllTasksCompleteForTest();
+
+  // entry1 was skipped (remains active/eligible), entry2 was processed.
+  EXPECT_EQ(backend->GetSharedCacheEligibleEntriesCountForTest(), 1u);
+  VerifySharedCacheResourceIdExists(backend.get(), kKey2);
+
+  // 3. Close entry1 and process again.
+  entry1->Close();
+  backend->RunUntilAllTasksCompleteForTest();
+
+  base::RunLoop process_run_loop2;
+  backend->ProcessSharedCacheEligibleEntriesForTest(
+      base::ScopedClosureRunner(process_run_loop2.QuitClosure()),
+      /*on_entry_copied_callback=*/base::NullCallback());
+
+  process_run_loop2.Run();
+  backend->RunUntilAllTasksCompleteForTest();
+
+  // entry1 should now be processed.
+  EXPECT_EQ(backend->GetSharedCacheEligibleEntriesCountForTest(), 0u);
+  VerifySharedCacheResourceIdExists(backend.get(), kKey1);
+}
+
+TEST_F(SqlBackendImplSharedCacheTest,
+       OnEntryEligibleForSharedCacheUpdateWithNewerResponseTime) {
+  auto backend = CreateBackendAndInit();
+  const std::string kKey = "0/0/https://example.test";
+  const GURL kUrl("https://example.test");
+  const net::SchemefulSite kSite(GURL("https://example.test"));
+  const net::NetworkIsolationKey kNik(kSite, kSite);
+
+  base::Time now = base::Time::Now();
+
+  // Register an entry initially.
+  {
+    auto response_info = std::make_unique<net::HttpResponseInfo>();
+    response_info->response_time = now;
+    response_info->headers =
+        base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 200 OK\n\n");
+    backend->OnEntryEligibleForSharedCache(kKey, kUrl, std::move(response_info),
+                                           kNik);
+  }
+  EXPECT_EQ(backend->GetSharedCacheEligibleEntriesCountForTest(), 1u);
+  {
+    const auto& map = backend->GetSharedCacheEligibleEntriesForTest();
+    auto it = map.find(CacheEntryKey(kKey));
+    ASSERT_NE(it, map.end());
+    EXPECT_EQ(it->second.response_info->response_time, now);
+  }
+
+  // Register the same key with an older response_time. It should be ignored.
+  {
+    auto response_info = std::make_unique<net::HttpResponseInfo>();
+    response_info->response_time = now - base::Seconds(10);
+    response_info->headers =
+        base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 200 OK\n\n");
+    backend->OnEntryEligibleForSharedCache(kKey, kUrl, std::move(response_info),
+                                           kNik);
+  }
+  EXPECT_EQ(backend->GetSharedCacheEligibleEntriesCountForTest(), 1u);
+  {
+    const auto& map = backend->GetSharedCacheEligibleEntriesForTest();
+    auto it = map.find(CacheEntryKey(kKey));
+    ASSERT_NE(it, map.end());
+    EXPECT_EQ(it->second.response_info->response_time, now);
+  }
+
+  // Register the same key with a newer response_time. It should execute the if
+  // branch and update the entry.
+  base::Time newer = now + base::Seconds(10);
+  {
+    auto response_info = std::make_unique<net::HttpResponseInfo>();
+    response_info->response_time = newer;
+    response_info->headers =
+        base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 200 OK\n\n");
+    backend->OnEntryEligibleForSharedCache(kKey, kUrl, std::move(response_info),
+                                           kNik);
+  }
+  EXPECT_EQ(backend->GetSharedCacheEligibleEntriesCountForTest(), 1u);
+  {
+    const auto& map = backend->GetSharedCacheEligibleEntriesForTest();
+    auto it = map.find(CacheEntryKey(kKey));
+    ASSERT_NE(it, map.end());
+    EXPECT_EQ(it->second.response_info->response_time, newer);
+  }
+}
+
+TEST_F(SqlBackendImplSharedCacheTest,
+       OnProcessSharedCacheEligibleEntriesCompleteReinsertsUnprocessedEntries) {
+  auto backend = CreateBackendAndInit();
+
+  const std::string kKey1 = "0/0/https://example1.test";
+  const std::string kKey2 = "0/0/https://example2.test";
+  const std::string kKey3 = "0/0/https://example3.test";
+
+  const net::SchemefulSite kSite1(GURL("https://site1.test"));
+  const net::NetworkIsolationKey kNik1(kSite1, kSite1);
+  const net::SchemefulSite kSite2(GURL("https://site2.test"));
+  const net::NetworkIsolationKey kNik2(kSite2, kSite2);
+
+  // kKey1 and kKey2 share kNik1; kKey3 uses kNik2.
+  CreateAndRegisterSharedCacheEntry(backend.get(), kKey1, "Data 1", kNik1);
+  CreateAndRegisterSharedCacheEntry(backend.get(), kKey2, "Data 2", kNik1);
+  CreateAndRegisterSharedCacheEntry(backend.get(), kKey3, "Data 3", kNik2);
+  backend->RunUntilAllTasksCompleteForTest();
+
+  EXPECT_EQ(backend->GetSharedCacheEligibleEntriesCountForTest(), 3u);
+
+  std::unique_ptr<OperationHandle> in_flight_handle;
+
+  base::RunLoop process_run_loop;
+  // When kKey1 finishes copying, post a normal operation so that CopyEntries
+  // aborts remaining entries in the same NIK group (kKey2) and subsequent NIK
+  // groups (kKey3).
+  backend->ProcessSharedCacheEligibleEntriesForTest(
+      base::ScopedClosureRunner(process_run_loop.QuitClosure()),
+      base::BindRepeating(
+          [](SqlBackendImpl* backend,
+             std::unique_ptr<OperationHandle>* handle_out,
+             const CacheEntryKey& key) {
+            if (!*handle_out) {
+              backend->GetExclusiveOperationCoordinatorForTest()
+                  ->PostOrRunNormalOperation(
+                      CacheEntryKey("fake_key_for_abort"),
+                      base::BindOnce(
+                          [](std::unique_ptr<OperationHandle>* out,
+                             std::unique_ptr<OperationHandle> handle) {
+                            *out = std::move(handle);
+                          },
+                          handle_out),
+                      /*low_priority=*/false);
+            }
+          },
+          backend.get(), &in_flight_handle));
+
+  process_run_loop.Run();
+
+  // kKey1 was processed; kKey2 (same NIK) and kKey3 (different NIK) were
+  // aborted and re-inserted.
+  EXPECT_EQ(backend->GetSharedCacheEligibleEntriesCountForTest(), 2u);
+
+  // Release normal operation so backend becomes idle again.
+  in_flight_handle.reset();
+
+  base::RunLoop process_run_loop2;
+  backend->ProcessAllSharedCacheEligibleEntriesForTest(
+      base::ScopedClosureRunner(process_run_loop2.QuitClosure()),
+      /*on_entry_copied_callback=*/base::NullCallback());
+  process_run_loop2.Run();
+  backend->RunUntilAllTasksCompleteForTest();
+
+  // All entries should now be in shared cache.
+  EXPECT_EQ(backend->GetSharedCacheEligibleEntriesCountForTest(), 0u);
+  VerifySharedCacheResourceIdExists(backend.get(), kKey1);
+  VerifySharedCacheResourceIdExists(backend.get(), kKey2);
+  VerifySharedCacheResourceIdExists(backend.get(), kKey3);
+}
+
+TEST_F(SqlBackendImplSharedCacheTest,
+       OnProcessSharedCacheEligibleEntriesCompleteConflictResponseTime) {
+  auto backend = CreateBackendAndInit();
+
+  const std::string kKey1 = "0/0/https://example1.test";
+  const std::string kKey2 = "0/0/https://example2.test";
+  const net::SchemefulSite kSite1(GURL("https://site1.test"));
+  const net::NetworkIsolationKey kNik1(kSite1, kSite1);
+  const net::SchemefulSite kSite2(GURL("https://site2.test"));
+  const net::NetworkIsolationKey kNik2(kSite2, kSite2);
+
+  base::Time now = base::Time::Now();
+  base::Time t1 = now;
+
+  CreateAndRegisterSharedCacheEntry(backend.get(), kKey1, "Data 1", kNik1, t1);
+  CreateAndRegisterSharedCacheEntry(backend.get(), kKey2, "Data 2", kNik2, t1);
+  backend->RunUntilAllTasksCompleteForTest();
+
+  std::unique_ptr<OperationHandle> in_flight_handle;
+  base::Time t0 = now - base::Seconds(10);
+
+  base::RunLoop process_run_loop;
+  backend->ProcessSharedCacheEligibleEntriesForTest(
+      base::ScopedClosureRunner(process_run_loop.QuitClosure()),
+      base::BindRepeating(
+          [](SqlBackendImpl* backend,
+             std::unique_ptr<OperationHandle>* handle_out,
+             const std::string& key2, const GURL& url,
+             const net::NetworkIsolationKey& nik, base::Time t0,
+             const CacheEntryKey& key) {
+            if (!*handle_out) {
+              backend->GetExclusiveOperationCoordinatorForTest()
+                  ->PostOrRunNormalOperation(
+                      CacheEntryKey("fake_key_for_abort"),
+                      base::BindOnce(
+                          [](std::unique_ptr<OperationHandle>* out,
+                             std::unique_ptr<OperationHandle> handle) {
+                            *out = std::move(handle);
+                          },
+                          handle_out),
+                      /*low_priority=*/false);
+              auto info = std::make_unique<net::HttpResponseInfo>();
+              info->response_time = t0;
+              info->headers = base::MakeRefCounted<net::HttpResponseHeaders>(
+                  "HTTP/1.1 200 OK\n\n");
+              backend->OnEntryEligibleForSharedCache(key2, url, std::move(info),
+                                                     nik);
+            }
+          },
+          backend.get(), &in_flight_handle, kKey2,
+          GURL(net::HttpCache::GetResourceURLFromHttpCacheKey(kKey2)), kNik2,
+          t0));
+
+  process_run_loop.Run();
+  in_flight_handle.reset();
+  backend->RunUntilAllTasksCompleteForTest();
+
+  // Unprocessed entry t1 for kKey2 is newer than t0, so t1 overwrites t0.
+  const auto& map1 = backend->GetSharedCacheEligibleEntriesForTest();
+  auto it1 = map1.find(CacheEntryKey(kKey2));
+  ASSERT_TRUE(it1 != map1.end());
+  EXPECT_EQ(it1->second.response_info->response_time, t1);
+
+  // 2. Test t2 > t1 case for kKey2.
+  base::Time t2 = now + base::Seconds(10);
+
+  // Register kKey1 again.
+  GURL url1{net::HttpCache::GetResourceURLFromHttpCacheKey(kKey1)};
+  auto info1 = std::make_unique<net::HttpResponseInfo>();
+  info1->response_time = t1;
+  info1->headers =
+      base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 200 OK\n\n");
+  backend->OnEntryEligibleForSharedCache(kKey1, url1, std::move(info1), kNik1);
+
+  base::RunLoop process_run_loop2;
+  backend->ProcessSharedCacheEligibleEntriesForTest(
+      base::ScopedClosureRunner(process_run_loop2.QuitClosure()),
+      base::BindRepeating(
+          [](SqlBackendImpl* backend,
+             std::unique_ptr<OperationHandle>* handle_out,
+             const std::string& key2, const GURL& url,
+             const net::NetworkIsolationKey& nik, base::Time t2,
+             const CacheEntryKey& key) {
+            if (!*handle_out) {
+              backend->GetExclusiveOperationCoordinatorForTest()
+                  ->PostOrRunNormalOperation(
+                      CacheEntryKey("fake_key_for_abort"),
+                      base::BindOnce(
+                          [](std::unique_ptr<OperationHandle>* out,
+                             std::unique_ptr<OperationHandle> handle) {
+                            *out = std::move(handle);
+                          },
+                          handle_out),
+                      /*low_priority=*/false);
+              auto info = std::make_unique<net::HttpResponseInfo>();
+              info->response_time = t2;
+              info->headers = base::MakeRefCounted<net::HttpResponseHeaders>(
+                  "HTTP/1.1 200 OK\n\n");
+              backend->OnEntryEligibleForSharedCache(key2, url, std::move(info),
+                                                     nik);
+            }
+          },
+          backend.get(), &in_flight_handle, kKey2,
+          GURL(net::HttpCache::GetResourceURLFromHttpCacheKey(kKey2)), kNik2,
+          t2));
+
+  process_run_loop2.Run();
+  in_flight_handle.reset();
+  backend->RunUntilAllTasksCompleteForTest();
+
+  const auto& map2 = backend->GetSharedCacheEligibleEntriesForTest();
+  auto it2 = map2.find(CacheEntryKey(kKey2));
+  ASSERT_TRUE(it2 != map2.end());
+  EXPECT_EQ(it2->second.response_info->response_time, t2);
+}
+
+TEST_F(SqlBackendImplSharedCacheTest,
+       ProcessAllSharedCacheEligibleEntriesForTest) {
+  auto backend = CreateBackendAndInit();
+
+  const std::string kKey1 = "0/0/https://example1.test";
+  const std::string kKey2 = "0/0/https://example2.test";
+  const net::SchemefulSite kSite1(GURL("https://site1.test"));
+  const net::NetworkIsolationKey kNik1(kSite1, kSite1);
+  const net::SchemefulSite kSite2(GURL("https://site2.test"));
+  const net::NetworkIsolationKey kNik2(kSite2, kSite2);
+
+  CreateAndRegisterSharedCacheEntry(backend.get(), kKey1, "Data 1", kNik1);
+  CreateAndRegisterSharedCacheEntry(backend.get(), kKey2, "Data 2", kNik2);
+  backend->RunUntilAllTasksCompleteForTest();
+
+  auto verify_count_task = base::BindOnce(
+      [](SqlBackendImpl* backend, std::unique_ptr<OperationHandle> handle) {
+        // While `handle` is held, pass 1 has finished and re-inserted the
+        // aborted entry (kKey2) into the queue.
+        EXPECT_EQ(backend->GetSharedCacheEligibleEntriesCountForTest(), 1u);
+      },
+      backend.get());
+
+  auto on_normal_op = base::BindOnce(
+      [](base::OnceCallback<void(std::unique_ptr<OperationHandle>)> task,
+         std::unique_ptr<OperationHandle> handle) {
+        base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE, base::BindOnce(std::move(task), std::move(handle)));
+      },
+      std::move(verify_count_task));
+
+  using NormalOpCallback =
+      base::OnceCallback<void(std::unique_ptr<OperationHandle>)>;
+  auto on_normal_op_holder =
+      std::make_unique<NormalOpCallback>(std::move(on_normal_op));
+
+  auto on_entry_copied = base::BindRepeating(
+      [](SqlBackendImpl* backend, NormalOpCallback* on_normal_op_holder,
+         const CacheEntryKey& key) {
+        if (*on_normal_op_holder) {
+          backend->GetExclusiveOperationCoordinatorForTest()
+              ->PostOrRunNormalOperation(CacheEntryKey("fake_key_for_abort"),
+                                         std::move(*on_normal_op_holder),
+                                         /*low_priority=*/false);
+        }
+      },
+      backend.get(), base::Owned(on_normal_op_holder.release()));
+
+  base::RunLoop process_run_loop;
+  backend->ProcessAllSharedCacheEligibleEntriesForTest(
+      base::ScopedClosureRunner(process_run_loop.QuitClosure()),
+      std::move(on_entry_copied));
+
+  process_run_loop.Run();
+
+  EXPECT_EQ(backend->GetSharedCacheEligibleEntriesCountForTest(), 0u);
+  VerifySharedCacheResourceIdExists(backend.get(), kKey1);
+  VerifySharedCacheResourceIdExists(backend.get(), kKey2);
 }
 
 }  // namespace

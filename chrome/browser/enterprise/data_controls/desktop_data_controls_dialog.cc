@@ -4,7 +4,6 @@
 
 #include "chrome/browser/enterprise/data_controls/desktop_data_controls_dialog.h"
 
-#include "chrome/grit/generated_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/guest_view/browser/guest_view_base.h"
 #include "components/strings/grit/components_strings.h"
@@ -15,11 +14,13 @@
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout_view.h"
+#include "ui/views/layout/layout_provider.h"
 
 namespace data_controls {
 
@@ -33,8 +34,9 @@ DesktopDataControlsDialog::TestObserver* observer_for_testing_ = nullptr;
 std::unique_ptr<views::View> CreateEnterpriseIcon() {
   auto enterprise_icon = std::make_unique<views::ImageView>();
   enterprise_icon->SetImage(ui::ImageModel::FromVectorIcon(
-      vector_icons::kBusinessIcon, ui::kColorSysOnSurfaceSubtle,
-      kBusinessIconSize));
+      features::IsRoundedIconsEnabled() ? vector_icons::kDomainIcon
+                                        : vector_icons::kBusinessOldIcon,
+      ui::kColorSysOnSurfaceSubtle, kBusinessIconSize));
   return enterprise_icon;
 }
 
@@ -52,6 +54,7 @@ class DataControlsDialogDelegate : public views::DialogDelegate {
     switch (type_) {
       case DataControlsDialog::Type::kClipboardPasteBlock:
       case DataControlsDialog::Type::kClipboardCopyBlock:
+      case DataControlsDialog::Type::kClipboardDragBlock:
         SetButtons(static_cast<int>(ui::mojom::DialogButton::kOk));
         SetButtonLabel(ui::mojom::DialogButton::kOk,
                        l10n_util::GetStringUTF16(IDS_OK));
@@ -86,8 +89,19 @@ class DataControlsDialogDelegate : public views::DialogDelegate {
                        l10n_util::GetStringUTF16(
                            IDS_DATA_CONTROLS_COPY_WARN_CONTINUE_BUTTON));
         break;
-      case DataControlsDialog::Type::kClipboardShareWarn:
       case DataControlsDialog::Type::kClipboardActionWarn:
+        SetButtons(static_cast<int>(ui::mojom::DialogButton::kCancel) |
+                   static_cast<int>(ui::mojom::DialogButton::kOk));
+
+        SetButtonLabel(ui::mojom::DialogButton::kOk,
+                       l10n_util::GetStringUTF16(IDS_CANCEL));
+
+        SetButtonStyle(ui::mojom::DialogButton::kCancel,
+                       ui::ButtonStyle::kTonal);
+        SetButtonLabel(ui::mojom::DialogButton::kCancel,
+                       l10n_util::GetStringUTF16(IDS_CONTINUE));
+        break;
+      case DataControlsDialog::Type::kClipboardShareWarn:
       case DataControlsDialog::Type::kClipboardShareBlock:
       case DataControlsDialog::Type::kClipboardActionBlock:
         // These flows are exclusive to mobile.
@@ -116,6 +130,10 @@ class DataControlsDialogDelegate : public views::DialogDelegate {
         id = IDS_DATA_CONTROLS_CLIPBOARD_COPY_BLOCK_TITLE;
         break;
 
+      case DataControlsDialog::Type::kClipboardDragBlock:
+        id = IDS_DATA_CONTROLS_CLIPBOARD_DRAG_BLOCK_TITLE;
+        break;
+
       case DataControlsDialog::Type::kClipboardPasteWarn:
         id = IDS_DATA_CONTROLS_CLIPBOARD_PASTE_WARN_TITLE;
         break;
@@ -123,9 +141,10 @@ class DataControlsDialogDelegate : public views::DialogDelegate {
       case DataControlsDialog::Type::kClipboardCopyWarn:
         id = IDS_DATA_CONTROLS_CLIPBOARD_COPY_WARN_TITLE;
         break;
-
-      case DataControlsDialog::Type::kClipboardShareWarn:
       case DataControlsDialog::Type::kClipboardActionWarn:
+        id = IDS_DATA_CONTROLS_CLIPBOARD_ACTION_WARN_TITLE;
+        break;
+      case DataControlsDialog::Type::kClipboardShareWarn:
       case DataControlsDialog::Type::kClipboardShareBlock:
       case DataControlsDialog::Type::kClipboardActionBlock:
         // These flows are exclusive to mobile.
@@ -143,6 +162,7 @@ class DataControlsDialogDelegate : public views::DialogDelegate {
       case DataControlsDialog::Type::kClipboardCopyBlock:
       case DataControlsDialog::Type::kClipboardShareBlock:
       case DataControlsDialog::Type::kClipboardActionBlock:
+      case DataControlsDialog::Type::kClipboardDragBlock:
         id = IDS_DATA_CONTROLS_BLOCKED_LABEL;
         break;
       case DataControlsDialog::Type::kClipboardPasteWarn:
@@ -243,20 +263,32 @@ void DesktopDataControlsDialog::Show(base::OnceClosure on_destructed) {
     return;
   }
 
-  widget_ = constrained_window::ShowWebModalDialogViewsOwned(
+  // Showing a tab-modal dialog can run a nested loop on some platforms which
+  // may dispatch `WebContentsObserver` notifications for `web_contents()`, so
+  // hold the returned widget in a local until `this` is known to still be
+  // valid.
+  auto weak_this = weak_ptr_factory_.GetWeakPtr();
+  auto widget = constrained_window::ShowWebModalDialogViewsOwned(
       dialog_delegate_.get(), top_web_contents,
       views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  if (!weak_this) {
+    return;
+  }
+  widget_ = std::move(widget);
+  if (!web_contents()) {
+    CloseDialog(views::Widget::ClosedReason::kAcceptButtonClicked);
+    return;
+  }
   widget_->MakeCloseSynchronous(base::BindOnce(
       &DesktopDataControlsDialog::CloseDialog, base::Unretained(this)));
 }
 
 void DesktopDataControlsDialog::CloseDialog(
     views::Widget::ClosedReason reason) {
-  if (reason == views::Widget::ClosedReason::kAcceptButtonClicked) {
-    OnDialogButtonClicked(/*bypassed=*/false);
-  }
   if (reason == views::Widget::ClosedReason::kCancelButtonClicked) {
     OnDialogButtonClicked(/*bypassed=*/true);
+  } else {
+    OnDialogButtonClicked(/*bypassed=*/false);
   }
 
   static_cast<DataControlsDialogDelegate*>(dialog_delegate_.get())->Shutdown();
@@ -283,6 +315,12 @@ void DesktopDataControlsDialog::WebContentsDestroyed() {
   // was neither bypassed or accepted so it should close without calling
   // any callback.
   ClearCallbacks();
+  if (!widget_) {
+    // `Show()` is still creating the widget; it will close the dialog once the
+    // widget is owned by `this`.
+    Observe(nullptr);
+    return;
+  }
   CloseDialog(views::Widget::ClosedReason::kAcceptButtonClicked);
 }
 
@@ -293,6 +331,12 @@ void DesktopDataControlsDialog::PrimaryPageChanged(content::Page& page) {
   // that trigger on the new page, so callbacks must be cleared before closing
   // the dialog.
   ClearCallbacks();
+  if (!widget_) {
+    // `Show()` is still creating the widget; it will close the dialog once the
+    // widget is owned by `this`.
+    Observe(nullptr);
+    return;
+  }
   CloseDialog(views::Widget::ClosedReason::kAcceptButtonClicked);
 }
 

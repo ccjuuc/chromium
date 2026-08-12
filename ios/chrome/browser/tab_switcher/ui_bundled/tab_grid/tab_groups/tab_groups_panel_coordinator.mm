@@ -26,8 +26,8 @@
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_list_factory.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/tab_grid_commands.h"
 #import "ios/chrome/browser/shared/public/commands/tab_groups_commands.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/disabled_grid_view_controller.h"
@@ -69,6 +69,8 @@ constexpr CGFloat kFacePileAvatarSize = 24;
   // The coordinator to handle the confirmation dialog for the action taken for
   // a tab group.
   TabGroupConfirmationCoordinator* _tabGroupConfirmationCoordinator;
+  // Cache of FacePileCoordinators, keyed by group ID.
+  NSMutableDictionary<NSString*, FacePileCoordinator*>* _facePileCoordinators;
 }
 
 - (instancetype)
@@ -93,6 +95,8 @@ constexpr CGFloat kFacePileAvatarSize = 24;
 
 - (void)start {
   [super start];
+
+  _facePileCoordinators = [[NSMutableDictionary alloc] init];
 
   ProfileIOS* profile = self.profile;
   _gridContainerViewController = [[GridContainerViewController alloc] init];
@@ -135,8 +139,8 @@ constexpr CGFloat kFacePileAvatarSize = 24;
   _mediator.toolbarsMutator = _toolbarsMutator;
   _mediator.tabGridHandler =
       HandlerForProtocol(self.browser->GetCommandDispatcher(), TabGridCommands);
-  _mediator.applicationHandler = HandlerForProtocol(
-      self.browser->GetCommandDispatcher(), ApplicationCommands);
+  _mediator.sceneHandler =
+      HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
   _mediator.tabGroupsCommands = HandlerForProtocol(
       self.browser->GetCommandDispatcher(), TabGroupsCommands);
   _mediator.consumer = _gridViewController;
@@ -153,6 +157,12 @@ constexpr CGFloat kFacePileAvatarSize = 24;
     [_tabGroupConfirmationCoordinator stop];
     _tabGroupConfirmationCoordinator = nil;
   }
+
+  for (FacePileCoordinator* coordinator in _facePileCoordinators.allValues) {
+    [coordinator stop];
+  }
+  _facePileCoordinators = nil;
+
   [_mediator disconnect];
   _mediator.toolbarsMutator = nil;
   _mediator = nil;
@@ -265,17 +275,20 @@ constexpr CGFloat kFacePileAvatarSize = 24;
 
 - (id<FacePileProviding>)facePileProviderForGroupID:
     (const std::string&)groupID {
-  // Configure the face pile.
-  FacePileConfiguration* config = [[FacePileConfiguration alloc] init];
-  config.showsEmptyState = NO;
-  config.avatarSize = kFacePileAvatarSize;
-  config.groupID = data_sharing::GroupId(groupID);
+  NSString* key = base::SysUTF8ToNSString(groupID);
+  FacePileCoordinator* facePileCoordinator = _facePileCoordinators[key];
+  if (!facePileCoordinator) {
+    FacePileConfiguration* config = [[FacePileConfiguration alloc] init];
+    config.showsEmptyState = NO;
+    config.avatarSize = kFacePileAvatarSize;
+    config.groupID = data_sharing::GroupId(groupID);
 
-  FacePileCoordinator* facePileCoordinator =
-      [[FacePileCoordinator alloc] initWithFacePileConfiguration:config
-                                                         browser:self.browser];
-  [facePileCoordinator start];
-
+    facePileCoordinator = [[FacePileCoordinator alloc]
+        initWithFacePileConfiguration:config
+                              browser:self.browser];
+    [facePileCoordinator start];
+    _facePileCoordinators[key] = facePileCoordinator;
+  }
   return facePileCoordinator;
 }
 

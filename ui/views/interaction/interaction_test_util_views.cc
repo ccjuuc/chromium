@@ -7,8 +7,11 @@
 #include <string>
 #include <utility>
 
+#include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/i18n/rtl.h"
+#include "base/logging.h"
+#include "base/notreached.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
 #include "base/task/single_thread_task_runner.h"
@@ -778,7 +781,7 @@ ui::test::ActionResult InteractionTestUtilSimulatorViews::Confirm(
 // static
 bool InteractionTestUtilSimulatorViews::IsWayland() {
 #if BUILDFLAG(IS_OZONE)
-  return ui::OzonePlatform::GetPlatformNameForTest() == "wayland";
+  return ui::OzonePlatform::RunningOnWaylandForTest();
 #else
   return false;
 #endif

@@ -37,19 +37,19 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabbed_mode.TabbedRootUiCoordinator;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
+import org.chromium.chrome.test.transit.page.RecentTabsPageStation;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.NewTabPageTestUtils;
-import org.chromium.chrome.test.util.RecentTabsPageTestUtils;
-import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.ui.base.DeviceFormFactor;
 
 /**
@@ -58,6 +58,10 @@ import org.chromium.ui.base.DeviceFormFactor;
  */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@DoNotBatch(
+        reason =
+                "Tests verify initial un-inflated ViewStub state; ViewStub inflation in"
+                        + " ChromeTabbedActivity is irreversible across batched test methods.")
 // TODO(crbug.com/40112282): Enable for tablets once we support them.
 @Restriction({DeviceFormFactor.PHONE})
 public class StatusIndicatorTest {
@@ -302,9 +306,8 @@ public class StatusIndicatorTest {
     @Test
     @MediumTest
     public void testShowAndHideOnRecentTabsPage() {
-        mActivityTestRule.loadUrl(UrlConstants.RECENT_TABS_URL);
-        final Tab tab = mActivityTestRule.getActivityTab();
-        RecentTabsPageTestUtils.waitForRecentTabsPageLoaded(tab);
+        mPage.loadPageProgrammatically(
+                RecentTabsPageStation.RECENT_TABS_URL, RecentTabsPageStation.newBuilder());
 
         // R.id.status_indicator won't be in the View tree until the indicator is shown for the
         // first time and the corresponding ViewStub is inflated.

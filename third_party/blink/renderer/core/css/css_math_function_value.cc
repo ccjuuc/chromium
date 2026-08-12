@@ -92,7 +92,7 @@ int CSSMathFunctionValue::ComputeInteger(
   // percentages.
   DCHECK_EQ(kCalcNumber, expression_->Category());
   DCHECK(!expression_->HasPercentage());
-  return ClampToWithNaNTo0<int>(
+  return ClampTo<int>(
       ClampToPermittedRange(expression_->ComputeNumber(length_resolver)));
 }
 
@@ -110,7 +110,7 @@ double CSSMathFunctionValue::ComputeNumber(
   if (expression_->Category() == kCalcPercent) {
     value /= 100.0;
   }
-  return std::isnan(value) ? 0.0 : CSSValueClampingUtils::ClampDouble(value);
+  return CSSValueClampingUtils::ClampDouble(value);
 }
 
 double CSSMathFunctionValue::ComputePercentage(
@@ -131,8 +131,7 @@ double CSSMathFunctionValue::ComputeValueInCanonicalUnit(
   std::optional<double> optional_value =
       expression_->ComputeValueInCanonicalUnit(length_resolver);
   DCHECK(optional_value.has_value());
-  double value = ClampToPermittedRange(optional_value.value());
-  return std::isnan(value) ? 0.0 : value;
+  return ClampToPermittedRange(optional_value.value());
 }
 
 std::optional<double> CSSMathFunctionValue::GetValueIfKnown() const {
@@ -163,8 +162,8 @@ static String BuildCSSText(const String& expression) {
   // “If a result of this serialization starts with a "(" (open parenthesis) and
   // ends with a ")" (close parenthesis), remove those characters from the
   // result.”
-  if (expression.StartsWith('(')) {
-    DCHECK(expression.EndsWith(')'));
+  if (expression.starts_with('(')) {
+    DCHECK(expression.ends_with(')'));
     result.Append(expression);
   } else {
     result.Append('(');
@@ -189,6 +188,7 @@ bool CSSMathFunctionValue::Equals(const CSSMathFunctionValue& other) const {
 }
 
 double CSSMathFunctionValue::ClampToPermittedRange(double value) const {
+  value = CSSValueClampingUtils::CensorNaNToZero(value);
   switch (PermittedValueRange()) {
     case CSSPrimitiveValue::ValueRange::kInteger:
       return RoundHalfTowardsPositiveInfinity(value);
@@ -247,19 +247,6 @@ const CSSMathFunctionValue* CSSMathFunctionValue::TransformAnchors(
   if (transformed != expression_) {
     return MakeGarbageCollected<CSSMathFunctionValue>(
         transformed, value_range_in_target_context_);
-  }
-  return this;
-}
-
-const CSSValue*
-CSSMathFunctionValue::CopyRandomValueWithPropertyNameAndValueIndexIfNeeded(
-    const CSSPropertyName& property_name,
-    wtf_size_t property_value_index) const {
-  if (expression_ && expression_->NeedsPropertyNameAndValueIndexForRandom()) {
-    return MakeGarbageCollected<CSSMathFunctionValue>(
-        expression_->CopyRandomWithPropertyNameAndValueIndexIfNeeded(
-            property_name, property_value_index),
-        value_range_in_target_context_);
   }
   return this;
 }

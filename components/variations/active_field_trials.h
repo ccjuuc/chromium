@@ -9,16 +9,16 @@
 
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "base/command_line.h"
 #include "base/component_export.h"
 #include "base/metrics/field_trial.h"
 #include "base/process/launch.h"
 
-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
-#include "base/files/platform_file.h"
-#include "base/posix/global_descriptors.h"
-#endif
+namespace base::shared_memory {
+struct SharedMemorySwitch;
+}  // namespace base::shared_memory
 
 namespace variations {
 
@@ -67,14 +67,19 @@ void GetFieldTrialActiveGroupIdsForActiveGroups(
 // with unique ActiveGroupIds for each Field Trial that has a chosen group.
 // Field Trials for which a group has not been chosen yet are NOT returned in
 // this list. Field trial names are suffixed with |suffix| before hashing is
-// executed.
+// executed. If |include_runtime_overrides| is true, the returned groups will
+// include the runtime FieldTrial overrides (see RuntimeFieldTrialOverrides
+// class), and the trials that are overridden by them will be excluded from the
+// output. Note that if setting this to true, this must be called on the main
+// sequence.
 //
 // This does not return low anonymity field trials; call sites that require
 // them can use the version of |GetFieldTrialActiveGroupIds()| below that takes
 // the active groups as an input.
 COMPONENT_EXPORT(VARIATIONS)
 void GetFieldTrialActiveGroupIds(std::string_view suffix,
-                                 std::vector<ActiveGroupId>* name_group_ids);
+                                 std::vector<ActiveGroupId>* name_group_ids,
+                                 bool include_runtime_overrides = false);
 
 // Fills the supplied vector |name_group_ids| (which must be empty when called)
 // with unique ActiveGroupIds for the provided |active_groups|.
@@ -136,7 +141,7 @@ bool IsInSyntheticTrialGroup(std::string_view trial_name,
 // TODO(crbug.com/41187035): Move this to field_trials_provider once it moves
 // into components/variations
 COMPONENT_EXPORT(VARIATIONS)
-void SetSeedVersion(const std::string& seed_version);
+void SetSeedVersion(std::string_view seed_version);
 
 // Gets the version of the seed that the current set of FieldTrials was
 // generated from.
@@ -153,10 +158,7 @@ const std::string& GetSeedVersion();
 // info.
 COMPONENT_EXPORT(VARIATIONS)
 void PopulateLaunchOptionsWithVariationsInfo(
-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
-    base::GlobalDescriptors::Key descriptor_key,
-    base::ScopedFD& descriptor_to_share,
-#endif
+    base::shared_memory::SharedMemorySwitch* shared_memory_switch,
     base::CommandLine* command_line,
     base::LaunchOptions* launch_options);
 #endif  // !BUILDFLAG(USE_BLINK)

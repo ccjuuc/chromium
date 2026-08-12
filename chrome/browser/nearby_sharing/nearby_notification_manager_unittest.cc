@@ -11,6 +11,7 @@
 #include "ash/public/cpp/holding_space/holding_space_controller.h"
 #include "ash/public/cpp/holding_space/holding_space_item.h"
 #include "ash/public/cpp/holding_space/holding_space_model.h"
+#include "ash/resources/vector_icons/vector_icons.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/raw_ptr.h"
@@ -131,15 +132,16 @@ MockNearbySharingService* CreateAndUseMockNearbySharingService(
 }
 
 std::string GetClipboardText() {
-  std::u16string text;
-  ui::Clipboard::GetForCurrentThread()->ReadText(
-      ui::ClipboardBuffer::kCopyPaste, /*data_dst=*/nullptr, &text);
+  std::u16string text = ui::clipboard_test_util::ReadText(
+      ui::Clipboard::GetForCurrentThread(), ui::ClipboardBuffer::kCopyPaste,
+      /*data_dst=*/nullptr);
   return base::UTF16ToUTF8(text);
 }
 
 SkBitmap GetClipboardImage() {
-  std::vector<uint8_t> png_data =
-      ui::clipboard_test_util::ReadPng(ui::Clipboard::GetForCurrentThread());
+  std::vector<uint8_t> png_data = ui::clipboard_test_util::ReadPng(
+      ui::Clipboard::GetForCurrentThread(), ui::ClipboardBuffer::kCopyPaste,
+      /*data_dst=*/nullptr);
   return gfx::PNGCodec::Decode(png_data);
 }
 
@@ -268,7 +270,7 @@ class NearbyNotificationManagerTest : public testing::Test {
   std::unique_ptr<base::ScopedDisallowBlocking> disallow_blocking_;
   std::unique_ptr<NearbyNotificationManager> manager_;
   data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
-  raw_ptr<MockSettingsOpener, DanglingUntriaged> settings_opener_;
+  raw_ptr<MockSettingsOpener> settings_opener_;
 };
 
 struct AttachmentsTestParamInternal {
@@ -415,6 +417,8 @@ std::u16string FormatNotificationTitle(
 }  // namespace
 
 TEST_F(NearbyNotificationManagerTest, RegistersAsBackgroundSurfaces) {
+  // Clear `settings_opener_` before resetting to avoid dangling pointer.
+  settings_opener_ = nullptr;
   manager_.reset();
   TransferUpdateCallback* receive_transfer_callback = nullptr;
   TransferUpdateCallback* send_transfer_callback = nullptr;
@@ -445,6 +449,8 @@ TEST_F(NearbyNotificationManagerTest, RegistersAsBackgroundSurfaces) {
 TEST_F(NearbyNotificationManagerTest, UnregistersSurfaces) {
   EXPECT_CALL(*nearby_service_, UnregisterReceiveSurface(manager()));
   EXPECT_CALL(*nearby_service_, UnregisterSendSurface(manager(), manager()));
+  // Clear `settings_opener_` before resetting to avoid dangling pointer.
+  settings_opener_ = nullptr;
   manager_.reset();
 }
 
@@ -470,7 +476,7 @@ TEST_F(NearbyNotificationManagerTest, ShowProgress_ShowsNotification) {
   EXPECT_TRUE(notification.never_timeout());
   EXPECT_TRUE(notification.pinned());
   EXPECT_FALSE(notification.renotify());
-  EXPECT_EQ(&kNearbyShareIcon, &notification.vector_small_image());
+  EXPECT_EQ(&ash::kNearbyShareIcon, &notification.vector_small_image());
   EXPECT_EQ(l10n_util::GetStringUTF16(IDS_NEARBY_NOTIFICATION_SOURCE),
             notification.display_source());
   const std::vector<message_center::ButtonInfo>& buttons =
@@ -507,7 +513,7 @@ TEST_F(NearbyNotificationManagerTest,
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   EXPECT_EQ(&kNearbyShareInternalIcon, &notification.vector_small_image());
 #else   // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  EXPECT_EQ(&kNearbyShareIcon, &notification.vector_small_image());
+  EXPECT_EQ(&ash::kNearbyShareIcon, &notification.vector_small_image());
 #endif  // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
   EXPECT_EQ(NearbyShareResourceGetter::GetInstance()->GetStringWithFeatureName(
                 IDS_NEARBY_NOTIFICATION_SOURCE_PH),
@@ -816,7 +822,7 @@ TEST_P(NearbyNotificationManagerConnectionRequestTest,
   EXPECT_EQ(GURL(), notification.origin_url());
   EXPECT_TRUE(notification.never_timeout());
   EXPECT_FALSE(notification.renotify());
-  EXPECT_EQ(&kNearbyShareIcon, &notification.vector_small_image());
+  EXPECT_EQ(&ash::kNearbyShareIcon, &notification.vector_small_image());
   EXPECT_EQ(l10n_util::GetStringUTF16(IDS_NEARBY_NOTIFICATION_SOURCE),
             notification.display_source());
 
@@ -897,7 +903,7 @@ TEST_P(NearbyNotificationManagerConnectionRequestTest,
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   EXPECT_EQ(&kNearbyShareInternalIcon, &notification.vector_small_image());
 #else   // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  EXPECT_EQ(&kNearbyShareIcon, &notification.vector_small_image());
+  EXPECT_EQ(&ash::kNearbyShareIcon, &notification.vector_small_image());
 #endif  // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
   EXPECT_EQ(NearbyShareResourceGetter::GetInstance()->GetStringWithFeatureName(
                 IDS_NEARBY_NOTIFICATION_SOURCE_PH),
@@ -957,7 +963,7 @@ TEST_F(NearbyNotificationManagerTest,
   EXPECT_EQ(GURL(), notification.origin_url());
   EXPECT_FALSE(notification.never_timeout());
   EXPECT_FALSE(notification.renotify());
-  EXPECT_EQ(&kNearbyShareIcon, &notification.vector_small_image());
+  EXPECT_EQ(&ash::kNearbyShareIcon, &notification.vector_small_image());
   EXPECT_EQ(l10n_util::GetStringUTF16(IDS_NEARBY_NOTIFICATION_SOURCE),
             notification.display_source());
   EXPECT_EQ(2u, notification.buttons().size());
@@ -1002,7 +1008,7 @@ TEST_F(NearbyNotificationManagerTest,
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   EXPECT_EQ(&kNearbyShareInternalIcon, &notification.vector_small_image());
 #else   // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  EXPECT_EQ(&kNearbyShareIcon, &notification.vector_small_image());
+  EXPECT_EQ(&ash::kNearbyShareIcon, &notification.vector_small_image());
 #endif  // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
   EXPECT_EQ(NearbyShareResourceGetter::GetInstance()->GetStringWithFeatureName(
                 IDS_NEARBY_NOTIFICATION_SOURCE_PH),
@@ -1050,7 +1056,7 @@ TEST_F(
   EXPECT_EQ(GURL(), notification.origin_url());
   EXPECT_FALSE(notification.never_timeout());
   EXPECT_FALSE(notification.renotify());
-  EXPECT_EQ(&kNearbyShareIcon, &notification.vector_small_image());
+  EXPECT_EQ(&ash::kNearbyShareIcon, &notification.vector_small_image());
   EXPECT_EQ(l10n_util::GetStringUTF16(IDS_NEARBY_NOTIFICATION_SOURCE),
             notification.display_source());
   EXPECT_EQ(2u, notification.buttons().size());
@@ -1098,7 +1104,7 @@ TEST_F(
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   EXPECT_EQ(&kNearbyShareInternalIcon, &notification.vector_small_image());
 #else   // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  EXPECT_EQ(&kNearbyShareIcon, &notification.vector_small_image());
+  EXPECT_EQ(&ash::kNearbyShareIcon, &notification.vector_small_image());
 #endif  // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
   EXPECT_EQ(NearbyShareResourceGetter::GetInstance()->GetStringWithFeatureName(
                 IDS_NEARBY_NOTIFICATION_SOURCE_PH),
@@ -1199,7 +1205,7 @@ TEST_F(NearbyNotificationManagerTest, ShowSuccess_ShowsNotification) {
   EXPECT_EQ(GURL(), notification.origin_url());
   EXPECT_FALSE(notification.never_timeout());
   EXPECT_FALSE(notification.renotify());
-  EXPECT_EQ(&kNearbyShareIcon, &notification.vector_small_image());
+  EXPECT_EQ(&ash::kNearbyShareIcon, &notification.vector_small_image());
   EXPECT_EQ(l10n_util::GetStringUTF16(IDS_NEARBY_NOTIFICATION_SOURCE),
             notification.display_source());
   EXPECT_EQ(0u, notification.buttons().size());
@@ -1228,7 +1234,7 @@ TEST_F(NearbyNotificationManagerTest,
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   EXPECT_EQ(&kNearbyShareInternalIcon, &notification.vector_small_image());
 #else   // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  EXPECT_EQ(&kNearbyShareIcon, &notification.vector_small_image());
+  EXPECT_EQ(&ash::kNearbyShareIcon, &notification.vector_small_image());
 #endif  // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
   EXPECT_EQ(NearbyShareResourceGetter::GetInstance()->GetStringWithFeatureName(
                 IDS_NEARBY_NOTIFICATION_SOURCE_PH),
@@ -1286,7 +1292,7 @@ TEST_F(NearbyNotificationManagerTest, ShowFailure_ShowsNotification) {
   EXPECT_EQ(GURL(), notification.origin_url());
   EXPECT_FALSE(notification.never_timeout());
   EXPECT_FALSE(notification.renotify());
-  EXPECT_EQ(&kNearbyShareIcon, &notification.vector_small_image());
+  EXPECT_EQ(&ash::kNearbyShareIcon, &notification.vector_small_image());
   EXPECT_EQ(l10n_util::GetStringUTF16(IDS_NEARBY_NOTIFICATION_SOURCE),
             notification.display_source());
   EXPECT_EQ(0u, notification.buttons().size());
@@ -1315,7 +1321,7 @@ TEST_F(NearbyNotificationManagerTest,
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   EXPECT_EQ(&kNearbyShareInternalIcon, &notification.vector_small_image());
 #else   // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  EXPECT_EQ(&kNearbyShareIcon, &notification.vector_small_image());
+  EXPECT_EQ(&ash::kNearbyShareIcon, &notification.vector_small_image());
 #endif  // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
   EXPECT_EQ(NearbyShareResourceGetter::GetInstance()->GetStringWithFeatureName(
                 IDS_NEARBY_NOTIFICATION_SOURCE_PH),
@@ -2154,7 +2160,7 @@ TEST_F(NearbyNotificationManagerTest, ShowVisibilityReminder_Contacts_Mode) {
   EXPECT_EQ(GURL(), notification.origin_url());
   EXPECT_FALSE(notification.never_timeout());
   EXPECT_FALSE(notification.renotify());
-  EXPECT_EQ(&kNearbyShareIcon, &notification.vector_small_image());
+  EXPECT_EQ(&ash::kNearbyShareIcon, &notification.vector_small_image());
   EXPECT_EQ(l10n_util::GetStringUTF16(IDS_NEARBY_NOTIFICATION_SOURCE),
             notification.display_source());
   EXPECT_EQ(2u, notification.buttons().size());
@@ -2203,7 +2209,7 @@ TEST_F(NearbyNotificationManagerTest,
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   EXPECT_EQ(&kNearbyShareInternalIcon, &notification.vector_small_image());
 #else   // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  EXPECT_EQ(&kNearbyShareIcon, &notification.vector_small_image());
+  EXPECT_EQ(&ash::kNearbyShareIcon, &notification.vector_small_image());
 #endif  // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
   EXPECT_EQ(NearbyShareResourceGetter::GetInstance()->GetStringWithFeatureName(
                 IDS_NEARBY_NOTIFICATION_SOURCE_PH),

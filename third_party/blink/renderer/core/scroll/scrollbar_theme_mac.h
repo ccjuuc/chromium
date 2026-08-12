@@ -29,6 +29,7 @@
 #include "third_party/blink/renderer/core/scroll/scrollbar_theme.h"
 
 namespace blink {
+struct PaintInfo;
 
 class CORE_EXPORT ScrollbarThemeMac : public ScrollbarTheme {
  public:
@@ -36,7 +37,7 @@ class CORE_EXPORT ScrollbarThemeMac : public ScrollbarTheme {
   ~ScrollbarThemeMac() override;
 
   void RegisterScrollbar(Scrollbar&) override;
-  bool IsScrollbarRegistered(Scrollbar&) const;
+  bool IsScrollbarRegistered(Scrollbar&) const override;
 
   // On Mac, the painting code itself animates the opacity so there's no need
   // to disable in order to make the scrollbars invisible. In fact,
@@ -54,7 +55,7 @@ class CORE_EXPORT ScrollbarThemeMac : public ScrollbarTheme {
   base::TimeDelta InitialAutoscrollTimerDelay() const override;
   base::TimeDelta AutoscrollTimerDelay() const override;
 
-  void PaintTickmarks(GraphicsContext&,
+  void PaintTickmarks(const PaintInfo&,
                       const Scrollbar&,
                       const gfx::Rect&) override;
 
@@ -74,7 +75,7 @@ class CORE_EXPORT ScrollbarThemeMac : public ScrollbarTheme {
 
   void SetNewPainterForScrollbar(Scrollbar&);
 
-  void PaintThumb(GraphicsContext& context,
+  void PaintThumb(const PaintInfo&,
                   const Scrollbar& scrollbar,
                   const gfx::Rect& rect) override;
 
@@ -105,10 +106,10 @@ class CORE_EXPORT ScrollbarThemeMac : public ScrollbarTheme {
 
   int TickmarkBorderWidth() const override { return 1; }
 
-  void PaintTrackBackground(GraphicsContext&,
+  void PaintTrackBackground(const PaintInfo&,
                             const Scrollbar&,
                             const gfx::Rect&) override;
-  void PaintScrollCorner(GraphicsContext&,
+  void PaintScrollCorner(const PaintInfo&,
                          const ScrollableArea&,
                          const DisplayItemClient&,
                          const gfx::Rect& corner_rect) override;

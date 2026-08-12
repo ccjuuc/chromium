@@ -8,11 +8,11 @@ import static org.chromium.build.NullUtil.assertNonNull;
 
 import org.chromium.base.Callback;
 import org.chromium.base.metrics.RecordUserAction;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.compositor.layouts.LayoutManagerImpl;
-import org.chromium.chrome.browser.layouts.LayoutStateProvider;
+import org.chromium.chrome.browser.layouts.LayoutStateProvider.LayoutStateObserver;
 import org.chromium.chrome.browser.layouts.LayoutType;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabSelectionType;
@@ -32,10 +32,10 @@ import java.util.Set;
 public class UndoRefocusHelper {
     private final Set<Integer> mTabsClosedFromTabStrip;
     private final TabModelSelector mModelSelector;
-    private final ObservableSupplier<LayoutManagerImpl> mLayoutManagerObservableSupplier;
+    private final MonotonicObservableSupplier<LayoutManagerImpl> mLayoutManagerObservableSupplier;
 
     private @Nullable LayoutManagerImpl mLayoutManager;
-    private LayoutStateProvider.@Nullable LayoutStateObserver mLayoutStateObserver;
+    private @Nullable LayoutStateObserver mLayoutStateObserver;
     private TabModelSelectorTabModelObserver mTabModelSelectorTabModelObserver;
     private int mSelectedTabIdWhenTabClosed = Tab.INVALID_TAB_ID;
     private boolean mTabSwitcherActive;
@@ -53,7 +53,7 @@ public class UndoRefocusHelper {
      */
     public UndoRefocusHelper(
             TabModelSelector modelSelector,
-            ObservableSupplier<LayoutManagerImpl> layoutManagerObservableSupplier,
+            MonotonicObservableSupplier<LayoutManagerImpl> layoutManagerObservableSupplier,
             boolean isTablet) {
         mLayoutManagerObservableSupplier = layoutManagerObservableSupplier;
         mModelSelector = modelSelector;
@@ -230,9 +230,10 @@ public class UndoRefocusHelper {
 
     private void observeLayoutState() {
         mLayoutManagerSupplierCallback = this::onLayoutManagerAvailable;
-        mLayoutManagerObservableSupplier.addObserver(mLayoutManagerSupplierCallback);
+        mLayoutManagerObservableSupplier.addSyncObserverAndPostIfNonNull(
+                mLayoutManagerSupplierCallback);
         @Nullable LayoutManagerImpl layoutManager = mLayoutManagerObservableSupplier.get();
-        if (layoutManager != null && layoutManager.isLayoutVisible(LayoutType.TAB_SWITCHER)) {
+        if (layoutManager != null && layoutManager.isLayoutVisible(LayoutType.HUB)) {
             mTabSwitcherActive = true;
         }
     }
@@ -240,10 +241,10 @@ public class UndoRefocusHelper {
     private void onLayoutManagerAvailable(LayoutManagerImpl layoutManager) {
         mLayoutManager = layoutManager;
         mLayoutStateObserver =
-                new LayoutStateProvider.LayoutStateObserver() {
+                new LayoutStateObserver() {
                     @Override
                     public void onFinishedShowing(int layoutType) {
-                        if (layoutType != LayoutType.TAB_SWITCHER) {
+                        if (layoutType != LayoutType.HUB) {
                             return;
                         }
                         mTabSwitcherActive = true;
@@ -251,7 +252,7 @@ public class UndoRefocusHelper {
 
                     @Override
                     public void onFinishedHiding(int layoutType) {
-                        if (layoutType != LayoutType.TAB_SWITCHER) {
+                        if (layoutType != LayoutType.HUB) {
                             return;
                         }
                         mTabSwitcherActive = false;

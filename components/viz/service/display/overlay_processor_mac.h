@@ -24,9 +24,6 @@ class VIZ_SERVICE_EXPORT OverlayProcessorMac
     : public OverlayProcessorInterface {
  public:
   using CandidateList = OverlayCandidateList;
-  // TODO(crbug.com/444264038): Delete this declaration when the RPDQ refactor
-  // is finished. Need to avoid hiding the base class' overload.
-  using OverlayProcessorInterface::ProcessForOverlays;
 
   OverlayProcessorMac();
   // For testing.
@@ -54,13 +51,10 @@ class VIZ_SERVICE_EXPORT OverlayProcessorMac
       DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_passes,
       const SkM44& output_color_matrix,
-      const FilterOperationsMap& render_pass_filters,
-      const FilterOperationsMap& render_pass_backdrop_filters,
       SurfaceDamageRectList surface_damage_rect_list,
       const PrimaryPlaneParams& primary_plane_params,
       CandidateList* overlay_candidates,
-      gfx::Rect* damage_rect,
-      std::vector<gfx::Rect>* content_bounds) override;
+      gfx::Rect* damage_rect) override;
 
   gfx::CALayerResult GetCALayerErrorCode() const override;
 

@@ -4,6 +4,7 @@
 
 package org.chromium.ui.listmenu;
 
+import static android.view.View.GONE;
 import static android.view.View.INVISIBLE;
 import static android.view.View.VISIBLE;
 
@@ -30,7 +31,6 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.ui.R;
 import org.chromium.ui.UiUtils;
 import org.chromium.ui.hierarchicalmenu.HierarchicalMenuController;
-import org.chromium.ui.hierarchicalmenu.HierarchicalMenuController.AccessibilityListObserver;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.ModelListAdapter;
@@ -106,7 +106,9 @@ public class BasicListMenu implements ListMenu {
                                 R.style.TextAppearance_DensityAdaptive_ListMenuItem)
                         .with(
                                 ListMenuItemProperties.ICON_TINT_COLOR_STATE_LIST_ID,
-                                isIconTintable ? R.color.list_menu_item_icon_color_list : 0)
+                                isIconTintable
+                                        ? R.color.list_menu_item_icon_color_list
+                                        : Resources.ID_NULL)
                         .with(ListMenuItemProperties.ORDER, order);
         return new ListItem(ListItemType.MENU_ITEM, modelBuilder.build());
     }
@@ -122,6 +124,7 @@ public class BasicListMenu implements ListMenu {
     private final ModelListAdapter mContentAdapter;
 
     private final ContentListOnScrollChangeListener mScrollChangeListener;
+    private final List<View.OnScrollChangeListener> mScrollChangeListeners = new ArrayList<>();
 
     private final List<Runnable> mClickRunnables = new ArrayList<>();
 
@@ -181,7 +184,17 @@ public class BasicListMenu implements ListMenu {
 
         mScrollChangeListener =
                 new ContentListOnScrollChangeListener(hairline, () -> !mHeaderModelList.isEmpty());
-        mContentListView.setOnScrollChangeListener(mScrollChangeListener);
+
+        // Multiplex scroll listeners to allow both internal hairline logic and external
+        // listeners (e.g. scroll-to-dismiss for flyout menus) to co-exist.
+        mContentListView.setOnScrollChangeListener(
+                (v, scrollX, scrollY, oldScrollX, oldScrollY) -> {
+                    mScrollChangeListener.onScrollChange(
+                            v, scrollX, scrollY, oldScrollX, oldScrollY);
+                    for (var listener : mScrollChangeListeners) {
+                        listener.onScrollChange(v, scrollX, scrollY, oldScrollX, oldScrollY);
+                    }
+                });
     }
 
     @Override
@@ -214,11 +227,16 @@ public class BasicListMenu implements ListMenu {
                 UiUtils.computeListAdapterContentDimensions(mHeaderAdapter, mHeaderListView);
         int[] contentDimensions =
                 UiUtils.computeListAdapterContentDimensions(mContentAdapter, mContentListView);
+        int dividerHeight = 0;
+        View hairline = mListMenuLayout.findViewById(R.id.menu_header_bottom_hairline);
+        if (hairline != null && hairline.getVisibility() != View.GONE) {
+            dividerHeight = Math.max(0, hairline.getHeight());
+        }
         // The header is above the content, so the result width is the max of the 2 widths and the
-        // result height is the addition of the 2 heights.
+        // result height is the addition of the 2 heights and divider height.
         int[] result = {
             Math.max(headerDimensions[0], contentDimensions[0]),
-            headerDimensions[1] + contentDimensions[1]
+            headerDimensions[1] + contentDimensions[1] + dividerHeight
         };
         // Now add padding from the listMenuLayout (which contains the header and content -- note
         // that the header and content don't have padding individually).
@@ -241,9 +259,9 @@ public class BasicListMenu implements ListMenu {
      * @param dismissDialog The {@link Runnable} to run.
      * @param hierarchicalMenuController The {@link HierarchicalMenuController} to use.
      */
-    public void setupCallbacksRecursively(
-            Runnable dismissDialog, HierarchicalMenuController hierarchicalMenuController) {
-        AccessibilityListObserver observer =
+    public void setupCallbacks(
+            Runnable dismissDialog, HierarchicalMenuController<?> hierarchicalMenuController) {
+        HierarchicalMenuController<?>.AccessibilityListObserver observer =
                 hierarchicalMenuController
                 .new AccessibilityListObserver(
                         mListMenuLayout,
@@ -254,7 +272,7 @@ public class BasicListMenu implements ListMenu {
         mHeaderModelList.addObserver(observer);
         mContentModelList.addObserver(observer);
 
-        hierarchicalMenuController.setupCallbacksRecursively(
+        hierarchicalMenuController.setupCallbacks(
                 mHeaderModelList, mContentModelList, dismissDialog);
     }
 
@@ -285,6 +303,10 @@ public class BasicListMenu implements ListMenu {
                 View divider, Supplier<Boolean> showHairlinePrecondition) {
             mDivider = divider;
             mShowHairlinePrecondition = showHairlinePrecondition;
+            if (!mShowHairlinePrecondition.get()) {
+                mVisibility = GONE;
+                mDivider.setVisibility(GONE);
+            }
         }
 
         @Override
@@ -298,7 +320,9 @@ public class BasicListMenu implements ListMenu {
                         -firstChild.getTop()
                                 + (listView.getFirstVisiblePosition() * firstChild.getHeight());
                 int desiredVisibility =
-                        (mShowHairlinePrecondition.get() && listScrollY > 0) ? VISIBLE : INVISIBLE;
+                        mShowHairlinePrecondition.get()
+                                ? (listScrollY > 0 ? VISIBLE : INVISIBLE)
+                                : GONE;
                 if (desiredVisibility != mVisibility) {
                     mVisibility = desiredVisibility;
                     mDivider.setVisibility(desiredVisibility);
@@ -315,5 +339,10 @@ public class BasicListMenu implements ListMenu {
 
     public View.OnScrollChangeListener getScrollChangeListenerForTesting() {
         return mScrollChangeListener;
+    }
+
+    @Override
+    public void addOnScrollListener(View.OnScrollChangeListener listener) {
+        mScrollChangeListeners.add(listener);
     }
 }

@@ -10,14 +10,15 @@
 #include <string_view>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/strings/cstring_view.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "sql/database.h"
+#include "sql/statement_id.h"
 #include "sql/test/scoped_error_expecter.h"
 #include "sql/test/test_helpers.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -415,9 +416,9 @@ TEST_F(StatementTest, GetSQLStatementExcludesBoundValues) {
 
   // Verify that GetSQLStatement doesn't leak any bound values that may be PII.
   std::string sql_statement = insert.GetSQLStatement();
-  EXPECT_TRUE(base::Contains(sql_statement, "INSERT INTO texts(t) VALUES(?)"));
-  EXPECT_TRUE(base::Contains(sql_statement, "VALUES"));
-  EXPECT_FALSE(base::Contains(sql_statement, "Doe"));
+  EXPECT_TRUE(sql_statement.contains("INSERT INTO texts(t) VALUES(?)"));
+  EXPECT_TRUE(sql_statement.contains("VALUES"));
+  EXPECT_FALSE(sql_statement.contains("Doe"));
 
   // Sanity check that the name was actually committed.
   Statement select(db_.GetUniqueStatement("SELECT t FROM texts ORDER BY id"));

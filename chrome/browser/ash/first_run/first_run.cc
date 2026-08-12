@@ -4,11 +4,12 @@
 
 #include "chrome/browser/ash/first_run/first_run.h"
 
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
+#include "ash/webui/help_app_ui/help_app_prefs.h"
 #include "base/command_line.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
@@ -19,8 +20,6 @@
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/login/login_state/login_state.h"
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
@@ -104,7 +103,7 @@ class AppLauncher final : public ProfileObserver {
     params.url = GURL("chrome://help-app?launchSource=first-run");
     params.launch_source = apps::LaunchSource::kFromFirstRun;
     LaunchSystemWebAppAsync(profile_, SystemWebAppType::HELP, params);
-    profile_->GetPrefs()->SetBoolean(prefs::kFirstRunTutorialShown, true);
+    profile_->GetPrefs()->SetBoolean(ash::prefs::kFirstRunTutorialShown, true);
     delete this;
   }
   raw_ptr<Profile> profile_;
@@ -116,12 +115,8 @@ class AppLauncher final : public ProfileObserver {
 void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   // This preference used to be syncable, change it to non-syncable so new
   // users will always see the welcome app on a new device.
-  // See crbug.com/752361
-  registry->RegisterBooleanPref(prefs::kFirstRunTutorialShown, false);
-  registry->RegisterBooleanPref(prefs::kHelpAppShouldShowGetStarted, false);
-  registry->RegisterBooleanPref(prefs::kHelpAppShouldShowParentalControl,
-                                false);
-  registry->RegisterBooleanPref(prefs::kHelpAppTabletModeDuringOobe, false);
+  // See crbug.com/41337695
+  registry->RegisterBooleanPref(ash::prefs::kFirstRunTutorialShown, false);
 }
 
 bool ShouldLaunchHelpApp(Profile* profile) {
@@ -129,10 +124,12 @@ bool ShouldLaunchHelpApp(Profile* profile) {
   user_manager::UserManager* user_manager = user_manager::UserManager::Get();
   // Even if we don't launch the help app now, define the preferences for what
   // should be shown in the app when it is launched.
-  profile->GetPrefs()->SetBoolean(prefs::kHelpAppShouldShowGetStarted,
-                                  ShouldShowGetStarted(profile, user_manager));
-  profile->GetPrefs()->SetBoolean(prefs::kHelpAppTabletModeDuringOobe,
-                                  display::Screen::Get()->InTabletMode());
+  profile->GetPrefs()->SetBoolean(
+      ash::help_app::prefs::kHelpAppShouldShowGetStarted,
+      ShouldShowGetStarted(profile, user_manager));
+  profile->GetPrefs()->SetBoolean(
+      ash::help_app::prefs::kHelpAppTabletModeDuringOobe,
+      display::Screen::Get()->InTabletMode());
 
   if (WizardController::default_controller())
     WizardController::default_controller()->PrepareFirstRunPrefs();
@@ -164,8 +161,9 @@ bool ShouldLaunchHelpApp(Profile* profile) {
   if (!user_manager->IsCurrentUserNew())
     return false;
 
-  if (profile->GetPrefs()->GetBoolean(prefs::kFirstRunTutorialShown))
+  if (profile->GetPrefs()->GetBoolean(ash::prefs::kFirstRunTutorialShown)) {
     return false;
+  }
 
   if (user_manager->IsCurrentUserNonCryptohomeDataEphemeral())
     return false;

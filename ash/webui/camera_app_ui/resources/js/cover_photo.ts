@@ -4,14 +4,10 @@
 
 import {assertInstanceof} from './assert.js';
 import {reportError} from './error.js';
-import {FileAccessEntry} from './models/file_system_access_entry.js';
+import type {FileAccessEntry} from './models/file_system_access_entry.js';
 import {extractImageFromBlob} from './thumbnailer.js';
-import {
-  ErrorLevel,
-  ErrorType,
-  ImageFormat,
-  MimeType,
-} from './type.js';
+import type {ImageFormat} from './type.js';
+import {ErrorLevel, ErrorType, MimeType} from './type.js';
 
 /**
  * Cover photo of gallery button.

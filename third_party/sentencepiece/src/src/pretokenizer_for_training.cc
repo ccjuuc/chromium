@@ -16,6 +16,7 @@
 #include <string>
 
 #include "absl/strings/str_replace.h"
+#include "absl/strings/string_view.h"
 
 namespace sentencepiece {
 namespace pretokenizer {
@@ -46,8 +47,8 @@ std::vector<std::string> PretokenizerForTrainingInterface::Postprocess(
   std::vector<std::string> result;
   std::string output;
 
-  int prev = 0;
-  for (const auto &piece : spt.pieces()) {
+  uint32_t prev = 0;
+  for (const auto& piece : spt.pieces()) {
     if (prev == piece.begin() && piece.begin() != 0) {
       result.push_back(output);
       output.clear();
@@ -58,13 +59,9 @@ std::vector<std::string> PretokenizerForTrainingInterface::Postprocess(
     prev = piece.end();
   }
 
-  if (!output.empty()) {
-    result.push_back(output);
-  }
+  if (!output.empty()) result.push_back(output);
 
-  for (auto& w : result) {
-    w = absl::StrReplaceAll(w, {{" ", kWSStr}});
-  }
+  for (auto& w : result) w = absl::StrReplaceAll(w, {{" ", kWSStr}});
 
   return result;
 }

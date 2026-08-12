@@ -10,12 +10,12 @@
 
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
 #include "chromeos/ash/services/secure_channel/client_connection_parameters.h"
 #include "chromeos/ash/services/secure_channel/pending_connection_request.h"
 #include "chromeos/ash/services/secure_channel/public/cpp/shared/connection_priority.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/nearby_connector.mojom-shared.h"
-#include "chromeos/ash/services/secure_channel/public/mojom/secure_channel.mojom-shared.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/secure_channel.mojom.h"
 
 namespace ash::secure_channel {
@@ -39,10 +39,7 @@ class PendingConnectionRequestBase
   PendingConnectionRequestBase& operator=(const PendingConnectionRequestBase&) =
       delete;
 
-  ~PendingConnectionRequestBase() override {
-    if (client_connection_parameters_)
-      client_connection_parameters_->RemoveObserver(this);
-  }
+  ~PendingConnectionRequestBase() override = default;
 
   // PendingConnectionRequest<FailureDetailType>:
   const base::UnguessableToken& GetRequestId() const override {
@@ -59,7 +56,8 @@ class PendingConnectionRequestBase
                                                     connection_priority),
         client_connection_parameters_(std::move(client_connection_parameters)),
         readable_request_type_for_logging_(readable_request_type_for_logging) {
-    client_connection_parameters_->AddObserver(this);
+    client_connection_parameters_observation_.Observe(
+        client_connection_parameters_.get());
   }
 
   // Derived classes should invoke this function if they would like to give up
@@ -106,7 +104,7 @@ class PendingConnectionRequestBase
   // PendingConnectionRequest<FailureDetailType>:
   std::unique_ptr<ClientConnectionParameters>
   ExtractClientConnectionParameters() override {
-    client_connection_parameters_->RemoveObserver(this);
+    client_connection_parameters_observation_.Reset();
     return std::move(client_connection_parameters_);
   }
 
@@ -134,6 +132,10 @@ class PendingConnectionRequestBase
   const std::string readable_request_type_for_logging_;
 
   bool has_finished_without_connection_ = false;
+
+  base::ScopedObservation<ClientConnectionParameters,
+                          ClientConnectionParameters::Observer>
+      client_connection_parameters_observation_{this};
 
   base::WeakPtrFactory<PendingConnectionRequestBase> weak_ptr_factory_{this};
 };

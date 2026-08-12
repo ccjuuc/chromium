@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/views/autofill/payments/offer_notification_icon_view.h"
-
 #include <optional>
 
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
@@ -14,7 +12,6 @@
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/autofill/core/browser/data_model/payments/autofill_offer_data.h"
 #include "components/autofill/core/browser/payments/offer_notification_options.h"
@@ -34,7 +31,6 @@ constexpr char kTestPromoCode[] = "FREEFALL1234";
 
 struct UiTestData {
   std::string name;
-  std::optional<std::vector<base::test::FeatureRefAndParams>> enabled_features;
 };
 
 std::string GetTestName(const ::testing::TestParamInfo<UiTestData>& info) {
@@ -45,12 +41,12 @@ AutofillOfferData CreateTestOffer(const std::vector<GURL>& merchant_origins,
                                   const std::string& promo_code) {
   int64_t offer_id = 2468;
   base::Time expiry = base::Time::Now() + base::Days(2);
-  autofill::DisplayStrings display_strings;
+  DisplayStrings display_strings;
   display_strings.value_prop_text = "5% off on shoes. Up to $50";
   display_strings.see_details_text = "See details";
   display_strings.usage_instructions_text =
       "Click the promo code field at checkout to autofill it.";
-  return autofill::AutofillOfferData::GPayPromoCodeOffer(
+  return AutofillOfferData::GPayPromoCodeOffer(
       offer_id, expiry, merchant_origins, /*offer_details_url=*/GURL(),
       display_strings, promo_code);
 }
@@ -59,13 +55,8 @@ class OfferNotificationIconViewBrowserTest
     : public UiBrowserTest,
       public testing::WithParamInterface<UiTestData> {
  public:
-  OfferNotificationIconViewBrowserTest() {
-    if (GetParam().enabled_features.has_value()) {
-      feature_list_.InitWithFeaturesAndParameters(
-          GetParam().enabled_features.value(),
-          /*disabled_features=*/{});
-    }
-  }
+  OfferNotificationIconViewBrowserTest() = default;
+
   // UiBrowserTest:
   void ShowUi(const std::string& name) override {
     AutofillOfferData offer = CreateTestOffer(
@@ -104,7 +95,7 @@ class OfferNotificationIconViewBrowserTest
   void WaitForUserDismissal() override {
     // Consider closing the browser to be dismissal. This is useful when using
     // the test-launcher-interactive option.
-    ui_test_utils::WaitForBrowserToClose();
+    ui_test_utils::BrowserDestroyedObserver().Wait();
   }
 
  protected:
@@ -112,31 +103,12 @@ class OfferNotificationIconViewBrowserTest
     return browser()->tab_strip_model()->GetActiveWebContents();
   }
 
-  IconLabelBubbleView* GetIcon() {
+  page_actions::PageActionView* GetIcon() {
     const ui::ElementContext context =
         views::ElementTrackerViews::GetContextForView(GetLocationBarView());
-    views::ElementTrackerViews::ViewList matched_views =
-        views::ElementTrackerViews::GetInstance()->GetAllMatchingViews(
+    return views::ElementTrackerViews::GetInstance()
+        ->GetFirstMatchingViewAs<page_actions::PageActionView>(
             kOfferNotificationChipElementId, context);
-
-    for (auto* matched_view : matched_views) {
-      // During the migration, there will be two views with the same element
-      // id. If the migration is enabled, we want the view that is a
-      // PageActionView.
-      if (IsPageActionMigrated(
-              PageActionIconType::kPaymentsOfferNotification) ==
-          views::IsViewClass<page_actions::PageActionView>(matched_view)) {
-        return views::AsViewClass<IconLabelBubbleView>(matched_view);
-      }
-    }
-
-    return nullptr;
-  }
-
-  void WaitForIconToFinishAnimating(OfferNotificationIconView* icon_view) {
-    while (icon_view->is_animating_label()) {
-      base::RunLoop().RunUntilIdle();
-    }
   }
 
  private:
@@ -145,10 +117,8 @@ class OfferNotificationIconViewBrowserTest
   }
 
   LocationBarView* GetLocationBarView() {
-    return GetBrowserView()->toolbar()->location_bar();
+    return GetBrowserView()->toolbar()->location_bar_view();
   }
-
-  base::test::ScopedFeatureList feature_list_;
 };
 
 INSTANTIATE_TEST_SUITE_P(All,

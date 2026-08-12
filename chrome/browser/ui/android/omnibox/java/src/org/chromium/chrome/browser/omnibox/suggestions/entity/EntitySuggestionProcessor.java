@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.omnibox.suggestions.entity;
 import android.graphics.Color;
 import android.text.TextUtils;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.build.annotations.NullMarked;
@@ -18,7 +19,7 @@ import org.chromium.chrome.browser.omnibox.suggestions.basic.BasicSuggestionProc
 import org.chromium.chrome.browser.omnibox.suggestions.basic.SuggestionViewProperties;
 import org.chromium.components.omnibox.AutocompleteInput;
 import org.chromium.components.omnibox.AutocompleteMatch;
-import org.chromium.components.omnibox.OmniboxFeatures;
+import org.chromium.components.omnibox.OmniboxCapabilities;
 import org.chromium.components.omnibox.OmniboxSuggestionType;
 import org.chromium.components.omnibox.suggestions.OmniboxSuggestionUiType;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -66,13 +67,15 @@ public class EntitySuggestionProcessor extends BasicSuggestionProcessor {
     @VisibleForTesting
     @Override
     public OmniboxDrawableState getFallbackIcon(AutocompleteMatch match) {
-        if (OmniboxFeatures.isLowMemoryDevice()) return super.getFallbackIcon(match);
+        if (OmniboxCapabilities.isLowMemoryDevice() || OmniboxCapabilities.isDesktopPlatform()) {
+            return super.getFallbackIcon(match);
+        }
 
         var colorSpec = match.getImageDominantColor();
         if (TextUtils.isEmpty(colorSpec)) return super.getFallbackIcon(match);
 
         try {
-            int color = Color.parseColor(colorSpec);
+            @ColorInt int color = Color.parseColor(colorSpec);
             return OmniboxDrawableState.forColor(color);
         } catch (IllegalArgumentException e) {
             return super.getFallbackIcon(match);

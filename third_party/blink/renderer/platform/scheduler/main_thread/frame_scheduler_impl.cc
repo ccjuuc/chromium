@@ -50,24 +50,11 @@ using perfetto::protos::pbzero::RendererMainThreadTaskExecution;
 
 namespace {
 
-// When enabled, the main thread's type is reduced from `kDisplayCritical` to
-// `kDefault` when WebRTC is in use within the renderer. This is a simple
-// workaround meant to be merged to higher channels while we're working on a
-// more refined solution. See crbug.com/1513904.
-BASE_FEATURE(kRendererMainIsDefaultThreadTypeForWebRTC,
-             "RendererMainIsNormalThreadTypeForWebRTC",
-#if BUILDFLAG(IS_ANDROID)
-             base::FEATURE_DISABLED_BY_DEFAULT
-#else   // BUILDFLAG(IS_ANDROID)
-             base::FEATURE_ENABLED_BY_DEFAULT
-#endif  // BUILDFLAG(IS_ANDROID)
-);
-
 perfetto::StaticString VisibilityStateToString(bool is_visible) {
   if (is_visible) {
     return "visible";
   } else {
-    return "hidden";
+    return nullptr;
   }
 }
 
@@ -75,7 +62,7 @@ perfetto::StaticString IsVisibleAreaLargeStateToString(bool is_large) {
   if (is_large) {
     return "large";
   } else {
-    return "small";
+    return nullptr;
   }
 }
 
@@ -83,7 +70,7 @@ perfetto::StaticString UserActivationStateToString(bool had_user_activation) {
   if (had_user_activation) {
     return "had user activation";
   } else {
-    return "no user activation";
+    return nullptr;
   }
 }
 
@@ -91,7 +78,7 @@ perfetto::StaticString PausedStateToString(bool is_paused) {
   if (is_paused) {
     return "paused";
   } else {
-    return "running";
+    return nullptr;
   }
 }
 
@@ -99,7 +86,7 @@ perfetto::StaticString FrozenStateToString(bool is_frozen) {
   if (is_frozen) {
     return "frozen";
   } else {
-    return "running";
+    return nullptr;
   }
 }
 
@@ -161,35 +148,35 @@ FrameSchedulerImpl::FrameSchedulerImpl(
           parent_page_scheduler_ && parent_page_scheduler_->IsPageVisible()
               ? PageVisibilityState::kVisible
               : PageVisibilityState::kHidden,
-          perfetto::NamedTrack::FromPointer("FrameScheduler.PageVisibility",
+          perfetto::StateTrack::FromPointer("FrameScheduler.PageVisibility",
                                             this,
                                             *tracing_track_),
           &tracing_controller_,
           PageVisibilityStateToString),
       frame_visible_(
           true,
-          perfetto::NamedTrack::FromPointer("FrameScheduler.FrameVisible",
+          perfetto::StateTrack::FromPointer("FrameScheduler.FrameVisible",
                                             this,
                                             *tracing_track_),
           &tracing_controller_,
           VisibilityStateToString),
       is_visible_area_large_(
           true,
-          perfetto::NamedTrack::FromPointer("FrameScheduler.IsVisibleAreaLarge",
+          perfetto::StateTrack::FromPointer("FrameScheduler.IsVisibleAreaLarge",
                                             this,
                                             *tracing_track_),
           &tracing_controller_,
           IsVisibleAreaLargeStateToString),
       had_user_activation_(
           false,
-          perfetto::NamedTrack::FromPointer("FrameScheduler.HadUserActivation",
+          perfetto::StateTrack::FromPointer("FrameScheduler.HadUserActivation",
                                             this,
                                             *tracing_track_),
           &tracing_controller_,
           UserActivationStateToString),
       frame_paused_(
           false,
-          perfetto::NamedTrack::FromPointer("FrameScheduler.FramePaused",
+          perfetto::StateTrack::FromPointer("FrameScheduler.FramePaused",
                                             this,
                                             *tracing_track_),
           &tracing_controller_,
@@ -198,13 +185,13 @@ FrameSchedulerImpl::FrameSchedulerImpl(
           frame_type == FrameType::kMainFrame
               ? FrameOriginType::kMainFrame
               : FrameOriginType::kSameOriginToMainFrame,
-          perfetto::NamedTrack::FromPointer("FrameScheduler.Origin",
+          perfetto::StateTrack::FromPointer("FrameScheduler.Origin",
                                             this,
                                             *tracing_track_),
           &tracing_controller_,
           FrameOriginTypeToString),
       subresource_loading_paused_(false,
-                                  perfetto::NamedTrack::FromPointer(
+                                  perfetto::StateTrack::FromPointer(
                                       "FrameScheduler.SubResourceLoadingPaused",
                                       this,
                                       *tracing_track_),
@@ -215,7 +202,7 @@ FrameSchedulerImpl::FrameSchedulerImpl(
                                                    *tracing_track_)),
       throttling_type_(
           ThrottlingType::kNone,
-          perfetto::NamedTrack::FromPointer("FrameScheduler.ThrottlingType",
+          perfetto::StateTrack::FromPointer("FrameScheduler.ThrottlingType",
                                             this,
                                             *tracing_track_),
           &tracing_controller_,
@@ -223,7 +210,7 @@ FrameSchedulerImpl::FrameSchedulerImpl(
       aggressive_throttling_opt_out_count_(0),
       opted_out_from_aggressive_throttling_(
           false,
-          perfetto::NamedTrack::FromPointer(
+          perfetto::StateTrack::FromPointer(
               "FrameScheduler.AggressiveThrottlingDisabled",
               this,
               *tracing_track_),
@@ -235,14 +222,14 @@ FrameSchedulerImpl::FrameSchedulerImpl(
                                                     main_thread_scheduler_),
       page_frozen_for_tracing_(
           parent_page_scheduler_ ? parent_page_scheduler_->IsFrozen() : true,
-          perfetto::NamedTrack::FromPointer("FrameScheduler.PageFrozen",
+          perfetto::StateTrack::FromPointer("FrameScheduler.PageFrozen",
                                             this,
                                             *tracing_track_),
           &tracing_controller_,
           FrozenStateToString),
       waiting_for_contentful_paint_(
           true,
-          perfetto::NamedTrack::FromPointer(
+          perfetto::StateTrack::FromPointer(
               "FrameScheduler.WaitingForContentfulPaint",
               this,
               *tracing_track_),
@@ -250,7 +237,7 @@ FrameSchedulerImpl::FrameSchedulerImpl(
           YesNoStateToString),
       waiting_for_meaningful_paint_(
           true,
-          perfetto::NamedTrack::FromPointer(
+          perfetto::StateTrack::FromPointer(
               "FrameScheduler.WaitingForMeaningfulPaint",
               this,
               *tracing_track_),
@@ -259,8 +246,8 @@ FrameSchedulerImpl::FrameSchedulerImpl(
   frame_task_queue_controller_ = base::WrapUnique(
       new FrameTaskQueueController(main_thread_scheduler_, this, this));
   back_forward_cache_disabling_feature_tracker_.SetDelegate(delegate_);
-  TRACE_EVENT_BEGIN(TRACE_DISABLED_BY_DEFAULT("renderer.scheduler"),
-                    "FrameScheduler.URL", url_track_, "url", "Unknown");
+  TRACE_EVENT_BEGIN("renderer.scheduler.status", "FrameScheduler.URL",
+                    url_track_, "url", "Unknown");
 }
 
 FrameSchedulerImpl::FrameSchedulerImpl()
@@ -274,7 +261,7 @@ FrameSchedulerImpl::FrameSchedulerImpl()
 FrameSchedulerImpl::~FrameSchedulerImpl() {
   weak_factory_.InvalidateWeakPtrs();
 
-  TRACE_EVENT_END(TRACE_DISABLED_BY_DEFAULT("renderer.scheduler"), url_track_);
+  TRACE_EVENT_END("renderer.scheduler.status", url_track_);
 
   for (const auto& task_queue_and_voter :
        frame_task_queue_controller_->GetAllTaskQueuesAndVoters()) {
@@ -473,9 +460,9 @@ void FrameSchedulerImpl::SetAgentClusterId(
 }
 
 void FrameSchedulerImpl::TraceUrlChange(const String& url) {
-  TRACE_EVENT_END(TRACE_DISABLED_BY_DEFAULT("renderer.scheduler"), url_track_);
-  TRACE_EVENT_BEGIN(TRACE_DISABLED_BY_DEFAULT("renderer.scheduler"),
-                    "FrameScheduler.URL", url_track_, "url", url);
+  TRACE_EVENT_END("renderer.scheduler.status", url_track_);
+  TRACE_EVENT_BEGIN("renderer.scheduler.status", "FrameScheduler.URL",
+                    url_track_, "url", url);
 }
 
 void FrameSchedulerImpl::AddTaskTime(base::TimeDelta time) {
@@ -794,13 +781,15 @@ void FrameSchedulerImpl::OnStartedUsingNonStickyFeature(
   }
 
   if (feature == SchedulingPolicy::Feature::kWebRTC) {
-    if (base::FeatureList::IsEnabled(
-            kRendererMainIsDefaultThreadTypeForWebRTC) &&
-        (base::PlatformThread::GetCurrentThreadType() ==
-             base::ThreadType::kDisplayCritical ||
-         base::PlatformThread::GetCurrentThreadType() ==
-             base::ThreadType::kInteractive)) {
-      base::PlatformThread::SetCurrentThreadType(base::ThreadType::kDefault);
+    // If kWebRtcUseMediaThreadTypes is enabled, we rely on WebRTC setting
+    // appropriate thread priorities for its tasks.
+    if (!base::FeatureList::IsEnabled(
+            blink::features::kWebRtcUseMediaThreadTypes) &&
+        base::FeatureList::IsEnabled(
+            blink::features::kRendererMainIsDefaultThreadTypeForWebRTC)) {
+      if (thread_type_throttled_to_default_count_++ == 0) {
+        main_thread_scheduler_->IncreaseDefaultThreadTypeUsageCount();
+      }
     }
 
     if (auto* rc = delegate_->GetDocumentResourceCoordinator()) {
@@ -834,6 +823,14 @@ void FrameSchedulerImpl::OnStoppedUsingNonStickyFeature(
   }
 
   if (handle->GetFeature() == SchedulingPolicy::Feature::kWebRTC) {
+    if (!base::FeatureList::IsEnabled(
+            blink::features::kWebRtcUseMediaThreadTypes) &&
+        base::FeatureList::IsEnabled(
+            blink::features::kRendererMainIsDefaultThreadTypeForWebRTC)) {
+      if (--thread_type_throttled_to_default_count_ == 0) {
+        main_thread_scheduler_->DecreaseDefaultThreadTypeUsageCount();
+      }
+    }
     if (auto* rc = delegate_->GetDocumentResourceCoordinator()) {
       rc->OnStoppedUsingWebRTC();
     }
@@ -1112,6 +1109,17 @@ ThrottlingType FrameSchedulerImpl::ComputeThrottlingType() {
       }
       return ThrottlingType::kBackground;
     }
+  }
+
+  // Throttle the active tab's timers (to 1 Hz, like a background page) while it
+  // contains an effectively-fullscreen video and the browser is in energy saver
+  // (battery saver) mode. This runs after the background checks so more
+  // aggressive background throttling still takes precedence.
+  if (parent_page_scheduler_->IsFullscreenVideo() &&
+      main_thread_scheduler_->IsBatterySaverEnabled() &&
+      base::FeatureList::IsEnabled(
+          features::kThrottleFullscreenVideoActiveTab)) {
+    return ThrottlingType::kBackground;
   }
 
   if (frame_can_be_throttled_foreground) {

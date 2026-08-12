@@ -14,7 +14,6 @@
 #include "chrome/browser/ash/fileapi/file_system_backend.h"
 #include "chrome/browser/ash/fusebox/fusebox_server.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/web_applications/isolated_web_apps/install/isolated_web_app_installation_manager.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_features.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
@@ -33,7 +32,7 @@ InstallIsolatedWebAppVirtualTask::InstallIsolatedWebAppVirtualTask() {
 }
 
 bool InstallIsolatedWebAppVirtualTask::IsEnabled(Profile* profile) const {
-  return web_app::IsIwaUnmanagedInstallEnabled(profile);
+  return web_app::IsIwaUnmanagedInstallFeatureEnabled(profile);
 }
 
 std::string InstallIsolatedWebAppVirtualTask::id() const {

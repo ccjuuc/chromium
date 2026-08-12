@@ -15,7 +15,6 @@
 #include "ash/public/cpp/ambient/ambient_backend_controller.h"
 #include "ash/public/cpp/ambient/weather_info.h"
 #include "ash/public/cpp/session/session_types.h"
-#include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
@@ -54,9 +53,8 @@ void BirchWeatherProvider::RequestBirchDataFetch() {
   const auto* pref_service =
       Shell::Get()->session_controller()->GetLastActiveUserPrefService();
   if (!pref_service ||
-      !base::Contains(pref_service->GetList(
-                          prefs::kContextualGoogleIntegrationsConfiguration),
-                      prefs::kWeatherIntegrationName)) {
+      !pref_service->GetList(prefs::kContextualGoogleIntegrationsConfiguration)
+           .contains(prefs::kWeatherIntegrationName)) {
     // Weather integration is disabled by policy.
     Shell::Get()->birch_model()->SetWeatherItems({});
     return;

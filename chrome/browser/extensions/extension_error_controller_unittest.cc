@@ -18,8 +18,11 @@
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/pref_names.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -97,7 +100,7 @@ ExtensionErrorUI* CreateMockUI(ExtensionErrorUI::Delegate* delegate) {
 // Builds and returns a simple extension.
 scoped_refptr<const Extension> BuildExtension() {
   return ExtensionBuilder()
-      .SetManifest(base::Value::Dict()
+      .SetManifest(base::DictValue()
                        .Set("name", "My Wonderful Extension")
                        .Set("version", "0.1.1.0")
                        .Set("manifest_version", 2))
@@ -152,7 +155,7 @@ ExtensionErrorControllerUnitTest::AddBlocklistedExtension(
 
 void ExtensionErrorControllerUnitTest::SetBlockExtensionPolicy(
     const Extension* extension) {
-  base::Value::List block_list;
+  base::ListValue block_list;
   if (extension) {
     block_list.Append(extension->id());
   }

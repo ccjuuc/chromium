@@ -40,7 +40,7 @@ class PerformanceManagerFeatureObserverClient;
 class PerformanceManagerLifetime;
 class ScopedGlobalScenarioMemory;
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 class ExtensionWatcher;
 #endif
 
@@ -48,6 +48,7 @@ namespace user_tuning {
 class BatterySaverModeManager;
 class PerformanceDetectionManager;
 class ProfileDiscardOptOutListHelper;
+class ProfileForceForegroundPriorityListHelper;
 class UserPerformanceTuningManager;
 }  // namespace user_tuning
 
@@ -121,13 +122,17 @@ class ChromeBrowserMainExtraPartsPerformanceManager
   std::unique_ptr<performance_manager::ScopedGlobalScenarioMemory>
       global_performance_scenario_memory_;
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   std::unique_ptr<performance_manager::ExtensionWatcher> extension_watcher_;
 #endif
 
   std::unique_ptr<
       performance_manager::user_tuning::ProfileDiscardOptOutListHelper>
       profile_discard_opt_out_list_helper_;
+
+  std::unique_ptr<performance_manager::user_tuning::
+                      ProfileForceForegroundPriorityListHelper>
+      profile_force_foreground_priority_list_helper_;
 
 #if !BUILDFLAG(IS_ANDROID)
   std::unique_ptr<performance_manager::user_tuning::BatterySaverModeManager>

@@ -22,10 +22,10 @@
 #import "components/sync/service/sync_user_settings.h"
 #import "ios/chrome/browser/net/model/crurl.h"
 #import "ios/chrome/browser/scoped_ui_blocker/ui_bundled/scoped_ui_blocker.h"
+#import "ios/chrome/browser/settings/google_services/public/google_services_settings_constants.h"
 #import "ios/chrome/browser/settings/model/sync/utils/sync_util.h"
 #import "ios/chrome/browser/settings/ui_bundled/cells/byo_textfield_item.h"
 #import "ios/chrome/browser/settings/ui_bundled/cells/passphrase_error_item.h"
-#import "ios/chrome/browser/settings/ui_bundled/google_services/google_services_settings_constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_navigation_controller.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
@@ -62,7 +62,7 @@ const CGFloat kSpinnerButtonPadding = 18;
 }  // namespace
 
 @interface SyncEncryptionPassphraseTableViewController () <
-    IdentityManagerObserverBridgeDelegate> {
+    IdentityManagerObserving> {
   // Whether the decryption progress is currently being shown.
   BOOL _isDecryptionProgressShown;
   NSString* _savedTitle;
@@ -109,10 +109,9 @@ const CGFloat kSpinnerButtonPadding = 18;
       service->GetUserSettings()->IsUsingExplicitPassphrase()) {
     base::Time passphraseTime =
         service->GetUserSettings()->GetExplicitPassphraseTime();
-    NSString* userEmail =
-        AuthenticationServiceFactory::GetForProfile(profile)
-            ->GetPrimaryIdentity(signin::ConsentLevel::kSignin)
-            .userEmail;
+    NSString* userEmail = AuthenticationServiceFactory::GetForProfile(profile)
+                              ->GetPrimaryIdentity()
+                              .userEmail;
     DCHECK(userEmail);
     _headerMessage =
         passphraseTime.is_null()
@@ -164,7 +163,7 @@ const CGFloat kSpinnerButtonPadding = 18;
   [self setLeftNavBarItem];
 
   SceneState* sceneState = self.browser->GetSceneState();
-  _uiBlocker = std::make_unique<ScopedUIBlocker>(sceneState);
+  _uiBlocker = ScopedUIBlocker::ProfileScoped(sceneState);
   self.view.accessibilityIdentifier =
       kSyncEncryptionPassphraseTableViewAccessibilityIdentifier;
 }
@@ -560,13 +559,13 @@ const CGFloat kSpinnerButtonPadding = 18;
   [self reloadData];
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onEndBatchOfRefreshTokenStateChanges {
+- (void)batchOfRefreshTokenStateChangesDidEnd {
   DCHECK(!_settingsAreDismissed);
   ProfileIOS* profile = self.browser->GetProfile();
-  if (AuthenticationServiceFactory::GetForProfile(profile)->HasPrimaryIdentity(
-          signin::ConsentLevel::kSignin)) {
+  if (AuthenticationServiceFactory::GetForProfile(profile)
+          ->HasPrimaryIdentity()) {
     return;
   }
   if (!self.presentModally) {

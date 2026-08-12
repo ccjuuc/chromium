@@ -8,8 +8,11 @@
 #include <atomic>
 #include <memory>
 
+#include "base/containers/heap_array.h"
+#include "base/memory/raw_span.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_buffer.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_param.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_scheduled_source_node.h"
@@ -22,7 +25,8 @@ namespace blink {
 class AudioBufferSourceOptions;
 class BaseAudioContext;
 
-class AudioBufferSourceHandler final : public AudioScheduledSourceHandler {
+class MODULES_EXPORT AudioBufferSourceHandler final
+    : public AudioScheduledSourceHandler {
  public:
   static scoped_refptr<AudioBufferSourceHandler> Create(
       AudioNode&,
@@ -61,12 +65,19 @@ class AudioBufferSourceHandler final : public AudioScheduledSourceHandler {
   void SetLoopStart(double loop_start);
   void SetLoopEnd(double loop_end);
 
+  double GetVirtualReadIndexForTesting() const { return virtual_read_index_; }
+
   // If we are no longer playing, propagate silence ahead to downstream nodes.
   bool PropagatesSilence() const override;
 
   void HandleStoppableSourceNode() override;
 
  private:
+  struct ProcessResult {
+    unsigned write_index;
+    double virtual_read_index;
+  };
+
   AudioBufferSourceHandler(AudioNode&,
                            float sample_rate,
                            AudioParamHandler& playback_rate,
@@ -97,14 +108,35 @@ class AudioBufferSourceHandler final : public AudioScheduledSourceHandler {
                         uint32_t number_of_frames,
                         double start_time_offset);
 
-  // Render silence starting from "index" frame in AudioBus.
-  inline bool RenderSilenceAndFinishIfNotLooping(AudioBus*,
-                                                 unsigned index,
-                                                 uint32_t frames_to_process);
+  ProcessResult ProcessFastPath(double virtual_delta_frames,
+                                double virtual_end_frame,
+                                uint32_t buffer_length,
+                                size_t destination_length,
+                                unsigned number_of_channels,
+                                int frames_to_process,
+                                unsigned write_index,
+                                double virtual_read_index);
+
+  ProcessResult ProcessInterpolatedPath(double virtual_start_frame,
+                                        double virtual_delta_frames,
+                                        double virtual_end_frame,
+                                        uint32_t buffer_length,
+                                        unsigned number_of_channels,
+                                        double computed_playback_rate,
+                                        int frames_to_process,
+                                        unsigned write_index,
+                                        double virtual_read_index);
+
+  // Render silence starting from `index` frame in AudioBus, then call
+  // `Finish()`.
+  inline void RenderSilenceAndFinish(size_t index, size_t frames_to_process);
 
   // Clamps grain parameters to the duration of the given AudioBuffer.
   void ClampGrainParameters(const SharedAudioBuffer*)
       EXCLUSIVE_LOCKS_REQUIRED(process_lock_);
+
+  // Updates effective loop start and end points.
+  void UpdateEffectiveLoopPoints() EXCLUSIVE_LOCKS_REQUIRED(process_lock_);
 
   bool DidSetLooping() const { return did_set_looping_; }
   void SetDidSetLooping(bool loop) {
@@ -125,9 +157,9 @@ class AudioBufferSourceHandler final : public AudioScheduledSourceHandler {
   // accessed from the audio thread.
   std::unique_ptr<SharedAudioBuffer> shared_buffer_;
 
-  // Pointers for the buffer and destination.
-  std::unique_ptr<const float*[]> source_channels_;
-  std::unique_ptr<float*[]> destination_channels_;
+  // Channel views for the source buffer and render destination.
+  base::HeapArray<base::raw_span<const float>> source_channels_;
+  base::HeapArray<base::raw_span<float>> destination_channels_;
 
   scoped_refptr<AudioParamHandler> playback_rate_;
   scoped_refptr<AudioParamHandler> detune_;
@@ -149,6 +181,10 @@ class AudioBufferSourceHandler final : public AudioScheduledSourceHandler {
   double loop_start_ = 0;
   double loop_end_ = 0;
 
+  // Effective loop points resolved under `process_lock_`.
+  double effective_loop_start_ = 0;
+  double effective_loop_end_ = 0;
+
   // `virtual_read_index_` is a sample-frame index into our buffer representing
   // the current playback position.  Since it's floating-point, it has
   // sub-sample accuracy.
@@ -159,10 +195,14 @@ class AudioBufferSourceHandler final : public AudioScheduledSourceHandler {
   double grain_offset_ = 0.0;  // in seconds
   double grain_duration_;      // in seconds
   // True if `grain_duration_` is given explicitly (via 3 arg start method).
-  bool is_duration_given_;
+  bool is_duration_given_ = false;
 
   // The minimum playbackRate value ever used for this source.
   double min_playback_rate_ = 1.0;
+
+  // The number of source frames currently output by this node.
+  // This is used for keeping track of the rate invariate duration of the node.
+  double buffer_played_frames_ = 0.0;
 
   // True if the `buffer` attribute has ever been set to a non-null
   // value.  Defaults to false.

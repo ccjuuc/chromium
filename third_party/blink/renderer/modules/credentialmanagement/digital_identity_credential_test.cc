@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/test/metrics/histogram_tester.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/mojom/webid/digital_identity_request.mojom.h"
@@ -14,6 +15,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_tester.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_dom_exception.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_credential_creation_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_credential_request_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_digital_credential_create_request.h"
@@ -21,6 +23,7 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_digital_credential_get_request.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_digital_credential_request_options.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/execution_context/security_context.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
 #include "third_party/blink/renderer/modules/credentialmanagement/credential.h"
@@ -98,7 +101,7 @@ CredentialCreationOptions* CreateCreateOptionsWithRequests(
 CredentialRequestOptions* CreateValidGetOptions(ScriptState* script_state) {
   v8::Local<v8::Context> context = script_state->GetContext();
   DigitalCredentialGetRequest* request = DigitalCredentialGetRequest::Create();
-  request->setProtocol("openid4vp");
+  request->setProtocol("openid4vp-v1-unsigned");
   v8::Local<v8::Object> request_data =
       v8::Object::New(script_state->GetIsolate());
   v8::Maybe<bool> maybe =
@@ -147,6 +150,10 @@ class DigitalIdentityCredentialTest : public PageTestBase {
 TEST_F(DigitalIdentityCredentialTest, IdentityDigitalCredentialUseCounter) {
   V8TestingScope context(::blink::KURL("https://example.test"));
 
+  // Mock user activation to pass the transient activation check.
+  LocalFrame::NotifyUserActivation(
+      &context.GetFrame(), mojom::UserActivationNotificationType::kTest);
+
   ScopedWebIdentityDigitalCredentialsForTest scoped_digital_credentials(
       /*enabled=*/true);
 
@@ -187,6 +194,10 @@ TEST_F(DigitalIdentityCredentialTest, IdentityDigitalCredentialUseCounter) {
 TEST_F(DigitalIdentityCredentialTest,
        IdentityDigitalCredentialCreateUseCounter) {
   V8TestingScope context(::blink::KURL("https://example.test"));
+
+  // Mock user activation to pass the transient activation check.
+  LocalFrame::NotifyUserActivation(
+      &context.GetFrame(), mojom::UserActivationNotificationType::kTest);
 
   ScopedWebIdentityDigitalCredentialsCreationForTest scoped_digital_credentials(
       /*enabled=*/true);
@@ -230,6 +241,10 @@ TEST_F(DigitalIdentityCredentialTest,
 TEST_F(DigitalIdentityCredentialTest,
        IdentityDigitalCredentialGetThrowsOnUnstringifiableData) {
   V8TestingScope context(::blink::KURL("https://example.test"));
+
+  // Mock user activation to pass the transient activation check.
+  LocalFrame::NotifyUserActivation(
+      &context.GetFrame(), mojom::UserActivationNotificationType::kTest);
 
   ScopedWebIdentityDigitalCredentialsForTest scoped_digital_credentials(
       /*enabled=*/true);
@@ -277,6 +292,10 @@ TEST_F(DigitalIdentityCredentialTest,
        IdentityDigitalCredentialCreateThrowsOnUnstringifiableData) {
   V8TestingScope context(::blink::KURL("https://example.test"));
 
+  // Mock user activation to pass the transient activation check.
+  LocalFrame::NotifyUserActivation(
+      &context.GetFrame(), mojom::UserActivationNotificationType::kTest);
+
   ScopedWebIdentityDigitalCredentialsCreationForTest scoped_digital_credentials(
       /*enabled=*/true);
 
@@ -314,6 +333,439 @@ TEST_F(DigitalIdentityCredentialTest,
 
     ASSERT_TRUE(tester.IsRejected());
   }
+}
+
+// Test that navigator.credentials.get() consumes the transient user activation.
+TEST_F(DigitalIdentityCredentialTest,
+       IdentityDigitalCredentialGetConsumesUserActivation) {
+  V8TestingScope context(::blink::KURL("https://example.test"));
+  base::HistogramTester histogram_tester;
+
+  // Mock user activation to pass the transient activation check.
+  LocalFrame::NotifyUserActivation(
+      &context.GetFrame(), mojom::UserActivationNotificationType::kTest);
+
+  // Activation should be present before the call.
+  ASSERT_TRUE(LocalFrame::HasTransientUserActivation(&context.GetFrame()));
+
+  ScopedWebIdentityDigitalCredentialsForTest scoped_digital_credentials(
+      /*enabled=*/true);
+
+  std::unique_ptr mock_request = std::make_unique<MockDigitalIdentityRequest>();
+  auto mock_request_ptr = mock_request.get();
+  context.GetWindow().GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::DigitalIdentityRequest::Name_,
+      BindRepeating(
+          [](MockDigitalIdentityRequest* mock_request_ptr,
+             mojo::ScopedMessagePipeHandle handle) {
+            mock_request_ptr->Bind(
+                mojo::PendingReceiver<mojom::DigitalIdentityRequest>(
+                    std::move(handle)));
+          },
+          Unretained(mock_request_ptr)));
+
+  ScriptState* script_state = context.GetScriptState();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLNullable<Credential>>>(
+          script_state);
+
+  DiscoverDigitalIdentityCredentialFromExternalSource(
+      resolver, *CreateValidGetOptions(context.GetScriptState()));
+
+  test::RunPendingTasks();
+
+  histogram_tester.ExpectUniqueSample(
+      "Blink.DigitalCredentials.Get.HasTransientUserActivation", true, 1);
+
+  // Activation should be consumed after the call.
+  EXPECT_FALSE(LocalFrame::HasTransientUserActivation(&context.GetFrame()));
+
+  context.GetWindow().GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::DigitalIdentityRequest::Name_, {});
+}
+
+// Test that navigator.credentials.get() fails without user activation.
+TEST_F(DigitalIdentityCredentialTest,
+       IdentityDigitalCredentialGetFailsWithoutUserActivation) {
+  V8TestingScope context(::blink::KURL("https://example.test"));
+  base::HistogramTester histogram_tester;
+
+  // Ensure no user activation.
+  ASSERT_FALSE(LocalFrame::HasTransientUserActivation(&context.GetFrame()));
+
+  ScopedWebIdentityDigitalCredentialsForTest scoped_digital_credentials(
+      /*enabled=*/true);
+
+  ScriptState* script_state = context.GetScriptState();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLNullable<Credential>>>(
+          script_state);
+
+  DiscoverDigitalIdentityCredentialFromExternalSource(
+      resolver, *CreateValidGetOptions(context.GetScriptState()));
+
+  ScriptPromiseTester tester(script_state, resolver->Promise());
+  tester.WaitUntilSettled();
+
+  histogram_tester.ExpectUniqueSample(
+      "Blink.DigitalCredentials.Get.HasTransientUserActivation", false, 1);
+
+  ASSERT_TRUE(tester.IsRejected());
+  auto* dom_exception = V8DOMException::ToWrappable(script_state->GetIsolate(),
+                                                    tester.Value().V8Value());
+  ASSERT_TRUE(dom_exception);
+  EXPECT_EQ(dom_exception->name(), "NotAllowedError");
+  EXPECT_EQ(dom_exception->message(),
+            "The 'digital-credentials-get' feature requires transient "
+            "activation.");
+}
+
+// Test that navigator.credentials.create() consumes the transient user
+// activation.
+TEST_F(DigitalIdentityCredentialTest,
+       IdentityDigitalCredentialCreateConsumesUserActivation) {
+  V8TestingScope context(::blink::KURL("https://example.test"));
+  base::HistogramTester histogram_tester;
+
+  // Mock user activation to pass the transient activation check.
+  LocalFrame::NotifyUserActivation(
+      &context.GetFrame(), mojom::UserActivationNotificationType::kTest);
+
+  // Activation should be present before the call.
+  ASSERT_TRUE(LocalFrame::HasTransientUserActivation(&context.GetFrame()));
+
+  ScopedWebIdentityDigitalCredentialsCreationForTest scoped_digital_credentials(
+      /*enabled=*/true);
+
+  std::unique_ptr mock_request = std::make_unique<MockDigitalIdentityRequest>();
+  auto mock_request_ptr = mock_request.get();
+  context.GetWindow().GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::DigitalIdentityRequest::Name_,
+      BindRepeating(
+          [](MockDigitalIdentityRequest* mock_request_ptr,
+             mojo::ScopedMessagePipeHandle handle) {
+            mock_request_ptr->Bind(
+                mojo::PendingReceiver<mojom::DigitalIdentityRequest>(
+                    std::move(handle)));
+          },
+          Unretained(mock_request_ptr)));
+
+  ScriptState* script_state = context.GetScriptState();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLNullable<Credential>>>(
+          script_state);
+  CreateDigitalIdentityCredentialInExternalSource(resolver,
+                                                  *CreateValidCreateOptions());
+
+  test::RunPendingTasks();
+
+  histogram_tester.ExpectUniqueSample(
+      "Blink.DigitalCredentials.Create.HasTransientUserActivation", true, 1);
+
+  // Activation should be consumed after the call.
+  EXPECT_FALSE(LocalFrame::HasTransientUserActivation(&context.GetFrame()));
+
+  context.GetWindow().GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::DigitalIdentityRequest::Name_, {});
+}
+
+// Test that navigator.credentials.create() fails without user activation.
+TEST_F(DigitalIdentityCredentialTest,
+       IdentityDigitalCredentialCreateFailsWithoutUserActivation) {
+  V8TestingScope context(::blink::KURL("https://example.test"));
+  base::HistogramTester histogram_tester;
+
+  // Ensure no user activation.
+  ASSERT_FALSE(LocalFrame::HasTransientUserActivation(&context.GetFrame()));
+
+  ScopedWebIdentityDigitalCredentialsCreationForTest scoped_digital_credentials(
+      /*enabled=*/true);
+
+  ScriptState* script_state = context.GetScriptState();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLNullable<Credential>>>(
+          script_state);
+  CreateDigitalIdentityCredentialInExternalSource(resolver,
+                                                  *CreateValidCreateOptions());
+
+  ScriptPromiseTester tester(script_state, resolver->Promise());
+  tester.WaitUntilSettled();
+
+  histogram_tester.ExpectUniqueSample(
+      "Blink.DigitalCredentials.Create.HasTransientUserActivation", false, 1);
+
+  ASSERT_TRUE(tester.IsRejected());
+  auto* dom_exception = V8DOMException::ToWrappable(script_state->GetIsolate(),
+                                                    tester.Value().V8Value());
+  ASSERT_TRUE(dom_exception);
+  EXPECT_EQ(dom_exception->name(), "NotAllowedError");
+  EXPECT_EQ(dom_exception->message(),
+            "The 'digital-credentials-create' feature requires transient "
+            "activation.");
+}
+
+TEST_F(DigitalIdentityCredentialTest,
+       IdentityDigitalCredentialGetSucceedsWithDelegatedActivation) {
+  V8TestingScope context(::blink::KURL("https://example.test"));
+
+  ASSERT_FALSE(LocalFrame::HasTransientUserActivation(&context.GetFrame()));
+  context.GetWindow().ActivateDigitalCredentialsGetTokenForTesting();
+  ASSERT_TRUE(context.GetWindow().IsDigitalCredentialsGetTokenActive());
+
+  ScopedWebIdentityDigitalCredentialsForTest scoped_digital_credentials(
+      /*enabled=*/true);
+  ScopedCapabilityDelegationDigitalCredentialsForTest scoped_delegation(
+      /*enabled=*/true);
+
+  std::unique_ptr mock_request = std::make_unique<MockDigitalIdentityRequest>();
+  auto mock_request_ptr = mock_request.get();
+  context.GetWindow().GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::DigitalIdentityRequest::Name_,
+      BindRepeating(
+          [](MockDigitalIdentityRequest* mock_request_ptr,
+             mojo::ScopedMessagePipeHandle handle) {
+            mock_request_ptr->Bind(
+                mojo::PendingReceiver<mojom::DigitalIdentityRequest>(
+                    std::move(handle)));
+          },
+          Unretained(mock_request_ptr)));
+
+  ScriptState* script_state = context.GetScriptState();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLNullable<Credential>>>(
+          script_state);
+
+  DiscoverDigitalIdentityCredentialFromExternalSource(
+      resolver, *CreateValidGetOptions(context.GetScriptState()));
+
+  test::RunPendingTasks();
+
+  EXPECT_FALSE(context.GetWindow().IsDigitalCredentialsGetTokenActive());
+  EXPECT_TRUE(context.GetWindow().document()->IsUseCounted(
+      blink::mojom::WebFeature::kIdentityDigitalCredentialsSuccess));
+
+  context.GetWindow().GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::DigitalIdentityRequest::Name_, {});
+}
+
+TEST_F(DigitalIdentityCredentialTest,
+       IdentityDigitalCredentialCreateSucceedsWithDelegatedActivation) {
+  V8TestingScope context(::blink::KURL("https://example.test"));
+
+  ASSERT_FALSE(LocalFrame::HasTransientUserActivation(&context.GetFrame()));
+  context.GetWindow().ActivateDigitalCredentialsCreateTokenForTesting();
+  ASSERT_TRUE(context.GetWindow().IsDigitalCredentialsCreateTokenActive());
+
+  ScopedWebIdentityDigitalCredentialsCreationForTest scoped_digital_credentials(
+      /*enabled=*/true);
+  ScopedCapabilityDelegationDigitalCredentialsForTest scoped_delegation(
+      /*enabled=*/true);
+
+  std::unique_ptr mock_request = std::make_unique<MockDigitalIdentityRequest>();
+  auto mock_request_ptr = mock_request.get();
+  context.GetWindow().GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::DigitalIdentityRequest::Name_,
+      BindRepeating(
+          [](MockDigitalIdentityRequest* mock_request_ptr,
+             mojo::ScopedMessagePipeHandle handle) {
+            mock_request_ptr->Bind(
+                mojo::PendingReceiver<mojom::DigitalIdentityRequest>(
+                    std::move(handle)));
+          },
+          Unretained(mock_request_ptr)));
+
+  ScriptState* script_state = context.GetScriptState();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLNullable<Credential>>>(
+          script_state);
+  CreateDigitalIdentityCredentialInExternalSource(resolver,
+                                                  *CreateValidCreateOptions());
+
+  test::RunPendingTasks();
+
+  EXPECT_FALSE(context.GetWindow().IsDigitalCredentialsCreateTokenActive());
+  EXPECT_TRUE(context.GetWindow().document()->IsUseCounted(
+      blink::mojom::WebFeature::kIdentityDigitalCredentialsCreationSuccess));
+
+  context.GetWindow().GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::DigitalIdentityRequest::Name_, {});
+}
+
+TEST_F(DigitalIdentityCredentialTest,
+       IdentityDigitalCredentialCreateShortCircuitsConsumption) {
+  V8TestingScope context(::blink::KURL("https://example.test"));
+
+  // Mock user activation.
+  LocalFrame::NotifyUserActivation(
+      &context.GetFrame(), mojom::UserActivationNotificationType::kTest);
+  ASSERT_TRUE(LocalFrame::HasTransientUserActivation(&context.GetFrame()));
+
+  // Simulate delegated activation.
+  context.GetWindow().ActivateDigitalCredentialsCreateTokenForTesting();
+  ASSERT_TRUE(context.GetWindow().IsDigitalCredentialsCreateTokenActive());
+
+  ScopedWebIdentityDigitalCredentialsCreationForTest scoped_digital_credentials(
+      /*enabled=*/true);
+  ScopedCapabilityDelegationDigitalCredentialsForTest scoped_delegation(
+      /*enabled=*/true);
+
+  std::unique_ptr mock_request = std::make_unique<MockDigitalIdentityRequest>();
+  auto mock_request_ptr = mock_request.get();
+  context.GetWindow().GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::DigitalIdentityRequest::Name_,
+      BindRepeating(
+          [](MockDigitalIdentityRequest* mock_request_ptr,
+             mojo::ScopedMessagePipeHandle handle) {
+            mock_request_ptr->Bind(
+                mojo::PendingReceiver<mojom::DigitalIdentityRequest>(
+                    std::move(handle)));
+          },
+          Unretained(mock_request_ptr)));
+
+  ScriptState* script_state = context.GetScriptState();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLNullable<Credential>>>(
+          script_state);
+  CreateDigitalIdentityCredentialInExternalSource(resolver,
+                                                  *CreateValidCreateOptions());
+
+  test::RunPendingTasks();
+
+  // Transient activation should be consumed.
+  EXPECT_FALSE(LocalFrame::HasTransientUserActivation(&context.GetFrame()));
+
+  // Delegated token should NOT be consumed because of short-circuit.
+  EXPECT_TRUE(context.GetWindow().IsDigitalCredentialsCreateTokenActive());
+
+  context.GetWindow().GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::DigitalIdentityRequest::Name_, {});
+}
+
+TEST_F(DigitalIdentityCredentialTest,
+       IdentityDigitalCredentialGetShortCircuitsConsumption) {
+  V8TestingScope context(::blink::KURL("https://example.test"));
+
+  // Mock user activation.
+  LocalFrame::NotifyUserActivation(
+      &context.GetFrame(), mojom::UserActivationNotificationType::kTest);
+  ASSERT_TRUE(LocalFrame::HasTransientUserActivation(&context.GetFrame()));
+
+  // Simulate delegated activation.
+  context.GetWindow().ActivateDigitalCredentialsGetTokenForTesting();
+  ASSERT_TRUE(context.GetWindow().IsDigitalCredentialsGetTokenActive());
+
+  ScopedWebIdentityDigitalCredentialsForTest scoped_digital_credentials(
+      /*enabled=*/true);
+  ScopedCapabilityDelegationDigitalCredentialsForTest scoped_delegation(
+      /*enabled=*/true);
+
+  std::unique_ptr mock_request = std::make_unique<MockDigitalIdentityRequest>();
+  auto mock_request_ptr = mock_request.get();
+  context.GetWindow().GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::DigitalIdentityRequest::Name_,
+      BindRepeating(
+          [](MockDigitalIdentityRequest* mock_request_ptr,
+             mojo::ScopedMessagePipeHandle handle) {
+            mock_request_ptr->Bind(
+                mojo::PendingReceiver<mojom::DigitalIdentityRequest>(
+                    std::move(handle)));
+          },
+          Unretained(mock_request_ptr)));
+
+  ScriptState* script_state = context.GetScriptState();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLNullable<Credential>>>(
+          script_state);
+
+  DiscoverDigitalIdentityCredentialFromExternalSource(
+      resolver, *CreateValidGetOptions(context.GetScriptState()));
+
+  test::RunPendingTasks();
+
+  // Transient activation should be consumed.
+  EXPECT_FALSE(LocalFrame::HasTransientUserActivation(&context.GetFrame()));
+
+  // Delegated token should NOT be consumed because of short-circuit.
+  EXPECT_TRUE(context.GetWindow().IsDigitalCredentialsGetTokenActive());
+
+  context.GetWindow().GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::DigitalIdentityRequest::Name_, {});
+}
+
+TEST_F(DigitalIdentityCredentialTest,
+       IdentityDigitalCredentialGetFailsOnOpaqueOrigin) {
+  V8TestingScope context(::blink::KURL("https://example.test"));
+
+  scoped_refptr<SecurityOrigin> opaque_origin =
+      context.GetWindow().GetSecurityOrigin()->DeriveNewOpaqueOrigin();
+  context.GetWindow().GetSecurityContext().SetSecurityOriginForTesting(
+      opaque_origin);
+
+  ASSERT_TRUE(context.GetWindow().GetSecurityOrigin()->IsOpaque());
+  ASSERT_TRUE(context.GetWindow().IsSecureContext());
+
+  LocalFrame::NotifyUserActivation(
+      &context.GetFrame(), mojom::UserActivationNotificationType::kTest);
+
+  ScopedWebIdentityDigitalCredentialsForTest scoped_digital_credentials(
+      /*enabled=*/true);
+
+  ScriptState* script_state = context.GetScriptState();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLNullable<Credential>>>(
+          script_state);
+
+  DiscoverDigitalIdentityCredentialFromExternalSource(
+      resolver, *CreateValidGetOptions(context.GetScriptState()));
+
+  ScriptPromiseTester tester(script_state, resolver->Promise());
+  tester.WaitUntilSettled();
+
+  ASSERT_TRUE(tester.IsRejected());
+  auto* dom_exception = V8DOMException::ToWrappable(script_state->GetIsolate(),
+                                                    tester.Value().V8Value());
+  ASSERT_TRUE(dom_exception);
+  EXPECT_EQ(dom_exception->name(), "NotAllowedError");
+  EXPECT_EQ(dom_exception->message(),
+            "The credential operation is not allowed in an opaque origin.");
+}
+
+TEST_F(DigitalIdentityCredentialTest,
+       IdentityDigitalCredentialCreateFailsOnOpaqueOrigin) {
+  V8TestingScope context(::blink::KURL("https://example.test"));
+
+  scoped_refptr<SecurityOrigin> opaque_origin =
+      context.GetWindow().GetSecurityOrigin()->DeriveNewOpaqueOrigin();
+  context.GetWindow().GetSecurityContext().SetSecurityOriginForTesting(
+      opaque_origin);
+
+  ASSERT_TRUE(context.GetWindow().GetSecurityOrigin()->IsOpaque());
+  ASSERT_TRUE(context.GetWindow().IsSecureContext());
+
+  LocalFrame::NotifyUserActivation(
+      &context.GetFrame(), mojom::UserActivationNotificationType::kTest);
+
+  ScopedWebIdentityDigitalCredentialsCreationForTest scoped_digital_credentials(
+      /*enabled=*/true);
+
+  ScriptState* script_state = context.GetScriptState();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLNullable<Credential>>>(
+          script_state);
+
+  CreateDigitalIdentityCredentialInExternalSource(resolver,
+                                                  *CreateValidCreateOptions());
+
+  ScriptPromiseTester tester(script_state, resolver->Promise());
+  tester.WaitUntilSettled();
+
+  ASSERT_TRUE(tester.IsRejected());
+  auto* dom_exception = V8DOMException::ToWrappable(script_state->GetIsolate(),
+                                                    tester.Value().V8Value());
+  ASSERT_TRUE(dom_exception);
+  EXPECT_EQ(dom_exception->name(), "NotAllowedError");
+  EXPECT_EQ(dom_exception->message(),
+            "The credential operation is not allowed in an opaque origin.");
 }
 
 }  // namespace blink

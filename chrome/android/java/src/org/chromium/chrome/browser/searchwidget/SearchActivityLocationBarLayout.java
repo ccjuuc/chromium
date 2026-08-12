@@ -20,14 +20,11 @@ import org.chromium.chrome.browser.locale.LocaleManager;
 import org.chromium.chrome.browser.omnibox.LocationBarBackgroundDrawable;
 import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
 import org.chromium.chrome.browser.omnibox.LocationBarLayout;
-import org.chromium.chrome.browser.omnibox.UrlBar;
 import org.chromium.chrome.browser.omnibox.UrlBarCoordinator;
-import org.chromium.chrome.browser.omnibox.UrlBarCoordinator.SelectionState;
-import org.chromium.chrome.browser.omnibox.UrlBarData;
 import org.chromium.chrome.browser.omnibox.status.StatusCoordinator;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteCoordinator;
-import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionHandler;
+import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionIntentHandler;
 import org.chromium.chrome.browser.toolbar.top.ToolbarPhone;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityExtras.IntentOrigin;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityExtras.SearchType;
@@ -41,7 +38,6 @@ public class SearchActivityLocationBarLayout extends LocationBarLayout {
     private boolean mPendingSearchPromoDecision;
     private boolean mPendingBeginQuery;
     private boolean mInteractionFromWidget;
-    private boolean mIsIncognito;
 
     public SearchActivityLocationBarLayout(Context context, AttributeSet attrs) {
         super(context, attrs, R.layout.location_bar);
@@ -52,13 +48,14 @@ public class SearchActivityLocationBarLayout extends LocationBarLayout {
             AutocompleteCoordinator autocompleteCoordinator,
             UrlBarCoordinator urlCoordinator,
             StatusCoordinator statusCoordinator,
-            LocationBarDataProvider locationBarDataProvider) {
+            LocationBarDataProvider locationBarDataProvider,
+            WindowAndroid windowAndroid) {
         super.initialize(
                 autocompleteCoordinator,
                 urlCoordinator,
                 statusCoordinator,
-                locationBarDataProvider);
-        mIsIncognito = locationBarDataProvider.isIncognitoBranded();
+                locationBarDataProvider,
+                windowAndroid);
         mPendingSearchPromoDecision = LocaleManager.getInstance().needToCheckForSearchEnginePromo();
         mAutocompleteCoordinator.setShouldPreventOmniboxAutocomplete(mPendingSearchPromoDecision);
 
@@ -101,7 +98,7 @@ public class SearchActivityLocationBarLayout extends LocationBarLayout {
         mAutocompleteCoordinator.setShouldPreventOmniboxAutocomplete(mPendingSearchPromoDecision);
         // Do not prefetch suggestions here; instead, we're asking the server for ZPS directly.
         // Issuing multiple requests would result with only the final one being executed.
-        mAutocompleteCoordinator.onTextChanged(mUrlCoordinator.getTextWithoutAutocomplete());
+        mAutocompleteCoordinator.onInputChanged();
 
         if (mPendingBeginQuery) {
             beginQueryInternal(searchType, windowAndroid);
@@ -114,14 +111,12 @@ public class SearchActivityLocationBarLayout extends LocationBarLayout {
      *
      * @param origin The SearchActivity requestor.
      * @param searchType The type of search to invoke.
-     * @param optionalText Prepopulate with a query, this may be null.
      * @param windowAndroid WindowAndroid context.
      */
     @VisibleForTesting
     public void beginQuery(
             @IntentOrigin int origin,
             @SearchType int searchType,
-            @Nullable String optionalText,
             @Nullable WindowAndroid windowAndroid) {
 
         // TODO(crbug.com/372036449): Move setting the hint text from the layout to using the URL
@@ -129,23 +124,16 @@ public class SearchActivityLocationBarLayout extends LocationBarLayout {
         if (origin == IntentOrigin.CUSTOM_TAB) {
             mUrlBar.setHint(R.string.omnibox_on_cct_empty_hint);
         } else if (origin == IntentOrigin.HUB) {
+            boolean isIncognito = mLocationBarDataProvider.isIncognitoBranded();
             @StringRes
             int hintTextRes =
-                    mIsIncognito
+                    isIncognito
                             ? R.string.hub_search_empty_hint_incognito
                             : R.string.hub_search_empty_hint;
             mUrlBar.setHint(hintTextRes);
         } else {
             mUrlBar.setHint(R.string.omnibox_empty_hint);
         }
-
-        // Clear the text regardless of the promo decision.  This allows the user to enter text
-        // before native has been initialized and have it not be cleared one the delayed beginQuery
-        // logic is performed.
-        mUrlCoordinator.setUrlBarData(
-                UrlBarData.forNonUrlText(optionalText == null ? "" : optionalText),
-                UrlBar.ScrollType.NO_SCROLL,
-                SelectionState.SELECT_END);
 
         if (mPendingSearchPromoDecision || (searchType != SearchType.TEXT && !mNativeInitialized)) {
             mPendingBeginQuery = true;
@@ -216,7 +204,7 @@ public class SearchActivityLocationBarLayout extends LocationBarLayout {
     @Override
     public int getVoiceRecognitionSource() {
         return mInteractionFromWidget
-                ? VoiceRecognitionHandler.VoiceInteractionSource.SEARCH_WIDGET
+                ? VoiceRecognitionIntentHandler.VoiceInteractionSource.SEARCH_WIDGET
                 : super.getVoiceRecognitionSource();
     }
 

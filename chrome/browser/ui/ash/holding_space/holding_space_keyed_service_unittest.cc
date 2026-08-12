@@ -85,6 +85,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/chromeos/styles/cros_styles.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_operations.h"
@@ -147,6 +148,7 @@ std::unique_ptr<KeyedService> BuildArcFileSystemBridge(
 std::unique_ptr<KeyedService> BuildVolumeManager(
     content::BrowserContext* context) {
   return std::make_unique<file_manager::VolumeManager>(
+      TestingBrowserProcess::GetGlobal()->local_state(),
       Profile::FromBrowserContext(context),
       nullptr /* drive_integration_service */,
       nullptr /* power_manager_client */,
@@ -593,9 +595,6 @@ class HoldingSpaceKeyedServiceTest : public BrowserWithTestWindowTest {
             FileSuggestKeyedServiceFactory::GetInstance(),
             base::BindRepeating(
                 &MockFileSuggestKeyedService::BuildMockFileSuggestKeyedService,
-                TestingBrowserProcess::GetGlobal()
-                    ->GetFeatures()
-                    ->application_locale_storage(),
                 temp_dir_.GetPath())}};
   }
 
@@ -779,6 +778,11 @@ class HoldingSpaceKeyedServiceWithExperimentalFeatureForGuestTest
     return profile_;
   }
 
+  std::unique_ptr<BrowserWindow> CreateBrowserWindow() override {
+    // Do not create browser window.
+    return nullptr;
+  }
+
   std::unique_ptr<Browser> CreateBrowser(
       Profile* profile,
       Browser::Type browser_type,
@@ -917,7 +921,7 @@ TEST_F(HoldingSpaceKeyedServiceTest, UpdatePersistentStorage) {
   EXPECT_EQ(primary_holding_space_model,
             primary_holding_space_service->model_for_testing());
 
-  base::Value::List persisted_holding_space_items;
+  base::ListValue persisted_holding_space_items;
 
   // Verify persistent storage is updated when adding each type of item.
   for (const auto type : holding_space_util::GetAllItemTypes()) {
@@ -993,7 +997,7 @@ TEST_F(HoldingSpaceKeyedServiceTest, PersistenceOfInProgressItems) {
   auto* finalized_holding_space_item_ptr = finalized_holding_space_item.get();
   holding_space_model->AddItem(std::move(finalized_holding_space_item));
 
-  base::Value::List persisted_holding_space_items;
+  base::ListValue persisted_holding_space_items;
   persisted_holding_space_items.Append(
       finalized_holding_space_item_ptr->Serialize());
 
@@ -1122,7 +1126,7 @@ TEST_F(HoldingSpaceKeyedServiceTest, UpdatePersistentStorageAfterMove) {
       file_manager::util::GetFileManagerFileSystemContext(GetProfile());
   ASSERT_TRUE(context);
 
-  base::Value::List persisted_holding_space_items;
+  base::ListValue persisted_holding_space_items;
 
   // Verify persistent storage is updated when adding each type of item.
   for (const auto type : holding_space_util::GetAllItemTypes()) {
@@ -1344,7 +1348,7 @@ TEST_F(HoldingSpaceKeyedServiceTest, UpdateItemsOverwrittenByMove) {
   };
   std::map<HoldingSpaceItem::Type, TestCase> test_config;
 
-  base::Value::List persisted_holding_space_items;
+  base::ListValue persisted_holding_space_items;
 
   // Configure holding space state for the test. For each item adds two holding
   // space items to the model - "src" and "dst" (during the test, the src item's
@@ -1385,7 +1389,7 @@ TEST_F(HoldingSpaceKeyedServiceTest, UpdateItemsOverwrittenByMove) {
                 HoldingSpacePersistenceDelegate::kPersistencePath),
             persisted_holding_space_items);
 
-  base::Value::List final_persisted_holding_space_items;
+  base::ListValue final_persisted_holding_space_items;
   // Runs the test logic.
   for (const auto type : holding_space_util::GetAllItemTypes()) {
     const TestCase& test_case = test_config[type];
@@ -1491,12 +1495,12 @@ TEST_F(HoldingSpaceKeyedServiceTest, RestorePersistentStorage) {
   }
 
   HoldingSpaceModel::ItemList restored_holding_space_items;
-  base::Value::List persisted_holding_space_items_after_restoration;
+  base::ListValue persisted_holding_space_items_after_restoration;
 
   // Create a secondary profile w/ a pre-populated pref store.
   TestingProfile* const secondary_profile = CreateSecondaryProfile(
       base::BindLambdaForTesting([&](TestingPrefStore* pref_store) {
-        base::Value::List persisted_holding_space_items_before_restoration;
+        base::ListValue persisted_holding_space_items_before_restoration;
 
         // Persist some holding space items of each type.
         for (const auto type : holding_space_util::GetAllItemTypes()) {
@@ -1612,13 +1616,13 @@ TEST_F(HoldingSpaceKeyedServiceTest,
 
   std::vector<std::string> initialized_items_before_delayed_mount;
   HoldingSpaceModel::ItemList restored_holding_space_items;
-  base::Value::List persisted_holding_space_items_after_restoration;
-  base::Value::List persisted_holding_space_items_after_delayed_mount;
+  base::ListValue persisted_holding_space_items_after_restoration;
+  base::ListValue persisted_holding_space_items_after_delayed_mount;
 
   // Create a secondary profile w/ a pre-populated pref store.
   TestingProfile* const secondary_profile = CreateSecondaryProfile(
       base::BindLambdaForTesting([&](TestingPrefStore* pref_store) {
-        base::Value::List persisted_holding_space_items_before_restoration;
+        base::ListValue persisted_holding_space_items_before_restoration;
 
         // Persist some holding space items of each type.
         for (const auto type : holding_space_util::GetAllItemTypes()) {
@@ -1782,12 +1786,12 @@ TEST_F(HoldingSpaceKeyedServiceTest,
       HoldingSpaceKeyedServiceFactory::GetInstance()->GetService(GetProfile());
 
   HoldingSpaceModel::ItemList restored_holding_space_items;
-  base::Value::List persisted_holding_space_items_after_delayed_mount;
+  base::ListValue persisted_holding_space_items_after_delayed_mount;
 
   // Create a secondary profile w/ a pre-populated pref store.
   TestingProfile* const secondary_profile = CreateSecondaryProfile(
       base::BindLambdaForTesting([&](TestingPrefStore* pref_store) {
-        base::Value::List persisted_holding_space_items_before_restoration;
+        base::ListValue persisted_holding_space_items_before_restoration;
 
         // Persist some holding space items of each type.
         for (const auto type : holding_space_util::GetAllItemTypes()) {
@@ -1924,13 +1928,13 @@ TEST_F(HoldingSpaceKeyedServiceTest,
 
   std::vector<std::string> initialized_items_before_delayed_mount;
   HoldingSpaceModel::ItemList restored_holding_space_items;
-  base::Value::List persisted_holding_space_items_after_restoration;
-  base::Value::List persisted_holding_space_items_after_delayed_mount;
+  base::ListValue persisted_holding_space_items_after_restoration;
+  base::ListValue persisted_holding_space_items_after_delayed_mount;
 
   // Create a secondary profile w/ a pre-populated pref store.
   TestingProfile* const secondary_profile = CreateSecondaryProfile(
       base::BindLambdaForTesting([&](TestingPrefStore* pref_store) {
-        base::Value::List persisted_holding_space_items_before_restoration;
+        base::ListValue persisted_holding_space_items_before_restoration;
 
         // Persist some holding space items of each type.
         for (const auto type : holding_space_util::GetAllItemTypes()) {
@@ -2095,13 +2099,13 @@ TEST_F(HoldingSpaceKeyedServiceTest, MAYBE_RemoveOlderFilesFromPersistence) {
       HoldingSpaceKeyedServiceFactory::GetInstance()->GetService(GetProfile());
 
   HoldingSpaceModel::ItemList restored_holding_space_items;
-  base::Value::List persisted_holding_space_items_after_restoration;
+  base::ListValue persisted_holding_space_items_after_restoration;
   base::Time last_creation_time = base::Time::Now();
 
   // Create a secondary profile w/ a pre-populated pref store.
   TestingProfile* const secondary_profile = CreateSecondaryProfile(
       base::BindLambdaForTesting([&](TestingPrefStore* pref_store) {
-        base::Value::List persisted_holding_space_items_before_restoration;
+        base::ListValue persisted_holding_space_items_before_restoration;
 
         // Persist some holding space items of each type.
         for (const auto type : holding_space_util::GetAllItemTypes()) {
@@ -2122,9 +2126,9 @@ TEST_F(HoldingSpaceKeyedServiceTest, MAYBE_RemoveOlderFilesFromPersistence) {
           persisted_holding_space_items_before_restoration.Append(
               fresh_holding_space_item->Serialize());
 
-            // We expect all holding space items of other types to be removed
-            // from persistence during restoration due to being older than
-            // `kMaxFileAge`.
+          // We expect all holding space items of other types to be removed
+          // from persistence during restoration due to being older than
+          // `kMaxFileAge`.
           const bool should_restore =
               type == HoldingSpaceItem::Type::kPinnedFile;
 
@@ -2431,7 +2435,9 @@ TEST_F(HoldingSpaceKeyedServiceTest, AddInProgressDownloadItem) {
                   gfx::ImageSkiaOperations::CreateSuperimposedImage(
                       image_util::CreateEmptyImage(kImageSize),
                       gfx::CreateVectorIcon(
-                          vector_icons::kErrorOutlineIcon,
+                          ::features::IsRoundedIconsEnabled()
+                              ? vector_icons::kErrorIcon
+                              : vector_icons::kErrorOutlineOldIcon,
                           kHoldingSpaceIconSize,
                           cros_styles::ResolveColor(
                               cros_styles::ColorName::kIconColorAlert,
@@ -2470,7 +2476,9 @@ TEST_F(HoldingSpaceKeyedServiceTest, AddInProgressDownloadItem) {
                   gfx::ImageSkiaOperations::CreateSuperimposedImage(
                       image_util::CreateEmptyImage(kImageSize),
                       gfx::CreateVectorIcon(
-                          vector_icons::kErrorOutlineIcon,
+                          ::features::IsRoundedIconsEnabled()
+                              ? vector_icons::kErrorIcon
+                              : vector_icons::kErrorOutlineOldIcon,
                           kHoldingSpaceIconSize,
                           cros_styles::ResolveColor(
                               cros_styles::ColorName::kIconColorWarning,
@@ -3141,7 +3149,7 @@ class HoldingSpaceKeyedServicePrintToPdfIntegrationTest
 
     pdf_printer_handler_->StartPrint(
         job_title,
-        /*settings=*/base::Value::Dict(),
+        /*settings=*/base::DictValue(),
         base::MakeRefCounted<base::RefCountedString>(std::string()),
         /*callback=*/base::DoNothing());
 
@@ -3159,7 +3167,8 @@ class HoldingSpaceKeyedServicePrintToPdfIntegrationTest
     // Create the PDF printer handler.
     Browser* browser = GetBrowserForPdfPrinterHandler();
     pdf_printer_handler_ = std::make_unique<::printing::PdfPrinterHandler>(
-        browser->profile(), browser->tab_strip_model()->GetActiveWebContents(),
+        browser->GetProfile(),
+        browser->tab_strip_model()->GetActiveWebContents(),
         /*sticky_settings=*/nullptr);
   }
 
@@ -3817,7 +3826,7 @@ TEST_F(HoldingSpaceSuggestionsDelegateTest, RestoreSuggestions) {
   // Create a secondary profile with a persisted drive file suggestion.
   TestingProfile* const secondary_profile = CreateSecondaryProfile(
       base::BindLambdaForTesting([&](TestingPrefStore* pref_store) {
-        base::Value::List persisted_items;
+        base::ListValue persisted_items;
         persisted_items.Append(drive_file_suggestion->Serialize());
         pref_store->SetValueSilently(
             HoldingSpacePersistenceDelegate::kPersistencePath,
@@ -3878,7 +3887,7 @@ TEST_F(HoldingSpaceSuggestionsDelegateTest, UpdateSuggestionsWithDelayedMount) {
   // Create a secondary profile with a persisted delayed file suggestion.
   TestingProfile* const secondary_profile = CreateSecondaryProfile(
       base::BindLambdaForTesting([&](TestingPrefStore* pref_store) {
-        base::Value::List persisted_items;
+        base::ListValue persisted_items;
         persisted_items.Append(delayed_holding_space_item->Serialize());
         pref_store->SetValueSilently(
             HoldingSpacePersistenceDelegate::kPersistencePath,

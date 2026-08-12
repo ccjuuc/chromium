@@ -372,9 +372,6 @@ TEST_F(MessageReceiverImplTest, OnFeatrueSetupResponseReceived) {
 
 TEST_F(MessageReceiverImplTest,
        OnFetchCameraRollItemsResponseReceivedWthFeatureEnabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(features::kPhoneHubCameraRoll);
-
   proto::FetchCameraRollItemsResponse expected_response;
   proto::CameraRollItem* item_proto = expected_response.add_items();
   proto::CameraRollItemMetadata* metadata = item_proto->mutable_metadata();
@@ -401,33 +398,7 @@ TEST_F(MessageReceiverImplTest,
 }
 
 TEST_F(MessageReceiverImplTest,
-       OnFetchCameraRollItemsResponseReceivedWithFeatureDisabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(features::kPhoneHubCameraRoll);
-
-  proto::FetchCameraRollItemsResponse expected_response;
-  proto::CameraRollItem* item_proto = expected_response.add_items();
-  proto::CameraRollItemMetadata* metadata = item_proto->mutable_metadata();
-  metadata->set_key("key");
-  proto::CameraRollItemThumbnail* thumbnail = item_proto->mutable_thumbnail();
-  thumbnail->set_data("encoded_thumbnail_data");
-
-  // Simulate receiving a message.
-  const std::string expected_message = SerializeMessage(
-      proto::FETCH_CAMERA_ROLL_ITEMS_RESPONSE, &expected_response);
-  fake_connection_manager_->NotifyMessageReceived(expected_message);
-
-  EXPECT_EQ(0u, GetNumPhoneStatusSnapshotCalls());
-  EXPECT_EQ(0u, GetNumPhoneStatusUpdatedCalls());
-  EXPECT_EQ(0u, GetNumFeatureSetupResponseCalls());
-  EXPECT_EQ(0u, GetNumFetchCameraRollItemsResponseCalls());
-}
-
-TEST_F(MessageReceiverImplTest,
        OnFetchCameraRollItemDataResponseReceivedWthFeatureEnabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(features::kPhoneHubCameraRoll);
-
   proto::FetchCameraRollItemDataResponse expected_response;
   expected_response.mutable_metadata()->set_key("key");
   expected_response.set_file_availability(
@@ -453,33 +424,7 @@ TEST_F(MessageReceiverImplTest,
   EXPECT_EQ(1234, actual_response.payload_id());
 }
 
-TEST_F(MessageReceiverImplTest,
-       OnFetchCameraRollItemDataResponseReceivedWithFeatureDisabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(features::kPhoneHubCameraRoll);
-
-  proto::FetchCameraRollItemDataResponse expected_response;
-  expected_response.mutable_metadata()->set_key("key");
-  expected_response.set_file_availability(
-      proto::FetchCameraRollItemDataResponse::AVAILABLE);
-  expected_response.set_payload_id(1234);
-
-  // Simulate receiving a message.
-  const std::string expected_message = SerializeMessage(
-      proto::FETCH_CAMERA_ROLL_ITEM_DATA_RESPONSE, &expected_response);
-  fake_connection_manager_->NotifyMessageReceived(expected_message);
-
-  EXPECT_EQ(0u, GetNumPhoneStatusSnapshotCalls());
-  EXPECT_EQ(0u, GetNumPhoneStatusUpdatedCalls());
-  EXPECT_EQ(0u, GetNumFeatureSetupResponseCalls());
-  EXPECT_EQ(0u, GetNumFetchCameraRollItemsResponseCalls());
-  EXPECT_EQ(0u, GetNumFetchCameraRollItemDataResponseCalls());
-}
-
-TEST_F(MessageReceiverImplTest, OnPingResponseReceivedFeatureEnabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(features::kPhoneHubPingOnBubbleOpen);
-
+TEST_F(MessageReceiverImplTest, OnPingResponseReceived) {
   proto::PingResponse expected_response;
 
   // Simulate receiving a message
@@ -488,20 +433,6 @@ TEST_F(MessageReceiverImplTest, OnPingResponseReceivedFeatureEnabled) {
   fake_connection_manager_->NotifyMessageReceived(expected_message);
 
   EXPECT_EQ(1u, GetNumPingResponseCalls());
-}
-
-TEST_F(MessageReceiverImplTest, OnPingResponseReceivedFeatureDisabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(features::kPhoneHubPingOnBubbleOpen);
-
-  proto::PingResponse expected_response;
-
-  // Simulate receiving a message
-  const std::string expected_message =
-      SerializeMessage(proto::PING_RESPONSE, &expected_response);
-  fake_connection_manager_->NotifyMessageReceived(expected_message);
-
-  EXPECT_EQ(0u, GetNumPingResponseCalls());
 }
 
 TEST_F(MessageReceiverImplTest, OnAppStreamUpdateReceived) {
@@ -628,10 +559,8 @@ TEST_F(MessageReceiverImplTest,
 
 TEST_F(MessageReceiverImplTest, OnMessageReceivedParseFailureStates) {
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      /*enabled_features=*/{features::kEcheSWA, features::kPhoneHubCameraRoll,
-                            features::kPhoneHubPingOnBubbleOpen},
-      /*disabled_features=*/{});
+  feature_list.InitWithFeatures(/*enabled_features=*/{features::kEcheSWA},
+                                /*disabled_features=*/{});
 
   std::string expected_message;
 

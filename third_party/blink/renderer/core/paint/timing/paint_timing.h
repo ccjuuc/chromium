@@ -16,39 +16,39 @@
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/paint/paint_event.h"
 #include "third_party/blink/renderer/core/paint/timing/first_meaningful_paint_detector.h"
+#include "third_party/blink/renderer/core/paint/timing/paint_timing_callbacks.h"
 #include "third_party/blink/renderer/core/timing/animation_frame_timing_info.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 
-namespace base {
-class TickClock;
-}
-
 namespace blink {
-
 struct DOMPaintTimingInfo;
+class LargestContentfulPaintManager;
+class ImageElementTiming;
 class LocalFrame;
-
-using PaintTimingCallback =
-    base::OnceCallback<void(const base::TimeTicks&, const DOMPaintTimingInfo&)>;
-
-using OptionalPaintTimingCallback = std::optional<PaintTimingCallback>;
+class PaintTimingDetector;
+class TextElementTiming;
 
 // PaintTiming is responsible for tracking paint-related timings for a given
 // document.
 class CORE_EXPORT PaintTiming final : public GarbageCollected<PaintTiming>,
                                       public Supplement<Document> {
-  friend class FirstMeaningfulPaintDetector;
-  using ReportTimeCallback =
-      base::OnceCallback<void(const viz::FrameTimingDetails&)>;
   using RequestAnimationFrameTimesAfterBackForwardCacheRestore = std::array<
       base::TimeTicks,
       WebPerformanceMetricsForReporting::
           kRequestAnimationFramesToRecordAfterBackForwardCacheRestore>;
 
  public:
-  static const char kSupplementName[];
+  using ReportTimeCallback =
+      base::OnceCallback<void(const viz::FrameTimingDetails&)>;
+
+  // `CallbackManager` is a unit-test specific interface to capture callbacks so
+  // that the lifecycle can be be controlled synchronously.
+  class CallbackManager : public GarbageCollectedMixin {
+   public:
+    virtual void RegisterCallback(ReportTimeCallback) = 0;
+  };
 
   struct PaintTimingInfo {
     // https://w3c.github.io/paint-timing/#paint-timing-info-rendering-update-end-time
@@ -57,6 +57,8 @@ class CORE_EXPORT PaintTiming final : public GarbageCollected<PaintTiming>,
     // https://w3c.github.io/paint-timing/#paint-timing-info-implementation-defined-presentation-time
     base::TimeTicks presentation_time;
   };
+
+  static const char kSupplementName[];
 
   explicit PaintTiming(Document&);
   PaintTiming(const PaintTiming&) = delete;
@@ -94,7 +96,7 @@ class CORE_EXPORT PaintTiming final : public GarbageCollected<PaintTiming>,
       base::TimeTicks presentation_time,
       FirstMeaningfulPaintDetector::HadUserInput had_input);
   void NotifyPaint(bool is_first_paint, bool text_painted, bool image_painted);
-  void NotifyPaintFinished() { MarkPaintTimingInternal(); }
+  void NotifyPaintFinished();
 
   // The getters below return monotonically-increasing seconds, or zero if the
   // given paint event has not yet occurred. See the comments for
@@ -165,9 +167,15 @@ class CORE_EXPORT PaintTiming final : public GarbageCollected<PaintTiming>,
     return paint_details_.first_contentful_paint_presentation_;
   }
 
+  base::TimeTicks FirstPaintRendered() const {
+    return paint_details_.first_paint_;
+  }
+
   FirstMeaningfulPaintDetector& GetFirstMeaningfulPaintDetector() {
     return *fmp_detector_;
   }
+
+  Document* GetDocument() { return GetSupplementable(); }
 
   void RegisterNotifyPresentationTime(ReportTimeCallback);
   void ReportPresentationTime(PaintEvent,
@@ -178,14 +186,34 @@ class CORE_EXPORT PaintTiming final : public GarbageCollected<PaintTiming>,
       wtf_size_t index,
       const viz::FrameTimingDetails&);
 
-  // The caller owns the |clock| which must outlive the PaintTiming.
-  void SetTickClockForTesting(const base::TickClock* clock);
-
   void OnRestoredFromBackForwardCache();
 
   void MarkPaintTiming();
 
+  void OnInputOrScroll();
+
   void Trace(Visitor*) const override;
+
+  // Returns the `LargestContentfulPaintManager` associated with this
+  // `PaintTiming`. Returns null if hard LCP is no longer being recorded, e.g.
+  // after first input.
+  LargestContentfulPaintManager* GetLargestContentfulPaintManager() {
+    return largest_contentful_paint_manager_;
+  }
+
+  // Sets the `CallbackManager` to handle presentation time callbacks. Used for
+  // unit tests.
+  void SetCallbackManagerForTest(CallbackManager* manager) {
+    callback_manager_ = manager;
+  }
+
+  // TODO(crbug.com/503420427): Consider removing this and proxying through
+  // PaintTiming.
+  PaintTimingDetector& GetPaintTimingDetector() {
+    return *paint_timing_detector_.Get();
+  }
+
+  ImageElementTiming* GetImageElementTiming() { return image_element_timing_; }
 
  private:
   friend class RecodingTimeAfterBackForwardCacheRestoreFrameCallback;
@@ -229,10 +257,6 @@ class CORE_EXPORT PaintTiming final : public GarbageCollected<PaintTiming>,
   void RegisterNotifyFirstPaintAfterBackForwardCacheRestorePresentationTime(
       wtf_size_t index);
 
-  base::TimeTicks FirstPaintRendered() const {
-    return paint_details_.first_paint_;
-  }
-
   Vector<base::TimeTicks>
       first_paints_after_back_forward_cache_restore_presentation_;
   Vector<RequestAnimationFrameTimesAfterBackForwardCacheRestore>
@@ -264,16 +288,19 @@ class CORE_EXPORT PaintTiming final : public GarbageCollected<PaintTiming>,
 
   base::TimeTicks lcp_mouse_over_dispatch_time_;
 
+  Member<PaintTimingDetector> paint_timing_detector_;
+  Member<ImageElementTiming> image_element_timing_;
+  Member<TextElementTiming> text_element_timing_;
+  Member<LargestContentfulPaintManager> largest_contentful_paint_manager_;
   Member<FirstMeaningfulPaintDetector> fmp_detector_;
   // The callback ID for requestAnimationFrame to record its time after the page
   // is restored from the back-forward cache.
   int raf_after_bfcache_restore_measurement_callback_id_ = 0;
 
-  const base::TickClock* clock_;
-
-  FRIEND_TEST_ALL_PREFIXES(FirstMeaningfulPaintDetectorTest,
-                           TwoLayoutsSignificantFirst);
   HashSet<PaintEvent> pending_paint_events_;
+
+  // Set in some unit tests.
+  Member<CallbackManager> callback_manager_;
 };
 
 }  // namespace blink

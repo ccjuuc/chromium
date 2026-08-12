@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <fcntl.h>
 #include <stddef.h>
 #include <stdlib.h>
 
@@ -10,6 +11,7 @@
 #include <utility>
 
 #include "base/allocator/partition_alloc_support.h"
+#include "base/byte_size.h"
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
@@ -17,14 +19,15 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/message_loop/message_pump_type.h"
+#include "base/message_loop/message_pump_wakeup_counter.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/clamped_math.h"
 #include "base/process/current_process.h"
 #include "base/process/process_metrics.h"
 #include "base/rand_util.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/synchronization/lock_metrics_recorder.h"
 #include "base/system/sys_info.h"
 #include "base/task/current_thread.h"
 #include "base/task/single_thread_task_executor.h"
@@ -55,6 +58,7 @@
 #include "content/public/gpu/content_gpu_client.h"
 #include "gpu/command_buffer/service/gpu_switches.h"
 #include "gpu/config/gpu_driver_bug_list.h"
+#include "gpu/config/gpu_driver_bug_workarounds.h"
 #include "gpu/config/gpu_finch_features.h"
 #include "gpu/config/gpu_info_collector.h"
 #include "gpu/config/gpu_preferences.h"
@@ -93,7 +97,7 @@
 #include "base/posix/eintr_wrapper.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "components/tracing/common/graphics_memory_dump_provider_android.h"
-#include "sandbox/linux/services/thread_helpers.h" // nogncheck
+#include "sandbox/linux/services/thread_helpers.h"  // nogncheck
 #include "sandbox/policy/features.h"
 #include "sandbox/policy/linux/landlock_gpu_policy_android.h"
 #include "sandbox/policy/sandbox_type.h"
@@ -106,6 +110,10 @@
 #include "media/base/win/mf_initializer.h"
 #include "sandbox/policy/win/sandbox_warmup.h"
 #include "sandbox/win/src/sandbox.h"
+#endif
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+#include "services/webnn/public/cpp/webnn_sandbox_init.h"
 #endif
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
@@ -156,7 +164,9 @@ class ContentSandboxHelper : public gpu::GpuSandboxHelper {
 
  private:
   // SandboxHelper:
-  void PreSandboxStartup(const gpu::GpuPreferences& gpu_prefs) override {
+  void PreSandboxStartup(const gpu::GpuPreferences& gpu_prefs,
+                         const gpu::GpuDriverBugWorkarounds& workarounds,
+                         const gpu::GPUInfo* gpu_info) override {
     TRACE_EVENT("gpu,startup", "gpu_main::PreSandboxStartup");
     // Warm up resources that don't need access to GPUInfo.
     {
@@ -172,19 +182,25 @@ class ContentSandboxHelper : public gpu::GpuSandboxHelper {
 
 #if BUILDFLAG(USE_VAAPI)
 #if BUILDFLAG(IS_CHROMEOS)
-    media::VaapiWrapper::PreSandboxInitialization();
+    media::VaapiWrapper::PreSandboxInitialization(
+        /*allow_disabling_global_lock=*/false, &workarounds, gpu_info);
 #else  // For Linux with VA-API support.
-    if (!gpu_prefs.disable_accelerated_video_decode)
-      media::VaapiWrapper::PreSandboxInitialization();
+    if (!gpu_prefs.disable_accelerated_video_decode) {
+      media::VaapiWrapper::PreSandboxInitialization(
+          /*allow_disabling_global_lock=*/false, &workarounds, gpu_info);
+    }
 #endif
 #endif  // BUILDFLAG(USE_VAAPI)
 #if BUILDFLAG(IS_WIN)
     media::PreSandboxMediaFoundationInitialization();
 #endif
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+    webnn::PreSandboxWebNNInitialization();
+#endif
 
     // On Linux, reading system memory doesn't work through the GPU sandbox.
     // This value is cached, so access it here to populate the cache.
-    base::SysInfo::AmountOfPhysicalMemory();
+    base::SysInfo::AmountOfTotalPhysicalMemory();
   }
 
   bool EnsureSandboxInitialized(gpu::GpuWatchdogThread* watchdog_thread,
@@ -331,6 +347,8 @@ int GpuMain(MainFunctionParams parameters) {
 
   base::PlatformThread::SetName("CrGpuMain");
   mojo::InterfaceEndpointClient::SetThreadNameSuffixForMetrics("GpuMain");
+  base::MessagePumpWakeupCounter::InitializeForCurrentThread("GpuMain");
+  base::LockMetricsRecorder::EnableRecordingOnCurrentThread("CrGpuMain");
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   // Thread type delegate of the process should be registered before
@@ -342,8 +360,7 @@ int GpuMain(MainFunctionParams parameters) {
   SandboxedProcessThreadTypeHandler::Create();
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
-  base::PlatformThread::SetCurrentThreadType(
-      base::ThreadType::kDisplayCritical);
+  base::PlatformThread::SetDefaultThreadType(base::ThreadType::kPresentation);
 
   auto gpu_init = std::make_unique<gpu::GpuInit>();
   ContentSandboxHelper sandbox_helper;
@@ -416,7 +433,7 @@ int GpuMain(MainFunctionParams parameters) {
 
   GetContentClient()->SetGpuInfo(gpu_init->gpu_info());
 
-  base::ThreadType io_thread_type = base::ThreadType::kDisplayCritical;
+  base::ThreadType io_thread_type = base::ThreadType::kPresentation;
   // ChildProcess will start the ThreadPoolInstance now that the sandbox is
   // initialized.
   ChildProcess gpu_process(io_thread_type);
@@ -429,7 +446,7 @@ int GpuMain(MainFunctionParams parameters) {
   base::RunLoop run_loop;
   GpuChildThread* child_thread =
       new GpuChildThread(run_loop.QuitClosure(), std::move(gpu_init));
-  child_thread->Init(start_time, main_thread_task_executor->sequence_manager());
+  child_thread->Init(start_time);
 
   gpu_process.set_main_thread(child_thread);
 

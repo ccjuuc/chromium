@@ -27,17 +27,15 @@ static_library("cleanup") {
     "web_app_cleanup_handler.h",
   ]
 
-  public_deps = [
-    "//chrome/browser:browser_public_dependencies",
-    "//chrome/browser/ui:browser_list",
-  ]
+  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
 
   deps = [
     "//base",
-    "//chrome/browser:browser_process",
     "//chrome/browser/ash/printing/print_management",
     "//chrome/browser/browsing_data:constants",
+    "//chrome/browser/lifetime",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/profiles:profile_manager",
     "//chrome/browser/ui/browser_window",
     "//chrome/browser/web_applications",
     "//chrome/common:constants",
@@ -134,6 +132,8 @@ source_set("browser_tests") {
     "//chrome/browser/ash/profiles",
     "//chrome/browser/extensions",
     "//chrome/browser/extensions:test_support",
+    "//chrome/browser/lifetime",
+    "//chrome/browser/policy:extension_force_install_mixin",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui",
     "//chrome/browser/ui/ash/shelf",
@@ -156,8 +156,4 @@ source_set("browser_tests") {
     "//ui/base:types",
     "//url",
   ]
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }

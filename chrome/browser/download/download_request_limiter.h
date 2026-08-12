@@ -10,6 +10,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/functional/callback.h"
@@ -27,6 +28,10 @@
 
 namespace content {
 class WebContents;
+}
+
+namespace policy {
+class AutomaticDownloadsPolicyTest;
 }
 
 // DownloadRequestLimiter is responsible for determining whether a download
@@ -172,8 +177,11 @@ class DownloadRequestLimiter
                            const url::Origin& request_origin);
 
     // Notifies the callbacks as to whether the download is allowed or not.
-    // Returns false if it didn't notify all callbacks.
-    bool NotifyCallbacks(bool allow);
+    // Only callbacks queued for `request_origin` are eligible to be allowed;
+    // callbacks queued for any other origin are always notified with false.
+    // Returns true if downloads were throttled and remaining callbacks were
+    // kept queued.
+    bool NotifyCallbacks(const url::Origin& request_origin, bool allow);
 
     // Set the download limiter state and notify if it has changed. Callers must
     // guarantee that |status| and |setting| correspond to each other.
@@ -204,10 +212,11 @@ class DownloadRequestLimiter
     // True if a download has been seen on the current page load.
     bool download_seen_;
 
-    // Callbacks we need to notify. This is only non-empty if we're showing a
-    // dialog.
+    // Callbacks we need to notify, paired with the origin that initiated each
+    // download. This is only non-empty if we're showing a dialog.
     // See description above CanDownload for details on lifetime of callbacks.
-    std::vector<DownloadRequestLimiter::Callback> callbacks_;
+    std::vector<std::pair<url::Origin, DownloadRequestLimiter::Callback>>
+        callbacks_;
 
     // Origins that have non-default download state.
     using DownloadStatusMap = std::map<url::Origin, DownloadStatus>;
@@ -231,15 +240,16 @@ class DownloadRequestLimiter
 
   // Returns the download status for a page. This does not change the state in
   // anyway.
-  DownloadStatus GetDownloadStatus(content::WebContents* web_contents);
+  DownloadStatus GetDownloadStatus(content::WebContents* web_contents) const;
 
   // Returns the download UI status for a page for the purposes of showing an
   // omnibox decoration.
-  DownloadUiStatus GetDownloadUiStatus(content::WebContents* web_contents);
+  DownloadUiStatus GetDownloadUiStatus(
+      content::WebContents* web_contents) const;
 
   // Returns the download origin that is associated with the current UI status
   // for the purposes of showing an omnibox decoration.
-  GURL GetDownloadOrigin(content::WebContents* web_contents);
+  GURL GetDownloadOrigin(content::WebContents* web_contents) const;
 
   // Check if download can proceed and notifies the callback on UI thread.
   void CanDownload(const content::WebContents::Getter& web_contents_getter,
@@ -271,21 +281,29 @@ class DownloadRequestLimiter
       AutomaticDownloads_LastVisited);
   friend class base::RefCountedThreadSafe<DownloadRequestLimiter>;
   friend class BackgroundFetchBrowserTest;
+  friend class policy::AutomaticDownloadsPolicyTest;
   friend class ContentSettingBubbleDialogTest;
   friend class DownloadRequestLimiterTest;
   friend class TabDownloadState;
 
   ~DownloadRequestLimiter();
 
+  // Gets the download state for the specified controller. Returns nullptr if
+  // the TabDownloadState does not exist.
+  //
+  // The returned TabDownloadState is owned by the DownloadRequestLimiter and
+  // deleted when no longer needed (the Remove method is invoked).
+  TabDownloadState* GetDownloadState(content::WebContents* web_contents) const;
+
   // Gets the download state for the specified controller. If the
-  // TabDownloadState does not exist and |create| is true, one is created.
+  // TabDownloadState does not exist, one is created.
   // See TabDownloadState's constructor description for details on the two
   // controllers.
   //
   // The returned TabDownloadState is owned by the DownloadRequestLimiter and
   // deleted when no longer needed (the Remove method is invoked).
-  TabDownloadState* GetDownloadState(content::WebContents* web_contents,
-                                     bool create);
+  TabDownloadState* GetOrCreateDownloadState(
+      content::WebContents* web_contents);
 
   // Does the work of updating the download status on the UI thread and
   // potentially prompting the user.

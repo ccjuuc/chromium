@@ -1,7 +1,6 @@
 <?xml version="1.0" ?>
 <!DOCTYPE translationbundle>
 <translationbundle lang="sr-Latn">
-<translation id="1028699632127661925">Šalje se na uređaj <ph name="DEVICE_NAME" />...</translation>
 <translation id="111910763555783249">Podešavanja obaveštenja</translation>
 <translation id="1127811143501539442">{DAYS,plural, =1{Pre 1 dan}one{Pre # dan}few{Pre # dana}other{Pre # dana}}</translation>
 <translation id="1156623771253174079">{SECONDS,plural, =1{Pre 1 minut}one{Pre # minut}few{Pre # minuta}other{Pre # minuta}}</translation>
@@ -12,7 +11,6 @@
 <translation id="1253734725326687145">Meta za dodir je premeštena u gornji desni ugao. Dodirnite ovde.</translation>
 <translation id="1266864766717917324">Nije uspelo deljenje: <ph name="CONTENT_TYPE" /></translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">Probajte da delite tekst u manjim delovima.</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">Sleva nadesno</translation>
 <translation id="1383876407941801731">Pretraži</translation>
@@ -20,6 +18,7 @@
 <translation id="1432724887402139994">{SECONDS,plural, =1{Pre 1 minut}one{Pre # minut}few{Pre # minuta}other{Pre # minuta}}</translation>
 <translation id="1450753235335490080">Nije uspelo deljenje: <ph name="CONTENT_TYPE" /></translation>
 <translation id="1523230076022876491">{MONTHS,plural, =1{Pre 1 mesec}one{Pre # mesec}few{Pre # meseca}other{Pre # meseci}}</translation>
+<translation id="1591017414891297549">PREGLED</translation>
 <translation id="1591184457164800433">{MINUTES,plural, =1{1 minut i }one{# minut i }few{# minuta i }other{# minuta i }}</translation>
 <translation id="1643823602425662293">Obaveštenje</translation>
 <translation id="169515659049020177">Shift</translation>
@@ -44,7 +43,6 @@
 <translation id="2148716181193084225">Danas</translation>
 <translation id="2168039046890040389">Stranica nagore</translation>
 <translation id="2190355936436201913">(prazno)</translation>
-<translation id="2192232475740621500">Koristi nisku gustinu</translation>
 <translation id="2267918077332197517">Blokiraj sva obaveštenja sa ovog sajta</translation>
 <translation id="2283117145434822734">F6</translation>
 <translation id="2289052229480071835">Dodirnite ciljna polja za dodir na ekranu.</translation>
@@ -56,7 +54,6 @@
 <translation id="2388990488038464401">Želite li da pozovete ovaj broj sa telefona?</translation>
 <translation id="2435457462613246316">Prikaži lozinku</translation>
 <translation id="24452542372838207">Proširi obaveštenje</translation>
-<translation id="2445449901874883781">Koristi visoku gustinu</translation>
 <translation id="2448407890032181691">Meta za dodir je premeštena u donji desni ugao. Dodirnite ovde.</translation>
 <translation id="2482878487686419369">Obaveštenja</translation>
 <translation id="2497284189126895209">Sve datoteke</translation>
@@ -69,7 +66,6 @@
 <translation id="2586657967955657006">Memorija</translation>
 <translation id="2653844658857826081">NOVO</translation>
 <translation id="2666092431469916601">Vrh</translation>
-<translation id="2701330563083355633">Deljeno sa: <ph name="DEVICE_NAME" /></translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{Pre godinu dana}one{Pre # godinu}few{Pre # godine}other{Pre # godina}}</translation>
 <translation id="2878511608894704031">Izbriši sve</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{za 1 d}one{za # d}few{za # d}other{za # d}}</translation>
@@ -88,7 +84,6 @@
 <translation id="3306688585798492231">Ugrađeni ekran</translation>
 <translation id="335581015389089642">Govor</translation>
 <translation id="3372635229069101468">Kliknite na <ph name="BEGIN_BOLD" />Detalji<ph name="END_BOLD" /></translation>
-<translation id="3389286852084373014">Tekst je prevelik</translation>
 <translation id="3406306243914553062">HTML sadržaj</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{Još 1 dan}one{Još # dan}few{Još # dana}other{Još # dana}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" /> datoteka</translation>
@@ -109,6 +104,7 @@
 <translation id="4031910098617850788">F5</translation>
 <translation id="40579289237549812">{UNREAD_NOTIFICATIONS,plural, =1{1 nepročitano obaveštenje}one{# nepročitano obaveštenje}few{# nepročitana obaveštenja}other{# nepročitanih obaveštenja}}</translation>
 <translation id="41501027364808384">{COUNT,plural, =1{Uključite sledeći dodatak u režimu bez arhiviranja:}one{Uključite sledeće dodatke u režimu bez arhiviranja:}few{Uključite sledeće dodatke u režimu bez arhiviranja:}other{Uključite sledeće dodatke u režimu bez arhiviranja:}}</translation>
+<translation id="4230098358142093034">Početna</translation>
 <translation id="4266252015790371705">{MONTHS,plural, =1{Pre mesec dana}one{Pre # mesec}few{Pre # meseca}other{Pre # meseci}}</translation>
 <translation id="4277033906326892359">Sadržaj kolone <ph name="COLUMN_NAME" /> je sortiran po rastućem redosledu</translation>
 <translation id="4289300219472526559">Počnite da govorite</translation>
@@ -190,7 +186,6 @@
 <translation id="6965382102122355670">Potvrdi</translation>
 <translation id="6974053822202609517">Zdesna nalevo</translation>
 <translation id="7052633198403197513">F1</translation>
-<translation id="7170202025028120564">Podešavanja prikaza aplikacije će stupiti na snagu kada se ona sledeći put restartuje.</translation>
 <translation id="7222373446505536781">F11</translation>
 <translation id="7238427729722629793">{MINUTES,plural, =1{Još 1 min}one{Još # min}few{Još # min}other{Još # min}}</translation>
 <translation id="7252604552361840748">Pronađite dodatak iznad</translation>
@@ -200,6 +195,7 @@
 <translation id="7410957453383678442">{MINUTES,plural, =1{Još 1 minut}one{Još # minut}few{Još # minuta}other{Još # minuta}}</translation>
 <translation id="7437971918971306061">Opozvano je sortiranje sadržaja kolone <ph name="COLUMN_NAME" />.</translation>
 <translation id="7460907917090416791"><ph name="QUANTITY" /> TB</translation>
+<translation id="7485236722522518129">F4</translation>
 <translation id="7507604095951736240">Emodži</translation>
 <translation id="7620655452534002301">Uklonjeno je.</translation>
 <translation id="7658239707568436148">Otkaži</translation>
@@ -232,6 +228,7 @@
 <translation id="8677655579646609597"><ph name="QUANTITY" /> KB/s</translation>
 <translation id="8725488761726303204">i još <ph name="NUMBER" /></translation>
 <translation id="8730621377337864115">Gotovo</translation>
+<translation id="8741385002816058621">Ovo je funkcija u pregledu</translation>
 <translation id="8772073294905169192">{HOURS,plural, =1{1 s}one{# s}few{# s}other{# s}}</translation>
 <translation id="8798099450830957504">Podrazumevano</translation>
 <translation id="8841375032071747811">Dugme Nazad</translation>
@@ -245,7 +242,6 @@
 <translation id="9170848237812810038">&amp;Opozovi</translation>
 <translation id="9195990613383871904">Sutra</translation>
 <translation id="928628199082367701">Super</translation>
-<translation id="932327136139879170">Početna</translation>
 <translation id="944069440740578670">Nepročitana obaveštenja</translation>
 <translation id="966963601246348639">{SECONDS,plural, =1{Pre 1 sekunde}one{Pre # sekunde}few{Pre # sekunde}other{Pre # sekundi}}</translation>
 </translationbundle>

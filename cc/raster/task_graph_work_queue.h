@@ -12,7 +12,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "cc/cc_export.h"
 #include "cc/raster/task_graph_runner.h"
@@ -124,9 +123,10 @@ class CC_EXPORT TaskGraphWorkQueue {
 
   static bool HasReadyToRunTasksInNamespace(
       const TaskNamespace* task_namespace) {
-    return !std::ranges::all_of(task_namespace->ready_to_run_tasks,
-                                &PrioritizedTask::Vector::empty,
-                                &TaskNamespace::ReadyTasks::value_type::second);
+    return !std::ranges::all_of(
+        task_namespace->ready_to_run_tasks,
+        [](const auto& v) { return v.empty(); },
+        &TaskNamespace::ReadyTasks::value_type::second);
   }
 
   static bool HasTasksBlockedOnExternalDependencyInNamespace(
@@ -194,8 +194,7 @@ class CC_EXPORT TaskGraphWorkQueue {
     size_t count = 0;
     for (TaskGraphWorkQueue::TaskNamespace* task_namespace_entry :
          found->second) {
-      DCHECK(
-          base::Contains(task_namespace_entry->ready_to_run_tasks, category));
+      DCHECK(task_namespace_entry->ready_to_run_tasks.contains(category));
       count += task_namespace_entry->ready_to_run_tasks.at(category).size();
     }
     return count;

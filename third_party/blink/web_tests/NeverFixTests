@@ -1,4 +1,4 @@
-# tags: [ Android Fuchsia Linux Mac Mac12 Mac12-arm64 Mac13 Mac13-arm64 Mac14 Mac14-arm64 Mac15 Mac15-arm64 Win Win10.20h2 Win11 Win11-arm64 iOS26-simulator ]
+# tags: [ Android Fuchsia Linux Mac Mac13 Mac13-arm64 Mac14 Mac14-arm64 Mac15 Mac15-arm64 Mac26 Mac26-arm64 Win Win10.20h2 Win11 Win11-arm64 iOS26-simulator ]
 # tags: [ Release Debug ]
 # results: [ Skip Pass ]
 
@@ -130,6 +130,7 @@ crbug.com/41254976 [ Mac ] external/wpt/pointerevents/pointerevent_after_target_
 crbug.com/41254976 [ Mac ] external/wpt/pointerevents/pointerevent_after_target_removed.html?touch [ Skip ]
 crbug.com/41254976 [ Mac ] external/wpt/pointerevents/pointerevent_after_target_removed_interleaved.tentative.html?touch [ Skip ]
 crbug.com/41254976 [ Mac ] external/wpt/pointerevents/pointerevent_attributes.html?touch [ Skip ]
+crbug.com/41254976 [ Mac ] external/wpt/pointerevents/pointerevent_attributes.optional.html?touch [ Skip ]
 crbug.com/41254976 [ Mac ] external/wpt/pointerevents/pointerevent_boundary_events_in_capturing.html?touch [ Skip ]
 crbug.com/41254976 [ Mac ] external/wpt/pointerevents/pointerevent_click_is_a_pointerevent.html?touch [ Skip ]
 crbug.com/41254976 [ Mac ] external/wpt/pointerevents/pointerevent_click_is_a_pointerevent_multiple_clicks.html?touch [ Skip ]
@@ -408,13 +409,6 @@ external/wpt/css/css-text/text-spacing-trim/text-spacing-trim-trim-all-001.html?
 external/wpt/css/css-text/text-spacing-trim/text-spacing-trim-trim-all-001.html?class=chws,vrl [ Skip ]
 external/wpt/css/css-text/text-spacing-trim/text-spacing-trim-trim-all-001.html?class=halt,htb [ Skip ]
 external/wpt/css/css-text/text-spacing-trim/text-spacing-trim-trim-all-001.html?class=halt,vrl [ Skip ]
-external/wpt/css/css-text/text-transform/text-transform-full-size-kana-001.html [ Skip ]
-external/wpt/css/css-text/text-transform/text-transform-full-size-kana-002.html [ Skip ]
-external/wpt/css/css-text/text-transform/text-transform-full-size-kana-003.html [ Skip ]
-external/wpt/css/css-text/text-transform/text-transform-full-size-kana-004.html [ Skip ]
-external/wpt/css/css-text/text-transform/text-transform-full-size-kana-005.html [ Skip ]
-external/wpt/css/css-text/text-transform/text-transform-full-size-kana-006.html [ Skip ]
-external/wpt/css/css-text/text-transform/text-transform-full-size-kana-007.html [ Skip ]
 external/wpt/css/css-text/word-boundary/* [ Skip ]
 external/wpt/css/css-text/writing-system/writing-system-line-break-001.html [ Skip ]
 external/wpt/css/css-text/writing-system/writing-system-line-break-002.html [ Skip ]
@@ -887,11 +881,7 @@ external/wpt/clipboard-apis/clipboard-file-manual.html [ Skip ]
 external/wpt/clipboard-apis/events/copy-event-manual.html [ Skip ]
 external/wpt/clipboard-apis/events/cut-event-manual.html [ Skip ]
 external/wpt/clipboard-apis/events/paste-event-manual.html [ Skip ]
-external/wpt/console/console-count-logging-manual.html [ Skip ]
-external/wpt/console/console-countReset-logging-manual.html [ Skip ]
-external/wpt/console/console-number-format-specifiers-symbol-manual.html [ Skip ]
 external/wpt/console/console-string-format-specifier-symbol-manual.html [ Skip ]
-external/wpt/console/console-timing-logging-manual.html [ Skip ]
 external/wpt/css/css-animations/animation-delay-001-manual.html [ Skip ]
 external/wpt/css/css-animations/animation-delay-002-manual.html [ Skip ]
 external/wpt/css/css-animations/animation-delay-003-manual.html [ Skip ]
@@ -1446,7 +1436,6 @@ crbug.com/1035708 external/wpt/css/css-pseudo/spelling-error-002-manual.html [ S
 crbug.com/1035708 external/wpt/css/css-pseudo/spelling-error-003-manual.html [ Skip ]
 
 crbug.com/626703 external/wpt/html/browsers/windows/restore-window-name-manual.https.html [ Skip ]
-crbug.com/626703 external/wpt/pointerevents/html/pointerevent_drag_interaction-manual.html [ Skip ]
 crbug.com/626703 external/wpt/pointerevents/pointerevent_multiple_primary_pointers_boundary_events-manual.html [ Skip ]
 crbug.com/626703 external/wpt/uievents/order-of-events/focus-events/legacy-manual.html [ Skip ]
 
@@ -1454,7 +1443,7 @@ crbug.com/626703 external/wpt/uievents/order-of-events/focus-events/legacy-manua
 # Tests that require support for <meta name="viewport">
 crbug.com/1343368 external/wpt/css/mediaqueries/viewport-script-dynamic.html [ Skip ]
 
-# Tests that require the text autosizing setting.
+# Tests that require the textSizeAdjust Setting.
 crbug.com/340389272 wpt_internal/css/css-size-adjust/* [ Skip ]
 
 # Predefined counter styles that we support a larger range than the spec.
@@ -1614,6 +1603,8 @@ external/wpt/worklets/animation-worklet-service-worker-interception.https.html [
 # Chrome for Testing specific tests that only run on Linux due to requiring FlagSpecific overrides.
 crbug.com/1446931 [ Android ] inspector-protocol/heap-profiler/heap-snapshot-exposes-cpp-internals.js [ Skip ]
 crbug.com/1446931 [ Fuchsia ] inspector-protocol/heap-profiler/heap-snapshot-exposes-cpp-internals.js [ Skip ]
+# Disable temporarily to switch behavior in V8 commit.
+crbug.com/1446931 [ Linux ] inspector-protocol/heap-profiler/heap-snapshot-exposes-cpp-internals.js [ Skip ]
 crbug.com/1446931 [ Mac ] inspector-protocol/heap-profiler/heap-snapshot-exposes-cpp-internals.js [ Skip ]
 crbug.com/1446931 [ Win ] inspector-protocol/heap-profiler/heap-snapshot-exposes-cpp-internals.js [ Skip ]
 
@@ -1655,8 +1646,6 @@ crbug.com/1449469 [ Win ] wpt_internal/css/css-fonts/default-monospace-family-ma
 crbug.com/1449469 [ Fuchsia ] wpt_internal/css/css-fonts/default-monospace-family-mac.html [ Skip ]
 crbug.com/1449469 [ Android ] wpt_internal/css/css-fonts/default-monospace-family-mac.html [ Skip ]
 
-# Subapps are part of IWA and WPT does not support IWAs
-crbug.com/1476305 external/wpt/subapps/* [ Skip ]
 
 # Web-animations tests that use short-lived animations for performance reasons
 # can be problematic on debug builds.
@@ -1675,8 +1664,6 @@ crbug.com/323752584 [ Win11-arm64 ] virtual/webnn-service-with-gpu/* [ Skip ]
 [ Linux ] virtual/webnn-service-with-gpu/* [ Skip ]
 
 # WebNN is only supported on macOS 14 and newer versions.
-[ Mac12 ] external/wpt/webnn/* [ Skip ]
-[ Mac12-arm64 ] external/wpt/webnn/* [ Skip ]
 [ Mac13 ] external/wpt/webnn/* [ Skip ]
 [ Mac13-arm64 ] external/wpt/webnn/* [ Skip ]
 
@@ -1714,6 +1701,8 @@ crbug.com/1430215 [ Mac ] external/wpt/dom/events/scrolling/overscroll-deltas.ht
 
 ######## End Unload Deprecation
 
+# Internal VT tests are not compatible with mpa serialization.
+crbug.com/40241779 virtual/view-transition-mpa-serialization/wpt_internal/view-transition/* [ Skip ]
 # View transitions cross document tests naturally exercise mpa serialization.
 crbug.com/40241779 virtual/view-transition-mpa-serialization/external/wpt/css/css-view-transitions/navigation/* [ Skip ]
 # View transitions cross document tests don't need to test wide gamut, since that's covered by same doc tests.
@@ -1840,7 +1829,6 @@ external/wpt/speculation-rules/prefetch/cross-origin-cookies-anonymous-client-ip
 # restrictOwnAudio is supported only on recent versions of Windows and Mac.
 [ Linux ] external/wpt/screen-capture/getdisplaymedia-restrictOwnAudio.https.html [ Skip ]
 [ Win10.20h2 ] external/wpt/screen-capture/getdisplaymedia-restrictOwnAudio.https.html [ Skip ]
-[ Mac12 ] external/wpt/screen-capture/getdisplaymedia-restrictOwnAudio.https.html [ Skip ]
 [ Mac13 ] external/wpt/screen-capture/getdisplaymedia-restrictOwnAudio.https.html [ Skip ]
 [ Android ] external/wpt/screen-capture/getdisplaymedia-restrictOwnAudio.https.html [ Skip ]
 [ Fuchsia ] external/wpt/screen-capture/getdisplaymedia-restrictOwnAudio.https.html [ Skip ]
@@ -1852,3 +1840,27 @@ external/wpt/speculation-rules/prefetch/cross-origin-cookies-anonymous-client-ip
 crbug.com/40550039 svg/css/use-replicates-changes-class.html [ Skip ]
 crbug.com/40550039 svg/css/use-replicates-changes-pseudo.html [ Skip ]
 crbug.com/40550039 svg/W3C-SVG-1.1-SE/struct-use-11-f.svg [ Skip ]
+
+# SwiftShader cannot be used on ARM and is required by these tests
+# See crbug.com/40061476 for more information.
+[ Mac15-arm64 ] external/wpt/webxr/* [ Skip ]
+[ Mac14-arm64 ] external/wpt/webxr/* [ Skip ]
+[ Mac13-arm64 ] external/wpt/webxr/* [ Skip ]
+[ Win11-arm64 ] external/wpt/webxr/* [ Skip ]
+
+# Expected failures for virtual/prefetch-force-off-the-main-thread:
+# (See also `TestExpectations`)
+# ServiceWorkers are not supported in off-the-main-thread prefetch.
+crbug.com/452389538 virtual/prefetch-force-off-the-main-thread/external/wpt/speculation-rules/prefetch/tentative/service-worker/* [ Skip ]
+
+# Device Bound Session Credentials is not supported on Android.
+[ Android ] external/wpt/device-bound-session-credentials/* [ Skip ]
+
+# see issues.chromium.org/issues/481087619 - Windows-specific word navigation behavior test.
+[ Linux ] editing/selection/move-by-word-win-punctuation-newline.html [ Skip ]
+[ Mac ] editing/selection/move-by-word-win-punctuation-newline.html [ Skip ]
+[ Android ] editing/selection/move-by-word-win-punctuation-newline.html [ Skip ]
+[ Fuchsia ] editing/selection/move-by-word-win-punctuation-newline.html [ Skip ]
+
+# OOM crash on Windows, marked as WontFix
+crbug.com/379516106 [ Win ] external/wpt/css/css-overflow/scrollbar-large-scale-in-iframe.html [ Skip ]

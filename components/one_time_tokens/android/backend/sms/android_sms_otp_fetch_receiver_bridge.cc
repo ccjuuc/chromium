@@ -8,6 +8,7 @@
 #include "base/android/jni_string.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
+#include "base/metrics/histogram_functions.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 
@@ -15,6 +16,32 @@
 #include "components/one_time_tokens/android/backend/sms/jni_headers/AndroidSmsOtpFetchReceiverBridge_jni.h"
 
 namespace one_time_tokens {
+
+namespace {
+
+SmsOtpRetrievalApiError SafeCastToSmsOtpRetrievalApiError(
+    int32_t api_error_code) {
+  switch (api_error_code) {
+    case 0:
+      return SmsOtpRetrievalApiError::kGmscoreVersionNotSupported;
+    case 13:
+      return SmsOtpRetrievalApiError::kError;
+    case 15:
+      return SmsOtpRetrievalApiError::kTimeout;
+    case 36500:
+      return SmsOtpRetrievalApiError::kPlatformNotSupported;
+    case 36501:
+      return SmsOtpRetrievalApiError::kApiNotAvailable;
+    case 36502:
+      return SmsOtpRetrievalApiError::kUserPermissionRequired;
+    default:
+      base::UmaHistogramSparse("Autofill.SmsOtp.UnrecognizedGmsCoreErrorCode",
+                               api_error_code);
+      return SmsOtpRetrievalApiError::kUnknown;
+  }
+}
+
+}  // namespace
 
 // static
 std::unique_ptr<AndroidSmsOtpFetchReceiverBridgeInterface>
@@ -70,7 +97,7 @@ void AndroidSmsOtpFetchReceiverBridge::OnOtpValueRetrievedInternal(
 
 void AndroidSmsOtpFetchReceiverBridge::OnOtpValueRetrievalError(
     JNIEnv* env,
-    jint api_error_code) {
+    int32_t api_error_code) {
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(
@@ -79,14 +106,14 @@ void AndroidSmsOtpFetchReceiverBridge::OnOtpValueRetrievalError(
 }
 
 void AndroidSmsOtpFetchReceiverBridge::OnOtpValueRetrievalErrorInternal(
-    jint api_error_code) {
+    int32_t api_error_code) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(main_sequence_checker_);
 
   if (!consumer_) {
     return;
   }
   consumer_->OnOtpValueRetrievalError(
-      static_cast<SmsOtpRetrievalApiErrorCode>(api_error_code));
+      SafeCastToSmsOtpRetrievalApiError(api_error_code));
 }
 
 }  // namespace one_time_tokens

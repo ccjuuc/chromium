@@ -74,10 +74,6 @@ static_library("bluetooth_config") {
     "//mojo/public/cpp/bindings",
     "//third_party/re2",
   ]
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 component("in_process_bluetooth_config") {
@@ -184,15 +180,11 @@ source_set("unit_tests") {
     "//components/prefs:test_support",
     "//components/session_manager/core",
     "//components/session_manager/core:test_support",
+    "//components/session_manager/test:test_support",
     "//components/sync_preferences:test_support",
     "//components/user_manager:test_support",
     "//device/bluetooth:mocks",
     "//mojo/public/cpp/bindings",
-    "//testing/gmock",
     "//testing/gtest",
   ]
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }

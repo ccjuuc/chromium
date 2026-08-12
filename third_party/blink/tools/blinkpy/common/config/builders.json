@@ -12,11 +12,6 @@
             "webdriver_wpt_tests": {}
         }
     },
-    "Mac12 Tests (dbg)": {
-        "main": "chromium.mac",
-        "port_name": "mac-mac12",
-        "specifiers": ["Mac12", "Debug"]
-    },
     "mac14-arm64-rel-tests": {
         "main": "chromium.mac",
         "port_name": "mac-mac14-arm64",
@@ -77,30 +72,6 @@
         },
         "is_try_builder": true
     },
-    "mac12.0-blink-rel": {
-        "main": "tryserver.blink",
-        "port_name": "mac-mac12",
-        "specifiers": ["Mac12", "Release"],
-        "steps": {
-            "blink_web_tests": {},
-            "blink_wpt_tests": {},
-            "chrome_wpt_tests": {},
-            "headless_shell_wpt_tests": {}
-        },
-        "is_try_builder": true
-    },
-    "mac12.0.arm64-blink-rel": {
-        "main": "tryserver.blink",
-        "port_name": "mac-mac12-arm64",
-        "specifiers": ["Mac12-arm64", "Release"],
-        "steps": {
-            "blink_web_tests": {},
-            "blink_wpt_tests": {},
-            "chrome_wpt_tests": {},
-            "headless_shell_wpt_tests": {}
-        },
-        "is_try_builder": true
-    },
     "mac13-blink-rel": {
         "main": "tryserver.blink",
         "port_name": "mac-mac13",
@@ -122,23 +93,6 @@
             "blink_wpt_tests": {},
             "chrome_wpt_tests": {},
             "headless_shell_wpt_tests": {}
-        },
-        "is_try_builder": true
-    },
-    "mac-skia-alt-arm64-blink-rel": {
-        "main": "tryserver.blink",
-        "port_name": "mac-mac14-arm64",
-        "specifiers": ["Mac14-arm64", "Release"],
-        "steps": {
-            "graphite_enabled_blink_web_tests": {
-                "flag_specific": "enable-skia-graphite"
-            },
-            "graphite_enabled_blink_wpt_tests": {
-                "flag_specific": "enable-skia-graphite"
-            },
-            "graphite_enabled_headless_shell_wpt_tests": {
-                "flag_specific": "enable-skia-graphite"
-            }
         },
         "is_try_builder": true
     },
@@ -182,6 +136,30 @@
         "main": "tryserver.blink",
         "port_name": "mac-mac15-arm64",
         "specifiers": ["Mac15-arm64", "Release"],
+        "steps": {
+            "blink_web_tests": {},
+            "blink_wpt_tests": {},
+            "chrome_wpt_tests": {},
+            "headless_shell_wpt_tests": {}
+        },
+        "is_try_builder": true
+    },
+    "mac26-arm64-blink-rel": {
+        "main": "tryserver.blink",
+        "port_name": "mac-mac26-arm64",
+        "specifiers": ["Mac26-arm64", "Release"],
+        "steps": {
+            "blink_web_tests": {},
+            "blink_wpt_tests": {},
+            "chrome_wpt_tests": {},
+            "headless_shell_wpt_tests": {}
+        },
+        "is_try_builder": true
+    },
+    "mac26-x64-blink-rel": {
+        "main": "tryserver.blink",
+        "port_name": "mac-mac26",
+        "specifiers": ["Mac26", "Release"],
         "steps": {
             "blink_web_tests": {},
             "blink_wpt_tests": {},

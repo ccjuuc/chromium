@@ -9,10 +9,10 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "services/device/public/cpp/test/mock_usb_mojo_device.h"
 #include "services/device/public/cpp/usb/usb_utils.h"
@@ -147,7 +147,7 @@ void FakeUsbDevice::ClaimInterface(uint8_t interface_number,
   }
 
   for (const auto& alternate : (*interface_it)->alternates) {
-    if (base::Contains(blocked_interface_classes_, alternate->class_code)) {
+    if (blocked_interface_classes_.contains(alternate->class_code)) {
       std::move(callback).Run(mojom::UsbClaimInterfaceResult::kProtectedClass);
       return;
     }

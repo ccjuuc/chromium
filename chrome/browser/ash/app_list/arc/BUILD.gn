@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-
 assert(is_chromeos)
 
 static_library("arc") {
@@ -13,8 +11,6 @@ static_library("arc") {
     "arc_app_icon.h",
     "arc_app_icon_descriptor.cc",
     "arc_app_icon_descriptor.h",
-    "arc_app_icon_factory.cc",
-    "arc_app_icon_factory.h",
     "arc_app_launcher.cc",
     "arc_app_launcher.h",
     "arc_app_list_prefs.cc",
@@ -63,20 +59,23 @@ static_library("arc") {
   deps = [
     "//ash",
     "//ash/constants",
+    "//ash/strings",
     "//base",
-    "//chrome/app:generated_resources",
     "//chrome/browser/ash/app_list",
     "//chrome/browser/ash/app_list/search/ranking",
     "//chrome/browser/ash/arc:arc_util",
     "//chrome/browser/ash/arc/boot_phase_monitor",
     "//chrome/browser/notifications",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/profiles:profile_manager",
     "//chrome/browser/resources:component_extension_resources",
     "//chrome/common:chrome_features",
     "//chrome/common:constants",
+    "//chromeos/ash/components/browser_context_helper",
     "//chromeos/ash/components/demo_mode",
     "//chromeos/ash/experiences/arc",
     "//chromeos/ash/experiences/arc:arc_app_constants",
+    "//chromeos/ash/experiences/arc/intent_helper",
     "//chromeos/ash/experiences/arc/intent_helper:arc_intent_helper_constants",
     "//chromeos/ash/experiences/arc/mojom",
     "//chromeos/ash/experiences/arc/session",
@@ -156,6 +155,7 @@ source_set("unit_tests") {
     "//chrome/common:constants",
     "//chrome/test:test_support",
     "//chromeos/ash/components/dbus/concierge",
+    "//chromeos/ash/components/login/session",
     "//chromeos/ash/experiences/arc:arc_app_constants",
     "//chromeos/ash/experiences/arc:arc_base_utils",
     "//chromeos/ash/experiences/arc:arc_features",

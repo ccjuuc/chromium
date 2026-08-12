@@ -7,11 +7,13 @@
 
 #include <memory>
 
+#include "base/feature_list.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/types/strong_alias.h"
 #include "chrome/browser/sync/sync_startup_tracker.h"
@@ -32,29 +34,47 @@ namespace syncer {
 class SyncService;
 }  // namespace syncer
 
+// Kill switch for enabling an observer that awaits the sync engine startup,
+// before displaying the history sync opting screen.
+BASE_DECLARE_FEATURE(kEnableAwaitSyncServiceStartupOnHistorySync);
+
 // Helper class to track the state of the SyncService.
-// Executes a callback when the SyncService's state is no longer pending.
+// Executes a callback when the SyncService's state is no longer pending. The
+// right implementation of the class is chosen based on the state of the
+// `syncer::kEnableAwaitSyncServiceStartup` and
+// `syncer::kReplaceSyncPromosWithSignInPromos` feature flags.
+// TODO(crbug.com/483991595): When the history sync helper becomes the only
+// consumer of this class make it private and simplify the histogram
+// recording logic.
 class SyncServiceStartupStateObserver {
  public:
-  SyncServiceStartupStateObserver(syncer::SyncService* sync_service,
-                                  base::OnceClosure on_state_updated_callback);
-  ~SyncServiceStartupStateObserver();
+  SyncServiceStartupStateObserver();
+  virtual ~SyncServiceStartupStateObserver();
 
   static std::unique_ptr<SyncServiceStartupStateObserver>
   MaybeCreateSyncServiceStateObserverForAccountWithClouldPolicies(
       syncer::SyncService* sync_service,
       Profile* profile,
       const CoreAccountInfo& account_info,
+      base::TimeDelta startup_delay,
       base::OnceClosure callback);
 
   // Public for testing.
-  void OnSyncStartupStateChanged(SyncStartupTracker::ServiceStartupState state);
+  virtual void MockTimeoutReachedForTesting() = 0;
+  virtual void OnSyncStartupStateChangedForTesting(
+      SyncStartupTracker::ServiceStartupState state) = 0;
 
- private:
-  base::OnceClosure on_state_updated_callback_;
-  std::unique_ptr<SyncStartupTracker> sync_startup_tracker_;
-  base::WeakPtrFactory<SyncServiceStartupStateObserver> weak_pointer_factory_{
-      this};
+  // Callbacks to record any necessary metrics when the sync service
+  // is ready to start or when we timeout waiting.
+  void SetSyncStartupCompleteMetricsCallback(
+      base::OnceCallback<void(base::TimeDelta)> callback);
+  void SetTimeoutMetricsCallback(
+      base::OnceCallback<void(base::TimeDelta)> callback);
+
+ protected:
+  base::OnceCallback<void(base::TimeDelta)>
+      sync_startup_complete_metrics_callback_;
+  base::OnceCallback<void(base::TimeDelta)> timeout_metrics_callback_;
 };
 
 // Helper class to determine if a user is managed and fetch the applicable
@@ -83,7 +103,6 @@ class HistorySyncOptinPolicyHelper {
   base::OnceCallback<void(bool)> on_register_for_policies_callback_;
   base::OnceClosure on_policies_fetched_callback_;
   std::unique_ptr<TurnSyncOnHelperPolicyFetchTracker> policy_fetch_tracker_;
-
   base::WeakPtrFactory<HistorySyncOptinPolicyHelper> weak_ptr_factory_{this};
 };
 
@@ -158,6 +177,9 @@ class HistorySyncOptinHelper {
     // after the history sync optin screen (e.g. opening of the browser in the
     // profile picker flow).
     virtual void FinishFlowWithoutHistorySyncOptin() = 0;
+    // Displays the sign in celebration screen.
+    virtual void ShowSignInCelebration(
+        base::OnceClosure celebration_finished) = 0;
   };
 
   static std::unique_ptr<HistorySyncOptinHelper> Create(
@@ -208,6 +230,7 @@ class HistorySyncOptinHelper {
 
   // Virtual methods for context-specific logic.
   virtual void DetermineManagementStatusAndShowManagementScreens() = 0;
+  virtual base::TimeDelta GetSyncStartupDelay() = 0;
 
   void ShowHistorySyncOptinScreen();
 
@@ -219,6 +242,8 @@ class HistorySyncOptinHelper {
       HistorySyncSkipReason skip_reason);
 
   void AwaitSyncStartupAndShowHistorySyncScreen();
+
+  void MaybeShowSignInCelebration(signin::Tribool maybe_managed_account);
 
   // Accessors.
   Profile* profile() { return profile_.get(); }
@@ -243,6 +268,7 @@ class HistorySyncOptinHelper {
   signin_metrics::AccessPoint access_point_;
 
   std::unique_ptr<SyncServiceStartupStateObserver> sync_startup_state_observer_;
+
   signin::Tribool maybe_managed_account_ = signin::Tribool::kUnknown;
   bool is_history_sync_step_complete_ = false;
   bool is_history_sync_screen_attempted_ = false;
@@ -250,6 +276,7 @@ class HistorySyncOptinHelper {
   base::WeakPtrFactory<HistorySyncOptinHelper> weak_ptr_factory_{this};
 };
 
+// TODO(anthie): Move the implementations of the helper to the source file.
 // `HistorySyncOptinHelper` implementation for the flow running in a browser
 // window.
 class HistorySyncOptinHelperInBrowser : public HistorySyncOptinHelper {
@@ -267,6 +294,7 @@ class HistorySyncOptinHelperInBrowser : public HistorySyncOptinHelper {
  private:
   // HistorySyncOptinHelper implementation:
   void DetermineManagementStatusAndShowManagementScreens() override;
+  base::TimeDelta GetSyncStartupDelay() override;
 
   void OnManagementAccepted(Profile* chosen_profile,
                             bool management_required_by_policy);
@@ -295,6 +323,7 @@ class HistorySyncOptinHelperInProfilePicker : public HistorySyncOptinHelper {
  private:
   // HistorySyncOptinHelper implementation:
   void DetermineManagementStatusAndShowManagementScreens() override;
+  base::TimeDelta GetSyncStartupDelay() override;
 
   void MaybeShowAccountManagementScreen(bool is_managed_account);
   void ShowAccountManagementScreen();

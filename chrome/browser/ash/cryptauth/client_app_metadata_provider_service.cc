@@ -20,13 +20,12 @@
 #include "base/time/time.h"
 #include "base/version.h"
 #include "chrome/browser/ash/cryptauth/cryptauth_device_id_provider.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
 #include "chromeos/ash/components/network/network_type_pattern.h"
 #include "chromeos/ash/services/device_sync/proto/cryptauth_better_together_feature_metadata.pb.h"
 #include "chromeos/ash/services/device_sync/public/cpp/gcm_constants.h"
+#include "components/application_locale_storage/application_locale_storage.h"
 #include "components/gcm_driver/instance_id/instance_id_driver.h"
 #include "components/gcm_driver/instance_id/instance_id_profile_service.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -84,12 +83,10 @@ const cryptauthv2::FeatureMetadata& GenerateFeatureMetadata() {
                   BetterTogetherFeatureMetadata_FeatureName_ECHE_CLIENT);
         }
 
-        // Camera Roll is only supported if the associated flag is enabled.
-        if (features::IsPhoneHubCameraRollEnabled()) {
-          inner_metadata.add_supported_features(
-              cryptauthv2::
-                  BetterTogetherFeatureMetadata_FeatureName_PHONE_HUB_CAMERA_ROLL_CLIENT);
-        }
+        // Camera Roll is enabled by default.
+        inner_metadata.add_supported_features(
+            cryptauthv2::
+                BetterTogetherFeatureMetadata_FeatureName_PHONE_HUB_CAMERA_ROLL_CLIENT);
 
         // Note: |inner_metadata|'s enabled_features field is deprecated and
         // left unset here (the server ignores this value when processing the
@@ -129,8 +126,8 @@ void LogInstanceIdTokenFetchRetries(int count) {
 // static
 void ClientAppMetadataProviderService::RegisterProfilePrefs(
     PrefRegistrySimple* registry) {
-  registry->RegisterStringPref(::prefs::kCryptAuthInstanceId, std::string());
-  registry->RegisterStringPref(::prefs::kCryptAuthInstanceIdToken,
+  registry->RegisterStringPref(ash::prefs::kCryptAuthInstanceId, std::string());
+  registry->RegisterStringPref(ash::prefs::kCryptAuthInstanceIdToken,
                                std::string());
 }
 
@@ -163,10 +160,12 @@ int64_t ClientAppMetadataProviderService::ConvertVersionCodeToInt64(
 
 ClientAppMetadataProviderService::ClientAppMetadataProviderService(
     PrefService* local_state,
+    const ApplicationLocaleStorage* application_locale_storage,
     PrefService* profile_pref_service,
     NetworkStateHandler* network_state_handler,
     instance_id::InstanceIDProfileService* instance_id_profile_service)
     : local_state_(CHECK_DEREF(local_state)),
+      application_locale_storage_(CHECK_DEREF(application_locale_storage)),
       pref_service_(profile_pref_service),
       network_state_handler_(network_state_handler),
       instance_id_profile_service_(instance_id_profile_service) {}
@@ -252,12 +251,12 @@ void ClientAppMetadataProviderService::OnInstanceIdFetched(
     const std::string& instance_id) {
   DCHECK(!instance_id.empty());
   std::string previous_instance_id =
-      pref_service_->GetString(::prefs::kCryptAuthInstanceId);
+      pref_service_->GetString(ash::prefs::kCryptAuthInstanceId);
   if (!previous_instance_id.empty()) {
     base::UmaHistogramBoolean("CryptAuth.InstanceId.DidInstanceIdChange",
                               previous_instance_id != instance_id);
   }
-  pref_service_->SetString(::prefs::kCryptAuthInstanceId, instance_id);
+  pref_service_->SetString(ash::prefs::kCryptAuthInstanceId, instance_id);
 
   GetInstanceId()->GetToken(
       device_sync::
@@ -307,12 +306,12 @@ void ClientAppMetadataProviderService::OnInstanceIdTokenFetched(
 
   DCHECK(!token.empty());
   std::string previous_instance_id_token =
-      pref_service_->GetString(::prefs::kCryptAuthInstanceIdToken);
+      pref_service_->GetString(ash::prefs::kCryptAuthInstanceIdToken);
   if (!previous_instance_id_token.empty()) {
     base::UmaHistogramBoolean("CryptAuth.InstanceId.DidInstanceIdTokenChange",
                               previous_instance_id_token != token);
   }
-  pref_service_->SetString(::prefs::kCryptAuthInstanceIdToken, token);
+  pref_service_->SetString(ash::prefs::kCryptAuthInstanceIdToken, token);
 
   cryptauthv2::ClientAppMetadata metadata;
 
@@ -324,7 +323,7 @@ void ClientAppMetadataProviderService::OnInstanceIdTokenFetched(
   metadata.set_long_device_id(
       cryptauth_device_id::GetDeviceID(local_state_.get()));
 
-  metadata.set_locale(g_browser_process->GetApplicationLocale());
+  metadata.set_locale(application_locale_storage_->Get());
   metadata.set_device_os_version(base::GetLinuxDistro());
   metadata.set_device_os_version_code(SoftwareVersionCodeAsInt64());
   metadata.set_device_os_release(std::string(version_info::GetVersionNumber()));

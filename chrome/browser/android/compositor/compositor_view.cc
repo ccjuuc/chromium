@@ -16,7 +16,6 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/rand_util.h"
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
@@ -48,11 +47,11 @@ using base::android::JavaRef;
 
 namespace android {
 
-static jboolean JNI_CompositorView_IsSurfaceControlEnabled(JNIEnv* env) {
+static bool JNI_CompositorView_IsSurfaceControlEnabled(JNIEnv* env) {
   return features::IsAndroidSurfaceControlEnabled();
 }
 
-static jlong JNI_CompositorView_Init(
+static int64_t JNI_CompositorView_Init(
     JNIEnv* env,
     const JavaRef<jobject>& obj,
     const JavaRef<jobject>& jwindow_android,
@@ -75,7 +74,7 @@ static jlong JNI_CompositorView_Init(
   return reinterpret_cast<intptr_t>(view);
 }
 
-static jboolean JNI_CompositorView_PreferRgb565ForDisplay(JNIEnv* env) {
+static bool JNI_CompositorView_PreferRgb565ForDisplay(JNIEnv* env) {
   return features::PreferRGB565ResourcesForDisplay();
 }
 
@@ -193,9 +192,9 @@ void CompositorView::SurfaceDestroyed(JNIEnv* env) {
 
 std::optional<int> CompositorView::SurfaceChanged(
     JNIEnv* env,
-    jint format,
-    jint width,
-    jint height,
+    int32_t format,
+    int32_t width,
+    int32_t height,
     bool can_be_used_with_surface_control,
     const JavaRef<jobject>& surface,
     const JavaRef<jobject>& browser_input_token) {
@@ -211,7 +210,7 @@ std::optional<int> CompositorView::SurfaceChanged(
     return std::nullopt;
   }
 
-  std::optional<int> surface_handle = std::nullopt;
+  std::optional<int> surface_handle;
   DCHECK(surface);
   if (current_surface_format_ != format) {
     current_surface_format_ = format;
@@ -229,18 +228,24 @@ std::optional<int> CompositorView::SurfaceChanged(
 void CompositorView::OnPhysicalBackingSizeChanged(
     JNIEnv* env,
     const JavaRef<jobject>& jweb_contents,
-    jint width,
-    jint height) {
+    int32_t width,
+    int32_t height,
+    bool is_fluid_resize) {
   content::WebContents* web_contents =
       content::WebContents::FromJavaWebContents(jweb_contents);
   gfx::Size size(width, height);
-  web_contents->GetNativeView()->OnPhysicalBackingSizeChanged(size);
+  std::optional<base::TimeDelta> deadline_override;
+  if (is_fluid_resize) {
+    deadline_override = base::TimeDelta();
+  }
+  web_contents->GetNativeView()->OnPhysicalBackingSizeChanged(
+      size, deadline_override);
 }
 
 void CompositorView::OnControlsResizeViewChanged(
     JNIEnv* env,
     const JavaRef<jobject>& jweb_contents,
-    jboolean controls_resize_view) {
+    bool controls_resize_view) {
   content::WebContents* web_contents =
       content::WebContents::FromJavaWebContents(jweb_contents);
   web_contents->GetNativeView()->OnControlsResizeViewChanged(
@@ -250,10 +255,10 @@ void CompositorView::OnControlsResizeViewChanged(
 void CompositorView::NotifyVirtualKeyboardOverlayRect(
     JNIEnv* env,
     const JavaRef<jobject>& jweb_contents,
-    jint x,
-    jint y,
-    jint width,
-    jint height) {
+    int32_t x,
+    int32_t y,
+    int32_t width,
+    int32_t height) {
   content::WebContents* web_contents =
       content::WebContents::FromJavaWebContents(jweb_contents);
   gfx::Rect keyboard_rect(x, y, width, height);
@@ -379,6 +384,10 @@ void CompositorView::SetNeedsComposite(JNIEnv* env) {
   compositor_->SetNeedsComposite();
 }
 
+void CompositorView::SetDrawPaused(JNIEnv* env, bool paused) {
+  compositor_->SetDrawPaused(paused);
+}
+
 void CompositorView::BrowserChildProcessKilled(
     const content::ChildProcessData& data,
     const content::ChildProcessTerminationInfo& info) {
@@ -432,7 +441,7 @@ void CompositorView::PreserveChildSurfaceControls(JNIEnv* env) {
 }
 
 void CompositorView::SetDidSwapBuffersCallbackEnabled(JNIEnv* env,
-                                                      jboolean enable) {
+                                                      bool enable) {
   compositor_->SetDidSwapBuffersCallbackEnabled(enable);
 }
 

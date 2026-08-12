@@ -4,17 +4,11 @@
 
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_view_views_test.h"
 
-#include <memory>
-
-#include "base/functional/bind.h"
-#include "base/path_service.h"
 #include "build/build_config.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/omnibox/omnibox_popup_state_manager.h"
-#include "chrome/common/chrome_paths.h"
 #include "content/public/test/test_utils.h"
-#include "net/dns/mock_host_resolver.h"
-#include "net/test/embedded_test_server/http_request.h"
-#include "net/test/embedded_test_server/http_response.h"
+#include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/interaction/expect_call_in_scope.h"
 
 #if BUILDFLAG(IS_LINUX)
@@ -27,6 +21,13 @@ OmniboxPopupViewViewsTest::ThemeChangeWaiter::~ThemeChangeWaiter() {
   // Theme changes propagate asynchronously in DesktopWindowTreeHostX11::
   // FrameTypeChanged(), so ensure all tasks are consumed.
   content::RunAllPendingInMessageLoop();
+}
+
+void OmniboxPopupViewViewsTest::SetUpOnMainThread() {
+  if (base::FeatureList::IsEnabled(omnibox::internal::kWebUIOmniboxPopup)) {
+    GTEST_SKIP() << "Views popup code shouldn't run when kWebUIOmniboxPopup "
+                    "is enabled.";
+  }
 }
 
 views::Widget* OmniboxPopupViewViewsTest::CreatePopupForTestQuery() {
@@ -49,7 +50,7 @@ views::Widget* OmniboxPopupViewViewsTest::CreatePopupForTestQuery() {
         edit_model()->SetUserText(u"foo");
         AutocompleteInput input(
             u"foo", metrics::OmniboxEventProto::BLANK,
-            ChromeAutocompleteSchemeClassifier(browser()->profile()));
+            ChromeAutocompleteSchemeClassifier(browser()->GetProfile()));
         input.set_omit_asynchronous_matches(true);
         controller()->StartAutocomplete(input);
 
@@ -75,7 +76,7 @@ void OmniboxPopupViewViewsTest::UseDefaultTheme() {
   ui::NativeTheme::GetInstanceForNativeUi()->NotifyOnNativeThemeUpdated();
 
   ThemeService* theme_service =
-      ThemeServiceFactory::GetForProfile(browser()->profile());
+      ThemeServiceFactory::GetForProfile(browser()->GetProfile());
   if (!theme_service->UsingDefaultTheme()) {
     ThemeChangeWaiter wait(theme_service);
     theme_service->UseDefaultTheme();

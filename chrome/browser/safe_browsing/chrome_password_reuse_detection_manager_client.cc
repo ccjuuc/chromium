@@ -23,6 +23,7 @@
 #include "components/autofill/core/browser/logging/log_router.h"
 #include "components/password_manager/content/browser/password_manager_log_router_factory.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/password_sync_util.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/sync/base/user_selectable_type.h"
@@ -165,7 +166,9 @@ void ChromePasswordReuseDetectionManagerClient::InternalOnPrimaryAccountChanged(
       return;
     }
     password_manager_client->GetPasswordReuseManager()->MaybeSavePasswordHash(
-        &password_form.value(), password_manager_client);
+        &password_form.value(), password_manager_client,
+        password_manager::metrics_util::GaiaPasswordHashChange::
+            SAVED_ON_CHROME_SIGNIN);
     base::UmaHistogramBoolean(
         "PasswordProtection.AttemptsToSavePasswordHashFromProfilePicker", true);
   }
@@ -365,7 +368,6 @@ void ChromePasswordReuseDetectionManagerClient::RenderFrameCreated(
 }
 
 void ChromePasswordReuseDetectionManagerClient::OnPaste() {
-  std::u16string text;
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
   // Given that this clipboard data read happens in the background and not
   // initiated by a user gesture, then the user shouldn't see a notification
@@ -373,8 +375,14 @@ void ChromePasswordReuseDetectionManagerClient::OnPaste() {
   // policy.
   ui::DataTransferEndpoint data_dst = ui::DataTransferEndpoint(
       ui::EndpointType::kDefault, {.notify_if_restricted = false});
-  clipboard->ReadText(ui::ClipboardBuffer::kCopyPaste, &data_dst, &text);
+  clipboard->ReadText(
+      ui::ClipboardBuffer::kCopyPaste, std::move(data_dst),
+      base::BindOnce(&ChromePasswordReuseDetectionManagerClient::OnTextRead,
+                     weak_factory_.GetWeakPtr()));
+}
 
+void ChromePasswordReuseDetectionManagerClient::OnTextRead(
+    std::u16string text) {
   password_reuse_detection_manager_.OnPaste(std::move(text));
   phishy_interaction_tracker_.HandlePasteEvent();
 }

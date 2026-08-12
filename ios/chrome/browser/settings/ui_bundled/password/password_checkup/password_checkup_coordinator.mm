@@ -28,17 +28,16 @@
 #import "ios/chrome/browser/settings/ui_bundled/password/reauthentication/local_reauthentication_coordinator.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/table_view/table_view_utils.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
-#import "ios/chrome/common/ui/reauthentication/reauthentication_protocol.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util.h"
 #import "ui/base/l10n/l10n_util_mac.h"
@@ -46,11 +45,11 @@
 using password_manager::PasswordCheckReferrer;
 
 @interface PasswordCheckupCoordinator () <
+    LocalReauthenticationCoordinatorDelegate,
+    NotificationsSettingsObserverDelegate,
     PasswordCheckupCommands,
     PasswordCheckupMediatorDelegate,
     PasswordIssuesCoordinatorDelegate,
-    NotificationsSettingsObserverDelegate,
-    LocalReauthenticationCoordinatorDelegate,
     UINavigationControllerDelegate>
 
 @end
@@ -64,9 +63,6 @@ using password_manager::PasswordCheckReferrer;
 
   // Coordinator for password issues.
   PasswordIssuesCoordinator* _passwordIssuesCoordinator;
-
-  // Reauthentication module used by password issues coordinator.
-  id<ReauthenticationProtocol> _reauthModule;
 
   // Coordinator for blocking Password Checkup until Local Authentication is
   // passed. Used for requiring authentication when opening Password Checkup
@@ -94,7 +90,6 @@ using password_manager::PasswordCheckReferrer;
     initWithBaseNavigationController:
         (UINavigationController*)navigationController
                              browser:(Browser*)browser
-                        reauthModule:(id<ReauthenticationProtocol>)reauthModule
                             referrer:(PasswordCheckReferrer)referrer {
   self = [super initWithBaseViewController:navigationController
                                    browser:browser];
@@ -105,25 +100,20 @@ using password_manager::PasswordCheckReferrer;
     AuthenticationService* authenticationService =
         AuthenticationServiceFactory::GetForProfile(self.profile);
     CHECK(authenticationService);
-    if (!authenticationService->HasPrimaryIdentity(
-            signin::ConsentLevel::kSignin)) {
+    if (!authenticationService->HasPrimaryIdentity()) {
       base::debug::DumpWithoutCrashing();
     }
 
     _baseNavigationController = navigationController;
-    _reauthModule = reauthModule;
-    _dispatcher = HandlerForProtocol(self.browser->GetCommandDispatcher(),
-                                     ApplicationCommands);
+    _dispatcher =
+        HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
     _referrer = referrer;
     password_manager::LogPasswordCheckReferrer(referrer);
 
-    if (IsSafetyCheckNotificationsEnabled()) {
-      _notificationsSettingsObserver = [[NotificationsSettingsObserver alloc]
-          initWithPrefService:self.profile->GetPrefs()
-                   localState:GetApplicationContext()->GetLocalState()];
-
-      _notificationsSettingsObserver.delegate = self;
-    }
+    _notificationsSettingsObserver = [[NotificationsSettingsObserver alloc]
+        initWithPrefService:self.profile->GetPrefs()
+                 localState:GetApplicationContext()->GetLocalState()];
+    _notificationsSettingsObserver.delegate = self;
   }
   return self;
 }
@@ -172,12 +162,10 @@ using password_manager::PasswordCheckReferrer;
   _viewController.handler = nil;
   _viewController = nil;
 
-  if (IsSafetyCheckNotificationsEnabled()) {
-    // Remove PrefObserverDelegates.
-    _notificationsSettingsObserver.delegate = nil;
-    [_notificationsSettingsObserver disconnect];
-    _notificationsSettingsObserver = nil;
-  }
+  // Remove `PrefObserverDelegate`s.
+  _notificationsSettingsObserver.delegate = nil;
+  [_notificationsSettingsObserver disconnect];
+  _notificationsSettingsObserver = nil;
 
   [self stopPasswordIssuesCoordinator];
   [self stopReauthenticationCoordinator];
@@ -201,10 +189,6 @@ using password_manager::PasswordCheckReferrer;
 
   password_manager::LogOpenPasswordIssuesList(warningType);
 
-  // Prevent actions temporarily until the password issues VC takes over the
-  // stack.
-  [_viewController startCooldown];
-
   _passwordIssuesCoordinator = [[PasswordIssuesCoordinator alloc]
             initForWarningType:warningType
       baseNavigationController:self.baseNavigationController
@@ -213,7 +197,6 @@ using password_manager::PasswordCheckReferrer;
   // was already authenticated when opening the password manager.
   _passwordIssuesCoordinator.skipAuthenticationOnStart = YES;
   _passwordIssuesCoordinator.delegate = self;
-  _passwordIssuesCoordinator.reauthModule = _reauthModule;
   [_passwordIssuesCoordinator start];
 }
 
@@ -252,8 +235,6 @@ using password_manager::PasswordCheckReferrer;
 #pragma mark - PasswordCheckupMediatorDelegate
 
 - (void)toggleSafetyCheckNotifications {
-  CHECK(IsSafetyCheckNotificationsEnabled());
-
   if ([self isSafetyCheckNotificationsEnabled]) {
     [self disableSafetyCheckNotifications];
     return;
@@ -285,8 +266,7 @@ using password_manager::PasswordCheckReferrer;
 
 - (void)notificationsSettingsDidChangeForClient:
     (PushNotificationClientId)clientID {
-  if (IsSafetyCheckNotificationsEnabled() &&
-      clientID == PushNotificationClientId::kSafetyCheck) {
+  if (clientID == PushNotificationClientId::kSafetyCheck) {
     [_mediator
         reconfigureNotificationsSection:[self
                                             isSafetyCheckNotificationsEnabled]];
@@ -334,8 +314,7 @@ using password_manager::PasswordCheckReferrer;
     // coordinator was stopped and (2) the password checkup `_viewController` is
     // now visible at the top of the nav stack.
     _viewController.view.userInteractionEnabled = YES;
-    // Use the cooldown period just in case.
-    [_viewController startCooldown];
+
   } else if ([navigationController.viewControllers
                  containsObject:_viewController]) {
     // Disable user interactions on `_viewController` since there is a view on
@@ -348,8 +327,6 @@ using password_manager::PasswordCheckReferrer;
 
 // Returns `YES` if the user has opted in to receive Safety Check notifications.
 - (BOOL)isSafetyCheckNotificationsEnabled {
-  CHECK(IsSafetyCheckNotificationsEnabled());
-
   // Safety Check notifications are controlled by app-wide notification
   // settings, not profile-specific ones. No Gaia ID is required below in
   // `GetMobileNotificationPermissionStatusForClient()`.
@@ -362,8 +339,6 @@ using password_manager::PasswordCheckReferrer;
 // notification service preferences. Displays a confirmation snackbar with a
 // link to notification settings.
 - (void)disableSafetyCheckNotifications {
-  CHECK(IsSafetyCheckNotificationsEnabled());
-
   GetApplicationContext()->GetPushNotificationService()->SetPreference(
       GaiaId(), PushNotificationClientId::kSafetyCheck, false);
 
@@ -417,9 +392,6 @@ using password_manager::PasswordCheckReferrer;
   if (authOnStart && base::FeatureList::IsEnabled(
                          password_manager::features::
                              kPasswordCheckupUIDoubleStartMitigation)) {
-    // Prevent actions temporarily in the case the auth view has to be
-    // pushed on the stack. You don't want actions when auth is required.
-    [_viewController startCooldown];
   }
 
   DCHECK(!_reauthCoordinator);
@@ -427,7 +399,6 @@ using password_manager::PasswordCheckReferrer;
   _reauthCoordinator = [[LocalReauthenticationCoordinator alloc]
       initWithBaseNavigationController:_baseNavigationController
                                browser:self.browser
-                reauthenticationModule:_reauthModule
                            authOnStart:authOnStart];
 
   _reauthCoordinator.delegate = self;

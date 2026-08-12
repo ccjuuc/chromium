@@ -173,7 +173,7 @@ class CORE_EXPORT SelectorChecker {
     // the Document associated with `element` as the tree scope.
     //
     // [1] https://drafts.csswg.org/selectors-4/#match-a-selector-against-a-tree
-    // [2] https://drafts.csswg.org/css-scoping-1/#tree-context
+    // [2] https://drafts.csswg.org/css-shadow-1/#tree-context
     // [3] https://dom.spec.whatwg.org/#concept-tree-root
     const TreeScope* tree_scope = nullptr;
     // The scoping root [1], whenever the selector is scoped [2].
@@ -393,9 +393,7 @@ class CORE_EXPORT SelectorChecker {
   static bool MatchesFocusPseudoClass(const Element&,
                                       PseudoId matching_for_pseudo_element);
   static bool MatchesFocusVisiblePseudoClass(const Element&);
-  static bool MatchesSelectorFragmentAnchorPseudoClass(const Element&);
   static bool MatchesActiveViewTransitionPseudoClass(const Element&);
-  static bool MatchesOverscrollTarget(const Element&);
 
  private:
   // Does the work of checking whether the simple selector and element pointed
@@ -538,11 +536,13 @@ class CORE_EXPORT SelectorChecker {
 // The set of supported selectors is formally given as “anything IsEasy()
 // returns true for”, but roughly encompasses the following:
 //
-//  - Tag matches (e.g. div).
+//  - Tag matches (e.g. div), possibly negated (e.g. :not(div)).
 //  - ID matches (e.g. #id).
 //  - Class matches (e.g. .c).
 //  - Case-sensitive attribute is-set and exact matches ([foo] and [foo="bar"]).
 //  - Subselector and descendant combinators.
+//  - Certain non-nested pseudo-element selectors (::before, ::after, ::marker,
+//    etc.) that don't have special handling.
 //  - Anything that does not need further checking
 //    (CSSSelector::IsCoveredByBucketing()).
 //
@@ -572,11 +572,19 @@ class CORE_EXPORT EasySelectorChecker {
   // Unlike SelectorChecker, does not check style_scope; the caller
   // will need to do that if desired.
   ALWAYS_INLINE static bool Match(const CSSSelector* selector,
-                                  const Element* element);
+                                  const Element* element,
+                                  const Element* pseudo_element,
+                                  PseudoId pseudo_id,
+                                  PseudoId& dynamic_pseudo);
 
  private:
   ALWAYS_INLINE static bool MatchOne(const CSSSelector* selector,
-                                     const Element* element);
+                                     const Element* element,
+                                     const Element* pseudo_element,
+                                     PseudoId pseudo_id,
+                                     PseudoId& dynamic_pseudo);
+  ALWAYS_INLINE static bool MatchesTagName(const QualifiedName& tag_q_name,
+                                           const Element* element);
   ALWAYS_INLINE static bool AttributeIsSet(const Element& element,
                                            const QualifiedName& attr);
   ALWAYS_INLINE static bool AttributeMatches(const Element& element,

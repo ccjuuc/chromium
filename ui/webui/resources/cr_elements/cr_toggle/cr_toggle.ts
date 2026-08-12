@@ -18,6 +18,8 @@ import {CrRippleMixin} from '../cr_ripple/cr_ripple_mixin.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 import {assert} from '//resources/js/assert.js';
+import {isMac} from '//resources/js/platform.js';
+
 import {getCss} from './cr_toggle.css.js';
 import {getHtml} from './cr_toggle.html.js';
 
@@ -68,23 +70,6 @@ export class CrToggleElement extends CrToggleElementBase {
   private handledInPointerMove_: boolean = false;
   private pointerDownX_: number = 0;
 
-  override firstUpdated() {
-    if (!this.hasAttribute('role')) {
-      this.setAttribute('role', 'button');
-    }
-    if (!this.hasAttribute('tabindex')) {
-      this.setAttribute('tabindex', '0');
-    }
-    this.setAttribute('aria-pressed', this.checked ? 'true' : 'false');
-    this.setAttribute('aria-disabled', this.disabled ? 'true' : 'false');
-
-    this.addEventListener('click', this.onClick_.bind(this));
-    this.addEventListener('keydown', this.onKeyDown_.bind(this));
-    this.addEventListener('keyup', this.onKeyUp_.bind(this));
-    this.addEventListener('pointerdown', this.onPointerDown_.bind(this));
-    this.addEventListener('pointerup', this.onPointerUp_.bind(this));
-  }
-
   override connectedCallback() {
     super.connectedCallback();
 
@@ -108,6 +93,23 @@ export class CrToggleElement extends CrToggleElementBase {
         this.toggleState_(/* fromKeyboard= */ false);
       }
     };
+  }
+
+  override firstUpdated() {
+    if (!this.hasAttribute('role')) {
+      this.setAttribute('role', 'button');
+    }
+    if (!this.hasAttribute('tabindex')) {
+      this.setAttribute('tabindex', '0');
+    }
+    this.setAttribute('aria-pressed', this.checked ? 'true' : 'false');
+    this.setAttribute('aria-disabled', this.disabled ? 'true' : 'false');
+
+    this.addEventListener('click', this.onClick_.bind(this));
+    this.addEventListener('keydown', this.onKeyDown_.bind(this));
+    this.addEventListener('keyup', this.onKeyUp_.bind(this));
+    this.addEventListener('pointerdown', this.onPointerDown_.bind(this));
+    this.addEventListener('pointerup', this.onPointerUp_.bind(this));
   }
 
   override updated(changedProperties: PropertyValues<this>) {
@@ -187,7 +189,7 @@ export class CrToggleElement extends CrToggleElementBase {
   }
 
   private onKeyDown_(e: KeyboardEvent) {
-    if (e.key !== ' ' && e.key !== 'Enter') {
+    if (e.key !== ' ' && (e.key !== 'Enter' || (isMac && e.ctrlKey))) {
       return;
     }
 
@@ -203,7 +205,7 @@ export class CrToggleElement extends CrToggleElementBase {
   }
 
   private onKeyUp_(e: KeyboardEvent) {
-    if (e.key !== ' ' && e.key !== 'Enter') {
+    if (e.key !== ' ' && (e.key !== 'Enter' || (isMac && e.ctrlKey))) {
       return;
     }
 

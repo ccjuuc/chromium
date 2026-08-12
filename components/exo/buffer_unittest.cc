@@ -6,6 +6,8 @@
 
 #include <GLES2/gl2extchromium.h>
 
+#include <algorithm>
+
 #include "base/barrier_closure.h"
 #include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
@@ -58,7 +60,6 @@ viz::CompositorFrame CreateCompositorFrame(
       viz::BeginFrameId(viz::BeginFrameArgs::kManualSourceId,
                         viz::BeginFrameArgs::kStartingFrameNumber);
   frame.metadata.begin_frame_ack.has_damage = true;
-  frame.metadata.frame_token = surface_tree_host->GenerateNextFrameToken();
   frame.metadata.device_scale_factor = 1;
   auto pass = viz::CompositorRenderPass::Create();
   pass->SetNew(viz::CompositorRenderPassId{1}, output_rect, damage_rect,
@@ -90,9 +91,9 @@ TEST_F(BufferTest, ReleaseCallback) {
   buffer->OnAttach();
   // Produce a transferable resource for the contents of the buffer.
   std::optional<viz::TransferableResource> resource =
-      buffer->ProduceTransferableResource(
-          frame_sink_holder->resource_manager(), nullptr, false,
-          gfx::ColorSpace::CreateSRGB(), nullptr);
+      buffer->ProduceTransferableResource(frame_sink_holder->resource_manager(),
+                                          false, gfx::ColorSpace::CreateSRGB(),
+                                          nullptr);
   ASSERT_TRUE(resource);
 
   // Release buffer.
@@ -130,9 +131,9 @@ TEST_F(BufferTest, SolidColorReleaseCallback) {
   buffer->OnAttach();
   // Produce a transferable resource for the contents of the buffer.
   std::optional<viz::TransferableResource> resource =
-      buffer->ProduceTransferableResource(
-          frame_sink_holder->resource_manager(), nullptr, false,
-          gfx::ColorSpace::CreateSRGB(), nullptr);
+      buffer->ProduceTransferableResource(frame_sink_holder->resource_manager(),
+                                          false, gfx::ColorSpace::CreateSRGB(),
+                                          nullptr);
   // Solid color buffer is immediately released after commit.
   EXPECT_FALSE(resource);
 
@@ -170,7 +171,7 @@ TEST_F(BufferTest, IsLost) {
     // Acquire a texture transferable resource for the contents of the buffer.
     std::optional<viz::TransferableResource> resource =
         buffer->ProduceTransferableResource(
-            frame_sink_holder->resource_manager(), nullptr, false,
+            frame_sink_holder->resource_manager(), false,
             gfx::ColorSpace::CreateSRGB(), nullptr);
     ASSERT_TRUE(resource);
 
@@ -198,7 +199,7 @@ TEST_F(BufferTest, IsLost) {
     // buffer.
     std::optional<viz::TransferableResource> new_resource =
         buffer->ProduceTransferableResource(
-            frame_sink_holder->resource_manager(), nullptr, false,
+            frame_sink_holder->resource_manager(), false,
             gfx::ColorSpace::CreateSRGB(), nullptr);
     ASSERT_TRUE(new_resource);
     buffer->OnDetach();
@@ -226,9 +227,9 @@ TEST_F(BufferTest, OnLostResources) {
   buffer->OnAttach();
   // Acquire a texture transferable resource for the contents of the buffer.
   std::optional<viz::TransferableResource> resource =
-      buffer->ProduceTransferableResource(
-          frame_sink_holder->resource_manager(), nullptr, false,
-          gfx::ColorSpace::CreateSRGB(), nullptr);
+      buffer->ProduceTransferableResource(frame_sink_holder->resource_manager(),
+                                          false, gfx::ColorSpace::CreateSRGB(),
+                                          nullptr);
   ASSERT_TRUE(resource);
 
   viz::RasterContextProvider* context_provider =
@@ -267,9 +268,9 @@ TEST_F(BufferTest, SurfaceTreeHostDestruction) {
   buffer->OnAttach();
   // Produce a transferable resource for the contents of the buffer.
   std::optional<viz::TransferableResource> resource =
-      buffer->ProduceTransferableResource(
-          frame_sink_holder->resource_manager(), nullptr, false,
-          gfx::ColorSpace::CreateSRGB(), nullptr);
+      buffer->ProduceTransferableResource(frame_sink_holder->resource_manager(),
+                                          false, gfx::ColorSpace::CreateSRGB(),
+                                          nullptr);
   ASSERT_TRUE(resource);
 
   // Submit frame with resource.
@@ -320,9 +321,9 @@ TEST_F(BufferTest, SurfaceTreeHostLastFrame) {
   buffer->OnAttach();
   // Produce a transferable resource for the contents of the buffer.
   std::optional<viz::TransferableResource> resource =
-      buffer->ProduceTransferableResource(
-          frame_sink_holder->resource_manager(), nullptr, false,
-          gfx::ColorSpace::CreateSRGB(), nullptr);
+      buffer->ProduceTransferableResource(frame_sink_holder->resource_manager(),
+                                          false, gfx::ColorSpace::CreateSRGB(),
+                                          nullptr);
   ASSERT_TRUE(resource);
 
   // Submit frame with resource.
@@ -426,9 +427,9 @@ TEST_F(BufferTest, SurfaceTreeHostNotReclaimCachedFrameResources) {
   buffer->OnAttach();
   // Produce a transferable resource for the contents of the buffer.
   std::optional<viz::TransferableResource> resource =
-      buffer->ProduceTransferableResource(
-          frame_sink_holder->resource_manager(), nullptr, false,
-          gfx::ColorSpace::CreateSRGB(), nullptr);
+      buffer->ProduceTransferableResource(frame_sink_holder->resource_manager(),
+                                          false, gfx::ColorSpace::CreateSRGB(),
+                                          nullptr);
   ASSERT_TRUE(resource);
 
   // Submit frame with `resource`.
@@ -443,7 +444,7 @@ TEST_F(BufferTest, SurfaceTreeHostNotReclaimCachedFrameResources) {
   frame_sink_holder->set_pre_reclaim_callback(base::BindLambdaForTesting(
       [&](const std::vector<viz::ReturnedResource>& resources) {
         // Skip if it is not a notification for reclaiming `resource`.
-        if (!base::Contains(
+        if (!std::ranges::contains(
                 resources, resource->id,
                 [](const viz::ReturnedResource& r) { return r.id; })) {
           return;
@@ -515,9 +516,9 @@ TEST_F(BufferTest, SurfaceTreeHostDiscardFrameNotReclaimNewFrameResources) {
   buffer->OnAttach();
   // Produce a transferable resource for the contents of the buffer.
   std::optional<viz::TransferableResource> resource =
-      buffer->ProduceTransferableResource(
-          frame_sink_holder->resource_manager(), nullptr, false,
-          gfx::ColorSpace::CreateSRGB(), nullptr);
+      buffer->ProduceTransferableResource(frame_sink_holder->resource_manager(),
+                                          false, gfx::ColorSpace::CreateSRGB(),
+                                          nullptr);
   ASSERT_TRUE(resource);
 
   frame_sink_holder->ClearPendingBeginFramesForTesting();
@@ -586,9 +587,9 @@ TEST_F(BufferTest, SurfaceTreeHostDiscardFrameNotReclaimInUseResources) {
   buffer->OnAttach();
   // Produce a transferable resource for the contents of the buffer.
   std::optional<viz::TransferableResource> resource =
-      buffer->ProduceTransferableResource(
-          frame_sink_holder->resource_manager(), nullptr, false,
-          gfx::ColorSpace::CreateSRGB(), nullptr);
+      buffer->ProduceTransferableResource(frame_sink_holder->resource_manager(),
+                                          false, gfx::ColorSpace::CreateSRGB(),
+                                          nullptr);
   ASSERT_TRUE(resource);
 
   // Submit frame with `resource`.
@@ -603,7 +604,7 @@ TEST_F(BufferTest, SurfaceTreeHostDiscardFrameNotReclaimInUseResources) {
   frame_sink_holder->set_pre_reclaim_callback(base::BindLambdaForTesting(
       [&](const std::vector<viz::ReturnedResource>& resources) {
         // Skip if it is not a notification for reclaiming `resource`.
-        if (!base::Contains(
+        if (!std::ranges::contains(
                 resources, resource->id,
                 [](const viz::ReturnedResource& r) { return r.id; })) {
           return;
@@ -640,6 +641,55 @@ TEST_F(BufferTest, SurfaceTreeHostDiscardFrameNotReclaimInUseResources) {
 
   // Release() should have been called exactly once.
   ASSERT_EQ(release_call_count, 1);
+}
+
+TEST_F(BufferTest, CreateBitmapFailure) {
+  // Create a valid but too small shared memory region.
+  base::UnsafeSharedMemoryRegion region =
+      base::UnsafeSharedMemoryRegion::Create(1);
+  ASSERT_TRUE(region.IsValid());
+  gfx::GpuMemoryBufferHandle handle(std::move(region));
+  handle.stride = 1024;
+
+  // Create a buffer with invalid handle.
+  auto buffer = test::ExoTestHelper::CreateBufferFromGMBHandle(
+      std::move(handle), gfx::Size(256, 256),
+      viz::SinglePlaneFormat::kRGBA_8888);
+
+  ASSERT_TRUE(buffer);
+
+  // This should not crash and return an empty bitmap.
+  SkBitmap bitmap = buffer->CreateBitmap();
+  EXPECT_TRUE(bitmap.drawsNothing());
+}
+
+TEST_F(BufferTest, ProduceTransferableResourceFailure) {
+  // Create a valid but too small shared memory region.
+  base::UnsafeSharedMemoryRegion region =
+      base::UnsafeSharedMemoryRegion::Create(1);
+  ASSERT_TRUE(region.IsValid());
+  gfx::GpuMemoryBufferHandle handle(std::move(region));
+  handle.stride = 1024;
+
+  // Create a buffer with invalid handle.
+  auto buffer = test::ExoTestHelper::CreateBufferFromGMBHandle(
+      std::move(handle), gfx::Size(256, 256),
+      viz::SinglePlaneFormat::kRGBA_8888);
+
+  ASSERT_TRUE(buffer);
+
+  buffer->OnAttach();
+
+  auto surface_tree_host = std::make_unique<SurfaceTreeHost>("BufferTest");
+  LayerTreeFrameSinkHolder* frame_sink_holder =
+      surface_tree_host->layer_tree_frame_sink_holder();
+
+  // This should not crash and return std::nullopt.
+  std::optional<viz::TransferableResource> resource =
+      buffer->ProduceTransferableResource(frame_sink_holder->resource_manager(),
+                                          false, gfx::ColorSpace::CreateSRGB(),
+                                          nullptr);
+  EXPECT_FALSE(resource.has_value());
 }
 
 }  // namespace

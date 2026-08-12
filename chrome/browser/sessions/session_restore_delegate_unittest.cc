@@ -4,14 +4,12 @@
 
 #include "chrome/browser/sessions/session_restore_delegate.h"
 
-#include "base/test/scoped_feature_list.h"
+#include "base/memory_coordinator/test_memory_consumer_registry.h"
 #include "chrome/browser/performance_manager/public/background_tab_loading_policy.h"
-#include "chrome/browser/resource_coordinator/tab_helper.h"
 #include "chrome/browser/sessions/session_restore.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/favicon/content/content_favicon_driver.h"
 #include "components/favicon/core/test/mock_favicon_service.h"
-#include "components/performance_manager/public/features.h"
 #include "components/performance_manager/test_support/page_node_utils.h"
 #include "components/performance_manager/test_support/test_harness_helper.h"
 #include "content/public/browser/navigation_controller.h"
@@ -41,11 +39,6 @@ std::unique_ptr<WebContents> CreateRestoredWebContents(
   entries.push_back(NavigationEntry::Create());
   test_contents->GetController().Restore(0, content::RestoreType::kRestored,
                                          &entries);
-  // TabLoadTracker needs the resource_coordinator WebContentsData to be
-  // initialized, which is needed by TabLoader.
-  // Only needed when `kBackgroundTabLoadingFromPerformanceManager` is `false`.
-  resource_coordinator::ResourceCoordinatorTabHelper::CreateForWebContents(
-      test_contents.get());
 
   performance_manager::testing::SetPageNodeType(
       performance_manager::testing::GetPageNodeForWebContents(
@@ -54,15 +47,9 @@ std::unique_ptr<WebContents> CreateRestoredWebContents(
   return test_contents;
 }
 
-class RestoreTabsTest : public ChromeRenderViewHostTestHarness,
-                        public WithParamInterface<bool> {
+class RestoreTabsTest : public ChromeRenderViewHostTestHarness {
  public:
   void SetUp() override {
-    scoped_features_.InitWithFeatureState(
-        performance_manager::features::
-            kBackgroundTabLoadingFromPerformanceManager,
-        GetParam());
-
     ChromeRenderViewHostTestHarness::SetUp();
     perf_manager_helper_.SetUp();
   }
@@ -72,13 +59,11 @@ class RestoreTabsTest : public ChromeRenderViewHostTestHarness,
   }
 
  private:
-  base::test::ScopedFeatureList scoped_features_;
+  base::TestMemoryConsumerRegistry test_memory_consumer_registry_;
   PerformanceManagerTestHarnessHelper perf_manager_helper_;
 };
 
-INSTANTIATE_TEST_SUITE_P(PerformanceManagerEnabled, RestoreTabsTest, Bool());
-
-TEST_P(RestoreTabsTest, RestoreTabsRestoresFavicons) {
+TEST_F(RestoreTabsTest, RestoreTabsRestoresFavicons) {
   performance_manager::policies::InstallBackgroundTabLoadingPolicyForTesting(
       base::BindRepeating(&SessionRestore::OnTabLoaderFinishedLoadingTabs));
 

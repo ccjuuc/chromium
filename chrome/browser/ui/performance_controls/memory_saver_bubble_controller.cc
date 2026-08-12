@@ -23,7 +23,7 @@ MemorySaverBubbleController::MemorySaverBubbleController(
   // invocations come from the expected ActionItem.
   action_item_ = actions::ActionManager::Get().FindAction(
       kActionShowMemorySaverChip,
-      /*scope=*/bwi->GetActions()->root_action_item());
+      /*scope=*/BrowserActions::From(bwi)->root_action_item());
   CHECK(action_item_);
 }
 
@@ -37,10 +37,9 @@ void MemorySaverBubbleController::InvokeAction(BrowserWindowInterface* bwi,
   BrowserView* browser_view =
       BrowserView::GetBrowserViewForBrowser(bwi->GetBrowserForMigrationOnly());
   CHECK_NE(browser_view, nullptr);
-  views::View* anchor_view =
-      browser_view->toolbar_button_provider()->GetAnchorView(std::nullopt);
-  bubble_ = MemorySaverBubbleView::ShowBubble(bwi->GetBrowserForMigrationOnly(),
-                                              anchor_view, this);
+  auto anchor =
+      browser_view->toolbar_button_provider()->GetBubbleAnchor(std::nullopt);
+  bubble_ = MemorySaverBubbleView::ShowBubble(bwi, anchor, this);
 }
 
 void MemorySaverBubbleController::OnBubbleShown() {

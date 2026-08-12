@@ -46,8 +46,7 @@
 namespace blink {
 
 FontFallbackList::FontFallbackList(FontSelector* font_selector)
-    : font_selector_(font_selector),
-      generation_(FontCache::Get().Generation()) {}
+    : font_selector_(font_selector) {}
 
 void FontFallbackList::Trace(Visitor* visitor) const {
   visitor->Trace(font_list_);
@@ -213,7 +212,6 @@ const FontData* FontFallbackList::FontDataAt(
   // families we've looked at before in |family_index_|, so that we never scan
   // the same spot in the list twice.  GetFontData will adjust our
   // |family_index_| as it scans for the right font to make.
-  DCHECK_EQ(FontCache::Get().Generation(), generation_);
   const FontData* result = GetFontData(font_description);
   if (result) {
     font_list_.push_back(result);
@@ -230,12 +228,17 @@ void FontFallbackList::ComputeFontFeatures(
   DCHECK(!is_font_features_computed_);
   is_font_features_computed_ = true;
   FontFeatureRange::FromFontDescription(font_description, font_features_);
-  has_non_initial_font_features_ =
-      !FontFeatureRange::IsInitial(font_features_) ||
+  has_simple_font_features_ =
+      // Ensure the features encompass the entire range.
+      std::ranges::all_of(font_features_,
+                          [](auto feature) {
+                            return feature.start == 0 &&
+                                   feature.end == static_cast<uint32_t>(-1);
+                          }) &&
       // Features for `font-variant-alternates` is set in `GetFontData`.
-      font_description.GetFontVariantAlternates() ||
+      !font_description.GetFontVariantAlternates() &&
       // Features for `font-variant-caps` is set while shaping.
-      font_description.VariantCaps() != FontDescription::kCapsNormal;
+      font_description.VariantCaps() == FontDescription::kCapsNormal;
 }
 
 base::span<const FontFeatureRange> FontFallbackList::GetFontFeatures(
@@ -246,15 +249,16 @@ base::span<const FontFeatureRange> FontFallbackList::GetFontFeatures(
   return font_features_;
 }
 
-bool FontFallbackList::HasNonInitialFontFeatures(
+
+bool FontFallbackList::HasSimpleFontFeatures(
     const FontDescription& font_description) {
   if (HasCustomFont()) [[unlikely]] {
-    return true;
+    return false;
   }
   if (!is_font_features_computed_) [[unlikely]] {
     ComputeFontFeatures(font_description);
   }
-  return has_non_initial_font_features_;
+  return has_simple_font_features_;
 }
 
 bool FontFallbackList::ComputeCanShapeWordByWord(

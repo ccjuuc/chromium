@@ -29,6 +29,7 @@
 #if BUILDFLAG(IS_WIN)
 #include "base/command_line.h"
 #include "components/os_crypt/async/browser/dpapi_key_provider.h"
+#include "components/os_crypt/async/browser/os_crypt_win.h"
 #include "headless/public/switches.h"
 #endif
 
@@ -47,17 +48,10 @@
 #endif
 
 #if defined(HEADLESS_USE_PREFS)
-#include "components/os_crypt/sync/os_crypt.h"  // nogncheck
-#include "components/pref_registry/pref_registry_syncable.h"
-#include "components/prefs/in_memory_pref_store.h"
-#include "components/prefs/json_pref_store.h"
-#include "components/prefs/pref_service_factory.h"
-#endif
-
-#if defined(HEADLESS_USE_POLICY)
-#include "components/headless/policy/headless_mode_policy.h"  // nogncheck
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
-#include "headless/lib/browser/policy/headless_policies.h"
+#include "components/pref_registry/pref_registry_syncable.h"  // nogncheck
+#include "components/prefs/in_memory_pref_store.h"            // nogncheck
+#include "components/prefs/json_pref_store.h"                 // nogncheck
+#include "components/prefs/pref_service_factory.h"            // nogncheck
 #endif
 
 #if defined(HEADLESS_SUPPORT_FIELD_TRIALS)
@@ -135,12 +129,6 @@ void HeadlessBrowserImpl::SetOptions(HeadlessBrowser::Options options) {
   options_ = std::move(options);
 }
 
-HeadlessBrowserContext::Builder
-HeadlessBrowserImpl::CreateBrowserContextBuilder() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  return HeadlessBrowserContext::Builder(this);
-}
-
 scoped_refptr<base::SingleThreadTaskRunner>
 HeadlessBrowserImpl::BrowserMainThread() const {
   return content::GetUIThreadTaskRunner({});
@@ -183,10 +171,11 @@ HeadlessBrowserImpl::GetAllBrowserContexts() {
 }
 
 HeadlessBrowserContext* HeadlessBrowserImpl::CreateBrowserContext(
-    HeadlessBrowserContext::Builder* builder) {
+    HeadlessBrowserContext::CreateParams params) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  auto browser_context = HeadlessBrowserContextImpl::Create(builder);
+  auto browser_context =
+      HeadlessBrowserContextImpl::Create(this, std::move(params));
   HeadlessBrowserContext* result = browser_context.get();
   browser_contexts_[browser_context->Id()] = std::move(browser_context);
 
@@ -253,18 +242,6 @@ bool HeadlessBrowserImpl::ShouldStartDevToolsServer() {
     return false;
   }
 
-#if defined(HEADLESS_USE_POLICY)
-  CHECK(local_state_);
-  if (!IsRemoteDebuggingAllowed(local_state_.get())) {
-    // Follow content/browser/devtools/devtools_http_handler.cc that reports its
-    // remote debugging port on stderr for symmetry.
-    UNSAFE_TODO(fputs(
-        "\nDevTools remote debugging is disallowed by the system admin.\n",
-        stderr));
-    fflush(stderr);
-    return false;
-  }
-#endif
   return true;
 }
 
@@ -294,12 +271,6 @@ void HeadlessBrowserImpl::PostMainMessageLoopRun() {
     local_state_.reset(nullptr);
   }
 #endif
-#if defined(HEADLESS_USE_POLICY)
-  if (policy_connector_) {
-    policy_connector_->Shutdown();
-    policy_connector_.reset(nullptr);
-  }
-#endif
 }
 
 void HeadlessBrowserImpl::InitializeWebContents(
@@ -317,12 +288,6 @@ ui::Compositor* HeadlessBrowserImpl::GetCompositor(
     HeadlessWebContentsImpl* web_contents) {
   return platform_delegate_->GetCompositor(web_contents);
 }
-
-#if defined(HEADLESS_USE_POLICY)
-policy::PolicyService* HeadlessBrowserImpl::GetPolicyService() {
-  return policy_connector_ ? policy_connector_->GetPolicyService() : nullptr;
-}
-#endif
 
 #if defined(HEADLESS_USE_PREFS)
 void HeadlessBrowserImpl::CreatePrefService() {
@@ -357,7 +322,7 @@ void HeadlessBrowserImpl::CreatePrefService() {
 
   auto pref_registry = base::MakeRefCounted<user_prefs::PrefRegistrySyncable>();
 #if BUILDFLAG(IS_WIN)
-  OSCrypt::RegisterLocalPrefs(pref_registry.get());
+  os_crypt_async::RegisterLocalPrefs(pref_registry.get());
 #endif
 
 #if defined(HEADLESS_SUPPORT_FIELD_TRIALS)
@@ -367,26 +332,14 @@ void HeadlessBrowserImpl::CreatePrefService() {
 
   PrefServiceFactory factory;
 
-#if defined(HEADLESS_USE_POLICY)
-  RegisterHeadlessPrefs(pref_registry.get());
-
-  policy_connector_ =
-      std::make_unique<policy::HeadlessBrowserPolicyConnector>();
-
-  factory.set_managed_prefs(
-      policy_connector_->CreatePrefStore(policy::POLICY_LEVEL_MANDATORY));
-
-  BrowserContextDependencyManager::GetInstance()
-      ->RegisterProfilePrefsForServices(pref_registry.get());
-#endif  // defined(HEADLESS_USE_POLICY)
-
   factory.set_user_prefs(pref_store);
   local_state_ = factory.Create(std::move(pref_registry));
 
 #if BUILDFLAG(IS_WIN)
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   if (!command_line->HasSwitch(switches::kDisableCookieEncryption) &&
-      OSCrypt::InitWithExistingKey(local_state_.get()) != OSCrypt::kSuccess) {
+      os_crypt_async::InitWithExistingKey(local_state_.get()) !=
+          os_crypt_async::InitResult::kSuccess) {
     command_line->AppendSwitch(switches::kDisableCookieEncryption);
   }
 #endif  // BUILDFLAG(IS_WIN)

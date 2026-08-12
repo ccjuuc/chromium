@@ -6,13 +6,11 @@
 
 #include <optional>
 
-#include "base/containers/contains.h"
 #include "base/memory/ptr_util.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
 #include "chromeos/ash/services/secure_channel/authenticated_channel_impl.h"
 #include "chromeos/ash/services/secure_channel/device_id_pair.h"
 #include "chromeos/ash/services/secure_channel/nearby_connection.h"
-#include "chromeos/ash/services/secure_channel/public/mojom/secure_channel.mojom-shared.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/secure_channel.mojom.h"
 #include "chromeos/ash/services/secure_channel/secure_channel_disconnector.h"
 
@@ -49,12 +47,10 @@ NearbyConnectionManagerImpl::NearbyConnectionManagerImpl(
     SecureChannelDisconnector* secure_channel_disconnector)
     : ble_scanner_(ble_scanner),
       secure_channel_disconnector_(secure_channel_disconnector) {
-  ble_scanner_->AddObserver(this);
+  ble_scanner_observation_.Observe(ble_scanner_);
 }
 
-NearbyConnectionManagerImpl::~NearbyConnectionManagerImpl() {
-  ble_scanner_->RemoveObserver(this);
-}
+NearbyConnectionManagerImpl::~NearbyConnectionManagerImpl() = default;
 
 void NearbyConnectionManagerImpl::PerformAttemptNearbyInitiatorConnection(
     const DeviceIdPair& device_id_pair) {
@@ -154,8 +150,7 @@ void NearbyConnectionManagerImpl::OnSecureChannelAuthenticationStateChanged(
 
 bool NearbyConnectionManagerImpl::DoesAuthenticatingChannelExist(
     const std::string& remote_device_id) {
-  return base::Contains(remote_device_id_to_secure_channel_map_,
-                        remote_device_id);
+  return remote_device_id_to_secure_channel_map_.contains(remote_device_id);
 }
 
 void NearbyConnectionManagerImpl::SetAuthenticatingChannel(

@@ -2,18 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-
 #include "chrome/test/base/in_process_browser_test.h"
 
 #include <stddef.h>
 #include <string.h>
 
 #include <array>
+#include <string_view>
 
 #include "base/compiler_specific.h"
 #include "base/path_service.h"
 #include "build/build_config.h"
 #include "chrome/browser/after_startup_task_utils.h"
+#include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -30,11 +31,11 @@
 
 #if defined(TOOLKIT_VIEWS)
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/toolbar/browser_app_menu_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/view.h"
 #endif
 
@@ -50,8 +51,9 @@ class LoadFailObserver : public content::WebContentsObserver {
 
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override {
-    if (navigation_handle->GetNetErrorCode() == net::OK)
+    if (navigation_handle->GetNetErrorCode() == net::OK) {
       return;
+    }
 
     failed_load_ = true;
     error_code_ = navigation_handle->GetNetErrorCode();
@@ -77,20 +79,29 @@ class LoadFailObserver : public content::WebContentsObserver {
 
 class InProcessBrowserTestP
     : public InProcessBrowserTest,
-      public ::testing::WithParamInterface<const char*> {};
+      public ::testing::WithParamInterface<std::string_view> {};
 
 IN_PROC_BROWSER_TEST_P(InProcessBrowserTestP, TestP) {
-  UNSAFE_TODO(EXPECT_EQ(0, strcmp("foo", GetParam())));
+  EXPECT_EQ(GetParam(), "foo");
 }
 
 INSTANTIATE_TEST_SUITE_P(IPBTP,
                          InProcessBrowserTestP,
                          ::testing::Values("foo"));
 
+class InProcessBrowserTestExternalConnectionFail : public InProcessBrowserTest {
+ private:
+  // Without this, prewarming fetches https://www.google.com/warmup.html which
+  // leads to flakiness in the test.
+  test::ScopedPrewarmFeatureList prewarm_feature_list_{
+      test::ScopedPrewarmFeatureList::PrewarmState::kEnabledWithNoTrigger};
+};
+
 // Tests that InProcessBrowserTest cannot resolve external host, in this case
 // "google.com" and "cnn.com". Using external resources is disabled by default
 // in InProcessBrowserTest because it causes flakiness.
-IN_PROC_BROWSER_TEST_F(InProcessBrowserTest, ExternalConnectionFail) {
+IN_PROC_BROWSER_TEST_F(InProcessBrowserTestExternalConnectionFail,
+                       ExternalConnectionFail) {
   content::WebContents* contents =
       browser()->tab_strip_model()->GetActiveWebContents();
 
@@ -167,9 +178,10 @@ END_METADATA
 IN_PROC_BROWSER_TEST_F(InProcessBrowserTest,
                        RunsScheduledLayoutOnAnchoredBubbles) {
   views::View* const anchor_view =
-      BrowserView::GetBrowserViewForBrowser(browser())
-          ->toolbar()
-          ->app_menu_button();
+      views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+          kToolbarAppMenuButtonElementId,
+          BrowserView::GetBrowserViewForBrowser(browser())
+              ->GetElementContext());
 
   // Temporarily owned.
   views::BubbleDialogDelegateView* const bubble =

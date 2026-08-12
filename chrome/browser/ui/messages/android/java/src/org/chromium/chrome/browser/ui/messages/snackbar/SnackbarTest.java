@@ -7,11 +7,16 @@ package org.chromium.chrome.browser.ui.messages.snackbar;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Activity;
+import android.view.InputDevice;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.ViewGroup;
 import android.widget.FrameLayout;
 
 import androidx.test.filters.MediumTest;
 import androidx.test.filters.SmallTest;
 
+import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.Before;
@@ -21,18 +26,20 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.base.test.util.DisabledTest;
-import org.chromium.base.test.util.Features.EnableFeatures;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.ui.messages.R;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager.ParentOverrideSlot;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager.SnackbarController;
-import org.chromium.chrome.browser.ui.messages.test.R;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.ui.accessibility.AccessibilityState;
+import org.chromium.ui.KeyboardVisibilityDelegate;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 import org.chromium.ui.test.util.BlankUiTestActivity;
 
 import java.util.concurrent.TimeUnit;
@@ -42,11 +49,17 @@ import java.util.function.Supplier;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.UNIT_TESTS)
 public class SnackbarTest {
+    private static final int SAMPLE_KEYBOARD_HEIGHT = 150;
     private SnackbarManager mManager;
+    private MockKeyboardVisibilityDelegate mKeyboardDelegate;
+    private final CallbackHelper mShowingHelper = new CallbackHelper();
+    private final CallbackHelper mDismissHelper = new CallbackHelper();
     private final SnackbarController mDefaultController =
             new SnackbarController() {
                 @Override
-                public void onDismissNoAction(Object actionData) {}
+                public void onDismissNoAction(Object actionData) {
+                    mDismissHelper.notifyCalled();
+                }
 
                 @Override
                 public void onAction(Object actionData) {}
@@ -57,11 +70,19 @@ public class SnackbarTest {
                 @Override
                 public void onDismissNoAction(Object actionData) {
                     mDismissed = true;
+                    mDismissHelper.notifyCalled();
                 }
 
                 @Override
                 public void onAction(Object actionData) {}
             };
+
+    private final Snackbar mSampleNotificationSnackbar =
+            Snackbar.make(
+                    "test snackbar text",
+                    mDismissController,
+                    Snackbar.TYPE_NOTIFICATION,
+                    Snackbar.UMA_TEST_SNACKBAR);
 
     @ClassRule
     public static BaseActivityTestRule<BlankUiTestActivity> activityTestRule =
@@ -71,14 +92,18 @@ public class SnackbarTest {
     private static FrameLayout sMainParent;
     private static FrameLayout sAlternateParent1;
     private static FrameLayout sAlternateParent2;
+    private SettableNonNullObservableSupplier<Integer> mAdditionalBottomMarginPxSupplier;
+    private SettableNonNullObservableSupplier<Boolean> mFullscreenSupplier;
     private boolean mDismissed;
     private boolean mActionClicked;
+    private final CallbackHelper mActionHelper = new CallbackHelper();
 
     private final SnackbarController mActionController =
             new SnackbarController() {
                 @Override
                 public void onAction(Object actionData) {
                     mActionClicked = true;
+                    mActionHelper.notifyCalled();
                 }
             };
 
@@ -113,34 +138,64 @@ public class SnackbarTest {
         PostTask.runOrPostTask(
                 TaskTraits.UI_DEFAULT,
                 () -> {
-                    mManager = new SnackbarManager(sActivity, sMainParent, null);
+                    mAdditionalBottomMarginPxSupplier = ObservableSuppliers.createNonNull(0);
+                    mFullscreenSupplier = ObservableSuppliers.createNonNull(false);
+                    mManager =
+                            new SnackbarManager(
+                                    sActivity,
+                                    sMainParent,
+                                    null,
+                                    mAdditionalBottomMarginPxSupplier,
+                                    ((BlankUiTestActivity) sActivity).getModalDialogManager(),
+                                    mFullscreenSupplier);
+                    mManager.isShowingSupplier()
+                            .addSyncObserverAndPostIfNonNull(
+                                    (showing) -> mShowingHelper.notifyCalled());
                     mManager.dismissAllSnackbars();
-                    AccessibilityState.setIsPerformGesturesEnabledForTesting(false);
+                    AccessibilityStateTestHelper.setIsPerformGesturesEnabledForTesting(false);
+
+                    mKeyboardDelegate = new MockKeyboardVisibilityDelegate();
+                    mKeyboardDelegate.setKeyboardHeight(SAMPLE_KEYBOARD_HEIGHT);
+                    KeyboardVisibilityDelegate.setInstanceForTesting(mKeyboardDelegate);
+                });
+    }
+
+    @After
+    public void tearDownTest() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mManager.destroy();
+                    AccessibilityStateTestHelper.uninitializeForTesting();
                 });
     }
 
     @Test
     @MediumTest
-    @DisabledTest(message = "crbug.com/439617848")
     public void testStackQueuePersistentOrder() {
+        Object stackbarActionData = new Object();
         final Snackbar stackbar =
                 Snackbar.make(
-                        "stack",
-                        mDefaultController,
-                        Snackbar.TYPE_ACTION,
-                        Snackbar.UMA_TEST_SNACKBAR);
+                                "stack",
+                                mDefaultController,
+                                Snackbar.TYPE_ACTION,
+                                Snackbar.UMA_TEST_SNACKBAR)
+                        .setAction("action", stackbarActionData);
+        Object queuebarActionData = new Object();
         final Snackbar queuebar =
                 Snackbar.make(
-                        "queue",
-                        mDefaultController,
-                        Snackbar.TYPE_NOTIFICATION,
-                        Snackbar.UMA_TEST_SNACKBAR);
+                                "queue",
+                                mDefaultController,
+                                Snackbar.TYPE_NOTIFICATION,
+                                Snackbar.UMA_TEST_SNACKBAR)
+                        .setAction("action", queuebarActionData);
+        Object persistentActionData = new Object();
         final Snackbar persistent =
                 Snackbar.make(
-                        "persistent",
-                        mDefaultController,
-                        Snackbar.TYPE_PERSISTENT,
-                        Snackbar.UMA_TEST_SNACKBAR);
+                                "persistent",
+                                mDefaultController,
+                                Snackbar.TYPE_PERSISTENT,
+                                Snackbar.UMA_TEST_SNACKBAR)
+                        .setAction("action", persistentActionData);
         PostTask.runOrPostTask(TaskTraits.UI_DEFAULT, () -> mManager.showSnackbar(stackbar));
         pollSnackbarCondition(
                 "First snackbar not shown",
@@ -164,12 +219,20 @@ public class SnackbarTest {
                             "Snackbars on stack should not be cancelled by persistent snackbars",
                             stackbar,
                             mManager.getCurrentSnackbarForTesting());
+                    // Simulate the stackbar being dismissed.
+                    mManager.dismissSnackbars(mDefaultController, stackbarActionData);
                 });
         pollSnackbarCondition(
                 "Snackbar on queue not shown",
                 () -> mManager.isShowing() && mManager.getCurrentSnackbarForTesting() == queuebar);
+        PostTask.runOrPostTask(
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    // Simulate the queuebar being dismissed.
+                    mManager.dismissSnackbars(mDefaultController, queuebarActionData);
+                });
         pollSnackbarCondition(
-                "Snackbar on queue not timed out",
+                "Snackbar in queue not dismissed",
                 () ->
                         mManager.isShowing()
                                 && mManager.getCurrentSnackbarForTesting() == persistent);
@@ -181,24 +244,30 @@ public class SnackbarTest {
     @Test
     @SmallTest
     public void testPersistentQueueStackOrder() {
+        Object stackbarActionData = new Object();
         final Snackbar stackbar =
                 Snackbar.make(
-                        "stack",
-                        mDefaultController,
-                        Snackbar.TYPE_ACTION,
-                        Snackbar.UMA_TEST_SNACKBAR);
+                                "stack",
+                                mDefaultController,
+                                Snackbar.TYPE_ACTION,
+                                Snackbar.UMA_TEST_SNACKBAR)
+                        .setAction("action", stackbarActionData);
+        Object queuebarActionData = new Object();
         final Snackbar queuebar =
                 Snackbar.make(
-                        "queue",
-                        mDefaultController,
-                        Snackbar.TYPE_NOTIFICATION,
-                        Snackbar.UMA_TEST_SNACKBAR);
+                                "queue",
+                                mDefaultController,
+                                Snackbar.TYPE_NOTIFICATION,
+                                Snackbar.UMA_TEST_SNACKBAR)
+                        .setAction("action", queuebarActionData);
+        Object persistentActionData = new Object();
         final Snackbar persistent =
                 Snackbar.make(
-                        "persistent",
-                        mDefaultController,
-                        Snackbar.TYPE_PERSISTENT,
-                        Snackbar.UMA_TEST_SNACKBAR);
+                                "persistent",
+                                mDefaultController,
+                                Snackbar.TYPE_PERSISTENT,
+                                Snackbar.UMA_TEST_SNACKBAR)
+                        .setAction("action", persistentActionData);
         PostTask.runOrPostTask(TaskTraits.UI_DEFAULT, () -> mManager.showSnackbar(persistent));
         pollSnackbarCondition(
                 "First snackbar not shown",
@@ -213,11 +282,17 @@ public class SnackbarTest {
         pollSnackbarCondition(
                 "Snackbar on queue was not cleared by snackbar stack.",
                 () -> mManager.isShowing() && mManager.getCurrentSnackbarForTesting() == stackbar);
+
+        // Dismiss the stackbar.
+        PostTask.runOrPostTask(
+                TaskTraits.UI_DEFAULT,
+                () -> mManager.dismissSnackbars(mDefaultController, stackbarActionData));
         pollSnackbarCondition(
-                "Snackbar did not time out",
+                "persistent was revealed by dismissal of stackbar (queuebar was replaced)",
                 () ->
                         mManager.isShowing()
                                 && mManager.getCurrentSnackbarForTesting() == persistent);
+
         PostTask.runOrPostTask(TaskTraits.UI_DEFAULT, () -> mManager.onClick(null));
         pollSnackbarCondition(
                 "Persistent snackbar did not get cleared", () -> !mManager.isShowing());
@@ -246,6 +321,27 @@ public class SnackbarTest {
                 });
         pollSnackbarCondition(
                 "Snackbar did not time out", () -> !mManager.isShowing() && mDismissed);
+    }
+
+    @Test
+    @SmallTest
+    public void testNullTextSnackbar() {
+        final Snackbar snackbar =
+                Snackbar.make(
+                        null, mDismissController, Snackbar.TYPE_ACTION, Snackbar.UMA_TEST_SNACKBAR);
+        mDismissed = false;
+        PostTask.runOrPostTask(TaskTraits.UI_DEFAULT, () -> mManager.showSnackbar(snackbar));
+        pollSnackbarCondition(
+                "Snackbar with null text was not shown.",
+                () -> mManager.isShowing() && mManager.getCurrentSnackbarForTesting() == snackbar);
+        PostTask.runOrPostTask(
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    mManager.dismissSnackbars(mDismissController);
+                    assertTrue("onDismissNoAction not called", mDismissed);
+                });
+        pollSnackbarCondition(
+                "Null-text snackbar did not dismiss.", () -> !mManager.isShowing() && mDismissed);
     }
 
     @Test
@@ -318,7 +414,7 @@ public class SnackbarTest {
         PostTask.runOrPostTask(
                 TaskTraits.UI_DEFAULT,
                 () -> {
-                    AccessibilityState.setIsPerformGesturesEnabledForTesting(true);
+                    AccessibilityStateTestHelper.setIsPerformGesturesEnabledForTesting(true);
                     snackbar.setDuration(SnackbarManager.getDefaultA11yDurationForTesting() / 3);
                     Assert.assertEquals(
                             "Snackbar should use default a11y duration when set duration is less"
@@ -330,7 +426,7 @@ public class SnackbarTest {
         PostTask.runOrPostTask(
                 TaskTraits.UI_DEFAULT,
                 () -> {
-                    AccessibilityState.setIsPerformGesturesEnabledForTesting(true);
+                    AccessibilityStateTestHelper.setIsPerformGesturesEnabledForTesting(true);
                     snackbar.setDuration(SnackbarManager.getDefaultA11yDurationForTesting() * 3);
                     Assert.assertTrue(
                             "Snackbar should use the recommended duration if it is more than "
@@ -352,7 +448,7 @@ public class SnackbarTest {
         PostTask.runOrPostTask(
                 TaskTraits.UI_DEFAULT,
                 () -> {
-                    mManager.overrideParent(sAlternateParent1);
+                    mManager.overrideParent(sAlternateParent1, mAdditionalBottomMarginPxSupplier);
                     mManager.showSnackbar(snackbar);
                 });
         pollSnackbarCondition(
@@ -365,7 +461,6 @@ public class SnackbarTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.FLOATING_SNACKBAR)
     public void testOverrideParent_BeforeShowing_FloatingSnackbar() {
         final Snackbar snackbar =
                 Snackbar.make(
@@ -376,7 +471,7 @@ public class SnackbarTest {
         PostTask.runOrPostTask(
                 TaskTraits.UI_DEFAULT,
                 () -> {
-                    mManager.overrideParent(sAlternateParent1);
+                    mManager.overrideParent(sAlternateParent1, mAdditionalBottomMarginPxSupplier);
                     mManager.showSnackbar(snackbar);
                 });
         pollSnackbarCondition(
@@ -400,7 +495,7 @@ public class SnackbarTest {
                 TaskTraits.UI_DEFAULT,
                 () -> {
                     mManager.showSnackbar(snackbar);
-                    mManager.overrideParent(sAlternateParent1);
+                    mManager.overrideParent(sAlternateParent1, mAdditionalBottomMarginPxSupplier);
                 });
         pollSnackbarCondition(
                 "Snackbar's parent should have been overridden, but wasn't.",
@@ -412,7 +507,6 @@ public class SnackbarTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.FLOATING_SNACKBAR)
     public void testOverrideParent_WhileShowing_FloatingSnackbar() {
         final Snackbar snackbar =
                 Snackbar.make(
@@ -424,7 +518,7 @@ public class SnackbarTest {
                 TaskTraits.UI_DEFAULT,
                 () -> {
                     mManager.showSnackbar(snackbar);
-                    mManager.overrideParent(sAlternateParent1);
+                    mManager.overrideParent(sAlternateParent1, mAdditionalBottomMarginPxSupplier);
                 });
         pollSnackbarCondition(
                 "Snackbar's parent should have been overridden, but wasn't.",
@@ -436,7 +530,7 @@ public class SnackbarTest {
 
     @Test
     @SmallTest
-    public void testPushParentViewToOverrideStack_BeforeShowing() {
+    public void testPushParentViewOverride_BeforeShowing() {
         final Snackbar snackbar =
                 Snackbar.make(
                         "stack",
@@ -446,7 +540,10 @@ public class SnackbarTest {
         PostTask.runOrPostTask(
                 TaskTraits.UI_DEFAULT,
                 () -> {
-                    mManager.pushParentViewToOverrideStack(sAlternateParent1);
+                    mManager.pushParentViewOverride(
+                            ParentOverrideSlot.HUB,
+                            sAlternateParent1,
+                            mAdditionalBottomMarginPxSupplier);
                     mManager.showSnackbar(snackbar);
                 });
         pollSnackbarCondition(
@@ -459,7 +556,7 @@ public class SnackbarTest {
 
     @Test
     @SmallTest
-    public void testPushParentViewToOverrideStack_AfterShowing() {
+    public void testPushParentViewOverride_AfterShowing() {
         final Snackbar snackbar =
                 Snackbar.make(
                         "stack",
@@ -470,7 +567,10 @@ public class SnackbarTest {
                 TaskTraits.UI_DEFAULT,
                 () -> {
                     mManager.showSnackbar(snackbar);
-                    mManager.pushParentViewToOverrideStack(sAlternateParent1);
+                    mManager.pushParentViewOverride(
+                            ParentOverrideSlot.HUB,
+                            sAlternateParent1,
+                            mAdditionalBottomMarginPxSupplier);
                 });
         pollSnackbarCondition(
                 "Snackbar's parent should have been overridden, but wasn't.",
@@ -482,7 +582,7 @@ public class SnackbarTest {
 
     @Test
     @SmallTest
-    public void testPushParentViewToOverrideStack_StackedParentOverrides() {
+    public void testPushParentViewOverride_StackedParentOverrides() {
         final Snackbar snackbar =
                 Snackbar.make(
                         "stack",
@@ -492,7 +592,10 @@ public class SnackbarTest {
         PostTask.runOrPostTask(
                 TaskTraits.UI_DEFAULT,
                 () -> {
-                    mManager.pushParentViewToOverrideStack(sAlternateParent1);
+                    mManager.pushParentViewOverride(
+                            ParentOverrideSlot.HUB,
+                            sAlternateParent1,
+                            mAdditionalBottomMarginPxSupplier);
                     mManager.showSnackbar(snackbar);
                 });
         pollSnackbarCondition(
@@ -505,10 +608,13 @@ public class SnackbarTest {
         PostTask.runOrPostTask(
                 TaskTraits.UI_DEFAULT,
                 () -> {
-                    mManager.pushParentViewToOverrideStack(sAlternateParent2);
+                    mManager.pushParentViewOverride(
+                            ParentOverrideSlot.TAB_LIST_EDITOR,
+                            sAlternateParent2,
+                            mAdditionalBottomMarginPxSupplier);
                 });
         pollSnackbarCondition(
-                "Snackbar's parent should have been overridden by the next stack item, but wasn't.",
+                "Snackbar's parent should have been overridden by the next slot item, but wasn't.",
                 () ->
                         mManager.isShowing()
                                 && mManager.getCurrentSnackbarViewForTesting().mParent
@@ -516,10 +622,10 @@ public class SnackbarTest {
         PostTask.runOrPostTask(
                 TaskTraits.UI_DEFAULT,
                 () -> {
-                    mManager.popParentViewFromOverrideStack(1);
+                    mManager.popParentViewOverride(ParentOverrideSlot.TAB_LIST_EDITOR);
                 });
         pollSnackbarCondition(
-                "Snackbar's parent should have been overridden by the previous stacked parent"
+                "Snackbar's parent should have been overridden by the previous slot"
                         + " override, but wasn't.",
                 () ->
                         mManager.isShowing()
@@ -529,7 +635,7 @@ public class SnackbarTest {
         PostTask.runOrPostTask(
                 TaskTraits.UI_DEFAULT,
                 () -> {
-                    mManager.popParentViewFromOverrideStack(0);
+                    mManager.popParentViewOverride(ParentOverrideSlot.HUB);
                 });
         pollSnackbarCondition(
                 "Snackbar's parent should have been overridden by the original parent, but wasn't.",
@@ -537,6 +643,69 @@ public class SnackbarTest {
                         mManager.isShowing()
                                 && mManager.getCurrentSnackbarViewForTesting().mParent
                                         == sMainParent);
+    }
+
+    @Test
+    @SmallTest
+    public void testPushParentViewOverride_UpdateBottomMargin() {
+        var marginSupplier =
+                ThreadUtils.runOnUiThreadBlocking(() -> ObservableSuppliers.createNonNull(100));
+        final Snackbar snackbar =
+                Snackbar.make(
+                        "stack",
+                        mDismissController,
+                        Snackbar.TYPE_ACTION,
+                        Snackbar.UMA_TEST_SNACKBAR);
+
+        PostTask.runOrPostTask(
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    mManager.showSnackbar(snackbar);
+                });
+        pollSnackbarCondition(
+                "Snackbar's parent should have been shown.", () -> mManager.isShowing());
+
+        final int[] initialMargin = new int[1];
+        PostTask.runOrPostTask(
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    initialMargin[0] =
+                            ((FrameLayout.LayoutParams)
+                                            mManager.getCurrentSnackbarViewForTesting()
+                                                    .getContainerViewForTesting()
+                                                    .getLayoutParams())
+                                    .bottomMargin;
+                    mManager.pushParentViewOverride(
+                            ParentOverrideSlot.HUB, sAlternateParent1, marginSupplier);
+                });
+        pollSnackbarCondition(
+                "Snackbar's parent should have been overridden, and margin applied.",
+                () ->
+                        mManager.isShowing()
+                                && mManager.getCurrentSnackbarViewForTesting().mParent
+                                        == sAlternateParent1
+                                && ((FrameLayout.LayoutParams)
+                                                        mManager.getCurrentSnackbarViewForTesting()
+                                                                .getContainerViewForTesting()
+                                                                .getLayoutParams())
+                                                .bottomMargin
+                                        == initialMargin[0] + 100);
+
+        PostTask.runOrPostTask(
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    marginSupplier.set(250);
+                });
+        pollSnackbarCondition(
+                "Snackbar's margin should have been updated.",
+                () ->
+                        mManager.isShowing()
+                                && ((FrameLayout.LayoutParams)
+                                                        mManager.getCurrentSnackbarViewForTesting()
+                                                                .getContainerViewForTesting()
+                                                                .getLayoutParams())
+                                                .bottomMargin
+                                        == initialMargin[0] + 250);
     }
 
     @Test
@@ -614,7 +783,279 @@ public class SnackbarTest {
         pollSnackbarCondition("Snackbar did not time out.", () -> !mManager.isShowing());
     }
 
-    void pollSnackbarCondition(String message, Supplier<Boolean> condition) {
+    @Test
+    @SmallTest
+    public void testSnackbarPersistsWithModalDialog() throws Exception {
+        int timeout = 400;
+        SnackbarManager.setDurationForTesting(timeout);
+        final Snackbar snackbar =
+                Snackbar.make(
+                        "stack",
+                        mDismissController,
+                        Snackbar.TYPE_ACTION,
+                        Snackbar.UMA_TEST_SNACKBAR);
+        mDismissed = false;
+        PostTask.runOrPostTask(
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    mManager.showSnackbar(snackbar);
+                    // Simulate a modal dialog being shown.
+                    mManager.onDialogShown(null);
+                });
+
+        // Wait for the duration of the timeout.
+        TimeUnit.MILLISECONDS.sleep(timeout + 100);
+
+        // Simulate the modal dialog being dismissed.
+        PostTask.runOrPostTask(TaskTraits.UI_DEFAULT, () -> mManager.onLastDialogDismissed());
+
+        // Should not immediately time out.
+        Assert.assertFalse(
+                "Snackbar should not immediately time out after modal dialog was dismissed.",
+                mDismissed);
+
+        // Now it should time out. This must be run from outside UI thread.
+        TimeUnit.MILLISECONDS.sleep(timeout + 200);
+
+        pollSnackbarCondition("Snackbar should eventually time out.", () -> !mManager.isShowing());
+    }
+
+    @Test
+    @SmallTest
+    public void testSnackbarShownDuringModalDialog() throws Exception {
+        int timeout = 400;
+        SnackbarManager.setDurationForTesting(timeout);
+        final Snackbar snackbar =
+                Snackbar.make(
+                        "stack",
+                        mDismissController,
+                        Snackbar.TYPE_ACTION,
+                        Snackbar.UMA_TEST_SNACKBAR);
+        mDismissed = false;
+
+        // Simulate a modal dialog being shown before the snackbar.
+        PostTask.runOrPostTask(
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    mManager.onDialogShown(null);
+
+                    mManager.showSnackbar(snackbar);
+                });
+
+        // Wait for the duration of the timeout.
+        TimeUnit.MILLISECONDS.sleep(timeout + 100);
+
+        // Simulate the modal dialog being dismissed.
+        PostTask.runOrPostTask(TaskTraits.UI_DEFAULT, () -> mManager.onLastDialogDismissed());
+
+        // Should not immediately time out.
+        pollSnackbarCondition(
+                "Snackbar should not immediately time out after modal dialog was" + " dismissed.",
+                () -> !mDismissed);
+
+        // Now it should time out. This must be run from outside UI thread.
+        TimeUnit.MILLISECONDS.sleep(timeout + 100);
+        pollSnackbarCondition(
+                "Snackbar should eventually time out", () -> !mManager.isShowing() && mDismissed);
+    }
+
+    @Test
+    @SmallTest
+    public void testSnackbarResizeOnParentOverrideResize() {
+        final Snackbar snackbar =
+                Snackbar.make(
+                        "Test resize",
+                        mDefaultController,
+                        Snackbar.TYPE_ACTION,
+                        Snackbar.UMA_TEST_SNACKBAR);
+
+        // Show snackbar and override parent to alternate parent
+        PostTask.runOrPostTask(
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    mManager.showSnackbar(snackbar);
+                    mManager.pushParentViewOverride(
+                            ParentOverrideSlot.ONE_OFF, sAlternateParent1, null);
+                });
+        pollSnackbarCondition("Snackbar not shown", () -> mManager.isShowing());
+
+        // Get initial width of alternate parent
+        final int[] originalWidth = new int[1];
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    originalWidth[0] = sAlternateParent1.getWidth();
+                });
+
+        // Simulate resize of alternate parent
+        PostTask.runOrPostTask(
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    ViewGroup.LayoutParams lp = sAlternateParent1.getLayoutParams();
+                    lp.width = originalWidth[0] / 2;
+                    sAlternateParent1.setLayoutParams(lp);
+                });
+
+        // Wait for layout and verify snackbar width matches the new parent width (minus margins)
+        pollSnackbarCondition(
+                "Snackbar did not resize to fit new parent width",
+                () -> {
+                    SnackbarView view = mManager.getCurrentSnackbarViewForTesting();
+                    if (view == null) return false;
+                    View containerView = view.getContainerViewForTesting();
+                    if (containerView == null) return false;
+
+                    int maxSnackbarWidth =
+                            sActivity
+                                    .getResources()
+                                    .getDimensionPixelSize(
+                                            org.chromium.chrome.ui.messages.R.dimen
+                                                    .snackbar_width_max);
+                    int floatingMargin =
+                            sActivity
+                                    .getResources()
+                                    .getDimensionPixelSize(
+                                            org.chromium.chrome.ui.messages.R.dimen
+                                                    .snackbar_floating_margin);
+                    int expectedWidth =
+                            Math.min(
+                                    maxSnackbarWidth,
+                                    sAlternateParent1.getWidth() - 2 * floatingMargin);
+                    return containerView.getWidth() == expectedWidth;
+                });
+
+        // Clean up: restore alternate parent width
+        PostTask.runOrPostTask(
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    ViewGroup.LayoutParams lp = sAlternateParent1.getLayoutParams();
+                    lp.width = originalWidth[0];
+                    sAlternateParent1.setLayoutParams(lp);
+                    mManager.popParentViewOverride(ParentOverrideSlot.ONE_OFF);
+                });
+    }
+
+    @Test
+    @SmallTest
+    public void testSnackbarBottomMargin_isFullscreen_adjusts() {
+        postUITask(() -> mFullscreenSupplier.set(true));
+        int baselineMargin = getSnackbarBaselineBottomMargin();
+
+        postUITask(() -> mKeyboardDelegate.setKeyboardShowing(true));
+
+        pollSnackbarCondition(
+                "Snackbar bottom margin should include keyboard height in fullscreen",
+                verifySnackbarBottomMarginEquals(baselineMargin + SAMPLE_KEYBOARD_HEIGHT));
+    }
+
+    @Test
+    @SmallTest
+    public void testSnackbarBottomMargin_isNotFullscreen_unchanged() {
+        postUITask(() -> mFullscreenSupplier.set(false));
+        int baselineMargin = getSnackbarBaselineBottomMargin();
+
+        postUITask(() -> mKeyboardDelegate.setKeyboardShowing(true));
+
+        pollSnackbarCondition(
+                "Snackbar bottom margin should ignore keyboard in non-fullscreen",
+                verifySnackbarBottomMarginEquals(baselineMargin));
+    }
+
+    @Test
+    @SmallTest
+    public void testGenericMotionEventConsumed() {
+        final Snackbar snackbar =
+                Snackbar.make(
+                        "test snackbar text",
+                        mDismissController,
+                        Snackbar.TYPE_ACTION,
+                        Snackbar.UMA_TEST_SNACKBAR);
+        PostTask.runOrPostTask(TaskTraits.UI_DEFAULT, () -> mManager.showSnackbar(snackbar));
+        pollSnackbarCondition("Snackbar should be shown", () -> mManager.isShowing());
+
+        MotionEvent mouseEvent = createMouseEvent(MotionEvent.ACTION_BUTTON_PRESS);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    SnackbarView view = mManager.getCurrentSnackbarViewForTesting();
+                    Assert.assertNotNull("SnackbarView should not be null", view);
+                    View containerView = view.getContainerViewForTesting();
+                    Assert.assertNotNull("Container view should not be null", containerView);
+                    assertTrue(
+                            "SnackbarView container view should consume mouse events",
+                            containerView.onGenericMotionEvent(mouseEvent)
+                                    || containerView.dispatchGenericMotionEvent(mouseEvent));
+                });
+    }
+
+    private void pollSnackbarCondition(String message, Supplier<Boolean> condition) {
         CriteriaHelper.pollUiThread(condition::get, message);
+    }
+
+    private void postUITask(Runnable task) {
+        PostTask.runOrPostTask(
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    task.run();
+                });
+    }
+
+    private Supplier<Boolean> verifySnackbarBottomMarginEquals(int expectedMargin) {
+        return () -> {
+            SnackbarView view = mManager.getCurrentSnackbarViewForTesting();
+            if (view == null) return false;
+            int currentMargin =
+                    ((FrameLayout.LayoutParams) view.getContainerViewForTesting().getLayoutParams())
+                            .bottomMargin;
+            return currentMargin == expectedMargin;
+        };
+    }
+
+    private int getSnackbarBaselineBottomMargin() {
+        postUITask(() -> mKeyboardDelegate.setKeyboardShowing(false));
+        postUITask(() -> mManager.showSnackbar(mSampleNotificationSnackbar));
+
+        pollSnackbarCondition("Snackbar should be shown", () -> mManager.isShowing());
+        return ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    SnackbarView view = mManager.getCurrentSnackbarViewForTesting();
+                    if (view == null) return 0;
+                    return ((FrameLayout.LayoutParams)
+                                    view.getContainerViewForTesting().getLayoutParams())
+                            .bottomMargin;
+                });
+    }
+
+    private MotionEvent createMouseEvent(int action) {
+        MotionEvent.PointerProperties[] pp = new MotionEvent.PointerProperties[1];
+        pp[0] = new MotionEvent.PointerProperties();
+        pp[0].id = 0;
+        pp[0].toolType = MotionEvent.TOOL_TYPE_MOUSE;
+
+        MotionEvent.PointerCoords[] pc = new MotionEvent.PointerCoords[1];
+        pc[0] = new MotionEvent.PointerCoords();
+
+        return MotionEvent.obtain(
+                0, 0, action, 1, pp, pc, 0, 0, 1.0f, 1.0f, 0, 0, InputDevice.SOURCE_MOUSE, 0);
+    }
+
+    private static class MockKeyboardVisibilityDelegate extends KeyboardVisibilityDelegate {
+        private boolean mIsKeyboardShowing;
+        private int mKeyboardHeight;
+
+        public void setKeyboardHeight(int height) {
+            mKeyboardHeight = height;
+        }
+
+        public void setKeyboardShowing(boolean showing) {
+            if (mIsKeyboardShowing != showing) {
+                mIsKeyboardShowing = showing;
+                notifyListeners(showing);
+            }
+        }
+
+        @Override
+        public int calculateTotalKeyboardHeight(View rootView) {
+            return mIsKeyboardShowing ? mKeyboardHeight : 0;
+        }
     }
 }

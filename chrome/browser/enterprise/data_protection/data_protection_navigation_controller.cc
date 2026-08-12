@@ -13,16 +13,16 @@
 #include "chrome/browser/enterprise/data_protection/data_protection_navigation_observer.h"
 #include "chrome/browser/enterprise/watermark/settings.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/tabs/public/tab_features.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "components/enterprise/connectors/core/reporting_constants.h"
-#include "components/enterprise/watermarking/content/watermark_text_container.h"
-#include "components/enterprise/watermarking/watermark.h"
+#include "components/enterprise/data_protection/utils.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
+
+#if BUILDFLAG(ENTERPRISE_WATERMARK)
+#include "components/enterprise/watermarking/content/watermark_text_container.h"
+#include "components/enterprise/watermarking/watermark.h"
+#endif  // BUILDFLAG(ENTERPRISE_WATERMARK)
 
 namespace enterprise_data_protection {
 
@@ -53,11 +53,13 @@ DataProtectionNavigationController::DataProtectionNavigationController(
 DataProtectionNavigationController::~DataProtectionNavigationController() =
     default;
 
+#if BUILDFLAG(ENTERPRISE_WATERMARK)
 base::CallbackListSubscription
 DataProtectionNavigationController::RegisterWatermarkStringUpdatedCallback(
     WatermarkStringUpdatedCallback callback) {
   return watermark_string_updated_callbacks_.Add(std::move(callback));
 }
+#endif  // BUILDFLAG(ENTERPRISE_WATERMARK)
 
 #if BUILDFLAG(ENTERPRISE_SCREENSHOT_PROTECTION)
 base::CallbackListSubscription
@@ -75,8 +77,10 @@ void DataProtectionNavigationController::ApplyDataProtectionSettings(
     return;
   }
 
+#if BUILDFLAG(ENTERPRISE_WATERMARK)
   watermark_text_ = settings.watermark_text;
   watermark_string_updated_callbacks_.Notify(watermark_text_);
+#endif  // BUILDFLAG(ENTERPRISE_WATERMARK)
 
 #if BUILDFLAG(ENTERPRISE_SCREENSHOT_PROTECTION)
   screenshot_allowed_ = settings.allow_screenshots;
@@ -111,11 +115,13 @@ void DataProtectionNavigationController::
   // Note that steps #5 and #6 are racy but the final outcome is correct
   // regardless of the order in which they execute.
 
+#if BUILDFLAG(ENTERPRISE_WATERMARK)
   if (clear_watermark_text_on_page_load_) {
     watermark_text_ = std::string();
     clear_watermark_text_on_page_load_ = false;
     watermark_string_updated_callbacks_.Notify(watermark_text_);
   }
+#endif  // BUILDFLAG(ENTERPRISE_WATERMARK)
 
 #if BUILDFLAG(ENTERPRISE_SCREENSHOT_PROTECTION)
   if (clear_screenshot_protection_on_page_load_) {
@@ -188,6 +194,7 @@ void DataProtectionNavigationController::
   }
 #endif  // BUILDFLAG(ENTERPRISE_SCREENSHOT_PROTECTION)
 
+#if BUILDFLAG(ENTERPRISE_WATERMARK)
   // Regardless of whether watermark text is empty, attach it as web contents
   // user data so that other browser process code can draw watermarks outside
   // of the context of a navigation (ex. when printing).
@@ -216,6 +223,7 @@ void DataProtectionNavigationController::
     watermark_text_ = settings.watermark_text;
     watermark_string_updated_callbacks_.Notify(watermark_text_);
   }
+#endif  // BUILDFLAG(ENTERPRISE_WATERMARK)
 
   if (!on_delay_apply_data_protection_settings_if_empty_called_for_testing_
            .is_null()) {
@@ -229,8 +237,7 @@ void DataProtectionNavigationController::DidStartNavigation(
     content::NavigationHandle* navigation_handle) {
   auto navigation_observer = enterprise_data_protection::
       DataProtectionNavigationObserver::CreateForNavigationIfNeeded(
-          this, tab_interface_->GetBrowserWindowInterface()->GetProfile(),
-          navigation_handle,
+          this, tab_interface_->GetProfile(), navigation_handle,
           base::BindOnce(&DataProtectionNavigationController::
                              ApplyDataProtectionSettingsOrDelayIfEmpty,
                          weak_ptr_factory_.GetWeakPtr(),

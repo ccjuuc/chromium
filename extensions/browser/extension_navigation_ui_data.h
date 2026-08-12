@@ -8,9 +8,12 @@
 #include <memory>
 #include <optional>
 
-#include "content/public/browser/child_process_id.h"
 #include "content/public/browser/global_routing_id.h"
+#include "content/public/common/child_process_id.h"
 #include "extensions/browser/extension_api_frame_id_map.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace content {
 class NavigationHandle;
@@ -44,6 +47,11 @@ class ExtensionNavigationUIData {
   const ExtensionApiFrameIdMap::FrameData& frame_data() const {
     return frame_data_;
   }
+
+  // Whether the navigation is happening in a privileged WebContents (created
+  // with PrivilegedParams). Used to exempt such navigations from the
+  // webRequest and Declarative Net Request APIs.
+  bool is_privileged() const { return is_privileged_; }
 
   struct WebViewData {
     int web_view_instance_id = 0;
@@ -82,6 +90,10 @@ class ExtensionNavigationUIData {
 
   ExtensionApiFrameIdMap::FrameData frame_data_;
   std::optional<WebViewData> web_view_data_;
+
+  // Whether this navigation is in a privileged WebContents. See
+  // is_privileged().
+  bool is_privileged_ = false;
 
   // ID for the parent RenderFrameHost of this navigation. Will only have a
   // valid value for sub-frame navigations.

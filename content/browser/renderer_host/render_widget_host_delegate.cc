@@ -98,11 +98,16 @@ blink::mojom::DisplayMode RenderWidgetHostDelegate::GetDisplayMode() const {
   return blink::mojom::DisplayMode::kBrowser;
 }
 
+blink::mojom::ApplicationContext
+RenderWidgetHostDelegate::GetApplicationContext() const {
+  return blink::mojom::ApplicationContext::kNone;
+}
+
 ui::mojom::WindowShowState RenderWidgetHostDelegate::GetWindowShowState() {
   return ui::mojom::WindowShowState::kDefault;
 }
 
-blink::mojom::DevicePostureProvider*
+DevicePostureProviderImpl*
 RenderWidgetHostDelegate::GetDevicePostureProvider() {
   return nullptr;
 }
@@ -129,6 +134,11 @@ RenderWidgetHostImpl* RenderWidgetHostDelegate::GetPointerLockWidget() {
 }
 
 bool RenderWidgetHostDelegate::IsWaitingForPointerLockPrompt(
+    RenderWidgetHostImpl* render_widget_host) {
+  return false;
+}
+
+bool RenderWidgetHostDelegate::IsPointerLockSandboxedForWidget(
     RenderWidgetHostImpl* render_widget_host) {
   return false;
 }
@@ -183,8 +193,8 @@ bool RenderWidgetHostDelegate::ShouldDoLearning() {
 }
 
 #if BUILDFLAG(IS_ANDROID)
-float RenderWidgetHostDelegate::GetCurrentTouchSequenceYOffset() {
-  return 0.f;
+gfx::PointF RenderWidgetHostDelegate::GetCurrentTouchSequenceOffset() {
+  return gfx::PointF();
 }
 #endif
 

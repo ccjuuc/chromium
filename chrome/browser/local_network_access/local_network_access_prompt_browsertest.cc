@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/strings/strcat.h"
 #include "chrome/browser/local_network_access/local_network_access_browsertest_base.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -49,10 +50,8 @@ class LocalNetworkAccessPromptBrowserTest
     LocalNetworkAccessBrowserTestBase::SetUpOnMainThread();
 
     ASSERT_TRUE(content::NavigateToURL(
-        web_contents(),
-        https_server().GetURL(
-            kHostA,
-            "/local_network_access/no-favicon-treat-as-public-address.html")));
+        web_contents(), https_public_server().GetURL(
+                            kHostA, "/local_network_access/no-favicon.html")));
 
     // Enable auto-accept of LNA permission request; this ensures that if the
     // connection is made the fetch() will succeed. In most of the tests below,
@@ -117,9 +116,8 @@ IN_PROC_BROWSER_TEST_F(LocalNetworkAccessPromptBrowserTest,
       web_contents());
 
   // LNA fetch should fail.
-  EXPECT_THAT(content::EvalJs(web_contents(), FetchUrlJs(https_server().GetURL(
-                                                  kHostC, kLnaPath))),
-              content::EvalJsResult::IsError());
+  EXPECT_FALSE(content::ExecJs(
+      web_contents(), FetchUrlJs(https_server().GetURL(kHostC, kLnaPath))));
 
   // Permission prompt not shown, c.com doesn't resolve so no connection is
   // made, and c.com is not a host that is always local/loopback.
@@ -134,9 +132,8 @@ IN_PROC_BROWSER_TEST_F(LocalNetworkAccessPromptBrowserTest,
       web_contents());
 
   // LNA fetch should fail.
-  EXPECT_THAT(content::EvalJs(web_contents(), FetchUrlJs(GetUnconnectedURL(
-                                                  kHostLocal, kLnaPath))),
-              content::EvalJsResult::IsError());
+  EXPECT_FALSE(content::ExecJs(
+      web_contents(), FetchUrlJs(GetUnconnectedURL(kHostLocal, kLnaPath))));
 
   permission_request_observer.Wait();
   EXPECT_TRUE(permission_request_observer.request_shown());
@@ -149,9 +146,8 @@ IN_PROC_BROWSER_TEST_F(LocalNetworkAccessPromptBrowserTest,
       web_contents());
 
   // LNA fetch should fail.
-  EXPECT_THAT(content::EvalJs(web_contents(), FetchUrlJs(GetUnconnectedURL(
-                                                  "localhost", kLnaPath))),
-              content::EvalJsResult::IsError());
+  EXPECT_FALSE(content::ExecJs(
+      web_contents(), FetchUrlJs(GetUnconnectedURL("localhost", kLnaPath))));
 
   permission_request_observer.Wait();
   EXPECT_TRUE(permission_request_observer.request_shown());
@@ -165,9 +161,8 @@ IN_PROC_BROWSER_TEST_F(LocalNetworkAccessPromptBrowserTest,
       web_contents());
 
   // LNA fetch should fail.
-  EXPECT_THAT(content::EvalJs(web_contents(), FetchUrlJs(GetUnconnectedURL(
-                                                  "127.0.0.1", kLnaPath))),
-              content::EvalJsResult::IsError());
+  EXPECT_FALSE(content::ExecJs(
+      web_contents(), FetchUrlJs(GetUnconnectedURL("127.0.0.1", kLnaPath))));
 
   permission_request_observer.Wait();
   EXPECT_TRUE(permission_request_observer.request_shown());
@@ -181,12 +176,82 @@ IN_PROC_BROWSER_TEST_F(LocalNetworkAccessPromptBrowserTest,
       web_contents());
 
   // LNA fetch should fail.
-  EXPECT_THAT(content::EvalJs(web_contents(),
-                              FetchUrlJs(GetUnconnectedURL("[::1]", kLnaPath))),
-              content::EvalJsResult::IsError());
+  EXPECT_FALSE(content::ExecJs(
+      web_contents(), FetchUrlJs(GetUnconnectedURL("[::1]", kLnaPath))));
 
   permission_request_observer.Wait();
   EXPECT_TRUE(permission_request_observer.request_shown());
+}
+
+class LocalNetworkAccessWebSocketsPromptBrowserTest
+    : public LocalNetworkAccessPromptBrowserTest {
+ protected:
+  std::string ConnectWebSocketHostJs(const std::string_view host) {
+    return content::JsReplace(
+        R"(
+          new Promise((resolve) => {
+            const ws = new WebSocket($1);
+            ws.onopen = () => resolve(true);
+            ws.onerror = () => resolve(false);
+          });
+        )",
+        GURL(base::StrCat({"wss://", host, ":", port_, "/echo"})));
+  }
+};
+
+// Connection failed, permission prompt shown because host is localhost.
+IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWebSocketsPromptBrowserTest,
+                       WebSocketPermissionPromptShownLocalhost) {
+  permissions::PermissionRequestObserver permission_request_observer(
+      web_contents());
+
+  // LNA WebSocket connection should fail because nothing is listening.
+  EXPECT_EQ(false, content::EvalJs(web_contents(),
+                                   ConnectWebSocketHostJs("localhost")));
+
+  // But the permission prompt should still be shown because of early check.
+  permission_request_observer.Wait();
+  EXPECT_TRUE(permission_request_observer.request_shown());
+}
+
+// Connection failed, permission prompt shown because host is an IP literal.
+IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWebSocketsPromptBrowserTest,
+                       WebSocketPermissionPromptShownIpLiteral) {
+  permissions::PermissionRequestObserver permission_request_observer(
+      web_contents());
+
+  EXPECT_EQ(false, content::EvalJs(web_contents(),
+                                   ConnectWebSocketHostJs("127.0.0.1")));
+
+  permission_request_observer.Wait();
+  EXPECT_TRUE(permission_request_observer.request_shown());
+}
+
+// Connection failed, permission prompt shown because host is a .local domain
+// that resolves.
+IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWebSocketsPromptBrowserTest,
+                       WebSocketPermissionPromptShownLocal) {
+  permissions::PermissionRequestObserver permission_request_observer(
+      web_contents());
+
+  EXPECT_EQ(false, content::EvalJs(web_contents(),
+                                   ConnectWebSocketHostJs(kHostLocal)));
+
+  permission_request_observer.Wait();
+  EXPECT_TRUE(permission_request_observer.request_shown());
+}
+
+// Connection failed, permission prompt not shown because host was not connected
+// to and was not known from the hostname to be a local/loopback host.
+IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWebSocketsPromptBrowserTest,
+                       WebSocketPermissionPromptNotShown) {
+  permissions::PermissionRequestObserver permission_request_observer(
+      web_contents());
+
+  EXPECT_EQ(false,
+            content::EvalJs(web_contents(), ConnectWebSocketHostJs(kHostC)));
+
+  EXPECT_FALSE(permission_request_observer.request_shown());
 }
 
 }  // namespace local_network_access

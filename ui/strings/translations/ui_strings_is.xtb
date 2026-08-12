@@ -1,7 +1,6 @@
 <?xml version="1.0" ?>
 <!DOCTYPE translationbundle>
 <translationbundle lang="is">
-<translation id="1028699632127661925">Sendir í <ph name="DEVICE_NAME" />...</translation>
 <translation id="111910763555783249">Tilkynningastillingar</translation>
 <translation id="1127811143501539442">{DAYS,plural, =1{Fyrir 1 degi}one{Fyrir # degi}other{Fyrir # dögum}}</translation>
 <translation id="1156623771253174079">{SECONDS,plural, =1{Fyrir einni mínútu}one{Fyrir # mínútu}other{Fyrir # mínútum}}</translation>
@@ -12,7 +11,6 @@
 <translation id="1253734725326687145">Snertimið fært efst til hægri. Ýttu hér.</translation>
 <translation id="1266864766717917324">Ekki tókst að deila <ph name="CONTENT_TYPE" /></translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">Prófaðu að deila textanum í smærri hluta.</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">Frá vinstri til hægri</translation>
 <translation id="1383876407941801731">Leita</translation>
@@ -20,6 +18,7 @@
 <translation id="1432724887402139994">{SECONDS,plural, =1{Fyrir 1 mínútu}one{Fyrir # mínútu}other{Fyrir # mínútum}}</translation>
 <translation id="1450753235335490080">Ekki er hægt að deila <ph name="CONTENT_TYPE" /></translation>
 <translation id="1523230076022876491">{MONTHS,plural, =1{Fyrir 1 mánuði}one{Fyrir # mánuði}other{Fyrir # mánuðum}}</translation>
+<translation id="1591017414891297549">FORSKOÐA</translation>
 <translation id="1591184457164800433">{MINUTES,plural, =1{1 mínúta og }one{# mínúta og }other{# mínútur og }}</translation>
 <translation id="1643823602425662293">Tilkynning</translation>
 <translation id="169515659049020177">Shift</translation>
@@ -44,7 +43,6 @@
 <translation id="2148716181193084225">Í dag</translation>
 <translation id="2168039046890040389">Upp um síðu</translation>
 <translation id="2190355936436201913">(autt)</translation>
-<translation id="2192232475740621500">Nota lítinn þéttleika</translation>
 <translation id="2267918077332197517">Loka á allar tilkynningar frá þessu svæði</translation>
 <translation id="2283117145434822734">F6</translation>
 <translation id="2289052229480071835">Ýttu á snertipunktana á skjánum.</translation>
@@ -56,7 +54,6 @@
 <translation id="2388990488038464401">Viltu hringja í þetta númer úr símanum þínum?</translation>
 <translation id="2435457462613246316">Sýna aðgangsorð</translation>
 <translation id="24452542372838207">Stækka tilkynningu</translation>
-<translation id="2445449901874883781">Nota mikinn þéttleika</translation>
 <translation id="2448407890032181691">Snertimið fært neðst til hægri. Ýttu hér.</translation>
 <translation id="2482878487686419369">Tilkynningar</translation>
 <translation id="2497284189126895209">Allar skrár</translation>
@@ -69,7 +66,6 @@
 <translation id="2586657967955657006">Klippiborð</translation>
 <translation id="2653844658857826081">NÝTT</translation>
 <translation id="2666092431469916601">Efst</translation>
-<translation id="2701330563083355633">Deilt úr <ph name="DEVICE_NAME" /></translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{Fyrir einu ári}one{Fyrir # ári}other{Fyrir # árum}}</translation>
 <translation id="2878511608894704031">Eyða öllu</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{eftir einn dag}one{eftir # dag}other{eftir # daga}}</translation>
@@ -88,7 +84,6 @@
 <translation id="3306688585798492231">Innbyggður skjár</translation>
 <translation id="335581015389089642">Tal</translation>
 <translation id="3372635229069101468">Smelltu á <ph name="BEGIN_BOLD" />Upplýsingar<ph name="END_BOLD" /></translation>
-<translation id="3389286852084373014">Textinn er of stór</translation>
 <translation id="3406306243914553062">HTML-efni</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{1 dagur eftir}one{# dagur eftir}other{# dagar eftir}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" />-skrá</translation>
@@ -109,6 +104,7 @@
 <translation id="4031910098617850788">F5</translation>
 <translation id="40579289237549812">{UNREAD_NOTIFICATIONS,plural, =1{Ein ólesin tilkynning}one{# ólesin tilkynning}other{# ólesnar tilkynningar}}</translation>
 <translation id="41501027364808384">{COUNT,plural, =1{Kveiktu á eftirfarandi viðbót í huliðsstillingu:}one{Kveiktu á eftirfarandi viðbótum í huliðsstillingu:}other{Kveiktu á eftirfarandi viðbótum í huliðsstillingu:}}</translation>
+<translation id="4230098358142093034">Heim</translation>
 <translation id="4266252015790371705">{MONTHS,plural, =1{Fyrir einum mánuði}one{Fyrir # mánuði}other{Fyrir # mánuðum}}</translation>
 <translation id="4277033906326892359">Dálknum <ph name="COLUMN_NAME" /> raðað í hækkandi röð</translation>
 <translation id="4289300219472526559">Byrja að tala</translation>
@@ -190,7 +186,6 @@
 <translation id="6965382102122355670">Í lagi</translation>
 <translation id="6974053822202609517">Frá hægri til vinstri</translation>
 <translation id="7052633198403197513">F1</translation>
-<translation id="7170202025028120564">Skjástillingar forritsins þíns taka gildi við næstu endurræsingu.</translation>
 <translation id="7222373446505536781">F11</translation>
 <translation id="7238427729722629793">{MINUTES,plural, =1{1 mín. eftir}one{# mín. eftir}other{# mín. eftir}}</translation>
 <translation id="7252604552361840748">Finndu viðbótina hér fyrir ofan</translation>
@@ -200,6 +195,7 @@
 <translation id="7410957453383678442">{MINUTES,plural, =1{1 mínúta eftir}one{# mínúta eftir}other{# mínútur eftir}}</translation>
 <translation id="7437971918971306061">Dálknum <ph name="COLUMN_NAME" /> óraðað.</translation>
 <translation id="7460907917090416791"><ph name="QUANTITY" /> TB</translation>
+<translation id="7485236722522518129">F4</translation>
 <translation id="7507604095951736240">Emoji</translation>
 <translation id="7620655452534002301">Fjarlægt.</translation>
 <translation id="7658239707568436148">Hætta við</translation>
@@ -232,6 +228,7 @@
 <translation id="8677655579646609597"><ph name="QUANTITY" /> kB/sek.</translation>
 <translation id="8725488761726303204">+<ph name="NUMBER" /> í viðbót</translation>
 <translation id="8730621377337864115">Lokið</translation>
+<translation id="8741385002816058621">Þetta er eiginleiki í forskoðun</translation>
 <translation id="8772073294905169192">{HOURS,plural, =1{1k}one{#k}other{#k}}</translation>
 <translation id="8798099450830957504">Sjálfgefið</translation>
 <translation id="8841375032071747811">Bakkhnappur</translation>
@@ -245,7 +242,6 @@
 <translation id="9170848237812810038">Aft&amp;urkalla</translation>
 <translation id="9195990613383871904">Á morgun</translation>
 <translation id="928628199082367701">Super</translation>
-<translation id="932327136139879170">Heim</translation>
 <translation id="944069440740578670">Ólesnar tilkynningar</translation>
 <translation id="966963601246348639">{SECONDS,plural, =1{Fyrir 1 sekúndu}one{Fyrir # sekúndu}other{Fyrir # sekúndum}}</translation>
 </translationbundle>

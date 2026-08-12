@@ -77,6 +77,12 @@ interface TestWebIdl {
   // Comment for onTestTwo.
   static attribute OnTestTwoEvent onTestTwo;
 
+  // Event with maxListeners extended attribute.
+  [maxListeners=1] static attribute OnTestMaxListenersEvent onTestMaxListeners;
+
+  // Event with supportsFilters extended attribute.
+  [supportsFilters] static attribute OnTestSupportsFiltersEvent onTestSupportsFilters;
+
   // Promise returning function, with a comment that provides the name and
   // description of the value the promise resolves to.
   // |arg1|: This is a normal argument comment.
@@ -107,6 +113,12 @@ callback OnTestOneListener = undefined (
 // |customType|: An ExampleType passed to the event listener.
 callback OnTestTwoListener = undefined (ExampleType customType);
 
+// Callback listener for onTestMaxListeners.
+callback OnTestMaxListenersListener = undefined ();
+
+// Callback listener for onTestSupportsFilters.
+callback OnTestSupportsFiltersListener = undefined ();
+
 interface OnTestOneEvent : ExtensionEvent {
   static void addListener(OnTestOneListener listener);
   static void removeListener(OnTestOneListener listener);
@@ -116,6 +128,16 @@ interface OnTestTwoEvent : ExtensionEvent {
   static void addListener(OnTestTwoListener listener);
   static void removeListener(OnTestTwoListener listener);
   static void hasListener(OnTestTwoListener listener);
+};
+interface OnTestMaxListenersEvent : ExtensionEvent {
+  static void addListener(OnTestMaxListenersListener listener);
+  static void removeListener(OnTestMaxListenersListener listener);
+  static void hasListener(OnTestMaxListenersListener listener);
+};
+interface OnTestSupportsFiltersEvent : ExtensionEvent {
+  static void addListener(OnTestSupportsFiltersListener listener);
+  static void removeListener(OnTestSupportsFiltersListener listener);
+  static void hasListener(OnTestSupportsFiltersListener listener);
 };
 
 dictionary ExampleType {
@@ -137,9 +159,11 @@ dictionary UnionTypes {
   required (ExampleType or long) dictTypeOrLong;
 };
 
-callback DictionaryCallback = undefined(DOMString stringArgument);
-dictionary DictionaryWithCallbackMember {
-  required DictionaryCallback callbackMember;
+callback CallbackWithArgument = undefined(DOMString stringArgument);
+callback CallbackWithReturn = boolean();
+dictionary DictionaryWithCallbackMembers {
+  required CallbackWithArgument argumentCallback;
+  required CallbackWithReturn returnCallback;
 };
 
 // Enum description.

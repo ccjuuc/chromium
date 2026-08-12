@@ -4,7 +4,6 @@
 
 package org.chromium.chrome.browser.webshare;
 
-import static org.chromium.build.NullUtil.assumeNonNull;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -16,6 +15,7 @@ import org.chromium.chrome.browser.share.ShareDelegateSupplier;
 import org.chromium.components.browser_ui.share.ShareParams;
 import org.chromium.components.browser_ui.webshare.ShareServiceImpl;
 import org.chromium.content_public.browser.PermissionsPolicyFeature;
+import org.chromium.content_public.browser.RenderFrameHost;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.services.service_manager.InterfaceFactory;
 import org.chromium.ui.base.WindowAndroid;
@@ -50,6 +50,7 @@ public class ShareServiceImplementationFactory implements InterfaceFactory<@Null
                 new ShareServiceImpl.WebShareDelegate() {
                     @Override
                     public boolean canShare() {
+                        if (mWebContents.isDestroyed()) return false;
                         return getShareDelegate() != null
                                 && mWebContents
                                         .getMainFrame()
@@ -58,7 +59,8 @@ public class ShareServiceImplementationFactory implements InterfaceFactory<@Null
 
                     @Override
                     public void share(ShareParams params) {
-                        ShareDelegate shareDelegate = assumeNonNull(getShareDelegate());
+                        ShareDelegate shareDelegate = getShareDelegate();
+                        if (shareDelegate == null) return;
                         shareDelegate.share(
                                 params,
                                 new ChromeShareExtras.Builder()
@@ -68,11 +70,21 @@ public class ShareServiceImplementationFactory implements InterfaceFactory<@Null
                     }
 
                     @Override
-                    public WindowAndroid getWindowAndroid() {
+                    public @Nullable WindowAndroid getWindowAndroid() {
+                        if (mWebContents.isDestroyed()) return null;
                         if (mWindowAndroid == null || mWindowAndroid.isDestroyed()) {
-                            mWindowAndroid = assumeNonNull(mWebContents.getTopLevelNativeWindow());
+                            mWindowAndroid = mWebContents.getTopLevelNativeWindow();
                         }
                         return mWindowAndroid;
+                    }
+
+                    @Override
+                    public void terminateRendererDueToBadMessage(int reason) {
+                        if (mWebContents.isDestroyed()) return;
+                        RenderFrameHost mainFrame = mWebContents.getMainFrame();
+                        if (mainFrame != null) {
+                            mainFrame.terminateRendererDueToBadMessage(reason);
+                        }
                     }
 
                     /**
@@ -80,9 +92,10 @@ public class ShareServiceImplementationFactory implements InterfaceFactory<@Null
                      * WindowAndroid} has changed.
                      *
                      * <p>The {@link WindowAndroid} changes when the theme changes, which
-                     * necessitates getting a new ShareDelegate. See https://crbug.com/1322778.
+                     * necessitates getting a new ShareDelegate. See https://crbug.com/40838216.
                      */
                     private @Nullable ShareDelegate getShareDelegate() {
+                        if (mWebContents.isDestroyed()) return null;
                         if (mWindowAndroid != null
                                 && mWindowAndroid.equals(mWebContents.getTopLevelNativeWindow())
                                 && mShareDelegateSupplier != null) {

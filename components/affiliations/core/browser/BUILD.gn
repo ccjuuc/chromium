@@ -19,6 +19,10 @@ fuzzable_proto_library("affiliation_proto") {
   sources = [ "affiliation_api.proto" ]
 }
 
+source_set("match_type") {
+  sources = [ "match_type.h" ]
+}
+
 source_set("affiliations") {
   sources = [
     "affiliation_backend.cc",
@@ -64,8 +68,9 @@ source_set("affiliations") {
     "//net",
     "//services/network/public/cpp",
     "//sql",
-    "//url",
+    "//third_party/re2",
   ]
+  public_deps = [ "//url" ]
   configs += [ "//build/config/compiler:wexit_time_destructors" ]
 }
 
@@ -110,6 +115,7 @@ source_set("unit_tests") {
     "affiliation_utils_unittest.cc",
     "facet_manager_unittest.cc",
     "hash_affiliation_fetcher_unittest.cc",
+    "lookup_affiliation_response_parser_unittest.cc",
     "sql_table_builder_unittest.cc",
   ]
   deps = [
@@ -129,15 +135,17 @@ source_set("unit_tests") {
   ]
 }
 
-if (use_fuzzing_engine_with_lpm) {
-  fuzzer_test("lookup_affiliation_response_parser_fuzzer") {
-    sources = [ "lookup_affiliation_response_parser_fuzzer.cc" ]
-    deps = [
-      ":affiliation_proto",
-      ":affiliations",
-      "//base",
-      "//base:i18n",
-      "//third_party/libprotobuf-mutator",
-    ]
-  }
+fuzzer_test("lookup_affiliation_response_parser_fuzzer") {
+  sources = [ "lookup_affiliation_response_parser_fuzzer.cc" ]
+  deps = [
+    ":affiliation_proto",
+    ":affiliation_proto_fuzzable",
+    ":affiliations",
+    "//base",
+    "//base:i18n",
+    "//third_party/libprotobuf-mutator",
+  ]
+
+  # TODO(crbug.com/505034799): Migrate to FUZZ_TEST.
+  is_fuzztest_compatible = false
 }

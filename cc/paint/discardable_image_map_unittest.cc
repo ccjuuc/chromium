@@ -12,7 +12,6 @@
 #include <memory>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/memory/ref_counted.h"
 #include "base/test/gtest_util.h"
 #include "base/test/scoped_feature_list.h"
@@ -782,25 +781,62 @@ TEST_F(DiscardableImageMapTest, GathersAnimatedImages) {
   const auto& animated_images_metadata = image_map->animated_images_metadata();
 
   ASSERT_EQ(animated_images_metadata.size(), 1u);
-  EXPECT_EQ(animated_images_metadata[0].paint_image_id,
+  EXPECT_EQ(animated_images_metadata.at(animation_loop_infinite.stable_id())
+                .paint_image_id,
             animation_loop_infinite.stable_id());
-  EXPECT_EQ(animated_images_metadata[0].completion_state,
+  EXPECT_EQ(animated_images_metadata.at(animation_loop_infinite.stable_id())
+                .completion_state,
             animation_loop_infinite.completion_state());
-  EXPECT_EQ(animated_images_metadata[0].frames,
-            animation_loop_infinite.GetFrameMetadata());
-  EXPECT_EQ(animated_images_metadata[0].repetition_count,
+  EXPECT_EQ(
+      animated_images_metadata.at(animation_loop_infinite.stable_id()).frames,
+      animation_loop_infinite.GetFrameMetadata());
+  EXPECT_EQ(animated_images_metadata.at(animation_loop_infinite.stable_id())
+                .repetition_count,
             animation_loop_infinite.repetition_count());
 
   std::vector<const DrawImage*> images =
       image_map->GetDiscardableImagesInRect(visible_rect);
   ASSERT_EQ(images.size(), 3u);
   EXPECT_TRUE(images[0]->paint_image().IsSameForTesting(static_image));
-  EXPECT_DCHECK_DEATH(images[0]->frame_index());
+  EXPECT_EQ(images[0]->frame_index(), PaintImage::kDefaultFrameIndex);
   EXPECT_TRUE(images[1]->paint_image().IsSameForTesting(animated_loop_none));
-  EXPECT_DCHECK_DEATH(images[1]->frame_index());
+  EXPECT_EQ(images[1]->frame_index(), PaintImage::kDefaultFrameIndex);
   EXPECT_TRUE(
       images[2]->paint_image().IsSameForTesting(animation_loop_infinite));
-  EXPECT_DCHECK_DEATH(images[2]->frame_index());
+  EXPECT_EQ(images[2]->frame_index(), PaintImage::kDefaultFrameIndex);
+}
+
+TEST_F(DiscardableImageMapTest, AnimatedImageMetadataReflectsCurrentState) {
+  gfx::Rect visible_rect(1000, 1000);
+  std::vector<FrameMetadata> frames = {
+      FrameMetadata(true, base::Milliseconds(2)),
+      FrameMetadata(true, base::Milliseconds(3))};
+  gfx::Size image_size(100, 100);
+
+  PaintImage initial =
+      PaintImageBuilder::WithCopy(CreateAnimatedImage(image_size, frames, 1u))
+          .set_id(1)
+          .set_reset_animation_sequence_id(0)
+          .TakePaintImage();
+  PaintImage current =
+      PaintImageBuilder::WithCopy(CreateAnimatedImage(image_size, frames, 1u))
+          .set_id(1)
+          .set_reset_animation_sequence_id(8)
+          .TakePaintImage();
+
+  FakeContentLayerClient content_layer_client;
+  content_layer_client.set_bounds(visible_rect.size());
+  content_layer_client.add_draw_image(initial, gfx::Point(0, 0));
+  content_layer_client.add_draw_image(current, gfx::Point(100, 100));
+
+  scoped_refptr<DisplayItemList> display_list =
+      content_layer_client.PaintContentsToDisplayList();
+  scoped_refptr<DiscardableImageMap> image_map =
+      display_list->GenerateDiscardableImageMap(ScrollOffsetMap());
+
+  const auto& metadata = image_map->animated_images_metadata();
+  ASSERT_TRUE(metadata.contains(1u));
+  EXPECT_EQ(metadata.at(1u).reset_animation_sequence_id, 8u);
 }
 
 TEST_F(DiscardableImageMapTest, GathersPaintWorklets) {
@@ -1023,9 +1059,9 @@ TEST_F(DiscardableImageMapTest, DecodingModeHintsBasic) {
       display_list->GenerateDiscardableImageMap(ScrollOffsetMap(),
                                                 &decode_hints);
   EXPECT_EQ(decode_hints.size(), 3u);
-  EXPECT_TRUE(base::Contains(decode_hints, 1));
-  EXPECT_TRUE(base::Contains(decode_hints, 2));
-  EXPECT_TRUE(base::Contains(decode_hints, 3));
+  EXPECT_TRUE(decode_hints.contains(1));
+  EXPECT_TRUE(decode_hints.contains(2));
+  EXPECT_TRUE(decode_hints.contains(3));
   EXPECT_EQ(decode_hints[1], PaintImage::DecodingMode::kUnspecified);
   EXPECT_EQ(decode_hints[2], PaintImage::DecodingMode::kAsync);
   EXPECT_EQ(decode_hints[3], PaintImage::DecodingMode::kSync);
@@ -1088,9 +1124,9 @@ TEST_F(DiscardableImageMapTest, DecodingModeHintsDuplicates) {
                                                 &decode_hints);
 
   EXPECT_EQ(decode_hints.size(), 3u);
-  EXPECT_TRUE(base::Contains(decode_hints, 1));
-  EXPECT_TRUE(base::Contains(decode_hints, 2));
-  EXPECT_TRUE(base::Contains(decode_hints, 3));
+  EXPECT_TRUE(decode_hints.contains(1));
+  EXPECT_TRUE(decode_hints.contains(2));
+  EXPECT_TRUE(decode_hints.contains(3));
   // 1 was unspecified and async, so the result should be unspecified.
   EXPECT_EQ(decode_hints[1], PaintImage::DecodingMode::kUnspecified);
   // 2 was unspecified and sync, so the result should be sync.

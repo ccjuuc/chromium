@@ -5,13 +5,14 @@
 #ifndef PARTITION_ALLOC_ADDRESS_POOL_MANAGER_H_
 #define PARTITION_ALLOC_ADDRESS_POOL_MANAGER_H_
 
+#include <array>
 #include <bitset>
 #include <limits>
 
 #include "partition_alloc/address_pool_manager_types.h"
 #include "partition_alloc/build_config.h"
 #include "partition_alloc/buildflags.h"
-#include "partition_alloc/partition_address_space.h"
+#include "partition_alloc/internal/partition_address_space_internal.h"
 #include "partition_alloc/partition_alloc_base/compiler_specific.h"
 #include "partition_alloc/partition_alloc_base/component_export.h"
 #include "partition_alloc/partition_alloc_base/thread_annotations.h"
@@ -155,6 +156,10 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC)
 
     // The bitset stores the allocation state of the address pool. 1 bit per
     // super-page: 1 = allocated, 0 = free.
+    // Note that we should not use bitset::set, bitset::reset(size_t), or
+    // bitset::test. These methods can throw std::out_of_range, which can cause
+    // unexpected dependencies and lead to symbol duplication errors during
+    // linking.
     std::bitset<kMaxSuperPagesInPool> alloc_bitset_ PA_GUARDED_BY(lock_);
 
     // An index of a bit in the bitset before which we know for sure there all
@@ -177,7 +182,7 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC)
 
   PA_ALWAYS_INLINE Pool* GetPool(pool_handle handle) {
     PA_DCHECK(kNullPoolHandle < handle && handle <= kNumPools);
-    return &PA_UNSAFE_TODO(pools_[handle - 1]);
+    return &pools_[handle - 1];
   }
 
   // Gets the stats for the pool identified by `handle`, if
@@ -200,11 +205,11 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC)
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #endif
-  Pool pools_[kNumPools];
+  std::array<Pool, kNumPools> pools_;
 
 #endif  // PA_BUILDFLAG(HAS_64_BIT_POINTERS)
 
-  PA_CONSTINIT static AddressPoolManager singleton_;
+  constinit static AddressPoolManager singleton_;
 };
 
 }  // namespace partition_alloc::internal

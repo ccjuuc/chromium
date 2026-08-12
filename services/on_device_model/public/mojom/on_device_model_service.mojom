@@ -1,6 +1,8 @@
 // Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+//
+// Next MinVersion: 5
 
 module on_device_model.mojom;
 
@@ -36,6 +38,11 @@ struct ModelAssets {
   mojo_base.mojom.File? cache;
   mojo_base.mojom.File? encoder_cache;
   mojo_base.mojom.File? adapter_cache;
+  // On GPU-specific backend, the program cache is used to store the compiled
+  // shaders into a single cache for the model.
+  [MinVersion=2] mojo_base.mojom.File? program_cache;
+  [MinVersion=3] mojo_base.mojom.File? encoder_program_cache;
+  [MinVersion=3] mojo_base.mojom.File? adapter_program_cache;
 };
 
 // Type of the backend to run the model.
@@ -73,29 +80,14 @@ struct LoadModelParams {
   // Chooses the performance characteristics of the model loaded. If only a
   // single model is available, this field will do nothing.
   ModelPerformanceHint performance_hint = kHighestQuality;
-};
 
-struct TextSafetyModelAssets {
-  mojo_base.mojom.ReadOnlyFile data;
-  mojo_base.mojom.ReadOnlyFile sp_model;
-};
-
-struct BertSafetyModelAssets {
-  mojo_base.mojom.ReadOnlyFile model;
-};
-
-struct LanguageModelAssets {
-  mojo_base.mojom.ReadOnlyFile model;
-};
-
-union SafetyModelAssets {
-  TextSafetyModelAssets ts_assets;
-  BertSafetyModelAssets bs_assets;
+  // Estimated device VRAM capacity in MB (0 if unknown).
+  [MinVersion=4] uint64 vram_mb = 0;
 };
 
 struct TextSafetyModelParams {
-  SafetyModelAssets? safety_assets;
-  LanguageModelAssets? language_assets;
+  mojo_base.mojom.ReadOnlyFile? safety_model;
+  mojo_base.mojom.ReadOnlyFile? language_model;
 };
 
 // An observer to report the current platform model loading progress.

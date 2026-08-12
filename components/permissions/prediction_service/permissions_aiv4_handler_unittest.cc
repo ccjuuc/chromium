@@ -12,7 +12,8 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
-#include "components/optimization_guide/core/delivery/test_model_info_builder.h"
+#include "build/build_config.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
 #include "components/optimization_guide/core/delivery/test_optimization_guide_model_provider.h"
 #include "components/optimization_guide/core/inference/test_model_handler.h"
 #include "components/optimization_guide/proto/common_types.pb.h"
@@ -50,12 +51,15 @@ auto kImageInputWidth = PermissionsAiv4Executor::kImageInputWidth;
 auto kImageInputHeight = PermissionsAiv4Executor::kImageInputHeight;
 constexpr char kModelExecutionTimeoutHistogram[] =
     "Permissions.AIv4.ModelExecutionTimeout";
+constexpr char kUseHardcodedThresholdsHistogram[] =
+    "Permissions.AIv4.UseHardcodedPredictionThresholds";
 
 constexpr int kTestTextInputSize = 768;
 
 PermissionsAiv4ModelMetadata BuildMetadataFromValues(
     const std::array<float, 4>& thresholds,
-    std::optional<int> text_embeddings_input_size = std::nullopt) {
+    std::optional<int> text_embeddings_input_size = std::nullopt,
+    std::optional<int32_t> passage_count = std::nullopt) {
   PermissionsAiv4ModelMetadata metadata;
   std::string serialized_metadata;
   metadata.mutable_relevance_thresholds()->set_min_low_relevance(thresholds[0]);
@@ -68,14 +72,16 @@ PermissionsAiv4ModelMetadata BuildMetadataFromValues(
   if (text_embeddings_input_size.has_value()) {
     metadata.set_text_embeddings_input_size(text_embeddings_input_size.value());
   }
+  if (passage_count.has_value()) {
+    metadata.set_passage_count(passage_count.value());
+  }
   return metadata;
 }
 
-passage_embeddings::Embedding GetDummyEmbeddings(
-    int input_size = kTestTextInputSize) {
-  std::vector<float> data(input_size, 42.f);
-  return passage_embeddings::Embedding(data,
-                                       /*passage_word_count=*/42);
+std::vector<float> GetDummyEmbeddings(int input_size = kTestTextInputSize) {
+  std::vector<float> data(input_size, 0.0f);
+  data[0] = 1.0f;
+  return data;
 }
 
 class PermissionsAiv4ExecutorFake : public PermissionsAiv4Executor {
@@ -198,13 +204,13 @@ class Aiv4HandlerTestBase : public testing::Test {
           "PermissionsAiv4ModelMetadata");
     }
 
-    auto model_metadata = optimization_guide::TestModelInfoBuilder()
-                              .SetModelMetadata(any)
-                              .SetModelFilePath(model_file_path)
-                              .SetVersion(123)
-                              .Build();
+    optimization_guide::ModelInfo model_metadata = {
+        .model_file_path = model_file_path,
+        .version = 123,
+        .model_metadata = any,
+    };
 
-    model_handler()->OnModelUpdated(opt_target, *model_metadata);
+    model_handler()->OnModelUpdated(opt_target, model_metadata);
 
     task_environment_.RunUntilIdle();
   }
@@ -252,7 +258,11 @@ INSTANTIATE_TEST_SUITE_P(
          PermissionRequestRelevance::kVeryLow, /*metadata=*/std::nullopt},
         {kOptTargetNotifications, test::ModelFilePath(k0_023ReturnModel),
          /*expected_model_return_value=*/0.023f,
+#if BUILDFLAG(IS_ANDROID)
+         PermissionRequestRelevance::kMedium, /*metadata=*/std::nullopt},
+#else
          PermissionRequestRelevance::kLow, /*metadata=*/std::nullopt},
+#endif
         {kOptTargetNotifications, test::ModelFilePath(kOneReturnModel),
          /*expected_model_return_value=*/1.0f,
          PermissionRequestRelevance::kVeryHigh, /*metadata=*/std::nullopt},
@@ -348,6 +358,52 @@ TEST_F(Aiv4HandlerTest, BitmapGetsCopiedToTensor) {
   EXPECT_TRUE(flag);
 }
 
+TEST_F(Aiv4HandlerTest, BitmapOrientationPreserved) {
+  PushModelFileToModelExecutor(kOptTargetNotifications,
+                               test::ModelFilePath(kZeroReturnModel));
+
+  SkBitmap snapshot =
+      test::BuildBitmap(kImageInputWidth, kImageInputHeight, SK_ColorBLUE);
+
+  // Fill top-right quadrant with RED.
+  // w >= kImageInputWidth / 2 and h < kImageInputHeight / 2
+  // This asymmetric pattern is sensitive to transposition, rotation or flip
+  // in the encoder.
+  snapshot.erase(SK_ColorRED,
+                 SkIRect::MakeLTRB(kImageInputWidth / 2, 0, kImageInputWidth,
+                                   kImageInputHeight / 2));
+
+  bool flag = false;
+  notification_executor_mock_->set_preprocess_hook(base::BindLambdaForTesting(
+      [&flag](const std::vector<TfLiteTensor*>& input_tensors) {
+        std::vector<float> data;
+        ASSERT_TRUE(
+            tflite::task::core::PopulateVector<float>(input_tensors[1], &data)
+                .ok());
+        EXPECT_THAT(data, SizeIs(kImageInputWidth * kImageInputHeight * 3));
+
+        // Test a pixel in the top-right quadrant.
+        // It should be RED.
+        int test_w = kImageInputWidth * 3 / 4;
+        int test_h = kImageInputHeight / 4;
+        int index = (test_h * kImageInputWidth + test_w) * 3;
+
+        EXPECT_FLOAT_EQ(data[index], 1.0f);      // R for RED
+        EXPECT_FLOAT_EQ(data[index + 1], 0.0f);  // G for RED
+        EXPECT_FLOAT_EQ(data[index + 2], 0.0f);  // B for RED
+
+        flag = true;
+      }));
+
+  ModelCallbackFuture future;
+  auto* aiv4_handler = model_handler();
+  aiv4_handler->ExecuteModel(
+      future.GetCallback(),
+      ModelInput{std::move(snapshot), GetDummyEmbeddings()});
+  EXPECT_EQ(future.Take(), PermissionRequestRelevance::kVeryLow);
+  EXPECT_TRUE(flag);
+}
+
 // This test verifies the timeout behavior of the permission model handler.
 // The timeout is triggered when the model execution takes longer than the
 // timeout threshold. Additionally, this test verifies that the model handler
@@ -365,7 +421,7 @@ TEST_F(Aiv4HandlerTest, ModelHandlerTimeoutExecutions) {
           /*request_type=*/RequestType::kNotifications,
           std::move(geolocation_executor_mock));
 
-  // Because of `PermissionsAiv3ExecutorFake` the first execution will be hold
+  // Because of `PermissionsAiv4ExecutorFake` the first execution will be hold
   // until manually released. In this case we release the callback before we
   // try to execute the model again.
   ModelCallbackFuture future1;
@@ -431,8 +487,9 @@ TEST_F(Aiv4HandlerTest, TextEmbeddingGetsCopiedToTensor) {
             tflite::task::core::PopulateVector<float>(input_tensors[0], &data)
                 .ok());
         EXPECT_THAT(data, SizeIs(kTestTextInputSize));
-        for (int i = 0; i < kTestTextInputSize; i++) {
-          EXPECT_FLOAT_EQ(data[i], 42.f);
+        EXPECT_FLOAT_EQ(data[0], 1.0f);
+        for (int i = 1; i < kTestTextInputSize; i++) {
+          EXPECT_FLOAT_EQ(data[i], 0.0f);
         }
         flag = true;
       }));
@@ -480,6 +537,90 @@ TEST_F(Aiv4HandlerTest, TextEmbeddingSizeDoesNotMatchAiv4InputSize) {
   // We do not execute the model and call the callback with nullopt if input
   // size does not match expectations.
   EXPECT_EQ(future.Take(), std::nullopt);
+}
+
+TEST_F(Aiv4HandlerTest, PredictionThresholdsHistogram_UseHardcoded) {
+  base::HistogramTester histograms;
+
+  PushModelFileToModelExecutor(kOptTargetNotifications,
+                               test::ModelFilePath(kZeroReturnModel),
+                               /*metadata=*/std::nullopt);
+
+  ModelCallbackFuture future;
+  PermissionsAiv4Handler* aiv4_handler = model_handler();
+  aiv4_handler->ExecuteModel(
+      future.GetCallback(),
+      ModelInput{
+          test::BuildBitmap(kImageInputWidth, kImageInputHeight, kDefaultColor),
+          GetDummyEmbeddings()});
+  EXPECT_TRUE(future.Wait());
+
+  histograms.ExpectBucketCount(kUseHardcodedThresholdsHistogram, true, 1);
+  histograms.ExpectBucketCount(kUseHardcodedThresholdsHistogram, false, 0);
+}
+
+TEST_F(Aiv4HandlerTest, PredictionThresholdsHistogram_UseMetadata) {
+  base::HistogramTester histograms;
+
+  PermissionsAiv4ModelMetadata metadata =
+      BuildMetadataFromValues({0.1, 0.2, 0.3, 0.4});
+  PushModelFileToModelExecutor(kOptTargetNotifications,
+                               test::ModelFilePath(kZeroReturnModel), metadata);
+
+  ModelCallbackFuture future;
+  PermissionsAiv4Handler* aiv4_handler = model_handler();
+  aiv4_handler->ExecuteModel(
+      future.GetCallback(),
+      ModelInput{
+          test::BuildBitmap(kImageInputWidth, kImageInputHeight, kDefaultColor),
+          GetDummyEmbeddings()});
+  EXPECT_TRUE(future.Wait());
+
+  histograms.ExpectBucketCount(kUseHardcodedThresholdsHistogram, true, 0);
+  histograms.ExpectBucketCount(kUseHardcodedThresholdsHistogram, false, 1);
+}
+
+TEST_F(Aiv4HandlerTest, GetPassageCountReturnsCorrectValue) {
+  PermissionsAiv4ModelMetadata metadata = BuildMetadataFromValues(
+      {0.1, 0.2, 0.3, 0.4}, /*text_embeddings_input_size=*/std::nullopt,
+      /*passage_count=*/5);
+  PushModelFileToModelExecutor(kOptTargetNotifications,
+                               test::ModelFilePath(kZeroReturnModel), metadata);
+
+  auto* aiv4_handler = model_handler();
+  EXPECT_EQ(aiv4_handler->GetPassageCount(), 5);
+}
+
+TEST_F(Aiv4HandlerTest, GetPassageCountReturnsNulloptWhenNotSet) {
+  PermissionsAiv4ModelMetadata metadata =
+      BuildMetadataFromValues({0.1, 0.2, 0.3, 0.4});
+  PushModelFileToModelExecutor(kOptTargetNotifications,
+                               test::ModelFilePath(kZeroReturnModel), metadata);
+
+  auto* aiv4_handler = model_handler();
+  EXPECT_EQ(aiv4_handler->GetPassageCount(), std::nullopt);
+}
+
+TEST_F(Aiv4HandlerTest, GetPassageCountReturnsNulloptWhenZero) {
+  PermissionsAiv4ModelMetadata metadata = BuildMetadataFromValues(
+      {0.1, 0.2, 0.3, 0.4}, /*text_embeddings_input_size=*/std::nullopt,
+      /*passage_count=*/0);
+  PushModelFileToModelExecutor(kOptTargetNotifications,
+                               test::ModelFilePath(kZeroReturnModel), metadata);
+
+  auto* aiv4_handler = model_handler();
+  EXPECT_EQ(aiv4_handler->GetPassageCount(), std::nullopt);
+}
+
+TEST_F(Aiv4HandlerTest, GetPassageCountReturnsNulloptWhenNegative) {
+  PermissionsAiv4ModelMetadata metadata = BuildMetadataFromValues(
+      {0.1, 0.2, 0.3, 0.4}, /*text_embeddings_input_size=*/std::nullopt,
+      /*passage_count=*/-1);
+  PushModelFileToModelExecutor(kOptTargetNotifications,
+                               test::ModelFilePath(kZeroReturnModel), metadata);
+
+  auto* aiv4_handler = model_handler();
+  EXPECT_EQ(aiv4_handler->GetPassageCount(), std::nullopt);
 }
 
 }  // namespace

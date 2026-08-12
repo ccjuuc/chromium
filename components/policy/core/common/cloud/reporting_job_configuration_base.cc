@@ -53,11 +53,11 @@ const char
         "networkName";
 
 // static
-base::Value::Dict
+base::DictValue
 ReportingJobConfigurationBase::DeviceDictionaryBuilder::BuildDeviceDictionary(
     const std::string& dm_token,
     const std::string& client_id) {
-  base::Value::Dict device_dictionary;
+  base::DictValue device_dictionary;
   device_dictionary.Set(kDMToken, dm_token);
   device_dictionary.Set(kClientId, client_id);
   device_dictionary.Set(kOSVersion, GetOSVersion());
@@ -120,7 +120,7 @@ ReportingJobConfigurationBase::DeviceDictionaryBuilder::GetNamePath() {
   return GetStringPath(kName);
 }
 
-//static
+// static
 std::string
 ReportingJobConfigurationBase::DeviceDictionaryBuilder::GetDeviceFqdnPath() {
   return GetStringPath(kDeviceFqdn);
@@ -157,10 +157,10 @@ const char
         "chromeVersion";
 
 // static
-base::Value::Dict
+base::DictValue
 ReportingJobConfigurationBase::BrowserDictionaryBuilder::BuildBrowserDictionary(
     bool include_device_info) {
-  base::Value::Dict browser_dictionary;
+  base::DictValue browser_dictionary;
 
   base::FilePath browser_id;
   if (base::PathService::Get(base::DIR_EXE, &browser_id)) {
@@ -341,7 +341,7 @@ ReportingJobConfigurationBase::ReportingJobConfigurationBase(
     scoped_refptr<network::SharedURLLoaderFactory> factory,
     DMAuth auth_data,
     const std::string& server_url,
-    UploadCompleteCallback callback)
+    UploadCompleteCallbackDeprecated callback)
     : JobConfigurationBase(type,
                            std::move(auth_data),
                            /*oauth_token=*/std::nullopt,

@@ -23,22 +23,24 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.CANCEL_RUNNABLE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.DONE_RUNNABLE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.DropdownFieldProperties.DROPDOWN_KEY_VALUE_LIST;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.EDITOR_FIELDS;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.FieldProperties.ERROR_MESSAGE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.FieldProperties.IS_REQUIRED;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.FieldProperties.LABEL;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.FieldProperties.VALUE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.ItemType.DROPDOWN;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.ItemType.NOTICE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.ItemType.TEXT_INPUT;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.NoticeProperties.IMPORTANT_FOR_ACCESSIBILITY;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.NoticeProperties.NOTICE_TEXT;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.TextFieldProperties.TEXT_FIELD_TYPE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.isEditable;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.setDropdownKey;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.CANCEL_RUNNABLE;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.DONE_RUNNABLE;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.EDITOR_FIELDS;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.ItemType.DROPDOWN;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.ItemType.NOTICE;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.ItemType.TEXT_INPUT;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.NoticeProperties.IMPORTANT_FOR_ACCESSIBILITY;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.NoticeProperties.NOTICE_TEXT;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.NoticeProperties.NOTICE_VISIBLE;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.NoticeProperties.SHOW_BACKGROUND;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.isEditable;
+import static org.chromium.chrome.browser.autofill.editors.common.dropdown_field.DropdownFieldProperties.DROPDOWN_KEY_VALUE_LIST;
+import static org.chromium.chrome.browser.autofill.editors.common.dropdown_field.DropdownFieldProperties.setDropdownKey;
+import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.ERROR_MESSAGE;
+import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.IS_REQUIRED;
+import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.LABEL;
+import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.VALUE;
+import static org.chromium.chrome.browser.autofill.editors.common.text_field.TextFieldProperties.TEXT_FIELD_TYPE;
 
 import android.app.Activity;
 
@@ -68,18 +70,18 @@ import org.chromium.chrome.browser.autofill.PersonalDataManager;
 import org.chromium.chrome.browser.autofill.PhoneNumberUtil;
 import org.chromium.chrome.browser.autofill.PhoneNumberUtilJni;
 import org.chromium.chrome.browser.autofill.SubKeyRequesterFactory;
-import org.chromium.chrome.browser.autofill.editors.EditorDialogView;
-import org.chromium.chrome.browser.autofill.editors.EditorProperties;
-import org.chromium.chrome.browser.autofill.editors.EditorProperties.EditorItem;
+import org.chromium.chrome.browser.autofill.editors.address.EditorDialogView;
+import org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties;
+import org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.EditorItem;
 import org.chromium.components.autofill.AutofillAddressEditorUiInfo;
 import org.chromium.components.autofill.AutofillAddressUiComponent;
 import org.chromium.components.autofill.AutofillProfile;
 import org.chromium.components.autofill.DropdownKeyValue;
 import org.chromium.components.autofill.FieldType;
 import org.chromium.components.autofill.SubKeyRequester;
-import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.modelutil.ListModel;
 import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.ui.test.util.BlankUiTestActivity;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -193,7 +195,7 @@ public class AddressEditorTest {
         PhoneNumberUtilJni.setInstanceForTesting(mPhoneNumberUtilJni);
         when(mPhoneNumberUtilJni.isPossibleNumber(anyString(), anyString())).thenReturn(true);
 
-        mActivity = Robolectric.setupActivity(TestActivity.class);
+        mActivity = Robolectric.setupActivity(BlankUiTestActivity.class);
 
         SubKeyRequesterFactory.setInstanceForTesting(mSubKeyRequester);
 
@@ -326,6 +328,7 @@ public class AddressEditorTest {
                 /* isFullLine= */ true);
     }
 
+    @SuppressWarnings("unchecked") // hamcrest anyOf varargs
     private void validateErrorMessages(PropertyModel editorModel, boolean errorsPresent) {
         assertNotNull(editorModel);
         ListModel<EditorItem> editorFields = editorModel.get(EDITOR_FIELDS);
@@ -351,9 +354,9 @@ public class AddressEditorTest {
     @Test
     @SmallTest
     public void validateDefaultFields() {
-        setUpAddressUiComponents(new ArrayList(), /* countryCode= */ "US");
+        setUpAddressUiComponents(new ArrayList<>(), /* countryCode= */ "US");
         doAnswer(
-                        unused -> {
+                        _ -> {
                             mAddressEditor.onSubKeysReceived(null, null);
                             return null;
                         })
@@ -363,7 +366,7 @@ public class AddressEditorTest {
         mAddressEditor = new AddressEditor(mPersonalDataManager, /* saveToDisk= */ false);
         mAddressEditor.setEditorDialog(mEditorDialog);
         mAddressEditor.showEditPrompt(
-                new AutofillAddress(mActivity, sProfile, mPersonalDataManager), unused -> {});
+                new AutofillAddress(mActivity, sProfile, mPersonalDataManager), _ -> {});
 
         assertNotNull(mAddressEditor.getEditorModelForTesting());
         ListModel<EditorItem> editorFields =
@@ -408,7 +411,9 @@ public class AddressEditorTest {
         assertEquals(
                 mActivity.getString(R.string.payments_required_field_message),
                 requiredNotice.get(NOTICE_TEXT));
+        assertFalse(requiredNotice.get(SHOW_BACKGROUND));
         assertFalse(requiredNotice.get(IMPORTANT_FOR_ACCESSIBILITY));
+        assertTrue(requiredNotice.get(NOTICE_VISIBLE));
     }
 
     @Test
@@ -424,7 +429,7 @@ public class AddressEditorTest {
                                 /* isFullLine= */ true)),
                 /* countryCode= */ "US");
         doAnswer(
-                        unused -> {
+                        _ -> {
                             mAddressEditor.onSubKeysReceived(
                                     new String[] {"CA", "NY", "TX"},
                                     new String[] {"California", "New York", "Texas"});
@@ -435,7 +440,7 @@ public class AddressEditorTest {
         mAddressEditor = new AddressEditor(mPersonalDataManager, /* saveToDisk= */ false);
         mAddressEditor.setEditorDialog(mEditorDialog);
         mAddressEditor.showEditPrompt(
-                new AutofillAddress(mActivity, sProfile, mPersonalDataManager), unused -> {});
+                new AutofillAddress(mActivity, sProfile, mPersonalDataManager), _ -> {});
 
         assertNotNull(mAddressEditor.getEditorModelForTesting());
         ListModel<EditorItem> editorFields =
@@ -471,7 +476,7 @@ public class AddressEditorTest {
     public void validateShownFields_NewAddressProfile() {
         setUpAddressUiComponents(SUPPORTED_ADDRESS_FIELDS, /* countryCode= */ "US");
         doAnswer(
-                        unused -> {
+                        _ -> {
                             mAddressEditor.onSubKeysReceived(null, null);
                             return null;
                         })
@@ -480,7 +485,7 @@ public class AddressEditorTest {
 
         mAddressEditor = new AddressEditor(mPersonalDataManager, /* saveToDisk= */ false);
         mAddressEditor.setEditorDialog(mEditorDialog);
-        mAddressEditor.showEditPrompt(null, unused -> {});
+        mAddressEditor.showEditPrompt(null, _ -> {});
 
         validateShownFields(
                 mAddressEditor.getEditorModelForTesting(), AutofillProfile.builder().build());
@@ -492,7 +497,7 @@ public class AddressEditorTest {
         setUpAddressUiComponents(SUPPORTED_ADDRESS_FIELDS, /* countryCode= */ "US");
         mAddressEditor = new AddressEditor(mPersonalDataManager, /* saveToDisk= */ false);
         doAnswer(
-                        unused -> {
+                        _ -> {
                             mAddressEditor.onSubKeysReceived(null, null);
                             return null;
                         })
@@ -500,7 +505,7 @@ public class AddressEditorTest {
                 .getRegionSubKeys(anyString(), any());
         mAddressEditor.setEditorDialog(mEditorDialog);
         mAddressEditor.showEditPrompt(
-                new AutofillAddress(mActivity, sProfile, mPersonalDataManager), unused -> {});
+                new AutofillAddress(mActivity, sProfile, mPersonalDataManager), _ -> {});
 
         validateShownFields(mAddressEditor.getEditorModelForTesting(), sProfile);
     }
@@ -525,7 +530,7 @@ public class AddressEditorTest {
                                 /* isFullLine= */ true)),
                 /* countryCode= */ "DE");
         doAnswer(
-                        unused -> {
+                        _ -> {
                             mAddressEditor.onSubKeysReceived(null, null);
                             return null;
                         })
@@ -533,7 +538,7 @@ public class AddressEditorTest {
                 .getRegionSubKeys(anyString(), any());
         mAddressEditor = new AddressEditor(mPersonalDataManager, /* saveToDisk= */ false);
         mAddressEditor.setEditorDialog(mEditorDialog);
-        mAddressEditor.showEditPrompt(null, unused -> {});
+        mAddressEditor.showEditPrompt(null, _ -> {});
 
         assertNotNull(mAddressEditor.getEditorModelForTesting());
         ListModel<EditorItem> editorFields =
@@ -589,7 +594,7 @@ public class AddressEditorTest {
     public void showEditPrompt_AlterAddressProfile_Cancel() {
         setUpAddressUiComponents(SUPPORTED_ADDRESS_FIELDS, /* countryCode= */ "US");
         doAnswer(
-                        unused -> {
+                        _ -> {
                             mAddressEditor.onSubKeysReceived(null, null);
                             return null;
                         })
@@ -622,7 +627,7 @@ public class AddressEditorTest {
     public void showEditPrompt_AlterAddressProfile_CommitChanges() {
         setUpAddressUiComponents(SUPPORTED_ADDRESS_FIELDS, /* countryCode= */ "US");
         doAnswer(
-                        unused -> {
+                        _ -> {
                             mAddressEditor.onSubKeysReceived(null, null);
                             return null;
                         })
@@ -666,7 +671,7 @@ public class AddressEditorTest {
         // Whitelist only full name, admin area and locality.
         setUpAddressUiComponents(SUPPORTED_ADDRESS_FIELDS.subList(0, 3), /* countryCode= */ "US");
         doAnswer(
-                        unused -> {
+                        _ -> {
                             mAddressEditor.onSubKeysReceived(null, null);
                             return null;
                         })
@@ -710,7 +715,7 @@ public class AddressEditorTest {
     public void showEditPrompt_NewAddressProfile_NoInitialValidation() {
         setUpAddressUiComponents(SUPPORTED_ADDRESS_FIELDS, /* countryCode= */ "US");
         doAnswer(
-                        unused -> {
+                        _ -> {
                             mAddressEditor.onSubKeysReceived(null, null);
                             return null;
                         })
@@ -719,7 +724,7 @@ public class AddressEditorTest {
 
         mAddressEditor = new AddressEditor(mPersonalDataManager, /* saveToDisk= */ false);
         mAddressEditor.setEditorDialog(mEditorDialog);
-        mAddressEditor.showEditPrompt(null, unused -> {});
+        mAddressEditor.showEditPrompt(null, _ -> {});
 
         validateErrorMessages(
                 mAddressEditor.getEditorModelForTesting(), /* errorsPresent= */ false);
@@ -730,7 +735,7 @@ public class AddressEditorTest {
     public void showEditPrompt_NewAddressProfile_FieldsAreValidatedAfterSave() {
         setUpAddressUiComponents(SUPPORTED_ADDRESS_FIELDS, /* countryCode= */ "US");
         doAnswer(
-                        unused -> {
+                        _ -> {
                             mAddressEditor.onSubKeysReceived(null, null);
                             return null;
                         })
@@ -739,7 +744,7 @@ public class AddressEditorTest {
 
         mAddressEditor = new AddressEditor(mPersonalDataManager, /* saveToDisk= */ false);
         mAddressEditor.setEditorDialog(mEditorDialog);
-        mAddressEditor.showEditPrompt(null, unused -> {});
+        mAddressEditor.showEditPrompt(null, _ -> {});
 
         PropertyModel editorModel = mAddressEditor.getEditorModelForTesting();
         assertNotNull(editorModel);
@@ -760,7 +765,7 @@ public class AddressEditorTest {
 
         setUpAddressUiComponents(SUPPORTED_ADDRESS_FIELDS, /* countryCode= */ "US");
         doAnswer(
-                        unused -> {
+                        _ -> {
                             mAddressEditor.onSubKeysReceived(null, null);
                             return null;
                         })
@@ -770,7 +775,7 @@ public class AddressEditorTest {
         mAddressEditor = new AddressEditor(mPersonalDataManager, /* saveToDisk= */ false);
         mAddressEditor.setEditorDialog(mEditorDialog);
         mAddressEditor.showEditPrompt(
-                new AutofillAddress(mActivity, profile, mPersonalDataManager), unused -> {});
+                new AutofillAddress(mActivity, profile, mPersonalDataManager), _ -> {});
 
         validateErrorMessages(mAddressEditor.getEditorModelForTesting(), /* errorsPresent= */ true);
     }
@@ -787,7 +792,7 @@ public class AddressEditorTest {
 
         setUpAddressUiComponents(SUPPORTED_ADDRESS_FIELDS, /* countryCode= */ "US");
         doAnswer(
-                        unused -> {
+                        _ -> {
                             mAddressEditor.onSubKeysReceived(null, null);
                             return null;
                         })
@@ -797,7 +802,7 @@ public class AddressEditorTest {
         mAddressEditor = new AddressEditor(mPersonalDataManager, /* saveToDisk= */ false);
         mAddressEditor.setEditorDialog(mEditorDialog);
         mAddressEditor.showEditPrompt(
-                new AutofillAddress(mActivity, profile, mPersonalDataManager), unused -> {});
+                new AutofillAddress(mActivity, profile, mPersonalDataManager), _ -> {});
 
         PropertyModel editorModel = mAddressEditor.getEditorModelForTesting();
         assertNotNull(editorModel);
@@ -811,7 +816,7 @@ public class AddressEditorTest {
     public void showEditPrompt_AccountAddressProfile_EmptyFieldsAreValidatedAfterSave() {
         setUpAddressUiComponents(SUPPORTED_ADDRESS_FIELDS, /* countryCode= */ "US");
         doAnswer(
-                        unused -> {
+                        _ -> {
                             mAddressEditor.onSubKeysReceived(null, null);
                             return null;
                         })
@@ -822,7 +827,7 @@ public class AddressEditorTest {
         mAddressEditor.setEditorDialog(mEditorDialog);
         mAddressEditor.showEditPrompt(
                 new AutofillAddress(mActivity, new AutofillProfile(sProfile), mPersonalDataManager),
-                unused -> {});
+                _ -> {});
 
         PropertyModel editorModel = mAddressEditor.getEditorModelForTesting();
         assertNotNull(editorModel);
@@ -830,7 +835,7 @@ public class AddressEditorTest {
         ListModel<EditorItem> model = editorModel.get(EDITOR_FIELDS);
         assertEquals(11, model.size());
         for (EditorItem item : model) {
-            if (EditorProperties.isEditable(item) && item.model.get(IS_REQUIRED)) {
+            if (EditorComponentsProperties.isEditable(item) && item.model.get(IS_REQUIRED)) {
                 item.model.set(VALUE, "");
             }
         }

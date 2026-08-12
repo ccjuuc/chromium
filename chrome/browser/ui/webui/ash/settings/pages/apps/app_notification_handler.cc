@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "ash/constants/chrome_webui_url_constants.h"
 #include "ash/public/cpp/message_center_ash.h"
 #include "ash/public/cpp/new_window_delegate.h"
 #include "base/logging.h"
@@ -13,9 +14,7 @@
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/apps/mojom/app_type_mojom_traits.h"
-#include "chrome/common/url_constants.h"
 #include "components/services/app_service/public/cpp/app_types.h"
-#include "components/services/app_service/public/cpp/features.h"
 #include "components/services/app_service/public/cpp/permission.h"
 #include "components/services/app_service/public/cpp/types_util.h"
 
@@ -110,7 +109,7 @@ void AppNotificationHandler::SetNotificationPermission(
 
 void AppNotificationHandler::OpenBrowserNotificationSettings() {
   ash::NewWindowDelegate::GetInstance()->OpenUrl(
-      GURL(chrome::kAppNotificationsBrowserSettingsURL),
+      GURL(ash::chrome_urls::kChromeUIAppNotificationsBrowserSettingsURL),
       ash::NewWindowDelegate::OpenUrlFrom::kUserInteraction,
       ash::NewWindowDelegate::Disposition::kSwitchToTab);
 }

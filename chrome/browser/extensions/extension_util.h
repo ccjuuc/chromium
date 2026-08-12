@@ -9,8 +9,10 @@
 #include <string>
 
 #include "base/values.h"
+#include "build/build_config.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
+#include "extensions/common/extension_id.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -31,6 +33,7 @@ class PrefRegistrySyncable;
 }
 
 class Profile;
+class GURL;
 
 namespace extensions {
 
@@ -46,6 +49,12 @@ bool HasIsolatedStorage(const std::string& extension_id,
                         content::BrowserContext* context);
 bool HasIsolatedStorage(const Extension& extension,
                         content::BrowserContext* context);
+
+// Returns whether the extension with `extension_id` is force installed by
+// policy, and fills `reason` (if non-null) with expository text.
+bool IsExtensionForceInstalled(const std::string& extension_id,
+                               content::BrowserContext* context,
+                               std::u16string* reason = nullptr);
 
 // Sets whether `extension_id` can run in an incognito window. Reloads the
 // extension if it's enabled since this permission is applied at loading time
@@ -63,7 +72,7 @@ void SetAllowFileAccess(const std::string& extension_id,
 
 // Sets the name, id, and icon resource path of the given extension into the
 // returned dictionary.
-base::Value::Dict GetExtensionInfo(const Extension* extension);
+base::DictValue GetExtensionInfo(const Extension* extension);
 
 // Returns a PermissionSet configured with the permissions that should be
 // displayed in an extension installation prompt for the specified `extension`.
@@ -81,14 +90,6 @@ std::vector<content::BrowserContext*> GetAllRelatedProfiles(
 // relevant subsystems.
 void SetDeveloperModeForProfile(Profile* profile, bool in_developer_mode);
 
-// Returns the extension name to be used in UI surfaces. Name will be truncated
-// if its very long, preventing extension name to spoof or break UI surfaces
-// (see crbug.com/40063885).
-std::u16string GetFixupExtensionNameForUIDisplay(
-    const std::u16string& extension_name);
-std::u16string GetFixupExtensionNameForUIDisplay(
-    const std::string& extension_name);
-
 // Registers miscellaneous chrome-level extension-related prefs.
 void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
@@ -96,6 +97,51 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 // or preference).
 bool AreExtensionsDisabled(const base::CommandLine& command_line,
                            content::BrowserContext* context);
+
+// Returns the URL for the chrome://extensions page and highlights the
+// extension with `extension_id`. If `extension_id` is empty, just shows the
+// main extensions page.
+GURL GetExtensionsPageUrl(const ExtensionId& extension_id);
+
+// Returns true if `extension` is allowed to use MojoJS bindings.
+bool IsMojoJsEnabledForExtension(const Extension* extension,
+                                 content::BrowserContext* context);
+
+// Returns true if `extension` is allowed to report JS errors.
+bool IsJsErrorReportingEnabledForExtension(const Extension* extension,
+                                           content::BrowserContext* context);
+
+// Returns true if JS errors in `extension` should crash the browser in
+// non-official development builds.
+bool ShouldCrashOnExtensionJsErrorInDevelopmentBuild(
+    const Extension* extension,
+    content::BrowserContext* context);
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+// Represents the type of settings override configured by the extension.
+// DSE = Default Search Engine.
+// NTP = New Tab Page.
+enum class DseNtpOverrideType {
+  kNone = 0,
+  kDse = 1,
+  kNtp = 2,
+  kBoth = 3,
+};
+
+DseNtpOverrideType GetDseNtpOverrideType(const Extension& extension);
+#endif
+
+// Sources from which the CWS write review dialog can be launched.
+enum class CWSReviewSource {
+  kExtensionsMenu,
+  kExtensionsPage,
+  kContextMenu,
+};
+
+// Returns the URL to the Chrome Web Store's write review dialog for a specific
+// `extension_id` and `source`.
+GURL GetCWSWritingReviewUrl(const ExtensionId& extension_id,
+                            CWSReviewSource source);
 
 }  // namespace util
 }  // namespace extensions

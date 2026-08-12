@@ -81,15 +81,11 @@ OverlayStrategySingleOnTop::~OverlayStrategySingleOnTop() = default;
 
 void OverlayStrategySingleOnTop::Propose(
     const SkM44& output_color_matrix,
-    const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
-    const OverlayProcessorInterface::FilterOperationsMap&
-        render_pass_backdrop_filters,
     const DisplayResourceProvider* resource_provider,
     AggregatedRenderPassList* render_pass_list,
     SurfaceDamageRectList* surface_damage_rect_list,
     const std::optional<OverlayCandidate>& primary_plane,
-    std::vector<OverlayProposedCandidate>* candidates,
-    std::vector<gfx::Rect>* content_bounds) {
+    std::vector<OverlayProposedCandidate>* candidates) {
   auto* render_pass = render_pass_list->back().get();
   QuadList* quad_list = &render_pass->quad_list;
 
@@ -102,8 +98,7 @@ void OverlayStrategySingleOnTop::Propose(
   // Build a list of candidates with the associated quad.
   OverlayCandidateFactory candidate_factory = OverlayCandidateFactory(
       render_pass, resource_provider, surface_damage_rect_list,
-      &output_color_matrix, GetPrimaryPlaneDisplayRect(primary_plane),
-      &render_pass_filters, context);
+      &output_color_matrix, GetPrimaryPlaneDisplayRect(primary_plane), context);
 
   std::vector<OverlayProposedCandidate> candidates_with_masks;
 
@@ -173,15 +168,11 @@ void OverlayStrategySingleOnTop::Propose(
 
 bool OverlayStrategySingleOnTop::Attempt(
     const SkM44& output_color_matrix,
-    const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
-    const OverlayProcessorInterface::FilterOperationsMap&
-        render_pass_backdrop_filters,
     const DisplayResourceProvider* resource_provider,
     AggregatedRenderPassList* render_pass_list,
     SurfaceDamageRectList* surface_damage_rect_list,
     const std::optional<OverlayCandidate>& primary_plane,
     OverlayCandidateList* candidate_list,
-    std::vector<gfx::Rect>* content_bounds,
     const OverlayProposedCandidate& proposed_candidate) {
   // Before we attempt an overlay strategy, we shouldn't have a candidate.
   DCHECK(candidate_list->empty());

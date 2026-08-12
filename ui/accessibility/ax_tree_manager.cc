@@ -4,9 +4,13 @@
 
 #include "ui/accessibility/ax_tree_manager.h"
 
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/debug/crash_logging.h"
 #include "base/functional/callback.h"
+#include "base/logging.h"
 #include "base/no_destructor.h"
+#include "base/notreached.h"
 #include "ui/accessibility/ax_common.h"
 #include "ui/accessibility/ax_export.h"
 #include "ui/accessibility/ax_node.h"
@@ -318,10 +322,11 @@ void AXTreeManager::OnNodeWillBeDeleted(AXTree* tree, AXNode* node) {
   if (node == GetLastFocusedNode())
     SetLastFocusedNode(nullptr);
 
-  // We fire these here, immediately, to ensure we can send platform
-  // notifications prior to the actual destruction of the object.
-  if (node->GetRole() == ax::mojom::Role::kMenu)
+  // If an exposed menu is deleted, close it before its platform object goes
+  // away. Menus hidden first already closed when their ignored state changed.
+  if (node->GetRole() == ax::mojom::Role::kMenu && !node->IsIgnored()) {
     FireGeneratedEvent(AXEventGenerator::Event::MENU_POPUP_END, node);
+  }
 }
 
 void AXTreeManager::OnAtomicUpdateFinished(
@@ -388,6 +393,14 @@ AXNode* AXTreeManager::GetParentNodeFromParentTree() const {
       << "A node that hosts a child tree should expose its tree ID in its "
          "`kChildTreeId` attribute.";
 
+  return parent_node;
+}
+
+AXNode* AXTreeManager::GetUnignoredParentNodeFromParentTree() const {
+  AXNode* parent_node = GetParentNodeFromParentTree();
+  if (parent_node && parent_node->IsIgnored()) {
+    return parent_node->GetUnignoredParent();
+  }
   return parent_node;
 }
 

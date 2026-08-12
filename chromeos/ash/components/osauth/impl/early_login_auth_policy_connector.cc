@@ -66,13 +66,24 @@ EarlyLoginAuthPolicyConnector::GetLocalAuthFactorsComplexity(
 std::optional<AuthFactorsSet>
 EarlyLoginAuthPolicyConnector::AllowedLocalAuthFactors(
     const AccountId& account) {
-  if (!early_prefs_->HasPref(prefs::kLocalAuthFactors)) {
+  if (!early_prefs_->HasPref(prefs::kAllowedLocalAuthFactors)) {
     return std::nullopt;
   }
 
-  const base::Value::List* allowed_auth_factors =
-      &early_prefs_->GetValue(prefs::kLocalAuthFactors)->GetList();
+  const base::ListValue* allowed_auth_factors =
+      &early_prefs_->GetValue(prefs::kAllowedLocalAuthFactors)->GetList();
   return GetAuthFactorsSetFromPolicyList(allowed_auth_factors);
+}
+
+std::optional<bool>
+EarlyLoginAuthPolicyConnector::IsPinAllowedByQuickUnlockPolicy(
+    const AccountId& account) {
+  if (!early_prefs_->HasPref(prefs::kQuickUnlockModeAllowlist)) {
+    return std::nullopt;
+  }
+  const base::ListValue* quick_unlock_factors =
+      &early_prefs_->GetValue(prefs::kQuickUnlockModeAllowlist)->GetList();
+  return HasPinFactor(quick_unlock_factors);
 }
 
 bool EarlyLoginAuthPolicyConnector::IsAuthFactorManaged(

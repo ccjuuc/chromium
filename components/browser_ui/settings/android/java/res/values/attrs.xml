@@ -18,11 +18,24 @@ found in the LICENSE file.
         <attr name="userAction" format="string" />
     </declare-styleable>
 
-
     <declare-styleable name="SpinnerPreference">
         <!-- Used to change the SpinnerPreference to display the TextView and the Spinner on the
              same line. Devices with a smallest width of less than 360dp will still use two separate
              lines. -->
         <attr name="singleLine" format="boolean" />
+    </declare-styleable>
+
+    <declare-styleable name="ChromeExpandableSwitchPreference">
+        <!-- The layout resource ID to inflate into the expanded area. -->
+        <attr name="expandedContentLayout" format="reference" />
+    </declare-styleable>
+
+    <!-- Attributes for preference settings. -->
+    <declare-styleable name="Settings">
+        <attr name="android:title" />
+        <attr name="android:key" />
+        <attr name="android:summary" />
+        <attr name="android:fragment" />
+        <attr name="keywords" format="string" />
     </declare-styleable>
 </resources>

@@ -15,10 +15,10 @@
 #import "ios/chrome/browser/omnibox/ui/popup/row/omnibox_popup_row_util.h"
 #import "ios/chrome/browser/shared/ui/elements/extended_touch_target_button.h"
 #import "ios/chrome/browser/shared/ui/elements/fade_truncating_label.h"
+#import "ios/chrome/browser/shared/ui/elements/gradient/gradient_view.h"
 #import "ios/chrome/browser/shared/ui/util/attributed_string_util.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
-#import "ios/chrome/common/ui/elements/gradient_view.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/common/ui/util/pointer_interaction_util.h"
 #import "ui/base/device_form_factor.h"
@@ -209,11 +209,6 @@ const CGFloat kTopGradientColorOpacity = 0.85;
       [_textStackView.leadingAnchor
           constraintEqualToAnchor:_leadingIconView.trailingAnchor
                          constant:kTextIconSpace],
-
-      // Trailing button constraints.
-      [_trailingButton.heightAnchor
-          constraintEqualToAnchor:_trailingButton.widthAnchor],
-
       [_trailingButton.centerYAnchor
           constraintEqualToAnchor:self.centerYAnchor],
       _trailingButtonTrailingConstraint,

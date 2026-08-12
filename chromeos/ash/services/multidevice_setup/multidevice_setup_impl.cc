@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
@@ -17,7 +16,6 @@
 #include "base/time/default_clock.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
 #include "chromeos/ash/services/multidevice_setup/account_status_change_delegate_notifier_impl.h"
-#include "chromeos/ash/services/multidevice_setup/android_sms_app_installing_status_observer.h"
 #include "chromeos/ash/services/multidevice_setup/eligible_host_devices_provider_impl.h"
 #include "chromeos/ash/services/multidevice_setup/feature_state_manager_impl.h"
 #include "chromeos/ash/services/multidevice_setup/global_state_feature_manager.h"
@@ -27,8 +25,6 @@
 #include "chromeos/ash/services/multidevice_setup/host_device_timestamp_manager_impl.h"
 #include "chromeos/ash/services/multidevice_setup/host_status_provider_impl.h"
 #include "chromeos/ash/services/multidevice_setup/host_verifier_impl.h"
-#include "chromeos/ash/services/multidevice_setup/public/cpp/android_sms_app_helper_delegate.h"
-#include "chromeos/ash/services/multidevice_setup/public/cpp/android_sms_pairing_state_tracker.h"
 #include "chromeos/ash/services/multidevice_setup/public/cpp/auth_token_validator.h"
 #include "chromeos/ash/services/multidevice_setup/public/cpp/oobe_completion_tracker.h"
 #include "chromeos/ash/services/multidevice_setup/public/mojom/multidevice_setup.mojom.h"
@@ -72,20 +68,16 @@ std::unique_ptr<MultiDeviceSetupBase> MultiDeviceSetupImpl::Factory::Create(
     device_sync::DeviceSyncClient* device_sync_client,
     AuthTokenValidator* auth_token_validator,
     OobeCompletionTracker* oobe_completion_tracker,
-    AndroidSmsAppHelperDelegate* android_sms_app_helper_delegate,
-    AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
     bool is_secondary_user) {
   if (test_factory_) {
     return test_factory_->CreateInstance(
         pref_service, device_sync_client, auth_token_validator,
-        oobe_completion_tracker, android_sms_app_helper_delegate,
-        android_sms_pairing_state_tracker, is_secondary_user);
+        oobe_completion_tracker, is_secondary_user);
   }
 
   return base::WrapUnique(new MultiDeviceSetupImpl(
       pref_service, device_sync_client, auth_token_validator,
-      oobe_completion_tracker, android_sms_app_helper_delegate,
-      android_sms_pairing_state_tracker, is_secondary_user));
+      oobe_completion_tracker, is_secondary_user));
 }
 
 // static
@@ -101,8 +93,6 @@ MultiDeviceSetupImpl::MultiDeviceSetupImpl(
     device_sync::DeviceSyncClient* device_sync_client,
     AuthTokenValidator* auth_token_validator,
     OobeCompletionTracker* oobe_completion_tracker,
-    AndroidSmsAppHelperDelegate* android_sms_app_helper_delegate,
-    AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
     bool is_secondary_user)
     : eligible_host_devices_provider_(
           EligibleHostDevicesProviderImpl::Factory::Create(device_sync_client)),
@@ -152,26 +142,14 @@ MultiDeviceSetupImpl::MultiDeviceSetupImpl(
           pref_service,
           host_status_provider_.get(),
           device_sync_client,
-          android_sms_pairing_state_tracker,
           {{mojom::Feature::kWifiSync, wifi_sync_feature_manager_.get()}},
           is_secondary_user)),
-      android_sms_app_installing_host_observer_(
-          android_sms_app_helper_delegate
-              ? AndroidSmsAppInstallingStatusObserver::Factory::Create(
-                    host_status_provider_.get(),
-                    feature_state_manager_.get(),
-                    android_sms_app_helper_delegate,
-                    pref_service)
-              : nullptr),
       auth_token_validator_(auth_token_validator) {
-  host_status_provider_->AddObserver(this);
-  feature_state_manager_->AddObserver(this);
+  host_status_provider_observation_.Observe(host_status_provider_.get());
+  feature_state_manager_observation_.Observe(feature_state_manager_.get());
 }
 
-MultiDeviceSetupImpl::~MultiDeviceSetupImpl() {
-  host_status_provider_->RemoveObserver(this);
-  feature_state_manager_->RemoveObserver(this);
-}
+MultiDeviceSetupImpl::~MultiDeviceSetupImpl() = default;
 
 void MultiDeviceSetupImpl::SetAccountStatusChangeDelegate(
     mojo::PendingRemote<mojom::AccountStatusChangeDelegate> delegate) {
@@ -209,7 +187,7 @@ void MultiDeviceSetupImpl::GetEligibleActiveHostDevices(
   for (const auto& host_device :
        eligible_host_devices_provider_->GetEligibleActiveHostDevices()) {
     // For metrics.
-    if (base::Contains(name_set, host_device.remote_device.name())) {
+    if (name_set.contains(host_device.remote_device.name())) {
       has_duplicate_host_name = true;
       PA_LOG(WARNING) << "MultiDeviceSetupImpl::GetEligibleActiveHostDevices: "
                       << "Detected duplicate eligible host device name \""

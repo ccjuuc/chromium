@@ -12,7 +12,6 @@ import android.widget.Button;
 import androidx.annotation.ColorRes;
 import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
-import androidx.appcompat.content.res.AppCompatResources;
 import androidx.preference.PreferenceViewHolder;
 
 import org.chromium.build.annotations.NullMarked;
@@ -39,7 +38,7 @@ public class ChromeButtonPreference extends ChromeBasePreference {
     private @Nullable CharSequence mText;
 
     /** The color resource ID for tinting of the view's background. */
-    @ColorRes private @Nullable Integer mBackgroundColorRes;
+    private @Nullable @ColorRes Integer mBackgroundColorRes;
 
     /** The string to use for the Button widget content description. */
     private @Nullable CharSequence mContentDescription;
@@ -149,9 +148,7 @@ public class ChromeButtonPreference extends ChromeBasePreference {
 
     private void updateBackground() {
         if (mView == null || mBackgroundColorRes == null) return;
-        mView.setBackgroundColor(
-                AppCompatResources.getColorStateList(getContext(), mBackgroundColorRes)
-                        .getDefaultColor());
+        mView.setBackgroundColor(getContext().getColor(mBackgroundColorRes));
     }
 
     @VisibleForTesting

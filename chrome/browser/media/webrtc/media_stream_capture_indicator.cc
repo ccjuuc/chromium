@@ -11,7 +11,6 @@
 #include <utility>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/notreached.h"
@@ -33,6 +32,7 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "extensions/buildflags/buildflags.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/image/image_skia.h"
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -59,6 +59,11 @@ using content::BrowserThread;
 using content::WebContents;
 
 namespace {
+
+constexpr int kMaxMediaStreamCaptureListItems = 100;
+constexpr int IDC_MEDIA_CONTEXT_MEDIA_STREAM_CAPTURE_LIST_LAST =
+    IDC_MEDIA_CONTEXT_MEDIA_STREAM_CAPTURE_LIST_FIRST +
+    kMaxMediaStreamCaptureListItems - 1;
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 const extensions::Extension* GetExtension(WebContents* web_contents) {
@@ -301,7 +306,7 @@ class MediaStreamCaptureIndicator::UIDelegate : public content::MediaStreamUI {
     if (started_) {
       // Ignore possibly-compromised renderers that might call
       // MediaStreamDispatcherHost::OnStreamStarted() more than once.
-      // See: https://crbug.com/1155426
+      // See: https://crbug.com/40054066
       return 0;
     }
     started_ = true;
@@ -615,7 +620,7 @@ void MediaStreamCaptureIndicator::ExecuteCommand(int command_id,
   DCHECK_LE(0, index);
   DCHECK_GT(static_cast<int>(command_targets_.size()), index);
   WebContents* web_contents = command_targets_[index];
-  if (base::Contains(usage_map_, web_contents)) {
+  if (usage_map_.contains(web_contents)) {
     web_contents->GetDelegate()->ActivateContents(web_contents);
   }
 }
@@ -841,13 +846,18 @@ void MediaStreamCaptureIndicator::GetStatusTrayIconInfo(
   const gfx::VectorIcon* icon = nullptr;
   if (audio && video) {
     message_id = IDS_MEDIA_STREAM_STATUS_TRAY_TEXT_AUDIO_AND_VIDEO;
-    icon = &vector_icons::kVideocamIcon;
+    icon =
+        &(features::IsRoundedIconsEnabled() ? vector_icons::kVideocamFilledIcon
+                                            : vector_icons::kVideocamOldIcon);
   } else if (audio && !video) {
     message_id = IDS_MEDIA_STREAM_STATUS_TRAY_TEXT_AUDIO_ONLY;
-    icon = &vector_icons::kMicIcon;
+    icon = &(features::IsRoundedIconsEnabled() ? vector_icons::kMicFilledIcon
+                                               : vector_icons::kMicOldIcon);
   } else if (!audio && video) {
     message_id = IDS_MEDIA_STREAM_STATUS_TRAY_TEXT_VIDEO_ONLY;
-    icon = &vector_icons::kVideocamIcon;
+    icon =
+        &(features::IsRoundedIconsEnabled() ? vector_icons::kVideocamFilledIcon
+                                            : vector_icons::kVideocamOldIcon);
   }
 
   *tool_tip = l10n_util::GetStringUTF16(message_id);

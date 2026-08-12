@@ -42,7 +42,6 @@
 #include "third_party/blink/renderer/platform/loader/testing/test_resource_fetcher_properties.h"
 #include "third_party/blink/renderer/platform/testing/mock_context_lifecycle_notifier.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
-#include "third_party/blink/renderer/platform/testing/testing_platform_support_with_mock_scheduler.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/url_loader_mock_factory.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
@@ -258,7 +257,8 @@ TEST_F(CacheAwareFontResourceTest, CacheAwareFontLoading) {
       *MakeGarbageCollected<CSSUrlData>(
           AtomicString(url.GetString()), url,
           Referrer(document.Url(), document.GetReferrerPolicy()),
-          /*origin_clean=*/true, /*is_ad_related=*/false));
+          /*origin_clean=*/true, /*is_ad_related=*/false,
+          /*modifiers=*/CSSUrlRequestModifiers()));
   auto* src_value =
       CSSFontFaceSrcValue::Create(src_uri_value, nullptr /* world */);
 

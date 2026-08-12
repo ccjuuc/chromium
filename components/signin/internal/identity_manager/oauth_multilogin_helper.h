@@ -21,6 +21,7 @@
 #include "google_apis/gaia/gaia_auth_consumer.h"
 #include "google_apis/gaia/gaia_auth_fetcher.h"
 #include "google_apis/gaia/gaia_id.h"
+#include "google_apis/gaia/oauth_multilogin_result.h"
 #include "net/cookies/cookie_access_result.h"
 #include "services/network/public/mojom/device_bound_sessions.mojom.h"
 
@@ -85,6 +86,11 @@ class OAuthMultiloginHelper : public GaiaAuthConsumer {
   };
 
   CookieBindingSupport GetCookieBindingSupport() const;
+
+  // Returns the Youtube cookie binding mode based on the value of
+  // `kEnableOAuthMultiloginYoutubeCookiesBinding` feature. It will return
+  // `kDisabled` if `GetCookieBindingSupport()` is not `kStandard`.
+  gaia::MultiloginCookieBindingParams::Mode GetYoutubeCookieBindingMode() const;
 
   // Starts setting parsed cookies in browser via the
   // `DeviceBoundSessionManager`. Returns `true` if the cookies setting was

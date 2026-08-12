@@ -11,6 +11,7 @@
 #include <string_view>
 #include <utility>
 
+#include "base/containers/map_util.h"
 #include "base/files/file_util.h"
 #include "base/format_macros.h"
 #include "base/logging.h"
@@ -88,6 +89,7 @@ class ProgressMarkerToken {
     if (splits.size() != 2) {
       ProgressMarkerToken token;
       base::StringToInt64(s, &token.entity_version_);
+      token.is_empty_ = false;
       return token;
     }
     ProgressMarkerToken token;
@@ -95,6 +97,7 @@ class ProgressMarkerToken {
         !base::StringToInt64(splits[1], &token.entity_version_)) {
       return ProgressMarkerToken();
     }
+    token.is_empty_ = false;
     return token;
   }
 
@@ -107,6 +110,7 @@ class ProgressMarkerToken {
     }
   }
 
+  bool is_empty() const { return is_empty_; }
   int migration_version() const { return migration_version_; }
   int64_t entity_version() const { return entity_version_; }
 
@@ -115,6 +119,10 @@ class ProgressMarkerToken {
   }
 
  private:
+  // Whether the token was empty, representing first sync. In that case,
+  // `entity_version_` will be zero (but non-empty tokens can have a version of
+  // zero too).
+  bool is_empty_ = true;
   int migration_version_ = 0;
   int64_t entity_version_ = 0;
 };
@@ -154,6 +162,12 @@ class UpdateSieve {
     return !datatypes_to_migrate->empty();
   }
 
+  // Configures the set of data types for which a full update (all non-deleted
+  // entities plus a GC directive) should be returned in this request cycle.
+  void SetForceFullUpdateTypes(DataTypeSet types) {
+    force_full_update_types_ = types;
+  }
+
   // Sets the progress markers in `get_updates_response` based on the highest
   // version between request progress markers and response entities.
   void SetProgressMarkers(
@@ -163,6 +177,9 @@ class UpdateSieve {
           get_updates_response->add_new_progress_marker();
       new_marker->set_data_type_id(GetSpecificsFieldNumberFromDataType(type));
       new_marker->set_token(response_version.ToString());
+      if (force_full_update_types_.Has(type)) {
+        new_marker->mutable_gc_directive()->set_version_watermark(0);
+      }
     }
   }
 
@@ -175,19 +192,31 @@ class UpdateSieve {
       return false;
     }
     DCHECK_NE(0U, response_version_map_.count(type));
+    if (force_full_update_types_.Has(type)) {
+      return !entity.IsDeleted();
+    }
+    // If this is the initial download for the data type (i.e. there was no
+    // progress token), then don't return tombstones.
+    if (it->second.is_empty() && entity.IsDeleted()) {
+      return false;
+    }
     return it->second.entity_version() < entity.GetVersion();
   }
 
   // Updates internal tracking of max versions to later be used to set response
   // progress markers.
   void UpdateProgressMarker(const LoopbackServerEntity& entity) {
-    DCHECK(ClientWantsItem(entity));
     DataType type = entity.GetDataType();
     response_version_map_[type].UpdateWithEntity(entity.GetVersion());
   }
 
  private:
   using DataTypeToVersionMap = std::map<DataType, ProgressMarkerToken>;
+
+  // Data types for which a full update response (all non-deleted entities and a
+  // GC directive) is forced for the current request because at least one entity
+  // has a newer version on the server than the client's progress marker.
+  DataTypeSet force_full_update_types_;
 
   static UpdateSieve::DataTypeToVersionMap MessageToVersionMap(
       const sync_pb::GetUpdatesMessage& get_updates_message,
@@ -274,16 +303,40 @@ bool LoopbackServer::CreatePermanentBookmarkFolder(
     const std::string& server_tag,
     const std::string& name) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  const int migration_version = GetMigrationVersion(syncer::BOOKMARKS);
+  const LoopbackServerEntity* existing_folder =
+      FindPermanentBookmarkFolder(server_tag);
+
+  if (existing_folder) {
+    DCHECK_EQ(migration_version,
+              LoopbackServerEntity::GetMigrationVersionFromId(
+                  existing_folder->GetId()));
+    return true;
+  }
+
   std::unique_ptr<LoopbackServerEntity> entity =
       PersistentPermanentEntity::CreateNew(
           syncer::BOOKMARKS, server_tag, name,
-          DataTypeToProtocolRootTag(syncer::BOOKMARKS));
+          DataTypeToProtocolRootTag(syncer::BOOKMARKS), migration_version);
   if (!entity) {
     return false;
   }
 
   SaveEntity(std::move(entity));
   return true;
+}
+
+const LoopbackServerEntity* LoopbackServer::FindPermanentBookmarkFolder(
+    const std::string& server_tag) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  for (const auto& [id, entity] : entities_) {
+    if (entity->GetDataType() == syncer::BOOKMARKS && entity->IsPermanent() &&
+        LoopbackServerEntity::GetInnerIdFromId(id) == server_tag) {
+      return entity.get();
+    }
+  }
+  return nullptr;
 }
 
 bool LoopbackServer::CreateDefaultPermanentItems() {
@@ -361,12 +414,19 @@ net::HttpStatusCode LoopbackServer::HandleCommand(
     if (success) {
       response->set_error_code(sync_pb::SyncEnums::SUCCESS);
     } else if (!datatypes_to_migrate.empty()) {
-      DLOG(WARNING) << "Migration required for " << datatypes_to_migrate.size()
-                    << " datatypes";
-      response->set_error_code(sync_pb::SyncEnums::MIGRATION_DONE);
-      for (DataType type : datatypes_to_migrate) {
-        response->add_migrated_data_type_id(
-            GetSpecificsFieldNumberFromDataType(type));
+      if (use_gc_directive_for_migration_) {
+        PopulateGcDirectiveMigrationResponse(message.get_updates(),
+                                             datatypes_to_migrate,
+                                             response->mutable_get_updates());
+        response->set_error_code(sync_pb::SyncEnums::SUCCESS);
+      } else {
+        DLOG(WARNING) << "Migration required for "
+                      << datatypes_to_migrate.size() << " datatypes";
+        response->set_error_code(sync_pb::SyncEnums::MIGRATION_DONE);
+        for (DataType type : datatypes_to_migrate) {
+          response->add_migrated_data_type_id(
+              GetSpecificsFieldNumberFromDataType(type));
+        }
       }
     } else if (!throttled_datatypes_in_request.empty()) {
       DLOG(WARNING) << "Throttled datatypes: "
@@ -392,6 +452,10 @@ net::HttpStatusCode LoopbackServer::HandleCommand(
 
 void LoopbackServer::EnableStrongConsistencyWithConflictDetectionModel() {
   strong_consistency_model_enabled_ = true;
+}
+
+int LoopbackServer::GetMigrationVersion(DataType type) const {
+  return GetServerMigrationVersion(migration_versions_, type);
 }
 
 void LoopbackServer::AddNewKeystoreKeyForTesting() {
@@ -464,10 +528,34 @@ bool LoopbackServer::HandleGetUpdatesRequest(
     return false;
   }
 
+  // For data types configured as full update types, check if there is at least
+  // one entity with a newer version on the server.
+  syncer::DataTypeSet full_update_types_with_new_updates;
+  for (const auto& [id, entity] : entities_) {
+    DataType type = entity->GetDataType();
+    if (full_update_types_.Has(type) && sieve->ClientWantsItem(*entity)) {
+      full_update_types_with_new_updates.Put(type);
+    }
+  }
+  sieve->SetForceFullUpdateTypes(full_update_types_with_new_updates);
+
+  // Note that for data types configured as full update types and having new
+  // updates, ClientWantsItem() behavior will be changed after
+  // SetForceFullUpdateTypes() is called.
   std::vector<const LoopbackServerEntity*> wanted_entities;
   for (const auto& [id, entity] : entities_) {
     if (sieve->ClientWantsItem(*entity)) {
       wanted_entities.push_back(entity.get());
+    }
+
+    if (full_update_types_with_new_updates.Has(entity->GetDataType())) {
+      // For full update types, track the highest entity version (including
+      // tombstones) in the progress marker. Even if tombstones are filtered out
+      // from the response entries payload by GC directives, the progress marker
+      // version should advance.
+      // Note that below UpdateProgressMarker() is called for only
+      // `wanted_entities` while here it is called for every stored entity.
+      sieve->UpdateProgressMarker(*entity);
     }
   }
 
@@ -520,22 +608,40 @@ string LoopbackServer::CommitEntity(
     return string();
   }
 
-  // If strong consistency model is enabled (usually on a per-datatype level,
-  // but implemented here as a global state), the server detects version
-  // mismatches and responds with CONFLICT.
-  if (strong_consistency_model_enabled_) {
-    EntityMap::const_iterator iter = entities_.find(client_entity.id_string());
-    if (iter != entities_.end()) {
-      const LoopbackServerEntity* server_entity = iter->second.get();
-      if (server_entity->GetVersion() != client_entity.version()) {
-        entry_response->set_response_type(sync_pb::CommitResponse::CONFLICT);
-        return client_entity.id_string();
-      }
+  const syncer::DataType type =
+      GetDataTypeFromSpecifics(client_entity.specifics());
+  const int migration_version = GetMigrationVersion(type);
+
+  const LoopbackServerEntity* const server_entity =
+      base::FindPtrOrNull(entities_, client_entity.id_string());
+
+  // Verify that updates (version > 0) committed after a migration has occurred
+  // (migration_version > 0) use the expected versioned ID prefix. This prevents
+  // committing legacy IDs post-migration. Creations (version == 0) are skipped
+  // because they use temporary client IDs which the server replaces anyway.
+  if (migration_version > 0 && client_entity.version() > 0 &&
+      !client_entity.id_string().empty()) {
+    const std::string expected_prefix =
+        LoopbackServerEntity::CreateId(type, "", migration_version);
+
+    if (!base::StartsWith(client_entity.id_string(), expected_prefix,
+                          base::CompareCase::SENSITIVE)) {
+      entry_response->set_response_type(
+          sync_pb::CommitResponse::INVALID_MESSAGE);
+      return string();
     }
   }
 
+  // If strong consistency model is enabled (usually on a per-datatype level,
+  // but implemented here as a global state), the server detects version
+  // mismatches and responds with CONFLICT.
+  if (strong_consistency_model_enabled_ && server_entity &&
+      server_entity->GetVersion() != client_entity.version()) {
+    entry_response->set_response_type(sync_pb::CommitResponse::CONFLICT);
+    return client_entity.id_string();
+  }
+
   std::unique_ptr<LoopbackServerEntity> entity;
-  syncer::DataType type = GetDataTypeFromSpecifics(client_entity.specifics());
   if (client_entity.deleted()) {
     entity = PersistentTombstoneEntity::CreateFromEntity(client_entity);
     if (entity) {
@@ -544,30 +650,26 @@ string LoopbackServer::CommitEntity(
   } else if (type == syncer::NIGORI) {
     // NIGORI is the only permanent item type that should be updated by the
     // client.
-    EntityMap::const_iterator iter = entities_.find(client_entity.id_string());
-    CHECK(iter != entities_.end());
+    CHECK(server_entity);
     entity = PersistentPermanentEntity::CreateUpdatedNigoriEntity(
-        client_entity, *iter->second);
+        client_entity, *server_entity);
   } else if (type == syncer::BOOKMARKS) {
     // TODO(pvalenzuela): Validate entity's parent ID.
-    EntityMap::const_iterator iter = entities_.find(client_entity.id_string());
-    if (iter != entities_.end()) {
+    if (server_entity) {
       entity = PersistentBookmarkEntity::CreateUpdatedVersion(
-          client_entity, *iter->second, parent_id, client_guid);
+          client_entity, *server_entity, parent_id, client_guid);
     } else {
-      entity = PersistentBookmarkEntity::CreateNew(client_entity, parent_id,
-                                                   client_guid);
+      entity = PersistentBookmarkEntity::CreateNew(
+          client_entity, parent_id, client_guid, migration_version);
     }
   } else if (type == syncer::PASSWORDS) {
-    entity = PersistentUniqueClientEntity::CreateFromEntity(client_entity);
+    entity = PersistentUniqueClientEntity::CreateFromEntity(client_entity,
+                                                            migration_version);
     // If the commit is coming from a legacy client that doesn't support
     // password notes, carry over an existing note backup. The same logic is
     // implemented on the production sync server.
     if (!client_entity.specifics().password().has_encrypted_notes_backup()) {
-      EntityMap::const_iterator iter =
-          entities_.find(client_entity.id_string());
-      if (iter != entities_.end()) {
-        const LoopbackServerEntity* server_entity = iter->second.get();
+      if (server_entity) {
         if (server_entity->GetSpecifics()
                 .password()
                 .has_encrypted_notes_backup()) {
@@ -579,7 +681,8 @@ string LoopbackServer::CommitEntity(
       }
     }
   } else {
-    entity = PersistentUniqueClientEntity::CreateFromEntity(client_entity);
+    entity = PersistentUniqueClientEntity::CreateFromEntity(client_entity,
+                                                            migration_version);
   }
 
   if (!entity) {
@@ -753,14 +856,14 @@ LoopbackServer::GetPermanentSyncEntitiesByDataType(DataType data_type) {
   return sync_entities;
 }
 
-base::Value::Dict LoopbackServer::GetEntitiesAsDictForTesting() {
+base::DictValue LoopbackServer::GetEntitiesAsDictForTesting() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::Value::Dict dictionary;
+  base::DictValue dictionary;
 
-  // Initialize an empty Value::List for all DataTypes.
+  // Initialize an empty base::ListValue for all DataTypes.
   DataTypeSet all_types = DataTypeSet::All();
   for (DataType type : all_types) {
-    dictionary.Set(DataTypeToDebugString(type), base::Value::List());
+    dictionary.Set(DataTypeToDebugString(type), base::ListValue());
   }
 
   for (const auto& [id, entity] : entities_) {
@@ -771,7 +874,7 @@ base::Value::Dict LoopbackServer::GetEntitiesAsDictForTesting() {
       continue;
     }
 
-    base::Value::List* list_value =
+    base::ListValue* list_value =
         dictionary.FindList(DataTypeToDebugString(entity->GetDataType()));
     DCHECK(list_value);
 
@@ -928,6 +1031,95 @@ bool LoopbackServer::LoadStateFromFile() {
   DVLOG(1) << "Loopback sync cannot read the persistent state file ("
            << persistent_file_ << ").";
   return false;
+}
+
+// static
+int LoopbackServer::GetMigrationVersionFromProgressTokenForTesting(  // IN-TEST
+    const std::string& token) {
+  if (token.empty()) {
+    return 0;
+  }
+  return ProgressMarkerToken::FromString(token).migration_version();
+}
+
+void LoopbackServer::TriggerMigrationForTesting(DataTypeSet data_types) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  for (const DataType type : data_types) {
+    ++migration_versions_[type];
+  }
+
+  std::vector<std::string> old_ids;
+  for (const auto& [id, entity] : entities_) {
+    const DataType type = entity->GetDataType();
+    if (data_types.Has(type)) {
+      old_ids.push_back(id);
+    }
+  }
+
+  for (const std::string& old_id : old_ids) {
+    auto it = entities_.find(old_id);
+    CHECK(it != entities_.end());
+
+    std::unique_ptr<LoopbackServerEntity> entity = std::move(it->second);
+    CHECK(entity);
+
+    const DataType type = entity->GetDataType();
+    const int new_migration_version = GetMigrationVersion(type);
+    CHECK_NE(new_migration_version,
+             LoopbackServerEntity::GetMigrationVersionFromId(old_id));
+
+    const std::string new_id = LoopbackServerEntity::CreateId(
+        type, LoopbackServerEntity::GetInnerIdFromId(old_id),
+        new_migration_version);
+    CHECK_NE(old_id, new_id);
+
+    entity->MigrateToNewVersionForTesting(new_migration_version);  // IN-TEST
+    entities_[new_id] = std::move(entity);
+    entities_.erase(it);
+  }
+
+  FlushToDisk();
+}
+
+void LoopbackServer::EnableGcDirectiveForMigration() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  use_gc_directive_for_migration_ = true;
+}
+
+void LoopbackServer::PopulateGcDirectiveMigrationResponse(
+    const sync_pb::GetUpdatesMessage& get_updates,
+    const std::vector<DataType>& datatypes_to_migrate,
+    sync_pb::GetUpdatesResponse* response) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DataTypeSet to_migrate;
+  for (DataType type : datatypes_to_migrate) {
+    to_migrate.Put(type);
+  }
+  for (const sync_pb::DataTypeProgressMarker& marker :
+       get_updates.from_progress_marker()) {
+    DataType type =
+        syncer::GetDataTypeFromSpecificsFieldNumber(marker.data_type_id());
+    sync_pb::DataTypeProgressMarker* new_marker =
+        response->add_new_progress_marker();
+    new_marker->set_data_type_id(marker.data_type_id());
+
+    if (to_migrate.Has(type)) {
+      new_marker->mutable_gc_directive()->set_clear_metadata(true);
+    } else {
+      new_marker->set_token(marker.token());
+    }
+  }
+  response->set_changes_remaining(1);
+}
+
+void LoopbackServer::SetUpdateMode(DataType data_type, UpdateMode update_mode) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (update_mode == UpdateMode::kFull) {
+    full_update_types_.Put(data_type);
+  } else {
+    full_update_types_.Remove(data_type);
+  }
 }
 
 }  // namespace syncer

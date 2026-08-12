@@ -9,6 +9,7 @@
 #import "base/functional/callback_helpers.h"
 #import "base/ios/block_types.h"
 #import "base/json/values_util.h"
+#import "base/metrics/histogram_functions.h"
 #import "base/time/time.h"
 #import "components/desktop_to_mobile_promos/features.h"
 #import "components/desktop_to_mobile_promos/pref_names.h"
@@ -84,13 +85,23 @@ void CrossPlatformPromosService::ShowCPEPromo(Browser* browser) {
                                      TipsNotificationType::kCPE);
 }
 
+void CrossPlatformPromosService::ShowTabGroupsPromo(Browser* browser) {
+  TipsNotificationPresenter::Present(browser->AsWeakPtr(),
+                                     TipsNotificationType::kTabGroups);
+}
+
+void CrossPlatformPromosService::ShowPriceTrackingPromo(Browser* browser) {
+  TipsNotificationPresenter::Present(browser->AsWeakPtr(),
+                                     TipsNotificationType::kPriceTracking);
+}
+
 void CrossPlatformPromosService::MaybeShowPromo() {
   Browser* browser = GetActiveBrowser();
   if (!browser) {
     return;
   }
 
-  const base::Value::Dict& promo_reminder =
+  const base::DictValue& promo_reminder =
       profile_->GetPrefs()->GetDict(prefs::kIOSPromoReminder);
   std::optional<int> promo_type =
       promo_reminder.FindInt(prefs::kIOSPromoReminderPromoType);
@@ -115,7 +126,9 @@ void CrossPlatformPromosService::MaybeShowPromo() {
     return;
   }
 
-  switch (static_cast<desktop_to_mobile_promos::PromoType>(*promo_type)) {
+  desktop_to_mobile_promos::PromoType type =
+      static_cast<desktop_to_mobile_promos::PromoType>(*promo_type);
+  switch (type) {
     case desktop_to_mobile_promos::PromoType::kLens:
       ShowLensPromo(browser);
       break;
@@ -125,11 +138,20 @@ void CrossPlatformPromosService::MaybeShowPromo() {
     case desktop_to_mobile_promos::PromoType::kPassword:
       ShowCPEPromo(browser);
       break;
+    case desktop_to_mobile_promos::PromoType::kPriceTracking:
+      ShowPriceTrackingPromo(browser);
+      break;
+    case desktop_to_mobile_promos::PromoType::kTabGroups:
+      ShowTabGroupsPromo(browser);
+      break;
     default:
       // If the promo type is unknown, clear the pref to avoid re-triggering.
       profile_->GetPrefs()->ClearPref(prefs::kIOSPromoReminder);
       return;
   }
+
+  base::UmaHistogramEnumeration(
+      "IOS.CrossPlatformPromos.Promo.Shown.FromAppForeground", type);
 
   // Clear the promo reminder pref after showing the promo.
   profile_->GetPrefs()->ClearPref(prefs::kIOSPromoReminder);
@@ -159,7 +181,7 @@ bool CrossPlatformPromosService::RecordActiveDay(base::Time day) {
   day = day.LocalMidnight();
   ScopedListPrefUpdate update(profile_->GetPrefs(),
                               prefs::kCrossPlatformPromosActiveDays);
-  base::Value::List& active_days = update.Get();
+  base::ListValue& active_days = update.Get();
 
   // Return early if the given day is the most recent day in the list.
   int size = active_days.size();
@@ -187,7 +209,7 @@ base::Time CrossPlatformPromosService::FindActiveDay(size_t count) {
     return base::Time();
   }
 
-  const base::Value::List& active_days =
+  const base::ListValue& active_days =
       profile_->GetPrefs()->GetList(prefs::kCrossPlatformPromosActiveDays);
 
   if (active_days.size() < count) {

@@ -17,7 +17,10 @@
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
+#include "components/autofill/core/browser/proto/password_requirements.pb.h"
 #include "components/metrics/metrics_state_manager.h"
+#include "components/metrics/startup_visibility.h"
 #include "components/metrics/test/test_enabled_state_provider.h"
 #include "components/optimization_guide/core/model_quality/model_quality_log_entry.h"
 #include "components/optimization_guide/core/model_quality/test_model_quality_logs_uploader_service.h"
@@ -389,6 +392,20 @@ TEST_F(ModelQualityLogsUploaderTest, OpenFormUnexpectedStateLog) {
           PasswordChangeQuality_StepQuality_SubmissionStatus_UNEXPECTED_STATE);
 }
 
+TEST_F(ModelQualityLogsUploaderTest, OpenFormUserInterventionNeededLog) {
+  ModelQualityLogsUploader logs_uploader(web_contents(),
+                                         GURL(kChangePasswordURL));
+  optimization_guide::proto::PasswordChangeResponse response;
+  response.mutable_open_form_data()->set_page_type(
+      PageType::OpenFormResponseData_PageType_USER_INTERVENTION_NEEDED_PAGE);
+  logs_uploader.SetOpenFormQuality(std::optional(response),
+                                   CreateLoggingData(open_form_request_));
+  CheckOpenFormStatus(
+      logs_uploader.GetFinalLog(), open_form_request_, response,
+      QualityStatus::
+          PasswordChangeQuality_StepQuality_SubmissionStatus_USER_INTERVENTION_NEEDED);
+}
+
 TEST_F(ModelQualityLogsUploaderTest, SubmitFormSuccessLog) {
   ModelQualityLogsUploader logs_uploader(web_contents(),
                                          GURL(kChangePasswordURL));
@@ -412,6 +429,19 @@ TEST_F(ModelQualityLogsUploaderTest, SubmitFormElementNotFoundLog) {
       logs_uploader.GetFinalLog(), submit_form_request_, response,
       QualityStatus::
           PasswordChangeQuality_StepQuality_SubmissionStatus_ELEMENT_NOT_FOUND);
+}
+
+TEST_F(ModelQualityLogsUploaderTest, SubmitFormUserInterventionNeededLog) {
+  ModelQualityLogsUploader logs_uploader(web_contents(),
+                                         GURL(kChangePasswordURL));
+  optimization_guide::proto::PasswordChangeResponse response;
+  response.mutable_submit_form_data()->set_is_user_intervention_needed(true);
+  logs_uploader.SetSubmitFormQuality(std::optional(response),
+                                     CreateLoggingData(submit_form_request_));
+  CheckSubmitFormStatus(
+      logs_uploader.GetFinalLog(), submit_form_request_, response,
+      QualityStatus::
+          PasswordChangeQuality_StepQuality_SubmissionStatus_USER_INTERVENTION_NEEDED);
 }
 
 TEST_F(ModelQualityLogsUploaderTest, MergeLogsDoesNotOverwrite) {
@@ -964,6 +994,35 @@ TEST_F(ModelQualityLogsUploaderTest, SetChangePasswordFormData) {
   VerifyPasswordFormLoggedCorrectlyInProto(password_form, form_data);
 }
 
+TEST_F(ModelQualityLogsUploaderTest,
+       SetChangePasswordFormDataMultipleTimesDoesNotDuplicateFields) {
+  ModelQualityLogsUploader logs_uploader(web_contents(),
+                                         GURL(kChangePasswordURL));
+  password_manager::PasswordForm password_form;
+  password_form.url = GURL(kChangePasswordURL);
+  password_form.form_data.set_id_attribute(u"change_form_id");
+
+  autofill::FormFieldData password_field;
+  password_field.set_id_attribute(u"password_id");
+  password_field.set_name_attribute(u"password_name");
+  password_field.set_form_control_type(
+      autofill::FormControlType::kInputPassword);
+  password_field.set_renderer_id(autofill::FieldRendererId(1));
+
+  password_form.form_data.set_fields({password_field});
+
+  logs_uploader.SetChangePasswordFormData(password_form);
+  logs_uploader.SetChangePasswordFormData(password_form);
+
+  const optimization_guide::proto::PasswordChangeQuality_FormData& form_data =
+      logs_uploader.GetFinalLog()
+          .password_change_submission()
+          .quality()
+          .change_password_form_data();
+
+  EXPECT_EQ(1, form_data.field_data_size());
+}
+
 TEST_F(ModelQualityLogsUploaderTest, DurationRecordedForLoginCheck) {
   ModelQualityLogsUploader logs_uploader(web_contents(),
                                          GURL(kChangePasswordURL));
@@ -1026,4 +1085,33 @@ TEST_F(ModelQualityLogsUploaderTest, DurationRecordedForVerifySubmission) {
                 .verify_submission()
                 .request_latency_ms(),
             5332);
+}
+
+TEST_F(ModelQualityLogsUploaderTest, SetPasswordRequirementsSpec) {
+  ModelQualityLogsUploader logs_uploader(web_contents(),
+                                         GURL(kChangePasswordURL));
+
+  autofill::PasswordRequirementsSpec spec;
+  spec.set_priority(10);
+  spec.set_spec_version(1);
+  spec.set_min_length(8);
+  spec.set_max_length(16);
+  spec.mutable_lower_case()->set_min(1);
+  spec.mutable_lower_case()->set_max(10);
+  spec.mutable_lower_case()->set_character_set("abc");
+
+  logs_uploader.SetPasswordRequirementsSpec(spec);
+
+  const auto& proto_spec = logs_uploader.GetFinalLog()
+                               .password_change_submission()
+                               .quality()
+                               .password_requirements_spec();
+
+  EXPECT_EQ(proto_spec.priority(), 10u);
+  EXPECT_EQ(proto_spec.spec_version(), 1u);
+  EXPECT_EQ(proto_spec.min_length(), 8u);
+  EXPECT_EQ(proto_spec.max_length(), 16u);
+  EXPECT_EQ(proto_spec.lower_case().min(), 1u);
+  EXPECT_EQ(proto_spec.lower_case().max(), 10u);
+  EXPECT_EQ(proto_spec.lower_case().character_set(), "abc");
 }

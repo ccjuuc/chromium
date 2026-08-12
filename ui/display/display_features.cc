@@ -35,9 +35,18 @@ BASE_FEATURE(kEnableExternalDisplayHDR10Mode,
 // Feature to control if the CTM is dynamically set to the primary transform
 // from plane color space to output color space.
 BASE_FEATURE(kCtmColorManagement, base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Feature to control if we assume that setting the DRM color space to Default
+// will cause the color primaries to be interpreted as Rec709 (as opposed to
+// the color primaries from the EDID).
+BASE_FEATURE(kDrmColorSpaceDefaultIsRec709, base::FEATURE_DISABLED_BY_DEFAULT);
 #endif
 
+#if BUILDFLAG(IS_MAC)
 BASE_FEATURE(kCADisplayLinkInBrowser, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSkipPostTaskForCallbacks, base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
 
 // TODO(gildekel): A temporary flag to control whether EDID-based (vs.
 // port-based) display IDs are generated per display. Remove once the migration
@@ -83,12 +92,6 @@ bool IsTiledDisplaySupportEnabled() {
   return base::FeatureList::IsEnabled(kTiledDisplaySupport);
 }
 
-BASE_FEATURE(kExcludeDisplayInMirrorMode, base::FEATURE_DISABLED_BY_DEFAULT);
-
-bool IsExcludeDisplayInMirrorModeEnabled() {
-  return base::FeatureList::IsEnabled(kExcludeDisplayInMirrorMode);
-}
-
 BASE_FEATURE(kFastDrmMasterDrop, base::FEATURE_DISABLED_BY_DEFAULT);
 
 bool IsFastDrmMasterDropEnabled() {
@@ -116,7 +119,7 @@ bool IsOpsDisplayScaleFactorEnabled() {
 // and "ReducePPMs". In case of errors this flag can be disabled without
 // affecting the rest of the experiment.
 BASE_FEATURE(kScreenWinDisplayLookupByHMONITOR,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 bool IsScreenWinDisplayLookupByHMONITOREnabled() {
   return base::FeatureList::IsEnabled(base::features::kReducePPMs) &&

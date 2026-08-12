@@ -12,12 +12,11 @@
 #include "device/vr/public/mojom/vr_service.mojom-blink.h"
 #include "gpu/command_buffer/client/gles2_interface.h"
 #include "gpu/command_buffer/client/webgpu_interface.h"
-#include "gpu/command_buffer/common/mailbox_holder.h"
 #include "mojo/public/cpp/system/platform_handle.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/dawn_control_client_holder.h"
+#include "third_party/blink/renderer/platform/graphics/gpu/xr_webgl_drawing_buffer.h"
 #include "third_party/blink/renderer/platform/graphics/image_to_buffer_copier.h"
-#include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
 #include "third_party/blink/renderer/platform/mojo/mojo_binding_context.h"
 #include "ui/gfx/gpu_fence.h"
 
@@ -52,8 +51,7 @@ bool XRFrameTransport::DrawingIntoSharedBuffer() {
   switch (transport_options_->transport_method) {
     case device::mojom::blink::XRPresentationTransportMethod::
         SUBMIT_AS_TEXTURE_HANDLE:
-    case device::mojom::blink::XRPresentationTransportMethod::
-        SUBMIT_AS_MAILBOX_HOLDER:
+    case device::mojom::blink::XRPresentationTransportMethod::SUBMIT_AS_TEST:
       return false;
     case device::mojom::blink::XRPresentationTransportMethod::
         DRAW_INTO_TEXTURE_MAILBOX:
@@ -82,19 +80,21 @@ void XRFrameTransport::FramePreImage(XRFrameTransportDelegate* delegate) {
 
 void XRFrameTransport::FrameSubmitMissing(
     device::mojom::blink::XRPresentationProvider* vr_presentation_provider,
-    XRFrameTransportDelegate* delegate,
+    gpu::SharedImageExportResult camera_export_result,
     int16_t vr_frame_id) {
   TRACE_EVENT0("gpu", "FrameSubmitMissing");
-  CHECK(delegate);
+  // The drawing buffer doesn't need synchronization since this frame is
+  // dropped. We only pass camera_export_result to ensure pending reads finish
+  // before the device overwrites the camera texture.
   vr_presentation_provider->SubmitFrameMissing(vr_frame_id,
-                                               delegate->GenerateSyncToken());
+                                               std::move(camera_export_result));
 }
 
 bool XRFrameTransport::FrameSubmit(
     device::mojom::blink::XRPresentationProvider* vr_presentation_provider,
     XRFrameTransportDelegate* delegate,
-    Vector<device::LayerId> layer_ids,
-    Vector<scoped_refptr<StaticBitmapImage>> image_refs,
+    Vector<XRLayerUpdate> layers,
+    gpu::SharedImageExportResult camera_export_result,
     int16_t vr_frame_id) {
   DCHECK(transport_options_);
   CHECK(delegate);
@@ -111,16 +111,17 @@ bool XRFrameTransport::FrameSubmit(
     }
     // TODO(crbug.com/359418629): This only works because we're restricted to a
     // single layer at the moment.
-    CHECK_EQ(image_refs.size(), 1UL);
-    auto [gpu_memory_buffer_handle, sync_token] =
-        delegate->CopyImage(*image_refs.begin(), last_transfer_succeeded_);
+    CHECK_EQ(layers.size(), 1UL);
+    auto [gpu_memory_buffer_handle, sync_token] = delegate->CopyImage(
+        layers[0].current_frame_image.get(), last_transfer_succeeded_);
 
     // We can fail to obtain a GMB handle if we don't have GPU support, or
     // for some out-of-memory situations.
     // TODO(billorr): Consider whether we should just drop the frame or exit
     // presentation.
     if (gpu_memory_buffer_handle.is_null()) {
-      FrameSubmitMissing(vr_presentation_provider, delegate, vr_frame_id);
+      FrameSubmitMissing(vr_presentation_provider,
+                         std::move(camera_export_result), vr_frame_id);
       // We didn't actually submit anything, so don't set
       // the waiting_for_previous_frame_transfer_ and related state.
       return false;
@@ -140,15 +141,8 @@ bool XRFrameTransport::FrameSubmit(
 #endif
   } else if (transport_options_->transport_method ==
              device::mojom::blink::XRPresentationTransportMethod::
-                 SUBMIT_AS_MAILBOX_HOLDER) {
-    CHECK_EQ(image_refs.size(), 1UL);
-
-    // The AcceleratedStaticBitmapImage must be kept alive until the
-    // mailbox is used via CreateAndTexStorage2DSharedImageCHROMIUM, the mailbox
-    // itself does not keep it alive. We must keep a reference to the
-    // image until the mailbox was consumed.
-    StaticBitmapImage* static_image = image_refs.begin()->get();
-    static_image->EnsureSyncTokenVerified();
+                 SUBMIT_AS_TEST) {
+    CHECK_EQ(layers.size(), 1UL);
 
     // Conditionally wait for the previous render to finish. A late wait here
     // attempts to overlap work in parallel with the previous frame's
@@ -165,30 +159,46 @@ bool XRFrameTransport::FrameSubmit(
     if (transport_options_->wait_for_transfer_notification) {
       WaitForPreviousTransfer();
     }
-    previous_images_ = std::move(image_refs);
+    previous_images_.clear();
+    for (auto& layer : layers) {
+      previous_images_.push_back(std::move(layer.current_frame_image));
+    }
 
-    // Create mailbox and sync token for transfer.
-    TRACE_EVENT_BEGIN0("gpu", "XRFrameTransport::GetMailbox");
-    auto mailbox_holder = static_image->GetMailboxHolder();
-    TRACE_EVENT_END0("gpu", "XRFrameTransport::GetMailbox");
-
-    TRACE_EVENT_BEGIN0("gpu", "XRFrameTransport::SubmitFrame");
-    vr_presentation_provider->SubmitFrame(vr_frame_id, mailbox_holder,
-                                          frame_wait_time_);
-    TRACE_EVENT_END0("gpu", "XRFrameTransport::SubmitFrame");
+    {
+      TRACE_EVENT("gpu", "XRFrameTransport::SubmitFrame");
+      vr_presentation_provider->SubmitFrame(vr_frame_id, frame_wait_time_);
+    }
   } else if (transport_options_->transport_method ==
              device::mojom::blink::XRPresentationTransportMethod::
                  DRAW_INTO_TEXTURE_MAILBOX) {
     TRACE_EVENT0("gpu", "XRFrameTransport::SubmitFrameDrawnIntoTexture");
-    gpu::SyncToken sync_token = delegate->GenerateSyncToken();
-    if (!sync_token.HasData()) {
+    if (delegate->IsContextLost()) {
       return false;
     }
     if (waiting_for_previous_frame_render_) {
       frame_wait_time_ += WaitForPreviousRenderToFinish();
     }
+
+    Vector<device::mojom::blink::XRLayerUpdatePtr> mojom_layer_updates;
+    mojom_layer_updates.reserve(layers.size());
+
+    for (auto& layer : layers) {
+      auto mojom_layer_update = device::mojom::blink::XRLayerUpdate::New();
+      mojom_layer_update->layer_id = layer.layer_id;
+      if (layer.current_frame_image) {
+        delegate->VerifySyncToken(layer.current_frame_image->sync_token);
+        mojom_layer_update->shared_image_export_result =
+            layer.current_frame_image->shared_image->EndImport(
+                layer.current_frame_image->sync_token);
+      } else {
+        mojom_layer_update->shared_image_export_result =
+            gpu::SharedImageExportResult::CreateEmptyResult();
+      }
+      mojom_layer_updates.push_back(std::move(mojom_layer_update));
+    }
     vr_presentation_provider->SubmitFrameDrawnIntoTexture(
-        vr_frame_id, std::move(layer_ids), sync_token, frame_wait_time_);
+        vr_frame_id, std::move(mojom_layer_updates),
+        std::move(camera_export_result), frame_wait_time_);
   } else {
     NOTREACHED() << "Unimplemented frame transport method";
   }
@@ -202,10 +212,21 @@ bool XRFrameTransport::FrameSubmit(
   return true;
 }
 
-void XRFrameTransport::OnSubmitFrameTransferred(bool success) {
+void XRFrameTransport::OnSubmitFrameTransferred(
+    bool success,
+    const Vector<device::LayerId>& layer_ids) {
   DVLOG(3) << __func__;
   waiting_for_previous_frame_transfer_ = false;
   last_transfer_succeeded_ = success;
+
+  if (on_submit_frame_transferred_callback_) {
+    on_submit_frame_transferred_callback_.Run(success, layer_ids);
+  }
+}
+
+void XRFrameTransport::RegisterFrameTransferredCallback(
+    OnSubmitFrameTransferredCallback callback) {
+  on_submit_frame_transferred_callback_ = std::move(callback);
 }
 
 void XRFrameTransport::RegisterFrameRenderedCallback(

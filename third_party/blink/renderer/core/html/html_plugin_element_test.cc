@@ -106,13 +106,13 @@ TEST_P(HTMLPlugInElementTest, RemovePlugin) {
   )HTML";
 
   const char* container_type = GetParam();
-  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(
-      String::Format(kDivWithPlugin, container_type, container_type));
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(UNSAFE_TODO(
+      String::Format(kDivWithPlugin, container_type, container_type)));
 
   auto* plugin = To<HTMLPlugInElement>(
       GetDocument().getElementById(AtomicString("test_plugin")));
   ASSERT_TRUE(plugin);
-  EXPECT_EQ(container_type, plugin->tagName().LowerASCII());
+  EXPECT_EQ(container_type, plugin->tagName().ToAsciiLower());
 
   UpdateAllLifecyclePhasesForTest();
   plugin->UpdatePlugin();

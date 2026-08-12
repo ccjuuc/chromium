@@ -36,6 +36,7 @@
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_accuracy_mode.h"
 #include "third_party/blink/renderer/core/frame/deprecation/deprecation.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/navigator.h"
@@ -54,6 +55,7 @@
 
 namespace blink {
 namespace {
+using AccuracyMode = V8AccuracyMode::Enum;
 
 const char kPermissionDeniedErrorMessage[] = "User denied Geolocation";
 const char kFeaturePolicyErrorMessage[] =
@@ -133,6 +135,9 @@ PositionOptions* OverrideAccuracyHint(const PositionOptions* options) {
   copied_options->setTimeout(options->timeout());
   copied_options->setMaximumAge(options->maximumAge());
   copied_options->setEnableHighAccuracy(true);
+  if (RuntimeEnabledFeatures::ApproximateGeolocationWebVisibleAPIEnabled()) {
+    copied_options->setAccuracyMode(options->accuracyMode());
+  }
   return copied_options;
 }
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -243,6 +248,12 @@ void Geolocation::getCurrentPositionForBindings(
                       WebFeature::kGeolocationGetCurrentPositionHighAccuracy);
   }
 
+  if (RuntimeEnabledFeatures::ApproximateGeolocationWebVisibleAPIEnabled() &&
+      options->accuracyMode().AsEnum() == V8AccuracyMode::Enum::kApproximate) {
+    UseCounter::Count(GetExecutionContext(),
+                      WebFeature::kGeolocationAccuracyModeApproximate);
+  }
+
   if (!GetFrame())
     return;
 
@@ -252,12 +263,6 @@ void Geolocation::getCurrentPositionForBindings(
 
   auto* notifier = MakeGarbageCollected<GeoNotifierV8>(
       this, options, success_callback, error_callback);
-
-  if (GetFrame()->IsAdScriptInStack()) {
-    notifier->SetCalledWithAdScriptInStack();
-    UseCounter::Count(GetExecutionContext(),
-                      WebFeature::kAdScriptInStackOnGeoLocation);
-  }
 
   one_shots_->insert(notifier);
 
@@ -294,6 +299,12 @@ int Geolocation::watchPositionForBindings(
                       WebFeature::kGeolocationWatchPositionHighAccuracy);
   }
 
+  if (RuntimeEnabledFeatures::ApproximateGeolocationWebVisibleAPIEnabled() &&
+      options->accuracyMode().AsEnum() == V8AccuracyMode::Enum::kApproximate) {
+    UseCounter::Count(GetExecutionContext(),
+                      WebFeature::kGeolocationAccuracyModeApproximate);
+  }
+
   if (!GetFrame())
     return 0;
 
@@ -302,11 +313,6 @@ int Geolocation::watchPositionForBindings(
   auto* notifier = MakeGarbageCollected<GeoNotifierV8>(
       this, options, success_callback, error_callback);
 
-  if (GetFrame()->IsAdScriptInStack()) {
-    notifier->SetCalledWithAdScriptInStack();
-    UseCounter::Count(GetExecutionContext(),
-                      WebFeature::kAdScriptInStackOnWatchGeoLocation);
-  }
   return WatchPositionInternal(notifier);
 }
 
@@ -355,6 +361,16 @@ void Geolocation::StartRequest(GeoNotifier* notifier) {
   }
 
   ReportGeolocationViolation(DomWindow());
+
+  // If a request is initiated while the page is hidden, the |GeoNotifier| has
+  // already been created and appended to |one_shots_| or |watchers_|, but we
+  // return early here BEFORE arming its timeout timer and BEFORE dispatching a
+  // Mojo hardware query to the browser. This leaves the request in a dormant,
+  // timer-less state, which will be safely evaluated and started by
+  // `PageVisibilityChanged()` as soon as the tab becomes visible.
+  if (GetPage() && !GetPage()->IsPageVisible()) {
+    return;
+  }
 
   if (HaveSuitableCachedPosition(notifier->Options())) {
     notifier->SetUseCachedPosition();
@@ -414,12 +430,19 @@ bool Geolocation::DoesOwnNotifier(GeoNotifier* notifier) const {
 bool Geolocation::HaveSuitableCachedPosition(const PositionOptions* options) {
   if (!last_position_)
     return false;
-  if (!options->maximumAge())
-    return false;
   EpochTimeStamp current_time_millis =
       ConvertTimeToEpochTimeStamp(base::Time::Now());
-  return last_position_->timestamp() >
-         current_time_millis - options->maximumAge();
+  bool is_last_position_suitable =
+      options->maximumAge() &&
+      last_position_->timestamp() > current_time_millis - options->maximumAge();
+  if (!is_last_position_suitable && !watchers_->IsEmpty()) {
+    UseCounter::Count(
+        DomWindow(),
+        WebFeature::
+            kGeolocationRequestPositionWithPotentiallyUpToDateWatchedCachedPosition);
+  }
+
+  return is_last_position_suitable;
 }
 
 void Geolocation::clearWatch(int watch_id) {
@@ -444,6 +467,38 @@ void Geolocation::StopTimers() {
 
   for (const auto& notifier : watchers_->Notifiers()) {
     notifier->StopTimer();
+  }
+}
+
+void Geolocation::StartTimers() {
+  // One-shots are synchronously removed from |one_shots_| as soon as their
+  // callback is invoked. Therefore, any notifier remaining in |one_shots_| when
+  // the tab unhides is guaranteed to be pending its first callback. If a
+  // suitable cached position is available (or was already requested), fulfill
+  // it immediately; otherwise start/resume its timeout timer.
+  for (const auto& notifier : *one_shots_) {
+    if (notifier->UseCachedPosition() ||
+        HaveSuitableCachedPosition(notifier->Options())) {
+      notifier->SetUseCachedPosition();
+    } else {
+      notifier->StartTimer();
+    }
+  }
+
+  // Active watchers remain in |watchers_| to receive subsequent updates even
+  // after their initial callback has successfully fired. We must explicitly
+  // check |!InitialCallbackRun()| to ensure we only process initial setup
+  // for pending watchers, avoiding spurious timeouts or re-firing cached
+  // positions on already-connected watchers.
+  for (const auto& notifier : watchers_->Notifiers()) {
+    if (!notifier->InitialCallbackRun()) {
+      if (notifier->UseCachedPosition() ||
+          HaveSuitableCachedPosition(notifier->Options())) {
+        notifier->SetUseCachedPosition();
+      } else {
+        notifier->StartTimer();
+      }
+    }
   }
 }
 
@@ -477,9 +532,10 @@ void Geolocation::HandleError(GeolocationPositionError* error) {
   // later.
   //
   // A notifier may call |clearWatch|, and in that case, that watcher notifier
-  // already scheduled must be immediately cancelled according to the spec. But
-  // the current implementation doesn't support such case.
-  // TODO(mattreynolds): Support watcher cancellation inside notifier callbacks.
+  // already scheduled must be immediately cancelled according to the spec.
+  // But the current implementation doesn't support such case.
+  // TODO(mattreynolds): Support watcher cancellation inside notifier
+  // callbacks.
   for (auto& notifier : *one_shots_being_invoked_) {
     if (error->IsFatal() || !notifier->UseCachedPosition())
       notifier->RunErrorCallback(error);
@@ -527,13 +583,16 @@ void Geolocation::MakeSuccessCallbacks() {
   // Invoke the callbacks.
   //
   // A notifier may call |clearWatch|, and in that case, that watcher notifier
-  // already scheduled must be immediately cancelled according to the spec. But
-  // the current implementation doesn't support such case.
-  // TODO(mattreynolds): Support watcher cancellation inside notifier callbacks.
-  for (auto& notifier : *one_shots_being_invoked_)
+  // already scheduled must be immediately cancelled according to the spec.
+  // But the current implementation doesn't support such case.
+  // TODO(mattreynolds): Support watcher cancellation inside notifier
+  // callbacks.
+  for (auto& notifier : *one_shots_being_invoked_) {
     notifier->RunSuccessCallback(last_position_);
-  for (auto& notifier : watchers_being_invoked_)
+  }
+  for (auto& notifier : watchers_being_invoked_) {
     notifier->RunSuccessCallback(last_position_);
+  }
 
   one_shots_being_invoked_->clear();
   watchers_being_invoked_.clear();
@@ -547,13 +606,26 @@ void Geolocation::PositionChanged() {
 }
 
 void Geolocation::UpdateGeolocationState() {
+  // This visibility check serves as the ultimate perimeter safeguard against
+  // querying location from the browser backend while backgrounded. In
+  // embeddings like Android WebView, or via raced OS-level UI dialogs,
+  // permission can be asynchronously granted
+  // (`OnGeolocationPermissionStatusUpdated`) while the page/view is currently
+  // hidden. Returning early here defers the hardware dispatch to Mojo; the
+  // state will be re-evaluated and triggered from scratch by
+  // `PageVisibilityChanged()` as soon as the tab or view becomes visible
+  // again.
+  if (GetPage() && !GetPage()->IsPageVisible()) {
+    return;
+  }
+
   if (!EnsureGeolocationConnection() || permission_request_in_progress_) {
     // Return early while waiting for asynchronous setup to complete; this
-    // function will be recalled by `OnGeolocationPermissionStatusUpdated`. The
-    // accuracy is updated here to ensure the SetHighAccuracyHint Mojo call is
-    // handled promptly after `GeolocationImpl`'s construction. This prevents
-    // reporting positions with incorrect accuracy, as location request can
-    // occur immediately after construction.
+    // function will be recalled by `OnGeolocationPermissionStatusUpdated`.
+    // The accuracy is updated here to ensure the SetHighAccuracyHint Mojo
+    // call is handled promptly after `GeolocationImpl`'s construction. This
+    // prevents reporting positions with incorrect accuracy, as location
+    // request can occur immediately after construction.
     UpdateAccuracyHint();
     return;
   }
@@ -567,9 +639,10 @@ void Geolocation::UpdateGeolocationState() {
 }
 
 void Geolocation::StopUpdating() {
-  updating_ = false;
   ResetGeolocationConnection();
+  accuracy_ = mojom::blink::GeolocationAccuracy::kApproximate;
   enable_high_accuracy_ = false;
+  StopTimers();
 }
 
 bool Geolocation::EnsureGeolocationConnection() {
@@ -584,7 +657,7 @@ bool Geolocation::EnsureGeolocationConnection() {
       geolocation_service_.BindNewPipeAndPassReceiver(task_runner));
   geolocation_service_->CreateGeolocation(
       geolocation_.BindNewPipeAndPassReceiver(std::move(task_runner)),
-      LocalFrame::HasTransientUserActivation(GetFrame()),
+      LocalFrame::HasTransientUserActivation(GetFrame()), GetAccuracyLevel(),
       blink::BindOnce(&Geolocation::OnGeolocationPermissionStatusUpdated,
                       WrapWeakPersistent(this)));
 
@@ -596,6 +669,7 @@ bool Geolocation::EnsureGeolocationConnection() {
 }
 
 void Geolocation::ResetGeolocationConnection() {
+  updating_ = false;
   geolocation_.reset();
   geolocation_service_.reset();
 }
@@ -609,6 +683,16 @@ void Geolocation::OnPositionUpdated(
     device::mojom::blink::GeopositionResultPtr result) {
   updating_ = false;
   if (!GetExecutionContext()) {
+    return;
+  }
+
+  // If a location result arrives from the browser process while the page is
+  // hidden (e.g. due to an in-flight Mojo response racing with a tab switch),
+  // we drop the update immediately. This guarantees that no location data is
+  // delivered to JavaScript or stored in |last_position_| while backgrounded,
+  // relying entirely on `PageVisibilityChanged()` to query fresh data upon
+  // unhiding.
+  if (GetPage() && !GetPage()->IsPageVisible()) {
     return;
   }
 
@@ -647,6 +731,12 @@ void Geolocation::OnPositionUpdated(
 
 void Geolocation::PageVisibilityChanged() {
   if (GetPage() && GetPage()->IsPageVisible() && HasListeners()) {
+    // When a page becomes visible again, we must restart the timeout timers
+    // for all pending position requests. This ensures requests added while
+    // the tab was hidden begin their timers, and mid-flight requests paused
+    // by tab-switching are resumed with their remaining duration accounted
+    // for.
+    StartTimers();
     UpdateGeolocationState();
   } else {
     StopUpdating();
@@ -692,21 +782,55 @@ void Geolocation::HandlePermissionError() {
 }
 
 void Geolocation::UpdateAccuracyHint() {
-  const bool new_enable_high_accuracy =
-      std::ranges::any_of(*one_shots_,
-                          [](const auto& notifier) {
-                            return notifier->Options()->enableHighAccuracy();
-                          }) ||
-      std::ranges::any_of(watchers_->Notifiers(), [](const auto& notifier) {
-        return notifier->Options()->enableHighAccuracy();
-      });
-
-  if (new_enable_high_accuracy != enable_high_accuracy_) {
-    enable_high_accuracy_ = new_enable_high_accuracy;
-    if (geolocation_.is_bound()) {
-      geolocation_->SetHighAccuracyHint(enable_high_accuracy_);
+  if (RuntimeEnabledFeatures::ApproximateGeolocationWebVisibleAPIEnabled()) {
+    // When the feature is enabled, we manage accuracy state based on the
+    // aggregated `accuracyMode` and ignore `enableHighAccuracy` option.
+    mojom::blink::GeolocationAccuracy new_accuracy = GetAccuracyLevel();
+    if (new_accuracy != accuracy_) {
+      accuracy_ = new_accuracy;
+      const bool high_accuracy =
+          (accuracy_ == mojom::blink::GeolocationAccuracy::kPrecise);
+      if (geolocation_.is_bound()) {
+        geolocation_->SetHighAccuracyHint(high_accuracy);
+      }
+    }
+  } else {
+    // Legacy behavior: accuracy hint is driven solely by the
+    // `enableHighAccuracy` option.
+    auto wants_high_accuracy = [](const auto& notifier) {
+      return notifier->Options()->enableHighAccuracy();
+    };
+    const bool enable_high_accuracy =
+        std::ranges::any_of(*one_shots_, wants_high_accuracy) ||
+        std::ranges::any_of(watchers_->Notifiers(), wants_high_accuracy);
+    if (enable_high_accuracy != enable_high_accuracy_) {
+      enable_high_accuracy_ = enable_high_accuracy;
+      if (geolocation_.is_bound()) {
+        geolocation_->SetHighAccuracyHint(enable_high_accuracy);
+      }
     }
   }
+}
+
+mojom::blink::GeolocationAccuracy Geolocation::GetAccuracyLevel() const {
+  if (RuntimeEnabledFeatures::ApproximateGeolocationWebVisibleAPIEnabled()) {
+    // When `ApproximateGeolocationWebVisibleAPI` is enabled, we use
+    // `AccuracyMode` to determine whether to request a precise or approximate
+    // permission level.
+    auto is_approximate = [](const auto& notifier) {
+      return notifier->Options()->accuracyMode().AsEnum() ==
+             V8AccuracyMode::Enum::kApproximate;
+    };
+    bool require_approximate =
+        std::ranges::any_of(*one_shots_, is_approximate) ||
+        std::ranges::any_of(watchers_->Notifiers(), is_approximate);
+    return require_approximate ? mojom::blink::GeolocationAccuracy::kApproximate
+                               : mojom::blink::GeolocationAccuracy::kPrecise;
+  }
+
+  // When the feature is disabled, we always request precise location as
+  // approximate mode is not supported.
+  return mojom::blink::GeolocationAccuracy::kPrecise;
 }
 
 }  // namespace blink

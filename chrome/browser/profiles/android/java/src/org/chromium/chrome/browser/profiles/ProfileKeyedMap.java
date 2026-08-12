@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.profiles;
 
+import android.util.ArrayMap;
+
 import androidx.annotation.IntDef;
 
 import org.chromium.base.Callback;
@@ -14,7 +16,6 @@ import org.chromium.build.annotations.Nullable;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -30,8 +31,13 @@ import java.util.function.Function;
  */
 @NullMarked
 public class ProfileKeyedMap<T> {
-    /** Indicates no cleanup action is required when destroying an object in the map. */
-    public static final @Nullable Callback NO_REQUIRED_CLEANUP_ACTION = null;
+    /**
+     * Indicates no cleanup action is required when destroying an object in the map.
+     *
+     * @deprecated Use {@link #noRequiredCleanupAction()} instead, which is properly typed and
+     *     avoids unchecked warnings.
+     */
+    @Deprecated public static final @Nullable Callback NO_REQUIRED_CLEANUP_ACTION = null;
 
     /** Uses to determine what Profile reference should be used and stored in the map. */
     @IntDef({ProfileSelection.OWN_INSTANCE, ProfileSelection.REDIRECTED_TO_ORIGINAL})
@@ -44,7 +50,9 @@ public class ProfileKeyedMap<T> {
         int REDIRECTED_TO_ORIGINAL = 1;
     }
 
-    private final Map<Profile, T> mData = new HashMap<>();
+    // Initial capacity 2 covers the common profile combinations (regular and incognito/OTR)
+    // without incurring HashMap entry node allocations.
+    private final Map<Profile, T> mData = new ArrayMap<>(2);
     @ProfileSelection private final int mProfileSelection;
     private final @Nullable Callback<T> mDestroyAction;
 
@@ -93,6 +101,11 @@ public class ProfileKeyedMap<T> {
     public static <T extends Destroyable> ProfileKeyedMap<T> createMapOfDestroyables(
             @ProfileSelection int profileSelection) {
         return new ProfileKeyedMap<>(profileSelection, (e) -> e.destroy());
+    }
+
+    /** Returns null, indicating no cleanup action is required when destroying an object. */
+    public static <T> @Nullable Callback<T> noRequiredCleanupAction() {
+        return null;
     }
 
     private static Profile getProfileToUse(

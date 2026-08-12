@@ -14,7 +14,7 @@
 
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/scoped_feature_list.h"
@@ -34,12 +34,10 @@
 #include "cc/test/transfer_cache_test_helper.h"
 #include "cc/tiles/raster_dark_mode_filter.h"
 #include "components/viz/test/test_context_provider.h"
-#include "components/viz/test/test_gles2_interface.h"
 #include "components/viz/test/test_raster_interface.h"
 #include "gpu/command_buffer/common/command_buffer_id.h"
 #include "gpu/command_buffer/common/constants.h"
 #include "gpu/config/gpu_finch_features.h"
-#include "gpu/skia_bindings/gl_bindings_skia_cmd_buffer.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -54,12 +52,6 @@
 #include "third_party/skia/include/core/SkSize.h"
 #include "third_party/skia/include/core/SkYUVAPixmaps.h"
 #include "third_party/skia/include/effects/SkHighContrastFilter.h"
-#include "third_party/skia/include/gpu/GpuTypes.h"
-#include "third_party/skia/include/gpu/ganesh/GrBackendSurface.h"
-#include "third_party/skia/include/gpu/ganesh/GrDirectContext.h"
-#include "third_party/skia/include/gpu/ganesh/SkImageGanesh.h"
-#include "third_party/skia/include/gpu/ganesh/gl/GrGLDirectContext.h"
-#include "third_party/skia/include/gpu/ganesh/gl/GrGLInterface.h"
 
 using testing::_;
 using testing::StrictMock;
@@ -67,38 +59,25 @@ using testing::StrictMock;
 namespace cc {
 namespace {
 
-class FakeGPUImageDecodeTestGLES2Interface : public viz::TestGLES2Interface,
-                                             public viz::TestContextSupport {
+class FakeGPUImageDecodeTestRasterInterface : public viz::TestRasterInterface,
+                                              public viz::TestContextSupport {
  public:
-  explicit FakeGPUImageDecodeTestGLES2Interface(
+  explicit FakeGPUImageDecodeTestRasterInterface(
       TransferCacheTestHelper* transfer_cache_helper)
-      : extension_string_(
-            "GL_EXT_texture_format_BGRA8888 GL_OES_rgb8_rgba8 "
-            "GL_OES_texture_npot GL_EXT_texture_rg "
-            "GL_OES_texture_half_float GL_OES_texture_half_float_linear "
-            "GL_EXT_texture_norm16"),
-        transfer_cache_helper_(transfer_cache_helper) {}
+      : transfer_cache_helper_(transfer_cache_helper) {}
 
-  ~FakeGPUImageDecodeTestGLES2Interface() override {
-    // All textures / framebuffers / renderbuffers should be cleaned up.
-    EXPECT_EQ(0u, NumTextures());
-    EXPECT_EQ(0u, NumFramebuffers());
-    EXPECT_EQ(0u, NumRenderbuffers());
-  }
+  ~FakeGPUImageDecodeTestRasterInterface() override = default;
 
   base::span<uint8_t> MapTransferCacheEntry(uint32_t serialized_size) override {
     mapped_entry_size_ = serialized_size;
-    auto buffer =
-        PaintOpWriter::AllocateAlignedBuffer<uint8_t>(serialized_size);
-    mapped_entry_.swap(buffer);
-    return UNSAFE_TODO(base::span(mapped_entry_.get(), mapped_entry_size_));
+    mapped_entry_ = PaintOpWriter::AllocateAlignedBuffer(serialized_size);
+    return mapped_entry_.as_span();
   }
 
   void UnmapAndCreateTransferCacheEntry(uint32_t type, uint32_t id) override {
-    transfer_cache_helper_->CreateEntryDirect(
-        MakeEntryKey(type, id),
-        UNSAFE_TODO(base::span(mapped_entry_.get(), mapped_entry_size_)));
-    mapped_entry_ = nullptr;
+    transfer_cache_helper_->CreateEntryDirect(MakeEntryKey(type, id),
+                                              mapped_entry_.as_span());
+    mapped_entry_ = base::AlignedHeapArray<uint8_t>();
     mapped_entry_size_ = 0;
   }
 
@@ -123,91 +102,10 @@ class FakeGPUImageDecodeTestGLES2Interface : public viz::TestGLES2Interface,
     return std::make_pair(static_cast<TransferCacheEntryType>(type), id);
   }
 
-  // viz::TestGLES2Interface:
-  const GLubyte* GetString(GLenum name) override {
-    switch (name) {
-      case GL_EXTENSIONS:
-        return reinterpret_cast<const GLubyte*>(extension_string_.c_str());
-      case GL_VERSION:
-        return reinterpret_cast<const GLubyte*>("4.0 Null GL");
-      case GL_SHADING_LANGUAGE_VERSION:
-        return reinterpret_cast<const GLubyte*>("4.20.8 Null GLSL");
-      case GL_VENDOR:
-        return reinterpret_cast<const GLubyte*>("Null Vendor");
-      case GL_RENDERER:
-        return reinterpret_cast<const GLubyte*>("The Null (Non-)Renderer");
-    }
-    return nullptr;
-  }
-  void GetIntegerv(GLenum name, GLint* params) override {
-    switch (name) {
-      case GL_MAX_TEXTURE_IMAGE_UNITS:
-        *params = 8;
-        return;
-      case GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS:
-        *params = 8;
-        return;
-      case GL_MAX_RENDERBUFFER_SIZE:
-        *params = 2048;
-        return;
-      case GL_MAX_VERTEX_ATTRIBS:
-        *params = 8;
-        return;
-      default:
-        break;
-    }
-    TestGLES2Interface::GetIntegerv(name, params);
-  }
-
  private:
-  const std::string extension_string_;
   raw_ptr<TransferCacheTestHelper> transfer_cache_helper_;
   size_t mapped_entry_size_ = 0;
-  std::unique_ptr<uint8_t, base::AlignedFreeDeleter> mapped_entry_;
-};
-
-class GPUImageDecodeTestMockContextProvider : public viz::TestContextProvider {
- public:
-  static scoped_refptr<GPUImageDecodeTestMockContextProvider> Create(
-      TransferCacheTestHelper* transfer_cache_helper) {
-    auto support = std::make_unique<FakeGPUImageDecodeTestGLES2Interface>(
-        transfer_cache_helper);
-    auto gl = std::make_unique<FakeGPUImageDecodeTestGLES2Interface>(
-        transfer_cache_helper);
-    auto raster = std::make_unique<viz::TestRasterInterface>();
-    return new GPUImageDecodeTestMockContextProvider(
-        std::move(support), std::move(gl), std::move(raster));
-  }
-
-  void SetContextCapabilitiesOverride(std::optional<gpu::Capabilities> caps) {
-    capabilities_override_ = caps;
-  }
-
-  const gpu::Capabilities& ContextCapabilities() const override {
-    if (capabilities_override_.has_value())
-      return *capabilities_override_;
-
-    return viz::TestContextProvider::ContextCapabilities();
-  }
-
-  gpu::raster::RasterInterface* RasterInterface() override {
-    return raster_interface_gles_.get();
-  }
-
- private:
-  ~GPUImageDecodeTestMockContextProvider() override = default;
-  GPUImageDecodeTestMockContextProvider(
-      std::unique_ptr<viz::TestContextSupport> support,
-      std::unique_ptr<viz::TestGLES2Interface> gl,
-      std::unique_ptr<gpu::raster::RasterInterface> raster)
-      : TestContextProvider(std::move(support),
-                            std::move(gl),
-                            nullptr /* sii */,
-                            true),
-        raster_interface_gles_(std::move(raster)) {}
-
-  std::unique_ptr<gpu::raster::RasterInterface> raster_interface_gles_;
-  std::optional<gpu::Capabilities> capabilities_override_;
+  base::AlignedHeapArray<uint8_t> mapped_entry_;
 };
 
 class FakeRasterDarkModeFilter : public RasterDarkModeFilter {
@@ -239,15 +137,10 @@ class GpuImageDecodeCacheTest
     : public ::testing::TestWithParam<
           std::tuple<SkColorType,
                      bool /* do_yuv_decode */,
-                     bool /* enable_clipped_image_scaling */,
-                     bool /* no_discardable_memory */>> {
+                     bool /* enable_clipped_image_scaling */>> {
  public:
   void SetUp() override {
     std::vector<base::test::FeatureRef> enabled_features;
-    no_discardable_memory_ = std::get<3>(GetParam());
-    if (no_discardable_memory_)
-      enabled_features.push_back(
-          features::kNoDiscardableMemoryForGpuDecodePath);
     feature_list_.InitWithFeatures(enabled_features,
                                    {} /* disabled_features */);
     enable_clipped_image_scaling_ = std::get<2>(GetParam());
@@ -256,32 +149,22 @@ class GpuImageDecodeCacheTest
       ASSERT_TRUE(command_line != nullptr);
       command_line->AppendSwitch(switches::kEnableClippedImageScaling);
     }
-    context_provider_ =
-        GPUImageDecodeTestMockContextProvider::Create(&transfer_cache_helper_);
-    context_provider_->BindToCurrentSequence();
-    sk_sp<const GrGLInterface> gr_interface =
-        skia_bindings::CreateGLES2InterfaceBindings(
-            context_provider_->UnboundTestContextGL(),
-            context_provider_->ContextSupport());
-    gr_context_ = GrDirectContexts::MakeGL(std::move(gr_interface));
-    ASSERT_TRUE(!!gr_context_);
+    std::unique_ptr<viz::TestContextSupport> support =
+        std::make_unique<FakeGPUImageDecodeTestRasterInterface>(
+            &transfer_cache_helper_);
+    std::unique_ptr<viz::TestRasterInterface> raster_interface =
+        std::make_unique<FakeGPUImageDecodeTestRasterInterface>(
+            &transfer_cache_helper_);
+    context_provider_ = viz::TestContextProvider::CreateWorker(
+        std::move(support), std::move(raster_interface));
     {
       viz::RasterContextProvider::ScopedRasterContextLock context_lock(
           context_provider_.get());
-      transfer_cache_helper_.SetGrContext(gr_context_.get());
       max_texture_size_ =
           context_provider_->ContextCapabilities().max_texture_size;
     }
     color_type_ = std::get<0>(GetParam());
     do_yuv_decode_ = std::get<1>(GetParam());
-  }
-
-  void TearDown() override {
-    // Clear raw_ptrs in helpers that reference context_provider_ internals
-    // before context_provider_ is destroyed, to avoid dangling pointers. We
-    // can't just reorder the member variables because context_provider_
-    // references transfer_cache_helper_.
-    transfer_cache_helper_.SetGrContext(nullptr);
   }
 
   std::unique_ptr<GpuImageDecodeCache> CreateCache(
@@ -440,7 +323,7 @@ class GpuImageDecodeCacheTest
     cache->DrawWithImageFinished(draw_image, decoded_draw_image);
   }
 
-  GPUImageDecodeTestMockContextProvider* context_provider() {
+  viz::TestContextProvider* context_provider() {
     return context_provider_.get();
   }
 
@@ -553,8 +436,7 @@ class GpuImageDecodeCacheTest
   // The order of these members is important because |context_provider_| depends
   // on |transfer_cache_helper_|.
   TransferCacheTestHelper transfer_cache_helper_;
-  scoped_refptr<GPUImageDecodeTestMockContextProvider> context_provider_;
-  sk_sp<GrDirectContext> gr_context_;
+  scoped_refptr<viz::TestContextProvider> context_provider_;
 
   // Only used when |do_yuv_decode_| is true.
   SkYUVAPixmapInfo::DataType yuv_data_type_ =
@@ -564,7 +446,6 @@ class GpuImageDecodeCacheTest
   SkColorType color_type_;
   bool do_yuv_decode_;
   bool enable_clipped_image_scaling_;
-  bool no_discardable_memory_;
   int max_texture_size_ = 0;
 };
 
@@ -3099,10 +2980,8 @@ TEST_P(GpuImageDecodeCacheTest, KeepOnlyLast2ContentIds) {
     cache->DrawWithImageFinished(draw_images[i], decoded_draw_images[i]);
   }
 
-  // We have a single tracked entry, that gets cleared once we purge the cache.
+  // We have a single tracked entry.
   EXPECT_EQ(cache->paint_image_entries_count_for_testing(), 1u);
-  cache->OnMemoryPressure(base::MEMORY_PRESSURE_LEVEL_CRITICAL);
-  EXPECT_EQ(cache->paint_image_entries_count_for_testing(), 0u);
 }
 
 TEST_P(GpuImageDecodeCacheTest, DecodeToScale) {
@@ -3650,10 +3529,7 @@ TEST_P(GpuImageDecodeCacheTest, HighBitDepthYUVDecoding) {
 
   // Test that decoding to R16 works when supported.
   {
-    auto r16_caps = original_caps;
-    r16_caps.texture_norm16 = true;
-    r16_caps.texture_half_float_linear = true;
-    context_provider_->SetContextCapabilitiesOverride(r16_caps);
+    context_provider_->UnboundTestRasterInterface()->set_texture_norm16(true);
     auto r16_cache = CreateCache();
     const uint32_t client_id = r16_cache->GenerateClientId();
 
@@ -3690,10 +3566,9 @@ TEST_P(GpuImageDecodeCacheTest, HighBitDepthYUVDecoding) {
 
   // Test that decoding to half-float works when supported.
   {
-    auto f16_caps = original_caps;
-    f16_caps.texture_norm16 = false;
-    f16_caps.texture_half_float_linear = true;
-    context_provider_->SetContextCapabilitiesOverride(f16_caps);
+    context_provider_->UnboundTestRasterInterface()->set_texture_norm16(false);
+    context_provider_->UnboundTestRasterInterface()
+        ->set_texture_half_float_linear(true);
     auto f16_cache = CreateCache();
     const uint32_t client_id = f16_cache->GenerateClientId();
 
@@ -3730,10 +3605,9 @@ TEST_P(GpuImageDecodeCacheTest, HighBitDepthYUVDecoding) {
 
   // Verify YUV16 is unsupported when neither R16 or half-float are available.
   {
-    auto no_yuv16_caps = original_caps;
-    no_yuv16_caps.texture_norm16 = false;
-    no_yuv16_caps.texture_half_float_linear = false;
-    context_provider_->SetContextCapabilitiesOverride(no_yuv16_caps);
+    context_provider_->UnboundTestRasterInterface()->set_texture_norm16(false);
+    context_provider_->UnboundTestRasterInterface()
+        ->set_texture_half_float_linear(false);
     auto no_yuv16_cache = CreateCache();
     const uint32_t client_id = no_yuv16_cache->GenerateClientId();
 
@@ -4097,10 +3971,10 @@ SkColorType test_color_types[] = {kN32_SkColorType, kARGB_4444_SkColorType,
 INSTANTIATE_TEST_SUITE_P(
     GpuImageDecodeCacheTests,
     GpuImageDecodeCacheTest,
-    testing::Combine(testing::ValuesIn(test_color_types),
-                     testing::Bool() /* do_yuv_decode */,
-                     testing::Values(false) /* enable_clipped_image_scaling */,
-                     testing::Values(false) /* no_discardable_memory */));
+    testing::Combine(
+        testing::ValuesIn(test_color_types),
+        testing::Bool() /* do_yuv_decode */,
+        testing::Values(false) /* enable_clipped_image_scaling */));
 
 class GpuImageDecodeCachePurgeOnTimerTest : public GpuImageDecodeCacheTest {
  public:
@@ -4364,10 +4238,10 @@ TEST_P(GpuImageDecodeCachePurgeOnTimerTest, NoCache) {
 INSTANTIATE_TEST_SUITE_P(
     GpuImageDecodeCacheTests,
     GpuImageDecodeCachePurgeOnTimerTest,
-    testing::Combine(testing::Values(kN32_SkColorType),
-                     testing::Bool() /* do_yuv_decode */,
-                     testing::Values(false) /* enable_clipped_image_scaling */,
-                     testing::Bool() /* no_discardable_memory */));
+    testing::Combine(
+        testing::Values(kN32_SkColorType),
+        testing::Bool() /* do_yuv_decode */,
+        testing::Values(false) /* enable_clipped_image_scaling */));
 
 TEST_P(GpuImageDecodeCacheTest, GainmapImage) {
   auto cache = CreateCache();

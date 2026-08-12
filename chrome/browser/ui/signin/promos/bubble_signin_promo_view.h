@@ -41,13 +41,23 @@ class BubbleSignInPromoView : public views::View, public views::WidgetObserver {
   BubbleSignInPromoView(
       content::WebContents* web_contents,
       signin_metrics::AccessPoint access_point,
-      syncer::LocalDataItemModel::DataId data_id,
+      std::optional<syncer::LocalDataItemModel::DataId> data_id,
+      ui::ButtonStyle button_style = ui::ButtonStyle::kProminent);
+  BubbleSignInPromoView(
+      content::WebContents* web_contents,
+      signin_metrics::AccessPoint access_point,
+      std::unique_ptr<BubbleSignInPromoDelegate> delegate,
       ui::ButtonStyle button_style = ui::ButtonStyle::kProminent);
   BubbleSignInPromoView(const BubbleSignInPromoView&) = delete;
   BubbleSignInPromoView& operator=(const BubbleSignInPromoView&) = delete;
   ~BubbleSignInPromoView() override;
 
   View* GetSignInButton() const;
+
+  // This should be used to set the margins of bubble views containing only a
+  // `BubbleSignInPromoView`. Don't use these margins on dialogs without a title
+  // or close button.
+  static gfx::Insets GetBubbleSigninPromoMargins();
 
  private:
   // Used to sign in in when `signin_button_view_` is pressed.

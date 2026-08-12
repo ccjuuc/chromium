@@ -5,6 +5,7 @@
 #include "pdf/pdfium/pdfium_page.h"
 
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -13,7 +14,7 @@
 #include "base/files/file_path.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
-#include "base/test/test_discardable_memory_allocator.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "pdf/accessibility_structs.h"
 #include "pdf/buildflags.h"
@@ -28,6 +29,7 @@
 #include "third_party/skia/include/core/SkImageInfo.h"
 #include "third_party/skia/include/core/SkPixmap.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
+#include "ui/accessibility/accessibility_features.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size_f.h"
@@ -44,26 +46,10 @@ namespace {
 constexpr uint32_t kMaxImageDimensionForOcr = 2048;
 #endif
 
-TEST(PDFiumPageHelperTest, ScopedUnloadPreventer) {
-  // Should not DCHECK in its dtor due to ScopedUnloadPreventer usage.
-  PDFiumPage page1(/*engine=*/nullptr, 1u);
-  PDFiumPage page2(/*engine=*/nullptr, 2u);
-  PDFiumPage::ScopedUnloadPreventer prevent_unload1(&page1);
-  PDFiumPage::ScopedUnloadPreventer prevent_unload2(&page2);
-  PDFiumPage::ScopedUnloadPreventer prevent_unload3(prevent_unload2);
-  PDFiumPage::ScopedUnloadPreventer prevent_unload4(&page2);
-  prevent_unload2 = prevent_unload1;
-  prevent_unload1 = prevent_unload2;
-  prevent_unload1 = prevent_unload4;
-  prevent_unload4 = prevent_unload1;
-  prevent_unload3 = prevent_unload4;
-}
-
 void CompareTextRuns(const AccessibilityTextRunInfo& expected_text_run,
                      const AccessibilityTextRunInfo& actual_text_run) {
   EXPECT_EQ(expected_text_run.start_index, actual_text_run.start_index);
   EXPECT_EQ(expected_text_run.len, actual_text_run.len);
-  EXPECT_EQ(expected_text_run.tag_type, actual_text_run.tag_type);
   EXPECT_RECTF_EQ(expected_text_run.bounds, actual_text_run.bounds);
   EXPECT_EQ(expected_text_run.direction, actual_text_run.direction);
 
@@ -77,7 +63,6 @@ void CompareTextRuns(const AccessibilityTextRunInfo& expected_text_run,
   EXPECT_EQ(expected_style.fill_color, actual_style.fill_color);
   EXPECT_EQ(expected_style.stroke_color, actual_style.stroke_color);
   EXPECT_EQ(expected_style.is_italic, actual_style.is_italic);
-  EXPECT_EQ(expected_style.is_bold, actual_style.is_bold);
 }
 
 // Returns the page size for a `PDFiumPage`. The caller must make sure that
@@ -138,6 +123,39 @@ constexpr struct {
 
 }  // namespace
 
+TEST(PDFiumPageHelperTest, ScopedPageUnloadPreventer) {
+  // Should not DCHECK in its dtor due to ScopedPageUnloadPreventer usage.
+  PDFiumPage page1(/*engine=*/nullptr, 1u);
+  PDFiumPage page2(/*engine=*/nullptr, 2u);
+  PDFiumPage::ScopedPageUnloadPreventer prevent_unload1(&page1);
+  PDFiumPage::ScopedPageUnloadPreventer prevent_unload2(&page2);
+  PDFiumPage::ScopedPageUnloadPreventer prevent_unload3(prevent_unload2);
+  PDFiumPage::ScopedPageUnloadPreventer prevent_unload4(&page2);
+  prevent_unload2 = prevent_unload1;
+  prevent_unload1 = prevent_unload2;
+  prevent_unload1 = prevent_unload4;
+  prevent_unload4 = prevent_unload1;
+  prevent_unload3 = prevent_unload4;
+}
+
+TEST(PDFiumPageHelperTest, ScopedPageUnloadPreventerBlocksUnload) {
+  PDFiumPage page(/*engine=*/nullptr, 1u);
+  {
+    PDFiumPage::ScopedPageUnloadPreventer prevent_unload(&page);
+    EXPECT_FALSE(page.Unload());
+  }
+  EXPECT_TRUE(page.Unload());
+}
+
+TEST(PDFiumPageHelperTest, ScopedTextPageUnloadPreventerBlocksUnload) {
+  PDFiumPage page(/*engine=*/nullptr, 1u);
+  {
+    PDFiumPage::ScopedTextPageUnloadPreventer prevent_unload(&page);
+    EXPECT_FALSE(page.Unload());
+  }
+  EXPECT_TRUE(page.Unload());
+}
+
 using PDFiumPageTest = PDFiumTestBase;
 
 TEST_P(PDFiumPageTest, Constructor) {
@@ -163,6 +181,24 @@ TEST_P(PDFiumPageTest, NonTextPage) {
   EXPECT_TRUE(page.available());
   EXPECT_TRUE(page.GetTextPage());
   EXPECT_EQ(page.GetCharCount(), 0);
+}
+
+TEST_P(PDFiumPageTest, BadPage) {
+  TestClient client(/*use_skia_renderer=*/GetParam());
+  std::unique_ptr<PDFiumEngine> engine =
+      InitializeEngine(&client, FILE_PATH_LITERAL("bad_page.pdf"));
+  ASSERT_TRUE(engine);
+  ASSERT_EQ(1, engine->GetNumberOfPages());
+
+  PDFiumPage page(engine.get(), 0);
+  EXPECT_FALSE(page.available());
+  EXPECT_FALSE(page.GetTextPage());
+  EXPECT_EQ(page.GetCharCount(), 0);
+
+  page.MarkAvailable();
+  EXPECT_TRUE(page.available());
+  EXPECT_FALSE(page.GetTextPage());
+  EXPECT_EQ(page.GetCharCount(), -1);
 }
 
 TEST_P(PDFiumPageTest, IsCharInPageBounds) {
@@ -566,28 +602,7 @@ TEST_P(PDFiumPageImageTest, TextAndImagesWithAltText) {
 INSTANTIATE_TEST_SUITE_P(All, PDFiumPageImageTest, testing::Bool());
 
 #if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
-class PDFiumPageImageForOcrTest : public PDFiumPageImageTest {
- public:
-  PDFiumPageImageForOcrTest() = default;
-  PDFiumPageImageForOcrTest(const PDFiumPageImageForOcrTest&) = delete;
-  PDFiumPageImageForOcrTest& operator=(const PDFiumPageImageForOcrTest&) =
-      delete;
-  ~PDFiumPageImageForOcrTest() override = default;
-
-  void SetUp() override {
-    PDFiumPageImageTest::SetUp();
-    base::DiscardableMemoryAllocator::SetInstance(
-        &discardable_memory_allocator_);
-  }
-
-  void TearDown() override {
-    base::DiscardableMemoryAllocator::SetInstance(nullptr);
-    PDFiumPageImageTest::TearDown();
-  }
-
- private:
-  base::TestDiscardableMemoryAllocator discardable_memory_allocator_;
-};
+using PDFiumPageImageForOcrTest = PDFiumPageImageTest;
 
 TEST_P(PDFiumPageImageForOcrTest, LowResolutionImage) {
   TestClient client(/*use_skia_renderer=*/GetParam());
@@ -688,7 +703,29 @@ TEST_P(PDFiumPageImageForOcrTest, NonImage) {
 INSTANTIATE_TEST_SUITE_P(All, PDFiumPageImageForOcrTest, testing::Bool());
 #endif  // BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
 
-using PDFiumPageTextTest = PDFiumTestBase;
+class PDFiumPageTextTest : public PDFiumTestBase {
+ protected:
+  std::optional<AccessibilityTextRunInfo> GetFirstPageTextRunInfoAt(
+      const base::FilePath::CharType* pdf_name,
+      int char_index) {
+    TestClient client(/*use_skia_renderer=*/GetParam());
+    std::unique_ptr<PDFiumEngine> engine = InitializeEngine(&client, pdf_name);
+    if (!engine) {
+      return std::nullopt;
+    }
+    PDFiumPage& page = GetPDFiumPage(*engine, 0);
+    if (page.GetCharCount() <= 0) {
+      return std::nullopt;
+    }
+    return page.GetTextRunInfoAt(char_index);
+  }
+
+  std::optional<AccessibilityTextRunInfo> GetFontMatrixPDFTextRunInfo(
+      int char_index) {
+    return GetFirstPageTextRunInfoAt(FILE_PATH_LITERAL("font_matrix.pdf"),
+                                     char_index);
+  }
+};
 
 TEST_P(PDFiumPageTextTest, TextRunBounds) {
   TestClient client(/*use_skia_renderer=*/GetParam());
@@ -772,44 +809,37 @@ TEST_P(PDFiumPageTextTest, GetTextRunInfoAt) {
   int current_char_index = 0;
 
   AccessibilityTextStyleInfo expected_style_1 = {
-      "Times-Roman",
-      0,
-      AccessibilityTextRenderMode::kFill,
-      12,
-      0xff000000,
-      0xff000000,
-      false,
-      false};
+      "Times-Roman", 0,    AccessibilityTextRenderMode::kFill, 12, 0xff000000,
+      0xff000000,    false};
   AccessibilityTextStyleInfo expected_style_2 = {
-      "Helvetica", 0,          AccessibilityTextRenderMode::kFill,
-      16,          0xff000000, 0xff000000,
-      false,       false};
+      "Helvetica", 0,    AccessibilityTextRenderMode::kFill, 16, 0xff000000,
+      0xff000000,  false};
   // The links span from [7, 22], [52, 66] and [92, 108] with 16, 15 and 17
   // text run lengths respectively. There are text runs preceding and
   // succeeding them.
   auto expected_text_runs = std::to_array<AccessibilityTextRunInfo>({
-      {/*start_index=*/0, /*len=*/7, "",
+      {/*start_index=*/0, /*len=*/7,
        gfx::RectF(26.666666f, 189.333333f, 38.666672f, 13.333344f),
        AccessibilityTextDirection::kLeftToRight, expected_style_1},
-      {/*start_index=*/7, /*len=*/16, "",
+      {/*start_index=*/7, /*len=*/16,
        gfx::RectF(70.666664f, 189.333333f, 108.0f, 14.666672f),
        AccessibilityTextDirection::kLeftToRight, expected_style_1},
-      {/*start_index=*/23, /*len=*/20, "",
+      {/*start_index=*/23, /*len=*/20,
        gfx::RectF(181.333333f, 189.333333f, 117.333333f, 14.666672f),
        AccessibilityTextDirection::kLeftToRight, expected_style_1},
-      {/*start_index=*/43, /*len=*/9, "",
+      {/*start_index=*/43, /*len=*/9,
        gfx::RectF(28.0f, 117.33334f, 89.333328f, 20.0f),
        AccessibilityTextDirection::kLeftToRight, expected_style_2},
-      {/*start_index=*/52, /*len=*/15, "",
+      {/*start_index=*/52, /*len=*/15,
        gfx::RectF(126.66666f, 117.33334f, 137.33334f, 20.0f),
        AccessibilityTextDirection::kLeftToRight, expected_style_2},
-      {/*start_index=*/67, /*len=*/20, "",
+      {/*start_index=*/67, /*len=*/20,
        gfx::RectF(266.66666f, 118.66666f, 169.33334f, 18.666664f),
        AccessibilityTextDirection::kLeftToRight, expected_style_2},
-      {/*start_index=*/87, /*len=*/5, "",
+      {/*start_index=*/87, /*len=*/5,
        gfx::RectF(28.0f, 65.333336f, 40.0f, 18.666664f),
        AccessibilityTextDirection::kLeftToRight, expected_style_2},
-      {/*start_index=*/92, /*len=*/17, "",
+      {/*start_index=*/92, /*len=*/17,
        gfx::RectF(77.333336f, 64.0f, 160.0f, 20.0f),
        AccessibilityTextDirection::kLeftToRight, expected_style_2},
   });
@@ -870,23 +900,22 @@ TEST_P(PDFiumPageTextTest, HighlightTextRunInfo) {
 
   // Highlights span across text run indices 0, 2 and 3.
   static const AccessibilityTextStyleInfo kExpectedStyle = {
-      "Helvetica", 0,          AccessibilityTextRenderMode::kFill,
-      16,          0xff000000, 0xff000000,
-      false,       false};
+      "Helvetica", 0,    AccessibilityTextRenderMode::kFill, 16, 0xff000000,
+      0xff000000,  false};
   auto expected_text_runs = std::to_array<AccessibilityTextRunInfo>(
-      {{/*start_index=*/0, /*len=*/5, "",
+      {{/*start_index=*/0, /*len=*/5,
         gfx::RectF(1.3333334f, 198.66667f, 46.666668f, 14.666672f),
         AccessibilityTextDirection::kLeftToRight, kExpectedStyle},
-       {/*start_index=*/5, /*len=*/7, "",
+       {/*start_index=*/5, /*len=*/7,
         gfx::RectF(50.666668f, 198.66667f, 47.999996f, 17.333328f),
         AccessibilityTextDirection::kLeftToRight, kExpectedStyle},
-       {/*start_index=*/12, /*len=*/7, "",
+       {/*start_index=*/12, /*len=*/7,
         gfx::RectF(106.66666f, 198.66667f, 73.333336f, 18.666672f),
         AccessibilityTextDirection::kLeftToRight, kExpectedStyle},
-       {/*start_index=*/19, /*len=*/2, "",
+       {/*start_index=*/19, /*len=*/2,
         gfx::RectF(181.33333f, 202.66667f, 16.0f, 14.66667f),
         AccessibilityTextDirection::kNone, kExpectedStyle},
-       {/*start_index=*/21, /*len=*/2, "",
+       {/*start_index=*/21, /*len=*/2,
         gfx::RectF(198.66667f, 202.66667f, 21.333328f, 10.666672f),
         AccessibilityTextDirection::kLeftToRight, kExpectedStyle}});
 
@@ -906,6 +935,62 @@ TEST_P(PDFiumPageTextTest, HighlightTextRunInfo) {
     const auto& actual_text_run = text_run_info_result.value();
     CompareTextRuns(expected_text_run, actual_text_run);
     current_char_index += actual_text_run.len;
+  }
+}
+
+TEST_P(PDFiumPageTextTest, GetTextRunInfoAtWithHeuristicEnhancements) {
+  float font_size_disabled;
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndDisableFeature(
+        ::features::kPdfAccessibilityHeuristicEnhancements);
+    std::optional<AccessibilityTextRunInfo> text_run_info =
+        GetFontMatrixPDFTextRunInfo(0);
+    ASSERT_TRUE(text_run_info.has_value());
+    font_size_disabled = text_run_info->style.font_size;
+  }
+
+  float font_size_enabled;
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndEnableFeature(
+        ::features::kPdfAccessibilityHeuristicEnhancements);
+    std::optional<AccessibilityTextRunInfo> text_run_info =
+        GetFontMatrixPDFTextRunInfo(0);
+    ASSERT_TRUE(text_run_info.has_value());
+    font_size_enabled = text_run_info->style.font_size;
+  }
+
+  // For "A1", the base font size is 1.0, and the vertical scale of the matrix
+  // is 10.0.
+  // - With heuristic enhancements disabled, the nominal font size is 1.0. Since
+  //   this is <= 1.0, it triggers the fallback to the estimated character box
+  //   size, yielding ~10.667 with test fonts on Linux/ChromeOS and 12.0 with
+  //   native fonts on Mac/Windows.
+  // - With heuristic enhancements enabled, the font size is scaled by 10.0 to
+  //   equal 10.0. Since this is > 1.0, it bypasses the fallback on all
+  //   platforms.
+  float expected_font_size_disabled = UsingTestFonts() ? 10.667f : 12.0f;
+  EXPECT_NEAR(font_size_disabled, expected_font_size_disabled, 0.001f);
+  EXPECT_NEAR(font_size_enabled, 10.0f, 0.001f);
+}
+
+TEST_P(PDFiumPageTextTest, GetTextRunInfoFontWeight) {
+  // Test invalid weight (FPDFFont_GetWeight returns -1, which is mapped to 0).
+  {
+    std::optional<AccessibilityTextRunInfo> text_run_info =
+        GetFontMatrixPDFTextRunInfo(0);
+    ASSERT_TRUE(text_run_info.has_value());
+    EXPECT_EQ(text_run_info->style.font_weight, 0);
+  }
+
+  // Test valid weight.
+  {
+    constexpr int kHelveticaRunCharIndex = 12;
+    std::optional<AccessibilityTextRunInfo> text_run_info =
+        GetFontMatrixPDFTextRunInfo(kHelveticaRunCharIndex);
+    ASSERT_TRUE(text_run_info.has_value());
+    EXPECT_EQ(text_run_info->style.font_weight, 1340);
   }
 }
 
@@ -1169,6 +1254,11 @@ INSTANTIATE_TEST_SUITE_P(All, PDFiumPageButtonTest, testing::Bool());
 
 class PDFiumPageThumbnailTest : public PDFiumTestBase {
  public:
+  struct ComparisonOptions {
+    bool use_platform_suffix;
+    bool fuzzy_match;
+  };
+
   PDFiumPageThumbnailTest() = default;
   PDFiumPageThumbnailTest(const PDFiumPageThumbnailTest&) = delete;
   PDFiumPageThumbnailTest& operator=(const PDFiumPageThumbnailTest&) = delete;
@@ -1179,28 +1269,32 @@ class PDFiumPageThumbnailTest : public PDFiumTestBase {
                              float device_pixel_ratio,
                              const gfx::Size& expected_thumbnail_size,
                              const std::string& expectation_file_prefix) {
-    return TestGenerateThumbnailWithPlatformSpecificData(
+    return TestGenerateThumbnailWithOptions(
         engine, page_index, device_pixel_ratio, expected_thumbnail_size,
         expectation_file_prefix,
-        /*use_platform_suffix=*/false);
+        {.use_platform_suffix = false, .fuzzy_match = false});
   }
 
-  void TestGenerateThumbnailWithPlatformSpecificData(
+  void TestGenerateThumbnailWithOptions(
       PDFiumEngine& engine,
       size_t page_index,
       float device_pixel_ratio,
       const gfx::Size& expected_thumbnail_size,
       const std::string& expectation_file_prefix,
-      bool use_platform_suffix) {
+      const ComparisonOptions& options) {
     sk_sp<SkImage> image = GenerateThumbnailImage(
         engine, page_index, device_pixel_ratio, expected_thumbnail_size);
     ASSERT_TRUE(image);
 
     base::FilePath expectation_png_file_path = GetThumbnailTestData(
         expectation_file_prefix, page_index, device_pixel_ratio,
-        /*use_skia=*/GetParam(), use_platform_suffix);
+        /*use_skia=*/GetParam(), options.use_platform_suffix);
 
-    EXPECT_TRUE(MatchesPngFile(*image, expectation_png_file_path));
+    if (options.fuzzy_match) {
+      EXPECT_TRUE(FuzzyMatchesPngFile(*image, expectation_png_file_path));
+    } else {
+      EXPECT_TRUE(MatchesPngFile(*image, expectation_png_file_path));
+    }
   }
 
   sk_sp<SkImage> GenerateThumbnailImage(
@@ -1274,10 +1368,10 @@ TEST_P(PDFiumPageThumbnailTest, GenerateThumbnailWithOverlapCropBox) {
   std::unique_ptr<PDFiumEngine> engine =
       InitializeEngine(&client, FILE_PATH_LITERAL("hello_world_cropped.pdf"));
   ASSERT_TRUE(engine);
-  TestGenerateThumbnailWithPlatformSpecificData(
+  TestGenerateThumbnailWithOptions(
       *engine, /*page_index=*/0, /*device_pixel_ratio=*/1,
       /*expected_thumbnail_size=*/{162, 108}, "hello_world_cropped",
-      /*use_platform_suffix=*/true);
+      {.use_platform_suffix = true, .fuzzy_match = true});
 }
 
 // For crbug.com/438884266

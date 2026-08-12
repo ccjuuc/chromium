@@ -9,7 +9,9 @@
 #include <vector>
 
 #include "components/autofill/core/browser/data_model/valuables/loyalty_card.h"
+#include "components/autofill/core/browser/data_model/valuables/valuable_types.h"
 #include "components/webdata/common/web_database_table.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 class WebDatabase;
 
@@ -40,6 +42,15 @@ namespace autofill {
 //                      `loyalty_card_id` in the loyalty_cards table.
 //   merchant_domain    List of full origins for merchant websites on which
 //                      this card would apply.
+// -----------------------------------------------------------------------------
+// valuables_metadata   Contains the metadata for loyalty cards.
+//
+//   valuable_id        Identifies the relevant valuable. Matches the
+//                      `valuable_id` in the corresponding table.
+//   use_count          The number of times that this valuable has been used to
+//                      fill a form.
+//   use_date           The last time that this valuable was used to fill a
+//                      form.
 // -----------------------------------------------------------------------------
 class ValuablesTable : public WebDatabaseTable {
  public:
@@ -79,15 +90,37 @@ class ValuablesTable : public WebDatabaseTable {
   // unique identifier. Returns `true` if the operation succeeded.
   bool RemoveLoyaltyCard(ValuableId loyalty_card_id);
 
+  // Adds or updates a valuable metadata. Returns true on success.
+  bool AddOrUpdateValuableMetadata(const ValuableMetadata& metadata);
+
+  // Removes the valuable metadata with a given valuable id if exists. Returns
+  // true on success.
+  bool RemoveValuableMetadata(ValuableId valuable_id);
+
+  // Returns the valuable metadata for the given valuable id.
+  std::optional<ValuableMetadata> GetValuableMetadata(
+      ValuableId valuable_id) const;
+
+  // Returns the map of valuable metadata stored in the database keyed by
+  // ValuableId.
+  absl::flat_hash_map<ValuableId, ValuableMetadata> GetAllValuableMetadata()
+      const;
+
  private:
   bool InitLoyaltyCardsTable();
   bool InitLoyaltyCardMerchantDomainTable();
+  bool InitValuablesMetadataTable();
+
+  bool AddValuableMetadata(const ValuableMetadata& metadata) const;
 
   // Renames the database table from `loyalty_card` to `loyalty_cards` and
   // renames the following columns:
   //   * `guid` to `loyalty_card_id`.
   //   * `unmasked_loyalty_card_suffix` to `loyalty_card_number`.
   bool MigrateToVersion138();
+
+  // Adds `valuables_metadata` table.
+  bool MigrateToVersion148AddMetadataTable();
 };
 
 }  // namespace autofill

@@ -11,18 +11,19 @@
 #include <string>
 
 #include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list_types.h"
 #include "components/contextual_search/contextual_search_types.h"
 #include "components/lens/lens_bitmap_processing.h"
 #include "components/lens/lens_overlay_invocation_source.h"
-#include "third_party/lens_server_proto/aim_communication.pb.h"
+#include "third_party/lens_server_proto/aim_query.pb.h"
 #include "third_party/lens_server_proto/lens_overlay_client_context.pb.h"
-#include "third_party/lens_server_proto/lens_overlay_cluster_info.pb.h"
-#include "third_party/lens_server_proto/lens_overlay_selection_type.pb.h"
+#include "third_party/lens_server_proto/lens_overlay_image_crop.pb.h"
+#include "third_party/lens_server_proto/lens_overlay_request_id.pb.h"
 #include "third_party/lens_server_proto/lens_overlay_server.pb.h"
-#include "third_party/lens_server_proto/lens_overlay_service_deps.pb.h"
-#include "third_party/lens_server_proto/lens_overlay_visual_search_interaction_data.pb.h"
 #include "third_party/omnibox_proto/chrome_aim_entry_point.pb.h"
+#include "third_party/omnibox_proto/model_mode.pb.h"
+#include "third_party/omnibox_proto/tool_mode.pb.h"
 
 namespace base {
 class Time;
@@ -32,8 +33,10 @@ class UnguessableToken;
 class GURL;
 
 namespace lens {
-enum class MimeType;
+class ClientToAimMessage;
 struct ContextualInputData;
+enum LensOverlaySelectionType : int;
+enum class MimeType;
 namespace proto {
 class LensOverlaySuggestInputs;
 }  // namespace proto
@@ -48,6 +51,8 @@ class ContextualSearchContextController {
   // Struct containing configuration params for the context controller.
   // Note: When the ContextualTasks feature is enabled, some of these parameters
   // are overridden by the ComposeboxQueryController.
+  // TODO(crbug.com/479289674): Clean up other params from this struct, if
+  // the params should be made constant across all contextual surfaces.
   struct ConfigParams {
    public:
     // Whether to send the `lns_surface` parameter in search URLs.
@@ -56,15 +61,8 @@ class ContextualSearchContextController {
     // parameter if there is no image upload. Does nothing if `send_lns_surface`
     // is false.
     bool suppress_lns_surface_param_if_no_image = true;
-    // Whether to enable the multi-context input flow.
-    bool enable_multi_context_input_flow = false;
     // Whether to enable viewport images.
     bool enable_viewport_images = false;
-    // Whether or not to send viewport images with separate request ids from
-    // their associated page context, for the multi-context input flow.
-    // Does nothing if `enable_multi_context_input_flow` is false or if
-    // `enable_viewport_images` is false.
-    bool use_separate_request_ids_for_multi_context_viewport_images = true;
     // Whether to offer ZPS for the first document attachment, when multiple
     // attachments are available (true), or the only attachment if exactly one
     // attachment is available (false).
@@ -74,17 +72,19 @@ class ContextualSearchContextController {
     bool attach_page_title_and_url_to_suggest_requests = false;
   };
 
-  // Observer interface for the Page Handler to get updates on file upload
-  class FileUploadStatusObserver : public base::CheckedObserver {
+  // Observer interface for the Page Handler to get updates on context upload
+  class ContextUploadStatusObserver : public base::CheckedObserver {
    public:
-    virtual void OnFileUploadStatusChanged(
-        const base::UnguessableToken& file_token,
+    virtual void OnContextUploadStatusChanged(
+        const base::UnguessableToken& context_token,
         lens::MimeType mime_type,
-        FileUploadStatus file_upload_status,
-        const std::optional<FileUploadErrorType>& error_type) = 0;
+        ContextUploadStatus context_upload_status,
+        const std::optional<ContextUploadErrorType>& error_type) = 0;
+
+    virtual void OnControllerDestroyed() {}
 
    protected:
-    ~FileUploadStatusObserver() override = default;
+    ~ContextUploadStatusObserver() override = default;
   };
 
   // The possible search url types.
@@ -139,6 +139,9 @@ class ContextualSearchContextController {
     // The callback to run when the interaction response is received.
     base::OnceCallback<void(lens::LensOverlayInteractionResponse)>
         interaction_response_callback;
+
+    // Whether the query originated from voice search.
+    bool is_voice_search = false;
   };
 
   // Struct containing information needed to create a ClientToAimMessage.
@@ -161,20 +164,50 @@ class ContextualSearchContextController {
     lens::QueryPayload::QueryTextSource query_text_source =
         lens::QueryPayload::QUERY_TEXT_SOURCE_UNSPECIFIED;
 
-    // Whether deep search is selected.
-    bool deep_search_selected = false;
+    // Whether to force include the latest interaction request data in the AIM
+    // query payload.
+    bool force_include_latest_interaction_request_data = false;
+    // The currently active tool.
+    omnibox::ToolMode active_tool = omnibox::ToolMode::TOOL_MODE_UNSPECIFIED;
 
-    // Whether create images is selected.
-    bool create_images_selected = false;
+    // The currently active model.
+    omnibox::ModelMode active_model =
+        omnibox::ModelMode::MODEL_MODE_UNSPECIFIED;
 
     // Additional CGI params to append to the search request URL.
     std::map<std::string, std::string> additional_cgi_params;
+
+    // Metadata for context that is turn-specific. There is at most one entry
+    // per context id.
+    std::vector<lens::ContextTurnMetadata> context_turn_metadata;
+
+    // The token corresponding to the Lens Overlay instance, if one was active
+    // during the query submission.
+    std::optional<base::UnguessableToken> overlay_token;
+
+    // List of request IDs of removed contexts to be sent to the server.
+    // Populated by ContextualSearchSessionHandle.
+    std::vector<lens::LensOverlayRequestId> removed_contexts;
+
+    // Payload info for exiting a tool.
+    struct ExitToolInfo {
+      omnibox::ToolMode tool_mode = omnibox::ToolMode::TOOL_MODE_UNSPECIFIED;
+      omnibox::ToolMode new_tool_mode =
+          omnibox::ToolMode::TOOL_MODE_UNSPECIFIED;
+    };
+    std::optional<ExitToolInfo> exit_tool_info;
   };
 
   virtual ~ContextualSearchContextController() = default;
 
   // Called when a UI is associated with the context controller.
   virtual void InitializeIfNeeded() = 0;
+
+  // Triggers a fetch for the sticky cluster info if needed.
+  virtual void TriggerFetchClusterInfo() = 0;
+
+  // Set whether or not the context controller is backgrounded.
+  virtual void SetIsBackgrounded(bool backgrounded) = 0;
 
   // Called when a query has been submitted. `query_start_time` is the time
   // that the user clicked the submit button.
@@ -189,8 +222,8 @@ class ContextualSearchContextController {
           create_client_to_aim_request_info) = 0;
 
   // Observer management.
-  virtual void AddObserver(FileUploadStatusObserver* obs) = 0;
-  virtual void RemoveObserver(FileUploadStatusObserver* obs) = 0;
+  virtual void AddObserver(ContextUploadStatusObserver* obs) = 0;
+  virtual void RemoveObserver(ContextUploadStatusObserver* obs) = 0;
 
   // Triggers upload of the file with data and stores the file info in the
   // internal map. Call after setting the file info fields.
@@ -212,7 +245,7 @@ class ContextualSearchContextController {
       const base::UnguessableToken& file_token) = 0;
 
   // Return the file infos for all files in the request.
-  virtual std::vector<const FileInfo*> GetFileInfoList() = 0;
+  virtual std::vector<raw_ptr<const FileInfo>> GetFileInfoList() = 0;
 
   // Returns a weak pointer to the context controller.
   virtual base::WeakPtr<ContextualSearchContextController> AsWeakPtr() = 0;

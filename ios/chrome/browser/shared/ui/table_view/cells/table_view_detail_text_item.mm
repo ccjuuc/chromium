@@ -6,7 +6,6 @@
 
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/table_view/content_configuration/table_view_cell_content_configuration.h"
-#import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_styler.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/table_view/table_view_cells_constants.h"
@@ -28,9 +27,8 @@
 
 #pragma mark - TableViewItem
 
-- (void)configureCell:(LegacyTableViewCell*)cell
-           withStyler:(ChromeTableViewStyler*)styler {
-  [super configureCell:cell withStyler:styler];
+- (void)configureCell:(LegacyTableViewCell*)cell {
+  [super configureCell:cell];
 
   TableViewCellContentConfiguration* configuration =
       [[TableViewCellContentConfiguration alloc] init];
@@ -61,13 +59,13 @@
   switch (self.accessorySymbol) {
     case TableViewDetailTextCellAccessorySymbolChevron:
       cell.accessoryView = [[UIImageView alloc]
-          initWithImage:DefaultSymbolTemplateWithPointSize(
-                            kChevronForwardSymbol, kSymbolAccessoryPointSize)];
+          initWithImage:SymbolTemplateWithPointSize(SymbolChevronForward,
+                                                    kSymbolAccessoryPointSize)];
       break;
     case TableViewDetailTextCellAccessorySymbolExternalLink:
       cell.accessoryView = [[UIImageView alloc]
-          initWithImage:DefaultSymbolTemplateWithPointSize(
-                            kExternalLinkSymbol, kSymbolAccessoryPointSize)];
+          initWithImage:SymbolTemplateWithPointSize(SymbolExternalLink,
+                                                    kSymbolAccessoryPointSize)];
       break;
     case TableViewDetailTextCellAccessorySymbolNone:
       cell.accessoryView = nil;

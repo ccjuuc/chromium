@@ -199,7 +199,7 @@ WebString WebURLRequest::HttpHeaderField(const WebString& name) const {
 
 void WebURLRequest::SetHttpHeaderField(const WebString& name,
                                        const WebString& value) {
-  CHECK(!EqualIgnoringASCIICase(name, "referer"));
+  CHECK(!EqualIgnoringAsciiCase(name, "referer"));
   resource_request_->SetHttpHeaderField(name, value);
 }
 
@@ -258,10 +258,6 @@ WebString WebURLRequest::ReferrerString() const {
 
 network::mojom::ReferrerPolicy WebURLRequest::GetReferrerPolicy() const {
   return resource_request_->GetReferrerPolicy();
-}
-
-void WebURLRequest::SetHttpOriginIfNeeded(const WebSecurityOrigin& origin) {
-  resource_request_->SetHttpOriginIfNeeded(origin.Get());
 }
 
 bool WebURLRequest::HasUserGesture() const {
@@ -405,9 +401,9 @@ bool WebURLRequest::IsRevalidating() const {
   return resource_request_->IsRevalidating();
 }
 
-const std::optional<base::UnguessableToken>& WebURLRequest::GetDevToolsToken()
-    const {
-  return resource_request_->GetDevToolsToken();
+const std::optional<base::UnguessableToken>&
+WebURLRequest::GetDevToolsThrottlingToken() const {
+  return resource_request_->GetDevToolsThrottlingToken();
 }
 
 const WebString WebURLRequest::GetRequestedWithHeader() const {
@@ -416,10 +412,6 @@ const WebString WebURLRequest::GetRequestedWithHeader() const {
 
 void WebURLRequest::SetRequestedWithHeader(const WebString& value) {
   resource_request_->SetRequestedWithHeader(value);
-}
-
-const WebString WebURLRequest::GetPurposeHeader() const {
-  return resource_request_->GetPurposeHeader();
 }
 
 const base::UnguessableToken& WebURLRequest::GetFetchWindowId() const {
@@ -434,7 +426,7 @@ int WebURLRequest::GetLoadFlagsForWebUrlRequest() const {
 
   switch (resource_request_->GetCacheMode()) {
     case FetchCacheMode::kNoStore:
-      load_flags |= net::LOAD_DISABLE_CACHE;
+      load_flags |= net::LOAD_DISABLE_CACHE | net::LOAD_BYPASS_CACHE;
       break;
     case FetchCacheMode::kValidateCache:
       load_flags |= net::LOAD_VALIDATE_CACHE;

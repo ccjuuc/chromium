@@ -2,10 +2,12 @@
 # dependencies to a minimal set.
 include_rules = [
   "-components",
+  "+components/background_task_scheduler",
   "+components/country_codes",
   "+components/regional_capabilities",
   "+components/component_updater",
   "+components/keep_alive_registry",
+  "+components/keyed_service",
   "+components/metrics",
   "+components/network_time",
   "+components/prefs",
@@ -26,7 +28,7 @@ include_rules = [
 ]
 
 specific_include_rules = {
-  "log_decoder\.cc": [
+  "log_decoder\\.cc": [
     "+third_party/protobuf/src/google/protobuf",
   ],
 }

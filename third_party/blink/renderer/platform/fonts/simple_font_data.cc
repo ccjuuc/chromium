@@ -32,12 +32,12 @@
 #include <unicode/utf16.h>
 
 #include <algorithm>
+#include <bit>
 #include <memory>
 #include <utility>
 
 #include "base/compiler_specific.h"
 #include "base/memory/ptr_util.h"
-#include "base/numerics/byte_conversions.h"
 #include "build/build_config.h"
 #include "skia/ext/font_utils.h"
 #include "third_party/blink/renderer/platform/font_family_names.h"
@@ -367,8 +367,7 @@ static std::pair<int16_t, int16_t> TypoAscenderAndDescender(
                                        sizeof(buffer), buffer);
   if (size == sizeof(buffer)) {
     // The buffer values are in big endian.
-    return std::make_pair(base::ByteSwap(buffer[0]),
-                          -base::ByteSwap(buffer[1]));
+    return std::make_pair(std::byteswap(buffer[0]), -std::byteswap(buffer[1]));
   }
   return std::make_pair(0, 0);
 }
@@ -507,6 +506,32 @@ gfx::RectF SimpleFontData::PlatformBoundsForGlyph(Glyph glyph) const {
   SkRect bounds;
   SkFontGetBoundsForGlyph(font_, glyph, &bounds);
   return gfx::SkRectToRectF(bounds);
+}
+
+gfx::RectF SimpleFontData::PreciseBoundsForGlyph(Glyph glyph) const {
+  if (!platform_data_->size()) {
+    return gfx::RectF();
+  }
+
+  if (glyph_to_precise_bounds_map_) {
+    if (std::optional<gfx::RectF> cached =
+            glyph_to_precise_bounds_map_->MetricsForGlyph(glyph)) {
+      return *cached;
+    }
+  }
+
+  static_assert(sizeof(glyph) == 2, "Glyph id should not be truncated.");
+
+  SkRect bounds;
+  SkFontGetPreciseBoundsForGlyph(font_, glyph, &bounds);
+  gfx::RectF result = gfx::SkRectToRectF(bounds);
+
+  if (!glyph_to_precise_bounds_map_) {
+    glyph_to_precise_bounds_map_ =
+        std::make_unique<GlyphMetricsMap<gfx::RectF>>();
+  }
+  glyph_to_precise_bounds_map_->SetMetricsForGlyph(glyph, result);
+  return result;
 }
 
 void SimpleFontData::BoundsForGlyphs(const Vector<Glyph, 256>& glyphs,

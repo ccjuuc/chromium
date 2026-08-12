@@ -109,11 +109,11 @@ export class NetworkProxySectionElement extends NetworkProxySectionElementBase {
     ];
   }
 
-  disabled: boolean;
-  managedProperties: ManagedProperties|undefined;
-  private extensionInfo_: ExtensionInfo|undefined;
-  private useSharedProxies_: boolean;
-  private hasProxyOverrideRules_: boolean;
+  declare disabled: boolean;
+  declare managedProperties: ManagedProperties|undefined;
+  declare private extensionInfo_: ExtensionInfo|undefined;
+  declare private useSharedProxies_: boolean;
+  declare private hasProxyOverrideRules_: boolean;
 
   /**
    * Returns the allow shared CrToggleElement.
@@ -144,14 +144,15 @@ export class NetworkProxySectionElement extends NetworkProxySectionElementBase {
    */
   private isProxySetByExtension_(): boolean {
     const property = this.getProxySettingsTypeProperty_();
+    const proxyPref = this.getPref<unknown>('proxy');
     if (!property || !this.isExtensionControlled(property) ||
-        !this.prefs.proxy.controlledByName) {
+        !proxyPref.controlledByName) {
       return false;
     }
     this.extensionInfo_ = {
-      id: this.prefs.proxy.extensionId,
-      name: this.prefs.proxy.controlledByName,
-      canBeDisabled: this.prefs.proxy.extensionCanBeDisabled,
+      id: proxyPref.extensionId,
+      name: proxyPref.controlledByName,
+      canBeDisabled: proxyPref.extensionCanBeDisabled,
     };
     return true;
   }
@@ -207,7 +208,7 @@ export class NetworkProxySectionElement extends NetworkProxySectionElementBase {
     }
     // We currently do not accurately determine the source if the policy
     // controlling the proxy setting, so always show the 'allow shared'
-    // toggle for shared networks. http://crbug.com/662529.
+    // toggle for shared networks. http://crbug.com/40492211.
     return true;
   }
 

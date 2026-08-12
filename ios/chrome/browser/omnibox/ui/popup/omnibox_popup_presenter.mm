@@ -11,13 +11,11 @@
 #import "ios/chrome/browser/shared/ui/util/layout_guide_names.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/shared/ui/util/util_swift.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/omnibox_position_util.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_constants.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/common/ui/util/ui_util.h"
 #import "ui/base/device_form_factor.h"
-#import "ui/gfx/ios/uikit_util.h"
 
 namespace {
 const CGFloat kVerticalOffset = 6;
@@ -34,6 +32,10 @@ const CGFloat kFadeAnimationVerticalOffset = 12;
 @interface OmniboxPopupPresenter ()
 /// Constraint for the bottom anchor of the popup when form factor is phone.
 @property(nonatomic, strong) NSLayoutConstraint* bottomConstraintPhone;
+/// Constraint for the bottom anchor of the popup when form factor is regular
+/// horizontal size class and composebox is being shown.
+@property(nonatomic, strong)
+    NSLayoutConstraint* bottomConstraintComposeboxRegular;
 /// Constraint for the height anchor of the popup when form factor is tablet.
 @property(nonatomic, strong) NSLayoutConstraint* heightConstraintTablet;
 
@@ -97,16 +99,15 @@ const CGFloat kFadeAnimationVerticalOffset = 12;
     _popupContainerView.overrideUserInterfaceStyle = userInterfaceStyle;
     viewController.overrideUserInterfaceStyle = userInterfaceStyle;
 
-    // TODO(crbug.com/469986429): The final state of this should be us exposing
-    // the presenter property OmniboxPopupPresenterDelegate and set it there.
+    if (IsComposeboxIOSEnabled()) {
+      if ([self.delegate
+              respondsToSelector:@selector(popupDidInitializePresenter:)]) {
+        [self.delegate popupDidInitializePresenter:self];
+      }
+    }
     if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
-      if (IsComposeboxIpadEnabled()) {
-        _popupContainerView.backgroundColor =
-            [self.delegate popupBackgroundColorForPresenter:self];
-      } else {
         _popupContainerView.backgroundColor =
             [UIColor colorNamed:kPrimaryBackgroundColor];
-      }
     } else {
       _popupContainerView.backgroundColor =
           [self.delegate popupBackgroundColorForPresenter:self];
@@ -159,9 +160,7 @@ const CGFloat kFadeAnimationVerticalOffset = 12;
     BOOL isBottomOmnibox =
         IsBottomOmniboxAvailable() &&
         _unfocusedOmniboxToolbarType == ToolbarType::kSecondary;
-    BOOL enableFocusAnimation =
-        isFocusingOmnibox &&
-        (isBottomOmnibox || IsMultilineBrowserOmniboxEnabled());
+    BOOL enableFocusAnimation = isFocusingOmnibox && isBottomOmnibox;
 
     [self initialLayoutAnimated:enableFocusAnimation];
 
@@ -178,6 +177,9 @@ const CGFloat kFadeAnimationVerticalOffset = 12;
 /// Therefore, on trait collection change, re-add the popup and recreate the
 /// constraints to make sure the correct ones are used.
 - (void)updatePopupAfterTraitCollectionChange {
+  if (!self.isOpen) {
+    return;
+  }
   // Re-add the popup container to break any existing constraints.
   [self.popupContainerView removeFromSuperview];
   [[self.delegate popupParentViewForPresenter:self]
@@ -189,14 +191,20 @@ const CGFloat kFadeAnimationVerticalOffset = 12;
 }
 
 - (void)updatePopupConstraints {
-  if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
     BOOL showRegularLayout =
         IsRegularXRegularSizeClass(self.popupContainerView.traitCollection);
-    self.bottomConstraintPhone.active = !showRegularLayout;
-    self.heightConstraintTablet.active = showRegularLayout;
-  } else {
-    self.bottomConstraintPhone.active = YES;
-  }
+    if (IsComposeboxIpadEnabled() &&
+        _presentationContext == OmniboxPresentationContext::kComposebox) {
+      self.bottomConstraintComposeboxRegular.active = showRegularLayout;
+      self.bottomConstraintPhone.active = !showRegularLayout;
+    } else {
+      if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
+        self.bottomConstraintPhone.active = !showRegularLayout;
+        self.heightConstraintTablet.active = showRegularLayout;
+      } else {
+        self.bottomConstraintPhone.active = YES;
+      }
+    }
 }
 
 // Sets the additional vertical content inset for the suggestion list.
@@ -283,29 +291,47 @@ const CGFloat kFadeAnimationVerticalOffset = 12;
   // to defocus the omnibox.
   self.heightConstraintTablet = [popup.heightAnchor
       constraintLessThanOrEqualToAnchor:popup.superview.heightAnchor
-                             multiplier:0.7];
+                             multiplier:IsComposeboxIpadEnabled() ? 1 : 0.7];
 
-  BOOL tabletFormFactor =
-      ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET;
-
-  // Bottom constraints.
-  if (tabletFormFactor) {
-    BOOL paddingAmmount =
-        _presentationContext == OmniboxPresentationContext::kLensOverlay
-            ? 0
-            : kPopupBottomPaddingTablet + kSecondaryToolbarWithoutOmniboxHeight;
-    NSLayoutAnchor* superviewAnchor =
-        _presentationContext == OmniboxPresentationContext::kLensOverlay
-            ? popup.superview.bottomAnchor
-            : popup.superview.safeAreaLayoutGuide.bottomAnchor;
-    self.bottomConstraintPhone =
-        [superviewAnchor constraintGreaterThanOrEqualToAnchor:popup.bottomAnchor
-                                                     constant:paddingAmmount];
-  } else {
+  if (IsComposeboxIpadEnabled() &&
+      _presentationContext == OmniboxPresentationContext::kComposebox) {
+    // Constraints the popup bottom to its container superview so composebox for
+    // large size class is a completely containerized popup. Otherwise, the
+    // iphone fullscreen layout will be used.
+    self.bottomConstraintComposeboxRegular.active = NO;
+    self.bottomConstraintComposeboxRegular =
+        [popup.superview.safeAreaLayoutGuide.bottomAnchor
+            constraintEqualToAnchor:popup.bottomAnchor];
+    self.bottomConstraintPhone.active = NO;
     CGFloat offset = self.useBottomOmniboxInPopup ? _bottomOmniboxOffset : 0;
     self.bottomConstraintPhone =
         [popup.bottomAnchor constraintEqualToAnchor:popup.superview.bottomAnchor
                                            constant:-offset];
+  } else {
+    BOOL tabletFormFactor =
+        ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET;
+
+    // Bottom constraints.
+    if (tabletFormFactor) {
+      BOOL paddingAmmount =
+          _presentationContext == OmniboxPresentationContext::kLensOverlay
+              ? 0
+              : kPopupBottomPaddingTablet +
+                    kSecondaryToolbarWithoutOmniboxHeight;
+      NSLayoutAnchor* superviewAnchor =
+          _presentationContext == OmniboxPresentationContext::kLensOverlay
+              ? popup.superview.bottomAnchor
+              : popup.superview.safeAreaLayoutGuide.bottomAnchor;
+
+      self.bottomConstraintPhone = [superviewAnchor
+          constraintGreaterThanOrEqualToAnchor:popup.bottomAnchor
+                                      constant:paddingAmmount];
+    } else {
+      CGFloat offset = self.useBottomOmniboxInPopup ? _bottomOmniboxOffset : 0;
+      self.bottomConstraintPhone = [popup.bottomAnchor
+          constraintEqualToAnchor:popup.superview.bottomAnchor
+                         constant:-offset];
+    }
   }
 
   // Top constraints.
@@ -331,7 +357,6 @@ const CGFloat kFadeAnimationVerticalOffset = 12;
       [NSMutableArray arrayWithObject:_popupContainerTopConstraint];
 
   BOOL regularXRegularSizeClass =
-      tabletFormFactor &&
       IsRegularXRegularSizeClass(self.popupContainerView.traitCollection);
   if (regularXRegularSizeClass && self.topOmniboxGuide) {
     NSLayoutConstraint* leadingConstraint = [popup.leadingAnchor
@@ -383,30 +408,8 @@ const CGFloat kFadeAnimationVerticalOffset = 12;
 }
 
 - (BOOL)useBottomOmniboxInPopup {
-  if (_presentationContext == OmniboxPresentationContext::kComposebox) {
-    return _preferredOmniboxPosition == ToolbarType::kSecondary;
-  }
-
-  if (_presentationContext == OmniboxPresentationContext::kLensOverlay) {
-    return NO;
-  }
-
-  BOOL inPortrait = IsPortrait(self.viewController.view.window);
-  if (omnibox::ForceBottomOmniboxInEditState()) {
-    return inPortrait;
-  }
-
-  BOOL unfocusedToolbarBottom =
-      _unfocusedOmniboxToolbarType == ToolbarType::kSecondary;
-  BOOL userPreferenceBottom =
-      _preferredOmniboxPosition == ToolbarType::kSecondary;
-  if (omnibox::ShouldFocusedOmniboxFollowSteadyStatePosition()) {
-    // NTP portrait with bottom omnibox has a special handling.
-    return (userPreferenceBottom && _isNTP && inPortrait) ||
-           unfocusedToolbarBottom;
-  }
-
-  return NO;
+  return _presentationContext == OmniboxPresentationContext::kComposebox &&
+         _preferredOmniboxPosition == ToolbarType::kSecondary;
 }
 
 @end

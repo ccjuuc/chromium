@@ -4,10 +4,10 @@
 
 #include "chrome/browser/ui/webui/print_preview/pdf_printer_handler.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -26,11 +26,12 @@
 #include "chrome/browser/printing/print_preview_dialog_controller.h"
 #include "chrome/browser/printing/print_preview_sticky_settings.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/chrome_select_file_policy.h"
+#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 #include "chrome/browser/ui/webui/print_preview/print_preview_utils.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/account_id/account_id.h"
 #include "components/cloud_devices/common/printer_description.h"
+#include "components/pdf/common/constants.h"
 #include "components/url_formatter/url_formatter.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
@@ -106,7 +107,7 @@ gfx::Size GetDefaultPdfMediaSizeMicrons() {
                    pdf_media_size.height() * device_microns_per_device_unit);
 }
 
-base::Value::Dict GetPdfCapabilities(
+base::DictValue GetPdfCapabilities(
     const std::string& locale,
     PrinterSemanticCapsAndDefaults::Papers custom_papers) {
   using cloud_devices::printer::MediaSize;
@@ -139,7 +140,7 @@ base::Value::Dict GetPdfCapabilities(
           .WithNameMaybeBasedOnSize(/*custom_display_name=*/"",
                                     /*vendor_id=*/"")
           .Build();
-  if (!base::Contains(kPdfMedia, default_media.size_name)) {
+  if (!std::ranges::contains(kPdfMedia, default_media.size_name)) {
     default_media =
         cloud_devices::printer::MediaBuilder()
             .WithStandardName(locale == "en-US" ? MediaSize::NA_LETTER
@@ -227,7 +228,7 @@ void ConstructCapabilitiesAndCompleteCallback(
     PrinterSemanticCapsAndDefaults::Papers custom_papers) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  base::Value::Dict printer_info;
+  base::DictValue printer_info;
   printer_info.Set(kSettingDeviceName, destination_id);
   printer_info.Set(kSettingCapabilities,
                    GetPdfCapabilities(g_browser_process->GetApplicationLocale(),
@@ -282,7 +283,7 @@ void PdfPrinterHandler::StartGetCapability(const std::string& destination_id,
 
 void PdfPrinterHandler::StartPrint(
     const std::u16string& job_title,
-    base::Value::Dict settings,
+    base::DictValue settings,
     scoped_refptr<base::RefCountedMemory> print_data,
     PrintCallback callback) {
   print_data_ = print_data;
@@ -311,7 +312,8 @@ void PdfPrinterHandler::StartPrint(
   bool is_savable = false;
   if (initiator) {
     initiator_url = initiator->GetLastCommittedURL();
-    is_savable = initiator->IsSavable();
+    is_savable = initiator->IsSavable() ||
+                 initiator->GetContentsMimeType() == pdf::kPDFMimeType;
   }
   base::FilePath path = GetFileName(initiator_url, job_title, is_savable);
 

@@ -10,8 +10,10 @@
 #include "base/feature_list.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/stringprintf.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #include "sql/transaction.h"
 
 const base::FilePath::CharType WebDatabase::kInMemoryPath[] =
@@ -52,9 +54,10 @@ void LogInitResult(WebDatabaseInitResult result) {
   base::UmaHistogramEnumeration("WebDatabase.InitResult", result);
 }
 
-// Version 147 migrates entities metadata fields into a new table. It is thus is
-// no longer compatible with version 139.
-constexpr int kCompatibleVersionNumber = 147;
+// Version 151 writes tuples to one of `autofill::EntityTable`'s tables that
+// are not processed correctly by clients with version 150. As a result,
+// some `autofill::EntityInstance`s on these old clients would be incomplete.
+constexpr int kCompatibleVersionNumber = 151;
 
 // Change the version number and possibly the compatibility version of
 // |meta_table_|.
@@ -146,8 +149,9 @@ sql::Database* WebDatabase::GetSQLConnection() {
   return &db_;
 }
 
-sql::InitStatus WebDatabase::Init(const base::FilePath& db_name,
-                                  const os_crypt_async::Encryptor* encryptor) {
+sql::InitStatus WebDatabase::Init(
+    const base::FilePath& db_name,
+    scoped_refptr<const os_crypt_async::Encryptor> encryptor) {
   // Only unit tests whose tables don't use any crypto for their tables pass in
   // a null encryptor.
   if (!encryptor) {

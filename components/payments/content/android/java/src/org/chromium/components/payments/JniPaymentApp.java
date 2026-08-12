@@ -18,6 +18,7 @@ import org.jni_zero.NativeMethods;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.payments.mojom.PaymentDetailsModifier;
+import org.chromium.payments.mojom.PaymentEventResponseType;
 import org.chromium.payments.mojom.PaymentItem;
 import org.chromium.payments.mojom.PaymentMethodData;
 import org.chromium.payments.mojom.PaymentOptions;
@@ -30,6 +31,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /** Wrapper around a C++ payment app. */
@@ -66,7 +68,7 @@ public class JniPaymentApp extends PaymentApp {
         private final String mLabel;
         private final Bitmap mIcon;
 
-        @CalledByNative("PaymentEntityLogoImpl")
+        @CalledByNative
         PaymentEntityLogoImpl(
                 @JniType("std::u16string") String label, @JniType("const SkBitmap*") Bitmap icon) {
             mLabel = label;
@@ -106,11 +108,11 @@ public class JniPaymentApp extends PaymentApp {
     }
 
     @CalledByNative
-    public void onInvokeError(String errorMessage) {
+    public void onInvokeError(@PaymentEventResponseType.EnumType int error, String errorMessage) {
         mHandler.post(
                 () -> {
                     if (mInvokeCallback == null) return;
-                    mInvokeCallback.onInstrumentDetailsError(errorMessage);
+                    mInvokeCallback.onInstrumentDetailsError(error, errorMessage);
                     mInvokeCallback = null;
                 });
     }
@@ -195,6 +197,13 @@ public class JniPaymentApp extends PaymentApp {
     }
 
     @Override
+    public PaymentItem getTotalForSpc() {
+        byte[] byteResult = JniPaymentAppJni.get().getTotalForSpc(mNativeObject);
+        Objects.requireNonNull(byteResult, "The secure payment app must provide the total.");
+        return PaymentItem.deserialize(ByteBuffer.wrap(byteResult));
+    }
+
+    @Override
     public void invokePaymentApp(
             String id,
             String merchantName,
@@ -259,7 +268,7 @@ public class JniPaymentApp extends PaymentApp {
     @Override
     public void dismissInstrument() {
         if (mNativeObject == 0) return;
-        JniPaymentAppJni.get().freeNativeObject(mNativeObject);
+        JniPaymentAppJni.get().freeNativeObjectSoon(mNativeObject);
         mNativeObject = 0;
     }
 
@@ -308,6 +317,8 @@ public class JniPaymentApp extends PaymentApp {
 
         boolean canPreselect(long nativeJniPaymentApp);
 
+        byte[] getTotalForSpc(long nativeJniPaymentApp);
+
         void invokePaymentApp(long nativeJniPaymentApp, JniPaymentApp callback);
 
         void updateWith(long nativeJniPaymentApp, ByteBuffer responseByteBuffer);
@@ -326,7 +337,7 @@ public class JniPaymentApp extends PaymentApp {
 
         void setPaymentHandlerHost(long nativeJniPaymentApp, PaymentHandlerHost paymentHandlerHost);
 
-        void freeNativeObject(long nativeJniPaymentApp);
+        void freeNativeObjectSoon(long nativeJniPaymentApp);
 
         byte[] setAppSpecificResponseFields(long nativeJniPaymentApp, ByteBuffer paymentResponse);
     }

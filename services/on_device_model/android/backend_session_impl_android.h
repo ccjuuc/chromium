@@ -46,7 +46,11 @@ class BackendSessionImplAndroid : public BackendSession {
     // A response processing error is thrown when running inference. This may
     // be caused by safety filtering.
     kInferenceResponseProcessingError = 7,
-    kMaxValue = kInferenceResponseProcessingError,
+    // An invalid argument error when building the inference request. This can
+    // happen when request parameters violate MLKit API constraints (e.g.,
+    // maxOutputTokens cannot exceed 256).
+    kInvalidRequestArgumentError = 8,
+    kMaxValue = kInvalidRequestArgumentError,
   };
 
   BackendSessionImplAndroid(
@@ -57,12 +61,14 @@ class BackendSessionImplAndroid : public BackendSession {
   // BackendSession:
   void Append(on_device_model::mojom::AppendOptionsPtr options,
               mojo::PendingRemote<on_device_model::mojom::ContextClient> client,
+              mojo::ReportBadMessageCallback bad_message_callback,
               base::OnceClosure on_complete) override;
   void Generate(
       on_device_model::mojom::GenerateOptionsPtr input,
       mojo::PendingRemote<on_device_model::mojom::StreamingResponder> response,
       base::OnceClosure on_complete) override;
   void SizeInTokens(on_device_model::mojom::InputPtr input,
+                    mojo::ReportBadMessageCallback bad_message_callback,
                     base::OnceCallback<void(uint32_t)> callback) override;
   void Score(const std::string& text,
              base::OnceCallback<void(float)> callback) override;
@@ -74,21 +80,26 @@ class BackendSessionImplAndroid : public BackendSession {
                  mojo::PendingRemote<on_device_model::mojom::AsrStreamResponder>
                      response) override;
   void AsrAddAudioChunk(on_device_model::mojom::AudioDataPtr data) override;
+  void Hint(on_device_model::mojom::HintOptionsPtr options) override;
 
   // Called by Java (can be called on any thread):
   // Called when the response of `Generate` is received from the AiCoreSession.
   void OnResponse(const std::string& response);
   // Called when the response of `Generate` is completed from the AiCoreSession.
   void OnComplete(GenerateResult generate_result);
+  // Called when the result of `GetSizeInTokens` is received from the
+  // AiCoreSession.
+  void OnSizeInTokensResult(uint32_t size);
 
  private:
   BackendSessionImplAndroid(
       optimization_guide::proto::ModelExecutionFeature feature,
       on_device_model::mojom::SessionParamsPtr params,
-      const std::vector<ml::InputPiece>& context_input_pieces);
+      std::vector<on_device_model::mojom::InputPiecePtr> context_input_pieces);
 
   void OnResponseOnSequence(const std::string& response);
   void OnCompleteOnSequence(GenerateResult generate_result);
+  void OnSizeInTokensResultOnSequence(uint32_t size);
 
   // The Java counterpart of this object.
   base::android::ScopedJavaGlobalRef<jobject> java_session_;
@@ -97,8 +108,12 @@ class BackendSessionImplAndroid : public BackendSession {
   // responder is fine because `Generate` is only called until the previous one
   // completes.
   mojo::Remote<on_device_model::mojom::StreamingResponder> responder_;
+
+  // Callback for the current GetSizeInTokens call.
+  base::OnceCallback<void(uint32_t)> size_in_tokens_callback_;
+
   // The accumulated context of the current session.
-  std::vector<ml::InputPiece> context_input_pieces_;
+  std::vector<on_device_model::mojom::InputPiecePtr> context_input_pieces_;
 
   // The feature for which this session was created.
   const optimization_guide::proto::ModelExecutionFeature feature_;

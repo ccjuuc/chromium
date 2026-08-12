@@ -31,6 +31,7 @@ class PermissionUiSelector {
   using PredictionGrantLikelihood =
       PermissionPrediction_Likelihood_DiscretizedLikelihood;
 
+  // LINT.IfChange(QuietUiReason)
   enum class QuietUiReason {
     kEnabledInPrefs,
     kTriggeredByCrowdDeny,
@@ -39,7 +40,12 @@ class PermissionUiSelector {
     kServicePredictedVeryUnlikelyGrant,
     kOnDevicePredictedVeryUnlikelyGrant,
     kTriggeredDueToDisruptiveBehavior,
+    kTriggeredDueToLackOfGesture,
   };
+  // LINT.ThenChange(
+  // //chrome/browser/permissions/quiet_permission_prompt_model_android.cc,
+  // //chrome/browser/ui/content_settings/content_setting_bubble_model.cc,
+  // //components/permissions/permission_request_manager.cc)
 
   enum class WarningReason {
     kAbusiveRequests,

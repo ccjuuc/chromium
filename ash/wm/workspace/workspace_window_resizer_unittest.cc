@@ -4,6 +4,8 @@
 
 #include "ash/wm/workspace/workspace_window_resizer.h"
 
+#include <ranges>
+
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/public/cpp/window_properties.h"
 #include "ash/screen_util.h"
@@ -24,9 +26,9 @@
 #include "ash/wm/work_area_insets.h"
 #include "ash/wm/workspace/phantom_window_controller.h"
 #include "ash/wm/workspace_controller.h"
-#include "base/containers/adapters.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
+#include "base/test/gtest_util.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
@@ -137,7 +139,7 @@ class WorkspaceWindowResizerTest : public AshTestBase {
   std::vector<int> WindowOrderAsIntVector(aura::Window* parent) const {
     std::vector<int> result;
     const aura::Window::Windows& windows = parent->children();
-    for (aura::Window* window : base::Reversed(windows)) {
+    for (aura::Window* window : std::views::reverse(windows)) {
       if (window == window_.get() || window == window2_.get() ||
           window == window3_.get()) {
         result.push_back(window->GetId());
@@ -154,7 +156,9 @@ class WorkspaceWindowResizerTest : public AshTestBase {
     auto resizer =
         CreateWindowResizer(window, gfx::PointF(point_in_parent),
                             window_component, wm::WINDOW_MOVE_SOURCE_MOUSE);
-    workspace_resizer_ = WorkspaceWindowResizer::GetInstanceForTest();
+    auto* workspace_resizer = WorkspaceWindowResizer::GetInstanceForTest();
+    workspace_resizer_ =
+        workspace_resizer ? workspace_resizer->GetWeakPtr() : nullptr;
     return resizer;
   }
 
@@ -207,10 +211,10 @@ class WorkspaceWindowResizerTest : public AshTestBase {
 
   void InitTouchResizeWindow(const gfx::Rect& bounds, int window_component) {
     touch_resize_delegate_.set_window_component(window_component);
-    touch_resize_window_.reset(
+    touch_resize_window_ =
         CreateTestWindowInShell({.delegate = &touch_resize_delegate_,
                                  .bounds = bounds,
-                                 .window_id = 0}));
+                                 .window_id = 0});
   }
 
   bool IsDwellCountdownTimerRunning() {
@@ -237,8 +241,7 @@ class WorkspaceWindowResizerTest : public AshTestBase {
   aura::test::TestWindowDelegate touch_resize_delegate_;
   std::unique_ptr<aura::Window> touch_resize_window_;
 
-  raw_ptr<WorkspaceWindowResizer, DanglingUntriaged> workspace_resizer_ =
-      nullptr;
+  base::WeakPtr<WorkspaceWindowResizer> workspace_resizer_ = nullptr;
 };
 
 // Assertions around attached window resize dragging from the right with 2

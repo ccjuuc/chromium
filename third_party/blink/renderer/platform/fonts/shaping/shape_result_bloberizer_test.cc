@@ -8,6 +8,7 @@
 #include <optional>
 #include <utility>
 
+#include "base/numerics/safe_conversions.h"
 #include "skia/ext/font_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/platform/fonts/character_range.h"
@@ -92,11 +93,11 @@ void CheckBlobBuffer(const ShapeResultBloberizer::BlobBuffer& blob_buffer,
       EXPECT_EQ(expected_run.glyph_count, run.fGlyphCount)
           << "Blob: " << blob_index << " Run: " << run_index;
 
-      int actual_size = run.fUtf8Size_forTest;
-      int expected_size = expected_run.utf8.size();
+      size_t actual_size = base::checked_cast<size_t>(run.fUtf8Size_forTest);
+      size_t expected_size = expected_run.utf8.size();
       EXPECT_EQ(actual_size, expected_size)
           << "Blob: " << blob_index << " Run: " << run_index;
-      for (int i = 0; i < actual_size && i < expected_size; ++i) {
+      for (size_t i = 0; i < actual_size && i < expected_size; ++i) {
         EXPECT_EQ(UNSAFE_TODO(run.fUtf8_forTest[i]), expected_run.utf8[i])
             << "Blob: " << blob_index << " Run: " << run_index << " i: " << i;
       }
@@ -393,8 +394,7 @@ TEST_F(ShapeResultBloberizerTest, CommonAccentRightToLeftFillGlyphBufferNG) {
       bloberizer_ng.Blobs(),
       {{
           {5,
-           string.Substring(text_info.from, text_info.to - text_info.from)
-               .Utf8(),
+           string.substr(text_info.from, text_info.to - text_info.from).Utf8(),
            ExpectedRun::ClusterDirection::kDescending},
       }});
 }
@@ -419,8 +419,7 @@ TEST_F(ShapeResultBloberizerTest, FourByteUtf8CodepointsNG) {
       bloberizer_ng.Blobs(),
       {{
           {2,
-           string.Substring(text_info.from, text_info.to - text_info.from)
-               .Utf8(),
+           string.substr(text_info.from, text_info.to - text_info.from).Utf8(),
            ExpectedRun::ClusterDirection::kAscending},
       }});
 }
@@ -451,8 +450,7 @@ TEST_F(ShapeResultBloberizerTest, OffsetIntoTrailingSurrogateNG) {
       bloberizer_ng.Blobs(),
       {{
           {1,
-           string
-               .Substring(text_info.from + 1, text_info.to - text_info.from - 1)
+           string.substr(text_info.from + 1, text_info.to - text_info.from - 1)
                .Utf8(),
            ExpectedRun::ClusterDirection::kAscending},
       }});
@@ -466,10 +464,10 @@ TEST_F(ShapeResultBloberizerTest, LatinMultRunNG) {
   ExpectedRange range_b{5, 7};
   ExpectedRange range_c{7, 32};
   ExpectedRange range_d{32, 38};
-  HarfBuzzShaper shaper_a(string.Substring(range_a.from, range_a.to));
-  HarfBuzzShaper shaper_b(string.Substring(range_b.from, range_b.to));
-  HarfBuzzShaper shaper_c(string.Substring(range_c.from, range_c.to));
-  HarfBuzzShaper shaper_d(string.Substring(range_d.from, range_d.to));
+  HarfBuzzShaper shaper_a(string.substr(range_a.from, range_a.to));
+  HarfBuzzShaper shaper_b(string.substr(range_b.from, range_b.to));
+  HarfBuzzShaper shaper_c(string.substr(range_c.from, range_c.to));
+  HarfBuzzShaper shaper_d(string.substr(range_d.from, range_d.to));
 
   Font* font = MakeGarbageCollected<Font>(font_description);
 
@@ -497,19 +495,19 @@ TEST_F(ShapeResultBloberizerTest, LatinMultRunNG) {
       {{
           // "Testi"
           {static_cast<int>(range_a.length() - 1),
-           string.Substring(range_a.from + 1, range_a.length() - 1).Utf8(),
+           string.substr(range_a.from + 1, range_a.length() - 1).Utf8(),
            ExpectedRun::ClusterDirection::kAscending},
           // "ng"
           {static_cast<int>(range_b.length()),
-           string.Substring(range_b.from, range_b.length()).Utf8(),
+           string.substr(range_b.from, range_b.length()).Utf8(),
            ExpectedRun::ClusterDirection::kAscending},
           // " ShapeResultIterator::Cop"
           {static_cast<int>(range_c.length()),
-           string.Substring(range_c.from, range_c.length()).Utf8(),
+           string.substr(range_c.from, range_c.length()).Utf8(),
            ExpectedRun::ClusterDirection::kAscending},
           // "yRange"
           {static_cast<int>(range_d.length()),
-           string.Substring(range_d.from, range_d.length()).Utf8(),
+           string.substr(range_d.from, range_d.length()).Utf8(),
            ExpectedRun::ClusterDirection::kAscending},
       }});
 }
@@ -525,9 +523,9 @@ TEST_F(ShapeResultBloberizerTest, SupplementaryMultiRunNG) {
   ExpectedRange range_a{0, 6};
   ExpectedRange range_b{6, 12};
   ExpectedRange range_c{12, 16};
-  HarfBuzzShaper shaper_a(string.Substring(range_a.from, range_a.to));
-  HarfBuzzShaper shaper_b(string.Substring(range_b.from, range_b.to));
-  HarfBuzzShaper shaper_c(string.Substring(range_c.from, range_c.to));
+  HarfBuzzShaper shaper_a(string.substr(range_a.from, range_a.to));
+  HarfBuzzShaper shaper_b(string.substr(range_b.from, range_b.to));
+  HarfBuzzShaper shaper_c(string.substr(range_c.from, range_c.to));
 
   Font* font = blink::test::CreateTestFont(
       AtomicString("NotoSansCJK"),
@@ -558,15 +556,15 @@ TEST_F(ShapeResultBloberizerTest, SupplementaryMultiRunNG) {
                   {{
                       // "𠜎𠜱𠝹"
                       {static_cast<int>(range_a.length() / 2),
-                       string.Substring(range_a.from, range_a.length()).Utf8(),
+                       string.substr(range_a.from, range_a.length()).Utf8(),
                        ExpectedRun::ClusterDirection::kAscending},
                       // "𠱓𠱸𠲖"
                       {static_cast<int>(range_b.length() / 2),
-                       string.Substring(range_b.from, range_b.length()).Utf8(),
+                       string.substr(range_b.from, range_b.length()).Utf8(),
                        ExpectedRun::ClusterDirection::kAscending},
                       // "𠳏𠳕"
                       {static_cast<int>(range_c.length() / 2),
-                       string.Substring(range_c.from, range_c.length()).Utf8(),
+                       string.substr(range_c.from, range_c.length()).Utf8(),
                        ExpectedRun::ClusterDirection::kAscending},
                   }});
 }

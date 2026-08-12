@@ -7,7 +7,6 @@
 #include <memory>
 
 #include "base/memory/raw_ptr.h"
-#include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/views/chrome_views_test_base.h"
@@ -46,8 +45,7 @@ class TestLocationIconDelegate : public IconLabelBubbleView::Delegate,
   const LocationBarModel* GetLocationBarModel() const override {
     return location_bar_model_;
   }
-  ui::ImageModel GetLocationIcon(
-      IconFetchedCallback on_icon_fetched) const override {
+  ui::ImageModel GetLocationIcon(IconFetchedCallback on_icon_fetched) override {
     return ui::ImageModel();
   }
 
@@ -71,7 +69,7 @@ class LocationIconViewTest : public ChromeViewsTestBase {
     gfx::FontList font_list;
 
     widget_ =
-        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+        CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
 
     location_bar_model_ = std::make_unique<TestLocationBarModel>();
     delegate_ =

@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/notreached.h"
 #include "build/build_config.h"
 #include "gpu/ipc/common/exported_shared_image_mojom_traits.h"
 #include "gpu/ipc/common/mailbox_mojom_traits.h"
@@ -19,16 +20,22 @@
 namespace mojo {
 
 // static
-bool StructTraits<viz::mojom::MetadataOverrideDataView,
-                  viz::TransferableResource::MetadataOverride>::
+base::expected<void, DeserializationError>
+StructTraits<viz::mojom::MetadataOverrideDataView,
+             viz::TransferableResource::MetadataOverride>::
     Read(viz::mojom::MetadataOverrideDataView data,
          viz::TransferableResource::MetadataOverride* out) {
   out->is_overlay_candidate = data.is_overlay_candidate();
-  if (!data.ReadColorSpace(&out->color_space) ||
-      !data.ReadOrigin(&out->origin) || !data.ReadAlphaType(&out->alpha_type)) {
-    return false;
+  if (!data.ReadColorSpace(&out->color_space)) {
+    return base::unexpected(DeserializationError());
   }
-  return true;
+  if (!data.ReadOrigin(&out->origin)) {
+    return base::unexpected(DeserializationError());
+  }
+  if (!data.ReadAlphaType(&out->alpha_type)) {
+    return base::unexpected(DeserializationError());
+  }
+  return base::ok();
 }
 
 // static
@@ -48,23 +55,20 @@ EnumTraits<viz::mojom::SynchronizationType,
 }
 
 // static
-bool EnumTraits<viz::mojom::SynchronizationType,
-                viz::TransferableResource::SynchronizationType>::
-    FromMojom(viz::mojom::SynchronizationType input,
-              viz::TransferableResource::SynchronizationType* out) {
+viz::TransferableResource::SynchronizationType
+EnumTraits<viz::mojom::SynchronizationType,
+           viz::TransferableResource::SynchronizationType>::
+    FromMojom(viz::mojom::SynchronizationType input) {
   switch (input) {
     case viz::mojom::SynchronizationType::kSyncToken:
-      *out = viz::TransferableResource::SynchronizationType::kSyncToken;
-      return true;
+      return viz::TransferableResource::SynchronizationType::kSyncToken;
     case viz::mojom::SynchronizationType::kGpuCommandsCompleted:
-      *out =
-          viz::TransferableResource::SynchronizationType::kGpuCommandsCompleted;
-      return true;
+      return viz::TransferableResource::SynchronizationType::
+          kGpuCommandsCompleted;
     case viz::mojom::SynchronizationType::kReleaseFence:
-      *out = viz::TransferableResource::SynchronizationType::kReleaseFence;
-      return true;
+      return viz::TransferableResource::SynchronizationType::kReleaseFence;
   }
-  return false;
+  NOTREACHED();
 }
 
 // static
@@ -110,85 +114,83 @@ EnumTraits<viz::mojom::ResourceSource,
 }
 
 // static
-bool EnumTraits<viz::mojom::ResourceSource,
-                viz::TransferableResource::ResourceSource>::
-    FromMojom(viz::mojom::ResourceSource input,
-              viz::TransferableResource::ResourceSource* out) {
+viz::TransferableResource::ResourceSource
+EnumTraits<viz::mojom::ResourceSource,
+           viz::TransferableResource::ResourceSource>::
+    FromMojom(viz::mojom::ResourceSource input) {
   switch (input) {
     case viz::mojom::ResourceSource::kUnknown:
-      *out = viz::TransferableResource::ResourceSource::kUnknown;
-      return true;
+      return viz::TransferableResource::ResourceSource::kUnknown;
     case viz::mojom::ResourceSource::kAR:
-      *out = viz::TransferableResource::ResourceSource::kAR;
-      return true;
+      return viz::TransferableResource::ResourceSource::kAR;
     case viz::mojom::ResourceSource::kCanvas:
-      *out = viz::TransferableResource::ResourceSource::kCanvas;
-      return true;
+      return viz::TransferableResource::ResourceSource::kCanvas;
     case viz::mojom::ResourceSource::kDrawingBuffer:
-      *out = viz::TransferableResource::ResourceSource::kDrawingBuffer;
-      return true;
+      return viz::TransferableResource::ResourceSource::kDrawingBuffer;
     case viz::mojom::ResourceSource::kExoBuffer:
-      *out = viz::TransferableResource::ResourceSource::kExoBuffer;
-      return true;
+      return viz::TransferableResource::ResourceSource::kExoBuffer;
     case viz::mojom::ResourceSource::kHeadsUpDisplay:
-      *out = viz::TransferableResource::ResourceSource::kHeadsUpDisplay;
-      return true;
+      return viz::TransferableResource::ResourceSource::kHeadsUpDisplay;
     case viz::mojom::ResourceSource::kImageLayerBridge:
-      *out = viz::TransferableResource::ResourceSource::kImageLayerBridge;
-      return true;
+      return viz::TransferableResource::ResourceSource::kImageLayerBridge;
     case viz::mojom::ResourceSource::kPPBGraphics3D:
-      *out = viz::TransferableResource::ResourceSource::kPPBGraphics3D;
-      return true;
+      return viz::TransferableResource::ResourceSource::kPPBGraphics3D;
     case viz::mojom::ResourceSource::kPepperGraphics2D:
-      *out = viz::TransferableResource::ResourceSource::kPepperGraphics2D;
-      return true;
+      return viz::TransferableResource::ResourceSource::kPepperGraphics2D;
     case viz::mojom::ResourceSource::kViewTransition:
-      *out = viz::TransferableResource::ResourceSource::kViewTransition;
-      return true;
+      return viz::TransferableResource::ResourceSource::kViewTransition;
     case viz::mojom::ResourceSource::kStaleContent:
-      *out = viz::TransferableResource::ResourceSource::kStaleContent;
-      return true;
+      return viz::TransferableResource::ResourceSource::kStaleContent;
     case viz::mojom::ResourceSource::kTest:
-      *out = viz::TransferableResource::ResourceSource::kTest;
-      return true;
+      return viz::TransferableResource::ResourceSource::kTest;
     case viz::mojom::ResourceSource::kTileRasterTask:
-      *out = viz::TransferableResource::ResourceSource::kTileRasterTask;
-      return true;
+      return viz::TransferableResource::ResourceSource::kTileRasterTask;
     case viz::mojom::ResourceSource::kUI:
-      *out = viz::TransferableResource::ResourceSource::kUI;
-      return true;
+      return viz::TransferableResource::ResourceSource::kUI;
     case viz::mojom::ResourceSource::kVideo:
-      *out = viz::TransferableResource::ResourceSource::kVideo;
-      return true;
+      return viz::TransferableResource::ResourceSource::kVideo;
     case viz::mojom::ResourceSource::kWebGPUSwapBuffer:
-      *out = viz::TransferableResource::ResourceSource::kWebGPUSwapBuffer;
-      return true;
+      return viz::TransferableResource::ResourceSource::kWebGPUSwapBuffer;
   }
-  return false;
+  NOTREACHED();
 }
 
 // static
-bool StructTraits<viz::mojom::TransferableResourceDataView,
-                  viz::TransferableResource>::
-    Read(viz::mojom::TransferableResourceDataView data,
-         viz::TransferableResource* out) {
+base::expected<void, DeserializationError> StructTraits<
+    viz::mojom::TransferableResourceDataView,
+    viz::TransferableResource>::Read(viz::mojom::TransferableResourceDataView
+                                         data,
+                                     viz::TransferableResource* out) {
   viz::ResourceId id;
 
   gpu::SyncToken sync_token;
   gpu::ExportedSharedImage exported_shared_image;
   viz::TransferableResource::MetadataOverride metadata_override;
 
-  if (!data.ReadSharedImage(&exported_shared_image) ||
-      !data.ReadSyncToken(&sync_token) ||
-      !data.ReadMetadataOverride(&metadata_override) ||
-      !data.ReadHdrMetadata(&out->hdr_metadata) || !data.ReadId(&id) ||
-      !data.ReadSynchronizationType(&out->synchronization_type) ||
-      !data.ReadResourceSource(&out->resource_source)) {
-    return false;
+  if (!data.ReadSharedImage(&exported_shared_image)) {
+    return base::unexpected(DeserializationError());
+  }
+  if (!data.ReadSyncToken(&sync_token)) {
+    return base::unexpected(DeserializationError());
+  }
+  if (!data.ReadMetadataOverride(&metadata_override)) {
+    return base::unexpected(DeserializationError());
+  }
+  if (!data.ReadHdrMetadata(&out->hdr_metadata)) {
+    return base::unexpected(DeserializationError());
+  }
+  if (!data.ReadId(&id)) {
+    return base::unexpected(DeserializationError());
+  }
+  if (!data.ReadSynchronizationType(&out->synchronization_type)) {
+    return base::unexpected(DeserializationError());
+  }
+  if (!data.ReadResourceSource(&out->resource_source)) {
+    return base::unexpected(DeserializationError());
   }
 #if BUILDFLAG(IS_ANDROID)
   if (!data.ReadYcbcrInfo(&out->ycbcr_info)) {
-    return false;
+    return base::unexpected(DeserializationError());
   }
 #endif
 
@@ -197,7 +199,6 @@ bool StructTraits<viz::mojom::TransferableResourceDataView,
       gpu::ClientSharedImage::ImportUnowned(std::move(exported_shared_image)));
   out->set_sync_token(sync_token);
   out->set_metadata_override(metadata_override);
-  out->is_low_latency_rendering = data.is_low_latency_rendering();
   out->needs_detiling = data.needs_detiling();
 
 #if BUILDFLAG(IS_ANDROID)
@@ -208,7 +209,7 @@ bool StructTraits<viz::mojom::TransferableResourceDataView,
   out->wants_promotion_hint = data.wants_promotion_hint();
 #endif
 
-  return true;
+  return base::ok();
 }
 
 }  // namespace mojo

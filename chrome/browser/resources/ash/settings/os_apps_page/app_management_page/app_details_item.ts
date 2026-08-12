@@ -2,19 +2,27 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import 'chrome://resources/ash/common/cr_elements/cr_button/cr_button.js';
 import 'chrome://resources/ash/common/cr_elements/localized_link/localized_link.js';
 import 'chrome://resources/ash/common/cr_elements/policy/cr_tooltip_icon.js';
+import 'chrome://resources/polymer/v3_0/paper-spinner/paper-spinner-lite.js';
+
+enum UpdateState {
+  IDLE = 'idle',
+  CHECKING = 'checking',
+  UP_TO_DATE = 'up-to-date',
+  UPDATE_AVAILABLE = 'update-available',
+}
 import './app_management_cros_shared_style.css.js';
 
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import type {App} from 'chrome://resources/cr_components/app_management/app_management.mojom-webui.js';
-import {AppType, InstallReason, InstallSource} from 'chrome://resources/cr_components/app_management/app_management.mojom-webui.js';
+import {AppType, browserProxyFactory, InstallReason, InstallSource} from 'chrome://resources/cr_components/app_management/app_management.mojom-webui.js';
 import {AppManagementUserAction} from 'chrome://resources/cr_components/app_management/constants.js';
 import {recordAppManagementUserAction} from 'chrome://resources/cr_components/app_management/util.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-import {AppManagementBrowserProxy} from '../../common/app_management/browser_proxy.js';
 import {AppManagementStoreMixin} from '../../common/app_management/store_mixin.js';
 
 import {getTemplate} from './app_details_item.html.js';
@@ -42,21 +50,71 @@ export class AppManagementAppDetailsItem extends
         type: String,
         observer: 'appIdChanged_',
       },
+
+      apps_: {
+        type: Object,
+      },
+
+      subAppToParentAppId_: {
+        type: Object,
+      },
+
+      updateState_: {
+        type: String,
+        value: UpdateState.IDLE,
+      },
+
+      availableUpdateVersion_: {
+        type: String,
+        value: '',
+      },
+
+      hasOpenWindows_: {
+        type: Boolean,
+        value: false,
+      },
+
+      showUpdateFoundDialog_: {
+        type: Boolean,
+        value: false,
+      },
     };
   }
 
-  app: App;
-  private appId_: string;
+  constructor() {
+    super();
+    this.hasOpenWindows_ = false;
+    this.showUpdateFoundDialog_ = false;
+  }
+
+  declare app: App;
+  declare private appId_: string;
+  declare private apps_: Record<string, App>;
+  declare private subAppToParentAppId_: Record<string, string>;
+  declare private updateState_: UpdateState;
+  declare private availableUpdateVersion_: string;
+  declare private hasOpenWindows_: boolean;
+  declare private showUpdateFoundDialog_: boolean;
 
   override connectedCallback(): void {
     super.connectedCallback();
     this.watch('appId_', state => state.selectedAppId);
+    this.watch('apps_', state => state.apps);
+    this.watch('subAppToParentAppId_', state => state.subAppToParentAppId);
     this.updateFromStore();
+  }
+
+  private resetUpdateState_(): void {
+    this.updateState_ = UpdateState.IDLE;
+    this.availableUpdateVersion_ = '';
+    this.showUpdateFoundDialog_ = false;
+    this.hasOpenWindows_ = false;
   }
 
   private appIdChanged_(appId: string): void {
     if (appId && this.app) {
-      AppManagementBrowserProxy.getInstance().handler.updateAppSize(appId);
+      browserProxyFactory.getInstance().handler.updateAppSize(appId);
+      this.resetUpdateState_();
     }
   }
 
@@ -67,7 +125,120 @@ export class AppManagementAppDetailsItem extends
     if (app.installReason === InstallReason.kSystem) {
       return false;
     }
+    if (this.isIsolatedWebApp_(app)) {
+      return false;
+    }
     return Boolean(app.version);
+  }
+
+  private isIsolatedWebApp_(app: App): boolean {
+    return loadTimeData.getBoolean('isIwaInlineUpdateEnabled') && app &&
+        app.type === AppType.kWeb &&
+        app.publisherId.startsWith('isolated-app://');
+  }
+
+  private isChecking_(state: UpdateState): boolean {
+    return state === UpdateState.CHECKING;
+  }
+
+  private onCheckUpdateButtonClick_(): void {
+    this.checkForUpdates_();
+  }
+
+  private onUpdateFoundDialogClose_(): void {
+    this.showUpdateFoundDialog_ = false;
+  }
+
+  private onUpdateFoundDialogCancel_(): void {
+    this.showUpdateFoundDialog_ = false;
+  }
+
+  private onUpdateFoundDialogConfirm_(): void {
+    this.showUpdateFoundDialog_ = false;
+    this.triggerUpdate_();
+  }
+
+  private async checkForUpdates_(): Promise<void> {
+    if (!this.app) {
+      return;
+    }
+    const targetAppId = this.app.id;
+    this.updateState_ = UpdateState.CHECKING;
+    try {
+      const response = await browserProxyFactory.getInstance()
+                           .handler.checkForIsolatedWebAppUpdate(targetAppId);
+      if (this.app?.id !== targetAppId) {
+        return;
+      }
+      if (response && response.updateVersion) {
+        this.availableUpdateVersion_ =
+            response.updateVersion.components.join('.');
+        this.updateState_ = UpdateState.UPDATE_AVAILABLE;
+
+        // Query open windows state to configure dialogue body
+        const numWindowsResponse =
+            await browserProxyFactory.getInstance().handler.getNumWindowsForApp(
+                targetAppId);
+        if (this.app?.id !== targetAppId) {
+          return;
+        }
+        this.hasOpenWindows_ =
+            numWindowsResponse ? (numWindowsResponse.numWindows > 0) : false;
+        this.showUpdateFoundDialog_ = true;
+      } else {
+        this.updateState_ = UpdateState.UP_TO_DATE;
+      }
+    } catch (e) {
+      if (this.app?.id === targetAppId) {
+        console.error('Failed to check for updates:', e);
+        this.resetUpdateState_();
+      }
+    }
+  }
+
+  private async triggerUpdate_(): Promise<void> {
+    if (!this.app) {
+      return;
+    }
+    const targetAppId = this.app.id;
+    this.updateState_ = UpdateState.CHECKING;
+    try {
+      const response = await browserProxyFactory.getInstance()
+                           .handler.applyIsolatedWebAppUpdate(targetAppId);
+      if (this.app?.id !== targetAppId) {
+        return;
+      }
+      if (response && response.success) {
+        this.resetUpdateState_();
+      } else {
+        this.updateState_ = UpdateState.UPDATE_AVAILABLE;
+      }
+    } catch (e) {
+      if (this.app?.id === targetAppId) {
+        console.error('Failed to apply update:', e);
+        this.updateState_ = UpdateState.UPDATE_AVAILABLE;
+      }
+    }
+  }
+
+  private getUpdateStatusString_(state: UpdateState): string {
+    if (state === UpdateState.CHECKING) {
+      return this.i18n('appManagementCheckingForUpdates');
+    }
+    if (state === UpdateState.UP_TO_DATE) {
+      return this.i18n('appManagementAppIsUpToDate');
+    }
+    return '';
+  }
+
+  private getUpdateFoundDialogBody_(
+      hasOpenWindows: boolean, version: string, title: string): string {
+    if (hasOpenWindows) {
+      return this.i18n(
+          'appManagementUpdateFoundWarningDialogDescription', version, title);
+    }
+    return this.i18n(
+        'appManagementUpdateFoundDialogDescription', version, title);
   }
 
   /**
@@ -180,8 +351,7 @@ export class AppManagementAppDetailsItem extends
     if (this.app !== null) {
       recordAppManagementUserAction(
           this.app.type, AppManagementUserAction.APP_STORE_LINK_CLICKED);
-      AppManagementBrowserProxy.getInstance().handler.openStorePage(
-          this.app.id);
+      browserProxyFactory.getInstance().handler.openStorePage(this.app.id);
     }
   }
 
@@ -202,6 +372,41 @@ export class AppManagementAppDetailsItem extends
   private getTooltipA11yText_(app: App): string {
     return this.i18n(
         'appManagementAppDetailsTooltipWebA11y', this.getTooltipText_(app));
+  }
+
+  private getParentApp_(
+      app: App|undefined, apps: Record<string, App>|undefined,
+      subAppToParentAppId: Record<string, string>|undefined): App|null {
+    if (!app || !subAppToParentAppId || !apps) {
+      return null;
+    }
+    const parentId = subAppToParentAppId[app.id];
+    if (!parentId) {
+      return null;
+    }
+    return apps[parentId] || null;
+  }
+
+  private shouldShowSubappDataSharingExplanation_(
+      app: App|undefined, apps: Record<string, App>|undefined,
+      subAppToParentAppId: Record<string, string>|undefined): boolean {
+    if (!app) {
+      return false;
+    }
+    return app.type === AppType.kWeb &&
+        this.getParentApp_(app, apps, subAppToParentAppId) !== null;
+  }
+
+  private getSubappDataSharingExplanationString_(
+      app: App|undefined, apps: Record<string, App>|undefined,
+      subAppToParentAppId: Record<string, string>|undefined): string {
+    if (!app) {
+      return '';
+    }
+    const parentApp = this.getParentApp_(app, apps, subAppToParentAppId);
+    const parentAppName = parentApp ? (parentApp.title || '') : '';
+    return this.i18n(
+        'appManagementAppDetailsSubappDataSharingExplanation', parentAppName);
   }
 }
 

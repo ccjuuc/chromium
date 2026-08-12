@@ -6,7 +6,6 @@
 
 #include "base/android/jni_string.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/time/time.h"
 #include "chrome/browser/prefs/pref_metrics_service.h"
 #include "chrome/browser/profiles/profile.h"
@@ -29,8 +28,8 @@ enum class HomeScreenLaunchType { STANDALONE = 0, SHORTCUT = 1, COUNT = 2 };
 
 static void JNI_LaunchMetrics_RecordLaunch(
     JNIEnv* env,
-    jboolean is_shortcut,
-    std::string& jurl,
+    bool is_shortcut,
+    const std::string& jurl,
     int source,
     int display_mode,
     const JavaRef<jobject>& jweb_contents) {
@@ -87,8 +86,8 @@ static void JNI_LaunchMetrics_RecordLaunch(
 
 static void JNI_LaunchMetrics_RecordHomePageLaunchMetrics(
     JNIEnv* env,
-    jboolean show_home_button,
-    jboolean homepage_is_ntp,
+    bool show_home_button,
+    bool homepage_is_ntp,
     const JavaRef<jobject>& jhomepage_gurl) {
   GURL homepage_gurl = url::GURLAndroid::ToNativeGURL(env, jhomepage_gurl);
   PrefMetricsService::RecordHomePageLaunchMetrics(

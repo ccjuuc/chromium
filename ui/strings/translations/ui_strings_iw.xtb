@@ -1,7 +1,6 @@
 <?xml version="1.0" ?>
 <!DOCTYPE translationbundle>
 <translationbundle lang="iw">
-<translation id="1028699632127661925">הכרטיסייה נשלחת אל <ph name="DEVICE_NAME" />...</translation>
 <translation id="111910763555783249">הגדרות של הודעות</translation>
 <translation id="1127811143501539442">{DAYS,plural, =1{לפני יום אחד}one{לפני # ימים}two{לפני יומיים}other{לפני # ימים}}</translation>
 <translation id="1156623771253174079">{SECONDS,plural, =1{לפני דקה אחת}one{לפני # דקות}two{לפני # דקות}other{לפני # דקות}}</translation>
@@ -12,7 +11,6 @@
 <translation id="1253734725326687145">משטח המגע הועבר לפינה הימנית העליונה. יש ללחוץ כאן.</translation>
 <translation id="1266864766717917324">לא ניתן היה לשתף את ה<ph name="CONTENT_TYPE" /></translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">אפשר לנסות לשתף את הטקסט במקטעים קטנים יותר.</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">משמאל לימין</translation>
 <translation id="1383876407941801731">חיפוש</translation>
@@ -20,6 +18,7 @@
 <translation id="1432724887402139994">{SECONDS,plural, =1{לפני דקה}one{לפני # דקות}two{לפני # דקות}other{לפני # דקות}}</translation>
 <translation id="1450753235335490080">לא ניתן לשתף את ה<ph name="CONTENT_TYPE" /></translation>
 <translation id="1523230076022876491">{MONTHS,plural, =1{לפני חודש}one{לפני # חודשים}two{לפני חודשיים}other{לפני # חודשים}}</translation>
+<translation id="1591017414891297549">‏גרסת טרום-השקה (Preview)</translation>
 <translation id="1591184457164800433">{MINUTES,plural, =1{דקה אחת ו }one{# דקות ו }two{# דקות ו }other{# דקות ו }}</translation>
 <translation id="1643823602425662293">הודעה</translation>
 <translation id="169515659049020177">Shift</translation>
@@ -44,7 +43,6 @@
 <translation id="2148716181193084225">היום</translation>
 <translation id="2168039046890040389">דף למעלה</translation>
 <translation id="2190355936436201913">(ריק)</translation>
-<translation id="2192232475740621500">שימוש בדחיסות נמוכה</translation>
 <translation id="2267918077332197517">חסימת כל ההודעות מהאתר הזה</translation>
 <translation id="2283117145434822734">F6</translation>
 <translation id="2289052229480071835">יש ללחוץ על יעדי המגע במסך.</translation>
@@ -56,7 +54,6 @@
 <translation id="2388990488038464401">להתקשר למספר הזה מהטלפון שלך?</translation>
 <translation id="2435457462613246316">הצגת סיסמה</translation>
 <translation id="24452542372838207">הרחבת ההודעה</translation>
-<translation id="2445449901874883781">שימוש בדחיסות גבוהה</translation>
 <translation id="2448407890032181691">משטח המגע הועבר לפינה הימנית התחתונה. יש ללחוץ כאן.</translation>
 <translation id="2482878487686419369">התראות</translation>
 <translation id="2497284189126895209">כל הקבצים</translation>
@@ -69,7 +66,6 @@
 <translation id="2586657967955657006">לוח</translation>
 <translation id="2653844658857826081">חדש</translation>
 <translation id="2666092431469916601">למעלה</translation>
-<translation id="2701330563083355633">שותפה מהמכשיר <ph name="DEVICE_NAME" /></translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{לפני שנה אחת}one{לפני # שנים}two{לפני שנתיים}other{לפני # שנים}}</translation>
 <translation id="2878511608894704031">מחיקת הכול</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{עוד יום אחד}one{עוד יום אחד}two{עוד 2 ימים}other{עוד # ימים}}</translation>
@@ -88,7 +84,6 @@
 <translation id="3306688585798492231">מסך מובנה</translation>
 <translation id="335581015389089642">דיבור</translation>
 <translation id="3372635229069101468">לוחצים על <ph name="BEGIN_BOLD" />פרטים<ph name="END_BOLD" /></translation>
-<translation id="3389286852084373014">הטקסט ארוך מדי</translation>
 <translation id="3406306243914553062">‏תוכן HTML</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{נותר יום אחד}one{נותרו # ימים}two{נותרו יומיים}other{נותרו # ימים}}</translation>
 <translation id="3600969208114796418">קובץ <ph name="SAVEAS_EXTENSION_TYPE" /></translation>
@@ -109,6 +104,7 @@
 <translation id="4031910098617850788">F5</translation>
 <translation id="40579289237549812">{UNREAD_NOTIFICATIONS,plural, =1{הודעה אחת שלא נקראה}one{# הודעות שלא נקראו}two{2 הודעות שלא נקראו}other{# הודעות שלא נקראו}}</translation>
 <translation id="41501027364808384">{COUNT,plural, =1{מפעילים את התוסף הבא במצב פרטי:}one{מפעילים את התוספים הבאים במצב פרטי:}two{מפעילים את התוספים הבאים במצב פרטי:}other{מפעילים את התוספים הבאים במצב פרטי:}}</translation>
+<translation id="4230098358142093034">דף הבית</translation>
 <translation id="4266252015790371705">{MONTHS,plural, =1{לפני חודש אחד}one{לפני # חודשים}two{לפני חודשיים}other{לפני # חודשים}}</translation>
 <translation id="4277033906326892359">העמודה <ph name="COLUMN_NAME" /> ממוינת בסדר עולה</translation>
 <translation id="4289300219472526559">יש להתחיל לדבר</translation>
@@ -190,7 +186,6 @@
 <translation id="6965382102122355670">אישור</translation>
 <translation id="6974053822202609517">מימין לשמאל</translation>
 <translation id="7052633198403197513">F1</translation>
-<translation id="7170202025028120564">הגדרות התצוגה של האפליקציה ייכנסו לתוקף בפעם הבאה שהיא תופעל מחדש.</translation>
 <translation id="7222373446505536781">F11</translation>
 <translation id="7238427729722629793">{MINUTES,plural, =1{נותרה דק‘ אחת}one{נותרו # דק‘}two{נותרו # דק‘}other{נותרו # דק‘}}</translation>
 <translation id="7252604552361840748">מאתרים את התוסף שלמעלה</translation>
@@ -200,6 +195,7 @@
 <translation id="7410957453383678442">{MINUTES,plural, =1{נותרה דקה אחת}one{נותרו # דקות}two{נותרו # דקות}other{נותרו # דקות}}</translation>
 <translation id="7437971918971306061">העמודה <ph name="COLUMN_NAME" /> לא ממוינת.</translation>
 <translation id="7460907917090416791"><ph name="QUANTITY" /> TB</translation>
+<translation id="7485236722522518129">F4</translation>
 <translation id="7507604095951736240">אמוג'י</translation>
 <translation id="7620655452534002301">הרשומה הוסר.</translation>
 <translation id="7658239707568436148">ביטול</translation>
@@ -232,6 +228,7 @@
 <translation id="8677655579646609597"><ph name="QUANTITY" />KB/s‎</translation>
 <translation id="8725488761726303204">ועוד <ph name="NUMBER" /></translation>
 <translation id="8730621377337864115">בוצע</translation>
+<translation id="8741385002816058621">‏התכונה הזו היא של גרסת טרום-השקה (Preview)</translation>
 <translation id="8772073294905169192">{HOURS,plural, =1{שעה}one{# שע}two{# שע}other{# שע}}</translation>
 <translation id="8798099450830957504">ברירת מחדל</translation>
 <translation id="8841375032071747811">כפתור 'הקודם'</translation>
@@ -245,7 +242,6 @@
 <translation id="9170848237812810038">&amp;ביטול</translation>
 <translation id="9195990613383871904">מחר</translation>
 <translation id="928628199082367701">‏מקש Super</translation>
-<translation id="932327136139879170">בית</translation>
 <translation id="944069440740578670">התראות שלא נקראו</translation>
 <translation id="966963601246348639">{SECONDS,plural, =1{לפני שנייה אחת}one{לפני # שניות}two{לפני # שניות}other{לפני # שניות}}</translation>
 </translationbundle>

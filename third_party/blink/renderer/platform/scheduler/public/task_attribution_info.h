@@ -11,6 +11,8 @@
 
 namespace blink {
 class SoftNavigationContext;
+class ScriptToolContext;
+class ResourceTimingContext;
 }  // namespace blink
 
 namespace blink::scheduler {
@@ -24,9 +26,22 @@ class PLATFORM_EXPORT TaskAttributionInfo : public GarbageCollectedMixin {
   // navigation and postMessage.
   virtual TaskAttributionId Id() const = 0;
 
+  // Returns the test async data associated with this task, if any, otherwise
+  // 0. Used by window.scheduler.asyncData to expose Task Attribution for
+  // testing.
+  virtual uint32_t AsyncDataForTest() const = 0;
+
   // Returns the `SoftNavigationContext` associated with the task state, which
   // can be null.
   virtual SoftNavigationContext* GetSoftNavigationContext() = 0;
+
+  // Returns the `ResourceTimingContext` associated with the task state, which
+  // can be null.
+  virtual ResourceTimingContext* GetResourceTimingContext() = 0;
+
+  // Returns the `ScriptToolContext` associated with the task state, which
+  // can be null.
+  virtual ScriptToolContext* GetScriptToolContext() = 0;
 };
 
 }  // namespace blink::scheduler

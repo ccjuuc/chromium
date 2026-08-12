@@ -23,12 +23,12 @@
 #include "base/version.h"
 #include "chrome/browser/ash/extensions/external_cache_delegate.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/extensions/crx_installer.h"
 #include "chrome/browser/extensions/external_provider_impl.h"
 #include "chrome/browser/extensions/install_tracker_factory.h"
 #include "chrome/browser/extensions/updater/chrome_extension_downloader_factory.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_manager_observer.h"
+#include "chrome/browser/profiles/profile_observer.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -147,8 +147,9 @@ void ExternalCacheImpl::AnyInstallFailureObserver::OnProfileWillBeDestroyed(
   // observing it to receive the notification in the first place.
   CHECK(profile_observations_.IsObservingSource(profile));
   profile_observations_.RemoveObservation(profile);
-  CHECK_EQ(observed_profiles_.count(profile), 1u);
-  observed_profiles_.erase(profile);
+  auto it = observed_profiles_.find(profile);
+  CHECK(it != observed_profiles_.end());
+  observed_profiles_.erase(it);
 
   bool is_observing = install_tracker_observations_.IsObservingSource(tracker);
   bool still_needed = IsAnyObservedProfileUsingTracker(tracker);
@@ -214,7 +215,7 @@ ExternalCacheImpl::ExternalCacheImpl(
 
 ExternalCacheImpl::~ExternalCacheImpl() = default;
 
-const base::Value::Dict& ExternalCacheImpl::GetCachedExtensions() {
+const base::DictValue& ExternalCacheImpl::GetCachedExtensions() {
   return cached_extensions_;
 }
 
@@ -222,7 +223,7 @@ void ExternalCacheImpl::Shutdown(base::OnceClosure callback) {
   local_cache_.Shutdown(std::move(callback));
 }
 
-void ExternalCacheImpl::UpdateExtensionsList(base::Value::Dict prefs) {
+void ExternalCacheImpl::UpdateExtensionsList(base::DictValue prefs) {
   extensions_ = std::move(prefs);
 
   if (extensions_.empty()) {
@@ -365,7 +366,7 @@ bool ExternalCacheImpl::IsExtensionPending(const extensions::ExtensionId& id) {
 bool ExternalCacheImpl::GetExtensionExistingVersion(
     const extensions::ExtensionId& id,
     std::string* version) {
-  const base::Value::Dict* extension_dictionary =
+  const base::DictValue* extension_dictionary =
       cached_extensions_.FindDictByDottedPath(id);
   if (!extension_dictionary) {
     return false;
@@ -444,7 +445,7 @@ void ExternalCacheImpl::CheckCache() {
             id, update_url,
             extensions::mojom::ManifestLocation::kExternalPolicy, false, 0,
             extensions::DownloadFetchPriority::kBackground,
-            base::Version(version), extensions::Manifest::TYPE_UNKNOWN,
+            base::Version(version), extensions::Manifest::Type::kUnknown,
             std::string()));
       }
     }
@@ -510,7 +511,7 @@ void ExternalCacheImpl::OnPutExtension(const extensions::ExtensionId& id,
 
   VLOG(1) << "ExternalCacheImpl installed a new extension in the cache " << id;
 
-  const base::Value::Dict* original_entry = extensions_.FindDict(id);
+  const base::DictValue* original_entry = extensions_.FindDict(id);
   if (!original_entry) {
     LOG(ERROR) << "ExternalCacheImpl cannot find entry for extension " << id;
     return;

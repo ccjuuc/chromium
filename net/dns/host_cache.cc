@@ -20,21 +20,21 @@
 #include <vector>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/default_tick_clock.h"
+#include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/types/optional_util.h"
 #include "base/value_iterators.h"
 #include "net/base/address_family.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/network_anonymization_key.h"
+#include "net/base/network_handle.h"
 #include "net/base/trace_constants.h"
 #include "net/base/url_util.h"
 #include "net/dns/host_resolver.h"
@@ -66,6 +66,7 @@ const char kNetErrorKey[] = "net_error";
 const char kIpEndpointsKey[] = "ip_endpoints";
 const char kEndpointAddressKey[] = "endpoint_address";
 const char kEndpointPortKey[] = "endpoint_port";
+const char kInterfaceNameKey[] = "interface_name";
 const char kEndpointMetadatasKey[] = "endpoint_metadatas";
 const char kEndpointMetadataWeightKey[] = "endpoint_metadata_weight";
 const char kEndpointMetadataValueKey[] = "endpoint_metadata_value";
@@ -75,11 +76,19 @@ const char kTextRecordsKey[] = "text_records";
 const char kHostnameResultsKey[] = "hostname_results";
 const char kHostPortsKey[] = "host_ports";
 const char kCanonicalNamesKey[] = "canonical_names";
+const char kTargetNetworkKey[] = "target_network";
 
 base::Value IpEndpointToValue(const IPEndPoint& endpoint) {
-  base::Value::Dict dictionary;
+  base::DictValue dictionary;
   dictionary.Set(kEndpointAddressKey, endpoint.ToStringWithoutPort());
   dictionary.Set(kEndpointPortKey, endpoint.port());
+  if (endpoint.scope_id().has_value()) {
+    base::Value interface_name =
+        IPEndPoint::ScopeIdToInterfaceNameValue(endpoint.scope_id());
+    if (!interface_name.is_none()) {
+      dictionary.Set(kInterfaceNameKey, std::move(interface_name));
+    }
+  }
   return base::Value(std::move(dictionary));
 }
 
@@ -87,7 +96,7 @@ std::optional<IPEndPoint> IpEndpointFromValue(const base::Value& value) {
   if (!value.is_dict())
     return std::nullopt;
 
-  const base::Value::Dict& dict = value.GetDict();
+  const base::DictValue& dict = value.GetDict();
   const std::string* ip_str = dict.FindString(kEndpointAddressKey);
   std::optional<int> port = dict.FindInt(kEndpointPortKey);
 
@@ -100,12 +109,21 @@ std::optional<IPEndPoint> IpEndpointFromValue(const base::Value& value) {
   if (!ip.AssignFromIPLiteral(*ip_str))
     return std::nullopt;
 
-  return IPEndPoint(ip, base::checked_cast<uint16_t>(port.value()));
+  std::optional<uint32_t> scope_id =
+      IPEndPoint::ScopeIdFromInterfaceName(dict.Find(kInterfaceNameKey));
+  if (scope_id.has_value()) {
+    if (scope_id.value() == 0 || !(ip.IsIPv6() && ip.IsLinkLocal()) ||
+        !base::IsValueInRangeForNumericType<uint32_t>(scope_id.value())) {
+      return std::nullopt;
+    }
+  }
+
+  return IPEndPoint(ip, base::checked_cast<uint16_t>(port.value()), scope_id);
 }
 
 base::Value EndpointMetadataPairToValue(
     const std::pair<HttpsRecordPriority, ConnectionEndpointMetadata>& pair) {
-  base::Value::Dict dictionary;
+  base::DictValue dictionary;
   dictionary.Set(kEndpointMetadataWeightKey, pair.first);
   dictionary.Set(kEndpointMetadataValueKey, pair.second.ToValue());
   return base::Value(std::move(dictionary));
@@ -116,7 +134,7 @@ EndpointMetadataPairFromValue(const base::Value& value) {
   if (!value.is_dict())
     return std::nullopt;
 
-  const base::Value::Dict& dict = value.GetDict();
+  const base::DictValue& dict = value.GetDict();
   std::optional<int> priority = dict.FindInt(kEndpointMetadataWeightKey);
   const base::Value* metadata_value = dict.Find(kEndpointMetadataValueKey);
 
@@ -137,7 +155,7 @@ EndpointMetadataPairFromValue(const base::Value& value) {
 }
 
 bool IPEndPointsFromLegacyAddressListValue(
-    const base::Value::List& value,
+    const base::ListValue& value,
     std::vector<IPEndPoint>& ip_endpoints) {
   DCHECK(ip_endpoints.empty());
   for (const auto& it : value) {
@@ -221,12 +239,14 @@ HostCache::Key::Key(std::variant<url::SchemeHostPort, std::string> host,
                     DnsQueryType dns_query_type,
                     HostResolverFlags host_resolver_flags,
                     HostResolverSource host_resolver_source,
-                    const NetworkAnonymizationKey& network_anonymization_key)
+                    const NetworkAnonymizationKey& network_anonymization_key,
+                    handles::NetworkHandle target_network)
     : host(std::move(host)),
       dns_query_type(dns_query_type),
       host_resolver_flags(host_resolver_flags),
       host_resolver_source(host_resolver_source),
-      network_anonymization_key(network_anonymization_key) {
+      network_anonymization_key(network_anonymization_key),
+      target_network(target_network) {
   DCHECK(IsValidHostname(GetHostname(this->host)));
   if (std::holds_alternative<url::SchemeHostPort>(this->host)) {
     DCHECK(std::get<url::SchemeHostPort>(this->host).IsValid());
@@ -413,7 +433,7 @@ std::vector<HostResolverEndpointResult> HostCache::Entry::GetEndpoints() const {
     // Currently Chrome uses HTTPS records only when A and AAAA records are at
     // the same canonical name and that matches the HTTPS target name.
     for (ConnectionEndpointMetadata& metadata : metadatas) {
-      if (!base::Contains(canonical_names_, metadata.target_name)) {
+      if (!canonical_names_.contains(metadata.target_name)) {
         continue;
       }
       endpoints.emplace_back();
@@ -492,7 +512,7 @@ HostCache::Entry HostCache::Entry::CopyWithDefaultPort(uint16_t port) const {
 
   for (IPEndPoint& endpoint : copy.ip_endpoints_) {
     if (endpoint.port() == 0) {
-      endpoint = IPEndPoint(endpoint.address(), port);
+      endpoint = endpoint.CopyWithPort(port);
     }
   }
 
@@ -517,16 +537,16 @@ std::vector<ServiceEndpoint> HostCache::Entry::ConvertToServiceEndpoints(
     std::vector<IPEndPoint>& ip_endpoints =
         ip_endpoint.address().IsIPv6() ? ipv6_endpoints : ipv4_endpoints;
     if (ip_endpoint.port() == 0) {
-      ip_endpoints.emplace_back(ip_endpoint.address(), port);
+      ip_endpoints.push_back(ip_endpoint.CopyWithPort(port));
     } else {
-      ip_endpoints.emplace_back(ip_endpoint);
+      ip_endpoints.push_back(ip_endpoint);
     }
   }
 
   // See HostCache::Entry::GetEndpoints.
   if (!ipv4_endpoints.empty() || !ipv6_endpoints.empty()) {
     for (const auto& metadata : GetMetadatas()) {
-      if (!base::Contains(canonical_names(), metadata.target_name)) {
+      if (!canonical_names().contains(metadata.target_name)) {
         continue;
       }
 
@@ -633,8 +653,8 @@ base::Value HostCache::Entry::NetLogParams() const {
   return base::Value(GetAsValue(false /* include_staleness */));
 }
 
-base::Value::Dict HostCache::Entry::GetAsValue(bool include_staleness) const {
-  base::Value::Dict entry_dict;
+base::DictValue HostCache::Entry::GetAsValue(bool include_staleness) const {
+  base::DictValue entry_dict;
 
   if (include_staleness) {
     // The kExpirationKey value is using TimeTicks instead of Time used if
@@ -659,35 +679,35 @@ base::Value::Dict HostCache::Entry::GetAsValue(bool include_staleness) const {
   if (error() != OK) {
     entry_dict.Set(kNetErrorKey, error());
   } else {
-    base::Value::List ip_endpoints_list;
+    base::ListValue ip_endpoints_list;
     for (const IPEndPoint& ip_endpoint : ip_endpoints_) {
       ip_endpoints_list.Append(IpEndpointToValue(ip_endpoint));
     }
     entry_dict.Set(kIpEndpointsKey, std::move(ip_endpoints_list));
 
-    base::Value::List endpoint_metadatas_list;
+    base::ListValue endpoint_metadatas_list;
     for (const auto& endpoint_metadata_pair : endpoint_metadatas_) {
       endpoint_metadatas_list.Append(
           EndpointMetadataPairToValue(endpoint_metadata_pair));
     }
     entry_dict.Set(kEndpointMetadatasKey, std::move(endpoint_metadatas_list));
 
-    base::Value::List alias_list;
+    base::ListValue alias_list;
     for (const std::string& alias : aliases()) {
       alias_list.Append(alias);
     }
     entry_dict.Set(kAliasesKey, std::move(alias_list));
 
     // Append all resolved text records.
-    base::Value::List text_list_value;
+    base::ListValue text_list_value;
     for (const std::string& text_record : text_records()) {
       text_list_value.Append(text_record);
     }
     entry_dict.Set(kTextRecordsKey, std::move(text_list_value));
 
     // Append all the resolved hostnames.
-    base::Value::List hostnames_value;
-    base::Value::List host_ports_value;
+    base::ListValue hostnames_value;
+    base::ListValue host_ports_value;
     for (const HostPortPair& hostname : hostnames()) {
       hostnames_value.Append(hostname.host());
       host_ports_value.Append(hostname.port());
@@ -695,7 +715,7 @@ base::Value::Dict HostCache::Entry::GetAsValue(bool include_staleness) const {
     entry_dict.Set(kHostnameResultsKey, std::move(hostnames_value));
     entry_dict.Set(kHostPortsKey, std::move(host_ports_value));
 
-    base::Value::List canonical_names_list;
+    base::ListValue canonical_names_list;
     for (const std::string& canonical_name : canonical_names()) {
       canonical_names_list.Append(canonical_name);
     }
@@ -962,7 +982,7 @@ void HostCache::ClearForHosts(
     delegate_->ScheduleWrite();
 }
 
-void HostCache::GetList(base::Value::List& entry_list,
+void HostCache::GetList(base::ListValue& entry_list,
                         bool include_staleness,
                         SerializationType serialization_type) const {
   entry_list.clear();
@@ -978,6 +998,10 @@ void HostCache::GetList(base::Value::List& entry_list,
               &network_anonymization_key_value)) {
         continue;
       }
+      // Don't save entries associated with a specific network.
+      if (key.target_network != handles::kInvalidNetworkHandle) {
+        continue;
+      }
     } else {
       // ToValue() fails for transient NAKs, since they should never be
       // serialized to disk in a restorable format, so use ToDebugString() when
@@ -986,7 +1010,7 @@ void HostCache::GetList(base::Value::List& entry_list,
           base::Value(key.network_anonymization_key.ToDebugString());
     }
 
-    base::Value::Dict entry_dict = entry.GetAsValue(include_staleness);
+    base::DictValue entry_dict = entry.GetAsValue(include_staleness);
 
     const auto* host = std::get_if<url::SchemeHostPort>(&key.host);
     if (host) {
@@ -1006,11 +1030,16 @@ void HostCache::GetList(base::Value::List& entry_list,
                    std::move(network_anonymization_key_value));
     entry_dict.Set(kSecureKey, key.secure);
 
+    if (serialization_type == SerializationType::kDebug) {
+      entry_dict.Set(kTargetNetworkKey,
+                     base::NumberToString(key.target_network));
+    }
+
     entry_list.Append(std::move(entry_dict));
   }
 }
 
-bool HostCache::RestoreFromListValue(const base::Value::List& old_cache) {
+bool HostCache::RestoreFromListValue(const base::ListValue& old_cache) {
   // Reset the restore size to 0.
   restore_size_ = 0;
 
@@ -1023,7 +1052,7 @@ bool HostCache::RestoreFromListValue(const base::Value::List& old_cache) {
     if (!entry.is_dict())
       return false;
 
-    const base::Value::Dict& entry_dict = entry.GetDict();
+    const base::DictValue& entry_dict = entry.GetDict();
     const std::string* hostname_ptr = entry_dict.FindString(kHostnameKey);
     if (!hostname_ptr || !IsValidHostname(*hostname_ptr)) {
       return false;
@@ -1079,14 +1108,14 @@ bool HostCache::RestoreFromListValue(const base::Value::List& old_cache) {
     bool secure = entry_dict.FindBool(kSecureKey).value_or(false);
 
     int error = OK;
-    const base::Value::List* ip_endpoints_list = nullptr;
-    const base::Value::List* endpoint_metadatas_list = nullptr;
-    const base::Value::List* aliases_list = nullptr;
-    const base::Value::List* legacy_addresses_list = nullptr;
-    const base::Value::List* text_records_list = nullptr;
-    const base::Value::List* hostname_records_list = nullptr;
-    const base::Value::List* host_ports_list = nullptr;
-    const base::Value::List* canonical_names_list = nullptr;
+    const base::ListValue* ip_endpoints_list = nullptr;
+    const base::ListValue* endpoint_metadatas_list = nullptr;
+    const base::ListValue* aliases_list = nullptr;
+    const base::ListValue* legacy_addresses_list = nullptr;
+    const base::ListValue* text_records_list = nullptr;
+    const base::ListValue* hostname_records_list = nullptr;
+    const base::ListValue* host_ports_list = nullptr;
+    const base::ListValue* canonical_names_list = nullptr;
     std::optional<int> maybe_error = entry_dict.FindInt(kNetErrorKey);
     std::optional<bool> maybe_pinned = entry_dict.FindBool(kPinnedKey);
     if (maybe_error.has_value()) {
@@ -1117,12 +1146,22 @@ bool HostCache::RestoreFromListValue(const base::Value::List& old_cache) {
 
     std::vector<IPEndPoint> ip_endpoints;
     if (ip_endpoints_list) {
+      bool interface_unavailable = false;
       for (const base::Value& ip_endpoint_value : *ip_endpoints_list) {
         std::optional<IPEndPoint> ip_endpoint =
             IpEndpointFromValue(ip_endpoint_value);
-        if (!ip_endpoint)
+        if (!ip_endpoint) {
+          const base::DictValue* ep_dict = ip_endpoint_value.GetIfDict();
+          if (ep_dict && ep_dict->FindString(kInterfaceNameKey)) {
+            interface_unavailable = true;
+            break;
+          }
           return false;
+        }
         ip_endpoints.push_back(std::move(ip_endpoint).value());
+      }
+      if (interface_unavailable) {
+        continue;
       }
     }
 
@@ -1202,7 +1241,7 @@ bool HostCache::RestoreFromListValue(const base::Value::List& old_cache) {
 
     Key key(std::move(host), dns_query_type.value(), flags,
             static_cast<HostResolverSource>(host_resolver_source),
-            network_anonymization_key);
+            network_anonymization_key, handles::kInvalidNetworkHandle);
     key.secure = secure;
 
     // If the key is already in the cache, assume it's more recent and don't

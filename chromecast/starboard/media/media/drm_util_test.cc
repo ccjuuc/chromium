@@ -109,7 +109,8 @@ TEST(DrmUtilTest, CreatesCbcsDrmInfo) {
   constexpr std::string_view kIv = "abcdefghijklmnop";
   CHECK_EQ(kIv.size(),
            static_cast<size_t>(::media::DecryptConfig::kDecryptionKeySize));
-  const ::media::EncryptionPattern encryption_pattern(10, 20);
+  const auto encryption_pattern = ::media::EncryptionPattern::Create(10, 5);
+  CHECK(encryption_pattern.has_value());
   const ::media::SubsampleEntry subsample(1, 6);
   StarboardDrmSubSampleMapping sb_subsample;
   sb_subsample.clear_byte_count = subsample.clear_bytes;
@@ -130,9 +131,9 @@ TEST(DrmUtilTest, CreatesCbcsDrmInfo) {
   expected_drm_info.encryption_scheme =
       StarboardDrmEncryptionScheme::kStarboardDrmEncryptionSchemeAesCbc;
   expected_drm_info.encryption_pattern.crypt_byte_block =
-      encryption_pattern.crypt_byte_block();
+      encryption_pattern->crypt_byte_block();
   expected_drm_info.encryption_pattern.skip_byte_block =
-      encryption_pattern.skip_byte_block();
+      encryption_pattern->skip_byte_block();
   base::span<uint8_t>(expected_drm_info.initialization_vector)
       .copy_from_nonoverlapping(base::as_byte_span(kIv));
   expected_drm_info.initialization_vector_size = kIv.size();
@@ -204,6 +205,42 @@ TEST(DrmUtilTest, HandlesEmptySubsampleMappings) {
   CHECK(cast_buffer);
   EXPECT_THAT(DrmInfoWrapper::Create(*cast_buffer).GetDrmSampleInfo(),
               Pointee(MatchesDrmInfo(expected_drm_info)));
+}
+
+TEST(DrmUtilTest, VerifySubsamplesMatchSizeDetectsInvalidSizes) {
+  constexpr auto kBufferData = std::to_array<uint8_t>({1, 2, 3, 4, 5});
+  constexpr std::string_view kId = "drm_id";
+  constexpr std::string_view kIv = "0123456789abcdef";
+
+  // Total size (3+3=6) > buffer size (5).
+  const ::media::SubsampleEntry invalid_subsample(3, 3);
+  std::unique_ptr<::media::DecryptConfig> decrypt_config =
+      ::media::DecryptConfig::CreateCencConfig(
+          std::string(kId), std::string(kIv), {invalid_subsample});
+  auto buffer = base::MakeRefCounted<DecoderBufferAdapter>(
+      CreateChromiumBuffer(std::move(decrypt_config), kBufferData));
+
+  EXPECT_FALSE(DrmInfoWrapper::VerifySubsamplesMatchSize(*buffer));
+
+  // Total size (1+1=2) < buffer size (5).
+  const ::media::SubsampleEntry invalid_subsample_2(1, 1);
+  std::unique_ptr<::media::DecryptConfig> decrypt_config_2 =
+      ::media::DecryptConfig::CreateCencConfig(
+          std::string(kId), std::string(kIv), {invalid_subsample_2});
+  auto buffer_2 = base::MakeRefCounted<DecoderBufferAdapter>(
+      CreateChromiumBuffer(std::move(decrypt_config_2), kBufferData));
+
+  EXPECT_FALSE(DrmInfoWrapper::VerifySubsamplesMatchSize(*buffer_2));
+
+  // Correct size (2+3=5) == buffer size (5).
+  const ::media::SubsampleEntry valid_subsample(2, 3);
+  std::unique_ptr<::media::DecryptConfig> decrypt_config_3 =
+      ::media::DecryptConfig::CreateCencConfig(
+          std::string(kId), std::string(kIv), {valid_subsample});
+  auto buffer_3 = base::MakeRefCounted<DecoderBufferAdapter>(
+      CreateChromiumBuffer(std::move(decrypt_config_3), kBufferData));
+
+  EXPECT_TRUE(DrmInfoWrapper::VerifySubsamplesMatchSize(*buffer_3));
 }
 
 }  // namespace

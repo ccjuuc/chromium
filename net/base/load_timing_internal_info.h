@@ -11,6 +11,7 @@
 
 #include "base/time/time.h"
 #include "net/base/net_export.h"
+#include "net/dns/public/resolution_details.h"
 #include "net/http/alternate_protocol_usage.h"
 
 namespace net {
@@ -28,6 +29,24 @@ enum class SessionSource {
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/enums.xml:NetworkSessionSource)
 
+// Classifies why a new QUIC session had to be created by checking if a session
+// already existed in the pool's all_sessions_ set.
+// Note: When kSessionExisted* is logged, it indicates that a session existed
+// in all_sessions_ but was excluded from active_sessions_ (most commonly
+// because it received a GOAWAY frame or is draining during IP address
+// migration). Granular breakdown of why the existing session could not be
+// reused is tracked in follow-up metrics.
+// LINT.IfChange(QuicSessionEstablishmentReason)
+enum class QuicSessionEstablishmentReason {
+  kUnknown = 0,
+  kNoSessionExisted = 1,
+  kSessionExistedButNotPreconnect = 2,
+  kSessionExistedAndWasPreconnect = 3,
+  kSessionExistedBoth = 4,
+  kMaxValue = kSessionExistedBoth,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/net/enums.xml:QuicSessionEstablishmentReason)
+
 // Structure containing internal load timing information. This is similar to
 // LoadTimingInfo, but contains extra information which shouldn't be exposed to
 // the web. We use this structure for internal measurements.
@@ -37,11 +56,22 @@ struct NET_EXPORT LoadTimingInternalInfo {
   bool operator==(const LoadTimingInternalInfo& other) const;
   ~LoadTimingInternalInfo();
 
+  // The time taken for a SPDY/QUIC session to create an active stream for this
+  // request. Measures pending time due to max stream limits. This is only set
+  // when SPDY/QUIC is used.
+  std::optional<base::TimeDelta> max_stream_limit_pending_delay;
+
   // The time taken for HTTP stream creating to finish.
   base::TimeDelta create_stream_delay;
 
   // The time taken for HTTP transaction connected callback.
   base::TimeDelta connected_callback_delay;
+
+  // WARNING: Unlike other fields in this struct, this one is set in
+  // //services/network, which is a kind of layer violation. Intermediate
+  // layers could potentially modify this value.
+  // Whether the Accept-CH frame was received.
+  bool accept_ch_frame_received = false;
 
   // The time taken for HTTP stream initialization to finish if the
   // initialization was blocked.
@@ -56,6 +86,16 @@ struct NET_EXPORT LoadTimingInternalInfo {
 
   // Whether QUIC is enabled.
   bool http_network_session_quic_enabled = false;
+
+  // The details of the DNS resolution that established the connection used by
+  // this request. Can be nullopt when no resolution was performed, or
+  // resolution failed.
+  std::optional<ResolutionDetails> resolution_details;
+
+  // The reason why the QUIC session used by this request was originally
+  // established. Populated for all requests that use a QUIC session.
+  std::optional<QuicSessionEstablishmentReason>
+      quic_session_establishment_reason;
 };
 
 }  // namespace net

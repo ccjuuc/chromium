@@ -2,25 +2,34 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "extensions/browser/app_window/app_window.h"
+
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/strings/stringprintf.h"
 #include "build/build_config.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/apps/chrome_app_window_client.h"
 #include "chrome/browser/ui/browser.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/app_window/app_window_geometry_cache.h"
+#include "extensions/browser/app_window/native_app_window.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_id.h"
+#include "extensions/components/native_app_window/native_app_window_views.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
+#include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 #include "ui/display/display_switches.h"
+#include "url/gurl.h"
 
 using extensions::AppWindowGeometryCache;
 using extensions::ResultCatcher;
@@ -141,7 +150,7 @@ class AppWindowAPITest : public extensions::PlatformAppBrowserTest {
 };
 
 // These tests are flaky after https://codereview.chromium.org/57433010/.
-// See http://crbug.com/319613.
+// See http://crbug.com/40341463.
 
 IN_PROC_BROWSER_TEST_F(AppWindowAPITest, TestCreate) {
   ASSERT_TRUE(RunAppWindowAPITest("testCreate")) << message_;
@@ -159,7 +168,7 @@ IN_PROC_BROWSER_TEST_F(AppWindowAPITest, DISABLED_TestMaximize) {
   ASSERT_TRUE(RunAppWindowAPITest("testMaximize")) << message_;
 }
 
-// Flaky on Linux. http://crbug.com/424399.
+// Flaky on Linux. http://crbug.com/40389643.
 #if BUILDFLAG(IS_LINUX)
 #define MAYBE_TestMinimize DISABLED_TestMinimize
 #else
@@ -190,7 +199,7 @@ IN_PROC_BROWSER_TEST_F(AppWindowAPITest, DISABLED_TestRestoreAfterClose) {
 #define MAYBE_TestInitialBounds TestInitialBounds
 #define MAYBE_TestInitialConstraints TestInitialConstraints
 #define MAYBE_TestSetBounds TestSetBounds
-// Disabled as flakey, see http://crbug.com/434532 for details.
+// Disabled as flakey, see http://crbug.com/41143711 for details.
 #define MAYBE_TestSetSizeConstraints DISABLED_TestSetSizeConstraints
 #endif
 
@@ -214,7 +223,7 @@ IN_PROC_BROWSER_TEST_F(AppWindowAPITest, MAYBE_TestSetSizeConstraints) {
   ASSERT_TRUE(RunAppWindowAPITest("testSetSizeConstraints")) << message_;
 }
 
-// Flaky failures on mac_rel and WinXP, see http://crbug.com/324915.
+// Flaky failures on mac_rel and WinXP, see http://crbug.com/40343413.
 IN_PROC_BROWSER_TEST_F(AppWindowAPITest,
                        DISABLED_TestRestoreGeometryCacheChange) {
   // This test is similar to the other AppWindowAPI tests except that at some
@@ -229,7 +238,7 @@ IN_PROC_BROWSER_TEST_F(AppWindowAPITest,
       test_data_dir_.AppendASCII("platform_apps").AppendASCII("window_api"));
   EXPECT_TRUE(extension);
 
-  apps::AppServiceProxyFactory::GetForProfile(browser()->profile())
+  apps::AppServiceProxyFactory::GetForProfile(browser()->GetProfile())
       ->LaunchAppWithParams(apps::AppLaunchParams(
           extension->id(), apps::LaunchContainer::kLaunchContainerNone,
           WindowOpenDisposition::NEW_WINDOW, apps::LaunchSource::kFromTest));
@@ -243,12 +252,12 @@ IN_PROC_BROWSER_TEST_F(AppWindowAPITest,
   ASSERT_TRUE(geometry_listener.WaitUntilSatisfied());
 
   GeometryCacheChangeHelper geo_change_helper_1(
-      AppWindowGeometryCache::Get(browser()->profile()), extension->id(),
+      AppWindowGeometryCache::Get(browser()->GetProfile()), extension->id(),
       // The next line has information that has to stay in sync with the app.
       "test-ra", gfx::Rect(200, 200, 200, 200));
 
   GeometryCacheChangeHelper geo_change_helper_2(
-      AppWindowGeometryCache::Get(browser()->profile()), extension->id(),
+      AppWindowGeometryCache::Get(browser()->GetProfile()), extension->id(),
       // The next line has information that has to stay in sync with the app.
       "test-rb", gfx::Rect(200, 200, 200, 200));
 
@@ -272,4 +281,105 @@ IN_PROC_BROWSER_TEST_F(AppWindowAPITest, TestVisibleOnAllWorkspaces) {
   ASSERT_TRUE(
       RunAppWindowAPITestAndWaitForRoundTrip("testVisibleOnAllWorkspaces"))
       << message_;
+}
+
+namespace {
+
+class ClosingOnFullscreenTransitionWindow
+    : public native_app_window::NativeAppWindowViews {
+ public:
+  ClosingOnFullscreenTransitionWindow() = default;
+  ~ClosingOnFullscreenTransitionWindow() override = default;
+
+  void SetFullscreen(int fullscreen_types) override {
+    // Simulate window closure during fullscreen transition (e.g. as can happen
+    // on macOS when spinning a nested run loop).
+    widget()->CloseNow();
+  }
+};
+
+class TestAppWindowClient : public ChromeAppWindowClient {
+ public:
+  TestAppWindowClient() = default;
+  ~TestAppWindowClient() override = default;
+
+  std::unique_ptr<extensions::NativeAppWindow> CreateNativeAppWindow(
+      extensions::AppWindow* window,
+      extensions::AppWindow::CreateParams* params) override {
+    auto native_window =
+        std::make_unique<ClosingOnFullscreenTransitionWindow>();
+    native_window->Init(window, *params);
+    return native_window;
+  }
+};
+
+}  // namespace
+
+// Regression test for crbug.com/516948486.
+IN_PROC_BROWSER_TEST_F(AppWindowAPITest, UafInSetNativeWindowFullscreen) {
+  const extensions::Extension* extension = LoadExtension(
+      test_data_dir_.AppendASCII("platform_apps").AppendASCII("window_api"));
+  ASSERT_TRUE(extension);
+
+  TestAppWindowClient test_client;
+  // `AppWindowClient::Set()` has a DCHECK verifying that we don't overwrite a
+  // non-null client with another non-null client. We must clear the existing
+  // client (set during browser startup) before setting our test client.
+  extensions::AppWindowClient::Set(nullptr);
+  extensions::AppWindowClient::Set(&test_client);
+
+  extensions::AppWindow* window =
+      CreateAppWindowFromParams(browser()->GetProfile(), extension,
+                                extensions::AppWindow::CreateParams());
+  ASSERT_TRUE(window);
+
+  // Trigger fullscreen transition. In our placeholder `SetFullscreen()`,
+  // `OnNativeClose()` will be called, deleting `window`. Without the weak
+  // pointer check in `SetNativeWindowFullscreen()`, this call would result in a
+  // Use-After-Free when `RestoreAlwaysOnTop()` is reached.
+  SetNativeWindowFullscreenForTesting(window);
+
+  // Clear our test client before restoring the production client.
+  extensions::AppWindowClient::Set(nullptr);
+  extensions::AppWindowClient::Set(ChromeAppWindowClient::GetInstance());
+}
+
+IN_PROC_BROWSER_TEST_F(AppWindowAPITest,
+                       RendererInitiatedCrossProcessNavigationBlocked) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
+
+  // Launch a platform app and wait for it to be ready.
+  ExtensionTestMessageListener listener("ready", ReplyBehavior::kWillReply);
+  const extensions::Extension* extension =
+      LoadAndLaunchPlatformApp("windows_api_set_icon", &listener);
+  ASSERT_TRUE(extension);
+  listener.Reply("");
+
+  extensions::AppWindow* app_window = GetFirstAppWindow();
+  ASSERT_TRUE(app_window);
+  content::WebContents* web_contents = app_window->web_contents();
+  ASSERT_TRUE(web_contents);
+
+  // Clear browser_handles_all_top_level_requests to simulate a compromised
+  // renderer (which would ignore this preference and try to navigate directly).
+  web_contents->GetMutableRendererPrefs()
+      ->browser_handles_all_top_level_requests = false;
+  web_contents->SyncRendererPrefs();
+
+  GURL target_url = embedded_test_server()->GetURL("/title1.html");
+
+  content::TestNavigationManager navigation_manager(web_contents, target_url);
+
+  // Trigger renderer-initiated navigation.
+  ASSERT_TRUE(content::ExecJs(web_contents,
+                              base::StringPrintf("window.location.href = '%s';",
+                                                 target_url.spec().c_str())));
+
+  ASSERT_TRUE(navigation_manager.WaitForNavigationFinished());
+
+  EXPECT_FALSE(navigation_manager.was_committed());
+  EXPECT_FALSE(navigation_manager.was_successful());
+
+  // Verify we didn't actually navigate.
+  EXPECT_NE(target_url, web_contents->GetLastCommittedURL());
 }

@@ -12,8 +12,8 @@
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/affiliations/affiliation_service_factory.h"
-#include "chrome/browser/password_manager/account_password_store_factory.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/password_manager/core/browser/ui/saved_passwords_presenter.h"
 
@@ -49,15 +49,15 @@ class PasswordStoreBridge
 
   // Called by Java to get the number of stored credentials for both profile and
   // account stores.
-  jint GetPasswordStoreCredentialsCountForAllStores(JNIEnv* env) const;
+  int32_t GetPasswordStoreCredentialsCountForAllStores(JNIEnv* env) const;
 
   // Called by Java to get the number of stored credentials in the account
   // storage.
-  jint GetPasswordStoreCredentialsCountForAccountStore(JNIEnv* env) const;
+  int32_t GetPasswordStoreCredentialsCountForAccountStore(JNIEnv* env) const;
 
   // Called by Java to get the number of stored credentials in the local
   // storage.
-  jint GetPasswordStoreCredentialsCountForProfileStore(JNIEnv* env) const;
+  int32_t GetPasswordStoreCredentialsCountForProfileStore(JNIEnv* env) const;
 
   // Called by Java to get all stored credentials.
   void GetAllCredentials(
@@ -66,9 +66,6 @@ class PasswordStoreBridge
 
   // Called by Java to clear all stored passwords.
   void ClearAllPasswords(JNIEnv* env);
-
-  // Called by Java to clear all passwords from profile store.
-  void ClearAllPasswordsFromProfileStore(JNIEnv* env);
 
   // Called by Java to destroy `this`.
   void Destroy(JNIEnv* env);

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// TODO(crbug.com/537846713): Migrate this test suite to GlicBrowserTest.
+
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/actor/tools/history_tool_request.h"
 #include "chrome/browser/glic/host/glic_actor_interactive_uitest_common.h"
@@ -36,9 +38,8 @@ MultiStep GlicActorNavigationUiTest::HistoryAction(
       base::BindLambdaForTesting([&task_id, &tab_handle, direction]() {
         optimization_guide::proto::Actions action =
             direction == HistoryDirection::kBack
-                ? actor::MakeHistoryBack(tab_handle)
-                : actor::MakeHistoryForward(tab_handle);
-        action.set_task_id(task_id.value());
+                ? actor::MakeHistoryBack(tab_handle, task_id)
+                : actor::MakeHistoryForward(tab_handle, task_id);
         return EncodeActionProto(action);
       });
   return ExecuteAction(std::move(navigate_provider),

@@ -114,7 +114,7 @@ public class IncognitoTabModelTest {
      * Verify that a close all operation that occurs while a tab is being added does not crash the
      * browser and results in 1 valid tab. This test simulates the case where the user selects
      * "Close all incognito tabs" then quickly clicks the "+" button to add a new incognito tab. See
-     * crbug.com/496651.
+     * crbug.com/41180542.
      */
     @Test
     @SmallTest
@@ -201,14 +201,14 @@ public class IncognitoTabModelTest {
                     assertThat(mRegularTabModel.getCount()).isEqualTo(1);
                     assertThat(mIncognitoTabModel.getCount()).isEqualTo(0);
 
-                    Tab mTab = mRegularTabModel.getTabAt(0);
-                    assertFalse(mTab.isHidden());
+                    Tab tab = mRegularTabModel.getTabAt(0);
+                    assertFalse(tab.isHidden());
                     mActivityTestRule
                             .getActivity()
                             .getTabModelSelectorSupplier()
                             .get()
                             .selectModel(true);
-                    assertTrue(mTab.isHidden());
+                    assertTrue(tab.isHidden());
                 });
     }
 
@@ -217,7 +217,9 @@ public class IncognitoTabModelTest {
     public void testCurrentTabSupplierAddedBefore() {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mIncognitoTabModel.getCurrentTabSupplier().addObserver(mTabSupplierObserver);
+                    mIncognitoTabModel
+                            .getCurrentTabSupplier()
+                            .addSyncObserverAndPostIfNonNull(mTabSupplierObserver);
                 });
         verifyNoInteractions(mTabSupplierObserver);
 
@@ -234,7 +236,9 @@ public class IncognitoTabModelTest {
         createTabOnUiThread();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mIncognitoTabModel.getCurrentTabSupplier().addObserver(mTabSupplierObserver);
+                    mIncognitoTabModel
+                            .getCurrentTabSupplier()
+                            .addSyncObserverAndPostIfNonNull(mTabSupplierObserver);
                 });
         verify(mTabSupplierObserver, timeout(CriteriaHelper.DEFAULT_MAX_TIME_TO_POLL).times(1))
                 .onResult(notNull());
@@ -248,7 +252,9 @@ public class IncognitoTabModelTest {
     public void testTabCountSupplierAddedBefore() {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mIncognitoTabModel.getTabCountSupplier().addObserver(mTabCountSupplierObserver);
+                    mIncognitoTabModel
+                            .getTabCountSupplier()
+                            .addSyncObserverAndPostIfNonNull(mTabCountSupplierObserver);
                 });
         verify(mTabCountSupplierObserver, timeout(CriteriaHelper.DEFAULT_MAX_TIME_TO_POLL).times(1))
                 .onResult(0);
@@ -266,7 +272,9 @@ public class IncognitoTabModelTest {
         createTabOnUiThread();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mIncognitoTabModel.getTabCountSupplier().addObserver(mTabCountSupplierObserver);
+                    mIncognitoTabModel
+                            .getTabCountSupplier()
+                            .addSyncObserverAndPostIfNonNull(mTabCountSupplierObserver);
                 });
         verify(mTabCountSupplierObserver, timeout(CriteriaHelper.DEFAULT_MAX_TIME_TO_POLL).times(1))
                 .onResult(1);

@@ -10,9 +10,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.content.Context;
+import android.graphics.Paint;
+import android.graphics.drawable.Drawable;
+import android.os.Build;
 import android.text.StaticLayout;
 import android.view.LayoutInflater;
 import android.view.View.OnLayoutChangeListener;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 import androidx.test.core.app.ApplicationProvider;
@@ -51,6 +55,7 @@ public class EducationalTipModuleViewUnitTest {
     @Before
     public void setUp() {
         mContext = ApplicationProvider.getApplicationContext();
+        mContext.setTheme(R.style.Theme_BrowserUI_DayNight);
 
         mModuleView =
                 (EducationalTipModuleView)
@@ -128,5 +133,61 @@ public class EducationalTipModuleViewUnitTest {
                 .onLayoutChange(mMockContentTitleView, 0, 0, 0, 0, 0, 0, 0, 0);
 
         verify(mMockContentTitleView, times(1)).post(any());
+    }
+
+    @Test
+    @SmallTest
+    public void testSetCompleted_True() {
+        mModuleView.setCompleted(true);
+        verifySetCompleted();
+    }
+
+    @Test
+    @SmallTest
+    public void testSetCompleted_False() {
+        // Call setCompleted(true) first to change from default
+        mModuleView.setCompleted(true);
+        // Then call setCompleted(false) to attempt to reset
+        mModuleView.setCompleted(false);
+
+        // In the current implementation, setCompleted(false) doesn't revert the changes.
+        // So, the styles should still be the disabled ones.
+        verifySetCompleted();
+    }
+
+    @Test
+    @SmallTest
+    public void testSetUseTransparentIconBackground() {
+        ImageView imageView = mModuleView.findViewById(R.id.educational_tip_module_content_image);
+        Drawable background = imageView.getBackground();
+        Assert.assertNotNull(background);
+
+        mModuleView.setUseTransparentIconBackground(true);
+        Assert.assertNull(imageView.getBackground());
+    }
+
+    private void verifySetCompleted() {
+        TextView contentTitleView =
+                mModuleView.findViewById(R.id.educational_tip_module_content_title);
+        TextView contentDescriptionView =
+                mModuleView.findViewById(R.id.educational_tip_module_content_description);
+        TextView buttonView = mModuleView.findViewById(R.id.educational_tip_module_button);
+
+        int disabledColor = mContext.getColor(R.color.default_text_color_disabled_list);
+
+        Assert.assertEquals(disabledColor, contentTitleView.getCurrentTextColor());
+        Assert.assertTrue((contentTitleView.getPaintFlags() & Paint.STRIKE_THRU_TEXT_FLAG) != 0);
+        Assert.assertEquals(disabledColor, contentDescriptionView.getCurrentTextColor());
+        Assert.assertTrue(
+                (contentDescriptionView.getPaintFlags() & Paint.STRIKE_THRU_TEXT_FLAG) != 0);
+
+        Assert.assertFalse(buttonView.isEnabled());
+        Assert.assertEquals(disabledColor, buttonView.getCurrentTextColor());
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Assert.assertEquals(
+                    mContext.getString(R.string.educational_tip_accessibility_item_completed),
+                    mModuleView.getStateDescription());
+        }
     }
 }

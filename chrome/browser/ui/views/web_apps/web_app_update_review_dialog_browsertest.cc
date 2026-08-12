@@ -16,6 +16,7 @@
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/metrics/user_action_tester.h"
+#include "base/test/run_until.h"
 #include "base/test/test_future.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
@@ -23,12 +24,14 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/shortcuts/shortcut_icon_generator.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
+#include "chrome/browser/ui/views/toolbar/app_menu_control.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_menu_button.h"
 #include "chrome/browser/ui/views/web_apps/web_app_update_identity_view.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
@@ -42,7 +45,6 @@
 #include "chrome/browser/web_applications/test/web_app_icon_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/ui_manager/update_dialog_types.h"
-#include "chrome/browser/web_applications/web_app_callback_app_identity.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
@@ -54,6 +56,7 @@
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/events/test/test_event.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/skia_util.h"
@@ -121,18 +124,21 @@ class WebAppUpdateReviewDialog : public DialogBrowserTest {
   // DialogBrowserTest:
   void ShowUi(const std::string& name) override {
     // Modify the update configuration based on the test name.
-    if (base::Contains(name, "NameChange")) {
+    if (name.contains("NameChange")) {
       update_.new_title =
           u"Definitely a longer title that is really really really really "
           u"long.";
     }
-    if (base::Contains(name, "IconChange")) {
+    if (name.contains("InsignificantIconChange")) {
+      update_.new_icon = gfx::Image::CreateFrom1xBitmap(new_icon_);
+      update_.icon_diff_is_insignificant = true;
+    } else if (name.contains("IconChange")) {
       update_.new_icon = gfx::Image::CreateFrom1xBitmap(new_icon_);
     }
-    if (base::Contains(name, "UrlChange")) {
+    if (name.contains("UrlChange")) {
       update_.new_start_url = GURL("http://other.test.com");
     }
-    if (base::Contains(name, "ForcedMigration")) {
+    if (name.contains("ForcedMigration")) {
       update_.new_start_url = GURL("http://other.test.com");
       update_.is_forced_migration = true;
     }
@@ -142,14 +148,15 @@ class WebAppUpdateReviewDialog : public DialogBrowserTest {
                                           dialog_result_.GetCallback());
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   bool VerifyUi() override {
     if (!DialogBrowserTest::VerifyUi()) {
       return false;
     }
     bool is_showing =
-        browser()->GetBrowserView().GetProperty(kIsPwaUpdateDialogShowingKey);
+        BrowserView::GetBrowserViewForBrowser(browser())->GetProperty(
+            kIsPwaUpdateDialogShowingKey);
     EXPECT_TRUE(is_showing);
     return is_showing;
   }
@@ -178,6 +185,11 @@ IN_PROC_BROWSER_TEST_F(WebAppUpdateReviewDialog,
 }
 
 IN_PROC_BROWSER_TEST_F(WebAppUpdateReviewDialog,
+                       InvokeUi_NameChange_InsignificantIconChange) {
+  ShowAndVerifyUi();
+}
+
+IN_PROC_BROWSER_TEST_F(WebAppUpdateReviewDialog,
                        InvokeUi_NameChange_UrlChange) {
   ShowAndVerifyUi();
 }
@@ -201,6 +213,15 @@ IN_PROC_BROWSER_TEST_F(WebAppUpdateReviewDialog, InvokeUi_UrlChange) {
 }
 
 IN_PROC_BROWSER_TEST_F(WebAppUpdateReviewDialog,
+                       InvokeUi_UrlChange_InsignificantIconChange) {
+  ShowAndVerifyUi();
+}
+
+IN_PROC_BROWSER_TEST_F(WebAppUpdateReviewDialog, InvokeUi_ForcedMigration) {
+  ShowAndVerifyUi();
+}
+
+IN_PROC_BROWSER_TEST_F(WebAppUpdateReviewDialog,
                        ForcedMigrationNoIgnoreButton) {
   views::NamedWidgetShownWaiter update_dialog_waiter(
       views::test::AnyWidgetTestPasskey(), "WebAppUpdateReviewDialog");
@@ -208,7 +229,6 @@ IN_PROC_BROWSER_TEST_F(WebAppUpdateReviewDialog,
   views::Widget* dialog_widget = update_dialog_waiter.WaitIfNeededAndGet();
   ASSERT_TRUE(dialog_widget != nullptr);
   ASSERT_FALSE(dialog_widget->IsClosed());
-
   views::ElementTrackerViews* tracker_views =
       views::ElementTrackerViews::GetInstance();
   ui::ElementContext context =
@@ -236,11 +256,11 @@ IN_PROC_BROWSER_TEST_F(WebAppUpdateReviewDialog,
         }
       }));
   // Uninstalling the app will close the update dialog
-  web_app::test::UninstallWebApp(browser()->profile(), app_id_);
+  web_app::test::UninstallWebApp(browser()->GetProfile(), app_id_);
   run_loop.Run();
 
-  EXPECT_FALSE(
-      browser()->GetBrowserView().GetProperty(kIsPwaUpdateDialogShowingKey));
+  EXPECT_FALSE(BrowserView::GetBrowserViewForBrowser(browser())->GetProperty(
+      kIsPwaUpdateDialogShowingKey));
   EXPECT_EQ(dialog_result_.Get(),
             WebAppIdentityUpdateResult::kAppUninstalledDuringDialog);
 }
@@ -256,8 +276,8 @@ IN_PROC_BROWSER_TEST_F(WebAppUpdateReviewDialog,
 
   // Verify dialog is closed, and the ignore result is obtained.
   ClickIgnoreButtonOnDialog(dialog_widget);
-  EXPECT_FALSE(
-      browser()->GetBrowserView().GetProperty(kIsPwaUpdateDialogShowingKey));
+  EXPECT_FALSE(BrowserView::GetBrowserViewForBrowser(browser())->GetProperty(
+      kIsPwaUpdateDialogShowingKey));
   EXPECT_EQ(dialog_result_.Get(), WebAppIdentityUpdateResult::kIgnore);
 }
 
@@ -304,27 +324,28 @@ class WebAppUpdateDialogBrowserTests : public WebAppBrowserTestBase {
   WebAppUpdateDialogBrowserTests& operator=(
       const WebAppUpdateDialogBrowserTests&) = delete;
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   const webapps::AppId InstallAppAndTriggerAppUpdateDialog() {
     // Install the app and trigger a navigation.
     const GURL app_url =
-        https_server()->GetURL("/web_apps/updating/index.html");
+        embedded_https_test_server().GetURL("/web_apps/updating/index.html");
     const webapps::AppId app_id =
-        InstallWebAppFromPageAndCloseAppBrowser(browser(), app_url);
+        InstallWebAppInNewTabAndClose(browser(), app_url);
     Browser* app_browser = LaunchWebAppBrowser(app_id);
     EXPECT_NE(app_browser, nullptr);
     // Ensure that the app browser is visible before proceeding. This ensures
     // that all PWA launching processes have finished.
-    views::test::WidgetVisibleWaiter(app_browser->GetBrowserView().GetWidget())
+    views::test::WidgetVisibleWaiter(
+        BrowserView::GetBrowserViewForBrowser(app_browser)->GetWidget())
         .Wait();
     // TODO(crbug.com/442643377): Delete this wait after the update runs for
     // every navigation.
     provider().command_manager().AwaitAllCommandsCompleteForTesting();
 
     // Trigger an update, verify pending update info stored.
-    const GURL update_url =
-        https_server()->GetURL("/web_apps/updating/new_icon_page_masking.html");
+    const GURL update_url = embedded_https_test_server().GetURL(
+        "/web_apps/updating/new_icon_page_masking.html");
     {
       UpdateAwaiter awaiter(provider().install_manager());
       EXPECT_TRUE(ui_test_utils::NavigateToURL(app_browser, update_url));
@@ -421,8 +442,6 @@ class WebAppUpdateDialogBrowserTests : public WebAppBrowserTestBase {
   }
 
   base::HistogramTester tester_;
-  base::test::ScopedFeatureList feature_list_{
-      features::kWebAppPredictableAppUpdating};
 };
 
 IN_PROC_BROWSER_TEST_F(WebAppUpdateDialogBrowserTests,
@@ -432,6 +451,8 @@ IN_PROC_BROWSER_TEST_F(WebAppUpdateDialogBrowserTests,
   const webapps::AppId& app_id = InstallAppAndTriggerAppUpdateDialog();
   views::Widget* dialog_widget = update_dialog_waiter.WaitIfNeededAndGet();
   ASSERT_NE(nullptr, dialog_widget);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return dialog_widget->IsVisible(); }));
 
   // At this point, the update has not been triggered yet.
   const WebApp* old_web_app = provider().registrar_unsafe().GetAppById(app_id);
@@ -464,6 +485,8 @@ IN_PROC_BROWSER_TEST_F(WebAppUpdateDialogBrowserTests, Accept) {
   const webapps::AppId& app_id = InstallAppAndTriggerAppUpdateDialog();
   views::Widget* dialog_widget = update_dialog_waiter.WaitIfNeededAndGet();
   ASSERT_NE(nullptr, dialog_widget);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return dialog_widget->IsVisible(); }));
   EXPECT_EQ("Web app for updating",
             provider().registrar_unsafe().GetAppShortName(app_id));
 
@@ -477,7 +500,9 @@ IN_PROC_BROWSER_TEST_F(WebAppUpdateDialogBrowserTests, Accept) {
   // is present and expanded.
   EXPECT_TRUE(app_browser_view->GetProperty(kIsPwaUpdateDialogShowingKey));
   WebAppMenuButton* const menu_button = views::AsViewClass<WebAppMenuButton>(
-      app_browser_view->toolbar_button_provider()->GetAppMenuButton());
+      views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+          kToolbarAppMenuButtonElementId,
+          views::ElementTrackerViews::GetContextForView(app_browser_view)));
   EXPECT_TRUE(menu_button->IsLabelPresentAndVisible());
 
   // Accept the dialog, and verify name was updated as part of updating from
@@ -507,6 +532,8 @@ IN_PROC_BROWSER_TEST_F(WebAppUpdateDialogBrowserTests, CancelUninstall) {
   const webapps::AppId& app_id = InstallAppAndTriggerAppUpdateDialog();
   views::Widget* dialog_widget = update_dialog_waiter.WaitIfNeededAndGet();
   ASSERT_NE(nullptr, dialog_widget);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return dialog_widget->IsVisible(); }));
 
   // This will trigger uninstallation of the app. Wait for the uninstallation
   // dialog to show up.
@@ -518,12 +545,15 @@ IN_PROC_BROWSER_TEST_F(WebAppUpdateDialogBrowserTests, CancelUninstall) {
       BucketsAre(base::Bucket(WebAppIdentityUpdateResult::kUninstallApp, 1)));
   views::Widget* uninstall_dialog =
       uninstall_dialog_waiter.WaitIfNeededAndGet();
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return uninstall_dialog->IsVisible(); }));
 
   // Trigger uninstallation of the app by accepting the dialog and verify.
   WebAppProvider* provider = WebAppProvider::GetForTest(profile());
   views::test::AcceptDialog(uninstall_dialog);
   provider->command_manager().AwaitAllCommandsCompleteForTesting();
-  EXPECT_FALSE(provider->registrar_unsafe().IsInRegistrar(app_id));
+  EXPECT_FALSE(
+      provider->registrar_unsafe().GetInstallState(app_id).has_value());
 }
 
 IN_PROC_BROWSER_TEST_F(WebAppUpdateDialogBrowserTests, IgnoreRemovesMenuLabel) {
@@ -532,6 +562,8 @@ IN_PROC_BROWSER_TEST_F(WebAppUpdateDialogBrowserTests, IgnoreRemovesMenuLabel) {
   const webapps::AppId& app_id = InstallAppAndTriggerAppUpdateDialog();
   views::Widget* dialog_widget = update_dialog_waiter.WaitIfNeededAndGet();
   ASSERT_NE(nullptr, dialog_widget);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return dialog_widget->IsVisible(); }));
 
   BrowserWindowInterface* app_browser =
       AppBrowserController::FindForWebApp(*profile(), app_id);
@@ -543,7 +575,9 @@ IN_PROC_BROWSER_TEST_F(WebAppUpdateDialogBrowserTests, IgnoreRemovesMenuLabel) {
   // is present and expanded.
   EXPECT_TRUE(app_browser_view->GetProperty(kIsPwaUpdateDialogShowingKey));
   WebAppMenuButton* const menu_button = views::AsViewClass<WebAppMenuButton>(
-      app_browser_view->toolbar_button_provider()->GetAppMenuButton());
+      views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+          kToolbarAppMenuButtonElementId,
+          views::ElementTrackerViews::GetContextForView(app_browser_view)));
   EXPECT_TRUE(menu_button->IsLabelPresentAndVisible());
 
   // Trigger the ignore button and verify that the expanded label disappears.
@@ -568,6 +602,8 @@ IN_PROC_BROWSER_TEST_F(WebAppUpdateDialogBrowserTests,
   const webapps::AppId& app_id = InstallAppAndTriggerAppUpdateDialog();
   views::Widget* dialog_widget = update_dialog_waiter.WaitIfNeededAndGet();
   ASSERT_NE(nullptr, dialog_widget);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return dialog_widget->IsVisible(); }));
 
   BrowserWindowInterface* app_browser =
       AppBrowserController::FindForWebApp(*profile(), app_id);
@@ -579,7 +615,9 @@ IN_PROC_BROWSER_TEST_F(WebAppUpdateDialogBrowserTests,
   // is present and expanded.
   EXPECT_TRUE(app_browser_view->GetProperty(kIsPwaUpdateDialogShowingKey));
   WebAppMenuButton* const menu_button = views::AsViewClass<WebAppMenuButton>(
-      app_browser_view->toolbar_button_provider()->GetAppMenuButton());
+      views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+          kToolbarAppMenuButtonElementId,
+          views::ElementTrackerViews::GetContextForView(app_browser_view)));
   EXPECT_TRUE(menu_button->IsLabelPresentAndVisible());
 
   // Trigger the ignore button and verify that the expanded label disappears.
@@ -598,8 +636,8 @@ IN_PROC_BROWSER_TEST_F(WebAppUpdateDialogBrowserTests,
   // menu button is now in the expanded state with the label. The first update
   // was from index.html to new_icon_page_masking.html. Now, trigger an update
   // to new_icon_page.html.
-  const GURL update_url2 =
-      https_server()->GetURL("/web_apps/updating/new_icon_page.html");
+  const GURL update_url2 = embedded_https_test_server().GetURL(
+      "/web_apps/updating/new_icon_page.html");
   {
     base::test::TestFuture<void> update_future;
     UpdateAwaiter awaiter(provider().install_manager());

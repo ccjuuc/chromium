@@ -101,6 +101,27 @@ enum class LoadingDialogResult {
 
 // LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:FedCmLoadingDialogResult)
 
+// This enum describes the outcome of the mismatch dialog and is used for
+// histograms. Do not remove or modify existing values, but you may add new
+// values at the end.
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.ui.android.webid
+// LINT.IfChange(MismatchDialogResult)
+
+enum class MismatchDialogResult {
+  kContinued = 0,
+  kDismissedByCloseIcon = 1,
+  kDismissedForOtherReasons = 2,
+  // Android-specific
+  kSwipe = 3,
+  // Android-specific
+  kBackPress = 4,
+  // Android-specific
+  kTapScrim = 5,
+  kMaxValue = kTapScrim
+};
+
+// LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:FedCmMismatchDialogResult)
+
 // This enum describes the outcome of the disclosure dialog and is used for
 // histograms. Do not remove or modify existing values, but you may add new
 // values at the end.
@@ -122,6 +143,57 @@ enum class DisclosureDialogResult {
 };
 
 // LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:FedCmDisclosureDialogResult)
+
+// This enum describes the impression source of the ambient UI and is used for
+// histograms. Do not remove or modify existing values, but you may add new
+// values at the end.
+// LINT.IfChange(AmbientImpression)
+
+enum class AmbientImpression {
+  // The omnibox chip is shown for a sign-in user.
+  kSignInChip = 0,
+  // The omnibox chip is shown for a sign-up user.
+  kSignUpChip = 1,
+  // The anchored message is shown for a sign-in user after clicking the icon.
+  kSignInAnchoredMessage = 2,
+  // The anchored message is not shown for a sign-up yet, but is left here for
+  // future use.
+  kSignUpAnchoredMessage = 3,
+  // The collapsed sign-in icon.
+  kSignInIcon = 4,
+  // The collapsed sign-up icon.
+  kSignUpIcon = 5,
+  kMaxValue = kSignUpIcon
+};
+
+// LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:FedCmAmbientImpression)
+
+// This enum describes the click source of the ambient UI and is used for
+// histograms. Do not remove or modify existing values, but you may add new
+// values at the end.
+// LINT.IfChange(AmbientClick)
+
+enum class AmbientClick {
+  // The omnibox chip is clicked for a sign-in user. Clicking on the chip signs
+  // the user in.
+  kSignInChip = 0,
+  // The omnibox chip is clicked for a sign-up user. Clicking on the chip opens
+  // the modal dialog for new users.
+  kSignUpChip = 1,
+  // The anchored message is clicked for a sign-in user. Clicking on the icon
+  // opens the anchored message.
+  kSignInAnchoredMessage = 2,
+  // The anchored message for sign-up users isn't implemented yet, but is left
+  // here for future use.
+  kSignUpAnchoredMessage = 3,
+  // The collapsed sign-in icon is clicked, opening the anchored message.
+  kSignInIcon = 4,
+  // The collapsed sign-up icon is clicked, opening the modal dialog.
+  kSignUpIcon = 5,
+  kMaxValue = kSignUpIcon
+};
+
+// LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:FedCmAmbientClick)
 
 // Extracts the initial letter from the provided string.
 std::u16string GetInitialLetterAsUppercase(const std::string& utf8_string);

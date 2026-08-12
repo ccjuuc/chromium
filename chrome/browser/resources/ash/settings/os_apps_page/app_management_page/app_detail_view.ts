@@ -6,7 +6,6 @@ import './dom_switch.js';
 import './pwa_detail_view.js';
 import './arc_detail_view.js';
 import './chrome_app_detail_view.js';
-import './plugin_vm_page/plugin_vm_detail_view.js';
 import './borealis_page/borealis_detail_view.js';
 import '../../settings_shared.css.js';
 
@@ -67,11 +66,11 @@ export class AppManagementAppDetailViewElement extends
 
   // Public API: Bidirectional data flow.
   /** Passed down to children. Do not access without using PrefsMixin. */
-  prefs: PrefsState;
+  declare prefs: PrefsState;
 
-  private app_: App;
-  private apps_: AppMap;
-  private selectedAppId_: string;
+  declare private app_: App;
+  declare private apps_: AppMap;
+  declare private selectedAppId_: string;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -120,8 +119,6 @@ export class AppManagementAppDetailViewElement extends
         return 'chrome-app-detail-view';
       case (AppType.kArc):
         return 'arc-detail-view';
-      case (AppType.kPluginVm):
-        return 'plugin-vm-detail-view';
       case (AppType.kBorealis):
         return 'borealis-detail-view';
       default:

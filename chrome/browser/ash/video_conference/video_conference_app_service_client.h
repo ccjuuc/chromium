@@ -16,7 +16,6 @@
 #include "base/unguessable_token.h"
 #include "chrome/browser/ash/video_conference/video_conference_client_base.h"
 #include "chrome/browser/chromeos/video_conference/video_conference_manager_client_common.h"
-#include "chromeos/crosapi/mojom/video_conference.mojom.h"
 #include "components/services/app_service/public/cpp/app_capability_access_cache.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/instance_registry.h"
@@ -58,9 +57,8 @@ class VideoConferenceAppServiceClient
 
   ~VideoConferenceAppServiceClient() override;
 
-  // crosapi::mojom::VideoConferenceManagerClient overrides.
-  void ReturnToApp(const base::UnguessableToken& token,
-                   ReturnToAppCallback callback) override;
+  // VideoConferenceManagerClient overrides.
+  bool ReturnToApp(const base::UnguessableToken& token) override;
 
   // apps::AppCapabilityAccessCache::Observer overrides.
   void OnCapabilityAccessUpdate(

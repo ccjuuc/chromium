@@ -149,7 +149,6 @@ linux_memory_builder(
                 ],
             ),
             "linux-jammy",
-            "retry_only_failed_tests",
         ],
         per_test_modifications = {
             "accessibility_unittests": targets.mixin(
@@ -166,12 +165,21 @@ linux_memory_builder(
                 ),
             ),
             "browser_tests": targets.mixin(
+                args = [
+                    "--test-launcher-filter-file=../../testing/buildbot/filters/linux.asan.browser_tests.filter",
+                    # TODO(crbug.com/542347163): Re-enable when the runtime regression is fixed.
+                    "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup",
+                ],
                 ci_only = True,
                 # These are very slow on the ASAN trybot for some reason.
                 # crbug.com/1257927
                 swarming = targets.swarming(
+                    hard_timeout_sec = 5400,  # 90 minutes,
                     shards = 70,
                 ),
+            ),
+            "components_browsertests": targets.mixin(
+                ci_only = True,
             ),
             "components_unittests": targets.mixin(
                 # These are very slow on the ASAN trybot for some reason.
@@ -207,11 +215,20 @@ linux_memory_builder(
                 "linux_nvidia_gtx_1660_stable",
             ],
             "interactive_ui_tests": targets.mixin(
-                # Only retry the individual failed tests instead of rerunning entire
-                # shards.
-                retry_only_failed_tests = True,
+                args = [
+                    # TODO(crbug.com/542347163): Re-enable when the runtime regression is fixed.
+                    "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup",
+                ],
                 # These are slow on the ASan trybot for some reason, crbug.com/1257927
                 swarming = targets.swarming(
+                    # Move to faster machine types to reduce capacity impact.
+                    # TODO(crbug.com/541675870): Can remove this if/when
+                    # everything's been migrated.
+                    optional_dimensions = {
+                        30: {
+                            "cpu": "x86-64-e4",
+                        },
+                    },
                     shards = 12,
                 ),
             ),
@@ -223,14 +240,15 @@ linux_memory_builder(
                 ),
             ),
             "sync_integration_tests": targets.mixin(
+                args = [
+                    # TODO(crbug.com/542347163): Re-enable when the runtime regression is fixed.
+                    "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup",
+                ],
                 swarming = targets.swarming(
-                    shards = 4,
+                    shards = 8,
                 ),
             ),
             "unit_tests": targets.mixin(
-                # Only retry the individual failed tests instead of rerunning entire
-                # shards.
-                retry_only_failed_tests = True,
                 # These are slow on the ASAN trybot for some reason.
                 # crbug.com/1257927
                 swarming = targets.swarming(
@@ -322,9 +340,12 @@ linux_memory_builder(
         ],
         per_test_modifications = {
             "browser_tests": targets.mixin(
+                args = [
+                    # TODO(crbug.com/542347163): Re-enable when the runtime regression is fixed.
+                    "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup",
+                ],
                 swarming = targets.swarming(
-                    # https://crbug.com/1361973
-                    shards = 30,
+                    shards = 45,
                 ),
             ),
             "crashpad_tests": targets.remove(
@@ -342,12 +363,22 @@ linux_memory_builder(
             "interactive_ui_tests": targets.mixin(
                 # Slow on certain debug builders, see crbug.com/1513713.
                 swarming = targets.swarming(
-                    shards = 10,
+                    shards = 15,
+                ),
+            ),
+            "sync_integration_tests": targets.mixin(
+                args = [
+                    # TODO(crbug.com/542347163): Re-enable when the runtime regression is fixed.
+                    "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup",
+                ],
+                swarming = targets.swarming(
+                    shards = 6,
                 ),
             ),
         },
     ),
     cores = 32,
+    ssd = True,
     console_view_entry = consoles.console_view_entry(
         category = "cfi",
         short_name = "lnx",
@@ -480,7 +511,7 @@ linux_memory_builder(
             ),
             "sync_integration_tests": targets.mixin(
                 swarming = targets.swarming(
-                    shards = 6,
+                    shards = 12,
                 ),
             ),
             "unit_tests": targets.mixin(
@@ -577,6 +608,8 @@ linux_memory_builder(
             "browser_tests": targets.mixin(
                 args = [
                     "--test-launcher-filter-file=../../testing/buildbot/filters/chromeos.msan.browser_tests.oobe_negative.filter",
+                    # TODO(crbug.com/542347163): Re-enable when the runtime regression is fixed.
+                    "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup",
                 ],
                 # These are very slow on the Chrome OS MSAN trybot, most likely because browser_tests on cros has ~40% more tests. Also, these tests
                 # run on ash, which means every test starts and shuts down ash, which most likely explains why it takes longer than on other platforms.
@@ -596,6 +629,10 @@ linux_memory_builder(
                 reason = "Can't run on MSAN because gl_unittests_ozone uses the hardware driver, which isn't instrumented.",
             ),
             "interactive_ui_tests": targets.mixin(
+                args = [
+                    # TODO(crbug.com/542347163): Re-enable when the runtime regression is fixed.
+                    "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup",
+                ],
                 # These are very slow on the Chrome OS MSAN trybot for some reason.
                 # crbug.com/865455
                 swarming = targets.swarming(
@@ -611,6 +648,11 @@ linux_memory_builder(
             ),
             "services_unittests": targets.remove(
                 reason = "https://crbug.com/831676",
+            ),
+            "sync_integration_tests": targets.mixin(
+                swarming = targets.swarming(
+                    shards = 6,
+                ),
             ),
             "unit_tests": targets.mixin(
                 # These are very slow on the Chrome OS MSAN trybot for some reason.
@@ -701,8 +743,12 @@ linux_memory_builder(
         ],
         per_test_modifications = {
             "browser_tests": targets.mixin(
+                args = [
+                    # TODO(crbug.com/542347163): Re-enable when the runtime regression is fixed.
+                    "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup",
+                ],
                 swarming = targets.swarming(
-                    shards = 52,
+                    shards = 70,
                 ),
             ),
             "content_browsertests": targets.mixin(
@@ -719,11 +765,20 @@ linux_memory_builder(
             ),
             "interactive_ui_tests": targets.mixin(
                 swarming = targets.swarming(
-                    shards = 15,
+                    shards = 25,
                 ),
             ),
             "services_unittests": targets.remove(
                 reason = "https://crbug.com/831676",
+            ),
+            "sync_integration_tests": targets.mixin(
+                args = [
+                    # TODO(crbug.com/542347163): Re-enable when the runtime regression is fixed.
+                    "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup",
+                ],
+                swarming = targets.swarming(
+                    shards = 6,
+                ),
             ),
         },
     ),
@@ -766,7 +821,8 @@ ci.builder(
     ),
     builderless = False,
     cores = None,  # Swapping between 8 and 24
-    os = os.MAC_DEFAULT,
+    # TODO(crbug.com/543006750): Revert to MAC_DEFAULT after arm migration.
+    os = os.MAC_15,
     console_view_entry = consoles.console_view_entry(
         category = "mac",
         short_name = "bld",
@@ -805,7 +861,6 @@ linux_memory_builder(
                 ],
             ),
             "linux-jammy",
-            "retry_only_failed_tests",
         ],
         per_test_modifications = {
             "blink_unittests": targets.mixin(
@@ -842,10 +897,7 @@ linux_memory_builder(
                 reason = "https://crbug.com/crashpad/304",
             ),
             "gl_tests_passthrough": [
-                "gpu-swarming-pool",
-                "no_gpu",
-                "linux-jammy",
-                "x86-64",
+                "gpu_linux_gce_stable",
                 targets.mixin(
                     args = [
                         "--test-launcher-filter-file=../../testing/buildbot/filters/linux.swiftshader.tsan.gl_tests_passthrough.filter",
@@ -853,11 +905,12 @@ linux_memory_builder(
                 ),
             ],
             "interactive_ui_tests": targets.mixin(
+                args = [
+                    # TODO(crbug.com/542347163): Re-enable when the runtime regression is fixed.
+                    "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup",
+                ],
                 # https://crbug.com/1498240
                 ci_only = True,
-                # Only retry the individual failed tests instead of rerunning entire
-                # shards.
-                retry_only_failed_tests = True,
                 # These are slow on the TSan bots for some reason, crbug.com/1257927
                 swarming = targets.swarming(
                     # Adjusted for testing, see https://crbug.com/1179567
@@ -870,6 +923,10 @@ linux_memory_builder(
                 ),
             ),
             "sync_integration_tests": targets.mixin(
+                args = [
+                    # TODO(crbug.com/542347163): Re-enable when the runtime regression is fixed.
+                    "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup",
+                ],
                 # https://crbug.com/1498240
                 ci_only = True,
                 swarming = targets.swarming(
@@ -964,6 +1021,10 @@ linux_memory_builder(
                 ),
             ),
             "browser_tests": targets.mixin(
+                args = [
+                    # TODO(crbug.com/542347163): Re-enable when the runtime regression is fixed.
+                    "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup",
+                ],
                 swarming = targets.swarming(
                     shards = 20,
                 ),
@@ -974,6 +1035,10 @@ linux_memory_builder(
                 ),
             ),
             "interactive_ui_tests": targets.mixin(
+                args = [
+                    # TODO(crbug.com/542347163): Re-enable when the runtime regression is fixed.
+                    "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup",
+                ],
                 swarming = targets.swarming(
                     shards = 6,
                 ),
@@ -1021,7 +1086,7 @@ ci.builder(
                     "--test-launcher-print-test-stdio=always",
                 ],
             ),
-            "mac_default_x64",
+            "mac_15_x64",
         ],
         per_test_modifications = {
             "browser_tests": targets.mixin(
@@ -1045,7 +1110,7 @@ ci.builder(
             ),
             "sync_integration_tests": targets.mixin(
                 swarming = targets.swarming(
-                    shards = 3,
+                    shards = 8,
                 ),
             ),
             "unit_tests": targets.mixin(
@@ -1057,7 +1122,8 @@ ci.builder(
     ),
     builderless = False,
     cores = 12,
-    os = os.MAC_DEFAULT,
+    # TODO(crbug.com/543006750): Revert to MAC_DEFAULT after arm migration.
+    os = os.MAC_15,
     console_view_entry = consoles.console_view_entry(
         category = "mac",
         short_name = "tst",
@@ -1104,7 +1170,7 @@ ci.builder(
     ),
     targets = targets.bundle(
         targets = [
-            "chromium_webkit_isolated_scripts",
+            "chromium_blink_isolated_scripts",
         ],
         mixins = [
             "linux-jammy",
@@ -1184,7 +1250,7 @@ ci.builder(
     ),
     targets = targets.bundle(
         targets = [
-            "chromium_webkit_isolated_scripts",
+            "chromium_blink_isolated_scripts",
         ],
         additional_compile_targets = [
             "blink_tests",
@@ -1265,7 +1331,7 @@ ci.builder(
     ),
     targets = targets.bundle(
         targets = [
-            "chromium_webkit_isolated_scripts",
+            "chromium_blink_isolated_scripts",
         ],
         mixins = [
             "linux-jammy",
@@ -1366,7 +1432,7 @@ ci.builder(
                 # These are very slow on the ASAN trybot for some reason.
                 # crbug.com/1257927
                 swarming = targets.swarming(
-                    shards = 80,
+                    shards = 120,
                 ),
             ),
             "components_unittests": targets.mixin(
@@ -1397,7 +1463,7 @@ ci.builder(
                     "--test-launcher-jobs=3",
                 ],
                 swarming = targets.swarming(
-                    shards = 18,
+                    shards = 24,
                 ),
             ),
             "net_unittests": targets.mixin(
@@ -1412,13 +1478,18 @@ ci.builder(
                     "--test-launcher-jobs=3",
                 ],
                 swarming = targets.swarming(
-                    shards = 2,
+                    shards = 6,
                 ),
             ),
             "unit_tests": targets.mixin(
                 swarming = targets.swarming(
                     # ASAN bot is slow: https://crbug.com/1484550#c4
                     shards = 4,
+                ),
+            ),
+            "updater_tests": targets.mixin(
+                swarming = targets.swarming(
+                    shards = 2,
                 ),
             ),
             "updater_tests_system": targets.mixin(
@@ -1491,7 +1562,7 @@ ci.builder(
         mixins = [
             "expand-as-isolated-script",
             "has_native_resultdb_integration",
-            "mac_beta_arm64",
+            "mac_default_arm64",
             "mac_toolchain",
             "out_dir_arg",
             "xcode_26_main",

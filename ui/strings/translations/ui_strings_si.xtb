@@ -1,7 +1,6 @@
 <?xml version="1.0" ?>
 <!DOCTYPE translationbundle>
 <translationbundle lang="si">
-<translation id="1028699632127661925"><ph name="DEVICE_NAME" /> වෙත යවනු ලැබේ...</translation>
 <translation id="111910763555783249">දැනුම්දීම් සැකසීම්</translation>
 <translation id="1127811143501539442">{DAYS,plural, =1{දින 1 කට පෙර}one{දින # කට පෙර}other{දින # කට පෙර}}</translation>
 <translation id="1156623771253174079">{SECONDS,plural, =1{මිනිත්තු 1කට පෙර}one{මිනිත්තු #කට පෙර}other{මිනිත්තු #කට පෙර}}</translation>
@@ -12,7 +11,6 @@
 <translation id="1253734725326687145">ස්පර්ශ ඉලක්කය ඉහළ දකුණට ගෙන යන ලදි. මෙහි තට්ටු කරන්න.</translation>
 <translation id="1266864766717917324"><ph name="CONTENT_TYPE" /> බෙදා ගත නොහැකි විය</translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">පාඨය කුඩා කැබලි ලෙස බෙදා ගැනීමට උත්සාහ කරන්න.</translation>
 <translation id="1293699935367580298">පිට වීම</translation>
 <translation id="1368832886055348810">වමේ සිට දකුණට</translation>
 <translation id="1383876407941801731">සොයන්න</translation>
@@ -20,6 +18,7 @@
 <translation id="1432724887402139994">{SECONDS,plural, =1{මිනිත්තු 1කට පෙර}one{මිනිත්තු #කට පෙර}other{මිනිත්තු #කට පෙර}}</translation>
 <translation id="1450753235335490080"><ph name="CONTENT_TYPE" /> බෙදා ගත නොහැක</translation>
 <translation id="1523230076022876491">{MONTHS,plural, =1{මාස 1කට පෙර}one{මාස #කට පෙර}other{මාස #කට පෙර}}</translation>
+<translation id="1591017414891297549">පෙරදසුන</translation>
 <translation id="1591184457164800433">{MINUTES,plural, =1{මිනිත්තු 1 ක් සහ }one{මිනිත්තු # ක් සහ }other{මිනිත්තු # ක් සහ }}</translation>
 <translation id="1643823602425662293">දැනුම්දීම</translation>
 <translation id="169515659049020177">SHIFT</translation>
@@ -44,7 +43,6 @@
 <translation id="2148716181193084225">අද</translation>
 <translation id="2168039046890040389">පිටුව ඉහළට</translation>
 <translation id="2190355936436201913">(හිස්)</translation>
-<translation id="2192232475740621500">අඩු ඝනත්වය භාවිතා කරන්න</translation>
 <translation id="2267918077332197517">මෙම අඩවියෙන් එන දැනුම් දීම් සියල්ල අවහිර කරන්න</translation>
 <translation id="2283117145434822734">F6</translation>
 <translation id="2289052229480071835">ඔබේ තිරය මත ස්පර්ශ ඉලක්ක තට්ටු කරන්න.</translation>
@@ -56,7 +54,6 @@
 <translation id="2388990488038464401">ඔබේ දුරකථනයෙන් මෙම අංකය අමතන්නේද?</translation>
 <translation id="2435457462613246316">මුරපදය පෙන්වන්න</translation>
 <translation id="24452542372838207">දැනුම්දීම දිග හරින්න</translation>
-<translation id="2445449901874883781">ඉහළ ඝනත්වය භාවිතා කරන්න</translation>
 <translation id="2448407890032181691">ස්පර්ශ ඉලක්කය පහළ දකුණට ගෙන යන ලදි. මෙහි තට්ටු කරන්න.</translation>
 <translation id="2482878487686419369">දැනුම්දීම්</translation>
 <translation id="2497284189126895209">සියළු ගොනු</translation>
@@ -69,7 +66,6 @@
 <translation id="2586657967955657006">පසුරු පුවරුව</translation>
 <translation id="2653844658857826081">නව</translation>
 <translation id="2666092431469916601">ඉහල</translation>
-<translation id="2701330563083355633"><ph name="DEVICE_NAME" /> වෙතින් බෙදා ගන්නා ලදි</translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{වසර 1කට පෙර}one{වසර #කට පෙර}other{වසර #කට පෙර}}</translation>
 <translation id="2878511608894704031">සියල්ල මකන්න</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{1 දිනකින්}one{දින #කින්}other{දින #කින්}}</translation>
@@ -88,7 +84,6 @@
 <translation id="3306688585798492231">තිළැලි සංදර්ශනය</translation>
 <translation id="335581015389089642">කථනය</translation>
 <translation id="3372635229069101468"><ph name="BEGIN_BOLD" />විස්තර<ph name="END_BOLD" /> බලන්න</translation>
-<translation id="3389286852084373014">පාඨය විශාල වැඩියි</translation>
 <translation id="3406306243914553062">HTML අන්තර්ගතය</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{දින 1 ක් ඉතිරියි}one{දින # ක් ඉතිරියි}other{දින # ක් ඉතිරියි}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" /> ගොනුව</translation>
@@ -109,6 +104,7 @@
 <translation id="4031910098617850788">F5</translation>
 <translation id="40579289237549812">{UNREAD_NOTIFICATIONS,plural, =1{1 නොකියවූ දැනුම්දීමක්}one{නොකියවූ දැනුම්දීම් # ක්}other{නොකියවූ දැනුම්දීම් # ක්}}</translation>
 <translation id="41501027364808384">{COUNT,plural, =1{අප්‍රසිද්ධ තුළ පහත දිගුව ක්‍රියාත්මක කරන්න:}one{අප්‍රසිද්ධ තුළ පහත දිගු ක්‍රියාත්මක කරන්න:}other{අප්‍රසිද්ධ තුළ පහත දිගු ක්‍රියාත්මක කරන්න:}}</translation>
+<translation id="4230098358142093034">නිවස</translation>
 <translation id="4266252015790371705">{MONTHS,plural, =1{මාස 1කට පෙර}one{මාස #කට පෙර}other{මාස #කට පෙර}}</translation>
 <translation id="4277033906326892359"><ph name="COLUMN_NAME" /> තීරුව වැඩි වන අනුපිළිවෙළට සකසන ලදි</translation>
 <translation id="4289300219472526559">කතා කිරීම අරඹන්න</translation>
@@ -190,7 +186,6 @@
 <translation id="6965382102122355670">හරි</translation>
 <translation id="6974053822202609517">දකුණේ සිට වමට</translation>
 <translation id="7052633198403197513">F1</translation>
-<translation id="7170202025028120564">එය මීළඟ වරට යළි ඇරඹූ විට ඔබේ යෙදුමේ සංදර්ශක සැකසීම් ක්‍රියාත්මක වෙයි.</translation>
 <translation id="7222373446505536781">F11</translation>
 <translation id="7238427729722629793">{MINUTES,plural, =1{මිනිත්තු 1 ක් ඉතිරියි}one{මිනිත්තු # ක් ඉතිරියි}other{මිනිත්තු # ක් ඉතිරියි}}</translation>
 <translation id="7252604552361840748">ඉහත දිගුව සොයා ගන්න</translation>
@@ -200,6 +195,7 @@
 <translation id="7410957453383678442">{MINUTES,plural, =1{මිනිත්තු 1 ක් ඉතිරියි}one{මිනිත්තු # ක් ඉතිරියි}other{මිනිත්තු # ක් ඉතිරියි}}</translation>
 <translation id="7437971918971306061"><ph name="COLUMN_NAME" /> තීරුව අනුපිළිවෙළට සැකසීම් ඉවත් කරන ලදි.</translation>
 <translation id="7460907917090416791"><ph name="QUANTITY" /> TB</translation>
+<translation id="7485236722522518129">F4</translation>
 <translation id="7507604095951736240">ඉමොජි</translation>
 <translation id="7620655452534002301">ඉවත් කරන ලදි.</translation>
 <translation id="7658239707568436148">අවලංගු කරන්න</translation>
@@ -232,6 +228,7 @@
 <translation id="8677655579646609597"><ph name="QUANTITY" /> KB/s</translation>
 <translation id="8725488761726303204">තව +<ph name="NUMBER" /></translation>
 <translation id="8730621377337864115">අවසන්</translation>
+<translation id="8741385002816058621">මෙය පෙරදසුනෙහි විශේෂාංගයකි</translation>
 <translation id="8772073294905169192">{HOURS,plural, =1{1h}one{#h}other{#h}}</translation>
 <translation id="8798099450830957504">පෙරනිමි</translation>
 <translation id="8841375032071747811">ආපසු බොත්තම</translation>
@@ -245,7 +242,6 @@
 <translation id="9170848237812810038">&amp;පසුගමනය</translation>
 <translation id="9195990613383871904">හෙට</translation>
 <translation id="928628199082367701">සුපිරි</translation>
-<translation id="932327136139879170">මුල් පිටුව</translation>
 <translation id="944069440740578670">නොකියවූ දැනුම්දීම්</translation>
 <translation id="966963601246348639">{SECONDS,plural, =1{තත්පර 1කට පෙර}one{තත්පර #කට පෙර}other{තත්පර #කට පෙර}}</translation>
 </translationbundle>

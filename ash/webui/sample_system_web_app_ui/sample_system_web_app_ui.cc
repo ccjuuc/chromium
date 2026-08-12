@@ -10,6 +10,7 @@
 #include "ash/webui/grit/ash_sample_system_web_app_resources_map.h"
 #include "ash/webui/sample_system_web_app_ui/sample_page_handler.h"
 #include "ash/webui/sample_system_web_app_ui/url_constants.h"
+#include "ash/webui/web_applications/webui_test_prod_util.h"
 #include "base/base64.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/stringprintf.h"
@@ -29,7 +30,7 @@ SampleSystemWebAppUI::SampleSystemWebAppUI(content::WebUI* web_ui)
   content::WebUIDataSource* trusted_source =
       content::WebUIDataSource::CreateAndAdd(browser_context,
                                              kChromeUISampleSystemWebAppHost);
-  trusted_source->AddResourcePath("", IDR_ASH_SAMPLE_SYSTEM_WEB_APP_INDEX_HTML);
+  trusted_source->SetDefaultResource(IDR_ASH_SAMPLE_SYSTEM_WEB_APP_INDEX_HTML);
   trusted_source->AddResourcePaths(kAshSampleSystemWebAppResources);
 
 #if !DCHECK_IS_ON()
@@ -49,12 +50,21 @@ SampleSystemWebAppUI::SampleSystemWebAppUI(content::WebUI* web_ui)
   trusted_source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::WorkerSrc,
       std::string("worker-src 'self';"));
+
+  std::string script_src = "script-src chrome://resources 'self';";
+  std::string trusted_types = "trusted-types lit-html worker-js-static;";
+
+  // Allow loading test scripts from chrome://webui-test and using the
+  // 'test-harness' Trusted Types policy when running under browser tests.
+  if (MaybeConfigureTestableDataSource(trusted_source)) {
+    script_src.insert(script_src.length() - 1, " chrome://webui-test");
+    trusted_types.insert(trusted_types.length() - 1, " test-harness");
+  }
+
   trusted_source->OverrideContentSecurityPolicy(
-      network::mojom::CSPDirectiveName::TrustedTypes,
-      "trusted-types lit-html worker-js-static;");
+      network::mojom::CSPDirectiveName::ScriptSrc, script_src);
   trusted_source->OverrideContentSecurityPolicy(
-      network::mojom::CSPDirectiveName::ScriptSrc,
-      "script-src chrome://resources chrome://webui-test 'self';");
+      network::mojom::CSPDirectiveName::TrustedTypes, trusted_types);
 
   // Add ability to request chrome-untrusted: URLs
   web_ui->AddRequestableScheme(content::kChromeUIUntrustedScheme);

@@ -42,16 +42,21 @@ class MEDIA_EXPORT AVC {
       const AVCDecoderConfigurationRecord& avc_config,
       std::vector<uint8_t>* buffer);
 
-  // Analyzes the contents of `buffer` for conformance to Section 7.4.1.2.3 of
-  // ISO/IEC 14496-10. Also analyzes `buffer` and reports if it looks like a
-  // keyframe, if such can be determined. Determination of keyframe-ness is done
-  // only if `buffer` is conformant or if lack of conformance is detected after
-  // detecting keyframe-ness.
+  // Analyzes the contents of `buffer` for keyframe detection. While it also
+  // checks for conformance to Section 7.4.1.2.3 of ISO/IEC 14496-10, parsing is
+  // intentionally lax to accommodate real-world content; out-of-order NALUs do
+  // not prevent keyframe determination and are reported via `is_conformant`.
+  // This method should primarily be used for keyframe probing.
   // `subsamples` contains the information about what parts of the buffer are
   // encrypted and which parts are clear.
+  // `allow_bare_idr` indicates whether the analyzer should treat an IDR NAL
+  // unit without accompanying SPS/PPS parameter sets as sufficient to mark a
+  // frame as a keyframe. When true, the analyzer relies on a "bare" IDR NAL
+  // unit alone to determine keyframe-ness.
   static BitstreamConverter::AnalysisResult AnalyzeAnnexB(
       base::span<const uint8_t> buffer,
-      const std::vector<SubsampleEntry>& subsamples);
+      const std::vector<SubsampleEntry>& subsamples,
+      bool allow_bare_idr = true);
 
   // Given a `buffer` and `subsamples` information and `pts` pointer into the
   // `buffer` finds the index of the subsample `ptr` is pointing into.
@@ -69,7 +74,7 @@ class MEDIA_EXPORT AVC {
 // with embedded NALU lengths into AnnexB bitstream format (described in ISO/IEC
 // 14496-10) with 4-byte start codes. It also knows how to handle CENC-encrypted
 // streams and adjusts subsample data for those streams while converting.
-class AVCBitstreamConverter : public BitstreamConverter {
+class MEDIA_EXPORT AVCBitstreamConverter : public BitstreamConverter {
  public:
   explicit AVCBitstreamConverter(
       std::unique_ptr<AVCDecoderConfigurationRecord> avc_config);

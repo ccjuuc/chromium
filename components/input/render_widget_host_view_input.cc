@@ -150,6 +150,26 @@ RenderWidgetHostViewInput::GetParentViewInput() {
   return nullptr;
 }
 
+// static
+bool RenderWidgetHostViewInput::IsAncestorView(
+    RenderWidgetHostViewInput* starting_view,
+    const RenderWidgetHostViewInput* target_view,
+    const RenderWidgetHostViewInput* stay_within) {
+  RenderWidgetHostViewInput* cur_view = starting_view->GetParentViewInput();
+  while (cur_view) {
+    if (cur_view == target_view) {
+      return true;
+    }
+
+    if (stay_within && cur_view == stay_within) {
+      return false;
+    }
+
+    cur_view = cur_view->GetParentViewInput();
+  }
+  return false;
+}
+
 blink::mojom::InputEventResultState RenderWidgetHostViewInput::FilterInputEvent(
     const blink::WebInputEvent& input_event) {
   // By default, input events are simply forwarded to the renderer.
@@ -329,8 +349,8 @@ bool RenderWidgetHostViewInput::TransformPointToTargetCoordSpace(
 
   float device_scale_factor = original_view->GetDeviceScaleFactor();
   CHECK_GT(device_scale_factor, 0.0f);
-  // TODO(crbug.com/41460959): Optimize so that |point_in_pixels| doesn't need
-  // to be in the coordinate space of the root surface in HitTestQuery.
+  // HitTestQuery requires |point_in_pixels| to be in the coordinate space of
+  // the root surface. See crbug.com/41460959 for context.
   gfx::Transform transform_root_to_original;
   query->GetTransformToTarget(original_view->GetFrameSinkId(),
                               &transform_root_to_original);
@@ -349,6 +369,11 @@ bool RenderWidgetHostViewInput::TransformPointToTargetCoordSpace(
   *transformed_point = gfx::ConvertPointToDips(
       transformed_point_in_physical_pixels, device_scale_factor);
   return true;
+}
+
+scoped_refptr<ui::FilteredGestureProvider>
+RenderWidgetHostViewInput::GetGestureProvider() {
+  return nullptr;
 }
 
 }  // namespace input

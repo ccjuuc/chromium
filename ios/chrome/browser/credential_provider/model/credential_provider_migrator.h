@@ -32,13 +32,13 @@ extern NSErrorDomain const kCredentialProviderMigratorErrorDomain;
 // Possible error codes in case of migration failure.
 typedef enum : NSInteger {
   kCredentialProviderMigratorErrorAlreadyRunning,
-  kCredentialProviderMigratorErrorBackgroundedApp,
 } CredentialProviderMigratorErrors;
 
 @interface CredentialProviderMigrator : NSObject
 - (instancetype)
     initWithUserDefaults:(NSUserDefaults*)userDefaults
                      key:(NSString*)key
+                    gaia:(NSString*)gaiaID
            passwordStore:
                (scoped_refptr<password_manager::PasswordStoreInterface>)
                    passwordStore

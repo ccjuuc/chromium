@@ -13,7 +13,6 @@
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/types/expected.h"
 #include "build/build_config.h"
@@ -207,7 +206,8 @@ PlatformSharedMemoryRegion PlatformSharedMemoryRegion::Create(Mode mode,
   }
 
   FilePath path;
-  ScopedFD fd = CreateAndOpenFdForTemporaryFileInDir(directory, &path);
+  ScopedFD fd = CreateAndOpenFdForTemporaryFileInDir(directory,
+                                                     /*name_prefix=*/{}, &path);
   File shm_file(fd.release());
 
   if (!shm_file.IsValid()) {

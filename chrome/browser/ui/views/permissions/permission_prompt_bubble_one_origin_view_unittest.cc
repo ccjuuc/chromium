@@ -4,8 +4,6 @@
 
 #include "chrome/browser/ui/views/permissions/permission_prompt_bubble_one_origin_view.h"
 
-#include <algorithm>
-
 #include "base/containers/to_vector.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
@@ -21,14 +19,16 @@
 #include "url/gurl.h"
 
 #if !BUILDFLAG(IS_CHROMEOS)
-#include "base/run_loop.h"
 #include "base/test/test_future.h"
-#include "chrome/browser/ui/views/frame/test_with_browser_view.h"
+#include "chrome/test/base/testing_profile.h"
 #include "components/media_effects/test/fake_audio_service.h"
 #include "components/media_effects/test/fake_video_capture_service.h"
 #include "components/media_effects/test/scoped_media_device_info.h"
 #include "components/strings/grit/components_strings.h"
-#include "third_party/blink/public/common/features.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/test/test_renderer_host.h"
+#include "content/public/test/web_contents_tester.h"
+#include "ui/views/controls/native/native_view_host.h"
 #endif
 
 using PermissionPromptBubbleOneOriginViewTest = ChromeViewsTestBase;
@@ -88,14 +88,17 @@ class TestDelegate : public permissions::PermissionPrompt::Delegate {
     return GURL("https://embedder.example.com");
   }
 
-  void Accept() override {}
-  void AcceptThisTime() override {}
-  void Deny() override {}
-  void Dismiss() override {}
-  void Ignore() override {}
-  void SetPromptOptions(PromptOptions prompt_options) override {}
+  void Accept(const PromptOptions& prompt_options) override {}
+  void AcceptThisTime(const PromptOptions& prompt_options) override {}
+  void Deny(const PromptOptions& prompt_options) override {}
+  void Dismiss(const PromptOptions& prompt_options) override {}
+  void Ignore(const PromptOptions& prompt_options) override {}
   GeolocationAccuracy GetInitialGeolocationAccuracySelection() const override {
     NOTREACHED();
+  }
+  std::optional<permissions::GeolocationPromptType> GetGeolocationPromptType()
+      const override {
+    return std::nullopt;
   }
   void FinalizeCurrentRequests() override {}
   void OpenHelpCenterLink(const ui::Event& event) override {}
@@ -103,6 +106,7 @@ class TestDelegate : public permissions::PermissionPrompt::Delegate {
   void SetManageClicked() override {}
   void SetLearnMoreClicked() override {}
   void SetHatsShownCallback(base::OnceCallback<void()> callback) override {}
+  void SwitchToLoudPrompt() override {}
 
   bool WasCurrentRequestAlreadyDisplayed() override { return false; }
   bool ShouldDropCurrentRequestIfCannotShowQuietly() const override {
@@ -221,10 +225,23 @@ constexpr char kGroupId2[] = "group_id_2";
 // origin view (e.g. permission prompt delegate, ...), as well as media previews
 // (e.g. audio service, video service, ...).
 class PermissionPromptBubbleOneOriginViewTestMediaPreview
-    : public TestWithBrowserView {
+    : public ChromeViewsTestBase {
  protected:
   void SetUp() override {
-    TestWithBrowserView::SetUp();
+    ChromeViewsTestBase::SetUp();
+    anchor_widget_ =
+        CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+    anchor_widget_->SetContentsView(std::make_unique<views::View>());
+    anchor_widget_->Show();
+
+    web_contents_ =
+        content::WebContentsTester::CreateTestWebContents(&profile_, nullptr);
+    content::WebContentsTester::For(web_contents_.get())
+        ->NavigateAndCommit(GURL("http://a.com"));
+    native_view_host_ = anchor_widget_->GetContentsView()->AddChildView(
+        std::make_unique<views::NativeViewHost>());
+    native_view_host_->Attach(web_contents_->GetNativeView());
+
     base::test::TestFuture<void> mic_infos, camera_infos;
     audio_service_.SetOnRepliedWithInputDeviceDescriptionsCallback(
         mic_infos.GetCallback());
@@ -237,20 +254,27 @@ class PermissionPromptBubbleOneOriginViewTestMediaPreview
     ASSERT_TRUE(camera_infos.WaitAndClear());
   }
 
-  void InitializePremissionPrompt(
+  void InitializePermissionPrompt(
       const std::vector<permissions::RequestType>& request_types) {
     test_delegate_.emplace(GURL("https://test.origin"), request_types,
                            std::vector<std::string>{kMicId},
                            std::vector<std::string>{kCameraId});
     permission_prompt_ = std::make_unique<PermissionPromptBubbleOneOriginView>(
-        browser(), test_delegate_->GetWeakPtr(),
+        web_contents_.get(), test_delegate_->GetWeakPtr(),
         PermissionPromptStyle::kBubbleOnly);
   }
 
   void TearDown() override {
     permission_prompt_.reset();
     test_delegate_.reset();
-    TestWithBrowserView::TearDown();
+    if (native_view_host_) {
+      native_view_host_->Detach();
+      native_view_host_ = nullptr;
+    }
+    web_contents_.reset();
+    anchor_widget_.reset();
+    media_device_info_.reset();
+    ChromeViewsTestBase::TearDown();
   }
 
   std::u16string GetExpectedCameraLabelText(size_t devices) {
@@ -271,6 +295,11 @@ class PermissionPromptBubbleOneOriginViewTestMediaPreview
         base::NumberToString16(devices));
   }
 
+  content::RenderViewHostTestEnabler rvh_test_enabler_;
+  TestingProfile profile_;
+  std::unique_ptr<views::Widget> anchor_widget_;
+  raw_ptr<views::NativeViewHost> native_view_host_ = nullptr;
+  std::unique_ptr<content::WebContents> web_contents_;
   media_effects::ScopedFakeAudioService audio_service_;
   media_effects::ScopedFakeVideoCaptureService video_service_;
   std::optional<media_effects::ScopedMediaDeviceInfo> media_device_info_;
@@ -283,7 +312,7 @@ class PermissionPromptBubbleOneOriginViewTestMediaPreview
 // label.
 TEST_F(PermissionPromptBubbleOneOriginViewTestMediaPreview,
        MediaPreviewMicOnly) {
-  InitializePremissionPrompt({permissions::RequestType::kMicStream});
+  InitializePermissionPrompt({permissions::RequestType::kMicStream});
   ASSERT_TRUE(permission_prompt_->GetMediaPreviewsForTesting());
   ASSERT_FALSE(permission_prompt_->GetCameraPermissionLabelForTesting());
   ASSERT_FALSE(permission_prompt_->GetPtzCameraPermissionLabelForTesting());
@@ -318,7 +347,7 @@ TEST_F(PermissionPromptBubbleOneOriginViewTestMediaPreview,
 // label.
 TEST_F(PermissionPromptBubbleOneOriginViewTestMediaPreview,
        MediaPreviewCameraOnly) {
-  InitializePremissionPrompt({permissions::RequestType::kCameraStream});
+  InitializePermissionPrompt({permissions::RequestType::kCameraStream});
   ASSERT_TRUE(permission_prompt_->GetMediaPreviewsForTesting());
   auto camera_label = permission_prompt_->GetCameraPermissionLabelForTesting();
   ASSERT_TRUE(camera_label);
@@ -351,7 +380,7 @@ TEST_F(PermissionPromptBubbleOneOriginViewTestMediaPreview,
 // permission label.
 TEST_F(PermissionPromptBubbleOneOriginViewTestMediaPreview,
        MediaPreviewPTZCameraOnly) {
-  InitializePremissionPrompt({permissions::RequestType::kCameraPanTiltZoom});
+  InitializePermissionPrompt({permissions::RequestType::kCameraPanTiltZoom});
   ASSERT_TRUE(permission_prompt_->GetMediaPreviewsForTesting());
   ASSERT_FALSE(permission_prompt_->GetCameraPermissionLabelForTesting());
   auto ptz_camera_label =
@@ -385,7 +414,7 @@ TEST_F(PermissionPromptBubbleOneOriginViewTestMediaPreview,
 // mic permission labels.
 TEST_F(PermissionPromptBubbleOneOriginViewTestMediaPreview,
        MediaPreviewCameraAndMic) {
-  InitializePremissionPrompt({permissions::RequestType::kMicStream,
+  InitializePermissionPrompt({permissions::RequestType::kMicStream,
                               permissions::RequestType::kCameraStream});
   ASSERT_TRUE(permission_prompt_->GetMediaPreviewsForTesting());
   auto camera_label = permission_prompt_->GetCameraPermissionLabelForTesting();
@@ -436,7 +465,7 @@ TEST_F(PermissionPromptBubbleOneOriginViewTestMediaPreview,
 // requested.
 TEST_F(PermissionPromptBubbleOneOriginViewTestMediaPreview,
        MediaPreviewNoCameraOrMic) {
-  InitializePremissionPrompt({permissions::RequestType::kGeolocation});
+  InitializePermissionPrompt({permissions::RequestType::kGeolocation});
   ASSERT_FALSE(permission_prompt_->GetMediaPreviewsForTesting());
   ASSERT_FALSE(permission_prompt_->GetCameraPermissionLabelForTesting());
   ASSERT_FALSE(permission_prompt_->GetPtzCameraPermissionLabelForTesting());

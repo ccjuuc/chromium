@@ -10,13 +10,13 @@ let testUtil;
  * @type {string}
  * @const
  */
-var FIRST_FILE_SYSTEM_ID = 'vanilla';
+const FIRST_FILE_SYSTEM_ID = 'vanilla';
 
 /**
  * @type {string}
  * @const
  */
-var SECOND_FILE_SYSTEM_ID = 'ice-cream';
+const SECOND_FILE_SYSTEM_ID = 'ice-cream';
 
 /**
  * Sets up the tests. Called once per all test cases. In case of a failure,
@@ -25,20 +25,26 @@ var SECOND_FILE_SYSTEM_ID = 'ice-cream';
  * @param {function()} callback Success callback.
  */
 function setUp(callback) {
-  Promise.all([
-    new Promise(function(fulfill, reject) {
-      chrome.fileSystemProvider.mount(
-          {fileSystemId: FIRST_FILE_SYSTEM_ID, displayName: 'vanilla.zip'},
-          chrome.test.callbackPass(fulfill));
-    }),
-    new Promise(function(fulfill, reject) {
-      chrome.fileSystemProvider.mount(
-          {fileSystemId: SECOND_FILE_SYSTEM_ID, displayName: 'ice-cream.zip'},
-          chrome.test.callbackPass(fulfill));
-    })
-  ]).then(callback).catch(function(error) {
-    chrome.test.fail(error.stack || error);
-  });
+  Promise
+      .all([
+        new Promise(function(fulfill, reject) {
+          chrome.fileSystemProvider.mount(
+              {fileSystemId: FIRST_FILE_SYSTEM_ID, displayName: 'vanilla.zip'},
+              chrome.test.callbackPass(fulfill));
+        }),
+        new Promise(function(fulfill, reject) {
+          chrome.fileSystemProvider.mount(
+              {
+                fileSystemId: SECOND_FILE_SYSTEM_ID,
+                displayName: 'ice-cream.zip',
+              },
+              chrome.test.callbackPass(fulfill));
+        }),
+      ])
+      .then(callback)
+      .catch(function(error) {
+        chrome.test.fail(error.stack || error);
+      });
 }
 
 /**
@@ -49,7 +55,7 @@ function runTests() {
     // Tests the fileSystemProvider.unmount(). Verifies if the unmount event
     // is emitted by VolumeManager.
     function unmount() {
-      var onMountCompleted = function(event) {
+      const onMountCompleted = function(event) {
         chrome.test.assertEq('unmount', event.eventType);
         chrome.test.assertEq('success', event.status);
         // For extension based providers, provider id is the same as
@@ -62,25 +68,22 @@ function runTests() {
             onMountCompleted);
       };
 
-      chrome.fileManagerPrivate.onMountCompleted.addListener(
-          onMountCompleted);
+      chrome.fileManagerPrivate.onMountCompleted.addListener(onMountCompleted);
       chrome.fileSystemProvider.unmount(
-          {fileSystemId: FIRST_FILE_SYSTEM_ID},
-          chrome.test.callbackPass());
+          {fileSystemId: FIRST_FILE_SYSTEM_ID}, chrome.test.callbackPass());
     },
 
     // Tests the fileSystemProvider.unmount() with a wrong id. Verifies that
     // it fails with a correct error code.
     function unmountWrongId() {
       chrome.fileSystemProvider.unmount(
-          {fileSystemId: 'wrong-fs-id'},
-          chrome.test.callbackFail('NOT_FOUND'));
+          {fileSystemId: 'wrong-fs-id'}, chrome.test.callbackFail('NOT_FOUND'));
     },
 
     // Tests if fileManagerPrivate.removeMount() for provided file systems emits
     // the onMountRequested() event with correct arguments.
     function requestUnmountSuccess() {
-      var onUnmountRequested = function(options, onSuccess, onError) {
+      const onUnmountRequested = function(options, onSuccess, onError) {
         chrome.test.assertEq(SECOND_FILE_SYSTEM_ID, options.fileSystemId);
         // Not calling fileSystemProvider.unmount(), so the onMountCompleted
         // event will not be raised.
@@ -106,9 +109,9 @@ function runTests() {
     // event is called with correct aguments, and (2) if calling onError(),
     // results in an unmount event fired from the VolumeManager instance.
     function requestUnmountError() {
-      var unmountRequested = false;
+      let unmountRequested = false;
 
-      var onUnmountRequested = function(options, onSuccess, onError) {
+      const onUnmountRequested = function(options, onSuccess, onError) {
         chrome.test.assertEq(false, unmountRequested);
         chrome.test.assertEq(SECOND_FILE_SYSTEM_ID, options.fileSystemId);
         onError('IN_USE');  // enum ProviderError.
@@ -117,7 +120,7 @@ function runTests() {
             onUnmountRequested);
       };
 
-      var onMountCompleted = chrome.test.callbackPass(function(event) {
+      const onMountCompleted = chrome.test.callbackPass(function(event) {
         chrome.test.assertEq('unmount', event.eventType);
         chrome.test.assertEq('unknown_error', event.status);
         // For extension based providers, provider id is the same as
@@ -144,7 +147,7 @@ function runTests() {
           chrome.test.assertNoLastError();
         });
       });
-    }
+    },
   ]);
 }
 
@@ -152,7 +155,7 @@ function runTests() {
 // considered modules.
 (async () => {
   testUtil = await import(
-    '/_test_resources/api_test/file_system_provider/test_util.js');
+      '/_test_resources/api_test/file_system_provider/test_util.js');
 
   // Setup and run all of the test cases.
   setUp(runTests);

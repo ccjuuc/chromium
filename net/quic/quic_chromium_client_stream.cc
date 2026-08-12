@@ -48,12 +48,22 @@ class ScopedBoolSaver {
 };
 }  // namespace
 
-QuicChromiumClientStream::Handle::Handle(QuicChromiumClientStream* stream)
-    : stream_(stream), net_log_(stream->net_log()) {
+QuicChromiumClientStream::Handle::Handle(
+    QuicChromiumClientStream* stream,
+    base::TimeDelta max_stream_limit_pending_delay)
+    : stream_(stream),
+      net_log_(stream->net_log()),
+      max_stream_limit_pending_delay_(max_stream_limit_pending_delay) {
   SaveState();
 }
 
+base::TimeDelta
+QuicChromiumClientStream::Handle::max_stream_limit_pending_delay() const {
+  return max_stream_limit_pending_delay_;
+}
+
 QuicChromiumClientStream::Handle::~Handle() {
+  UnregisterHttp3DatagramVisitor();
   if (stream_) {
     stream_->ClearHandle();
     // TODO(rch): If stream_ is still valid, it should probably be Reset()
@@ -147,6 +157,7 @@ void QuicChromiumClientStream::Handle::OnClose() {
 
 void QuicChromiumClientStream::Handle::OnError(int error) {
   net_error_ = error;
+  UnregisterHttp3DatagramVisitor();
   if (stream_)
     SaveState();
   stream_ = nullptr;
@@ -363,6 +374,7 @@ void QuicChromiumClientStream::Handle::SetPriority(
 
 void QuicChromiumClientStream::Handle::Reset(
     quic::QuicRstStreamErrorCode error_code) {
+  UnregisterHttp3DatagramVisitor();
   if (stream_)
     stream_->Reset(error_code);
 }
@@ -371,12 +383,14 @@ void QuicChromiumClientStream::Handle::RegisterHttp3DatagramVisitor(
     Http3DatagramVisitor* visitor) {
   if (stream_) {
     stream_->RegisterHttp3DatagramVisitor(visitor);
+    datagram_visitor_registered_ = true;
   }
 }
 
 void QuicChromiumClientStream::Handle::UnregisterHttp3DatagramVisitor() {
-  if (stream_) {
+  if (stream_ && datagram_visitor_registered_) {
     stream_->UnregisterHttp3DatagramVisitor();
+    datagram_visitor_registered_ = false;
   }
 }
 
@@ -467,7 +481,7 @@ bool QuicChromiumClientStream::Handle::IsFirstStream() const {
 bool QuicChromiumClientStream::Handle::can_migrate_to_cellular_network() {
   if (!stream_)
     return false;
-  return stream_->can_migrate_to_cellular_network();
+  return stream_->CanMigrateToCellularNetwork();
 }
 
 const NetLogWithSource& QuicChromiumClientStream::Handle::net_log() const {
@@ -548,24 +562,14 @@ QuicChromiumClientStream::QuicChromiumClientStream(
     quic::QuicServerId server_id,
     quic::StreamType type,
     const NetLogWithSource& net_log,
-    const NetworkTrafficAnnotationTag& traffic_annotation)
-    : quic::QuicSpdyStream(id, session, type),
+    const NetworkTrafficAnnotationTag& traffic_annotation,
+    std::optional<base::TimeDelta> max_stream_limit_pending_delay)
+    : QuicChromiumClientStreamBase(id, session, type),
       net_log_(net_log),
       session_(session),
       server_id_(std::move(server_id)),
-      quic_version_(session->connection()->transport_version()) {}
-
-QuicChromiumClientStream::QuicChromiumClientStream(
-    quic::PendingStream* pending,
-    quic::QuicSpdyClientSessionBase* session,
-    quic::QuicServerId server_id,
-    const NetLogWithSource& net_log,
-    const NetworkTrafficAnnotationTag& traffic_annotation)
-    : quic::QuicSpdyStream(pending, session),
-      net_log_(net_log),
-      session_(session),
-      server_id_(std::move(server_id)),
-      quic_version_(session->connection()->transport_version()) {}
+      quic_version_(session->connection()->transport_version()),
+      max_stream_limit_pending_delay_(max_stream_limit_pending_delay) {}
 
 QuicChromiumClientStream::~QuicChromiumClientStream() {
   if (handle_)
@@ -738,7 +742,12 @@ bool QuicChromiumClientStream::WritevStreamData(
 std::unique_ptr<QuicChromiumClientStream::Handle>
 QuicChromiumClientStream::CreateHandle() {
   DCHECK(!handle_);
-  auto handle = base::WrapUnique(new QuicChromiumClientStream::Handle(this));
+  // We only create a handle for outgoing streams, which should have a
+  // max_stream_limit_pending_delay set.
+  CHECK(max_stream_limit_pending_delay_.has_value());
+
+  auto handle = base::WrapUnique(new QuicChromiumClientStream::Handle(
+      this, *max_stream_limit_pending_delay_));
   handle_ = handle.get();
 
   // Should this perhaps be via PostTask to make reasoning simpler?
@@ -755,8 +764,7 @@ void QuicChromiumClientStream::ClearHandle() {
 
 void QuicChromiumClientStream::OnError(int error) {
   if (handle_) {
-    QuicChromiumClientStream::Handle* handle = handle_;
-    handle_ = nullptr;
+    auto handle = std::exchange(handle_, nullptr);
     handle->OnError(error);
   }
 }
@@ -912,7 +920,7 @@ void QuicChromiumClientStream::NotifyHandleOfDataAvailable() {
 }
 
 void QuicChromiumClientStream::DisableConnectionMigrationToCellularNetwork() {
-  can_migrate_to_cellular_network_ = false;
+  set_can_migrate_to_cellular_network(false);
 }
 
 quic::QuicPacketLength

@@ -18,6 +18,7 @@
 #include "chrome/browser/ui/webui/metrics_handler.h"
 #include "chrome/browser/ui/webui/page_not_available_for_guest/page_not_available_for_guest_ui.h"
 #include "chrome/browser/ui/webui/plural_string_handler.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/bookmarks_resources.h"
 #include "chrome/grit/bookmarks_resources_map.h"
@@ -64,9 +65,7 @@ content::WebUIDataSource* CreateAndAddBookmarksUIHTMLSource(Profile* profile) {
       {"addBookmarkTitle", IDS_BOOKMARK_MANAGER_ADD_BOOKMARK_TITLE},
       {"addFolderTitle", IDS_BOOKMARK_MANAGER_ADD_FOLDER_TITLE},
       {"accountBookmarksTitle", IDS_BOOKMARKS_ACCOUNT_BOOKMARKS},
-#if !BUILDFLAG(IS_CHROMEOS)
       {"bookmarkPromoCardTitle", IDS_BATCH_UPLOAD_PROMO_TITLE},
-#endif
       {"cancel", IDS_CANCEL},
       {"clearSearch", IDS_BOOKMARK_MANAGER_CLEAR_SEARCH},
       {"close", IDS_CLOSE},
@@ -127,9 +126,7 @@ content::WebUIDataSource* CreateAndAddBookmarksUIHTMLSource(Profile* profile) {
       {"openDialogTitle", IDS_BOOKMARK_MANAGER_OPEN_DIALOG_TITLE},
       {"organizeButtonTitle", IDS_BOOKMARK_MANAGER_ORGANIZE_MENU},
       {"renameFolderTitle", IDS_BOOKMARK_MANAGER_FOLDER_RENAME_TITLE},
-#if !BUILDFLAG(IS_CHROMEOS)
       {"saveToAccount", IDS_BATCH_UPLOAD_PROMO_TITLE_OK_BUTTON_LABEL},
-#endif
       {"searchPrompt", IDS_BOOKMARK_MANAGER_SEARCH_BUTTON},
       {"sidebarAxLabel", IDS_BOOKMARK_MANAGER_SIDEBAR_AX_LABEL},
       {"searchCleared", IDS_SEARCH_CLEARED},
@@ -145,12 +142,19 @@ content::WebUIDataSource* CreateAndAddBookmarksUIHTMLSource(Profile* profile) {
     AddLocalizedString(source, str.name, str.id);
   }
 
+  source->AddBoolean("menuSimplification",
+                     features::IsMenuSimplificationEnabled());
+
   source->AddResourcePath(
       "images/batch_upload_bookmarks_promo.svg",
       IDR_BOOKMARKS_IMAGES_BATCH_UPLOAD_BOOKMARKS_PROMO_SVG);
   source->AddResourcePath(
       "images/batch_upload_bookmarks_promo_dark.svg",
       IDR_BOOKMARKS_IMAGES_BATCH_UPLOAD_BOOKMARKS_PROMO_DARK_SVG);
+
+  source->AddString("webuiRefresh2026", features::IsWebuiRefresh2026Enabled()
+                                            ? "webui-refresh-2026"
+                                            : "");
 
   return source;
 }
@@ -173,7 +177,8 @@ BookmarksUIConfig::CreateWebUIController(content::WebUI* web_ui,
   return std::make_unique<BookmarksUI>(web_ui);
 }
 
-BookmarksUI::BookmarksUI(content::WebUI* web_ui) : WebUIController(web_ui) {
+BookmarksUI::BookmarksUI(content::WebUI* web_ui)
+    : ui::MojoWebUIController(web_ui, /*enable_chrome_send=*/true) {
   // Set up the chrome://bookmarks/ source.
   Profile* profile = Profile::FromWebUI(web_ui);
   auto* source = CreateAndAddBookmarksUIHTMLSource(profile);
@@ -182,6 +187,7 @@ BookmarksUI::BookmarksUI(content::WebUI* web_ui) : WebUIController(web_ui) {
   content::URLDataSource::Add(
       profile, std::make_unique<FaviconSource>(
                    profile, chrome::FaviconUrlFormat::kFavicon2));
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
 
   auto plural_string_handler = std::make_unique<PluralStringHandler>();
   plural_string_handler->AddLocalizedString(
@@ -197,7 +203,7 @@ BookmarksUI::BookmarksUI(content::WebUI* web_ui) : WebUIController(web_ui) {
 }
 
 // static
-base::RefCountedMemory* BookmarksUI::GetFaviconResourceBytes(
+scoped_refptr<base::RefCountedMemory> BookmarksUI::GetFaviconResourceBytes(
     ui::ResourceScaleFactor scale_factor) {
   return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
       IDR_BOOKMARKS_FAVICON, scale_factor);

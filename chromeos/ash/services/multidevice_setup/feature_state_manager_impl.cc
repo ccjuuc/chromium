@@ -8,7 +8,6 @@
 #include <optional>
 
 #include "ash/constants/ash_features.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
@@ -197,7 +196,6 @@ std::unique_ptr<FeatureStateManager> FeatureStateManagerImpl::Factory::Create(
     PrefService* pref_service,
     HostStatusProvider* host_status_provider,
     device_sync::DeviceSyncClient* device_sync_client,
-    AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
     const base::flat_map<mojom::Feature,
                          raw_ptr<GlobalStateFeatureManager, CtnExperimental>>&
         global_state_feature_managers,
@@ -205,14 +203,12 @@ std::unique_ptr<FeatureStateManager> FeatureStateManagerImpl::Factory::Create(
   if (test_factory_) {
     return test_factory_->CreateInstance(
         pref_service, host_status_provider, device_sync_client,
-        android_sms_pairing_state_tracker, global_state_feature_managers,
-        is_secondary_user);
+        global_state_feature_managers, is_secondary_user);
   }
 
   return base::WrapUnique(new FeatureStateManagerImpl(
       pref_service, host_status_provider, device_sync_client,
-      android_sms_pairing_state_tracker, global_state_feature_managers,
-      is_secondary_user));
+      global_state_feature_managers, is_secondary_user));
 }
 
 // static
@@ -227,7 +223,6 @@ FeatureStateManagerImpl::FeatureStateManagerImpl(
     PrefService* pref_service,
     HostStatusProvider* host_status_provider,
     device_sync::DeviceSyncClient* device_sync_client,
-    AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
     const base::flat_map<mojom::Feature,
                          raw_ptr<GlobalStateFeatureManager, CtnExperimental>>&
         global_state_feature_managers,
@@ -235,17 +230,13 @@ FeatureStateManagerImpl::FeatureStateManagerImpl(
     : pref_service_(pref_service),
       host_status_provider_(host_status_provider),
       device_sync_client_(device_sync_client),
-      android_sms_pairing_state_tracker_(android_sms_pairing_state_tracker),
       global_state_feature_managers_(global_state_feature_managers),
       is_secondary_user_(is_secondary_user),
       feature_to_enabled_pref_name_map_(GenerateFeatureToEnabledPrefNameMap()),
       feature_to_allowed_pref_name_map_(GenerateFeatureToAllowedPrefNameMap()),
       cached_feature_state_map_(GenerateInitialDefaultCachedStateMap()) {
-  host_status_provider_->AddObserver(this);
-  device_sync_client_->AddObserver(this);
-  if (android_sms_pairing_state_tracker_) {
-    android_sms_pairing_state_tracker_->AddObserver(this);
-  }
+  host_status_observation_.Observe(host_status_provider);
+  device_sync_observation_.Observe(device_sync_client);
 
   registrar_.Init(pref_service_);
 
@@ -282,13 +273,7 @@ FeatureStateManagerImpl::FeatureStateManagerImpl(
                           base::Unretained(this)));
 }
 
-FeatureStateManagerImpl::~FeatureStateManagerImpl() {
-  host_status_provider_->RemoveObserver(this);
-  device_sync_client_->RemoveObserver(this);
-  if (android_sms_pairing_state_tracker_) {
-    android_sms_pairing_state_tracker_->RemoveObserver(this);
-  }
-}
+FeatureStateManagerImpl::~FeatureStateManagerImpl() = default;
 
 FeatureStateManager::FeatureStatesMap
 FeatureStateManagerImpl::GetFeatureStates() {
@@ -324,10 +309,6 @@ void FeatureStateManagerImpl::OnNewDevicesSynced() {
 }
 
 void FeatureStateManagerImpl::OnPrefValueChanged() {
-  UpdateFeatureStateCache(true /* notify_observers_of_changes */);
-}
-
-void FeatureStateManagerImpl::OnPairingStateChanged() {
   UpdateFeatureStateCache(true /* notify_observers_of_changes */);
 }
 
@@ -393,7 +374,7 @@ mojom::FeatureState FeatureStateManagerImpl::ComputeFeatureState(
 bool FeatureStateManagerImpl::IsAllowedByPolicy(mojom::Feature feature) {
   // If no policy preference exists for this feature, the feature is implicitly
   // allowed.
-  if (!base::Contains(feature_to_allowed_pref_name_map_, feature)) {
+  if (!feature_to_allowed_pref_name_map_.contains(feature)) {
     return true;
   }
 
@@ -560,7 +541,7 @@ mojom::FeatureState FeatureStateManagerImpl::GetEnabledOrDisabledState(
                 : mojom::FeatureState::kDisabledByUser);
   }
 
-  if (!base::Contains(feature_to_enabled_pref_name_map_, feature)) {
+  if (!feature_to_enabled_pref_name_map_.contains(feature)) {
     NOTREACHED() << "FeatureStateManagerImpl::GetEnabledOrDisabledState(): "
                  << "Feature not present in \"enabled pref\" map: " << feature;
   }

@@ -12,9 +12,8 @@
 #include "ash/public/cpp/wallpaper/wallpaper_controller.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
-#include "base/memory/singleton.h"
 #include "base/memory/weak_ptr.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
@@ -51,7 +50,8 @@ class ArcIntentHelperBridgeFactory
   static constexpr const char* kName = "ArcIntentHelperBridgeFactory";
 
   static ArcIntentHelperBridgeFactory* GetInstance() {
-    return base::Singleton<ArcIntentHelperBridgeFactory>::get();
+    static base::NoDestructor<ArcIntentHelperBridgeFactory> instance;
+    return instance.get();
   }
 
   static void ShutDownForTesting(content::BrowserContext* context) {
@@ -61,7 +61,7 @@ class ArcIntentHelperBridgeFactory
   }
 
  private:
-  friend struct base::DefaultSingletonTraits<ArcIntentHelperBridgeFactory>;
+  friend base::NoDestructor<ArcIntentHelperBridgeFactory>;
 
   ArcIntentHelperBridgeFactory() = default;
   ~ArcIntentHelperBridgeFactory() override = default;
@@ -183,7 +183,7 @@ void ArcIntentHelperBridge::OnOpenDownloads() {
 void ArcIntentHelperBridge::OnOpenUrl(const std::string& url) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   // Converts |url| to a fixed-up one and checks validity.
-  const GURL gurl(url_formatter::FixupURL(url, /*desired_tld=*/std::string()));
+  const GURL gurl(url_formatter::FixupURL(url));
   if (!gurl.is_valid()) {
     return;
   }
@@ -197,15 +197,8 @@ void ArcIntentHelperBridge::OnOpenUrl(const std::string& url) {
 void ArcIntentHelperBridge::OnOpenCustomTab(const std::string& url,
                                             int32_t task_id,
                                             OnOpenCustomTabCallback callback) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  // Converts |url| to a fixed-up one and checks validity.
-  const GURL gurl(url_formatter::FixupURL(url, /*desired_tld=*/std::string()));
-  if (!gurl.is_valid() || allowed_arc_schemes_.find(gurl.GetScheme()) ==
-                              allowed_arc_schemes_.end()) {
-    std::move(callback).Run(mojo::NullRemote());
-    return;
-  }
-  g_open_url_delegate->OpenArcCustomTab(gurl, task_id, std::move(callback));
+  // CustomTab is deprecated.
+  std::move(callback).Run(mojo::NullRemote());
 }
 
 void ArcIntentHelperBridge::OnOpenChromePage(mojom::ChromePage page) {
@@ -235,7 +228,7 @@ void ArcIntentHelperBridge::OpenVolumeControl() {
 void ArcIntentHelperBridge::OnOpenWebApp(const std::string& url) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   // Converts |url| to a fixed-up one and checks validity.
-  const GURL gurl(url_formatter::FixupURL(url, /*desired_tld=*/std::string()));
+  const GURL gurl(url_formatter::FixupURL(url));
 
   // Web app launches should only be invoked on HTTPS URLs.
   if (CanOpenWebAppForUrl(gurl)) {
@@ -322,6 +315,15 @@ void ArcIntentHelperBridge::OnOpenAppWithIntent(
     arc::mojom::LaunchIntentPtr intent) {
   // Web app launches should only be invoked on HTTPS URLs.
   if (CanOpenWebAppForUrl(start_url)) {
+    // The intent data URL may be opened directly in the browser when no
+    // matching app is installed, so restrict it to the same set of schemes as
+    // OnOpenUrl.
+    if (intent->data &&
+        !allowed_arc_schemes_.contains(intent->data->GetScheme())) {
+      LOG(WARNING) << "Pruning disallowed intent data scheme: "
+                   << intent->data->GetScheme();
+      intent->data.reset();
+    }
     g_open_url_delegate->OpenAppWithIntent(start_url, std::move(intent));
   }
 }
@@ -398,7 +400,7 @@ void ArcIntentHelperBridge::SendNewCaptureBroadcast(bool is_video,
   std::string action =
       is_video ? "org.chromium.arc.intent_helper.ACTION_SEND_NEW_VIDEO"
                : "org.chromium.arc.intent_helper.ACTION_SEND_NEW_PICTURE";
-  base::Value::Dict value;
+  base::DictValue value;
   value.Set("file_path", file_path);
   std::string extras = base::WriteJson(value).value_or("");
 

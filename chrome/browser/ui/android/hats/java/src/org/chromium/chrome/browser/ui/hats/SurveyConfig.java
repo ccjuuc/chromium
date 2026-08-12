@@ -6,7 +6,6 @@ package org.chromium.chrome.browser.ui.hats;
 
 import android.text.TextUtils;
 
-import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.CalledByNative;
@@ -18,8 +17,6 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
 
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -31,16 +28,6 @@ import java.util.Map;
 @JNINamespace("hats")
 @NullMarked
 public class SurveyConfig {
-
-    // LINT.IfChange(RequestedBrowserType)
-    @IntDef({RequestedBrowserType.REGULAR, RequestedBrowserType.INCOGNITO})
-    @Retention(RetentionPolicy.SOURCE)
-    public @interface RequestedBrowserType {
-        int REGULAR = 0;
-        int INCOGNITO = 1;
-    }
-
-    // LINT.ThenChange(//chrome/browser/ui/hats/survey_config.h:RequestedBrowserType)
 
     private static boolean sForceUsingTestingConfig;
     private static @Nullable SurveyConfig sConfigForTesting;
@@ -71,15 +58,11 @@ public class SurveyConfig {
     /** Product Specific String Data fields which are sent with the survey response. */
     final String[] mPsdStringDataFields;
 
-    /**
-     * Optional parameter which overrides the default survey cooldown period, see {@link
-     * SurveyThrottler#MIN_DAYS_BETWEEN_ANY_PROMPT_DISPLAYED}. This value is set only if the survey
-     * feature launched for a specific list of users defined by some Google group.
-     */
-    final @Nullable Integer mCooldownPeriodOverride;
-
     /** Requested browser type decides where the survey can be shown. */
     final @RequestedBrowserType int mRequestedBrowserType;
+
+    /** Profile age requirement. */
+    final @ProfileAgeRequirement int mProfileAgeRequirement;
 
     /** Not generated from java. */
     @VisibleForTesting
@@ -90,16 +73,16 @@ public class SurveyConfig {
             boolean userPrompted,
             String[] psdBitDataFields,
             String[] psdStringDataFields,
-            @Nullable Integer cooldownPeriodOverride,
-            @RequestedBrowserType int requestedBrowserType) {
+            @RequestedBrowserType int requestedBrowserType,
+            @ProfileAgeRequirement int profileAgeRequirement) {
         mTrigger = trigger;
         mTriggerId = triggerId;
         mProbability = probability;
         mUserPrompted = userPrompted;
         mPsdBitDataFields = psdBitDataFields;
         mPsdStringDataFields = psdStringDataFields;
-        mCooldownPeriodOverride = cooldownPeriodOverride;
         mRequestedBrowserType = requestedBrowserType;
+        mProfileAgeRequirement = profileAgeRequirement;
     }
 
     /**
@@ -147,7 +130,11 @@ public class SurveyConfig {
                 .append(" Probability=")
                 .append(config.mProbability)
                 .append(" UserPrompted=")
-                .append(config.mUserPrompted);
+                .append(config.mUserPrompted)
+                .append(" RequestedBrowserType=")
+                .append(config.mRequestedBrowserType)
+                .append(" ProfileAgeRequirement=")
+                .append(config.mProfileAgeRequirement);
 
         sb.append(" PsdBitFields=");
         for (String field : config.mPsdBitDataFields) {
@@ -187,8 +174,8 @@ public class SurveyConfig {
                     config.mUserPrompted,
                     config.mPsdBitDataFields,
                     config.mPsdStringDataFields,
-                    config.mCooldownPeriodOverride,
-                    config.mRequestedBrowserType);
+                    config.mRequestedBrowserType,
+                    config.mProfileAgeRequirement);
         }
         return config;
     }
@@ -202,8 +189,8 @@ public class SurveyConfig {
             boolean userPrompted,
             String[] psdBitDataFields,
             String[] psdStringDataFields,
-            int cooldownPeriodOverride,
-            @RequestedBrowserType int requestedBrowserType) {
+            @RequestedBrowserType int requestedBrowserType,
+            @ProfileAgeRequirement int profileAgeRequirement) {
         holder.mTriggers.put(
                 trigger,
                 new SurveyConfig(
@@ -213,8 +200,8 @@ public class SurveyConfig {
                         userPrompted,
                         psdBitDataFields,
                         psdStringDataFields,
-                        cooldownPeriodOverride == 0 ? null : cooldownPeriodOverride,
-                        requestedBrowserType));
+                        requestedBrowserType,
+                        profileAgeRequirement));
     }
 
     /** Holder that stores all the active surveys for Android. */

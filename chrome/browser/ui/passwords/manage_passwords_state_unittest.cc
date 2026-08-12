@@ -18,6 +18,7 @@
 #include "base/test/mock_callback.h"
 #include "components/password_manager/core/browser/mock_password_form_manager_for_ui.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/stub_password_manager_client.h"
 #include "components/password_manager/core/common/password_manager_ui.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -26,10 +27,13 @@
 #include "url/origin.h"
 
 using base::ASCIIToUTF16;
+using password_manager::CloneStoredCredential;
+using password_manager::FromPasswordForm;
 using password_manager::MockPasswordFormManagerForUI;
 using password_manager::PasswordForm;
 using password_manager::PasswordStoreChange;
 using password_manager::PasswordStoreChangeList;
+using password_manager::StoredCredential;
 using ::testing::_;
 using ::testing::Contains;
 using ::testing::ElementsAre;
@@ -118,6 +122,8 @@ class ManagePasswordsStateTest : public testing::Test {
   PasswordForm saved_match_;
   PasswordForm psl_match_;
   PasswordForm local_federated_form_;
+  std::vector<StoredCredential> best_matches_storage_;
+  std::vector<StoredCredential> federated_matches_storage_;
 };
 
 std::unique_ptr<MockPasswordFormManagerForUI>
@@ -125,12 +131,18 @@ ManagePasswordsStateTest::CreateFormManager(
     std::vector<PasswordForm> best_matches,
     std::vector<PasswordForm> federated_matches) {
   auto form_manager = std::make_unique<MockPasswordFormManagerForUI>();
+  best_matches_storage_ = FromPasswordForms(std::move(best_matches));
+  federated_matches_storage_ = FromPasswordForms(std::move(federated_matches));
   EXPECT_CALL(*form_manager, GetBestMatches())
-      .WillOnce(testing::Return(std::move(best_matches)));
+      .WillOnce(testing::Return(
+          base::span<const StoredCredential>(best_matches_storage_)));
   EXPECT_CALL(*form_manager, GetFederatedMatches())
-      .WillOnce(Return(std::move(federated_matches)));
+      .WillOnce(testing::Return(
+          base::span<const StoredCredential>(federated_matches_storage_)));
   EXPECT_CALL(*form_manager, GetURL())
       .WillOnce(testing::ReturnRef(saved_match_.url));
+  EXPECT_CALL(*form_manager, IsFetchCompleted())
+      .WillOnce(testing::Return(true));
   return form_manager;
 }
 
@@ -141,11 +153,11 @@ void ManagePasswordsStateTest::TestNoisyUpdates() {
   const url::Origin origin = passwords_data_.origin();
 
   // Push "Add".
-  PasswordForm form;
-  form.url = GURL("http://3rdparty.com");
-  form.username_value = u"username";
-  form.password_value = u"12345";
-  PasswordStoreChange change(PasswordStoreChange::ADD, form);
+  StoredCredential cred;
+  cred.url = GURL("http://3rdparty.com");
+  cred.username_value = u"username";
+  cred.password_value = password_manager::PasswordString(u"12345");
+  PasswordStoreChange change(PasswordStoreChange::ADD, std::move(cred));
   PasswordStoreChangeList list(1, change);
   passwords_data().ProcessLoginsChanged(list);
   EXPECT_EQ(forms, GetRawPointers(passwords_data().GetCurrentForms()));
@@ -153,15 +165,24 @@ void ManagePasswordsStateTest::TestNoisyUpdates() {
   EXPECT_EQ(origin, passwords_data().origin());
 
   // Update the form.
-  form.password_value = u"password";
-  list[0] = PasswordStoreChange(PasswordStoreChange::UPDATE, form);
+  StoredCredential updated_cred;
+  updated_cred.url = GURL("http://3rdparty.com");
+  updated_cred.username_value = u"username";
+  updated_cred.password_value = password_manager::PasswordString(u"password");
+  list[0] =
+      PasswordStoreChange(PasswordStoreChange::UPDATE, std::move(updated_cred));
   passwords_data().ProcessLoginsChanged(list);
   EXPECT_EQ(forms, GetRawPointers(passwords_data().GetCurrentForms()));
   EXPECT_EQ(state, passwords_data().state());
   EXPECT_EQ(origin, passwords_data().origin());
 
   // Delete the form.
-  list[0] = PasswordStoreChange(PasswordStoreChange::REMOVE, form);
+  StoredCredential removed_cred;
+  removed_cred.url = GURL("http://3rdparty.com");
+  removed_cred.username_value = u"username";
+  removed_cred.password_value = password_manager::PasswordString(u"password");
+  list[0] =
+      PasswordStoreChange(PasswordStoreChange::REMOVE, std::move(removed_cred));
   passwords_data().ProcessLoginsChanged(list);
   EXPECT_EQ(forms, GetRawPointers(passwords_data().GetCurrentForms()));
   EXPECT_EQ(state, passwords_data().state());
@@ -175,27 +196,31 @@ void ManagePasswordsStateTest::TestAllUpdates() {
   const url::Origin origin = passwords_data_.origin();
   EXPECT_NE(url::Origin(), origin);
 
+  auto create_cred = [&]() {
+    StoredCredential c;
+    GURL::Replacements replace_path;
+    replace_path.SetPathStr("absolutely_different_path");
+    c.url = origin.GetURL().ReplaceComponents(replace_path);
+    c.signon_realm = c.url.DeprecatedGetOriginAsURL().spec();
+    c.username_value = u"user15";
+    c.password_value = password_manager::PasswordString(u"12345");
+    return c;
+  };
+
   // Push "Add".
-  PasswordForm form;
-  GURL::Replacements replace_path;
-  replace_path.SetPathStr("absolutely_different_path");
-  form.url = origin.GetURL().ReplaceComponents(replace_path);
-  form.signon_realm = form.url.DeprecatedGetOriginAsURL().spec();
-  form.username_value = u"user15";
-  form.password_value = u"12345";
-  PasswordStoreChange change(PasswordStoreChange::ADD, form);
+  PasswordStoreChange change(PasswordStoreChange::ADD, create_cred());
   PasswordStoreChangeList list(1, change);
   EXPECT_CALL(mock_client_, UpdateFormManagers()).Times(0);
   passwords_data().ProcessLoginsChanged(list);
-  EXPECT_THAT(passwords_data().GetCurrentForms(), Contains(Pointee(form)));
+  EXPECT_THAT(passwords_data().GetCurrentForms(),
+              Contains(Pointee(ToPasswordForm(create_cred()))));
   EXPECT_EQ(state, passwords_data().state());
   EXPECT_EQ(origin, passwords_data().origin());
   Mock::VerifyAndClearExpectations(&mock_client_);
 
   // Remove and Add form.
-  list[0] = PasswordStoreChange(PasswordStoreChange::REMOVE, form);
-  form.username_value = u"user15";
-  list.emplace_back(PasswordStoreChange::ADD, form);
+  list[0] = PasswordStoreChange(PasswordStoreChange::REMOVE, create_cred());
+  list.emplace_back(PasswordStoreChange::ADD, create_cred());
   EXPECT_CALL(mock_client_, UpdateFormManagers()).Times(0);
   passwords_data().ProcessLoginsChanged(list);
   EXPECT_EQ(state, passwords_data().state());
@@ -204,17 +229,20 @@ void ManagePasswordsStateTest::TestAllUpdates() {
   list.erase(++list.begin());
 
   // Update the form.
-  form.password_value = u"password";
-  list[0] = PasswordStoreChange(PasswordStoreChange::UPDATE, form);
+  StoredCredential cred = create_cred();
+  cred.password_value = password_manager::PasswordString(u"password");
+  list[0] = PasswordStoreChange(PasswordStoreChange::UPDATE,
+                                CloneStoredCredential(cred));
   EXPECT_CALL(mock_client_, UpdateFormManagers()).Times(0);
   passwords_data().ProcessLoginsChanged(list);
-  EXPECT_THAT(passwords_data().GetCurrentForms(), Contains(Pointee(form)));
+  EXPECT_THAT(passwords_data().GetCurrentForms(),
+              Contains(Pointee(ToPasswordForm(cred))));
   EXPECT_EQ(state, passwords_data().state());
   EXPECT_EQ(origin, passwords_data().origin());
   Mock::VerifyAndClearExpectations(&mock_client_);
 
   // Delete the form.
-  list[0] = PasswordStoreChange(PasswordStoreChange::REMOVE, form);
+  list[0] = PasswordStoreChange(PasswordStoreChange::REMOVE, std::move(cred));
   EXPECT_CALL(mock_client_, UpdateFormManagers());
   passwords_data().ProcessLoginsChanged(list);
   EXPECT_EQ(forms, GetRawPointers(passwords_data().GetCurrentForms()));
@@ -237,14 +265,15 @@ void ManagePasswordsStateTest::TestBlocklistedUpdates() {
   blocked_form.blocked_by_user = true;
   blocked_form.url = origin.GetURL();
   PasswordStoreChangeList list;
-  list.emplace_back(PasswordStoreChange::ADD, blocked_form);
+  list.emplace_back(PasswordStoreChange::ADD, FromPasswordForm(blocked_form));
   passwords_data().ProcessLoginsChanged(list);
   EXPECT_EQ(forms, GetRawPointers(passwords_data().GetCurrentForms()));
   EXPECT_EQ(state, passwords_data().state());
   EXPECT_EQ(origin, passwords_data().origin());
 
   // Delete the blocked form.
-  list[0] = PasswordStoreChange(PasswordStoreChange::REMOVE, blocked_form);
+  list[0] = PasswordStoreChange(PasswordStoreChange::REMOVE,
+                                FromPasswordForm(blocked_form));
   passwords_data().ProcessLoginsChanged(list);
   EXPECT_EQ(forms, GetRawPointers(passwords_data().GetCurrentForms()));
   EXPECT_EQ(state, passwords_data().state());
@@ -378,7 +407,8 @@ TEST_F(ManagePasswordsStateTest, AutomaticPasswordSaveWithFederations) {
 TEST_F(ManagePasswordsStateTest, PasswordAutofilled) {
   std::vector<PasswordForm> password_forms = {saved_match()};
   const url::Origin origin = url::Origin::Create(GURL(kTestOrigin));
-  passwords_data().OnPasswordAutofilled(password_forms, origin, {});
+  passwords_data().OnPasswordAutofilled(FromPasswordForms(password_forms),
+                                        origin, {});
 
   EXPECT_THAT(passwords_data().GetCurrentForms(),
               ElementsAre(Pointee(saved_match())));
@@ -392,7 +422,8 @@ TEST_F(ManagePasswordsStateTest, PasswordAutofillWithSavedFederations) {
   std::vector<PasswordForm> password_forms = {saved_match()};
   const url::Origin origin = url::Origin::Create(GURL(kTestOrigin));
   std::vector<PasswordForm> federated = {local_federated_form()};
-  passwords_data().OnPasswordAutofilled(password_forms, origin, federated);
+  passwords_data().OnPasswordAutofilled(FromPasswordForms(password_forms),
+                                        origin, FromPasswordForms(federated));
 
   // |federated| represents the locally saved federations. These are bundled in
   // the "current forms".
@@ -406,7 +437,8 @@ TEST_F(ManagePasswordsStateTest, PasswordAutofillWithSavedFederations) {
 TEST_F(ManagePasswordsStateTest, PasswordAutofillWithOnlyFederations) {
   const url::Origin origin = url::Origin::Create(GURL(kTestOrigin));
   std::vector<PasswordForm> federated = {local_federated_form()};
-  passwords_data().OnPasswordAutofilled({}, origin, federated);
+  passwords_data().OnPasswordAutofilled({}, origin,
+                                        FromPasswordForms(federated));
 
   EXPECT_THAT(passwords_data().GetCurrentForms(),
               ElementsAre(Pointee(local_federated_form())));
@@ -417,7 +449,8 @@ TEST_F(ManagePasswordsStateTest, PasswordAutofillWithOnlyFederations) {
 TEST_F(ManagePasswordsStateTest, ActiveOnMixedPSLAndNonPSLMatched) {
   std::vector<PasswordForm> password_forms = {saved_match(), psl_match()};
   const url::Origin origin = url::Origin::Create(GURL(kTestOrigin));
-  passwords_data().OnPasswordAutofilled(password_forms, origin, {});
+  passwords_data().OnPasswordAutofilled(FromPasswordForms(password_forms),
+                                        origin, {});
 
   EXPECT_THAT(passwords_data().GetCurrentForms(),
               ElementsAre(Pointee(saved_match()), Pointee(psl_match())));
@@ -430,7 +463,8 @@ TEST_F(ManagePasswordsStateTest, ActiveOnMixedPSLAndNonPSLMatched) {
 TEST_F(ManagePasswordsStateTest, ActiveOnPSLMatched) {
   std::vector<PasswordForm> password_form = {psl_match()};
   const url::Origin origin = url::Origin::Create(GURL(kTestOrigin));
-  passwords_data().OnPasswordAutofilled(password_form, origin, {});
+  passwords_data().OnPasswordAutofilled(FromPasswordForms(password_form),
+                                        origin, {});
 
   EXPECT_THAT(passwords_data().GetCurrentForms(),
               ElementsAre(Pointee(psl_match())));
@@ -501,7 +535,8 @@ TEST_F(ManagePasswordsStateTest, AutomaticPasswordSaveAddBlocklisted) {
 TEST_F(ManagePasswordsStateTest, BackgroundAutofilledAddBlocklisted) {
   std::vector<PasswordForm> password_forms = {saved_match()};
   passwords_data().OnPasswordAutofilled(
-      password_forms, url::Origin::Create(password_forms.front().url), {});
+      FromPasswordForms(password_forms),
+      url::Origin::Create(password_forms.front().url), {});
   EXPECT_EQ(password_manager::ui::MANAGE_STATE, passwords_data().state());
 
   TestBlocklistedUpdates();
@@ -598,15 +633,15 @@ TEST_F(ManagePasswordsStateTest, ChooseCredentialLocalWithNonEmptyFederation) {
 TEST_F(ManagePasswordsStateTest, AutofillCausedByInternalFormManager) {
   struct OwningPasswordFormManagerForUI : public MockPasswordFormManagerForUI {
     GURL url;
-    std::vector<password_manager::PasswordForm> best_matches;
-    std::vector<password_manager::PasswordForm> federated_matches;
+    std::vector<password_manager::StoredCredential> best_matches;
+    std::vector<password_manager::StoredCredential> federated_matches;
 
     const GURL& GetURL() const override { return url; }
-    base::span<const PasswordForm> GetBestMatches() const override {
+    base::span<const StoredCredential> GetBestMatches() const override {
       return best_matches;
     }
-    base::span<const password_manager::PasswordForm> GetFederatedMatches()
-        const override {
+    bool IsFetchCompleted() const override { return true; }
+    base::span<const StoredCredential> GetFederatedMatches() const override {
       return federated_matches;
     }
   };
@@ -614,8 +649,10 @@ TEST_F(ManagePasswordsStateTest, AutofillCausedByInternalFormManager) {
   auto test_form_manager = std::make_unique<OwningPasswordFormManagerForUI>();
   auto* weak_manager = test_form_manager.get();
   test_form_manager->url = saved_match().url;
-  test_form_manager->best_matches = {saved_match()};
-  test_form_manager->federated_matches = {local_federated_form()};
+  test_form_manager->best_matches =
+      FromPasswordForms(std::vector<PasswordForm>{saved_match()});
+  test_form_manager->federated_matches =
+      FromPasswordForms(std::vector<PasswordForm>{local_federated_form()});
   passwords_data().OnPendingPassword(std::move(test_form_manager));
 
   // Force autofill with the parameters coming from the object to be destroyed.

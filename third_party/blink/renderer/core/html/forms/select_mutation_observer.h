@@ -8,6 +8,7 @@
 #include "third_party/blink/renderer/core/dom/mutation_observer.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
 #include "third_party/blink/renderer/core/inspector/inspector_audits_issue.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 
 namespace blink {
 
@@ -24,13 +25,21 @@ class SelectMutationObserver : public MutationObserver::Delegate {
 
   void Disconnect();
 
+  static bool IsInteractiveElement(const Node& node);
+  static bool HasTabIndexAttribute(const Node& node);
+  static bool IsContenteditable(const Node& node);
+  static bool IsWhitespaceOrEmpty(const Node& node);
+
  private:
-  void CheckAddedNodes(MutationRecord* record);
+  void CheckAddedNodes(MutationRecord* record,
+                       HeapHashSet<Member<Node>>& visited_nodes);
   void CheckRemovedNodes(MutationRecord* record);
-  void TraverseNodeDescendants(const Node* node);
-  void AddDescendantDisallowedErrorToNode(Node& node);
+  void TraverseNodeDescendants(const Node* node,
+                               HeapHashSet<Member<Node>>& visited_nodes);
+  void AddDescendantDisallowedErrorToNode(
+      Node& node,
+      HeapHashSet<Member<Node>>& visited_nodes);
   bool IsAllowedInteractiveElement(Node& node);
-  bool IsInteractiveElement(const Node& node);
   void RecordIssueByType(ElementAccessibilityIssueReason issue_reason);
   ElementAccessibilityIssueReason CheckForIssue(const Node& descendant);
   bool IsAllowedDescendantOfSelect(const Node& descendant, const Node& parent);
@@ -39,11 +48,8 @@ class SelectMutationObserver : public MutationObserver::Delegate {
   bool IsAllowedDescendantOfButton(const Node& descendant);
   ElementAccessibilityIssueReason CheckDescedantOfOption(
       const Node& descendant);
-  bool HasTabIndexAttribute(const Node& node);
-  bool IsContenteditable(const Node& node);
   ElementAccessibilityIssueReason TraverseAncestorsAndCheckDescendant(
       const Node& descendant);
-  bool IsWhitespaceOrEmpty(const Node& node);
   bool IsAllowedPhrasingContent(const Node& node);
   bool IsAutonomousCustomElement(const Node& node);
 

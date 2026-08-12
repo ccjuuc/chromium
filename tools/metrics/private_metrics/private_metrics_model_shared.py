@@ -3,12 +3,10 @@
 # found in the LICENSE file.
 """Shared model objects and utils for Private Metrics."""
 
-import os
-import sys
+import setup_modules  # pylint: disable=unused-import
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'common'))
-import models
-import model_shared
+import chromium_src.tools.metrics.common.models as models
+import chromium_src.tools.metrics.common.model_shared as model_shared
 
 METRIC_TYPE = models.ObjectNodeType(
     'metric',
@@ -64,7 +62,7 @@ EVENT_TYPE = models.ObjectNodeType(
 def create_event_based_document_type(tag):
   """Create new document type for an event-based Private Metrics configuration.
 
-  Currently, that includes DKM and DWA. See go/pmc-dkm for details.
+  Currently, that includes DWA. See go/pmc-dkm for details.
 
   Args:
     tag: Tag of the root node

@@ -20,6 +20,7 @@
 #include <string>
 
 #include "base/at_exit.h"
+#include "base/byte_size.h"
 #include "base/clang_profiling_buildflags.h"
 #include "base/command_line.h"
 #include "base/containers/span.h"
@@ -28,6 +29,7 @@
 #include "base/debug/dump_without_crashing.h"
 #include "base/debug/handle_hooks_win.h"
 #include "base/file_version_info.h"
+#include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -35,6 +37,7 @@
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/persistent_histogram_storage.h"
+#include "base/numerics/clamped_math.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/path_service.h"
 #include "base/process/launch.h"
@@ -86,7 +89,7 @@
 #include "chrome/installer/setup/uninstall.h"
 #include "chrome/installer/setup/unpack_archive.h"
 #include "chrome/installer/util/app_command.h"
-#include "chrome/installer/util/conditional_work_item_list.h"
+#include "chrome/installer/util/conditional_work_item.h"
 #include "chrome/installer/util/delete_after_reboot_helper.h"
 #include "chrome/installer/util/delete_old_versions.h"
 #include "chrome/installer/util/delete_tree_work_item.h"
@@ -103,6 +106,7 @@
 #include "chrome/installer/util/l10n_string_util.h"
 #include "chrome/installer/util/logging_installer.h"
 #include "chrome/installer/util/lzma_util.h"
+#include "chrome/installer/util/move_tree_work_item.h"
 #include "chrome/installer/util/self_cleaning_temp_dir.h"
 #include "chrome/installer/util/shell_util.h"
 #include "chrome/installer/util/util_constants.h"
@@ -131,25 +135,34 @@ using installer::ProductState;
 
 namespace {
 
-const wchar_t kSystemPrincipalSid[] = L"S-1-5-18";
-const wchar_t kDisplayVersion[] = L"DisplayVersion";
+constexpr wchar_t kSystemPrincipalSid[] = L"S-1-5-18";
+constexpr wchar_t kDisplayVersion[] = L"DisplayVersion";
+constexpr wchar_t kEstimatedSize[] = L"EstimatedSize";
+constexpr wchar_t kInstallDate[] = L"InstallDate";
+
+base::ByteSize ComputeInstallationSize(const base::FilePath& src_path,
+                                       const base::FilePath& setup_exe,
+                                       bool requires_active_install) {
+  // The total installation size is the size of the `src_path` for the version
+  // being installed plus setup.exe. Installs that require integration with
+  // Active Setup have a second copy of setup.exe saved as chrmstp.exe.
+  base::ClampedNumeric<uint64_t> setup_size =
+      base::GetFileSize(setup_exe).value_or(0);
+  if (requires_active_install) {
+    setup_size *= 2;
+  }
+
+  return base::ByteSize(
+      (setup_size + base::ComputeDirectorySize(src_path)).RawValue());
+}
 
 // Overwrite an existing DisplayVersion as written by the MSI installer
 // with the real version number of Chrome.
-LONG OverwriteDisplayVersion(const std::wstring& path,
-                             const std::wstring& value,
-                             REGSAM wowkey) {
-  base::win::RegKey key;
+LONG OverwriteDisplayVersion(base::win::RegKey& key,
+                             const std::wstring& path,
+                             const std::wstring& value) {
   LONG result = 0;
   std::wstring existing;
-  if ((result = key.Open(HKEY_LOCAL_MACHINE, path.c_str(),
-                         KEY_QUERY_VALUE | KEY_SET_VALUE | wowkey)) !=
-      ERROR_SUCCESS) {
-    VLOG(1) << "Skipping DisplayVersion update because registry key " << path
-            << " does not exist in "
-            << (wowkey == KEY_WOW64_64KEY ? "64" : "32") << "bit hive";
-    return result;
-  }
   if ((result = key.ReadValue(kDisplayVersion, &existing)) != ERROR_SUCCESS) {
     LOG(ERROR) << "Failed to set DisplayVersion: " << kDisplayVersion
                << " not found under " << path;
@@ -166,24 +179,110 @@ LONG OverwriteDisplayVersion(const std::wstring& path,
   return ERROR_SUCCESS;
 }
 
-LONG OverwriteDisplayVersions(const std::wstring& product,
-                              const std::wstring& value) {
-  // The version is held in two places.  First change it in the MSI Installer
-  // registry entry.  It is held under a "squashed guid" key.
-  std::wstring reg_path = base::StrCat(
+// Overwrite an existing EstimatedSize as written by the MSI installer
+// with the real size of the latest version of Chrome.
+LONG OverwriteEstimatedSize(base::win::RegKey& key,
+                            const std::wstring& path,
+                            DWORD value) {
+  LONG result = 0;
+  DWORD existing;
+  if ((result = key.ReadValueDW(kEstimatedSize, &existing)) != ERROR_SUCCESS) {
+    LOG(ERROR) << "Failed to set EstimatedSize: " << kEstimatedSize
+               << " not found under " << path;
+    return result;
+  }
+
+  // msiexec.exe will write an incorrect value for the EstimatedSize while
+  // installing the msi.  If the correct estimated size cannot be determined,
+  // delete the existing value to avoid misrepresenting the installation size.
+  if (value == 0) {
+    if ((result = key.DeleteValue(kEstimatedSize)) != ERROR_SUCCESS) {
+      LOG(ERROR) << "Failed to delete EstimatedSize: " << kEstimatedSize
+                 << " could not be deleted under " << path;
+      return result;
+    }
+    VLOG(1) << "Deleted EstimatedSize at " << path;
+    return ERROR_SUCCESS;
+  }
+  if ((result = key.WriteValue(kEstimatedSize, value)) != ERROR_SUCCESS) {
+    LOG(ERROR) << "Failed to set EstimatedSize: " << kEstimatedSize
+               << " could not be written under " << path;
+    return result;
+  }
+  VLOG(1) << "Set EstimatedSize at " << path << " to " << value << " from "
+          << existing;
+  return ERROR_SUCCESS;
+}
+
+// Overwrite an existing InstallDate as written by the MSI installer with the
+// current date.
+LONG OverwriteInstallDate(base::win::RegKey& key,
+                          const std::wstring& path,
+                          const std::wstring& value) {
+  LONG result = 0;
+  std::wstring existing;
+  if ((result = key.ReadValue(kInstallDate, &existing)) != ERROR_SUCCESS) {
+    LOG(ERROR) << "Failed to set InstallDate: " << kInstallDate
+               << " not found under " << path;
+    return result;
+  }
+  if ((result = key.WriteValue(kInstallDate, value.c_str())) != ERROR_SUCCESS) {
+    LOG(ERROR) << "Failed to set InstallDate: " << kInstallDate
+               << " could not be written under " << path;
+    return result;
+  }
+  VLOG(1) << "Set InstallDate at " << path << " to " << value << " from "
+          << existing;
+  return ERROR_SUCCESS;
+}
+
+LONG OverwriteWindowsInstallerPropertiesInKey(
+    const std::wstring& path,
+    REGSAM wowkey,
+    const std::wstring& display_version,
+    uint32_t estimated_size) {
+  base::win::RegKey key;
+  if (LONG result = key.Open(HKEY_LOCAL_MACHINE, path.c_str(),
+                             KEY_QUERY_VALUE | KEY_SET_VALUE | wowkey);
+      result != ERROR_SUCCESS) {
+    VLOG(1) << "Skipping installer properties update because registry key "
+            << path << " does not exist in "
+            << (wowkey == KEY_WOW64_64KEY ? "64" : "32") << "bit hive";
+    return result;
+  }
+
+  LONG result1 = OverwriteDisplayVersion(key, path, display_version);
+  LONG result2 = OverwriteEstimatedSize(key, path, estimated_size);
+  LONG result3 = OverwriteInstallDate(key, path, InstallUtil::GetCurrentDate());
+
+  return result1 != ERROR_SUCCESS
+             ? result1
+             : (result2 != ERROR_SUCCESS ? result2 : result3);
+}
+
+LONG OverwriteWindowsInstallerProperties(const std::wstring& product,
+                                         const std::wstring& display_version,
+                                         uint32_t estimated_size) {
+  // The installer properties are held in two places.  First change them in the
+  // MSI Installer registry entry.  They are held under a "squashed guid" key.
+  const std::wstring installer_reg_path = base::StrCat(
       {L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\",
        kSystemPrincipalSid, L"\\Products\\", InstallUtil::GuidToSquid(product),
        L"\\InstallProperties"});
-  LONG result1 = OverwriteDisplayVersion(reg_path, value, KEY_WOW64_64KEY);
+  LONG result1 = OverwriteWindowsInstallerPropertiesInKey(
+      installer_reg_path, KEY_WOW64_64KEY, display_version, estimated_size);
 
-  // The display version also exists under the Unininstall registry key with
-  // the original guid.  Check both WOW64_64 and WOW64_32.
-  reg_path = base::StrCat(
+  // The installer properties also exist under the Uninstall registry key
+  // with the original guid.  Check both WOW64_64 and WOW64_32.
+  const std::wstring uninstall_reg_path = base::StrCat(
       {L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{", product,
        L"}"});
+
   // Consider the operation a success if either of these succeeds.
-  LONG result2 = OverwriteDisplayVersion(reg_path, value, KEY_WOW64_64KEY);
-  LONG result3 = OverwriteDisplayVersion(reg_path, value, KEY_WOW64_32KEY);
+  LONG result2 = OverwriteWindowsInstallerPropertiesInKey(
+      uninstall_reg_path, KEY_WOW64_64KEY, display_version, estimated_size);
+  LONG result3 = OverwriteWindowsInstallerPropertiesInKey(
+      uninstall_reg_path, KEY_WOW64_32KEY, display_version, estimated_size);
 
   return result1 != ERROR_SUCCESS
              ? result1
@@ -192,13 +291,15 @@ LONG OverwriteDisplayVersions(const std::wstring& product,
 
 // Launches a subprocess of `setup_exe` (the full path to this executable in the
 // target installation directory) that will wait for msiexec to finish its work
-// and then overwrite the DisplayVersion values in the Windows registry. `id` is
-// the MSI product ID and `version` is the new Chrome version. The child will
-// run with verbose logging enabled if `verbose_logging` is true.
-void DelayedOverwriteDisplayVersions(const base::FilePath& setup_exe,
-                                     const std::string& id,
-                                     const base::Version& version,
-                                     bool verbose_logging) {
+// and then overwrite the installer properties in the Windows registry. `id` is
+// the MSI product ID and `display_version` is the new Chrome version. The child
+// will run with verbose logging enabled if `verbose_logging` is true.
+void DelayedOverwriteWindowsInstallerProperties(
+    const base::FilePath& setup_exe,
+    const std::string& id,
+    const base::Version& display_version,
+    uint32_t estimated_size,
+    bool verbose_logging) {
   DCHECK(install_static::IsSystemInstall());
 
   // Create an event to be given to the child process that it will signal
@@ -215,11 +316,13 @@ void DelayedOverwriteDisplayVersions(const base::FilePath& setup_exe,
   command_line.AppendSwitchASCII(installer::switches::kSetDisplayVersionProduct,
                                  id);
   command_line.AppendSwitchASCII(installer::switches::kSetDisplayVersionValue,
-                                 version.GetString());
+                                 display_version.GetString());
+  command_line.AppendSwitchASCII(installer::switches::kSetEstimatedSizeValue,
+                                 base::NumberToString(estimated_size));
   if (start_event.is_valid()) {
     command_line.AppendSwitchNative(
         installer::switches::kStartupEventHandle,
-        base::NumberToWString(base::win::HandleToUint32(start_event.Get())));
+        base::NumberToWString(base::win::HandleToUint32(start_event.get())));
   }
   InstallUtil::AppendModeAndChannelSwitches(&command_line);
   command_line.AppendSwitch(installer::switches::kSystemLevel);
@@ -229,12 +332,12 @@ void DelayedOverwriteDisplayVersions(const base::FilePath& setup_exe,
 
   base::LaunchOptions launch_options;
   if (start_event.is_valid()) {
-    launch_options.handles_to_inherit.push_back(start_event.Get());
+    launch_options.handles_to_inherit.push_back(start_event.get());
   }
   launch_options.force_breakaway_from_job_ = true;
   base::Process writer = base::LaunchProcess(command_line, launch_options);
   if (!writer.IsValid()) {
-    PLOG(ERROR) << "Failed to set DisplayVersion: "
+    PLOG(ERROR) << "Failed to set installer properties: "
                 << "could not launch subprocess to make desired changes."
                 << " <<" << command_line.GetCommandLineString() << ">>";
     return;
@@ -247,32 +350,34 @@ void DelayedOverwriteDisplayVersions(const base::FilePath& setup_exe,
   // Wait up to 30 seconds for either the start event to be signaled or for the
   // child process to terminate (i.e., in case it crashes).
   constexpr DWORD kWaitForStartTimeoutMs = 30 * 1000;
-  const HANDLE handles[] = {start_event.Get(), writer.Handle()};
+  const HANDLE handles[] = {start_event.get(), writer.Handle()};
   auto wait_result =
       ::WaitForMultipleObjects(std::size(handles), &handles[0],
                                /*bWaitAll=*/FALSE, kWaitForStartTimeoutMs);
   if (wait_result == WAIT_OBJECT_0) {
-    VLOG(1) << "Proceeding after waiting for DisplayVersion overwrite child.";
+    VLOG(1)
+        << "Proceeding after waiting for installer properties overwrite child.";
   } else if (wait_result == WAIT_OBJECT_0 + 1) {
-    LOG(ERROR) << "Proceeding after unexpected DisplayVersion overwrite "
+    LOG(ERROR) << "Proceeding after unexpected installer properties overwrite "
                   "child termination.";
   } else if (wait_result == WAIT_TIMEOUT) {
     LOG(ERROR) << "Proceeding after unexpected timeout waiting for "
-                  "DisplayVersion overwrite child.";
+                  "installer properties overwrite child.";
   } else {
     DCHECK_EQ(wait_result, WAIT_FAILED);
-    PLOG(ERROR) << "Proceeding after failing to wait for DisplayVersion "
+    PLOG(ERROR) << "Proceeding after failing to wait for installer properties "
                    "overwrite child";
   }
 }
 
 // Signals `event` if it is valid and then closes it.
 void SignalAndCloseEvent(base::win::ScopedHandle event) {
-  if (event.is_valid() && !::SetEvent(event.Get())) {
+  if (event.is_valid() && !::SetEvent(event.get())) {
     // Failure to signal the event likely means that the handle is invalid.
     // Clear the ScopedHandle to prevent a crash upon close and proceed with the
     // operation. The parent process will wait for 30s in this case (see
-    // DelayedOverwriteDisplayVersions) and will then continue on its merry way.
+    // DelayedOverwriteWindowsInstallerProperties) and will then continue on its
+    // merry way.
     if (auto error = ::GetLastError(); error != ERROR_INVALID_HANDLE) {
       // It is highly unexpected that this would fail for any other reason. Send
       // diagnostics for analysis just in case.
@@ -284,11 +389,13 @@ void SignalAndCloseEvent(base::win::ScopedHandle event) {
   }
 }
 
-// Waits for msiexec to release its mutex and then overwrites DisplayVersion in
-// the Windows registry.
-LONG OverwriteDisplayVersionsAfterMsiexec(base::win::ScopedHandle startup_event,
-                                          const std::wstring& product,
-                                          const std::wstring& value) {
+// Waits for msiexec to release its mutex and then overwrites installer
+// properties in the Windows registry.
+LONG OverwriteWindowsInstallerPropertiesAfterMsiexec(
+    base::win::ScopedHandle startup_event,
+    const std::wstring& product,
+    const std::wstring& display_version,
+    uint32_t estimated_size) {
   bool adjusted_priority = false;
   bool acquired_mutex = false;
   base::win::ScopedHandle msi_handle(::OpenMutexW(
@@ -304,39 +411,42 @@ LONG OverwriteDisplayVersionsAfterMsiexec(base::win::ScopedHandle startup_event,
     // Notify the parent process that this one is ready to go.
     SignalAndCloseEvent(std::move(startup_event));
 
-    const auto wait_result = ::WaitForSingleObject(msi_handle.Get(), INFINITE);
+    const auto wait_result = ::WaitForSingleObject(msi_handle.get(), INFINITE);
     if (wait_result == WAIT_FAILED) {
       // The handle is valid and was opened with SYNCHRONIZE, so the wait should
       // never fail. If it does, wait ten seconds and proceed with the overwrite
       // to match the old behavior.
-      PLOG(ERROR) << "Overwriting DisplayVersion in 10s after failing to wait "
-                     "for the MSI mutex";
+      PLOG(ERROR)
+          << "Overwriting installer properties in 10s after failing to wait "
+             "for the MSI mutex";
       base::PlatformThread::Sleep(base::Seconds(10));
     } else {
       CHECK(wait_result == WAIT_ABANDONED || wait_result == WAIT_OBJECT_0)
           << "WaitForSingleObject: " << wait_result;
-      VLOG(1) << "Acquired MSI mutex; overwriting DisplayVersion.";
+      VLOG(1) << "Acquired MSI mutex; overwriting installer properties.";
       acquired_mutex = true;
     }
   } else {
     // The mutex should still be held by msiexec since the parent setup.exe
     // (which is run in the context of a Windows Installer operation) is
     // blocking on this process.
-    PLOG(ERROR) << "Overwriting DisplayVersion immediately after failing to "
-                   "open the MSI mutex";
+    PLOG(ERROR)
+        << "Overwriting installer properties immediately after failing to "
+           "open the MSI mutex";
 
     // Notify the parent process that this one is ready to go.
     SignalAndCloseEvent(std::move(startup_event));
   }
 
-  auto result = OverwriteDisplayVersions(product, value);
+  auto result = OverwriteWindowsInstallerProperties(product, display_version,
+                                                    estimated_size);
 
   if (adjusted_priority) {
     ::SetPriorityClass(::GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
   }
 
   if (acquired_mutex) {
-    ::ReleaseMutex(msi_handle.Get());
+    ::ReleaseMutex(msi_handle.get());
   }
 
   return result;
@@ -377,7 +487,7 @@ installer::InstallStatus RepeatDeleteOldVersions(
 
     // SetPriorityClass with PROCESS_MODE_BACKGROUND_BEGIN will cap the process
     // working set to 32 MiB. This was experimentally determined after being
-    // reported in https://crbug.com/1475179. This can lead to extreme
+    // reported in https://crbug.com/40927803. This can lead to extreme
     // inefficiency as most CPU time is spent faulting in pages and then
     // immediately trimming the working set. In one trace 99% of CPU time was
     // spent handling page faults, so avoid SetPriorityClass with
@@ -446,33 +556,42 @@ installer::InstallStatus RenameChromeExecutables(
   }
   std::unique_ptr<WorkItemList> install_list(WorkItem::CreateWorkItemList());
   // Move chrome.exe to old_chrome.exe, then move new_chrome.exe to chrome.exe.
+  // Strict move: `chrome_exe` must not be present following this operation.
   install_list->AddMoveTreeWorkItem(chrome_exe, chrome_old_exe,
-                                    temp_path.path(), WorkItem::ALWAYS_MOVE);
+                                    temp_path.path(),
+                                    WorkItem::MoveTreeOptions{});
+  // Strict move: `chrome_new_exe` must not be present following this operation.
   install_list->AddMoveTreeWorkItem(chrome_new_exe, chrome_exe,
-                                    temp_path.path(), WorkItem::ALWAYS_MOVE);
-  install_list->AddDeleteTreeWorkItem(chrome_new_exe, temp_path.path());
+                                    temp_path.path(),
+                                    WorkItem::MoveTreeOptions{});
 
   // Move chrome_proxy.exe to old_chrome_proxy.exe if it exists (a previous
   // installation may not have included it), then move new_chrome_proxy.exe to
   // chrome_proxy.exe.
-  std::unique_ptr<WorkItemList> existing_proxy_rename_list(
-      WorkItem::CreateConditionalWorkItemList(
-          new ConditionRunIfFileExists(chrome_proxy_exe)));
-  existing_proxy_rename_list->set_log_message("ExistingProxyRenameItemList");
-  existing_proxy_rename_list->AddMoveTreeWorkItem(
-      chrome_proxy_exe, chrome_proxy_old_exe, temp_path.path(),
-      WorkItem::ALWAYS_MOVE);
-  install_list->AddWorkItem(existing_proxy_rename_list.release());
+  // Strict move: `chrome_proxy_exe` must not be present following this
+  // operation.
+  std::unique_ptr<WorkItem> move_proxy_to_old_item(
+      WorkItem::CreateMoveTreeWorkItem(chrome_proxy_exe, chrome_proxy_old_exe,
+                                       temp_path.path(),
+                                       WorkItem::MoveTreeOptions{}));
+  move_proxy_to_old_item->set_log_message("ExistingProxyRenameItem");
+
+  install_list->AddWorkItem(WorkItem::CreateConditionalWorkItem(
+      std::make_unique<ConditionFileExists>(chrome_proxy_exe),
+      std::move(move_proxy_to_old_item), nullptr));
+
+  // Strict move: `chrome_proxy_new_exe` must not be present following this
+  // operation.
   install_list->AddMoveTreeWorkItem(chrome_proxy_new_exe, chrome_proxy_exe,
-                                    temp_path.path(), WorkItem::ALWAYS_MOVE);
-  install_list->AddDeleteTreeWorkItem(chrome_proxy_new_exe, temp_path.path());
+                                    temp_path.path(),
+                                    WorkItem::MoveTreeOptions{});
 
   AddFinalizeUpdateWorkItems(original_state,
                              base::Version(chrome::kChromeVersion),
                              *installer_state, setup_exe, install_list.get());
 
   // Add work items to delete Chrome's "opv", "cpv", and "cmd" values.
-  // TODO(grt): Clean this up; https://crbug.com/577816.
+  // TODO(grt): Clean this up; https://crbug.com/40452395.
   const HKEY reg_root = installer_state->root_key();
   const std::wstring clients_key = install_static::GetClientsKeyPath();
 
@@ -946,6 +1065,21 @@ bool HandleNonInstallCmdLineOptions(installer::ModifyParams& modify_params,
         CreateEulaSentinel();
       }
     }
+  } else if (cmd_line.HasSwitch(installer::switches::kOnOsUpgrade)) {
+    installer::InstallStatus status = installer::INVALID_STATE_FOR_OPTION;
+    std::unique_ptr<FileVersionInfo> version_info(
+        FileVersionInfo::CreateFileVersionInfo(setup_exe));
+    const base::Version installed_version(
+        base::UTF16ToUTF8(version_info->product_version()));
+    if (installed_version.IsValid()) {
+      installer::HandleOsUpgradeForBrowser(*installer_state, installed_version,
+                                           setup_exe);
+      status = installer::INSTALL_REPAIRED;
+    } else {
+      LOG(DFATAL) << "Failed to extract product version from "
+                  << setup_exe.value();
+    }
+    *exit_code = InstallUtil::GetInstallReturnCode(status);
   } else if (cmd_line.HasSwitch(installer::switches::kConfigureUserSettings)) {
     // NOTE: Should the work done here, on kConfigureUserSettings, change:
     // kActiveSetupVersion in install_worker.cc needs to be increased for Active
@@ -1059,21 +1193,6 @@ bool HandleNonInstallCmdLineOptions(installer::ModifyParams& modify_params,
     installer::DeleteChromeRegistrationKeys(*installer_state,
                                             HKEY_LOCAL_MACHINE, suffix, &tmp);
     *exit_code = tmp;
-  } else if (cmd_line.HasSwitch(installer::switches::kOnOsUpgrade)) {
-    installer::InstallStatus status = installer::INVALID_STATE_FOR_OPTION;
-    std::unique_ptr<FileVersionInfo> version_info(
-        FileVersionInfo::CreateFileVersionInfo(setup_exe));
-    const base::Version installed_version(
-        base::UTF16ToUTF8(version_info->product_version()));
-    if (installed_version.IsValid()) {
-      installer::HandleOsUpgradeForBrowser(*installer_state, installed_version,
-                                           setup_exe);
-      status = installer::INSTALL_REPAIRED;
-    } else {
-      LOG(DFATAL) << "Failed to extract product version from "
-                  << setup_exe.value();
-    }
-    *exit_code = InstallUtil::GetInstallReturnCode(status);
   } else if (cmd_line.HasSwitch(installer::switches::kReenableAutoupdates)) {
     // setup.exe has been asked to attempt to reenable updates for Chrome.
     bool updates_enabled = GoogleUpdateSettings::ReenableAutoupdates();
@@ -1083,7 +1202,7 @@ bool HandleNonInstallCmdLineOptions(installer::ModifyParams& modify_params,
                  installer::switches::kSetDisplayVersionProduct)) {
     const std::wstring registry_product(cmd_line.GetSwitchValueNative(
         installer::switches::kSetDisplayVersionProduct));
-    const std::wstring registry_value(cmd_line.GetSwitchValueNative(
+    const std::wstring display_version(cmd_line.GetSwitchValueNative(
         installer::switches::kSetDisplayVersionValue));
     uint32_t startup_event_handle_value = 0;
     base::win::ScopedHandle startup_event;
@@ -1094,8 +1213,16 @@ bool HandleNonInstallCmdLineOptions(installer::ModifyParams& modify_params,
       startup_event.Set(base::win::Uint32ToHandle(startup_event_handle_value));
     }
 
-    *exit_code = OverwriteDisplayVersionsAfterMsiexec(
-        std::move(startup_event), registry_product, registry_value);
+    uint32_t estimated_size = 0;
+    if (!base::StringToUint(cmd_line.GetSwitchValueNative(
+                                installer::switches::kSetEstimatedSizeValue),
+                            &estimated_size)) {
+      estimated_size = 0;
+    }
+
+    *exit_code = OverwriteWindowsInstallerPropertiesAfterMsiexec(
+        std::move(startup_event), registry_product, display_version,
+        estimated_size);
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   } else if (cmd_line.HasSwitch(installer::switches::kStoreDMToken)) {
     // Write the specified token to the registry, overwriting any already
@@ -1222,6 +1349,7 @@ InstallStatus InstallProductsHelper(InstallationState& original_state,
 
   InstallStatus install_status = UNKNOWN_STATUS;
   base::FilePath src_path(unpack_path.Append(kInstallSourceChromeDir));
+  std::optional<uint32_t> src_size_kb;
   std::unique_ptr<base::Version> installer_version(
       GetMaxVersionFromArchiveDir(src_path));
   if (!installer_version.get()) {
@@ -1232,7 +1360,6 @@ InstallStatus InstallProductsHelper(InstallationState& original_state,
   } else {
     VLOG(1) << "version to install: " << installer_version->GetString();
     bool proceed_with_installation = true;
-
     if (!IsDowngradeAllowed(prefs)) {
       const ProductState* product_state =
           original_state.GetProductState(system_install);
@@ -1253,11 +1380,14 @@ InstallStatus InstallProductsHelper(InstallationState& original_state,
 
       const base::Version current_version(
           installer_state.GetCurrentVersion(original_state));
-      InstallParams install_params = {
-          installer_state,    original_state, setup_exe,
-          current_version,    src_path,       temp_path.path(),
-          *installer_version,
-      };
+      src_size_kb = base::saturated_cast<uint32_t>(
+          ComputeInstallationSize(src_path, setup_exe,
+                                  installer_state.RequiresActiveSetup())
+              .InKiB());
+      InstallParams install_params = {installer_state,    original_state,
+                                      setup_exe,          current_version,
+                                      src_path,           temp_path.path(),
+                                      *installer_version, *src_size_kb};
 
       install_status =
           InstallOrUpdateProduct(install_params, prefs_source_path, prefs);
@@ -1314,30 +1444,32 @@ InstallStatus InstallProductsHelper(InstallationState& original_state,
 
   // If the installation completed successfully...
   if (InstallUtil::GetInstallReturnCode(install_status) == 0) {
-    // Update the DisplayVersion created by an MSI-based install.
+    // Update the installer properties created by an MSI-based install.
     std::string install_id;
     if (prefs.GetString(installer::initial_preferences::kMsiProductId,
                         &install_id)) {
       // A currently active MSI install will have specified the initial-
       // preferences file on the command-line that includes the product-id.
-      // We must delay the setting of the DisplayVersion until after the
+      // We must delay the setting of the installer properties until after the
       // grandparent "msiexec" process has exited.
       base::FilePath new_setup =
           installer_state.GetInstallerDirectory(*installer_version)
               .Append(kSetupExe);
-      DelayedOverwriteDisplayVersions(new_setup, install_id, *installer_version,
-                                      installer_state.verbose_logging());
+      DelayedOverwriteWindowsInstallerProperties(
+          new_setup, install_id, *installer_version, *src_size_kb,
+          installer_state.verbose_logging());
     } else if (const auto* product_state =
                    original_state.GetProductState(system_install);
                product_state) {
       // Only when called by the MSI installer do we need to delay setting
-      // the DisplayVersion.  In other runs, such as those done by the auto-
-      // update action, we set the value immediately.
-      // Get the app's MSI Product-ID from an entry in ClientState.
+      // the installer properties.  In other runs, such as those done by the
+      // auto-update action, we set the values immediately. Get the app's MSI
+      // Product-ID from an entry in ClientState.
       if (const std::wstring& app_guid = product_state->product_guid();
           !app_guid.empty()) {
-        OverwriteDisplayVersions(
-            app_guid, base::UTF8ToWide(installer_version->GetString()));
+        OverwriteWindowsInstallerProperties(
+            app_guid, base::UTF8ToWide(installer_version->GetString()),
+            *src_size_kb);
       }
     }
 
@@ -1635,12 +1767,12 @@ int WINAPI wWinMain(HINSTANCE instance,
                     int show_command) {
   const auto process_exit_code = SetupMain();
 
-  // https://crbug.com/896565: Graceful shutdown sometimes fails for reasons out
-  // of the installer's control. Crashes from such failures are inactionable, so
-  // terminate the process forthwith. Do not use
+  // https://crbug.com/40092754: Graceful shutdown sometimes fails for reasons
+  // out of the installer's control. Crashes from such failures are
+  // inactionable, so terminate the process forthwith. Do not use
   // base::Process::TerminateCurrentProcessImmediately because it will crash the
   // process with int 3 in cases where ::TerminateProcess returns; see
-  // https://crbug.com/1489598. It is better for the installer to try to return
+  // https://crbug.com/40074164. It is better for the installer to try to return
   // the actual exit code (risking the original crash).
 #if BUILDFLAG(CLANG_PROFILING)
   base::WriteClangProfilingProfile();

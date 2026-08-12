@@ -15,6 +15,7 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.components.autofill.EditableOption;
 import org.chromium.payments.mojom.PaymentDetailsModifier;
+import org.chromium.payments.mojom.PaymentEventResponseType;
 import org.chromium.payments.mojom.PaymentItem;
 import org.chromium.payments.mojom.PaymentMethodData;
 import org.chromium.payments.mojom.PaymentOptions;
@@ -46,10 +47,34 @@ public abstract class PaymentApp extends EditableOption {
 
         /**
          * Called if unable to retrieve payment details.
+         *
+         * <p>TODO(crbug.com/473478138): Deprecated in favour of two-argument version. This version
+         * kept temporarily to allow Chrome for Android internal code to keep compiling. Remove this
+         * method once that dependency is removed.
+         *
          * @param errorMessage Developer-facing error message to be used when rejecting the promise
-         *                     returned from PaymentRequest.show().
+         *     returned from PaymentRequest.show().
          */
-        void onInstrumentDetailsError(String errorMessage);
+        default void onInstrumentDetailsError(String errorMessage) {
+            onInstrumentDetailsError(PaymentEventResponseType.PAYMENT_EVENT_REJECT, errorMessage);
+        }
+
+        /**
+         * Called if unable to retrieve payment details.
+         *
+         * <p>TODO(crbug.com/473478138): Temporarily default to allow a unittest in Chrome for
+         * Android internal code to keep compiling. Remove 'default' once the test overrides this
+         * method.
+         * <p>TODO(crbug.com/506994069): Pass PaymentAppError directly to
+         * InstrumentDetailsCallback.onInstrumentDetailsError instead of separate error type and
+         * message.
+         *
+         * @param error One of the {@link PaymentEventResponseType} values.
+         * @param errorMessage Developer-facing error message to be used when rejecting the promise
+         *     returned from PaymentRequest.show().
+         */
+        default void onInstrumentDetailsError(
+                @PaymentEventResponseType.EnumType int error, String errorMessage) {}
     }
 
     /** The interface for the requester to abort payment. */
@@ -179,25 +204,24 @@ public abstract class PaymentApp extends EditableOption {
     /**
      * Invoke the payment app to retrieve the payment details.
      *
-     * The callback will be invoked with the resulting payment details or error.
+     * <p>The callback will be invoked with the resulting payment details or error.
      *
-     * @param id               The unique identifier of the PaymentRequest.
-     * @param merchantName     The name of the merchant.
-     * @param origin           The origin of this merchant.
-     * @param iframeOrigin     The origin of the iframe that invoked PaymentRequest.
+     * @param id The unique identifier of the PaymentRequest.
+     * @param merchantName The name of the merchant.
+     * @param origin The origin of this merchant.
+     * @param iframeOrigin The origin of the iframe that invoked PaymentRequest.
      * @param certificateChain The site certificate chain of the merchant. Can be null when
-     *                         ANDROID_PAYMENT_INTENTS_OMIT_DEPRECATED_PARAMETERS is enabled or for
-     *                         localhost or local file, which are secure contexts without SSL. Each
-     *                         byte array cannot be null.
-     * @param methodDataMap    The payment-method specific data for all applicable payment methods,
-     *                         e.g., whether the app should be invoked in test or production, a
-     *                         merchant identifier, or a public key.
-     * @param total            The total amount.
-     * @param displayItems     The shopping cart items.
-     * @param modifiers        The relevant payment details modifiers.
-     * @param paymentOptions   The payment options of the PaymentRequest.
-     * @param shippingOptions  The shipping options of the PaymentRequest.
-     * @param callback         The object that will receive the payment details.
+     *     ANDROID_PAYMENT_INTENTS_OMIT_DEPRECATED_PARAMETERS is enabled or for localhost or local
+     *     file, which are secure contexts without SSL. Each byte array cannot be null.
+     * @param methodDataMap The payment-method specific data for all applicable payment methods,
+     *     e.g., whether the app should be invoked in test or production, a merchant identifier, or
+     *     a public key.
+     * @param total The total amount.
+     * @param displayItems The shopping cart items.
+     * @param modifiers The relevant payment details modifiers.
+     * @param paymentOptions The payment options of the PaymentRequest.
+     * @param shippingOptions The shipping options of the PaymentRequest.
+     * @param callback The object that will receive the payment details.
      */
     public void invokePaymentApp(
             String id,
@@ -305,6 +329,14 @@ public abstract class PaymentApp extends EditableOption {
      */
     public PaymentResponse setAppSpecificResponseFields(PaymentResponse response) {
         return response;
+    }
+
+    /**
+     * @return The total amount for this payment app. Must only be called for the SPC payment app.
+     */
+    public PaymentItem getTotalForSpc() {
+        throw new IllegalStateException(
+                "getTotalForSpc() must only be called for secure payment app.");
     }
 
     /**

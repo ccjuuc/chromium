@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/feature_list.h"
 #include "base/functional/callback.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
@@ -20,6 +21,7 @@
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
+#include "components/download/public/common/download_features.h"
 #include "components/download/public/common/simple_download_manager_coordinator.h"
 #include "components/history/core/browser/history_service.h"
 #include "content/public/browser/download_manager.h"
@@ -33,9 +35,7 @@
 #include "chrome/browser/download/android/download_utils.h"
 #endif
 
-using content::BrowserContext;
 using content::DownloadManager;
-using content::DownloadManagerDelegate;
 
 DownloadCoreServiceImpl::DownloadCoreServiceImpl(Profile* profile)
     : download_manager_created_(false), profile_(profile) {}
@@ -73,8 +73,11 @@ DownloadCoreServiceImpl::GetDownloadManagerDelegate() {
         profile_, ServiceAccessType::EXPLICIT_ACCESS);
     history->GetNextDownloadId(
         manager_delegate_->GetDownloadIdReceiverCallback());
-    download_history_ = std::make_unique<DownloadHistory>(
-        manager, std::make_unique<DownloadHistory::HistoryAdapter>(history));
+    if (!base::FeatureList::IsEnabled(
+            download::features::kDeferredDownloadHistoryLoading)) {
+      download_history_ = std::make_unique<DownloadHistory>(
+          manager, std::make_unique<DownloadHistory::HistoryAdapter>(history));
+    }
   }
 
   // Pass an empty delegate when constructing the DownloadUIController. The
@@ -94,11 +97,24 @@ DownloadUIController* DownloadCoreServiceImpl::GetDownloadUIController() {
   return download_ui_ ? download_ui_.get() : nullptr;
 }
 
-DownloadHistory* DownloadCoreServiceImpl::GetDownloadHistory() {
+void DownloadCoreServiceImpl::InitializeHistory() {
+  if (download_history_ || profile_->IsOffTheRecord()) {
+    return;
+  }
   if (!download_manager_created_) {
     GetDownloadManagerDelegate();
   }
   DCHECK(download_manager_created_);
+  DownloadManager* manager = profile_->GetDownloadManager();
+  history::HistoryService* history = HistoryServiceFactory::GetForProfile(
+      profile_, ServiceAccessType::EXPLICIT_ACCESS);
+  if (history) {
+    download_history_ = std::make_unique<DownloadHistory>(
+        manager, std::make_unique<DownloadHistory::HistoryAdapter>(history));
+  }
+}
+
+DownloadHistory* DownloadCoreServiceImpl::GetDownloadHistory() {
   return download_history_.get();
 }
 
@@ -180,7 +196,7 @@ void DownloadCoreServiceImpl::Shutdown() {
     // goes away and BrowserContext's destructor runs. But that would be too
     // late for us since we need to use the profile (indirectly through history
     // code) when the DownloadManager is shutting down. So we shut it down
-    // manually earlier. See http://crbug.com/131692
+    // manually earlier. See http://crbug.com/40222377
     profile_->GetDownloadManager()->Shutdown();
   }
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)

@@ -128,17 +128,17 @@ export class MainPageContainerElement extends MainPageContainerElementBase {
     };
   }
 
-  prefs: PrefsState;
-  androidAppsInfo?: AndroidAppsInfo;
-  pageAvailability: OsPageAvailability;
+  declare prefs: PrefsState;
+  declare androidAppsInfo?: AndroidAppsInfo;
+  declare pageAvailability: OsPageAvailability;
 
   // Languages data and API
-  private languages_: LanguagesModel|undefined;
-  private languageHelper_: LanguageHelper|undefined;
+  declare private languages_: LanguagesModel|undefined;
+  declare private languageHelper_: LanguageHelper|undefined;
 
-  private isShowingSubpage_: boolean;
-  private showSecondaryUserBanner_: boolean;
-  private showUpdateRequiredEolBanner_: boolean;
+  declare private isShowingSubpage_: boolean;
+  declare private showSecondaryUserBanner_: boolean;
+  declare private showUpdateRequiredEolBanner_: boolean;
 
   override ready(): void {
     super.ready();
@@ -180,7 +180,7 @@ export class MainPageContainerElement extends MainPageContainerElementBase {
   /** Stamp page in the DOM depending on page availability */
   private shouldStampPage_(
       pageAvailability: OsPageAvailability, pageName: Section): boolean {
-    return !!pageAvailability[pageName];
+    return pageAvailability[pageName];
   }
 
   private computeShowSecondaryUserBanner_(): boolean {

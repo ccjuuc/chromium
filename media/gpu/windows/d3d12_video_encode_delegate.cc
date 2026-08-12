@@ -70,11 +70,9 @@ bool IsVBRSupported(ID3D12VideoDevice3* video_device,
   return SUCCEEDED(hr) && vbr.IsSupported;
 }
 
-DXGI_FORMAT GetDxgiInputFormat(VideoCodecProfile output_profile,
-                               VideoPixelFormat input_format) {
-  if ((output_profile == H264PROFILE_HIGH10PROFILE ||
-       output_profile == HEVCPROFILE_MAIN10) &&
-      input_format == PIXEL_FORMAT_P010LE) {
+DXGI_FORMAT GetDxgiInputFormat(VideoCodecProfile output_profile) {
+  if (output_profile == H264PROFILE_HIGH10PROFILE ||
+      output_profile == HEVCPROFILE_MAIN10) {
     return DXGI_FORMAT_P010;
   } else if (output_profile == AV1PROFILE_PROFILE_HIGH) {
     return DXGI_FORMAT_AYUV;
@@ -165,8 +163,8 @@ D3D12VideoEncodeDelegate::GetSupportedProfiles(
         break;
 #endif  // BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
       case D3D12_VIDEO_ENCODER_CODEC_AV1:
-        profiles =
-            D3D12VideoEncodeAV1Delegate::GetSupportedProfiles(video_device);
+        profiles = D3D12VideoEncodeAV1Delegate::GetSupportedProfiles(
+            video_device, gpu_workarounds);
         break;
       default:
         NOTREACHED();
@@ -228,7 +226,7 @@ EncoderStatus D3D12VideoEncodeDelegate::Initialize(
   input_size_.Width = config.input_visible_size.width();
   input_size_.Height = config.input_visible_size.height();
 
-  input_format_ = GetDxgiInputFormat(output_profile_, config.input_format);
+  input_format_ = GetDxgiInputFormat(output_profile_);
   processed_input_frame_.Reset();
 
   bitrate_allocation_ = AllocateBitrateForDefaultEncoding(config);
@@ -270,25 +268,60 @@ bool D3D12VideoEncodeDelegate::UpdateRateControl(
 
 EncoderStatus::Or<D3D12VideoEncodeDelegate::EncodeResult>
 D3D12VideoEncodeDelegate::Encode(
-    Microsoft::WRL::ComPtr<ID3D12Resource> input_frame,
-    UINT input_frame_subresource,
+    D3D12PictureBuffer picture_buffer,
     const gfx::ColorSpace& input_frame_color_space,
     const BitstreamBuffer& bitstream_buffer,
-    const VideoEncoder::EncodeOptions& options) {
+    const VideoEncoder::EncodeOptions& options,
+    const gfx::HDRMetadata& input_frame_hdr_metadata) {
   if (options.reference_buffers.size() > GetMaxNumOfManualRefBuffers()) {
     return {EncoderStatus::Codes::kBadReferenceBuffer,
             "Number of manual reference buffers exceeds that is supported by "
             "encoder"};
   }
+  if (!svc_layers_ && !options.key_frame && options.reference_buffers.empty()) {
+    return {EncoderStatus::Codes::kBadReferenceBuffer,
+            "Non-keyframe must have at least one reference buffer"};
+  }
+
+  // Validate reference buffer indices early, before submitting any GPU work
+  // (e.g., video processing). This prevents a scenario where GPU commands are
+  // submitted but the subsequent CPU synchronization is skipped due to an
+  // error in EncodeImpl().
+  for (uint8_t ref_idx : options.reference_buffers) {
+    if (ref_idx >= GetMaxNumOfManualRefBuffers()) {
+      return {EncoderStatus::Codes::kBadReferenceBuffer,
+              "Manual reference buffer index exceeds that is supported by "
+              "encoder"};
+    }
+  }
+  if (options.update_buffer.has_value() &&
+      options.update_buffer.value() >= GetMaxNumOfManualRefBuffers()) {
+    return {EncoderStatus::Codes::kBadReferenceBuffer,
+            "Update buffer index is out of range"};
+  }
 
   const gfx::ColorSpace& output_color_space =
       GetEncoderOutputColorSpaceFromInputColorSpace(input_frame_color_space);
-  if (D3D12_RESOURCE_DESC input_frame_desc = input_frame->GetDesc();
+  if (D3D12_RESOURCE_DESC input_frame_desc = picture_buffer.resource->GetDesc();
       input_frame_desc.Width != input_size_.Width ||
       input_frame_desc.Height != input_size_.Height ||
       input_frame_desc.Format != input_format_ ||
       input_frame_color_space != output_color_space) {
     if (!processed_input_frame_) {
+      // The actual input DXGI format and color space are only known here, at
+      // Encode() time (e.g. an RGB(A) HDR shared image that must be converted
+      // to P010). Validate that the video processor can perform this conversion
+      // before allocating resources or submitting any GPU work, so we fail with
+      // a clear error rather than deep inside the video processor.
+      if (!video_processor_wrapper_->CheckVideoProcessorSupport(
+              static_cast<UINT>(input_frame_desc.Width),
+              static_cast<UINT>(input_frame_desc.Height),
+              input_frame_desc.Format, input_frame_color_space, input_format_,
+              output_color_space)) {
+        return {EncoderStatus::Codes::kEncoderUnsupportedConfig,
+                "D3D12 video processor does not support the required input "
+                "format conversion"};
+      }
       D3D12_RESOURCE_DESC processed_input_frame_desc =
           CD3DX12_RESOURCE_DESC::Tex2D(input_format_, input_size_.Width,
                                        input_size_.Height, 1, 1);
@@ -298,25 +331,49 @@ D3D12VideoEncodeDelegate::Encode(
           IID_PPV_ARGS(&processed_input_frame_));
       RETURN_ON_HR_FAILURE(
           hr, "CreateCommittedResource for processed input frame failed",
-          EncoderStatus::Codes::kSystemAPICallError);
+          EncoderStatus::Codes::kD3D12CreateCommittedResourceFailed);
     }
-    bool ok = video_processor_wrapper_->ProcessFrames(
-        input_frame.Get(), input_frame_subresource, input_frame_color_space,
+    if (picture_buffer.fence_and_value.first) {
+      if (!video_processor_wrapper_->Wait(picture_buffer.fence_and_value)) {
+        return {EncoderStatus::Codes::kD3D12FenceWaitFailed,
+                "D3D12 video processor wait failed"};
+      }
+    }
+    auto fence_or_value = video_processor_wrapper_->ProcessFrames(
+        picture_buffer.resource.Get(), picture_buffer.subresource,
+        input_frame_color_space,
         gfx::Rect(0, 0, input_frame_desc.Width, input_frame_desc.Height),
         processed_input_frame_.Get(), 0, output_color_space,
         gfx::Rect(0, 0, input_size_.Width, input_size_.Height));
-    if (!ok) {
-      return {EncoderStatus::Codes::kSystemAPICallError,
+    if (!fence_or_value.first) {
+      return {EncoderStatus::Codes::kD3D12VideoProcessorProcessFramesFailed,
               "D3D12 video processor process frame failed"};
     }
 
-    input_frame = processed_input_frame_;
-    input_frame_subresource = 0;
+    picture_buffer = {processed_input_frame_, 0, fence_or_value};
   }
-
-  auto impl_result = EncodeImpl(input_frame.Get(), input_frame_subresource,
-                                options, output_color_space);
+  if (picture_buffer.fence_and_value.first) {
+    if (!video_encoder_wrapper_->Wait(picture_buffer.fence_and_value)) {
+      return {EncoderStatus::Codes::kD3D12FenceWaitFailed,
+              "D3D12 video encoder wait failed"};
+    }
+  }
+  auto impl_result =
+      EncodeImpl(picture_buffer.resource.Get(), picture_buffer.subresource,
+                 options, output_color_space, input_frame_hdr_metadata);
   if (!impl_result.is_ok()) {
+    // EncodeImpl() may bail (e.g. kBadReferenceBuffer) after
+    // D3D12VideoProcessorWrapper::ProcessFrames() has already submitted work
+    // to the video processor queue but before D3D12VideoEncoderWrapper::Encode
+    // would have CPU-synced it. Sync now so resources referenced by that
+    // command list are not released while the GPU is still using them when
+    // teardown follows this error.
+    if (auto status = video_processor_wrapper_->WaitForInFlightWork();
+        !status.is_ok()) {
+      DLOG(ERROR) << "Waiting for in-flight video processing after encode "
+                     "error failed: "
+                  << static_cast<int>(status.code());
+    }
     return std::move(impl_result);
   }
 
@@ -548,6 +605,10 @@ EncoderStatus::Or<size_t> D3D12VideoEncodeDelegate::ReadbackBitstream(
     return std::move(size_or_error).error();
   }
   size_t size = std::move(size_or_error).value();
+  if (size > bitstream_buffer.size()) {
+    return {EncoderStatus::Codes::kEncoderHardwareDriverError,
+            "Encoded bitstream exceeds output buffer size"};
+  }
   D3D12_RANGE written_range{};
   metadata.Commit(&written_range);
   EncoderStatus status =
@@ -573,8 +634,11 @@ bool D3D12VideoEncodeDecodedPictureBuffers<
                                             DXGI_FORMAT format,
                                             size_t max_num_ref_frames,
                                             bool use_texture_array) {
-  CHECK_GT(max_num_ref_frames, 0u);
-  CHECK_LE(max_num_ref_frames, kMaxDpbSize);
+  if (max_num_ref_frames == 0 || max_num_ref_frames > kMaxDpbSize) {
+    LOG(ERROR) << "Invalid max reference frames number: " << max_num_ref_frames
+               << " (should be between 1 and " << kMaxDpbSize << ")";
+    return false;
+  }
   size_ = max_num_ref_frames;
 
   // We reserve one space in extra for the current frame.

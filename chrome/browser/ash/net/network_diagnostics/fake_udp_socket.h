@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_ASH_NET_NETWORK_DIAGNOSTICS_FAKE_UDP_SOCKET_H_
 #define CHROME_BROWSER_ASH_NET_NETWORK_DIAGNOSTICS_FAKE_UDP_SOCKET_H_
 
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_span.h"
 #include "base/time/time.h"
@@ -43,8 +44,10 @@ class FakeUdpSocket : public network::mojom::UDPSocket {
   void SetReceiveBufferSize(int32_t receive_buffer_size,
                             SetSendBufferSizeCallback callback) override;
   void JoinGroup(const net::IPAddress& group_address,
+                 const std::optional<net::IPAddress>& source_address,
                  JoinGroupCallback callback) override;
   void LeaveGroup(const net::IPAddress& group_address,
+                  const std::optional<net::IPAddress>& source_address,
                   LeaveGroupCallback callback) override;
   // Used in the fake.
   void ReceiveMore(uint32_t num_additional_datagrams) override;

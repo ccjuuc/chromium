@@ -5,24 +5,38 @@
 #include "chrome/browser/ui/extensions/extension_install_ui_desktop.h"
 
 #include "base/functional/bind.h"
+#include "base/scoped_observation.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chrome/browser/ui/extensions/extension_installed_watcher.h"
+#include "chrome/browser/ui/extensions/extension_post_install_dialog.h"
+#include "chrome/browser/ui/extensions/extension_post_install_dialog_model.h"
 #include "chrome/browser/ui/extensions/installation_error_infobar_delegate.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
 #include "chrome/browser/ui/simple_message_box.h"
 #include "chrome/browser/ui/singleton_tabs.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/user_education/browser_user_education_interface.h"
+#include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/toolbar/toolbar_action_view.h"
+#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "chrome/common/pref_names.h"
+#include "components/feature_engagement/public/feature_constants.h"
 #include "components/infobars/content/content_infobar_manager.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/install/crx_install_error.h"
@@ -46,8 +60,8 @@ namespace {
 
 BrowserWindowInterface* FindOrCreateVisibleBrowser(Profile* profile) {
   chrome::ScopedTabbedBrowserDisplayer displayer(profile);
-  Browser* browser = displayer.browser();
-  if (browser->tab_strip_model()->count() == 0) {
+  BrowserWindowInterface* browser = displayer.browser_window_interface();
+  if (browser->GetTabStripModel()->count() == 0) {
     chrome::AddTabAt(browser, GURL(), -1, true);
   }
   return browser;
@@ -78,8 +92,7 @@ void ShowAppInstalledNotification(
       FindOrCreateVisibleBrowser(current_profile);
   CHECK(browser_window);
   NavigateParams params(GetSingletonTabNavigateParams(
-      browser_window->GetBrowserForMigrationOnly(),
-      GURL(chrome::kChromeUIAppsURL)));
+      browser_window, GURL(chrome::kChromeUIAppsURL)));
   Navigate(&params);
 #endif
 }
@@ -101,7 +114,7 @@ void ExtensionInstallUIDesktop::OnInstallSuccess(
 
   if (!profile()) {
     // TODO(zelidrag): Figure out what exact conditions cause crash
-    // http://crbug.com/159437 and write browser test to cover it.
+    // http://crbug.com/40293301 and write browser test to cover it.
     DUMP_WILL_BE_NOTREACHED();
     return;
   }
@@ -114,7 +127,40 @@ void ExtensionInstallUIDesktop::OnInstallSuccess(
   CHECK(browser_window);
 
   if (!extension->is_app()) {
-    ShowBubble(extension, browser_window, profile(), *icon);
+    SkBitmap icon_to_use = icon ? *icon : SkBitmap();
+    extensions::TriggerPostInstallDialog(
+        profile(), extension, icon_to_use,
+        base::BindOnce(
+            [](BrowserWindowInterface* bwi) {
+              return bwi->GetActiveTabInterface()->GetContents();
+            },
+            browser_window),
+        base::BindOnce(
+            [](const extensions::ExtensionId& extension_id,
+               base::WeakPtr<content::WebContents> web_contents) {
+              if (!web_contents) {
+                return;
+              }
+              BrowserWindowInterface* browser_interface =
+                  GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+                      web_contents.get());
+              if (!browser_interface) {
+                return;
+              }
+              Browser* browser =
+                  browser_interface->GetBrowserForMigrationOnly();
+              BrowserView* browser_view =
+                  BrowserView::GetBrowserViewForBrowser(browser);
+              if (!browser_view->toolbar()) {
+                return;
+              }
+              ExtensionsToolbarDesktop* extensions_toolbar =
+                  browser_view->toolbar()->extensions_container();
+              if (extensions_toolbar) {
+                extensions_toolbar->ShowPinnedByDefaultIPH(extension_id);
+              }
+            },
+            extension->id()));
     return;
   }
 
@@ -131,12 +177,14 @@ void ExtensionInstallUIDesktop::OnInstallFailure(
     return;
   }
 
-  Browser* browser = chrome::FindLastActiveWithProfile(profile());
+  BrowserWindowInterface* const browser =
+      ProfileBrowserCollection::GetForProfile(profile())
+          ->GetLastActiveBrowser();
   if (!browser) {  // Can be nullptr in unittests.
     return;
   }
   WebContents* web_contents =
-      browser->tab_strip_model()->GetActiveWebContents();
+      browser->GetTabStripModel()->GetActiveWebContents();
   if (!web_contents) {
     return;
   }

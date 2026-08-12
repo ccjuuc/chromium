@@ -7,11 +7,9 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/i18n/time_formatting.h"
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
@@ -29,7 +27,7 @@
 #include "chrome/browser/ash/guest_os/guest_os_share_path_factory.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/chrome_select_file_policy.h"
+#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
@@ -145,15 +143,19 @@ void CrostiniExportImport::ImportContainer(guest_os::GuestId container_id,
 }
 
 base::FilePath CrostiniExportImport::GetDefaultBackupPath() const {
+  base::Time::Exploded exploded;
+  base::Time::Now().LocalExplode(&exploded);
   return file_manager::util::GetMyFilesFolderForProfile(profile_).Append(
-      base::UnlocalizedTimeFormatWithPattern(
-          base::Time::Now(), "'chromeos-linux-'yyyy-MM-dd'.tini'"));
+      base::StringPrintf("chromeos-linux-%04d-%02d-%02d.tini", exploded.year,
+                         exploded.month, exploded.day_of_month));
 }
 
 base::FilePath CrostiniExportImport::GetDefaultImageBackupPath() const {
+  base::Time::Exploded exploded;
+  base::Time::Now().LocalExplode(&exploded);
   return file_manager::util::GetMyFilesFolderForProfile(profile_).Append(
-      base::UnlocalizedTimeFormatWithPattern(
-          base::Time::Now(), "'chromeos-linux-'yyyy-MM-dd'.img.zst'"));
+      base::StringPrintf("chromeos-linux-%04d-%02d-%02d.img.zst", exploded.year,
+                         exploded.month, exploded.day_of_month));
 }
 
 void CrostiniExportImport::OpenFileDialog(content::WebContents* web_contents) {
@@ -247,7 +249,7 @@ void CrostiniExportImport::ImportContainer(
     CrostiniManager::CrostiniResultCallback callback) {
   std::vector<guest_os::GuestId> existing_containers =
       guest_os::GetContainers(profile_, guest_os::VmType::TERMINA);
-  if (!base::Contains(existing_containers, container_id)) {
+  if (!std::ranges::contains(existing_containers, container_id)) {
     LOG(ERROR) << "Attempting to import Crostini container backup into "
                   "non-existent container: "
                << container_id;
@@ -518,9 +520,6 @@ void CrostiniExportImport::EnsureLxdStartedThenSharePath(
   auto* crostini_manager = crostini::CrostiniManager::GetForProfile(profile_);
   crostini::CrostiniManager::RestartOptions options;
   options.stop_after_lxd_available = true;
-  if (create_new_container) {
-    options.restart_source = crostini::RestartSource::kMultiContainerCreation;
-  }
   crostini_manager->RestartCrostiniWithOptions(
       container_id, std::move(options),
       base::BindOnce(&CrostiniExportImport::SharePath,

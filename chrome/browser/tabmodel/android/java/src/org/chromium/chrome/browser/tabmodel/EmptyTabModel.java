@@ -5,10 +5,13 @@
 package org.chromium.chrome.browser.tabmodel;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
+import static org.chromium.chrome.browser.tabmodel.TabGroupTitleUtils.UNSET_TAB_GROUP_TITLE;
 
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Callback;
+import org.chromium.base.Token;
+import org.chromium.base.supplier.LazyOneshotSupplier;
 import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.NullableObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
@@ -17,10 +20,14 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabCreationState;
+import org.chromium.chrome.browser.tab.TabDestroyStatus;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabSelectionType;
+import org.chromium.chrome.browser.tabmodel.NextTabPolicy.NextTabPolicySupplier;
+import org.chromium.components.tab_groups.TabGroupColorId;
 import org.chromium.components.tabs.TabStripCollection;
 
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
@@ -58,12 +65,20 @@ public class EmptyTabModel implements IncognitoTabModelInternal {
     }
 
     @Override
+    public @TabModelType int getTabModelType() {
+        return TabModelType.EMPTY;
+    }
+
+    @Override
     public @Nullable Profile getProfile() {
         return null;
     }
 
     @Override
     public void associateWithBrowserWindow(long nativeAndroidBrowserWindow) {}
+
+    @Override
+    public void dissociateWithBrowserWindow() {}
 
     @Override
     public boolean isIncognito() {
@@ -149,6 +164,11 @@ public class EmptyTabModel implements IncognitoTabModelInternal {
     }
 
     @Override
+    public NextTabPolicySupplier getNextTabPolicySupplier() {
+        return () -> NextTabPolicy.HIERARCHICAL;
+    }
+
+    @Override
     public void setIndex(int i, @TabSelectionType int type) {}
 
     @Override
@@ -169,7 +189,9 @@ public class EmptyTabModel implements IncognitoTabModelInternal {
     public void unpinTab(int tabId) {}
 
     @Override
-    public void destroy() {}
+    public @TabDestroyStatus int destroy() {
+        return TabDestroyStatus.FAST_SHUTDOWN;
+    }
 
     @Override
     public boolean isClosurePending(int tabId) {
@@ -226,6 +248,11 @@ public class EmptyTabModel implements IncognitoTabModelInternal {
     public void openMostRecentlyClosedEntry() {}
 
     @Override
+    public @RecentlyClosedEntryType int getMostRecentlyClosedEntryType() {
+        return RecentlyClosedEntryType.NONE;
+    }
+
+    @Override
     public long getMostRecentClosureTime() {
         return TabModel.INVALID_TIMESTAMP;
     }
@@ -262,6 +289,16 @@ public class EmptyTabModel implements IncognitoTabModelInternal {
     }
 
     @Override
+    public List<Integer> getOrderedMultiSelectedTabIds() {
+        return Collections.emptyList();
+    }
+
+    @Override
+    public List<Tab> getOrderedMultiSelectedTabs() {
+        return Collections.emptyList();
+    }
+
+    @Override
     public int findFirstNonPinnedTabIndex() {
         return 0;
     }
@@ -293,4 +330,195 @@ public class EmptyTabModel implements IncognitoTabModelInternal {
     public @Nullable Tab duplicateTab(Tab tab) {
         return null;
     }
+
+    @Override
+    public boolean isClosingAllTabs() {
+        return false;
+    }
+
+    @Override
+    public void addTabGroupObserver(TabGroupObserver observer) {}
+
+    @Override
+    public void removeTabGroupObserver(TabGroupObserver observer) {}
+
+    @Override
+    public List<Tab> getRepresentativeTabList() {
+        return Collections.emptyList();
+    }
+
+    @Override
+    public int getIndividualTabAndGroupCount() {
+        return 0;
+    }
+
+    @Override
+    public int getCurrentRepresentativeTabIndex() {
+        return TabModel.INVALID_TAB_INDEX;
+    }
+
+    @Override
+    public @Nullable Tab getCurrentRepresentativeTab() {
+        return null;
+    }
+
+    @Override
+    public @Nullable Tab getRepresentativeTabAt(int index) {
+        return null;
+    }
+
+    @Override
+    public int representativeIndexOf(@Nullable Tab tab) {
+        return TabModel.INVALID_TAB_INDEX;
+    }
+
+    @Override
+    public int getTabGroupCount() {
+        return 0;
+    }
+
+    @Override
+    public int getTabCountForGroup(@Nullable Token tabGroupId) {
+        return 0;
+    }
+
+    @Override
+    public boolean tabGroupExists(@Nullable Token tabGroupId) {
+        return false;
+    }
+
+    @Override
+    public List<Tab> getRelatedTabList(int tabId) {
+        return Collections.emptyList();
+    }
+
+    @Override
+    public List<Tab> getTabsInGroup(@Nullable Token tabGroupId) {
+        return Collections.emptyList();
+    }
+
+    @Override
+    public boolean isTabInTabGroup(Tab tab) {
+        return false;
+    }
+
+    @Override
+    public int getIndexOfTabInGroup(Tab tab) {
+        return TabModel.INVALID_TAB_INDEX;
+    }
+
+    @Override
+    public int getGroupLastShownTabId(@Nullable Token tabGroupId) {
+        return Tab.INVALID_TAB_ID;
+    }
+
+    @Override
+    public void moveRelatedTabs(int id, int newIndex) {}
+
+    @Override
+    public boolean willMergingCreateNewGroup(List<Tab> tabsToMerge) {
+        return false;
+    }
+
+    @Override
+    public void createSingleTabGroup(Tab tab) {}
+
+    @Override
+    public void createTabGroupForTabGroupSync(List<Tab> tabs, Token tabGroupId) {}
+
+    @Override
+    public void mergeTabsToGroup(
+            int sourceTabId, int destinationTabId, boolean skipUpdateTabModel) {}
+
+    @Override
+    public void mergeListOfTabsToGroup(
+            List<Tab> tabs, Tab destinationTab, @Nullable Integer indexInGroup, int notify) {}
+
+    @Override
+    public TabUngrouper getTabUngrouper() {
+        return new EmptyTabUngrouper();
+    }
+
+    @Override
+    public void performUndoGroupOperation(UndoGroupMetadata undoGroupMetadata) {}
+
+    @Override
+    public void undoGroupOperationExpired(UndoGroupMetadata undoGroupMetadata) {}
+
+    @Override
+    public Set<Token> getAllTabGroupIds() {
+        return Collections.emptySet();
+    }
+
+    @Override
+    public int getValidPosition(Tab tab, int proposedPosition) {
+        return proposedPosition;
+    }
+
+    @Override
+    public boolean isTabModelRestored() {
+        return false;
+    }
+
+    @Override
+    public boolean isTabGroupHiding(@Nullable Token tabGroupId) {
+        return false;
+    }
+
+    @Override
+    public LazyOneshotSupplier<Set<Token>> getLazyAllTabGroupIds(
+            List<Tab> tabsToExclude, boolean includePendingClosures) {
+        return LazyOneshotSupplier.fromValue(Collections.emptySet());
+    }
+
+    @Override
+    public String getTabGroupTitle(Token tabGroupId) {
+        return UNSET_TAB_GROUP_TITLE;
+    }
+
+    @Override
+    public String getTabGroupTitle(Tab groupedTab) {
+        return UNSET_TAB_GROUP_TITLE;
+    }
+
+    @Override
+    public void setTabGroupTitle(Token tabGroupId, @Nullable String title) {}
+
+    @Override
+    public void deleteTabGroupTitle(Token tabGroupId) {}
+
+    @Override
+    public int getTabGroupColor(Token tabGroupId) {
+        return TabGroupColorId.GREY;
+    }
+
+    @Override
+    public int getTabGroupColorWithFallback(Token tabGroupId) {
+        return TabGroupColorId.GREY;
+    }
+
+    @Override
+    public int getTabGroupColorWithFallback(Tab groupedTab) {
+        return TabGroupColorId.GREY;
+    }
+
+    @Override
+    public void setTabGroupColor(Token tabGroupId, int color) {}
+
+    @Override
+    public void deleteTabGroupColor(Token tabGroupId) {}
+
+    @Override
+    public boolean getTabGroupCollapsed(Token tabGroupId) {
+        return false;
+    }
+
+    @Override
+    public void setTabGroupCollapsed(Token tabGroupId, boolean isCollapsed, boolean animate) {}
+
+    @Override
+    public void deleteTabGroupCollapsed(Token tabGroupId) {}
+
+    @Override
+    public void moveTabOutOfGroupInDirection(int sourceTabId, boolean trailing) {}
 }

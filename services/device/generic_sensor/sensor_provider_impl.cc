@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
@@ -54,6 +53,8 @@ SensorProviderImpl::SensorProviderImpl(
   // content::WebContents.
   receivers_.set_disconnect_handler(base::BindRepeating(
       &SensorProviderImpl::OnReceiverDisconnected, base::Unretained(this)));
+  sensor_receivers_.set_disconnect_handler(base::BindRepeating(
+      &SensorProviderImpl::OnSensorDisconnected, base::Unretained(this)));
 }
 
 SensorProviderImpl::~SensorProviderImpl() = default;
@@ -81,8 +82,26 @@ void SensorProviderImpl::OnReceiverDisconnected() {
   }
 }
 
-void SensorProviderImpl::GetSensor(mojom::SensorType type,
-                                   GetSensorCallback callback) {
+void SensorProviderImpl::RemoveSensor(SensorImpl* sensor) {
+  auto it = sensor_to_receiver_id_.find(sensor);
+  if (it != sensor_to_receiver_id_.end()) {
+    mojo::ReceiverId id = it->second;
+    sensor_to_receiver_id_.erase(it);
+    sensor_receivers_.Remove(id);
+  }
+}
+
+void SensorProviderImpl::OnSensorDisconnected() {
+  SensorImpl* sensor = sensor_receivers_.current_context();
+  DCHECK(sensor_to_receiver_id_.contains(sensor));
+  sensor_to_receiver_id_.erase(sensor);
+}
+
+void SensorProviderImpl::GetSensor(
+    mojom::SensorType type,
+    mojo::PendingReceiver<mojom::SensorClientController> controller,
+    bool initially_suspended,
+    GetSensorCallback callback) {
   if (!base::FeatureList::IsEnabled(features::kGenericSensorExtraClasses) &&
       IsExtraSensorClass(type)) {
     std::move(callback).Run(mojom::SensorCreationResult::ERROR_NOT_AVAILABLE,
@@ -112,16 +131,19 @@ void SensorProviderImpl::GetSensor(mojom::SensorType type,
     provider->CreateSensor(
         type, base::BindOnce(&SensorProviderImpl::SensorCreated,
                              weak_ptr_factory_.GetWeakPtr(),
-                             std::move(cloned_region), std::move(callback)));
+                             std::move(cloned_region), std::move(controller),
+                             initially_suspended, std::move(callback)));
     return;
   }
 
-  SensorCreated(std::move(cloned_region), std::move(callback),
-                std::move(sensor));
+  SensorCreated(std::move(cloned_region), std::move(controller),
+                initially_suspended, std::move(callback), std::move(sensor));
 }
 
 void SensorProviderImpl::SensorCreated(
     base::ReadOnlySharedMemoryRegion cloned_region,
+    mojo::PendingReceiver<mojom::SensorClientController> controller,
+    bool initially_suspended,
     GetSensorCallback callback,
     scoped_refptr<PlatformSensor> sensor) {
   if (!sensor) {
@@ -132,12 +154,17 @@ void SensorProviderImpl::SensorCreated(
 
   auto init_params = mojom::SensorInitParams::New();
 
-  auto sensor_impl = std::make_unique<SensorImpl>(sensor);
+  auto sensor_impl = std::make_unique<SensorImpl>(sensor, std::move(controller),
+                                                  initially_suspended, this);
   init_params->client_receiver = sensor_impl->GetClient();
 
+  SensorImpl* sensor_impl_ptr = sensor_impl.get();
+
   mojo::PendingRemote<mojom::Sensor> pending_sensor;
-  sensor_receivers_.Add(std::move(sensor_impl),
-                        pending_sensor.InitWithNewPipeAndPassReceiver());
+  auto receiver_id = sensor_receivers_.Add(
+      std::move(sensor_impl), pending_sensor.InitWithNewPipeAndPassReceiver(),
+      sensor_impl_ptr);
+  sensor_to_receiver_id_[sensor_impl_ptr] = receiver_id;
   init_params->sensor = std::move(pending_sensor);
 
   init_params->memory = std::move(cloned_region);

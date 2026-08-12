@@ -60,9 +60,11 @@ std::optional<double> NumberPropertyFunctions::GetNumber(
         return std::optional<double>();
       }
       return style.ZIndex();
+    case CSSPropertyID::kZoom:
+      return style.Zoom();
 
     case CSSPropertyID::kLineHeight: {
-      const Length& length = style.SpecifiedLineHeight();
+      const Length& length = style.LineHeight();
       // Numbers are represented by percentages.
       if (!length.IsPercent()) {
         return std::optional<double>();
@@ -123,6 +125,7 @@ double NumberPropertyFunctions::ClampNumber(const CSSProperty& property,
     case CSSPropertyID::kFlexShrink:
     case CSSPropertyID::kLineHeight:
     case CSSPropertyID::kTabSize:
+    case CSSPropertyID::kZoom:
       return ClampTo<float>(value, 0);
 
     case CSSPropertyID::kOrphans:
@@ -132,6 +135,7 @@ double NumberPropertyFunctions::ClampNumber(const CSSProperty& property,
     case CSSPropertyID::kColumnCount:
       return ClampTo<uint16_t>(round(value), 1);
 
+    case CSSPropertyID::kMathDepth:
     case CSSPropertyID::kOrder:
     case CSSPropertyID::kReadingOrder:
     case CSSPropertyID::kZIndex:

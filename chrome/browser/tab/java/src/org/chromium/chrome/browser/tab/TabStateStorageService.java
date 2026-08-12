@@ -11,6 +11,10 @@ import org.jni_zero.NativeMethods;
 
 import org.chromium.base.Callback;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.components.tabs.TabStripCollection;
+
+import java.util.List;
 
 /** Java counterpart to keyed service in native that writes tab data to disk. */
 @JNINamespace("tabs")
@@ -77,14 +81,68 @@ public class TabStateStorageService {
                 .loadAllData(mNativeTabStateStorageService, windowTag, isOffTheRecord, callback);
     }
 
+    /**
+     * Counts the number of tabs for a given window.
+     *
+     * @param windowTag The window tag to count tabs for.
+     * @param isOffTheRecord Whether the tabs are off the record.
+     * @param callback The callback to be called with the number of tabs.
+     */
+    public void countTabsForWindow(
+            String windowTag, boolean isOffTheRecord, Callback<Integer> callback) {
+        TabStateStorageServiceJni.get()
+                .countTabsForWindow(
+                        mNativeTabStateStorageService, windowTag, isOffTheRecord, callback);
+    }
+
     /** Clears all the tabs from persistent storage. */
     public void clearState() {
         TabStateStorageServiceJni.get().clearState(mNativeTabStateStorageService);
     }
 
-    /** Clears all the tabs for a given window from persistent storage. */
+    /**
+     * Clears all the tabs for a given window from persistent storage.
+     *
+     * @param windowTag The window tag to clear data for.
+     */
     public void clearWindow(String windowTag) {
         TabStateStorageServiceJni.get().clearWindow(mNativeTabStateStorageService, windowTag);
+    }
+
+    /**
+     * Clears all windows except for those with the provided tags.
+     *
+     * @param windowTags The window tags to keep.
+     */
+    public void clearAllWindowsExcept(List<String> windowTags) {
+        TabStateStorageServiceJni.get()
+                .clearAllWindowsExcept(mNativeTabStateStorageService, windowTags);
+    }
+
+    /**
+     * Clears all unused nodes for a given window from persistent storage. Any node that is not a
+     * child of the given collection will be deleted.
+     *
+     * @param windowTag The window tag to clear unused nodes for.
+     * @param isOffTheRecord Whether the nodes are off the record.
+     * @param tabStripCollection The tab strip collection for a given window.
+     */
+    public void clearUnusedNodesForWindow(
+            String windowTag,
+            boolean isOffTheRecord,
+            @Nullable TabStripCollection tabStripCollection) {
+        if (tabStripCollection != null) {
+            TabStateStorageServiceJni.get()
+                    .clearUnusedNodesForWindow(
+                            mNativeTabStateStorageService,
+                            windowTag,
+                            isOffTheRecord,
+                            tabStripCollection);
+        } else {
+            TabStateStorageServiceJni.get()
+                    .clearWindowWithOtrStatus(
+                            mNativeTabStateStorageService, windowTag, isOffTheRecord);
+        }
     }
 
     /** Clears all the tabs for a given window from persistent storage. */
@@ -96,6 +154,36 @@ public class TabStateStorageService {
     public ScopedStorageBatch createBatch() {
         long batchPtr = TabStateStorageServiceJni.get().createBatch(mNativeTabStateStorageService);
         return new ScopedStorageBatchImpl(batchPtr);
+    }
+
+    /**
+     * Sets the encryption key.
+     *
+     * @param windowTag The window tag to set the key for.
+     * @param key The encryption key.
+     */
+    public void setKey(String windowTag, byte[] key) {
+        TabStateStorageServiceJni.get().setKey(mNativeTabStateStorageService, windowTag, key);
+    }
+
+    /**
+     * Removes the encryption key.
+     *
+     * @param windowTag The window tag to remove the key for.
+     */
+    public void removeKey(String windowTag) {
+        TabStateStorageServiceJni.get().removeKey(mNativeTabStateStorageService, windowTag);
+    }
+
+    /**
+     * Generates a new key for encryption.
+     *
+     * @param windowTag The window tag to generate the key for.
+     * @return The generated key.
+     */
+    public byte[] generateKey(String windowTag) {
+        return TabStateStorageServiceJni.get()
+                .generateKey(mNativeTabStateStorageService, windowTag);
     }
 
     @NativeMethods
@@ -110,15 +198,47 @@ public class TabStateStorageService {
                 boolean isOffTheRecord,
                 Callback<StorageLoadedData> loadedDataCallback);
 
+        void countTabsForWindow(
+                long nativeTabStateStorageServiceAndroid,
+                @JniType("std::string") String windowTag,
+                boolean isOffTheRecord,
+                Callback<Integer> countCallback);
+
         void clearState(long nativeTabStateStorageServiceAndroid);
 
         void clearWindow(
                 long nativeTabStateStorageServiceAndroid, @JniType("std::string") String windowTag);
 
+        void clearAllWindowsExcept(
+                long nativeTabStateStorageServiceAndroid,
+                @JniType("std::vector<std::string>") List<String> windowTags);
+
         long createBatch(long nativeTabStateStorageServiceAndroid);
+
+        void clearWindowWithOtrStatus(
+                long nativeTabStateStorageServiceAndroid,
+                @JniType("std::string") String windowTag,
+                boolean isOffTheRecord);
+
+        void clearUnusedNodesForWindow(
+                long nativeTabStateStorageServiceAndroid,
+                @JniType("std::string") String windowTag,
+                boolean isOffTheRecord,
+                @JniType("TabStripCollection*") TabStripCollection tabStripCollection);
 
         void printAll(long nativeTabStateStorageServiceAndroid);
 
         void commitBatch(long scopedBatchAndroid);
+
+        void setKey(
+                long nativeTabStateStorageServiceAndroid,
+                @JniType("std::string") String windowTag,
+                @JniType("std::vector<uint8_t>") byte[] key);
+
+        void removeKey(
+                long nativeTabStateStorageServiceAndroid, @JniType("std::string") String windowTag);
+
+        byte[] generateKey(
+                long nativeTabStateStorageServiceAndroid, @JniType("std::string") String windowTag);
     }
 }

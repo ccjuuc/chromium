@@ -20,9 +20,9 @@
 #include "chrome/browser/dom_distiller/dom_distiller_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_isolated_world_ids.h"
 #include "chrome/common/chrome_switches.h"
@@ -108,6 +108,7 @@ class PrefChangeObserver : public DistilledPagePrefs::Observer {
     callback_.Run();
   }
   void OnChangeFontScaling(float scaling) override { callback_.Run(); }
+  void OnChangeLinksEnabled(bool enabled) override { callback_.Run(); }
 
  private:
   base::RepeatingClosure callback_;
@@ -197,7 +198,7 @@ void DomDistillerViewerSourceBrowserTest::ViewSingleDistilledPage(
   // Ensure the correct factory is used for the DomDistillerService.
   dom_distiller::DomDistillerServiceFactory::GetInstance()
       ->SetTestingFactoryAndUse(
-          browser()->profile(),
+          browser()->GetProfile(),
           base::BindRepeating(&DomDistillerViewerSourceBrowserTest::Build,
                               base::Unretained(this)));
 
@@ -292,7 +293,7 @@ IN_PROC_BROWSER_TEST_F(DomDistillerViewerSourceBrowserTest,
 IN_PROC_BROWSER_TEST_F(DomDistillerViewerSourceBrowserTest, EarlyTemplateLoad) {
   dom_distiller::DomDistillerServiceFactory::GetInstance()
       ->SetTestingFactoryAndUse(
-          browser()->profile(),
+          browser()->GetProfile(),
           base::BindRepeating(&DomDistillerViewerSourceBrowserTest::Build,
                               base::Unretained(this)));
 
@@ -401,7 +402,7 @@ IN_PROC_BROWSER_TEST_F(DomDistillerViewerSourceBrowserTest, MultiPageArticle) {
   expect_distiller_page_ = true;
   dom_distiller::DomDistillerServiceFactory::GetInstance()
       ->SetTestingFactoryAndUse(
-          browser()->profile(),
+          browser()->GetProfile(),
           base::BindRepeating(&DomDistillerViewerSourceBrowserTest::Build,
                               base::Unretained(this)));
 
@@ -515,7 +516,7 @@ void DomDistillerViewerSourceBrowserTest::PrefTest(bool is_error_page) {
   ExpectBodyHasThemeAndFont(contents, "light", "sans-serif");
 
   DistilledPagePrefs* distilled_page_prefs =
-      DomDistillerServiceFactory::GetForBrowserContext(browser()->profile())
+      DomDistillerServiceFactory::GetForBrowserContext(browser()->GetProfile())
           ->GetDistilledPagePrefs();
 
   // Test theme.
@@ -555,7 +556,7 @@ IN_PROC_BROWSER_TEST_F(DomDistillerViewerSourceBrowserTest, PrefPersist) {
   EXPECT_TRUE(content::WaitForLoadStop(contents));
 
   DistilledPagePrefs* distilled_page_prefs =
-      DomDistillerServiceFactory::GetForBrowserContext(browser()->profile())
+      DomDistillerServiceFactory::GetForBrowserContext(browser()->GetProfile())
           ->GetDistilledPagePrefs();
 
   std::string result = content::EvalJs(contents, kGetFontSize).ExtractString();
@@ -623,7 +624,7 @@ IN_PROC_BROWSER_TEST_F(DomDistillerViewerSourceBrowserTest, MAYBE_UISetsPrefs) {
   }));
 
   DistilledPagePrefs* distilled_page_prefs =
-      DomDistillerServiceFactory::GetForBrowserContext(browser()->profile())
+      DomDistillerServiceFactory::GetForBrowserContext(browser()->GetProfile())
           ->GetDistilledPagePrefs();
 
   // Verify that the initial preferences aren't the same as those set below.

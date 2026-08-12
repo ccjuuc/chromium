@@ -24,6 +24,7 @@
 #include "third_party/blink/renderer/core/css/parser/css_parser.h"
 #include "third_party/blink/renderer/core/css/resolver/font_style_resolver.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/geometry/dom_matrix.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_performance_monitor.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_rendering_context.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_rendering_context_host.h"
@@ -114,7 +115,7 @@ class TestRenderingContext2D final
   const MemoryManagedPaintCanvas* GetPaintCanvas() const override {
     return &recorder_.getRecordingCanvas();
   }
-  void WillDraw(const SkIRect& dirty_rect,
+  void WillDraw(const gfx::Rect& dirty_rect,
                 CanvasPerformanceMonitor::DrawType) override {}
 
   sk_sp<PaintFilter> StateGetFilter() override {
@@ -165,24 +166,27 @@ class TestRenderingContext2D final
       return false;
     }
     auto* selector = Host()->GetFontSelector();
-    FontDescription font_description =
+    std::optional<FontDescription> maybe_desc =
         FontStyleResolver::ComputeFont(*style, selector->BaseFontSelector());
-    GetState().SetFont(font_description, selector);
+    if (!maybe_desc.has_value()) {
+      return false;
+    }
+    GetState().SetFont(maybe_desc.value(), selector);
     return true;
   }
 
-  CanvasResourceProvider* GetResourceProvider() const override {
-    return nullptr;
+  base::ByteSize AllocatedBufferSize() const override {
+    return base::ByteSize();
   }
 
-  CanvasResourceProvider* GetOrCreateResourceProvider() override {
-    return nullptr;
-  }
+  bool InitializeResourceProvider() override { return false; }
+
+  bool Is2DCanvasAccelerated() const override { return false; }
 
   // Implementing pure virtual functions from CanvasRenderingContext.
   scoped_refptr<StaticBitmapImage> GetImage() override { return nullptr; }
-  std::unique_ptr<CanvasResourceProvider> ReplaceResourceProvider(
-      std::unique_ptr<CanvasResourceProvider>) override {
+  scoped_refptr<StaticBitmapImage> PaintRenderingResultsToSnapshot(
+      SourceDrawingBuffer) override {
     return nullptr;
   }
 

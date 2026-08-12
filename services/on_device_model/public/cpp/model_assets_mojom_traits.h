@@ -12,7 +12,7 @@
 #include "mojo/public/cpp/bindings/struct_traits.h"
 #include "services/on_device_model/public/cpp/model_assets.h"
 #include "services/on_device_model/public/cpp/model_file_mojom_traits.h"
-#include "services/on_device_model/public/mojom/on_device_model_service.mojom-shared.h"
+#include "services/on_device_model/public/mojom/on_device_model_service.mojom-data-view.h"
 
 namespace mojo {
 
@@ -39,6 +39,20 @@ struct COMPONENT_EXPORT(ON_DEVICE_MODEL_CPP)
 
   static base::File adapter_cache(on_device_model::ModelAssets& assets) {
     return std::move(assets.adapter_cache);
+  }
+
+  static base::File program_cache(on_device_model::ModelAssets& assets) {
+    return std::move(assets.program_cache);
+  }
+
+  static base::File encoder_program_cache(
+      on_device_model::ModelAssets& assets) {
+    return std::move(assets.encoder_program_cache);
+  }
+
+  static base::File adapter_program_cache(
+      on_device_model::ModelAssets& assets) {
+    return std::move(assets.adapter_program_cache);
   }
 
   static bool Read(on_device_model::mojom::ModelAssetsDataView data,

@@ -4,54 +4,57 @@
 
 #include "base/trace_event/trace_log.h"
 
-#include <algorithm>
-#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <memory>
+#include <string>
 #include <string_view>
-#include <utility>
 
-#include "base/compiler_specific.h"
-#include "base/containers/contains.h"
-#include "base/debug/leak_annotations.h"
-#include "base/format_macros.h"
-#include "base/functional/bind.h"
-#include "base/location.h"
-#include "base/memory/ptr_util.h"
-#include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted_memory.h"
-#include "base/memory/stack_allocated.h"
+#include "base/byte_size.h"
+#include "base/check.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/process/process.h"
-#include "base/process/process_metrics.h"
+#include "base/process/process_handle.h"
 #include "base/run_loop.h"
-#include "base/strings/string_number_conversions.h"
-#include "base/strings/string_split.h"
-#include "base/strings/string_tokenizer.h"
-#include "base/strings/stringprintf.h"
-#include "base/system/sys_info.h"
+#include "base/synchronization/lock.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
+#include "base/time/time_override.h"
+#include "base/trace_event/builtin_categories.h"
 #include "base/trace_event/perfetto_proto_appender.h"
+#include "base/trace_event/trace_arguments.h"
+#include "base/trace_event/trace_config.h"
 #include "base/trace_event/trace_event.h"
+#include "base/trace_event/trace_event_impl.h"
 #include "build/build_config.h"
-#include "third_party/perfetto/include/perfetto/ext/trace_processor/export_json.h"  // nogncheck
-#include "third_party/perfetto/include/perfetto/trace_processor/trace_processor_storage.h"  // nogncheck
 #include "third_party/perfetto/include/perfetto/tracing/console_interceptor.h"
-#include "third_party/perfetto/protos/perfetto/config/chrome/chrome_config.gen.h"  // nogncheck
-#include "third_party/perfetto/protos/perfetto/config/interceptor_config.gen.h"  // nogncheck
-#include "third_party/perfetto/protos/perfetto/trace/track_event/process_descriptor.gen.h"  // nogncheck
-#include "third_party/perfetto/protos/perfetto/trace/track_event/thread_descriptor.gen.h"  // nogncheck
+#include "third_party/perfetto/include/perfetto/tracing/core/chrome_config.h"  // IWYU pragma: keep
+#include "third_party/perfetto/include/perfetto/tracing/event_context.h"
+#include "third_party/perfetto/include/perfetto/tracing/internal/track_event_internal.h"
+#include "third_party/perfetto/include/perfetto/tracing/internal/track_event_legacy.h"
+#include "third_party/perfetto/include/perfetto/tracing/tracing.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_category_registry.h"
+#include "third_party/perfetto/protos/perfetto/config/interceptor_config.gen.h"
+#include "third_party/perfetto/protos/perfetto/trace/track_event/track_event.pbzero.h"
 
-#if BUILDFLAG(IS_ANDROID)
-#include "base/debug/elf_reader.h"
+#if BUILDFLAG(USE_PERFETTO_TRACE_PROCESSOR)
+#include <utility>
 
-// The linker assigns the virtual address of the start of current library to
-// this symbol.
-extern char __executable_start;
+#include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/location.h"
+#include "base/memory/ref_counted_memory.h"
+#include "base/memory/scoped_refptr.h"
+#include "third_party/perfetto/include/perfetto/ext/trace_processor/export_json.h"  // nogncheck
+#include "third_party/perfetto/include/perfetto/trace_processor/basic_types.h"  // nogncheck
+#include "third_party/perfetto/include/perfetto/trace_processor/status.h"  // nogncheck
+#include "third_party/perfetto/include/perfetto/trace_processor/trace_processor_storage.h"  // nogncheck
 #endif
 
 namespace base::trace_event {
@@ -216,7 +219,7 @@ void OnUpdateLegacyTraceEventDuration(
     const char* name,
     PlatformThreadId thread_id,
     bool explicit_timestamps,
-    const TimeTicks& now,
+    TimeTicks now,
     const ThreadTicks& thread_now) {
   perfetto::DynamicCategory category(
       TRACE_EVENT_API_GET_CATEGORY_GROUP_NAME(category_group_enabled));
@@ -235,18 +238,17 @@ void OnUpdateLegacyTraceEventDuration(
       perfetto::internal::TrackEventInternal::kDefaultTrack, timestamp);
 }
 
-base::trace_event::TraceEventHandle AddTraceEventWithThreadIdAndTimestamps(
+void AddTraceEventWithThreadIdAndTimestamps(
     char phase,
     const unsigned char* category_group_enabled,
     const char* name,
     uint64_t id,
     base::PlatformThreadId thread_id,
-    const base::TimeTicks& timestamp,
+    base::TimeTicks timestamp,
     base::trace_event::TraceArguments* args,
     unsigned int flags) {
-  base::trace_event::TraceEventHandle handle = {};
   if (!*category_group_enabled) {
-    return handle;
+    return;
   }
   DCHECK(!timestamp.is_null());
 
@@ -255,7 +257,6 @@ base::trace_event::TraceEventHandle AddTraceEventWithThreadIdAndTimestamps(
                                                 id, args, flags);
 
   base::trace_event::OnAddLegacyTraceEvent(&new_trace_event);
-  return handle;
 }
 
 }  // namespace
@@ -347,15 +348,15 @@ void TraceLog::ResetForTesting() {
   self->tracing_session_.reset();
 }
 
-TraceLog::TraceLog() : process_id_(base::kNullProcessId) {
-  SetProcessID(GetCurrentProcId());
+TraceLog::TraceLog() {
   g_trace_log_for_testing = this;
 }
 
 TraceLog::~TraceLog() = default;
 
 void TraceLog::SetEnabled(const TraceConfig& trace_config) {
-  DCHECK(trace_config.process_filter_config().IsEnabled(process_id_));
+  DCHECK(
+      trace_config.process_filter_config().IsEnabled(base::GetCurrentProcId()));
 
   AutoLock lock(lock_);
 
@@ -468,32 +469,6 @@ void TraceLog::SetEnabledImpl(const TraceConfig& trace_config,
   AutoUnlock unlock(lock_);
   tracing_session_->Setup(perfetto_config);
   tracing_session_->StartBlocking();
-}
-
-void TraceLog::SetArgumentFilterPredicate(
-    const ArgumentFilterPredicate& argument_filter_predicate) {
-  AutoLock lock(lock_);
-  DCHECK(!argument_filter_predicate.is_null());
-  // Replace the existing argument filter.
-  argument_filter_predicate_ = argument_filter_predicate;
-}
-
-ArgumentFilterPredicate TraceLog::GetArgumentFilterPredicate() const {
-  AutoLock lock(lock_);
-  return argument_filter_predicate_;
-}
-
-void TraceLog::SetMetadataFilterPredicate(
-    const MetadataFilterPredicate& metadata_filter_predicate) {
-  AutoLock lock(lock_);
-  DCHECK(!metadata_filter_predicate.is_null());
-  // Replace the existing argument filter.
-  metadata_filter_predicate_ = metadata_filter_predicate;
-}
-
-MetadataFilterPredicate TraceLog::GetMetadataFilterPredicate() const {
-  AutoLock lock(lock_);
-  return metadata_filter_predicate_;
 }
 
 void TraceLog::SetDisabled() {
@@ -631,35 +606,29 @@ void TraceLog::OnTraceData(const char* data, size_t size, bool has_more) {
 }
 #endif  // BUILDFLAG(USE_PERFETTO_TRACE_PROCESSOR)
 
-void TraceLog::SetProcessID(ProcessId process_id) {
-  process_id_ = process_id;
-}
-
 }  // namespace base::trace_event
 
 namespace trace_event_internal {
 
-base::trace_event::TraceEventHandle AddTraceEvent(
-    char phase,
-    const unsigned char* category_group_enabled,
-    const char* name,
-    uint64_t id,
-    base::trace_event::TraceArguments* args,
-    unsigned int flags) {
+void AddTraceEvent(char phase,
+                   const unsigned char* category_group_enabled,
+                   const char* name,
+                   uint64_t id,
+                   base::trace_event::TraceArguments* args,
+                   unsigned int flags) {
   auto thread_id = base::PlatformThread::CurrentId();
   base::TimeTicks now = TRACE_TIME_TICKS_NOW();
   return AddTraceEventWithThreadIdAndTimestamp(
       phase, category_group_enabled, name, id, thread_id, now, args, flags);
 }
 
-base::trace_event::TraceEventHandle AddTraceEventWithProcessId(
-    char phase,
-    const unsigned char* category_group_enabled,
-    const char* name,
-    uint64_t id,
-    base::ProcessId process_id,
-    base::trace_event::TraceArguments* args,
-    unsigned int flags) {
+void AddTraceEventWithProcessId(char phase,
+                                const unsigned char* category_group_enabled,
+                                const char* name,
+                                uint64_t id,
+                                base::ProcessId process_id,
+                                base::trace_event::TraceArguments* args,
+                                unsigned int flags) {
   static_assert(sizeof(base::PlatformThreadId::UnderlyingType) >=
                 sizeof(base::ProcessId));
   base::TimeTicks now = TRACE_TIME_TICKS_NOW();
@@ -670,13 +639,13 @@ base::trace_event::TraceEventHandle AddTraceEventWithProcessId(
       now, args, flags | TRACE_EVENT_FLAG_HAS_PROCESS_ID);
 }
 
-base::trace_event::TraceEventHandle AddTraceEventWithThreadIdAndTimestamp(
+void AddTraceEventWithThreadIdAndTimestamp(
     char phase,
     const unsigned char* category_group_enabled,
     const char* name,
     uint64_t id,
     base::PlatformThreadId thread_id,
-    const base::TimeTicks& timestamp,
+    base::TimeTicks timestamp,
     base::trace_event::TraceArguments* args,
     unsigned int flags) {
   return base::trace_event::AddTraceEventWithThreadIdAndTimestamps(
@@ -684,13 +653,13 @@ base::trace_event::TraceEventHandle AddTraceEventWithThreadIdAndTimestamp(
       flags);
 }
 
-base::trace_event::TraceEventHandle AddTraceEventWithThreadIdAndTimestamps(
+void AddTraceEventWithThreadIdAndTimestamps(
     char phase,
     const unsigned char* category_group_enabled,
     const char* name,
     uint64_t id,
     base::PlatformThreadId thread_id,
-    const base::TimeTicks& timestamp,
+    base::TimeTicks timestamp,
     unsigned int flags) {
   return base::trace_event::AddTraceEventWithThreadIdAndTimestamps(
       phase, category_group_enabled, name, id, thread_id, timestamp, nullptr,
@@ -698,8 +667,7 @@ base::trace_event::TraceEventHandle AddTraceEventWithThreadIdAndTimestamps(
 }
 
 void UpdateTraceEventDuration(const unsigned char* category_group_enabled,
-                              const char* name,
-                              base::trace_event::TraceEventHandle handle) {
+                              const char* name) {
   if (!*category_group_enabled) {
     return;
   }

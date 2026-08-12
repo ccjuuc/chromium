@@ -11,7 +11,7 @@ version 1.x of crate `foo` would be found in the
 `.../chromium_crates_io/patches/foo-v1` directory.
 
 For broader context, please see `tools/crates/gnrt/README.md` and
-`docs/rust.md`.
+`//docs/rust/README.md`.
 
 ## Prefer upstream PRs instead of patches
 
@@ -72,6 +72,15 @@ The recommended procedure to create such patches is:
 
 5. Add the patch files in a new, third, commit
 6. Squash them, or rely on `git cl upload` doing so
+
+## Verifying if patches apply
+
+To force `gnrt` to re-vendor a crate (and re-apply patches) use the `--force`
+flag - e.g.:
+
+```
+$ tools/crates/run_gnrt.py vendor --force 'cxx*'
+```
 
 ## Recovering from patching errors
 

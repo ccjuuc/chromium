@@ -11,6 +11,7 @@
 #include <memory>
 #include <vector>
 
+#include "base/containers/circular_deque.h"
 #include "base/containers/queue.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
@@ -88,24 +89,20 @@ class MEDIA_GPU_EXPORT V4L2JpegEncodeAccelerator
 
   // Record for input buffers.
   struct I420BufferRecord {
-    I420BufferRecord();
-    ~I420BufferRecord();
-    void* address[kMaxI420Plane];  // mmap() address.
-    size_t length[kMaxI420Plane];  // mmap() length.
+    void* address[kMaxI420Plane] = {};  // mmap() address.
+    size_t length[kMaxI420Plane] = {};  // mmap() length.
 
     // Set true during QBUF and DQBUF. |address| will be accessed by hardware.
-    bool at_device;
+    bool at_device = false;
   };
 
   // Record for output buffers.
   struct JpegBufferRecord {
-    JpegBufferRecord();
-    ~JpegBufferRecord();
-    void* address[kMaxJpegPlane];  // mmap() address.
-    size_t length[kMaxJpegPlane];  // mmap() length.
+    void* address[kMaxJpegPlane] = {};  // mmap() address.
+    size_t length[kMaxJpegPlane] = {};  // mmap() length.
 
     // Set true during QBUF and DQBUF. |address| will be accessed by hardware.
-    bool at_device;
+    bool at_device = false;
   };
 
   // Job record. Jobs are processed in a FIFO order. This is separated from
@@ -173,13 +170,14 @@ class MEDIA_GPU_EXPORT V4L2JpegEncodeAccelerator
     void DestroyTask();
 
     base::queue<std::unique_ptr<JobRecord>> input_job_queue_;
-    base::queue<std::unique_ptr<JobRecord>> running_job_queue_;
+    base::circular_deque<std::unique_ptr<JobRecord>> running_job_queue_;
 
    private:
     // Combined the encoded data from |output_frame| with the JFIF/EXIF data.
     // Add JPEG Marks if needed. Add EXIF section by |exif_shm|.
     size_t FinalizeJpegImage(scoped_refptr<VideoFrame> output_frame,
                              size_t buffer_size,
+                             size_t max_buffer_capacity,
                              base::WritableSharedMemoryMapping exif_mapping);
 
     bool SetInputBufferFormat(gfx::Size coded_size,
@@ -238,9 +236,6 @@ class MEDIA_GPU_EXPORT V4L2JpegEncodeAccelerator
 
     // Pixel format of output buffer.
     uint32_t output_buffer_pixelformat_;
-
-    // sizeimage of output buffer.
-    uint32_t output_buffer_sizeimage_;
   };
 
   void VideoFrameReady(int32_t task_id, size_t encoded_picture_size);

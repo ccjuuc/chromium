@@ -6,6 +6,7 @@
 
 #include <string_view>
 
+#include "base/feature_list.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/data_pipe.h"
@@ -14,6 +15,7 @@
 #include "net/filter/source_stream_type.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_util.h"
+#include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
 #include "services/network/public/cpp/optional_trust_token_params.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -39,6 +41,7 @@
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
 #include "third_party/blink/renderer/platform/loader/fetch/trust_token_params_conversion.h"
 #include "third_party/blink/renderer/platform/network/encoded_form_data.h"
+#include "third_party/blink/renderer/platform/network/http_names.h"
 #include "third_party/blink/renderer/platform/network/wrapped_data_pipe_getter.h"
 
 namespace blink {
@@ -96,7 +99,6 @@ mojom::ResourceType RequestContextToResourceType(
       return mojom::ResourceType::kObject;
 
     // Ping
-    case mojom::blink::RequestContextType::ATTRIBUTION_SRC:
     case mojom::blink::RequestContextType::BEACON:
     case mojom::blink::RequestContextType::PING:
       return mojom::ResourceType::kPing;
@@ -124,6 +126,7 @@ mojom::ResourceType RequestContextToResourceType(
     case mojom::blink::RequestContextType::SPECULATION_RULES:
     case mojom::blink::RequestContextType::SUBRESOURCE:
     case mojom::blink::RequestContextType::SUBRESOURCE_WEBBUNDLE:
+    case mojom::blink::RequestContextType::TEXT:
       return mojom::ResourceType::kSubResource;
 
     // TextTrack
@@ -172,12 +175,12 @@ void PopulateResourceRequestBody(const EncodedFormData& src,
       case FormDataElement::kEncodedFile:
         if (element.file_length_ == -1) {
           dest->AppendFileRange(
-              WebStringToFilePath(element.filename_), 0,
+              StringToFilePath(element.filename_), 0,
               std::numeric_limits<uint64_t>::max(),
               element.expected_file_modification_time_.value_or(base::Time()));
         } else {
           dest->AppendFileRange(
-              WebStringToFilePath(element.filename_),
+              StringToFilePath(element.filename_),
               static_cast<uint64_t>(element.file_start_),
               static_cast<uint64_t>(element.file_length_),
               element.expected_file_modification_time_.value_or(base::Time()));
@@ -261,7 +264,19 @@ void PopulateResourceRequest(const ResourceRequestHead& src,
   dest->url = GURL(src.Url());
   dest->site_for_cookies = src.SiteForCookies();
   dest->upgrade_if_insecure = src.UpgradeIfInsecure();
-  dest->is_revalidating = src.IsRevalidating();
+  if (base::FeatureList::IsEnabled(network::features::kSafeRevalidation)) {
+    if (src.IsRevalidating()) {
+      if (!src.RevalidationEtag().IsNull()) {
+        dest->revalidation_etag = src.RevalidationEtag().Latin1();
+      }
+      if (!src.RevalidationLastModified().IsNull()) {
+        dest->revalidation_last_modified =
+            src.RevalidationLastModified().Latin1();
+      }
+    }
+  } else {
+    dest->is_revalidating = src.IsRevalidating();
+  }
   if (src.GetDevToolsAcceptedStreamTypes()) {
     dest->devtools_accepted_stream_types = std::vector<net::SourceStreamType>(
         src.GetDevToolsAcceptedStreamTypes()->data.begin(),
@@ -306,11 +321,14 @@ void PopulateResourceRequest(const ResourceRequestHead& src,
     dest->cors_exempt_headers.SetHeader(kCorsExemptRequestedWithHeaderName,
                                         src.GetRequestedWithHeader().Utf8());
   }
-  // Set Purpose header to cors_exempt_headers rather than headers to be
-  // exempted from CORS checks.
-  if (!src.GetPurposeHeader().empty()) {
-    dest->cors_exempt_headers.SetHeader(kPurposeHeaderName,
-                                        src.GetPurposeHeader().Utf8());
+  // Set Last-Event-ID header to cors_exempt_headers for EventSource.
+  // HTTP headers are Latin-1 byte strings, but the Last-Event-ID header is
+  // encoded as UTF-8.
+  // TODO(davidben): This should be captured in the type of
+  // setHTTPHeaderField's arguments.
+  if (!src.GetEventSourceLastEventId().empty()) {
+    dest->cors_exempt_headers.SetHeader("Last-Event-ID",
+                                        src.GetEventSourceLastEventId().Utf8());
   }
 
   // TODO(yhirano): Remove this WrappedResourceRequest.
@@ -354,14 +372,10 @@ void PopulateResourceRequest(const ResourceRequestHead& src,
   }
 
   dest->keepalive = src.GetKeepalive();
-  dest->browsing_topics = src.GetBrowsingTopics();
-  dest->ad_auction_headers = src.GetAdAuctionHeaders();
-  dest->shared_storage_writable_eligible =
-      src.GetSharedStorageWritableEligible();
   dest->has_user_gesture = src.HasUserGesture();
   dest->enable_load_timing = true;
   dest->enable_upload_progress = src.ReportUploadProgress();
-  dest->throttling_profile_id = src.GetDevToolsToken();
+  dest->throttling_profile_id = src.GetDevToolsThrottlingToken();
   dest->trust_token_params = ConvertTrustTokenParams(src.TrustTokenParams());
   dest->required_ip_address_space = src.GetTargetAddressSpace();
   if (src.HasFetchRetryOptions()) {
@@ -418,21 +432,13 @@ void PopulateResourceRequest(const ResourceRequestHead& src,
 
   dest->storage_access_api_status = src.GetStorageAccessApiStatus();
 
-  dest->attribution_reporting_support = src.GetAttributionReportingSupport();
-
-  dest->attribution_reporting_eligibility =
-      src.GetAttributionReportingEligibility();
-
-  dest->attribution_reporting_src_token = src.GetAttributionSrcToken();
-
   dest->keepalive_token = src.GetKeepaliveToken();
 
   dest->shared_dictionary_writer_enabled = src.SharedDictionaryWriterEnabled();
 
   dest->is_ad_tagged = src.IsAdResource();
 
-  dest->allows_device_bound_session_registration =
-      src.AllowsDeviceBoundSessionRegistration();
+  dest->allows_device_bound_sessions = src.AllowsDeviceBoundSessions();
 }
 
 }  // namespace blink

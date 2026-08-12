@@ -7,19 +7,28 @@
 
 #include <optional>
 
+#include "base/auto_reset.h"
 #include "base/memory/weak_ptr.h"
+#include "base/no_destructor.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
+#include "base/strings/string_util.h"
 #include "base/time/time.h"
+#include "base/unguessable_token.h"
+#include "content/browser/preloading/prefetch/pre_prefetch_container.h"
 #include "content/browser/preloading/prefetch/prefetch_status.h"
 #include "content/browser/preloading/prefetch/prefetch_streaming_url_loader_common_types.h"
 #include "content/browser/preloading/preload_pipeline_info_impl.h"
 #include "content/browser/preloading/preload_serving_metrics.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/prefetch_deduplication_utils.h"
 #include "content/public/browser/preloading.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "net/http/http_no_vary_search_data.h"
 #include "net/http/http_request_headers.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/devtools_observer.mojom-forward.h"
+#include "services/network/public/mojom/network_context.mojom-forward.h"
 #include "third_party/blink/public/mojom/loader/referrer.mojom.h"
 #include "url/gurl.h"
 
@@ -27,27 +36,26 @@ namespace base {
 class OneShotTimer;
 }  // namespace base
 
-namespace network::mojom {
-class CookieManager;
-}  // namespace network::mojom
-
-namespace url {
-class Origin;
-}  // namespace url
+namespace network {
+class SharedURLLoaderFactory;
+namespace mojom {
+class NetworkContext;
+}  // namespace mojom
+}  // namespace network
 
 namespace content {
 
+class AssertPrefetchContainerObserver;
+class PrefetchContainerObserver;
+class PrefetchIsolatedNetworkContext;
 class PrefetchKey;
 class PrefetchMatchResolverAction;
-class PrefetchNetworkContext;
 class PrefetchRequest;
 class PrefetchResponseReader;
 class PrefetchService;
 class PrefetchServingHandle;
-class PrefetchServingPageMetricsContainer;
 class PrefetchSingleRedirectHop;
 class PrefetchStreamingURLLoader;
-class ProxyLookupClientImpl;
 enum class PrefetchPotentialCandidateServingResult;
 enum class PrefetchProbeResult;
 enum class PrefetchServableState;
@@ -63,77 +71,66 @@ struct PrefetchResponseSizes {
   int64_t decoded_body_length;
 };
 
-// The state enum of the current prefetch, to replace `PrefetchStatus`.
-// https://crbug.com/1494771
-// Design doc for PrefetchContainer state transitions:
-// https://docs.google.com/document/d/1dK4mAVoRrgTVTGdewthI_hA8AHirgXW8k6BmpK9gnBE/edit?usp=sharing
+// The primary prefetching state of `PrefetchContainer`.
 //
-// Note that this is decoupled from `PrefetchContainer` to allow forward
-// declaration to prevent circular include.
+// The valid transitions and correspondence to
+// `PrefetchResponseReader::LoadState` are also described by the design doc
+// https://docs.google.com/document/d/1OgX1e6dbqYhXUE4_AUm3TE4g_0bC2u48QmHiJiUhGxU/edit?usp=sharing
+// and are verified by:
+// - `base::StateTransitions` in `PrefetchContainer::SetLoadState()` and
+// - `AssertPrefetchContainerObserver`.
+//
+// Note: there are related states like `request().attempt()`'s triggering
+// outcome and failure info, `PrefetchStatus` etc., but prefer using
+// `PrefetchContainerLoadState` as long as possible.
+// These other states intentionally don't directly affect
+// `PrefetchContainerLoadState` and `PrefetchResponseReader`'s servability.
+// (e.g. it can be servable even if `request().attempt()` has a failure)
+//
+// TODO(https://crbug.com/432518638): Make `PrefetchContainerLoadState` and
+// `PrefetchResponseReader::LoadState` more strictly/directly correspond and
+// verify it by adding CHECK()s.
+//
+// TODO(https://crbug.com/400761083): Always reach to `kCompleted` or `kFailed`.
+// The only remaining case is
+// `PrefetchResponseReader::LoadState::kFailedRedirect`.
 enum class PrefetchContainerLoadState {
   // --- Phase 1. [Initial state]
   kNotStarted,
 
-  // --- Phase 2. The eligibility check for the initial request has completed
-  // and `PreloadingAttempt::SetEligibility()` has been called.
+  // --- Phase 2. The eligibility check for the initial request has completed.
+  // Non-redirect `PrefetchContainer::OnEligibilityCheckComplete()` and
+  // `PreloadingAttempt::SetEligibility()` have been called.
+  // [Observer] `PrefetchContainerObserver::OnGotInitialEligibility()`.
 
-  // Found eligible.
   kEligible,
-
-  // [Final state] Found ineligible. `redirect_chain_[0].eligibility_`
-  // contains the reason for being ineligible.
+  // [Final state]
   kFailedIneligible,
 
-  // --- Phase 3. PrefetchService::StartSinglePrefetch() has been called and
-  // the holdback check has completed.
-
-  // Not heldback:
-  //
-  // On these states, refer to `PrefetchResponseReader`s for detailed
-  // prefetching state and servability.
-  //
-  // - `kStarted`: Prefetch is started.
-  // - `kDeterminedHead` or `kFailedDeterminedHead`:
-  //   `PrefetchContainer::OnDeterminedHead()` is called.
-  //   `Observer::OnDeterminedHead()` is called after transitioning to this
-  //   state. They will eventually transition to `kCompleted` or `kFailed`,
-  //   respectively (except for the cases where no state transitions occur,
-  //   which should be fixed by https://crbug.com/400761083).
-  //   TODO(https://crbug.com/400761083): Probably we should make these
-  //   `PrefetchContainer::LoadState`s directly correspond to
-  //   `PrefetchResponseReader::LoadState`s. One scenario where currently
-  //   these two `LoadState`s temporarily mismatch is: when
-  //   `PrefetchResponseReader::LoadState` transitions directly from
-  //   `kStarted` to `kFailed`, `PrefetchContainer::LoadState` transitions to
-  //   `kFailedDeterminedHead` and then immediately to `kFailed`, in order to
-  //   align `PrefetchContainer::LoadState` and
-  //   `PrefetchContainer::Observer` calls. Revisit this later.
-  // - [Final state] `kCompleted` or `kFailed`:
-  //   `PrefetchContainer::OnPrefetchComplete()` is called, and its
-  //   `PrefetchResponseReader::LoadState` is `kCompleted` or `kFailed`,
-  //   respectively.
-  //   `Observer::OnPrefetchCompletedOrFailed()` is called after transitioning
-  //   to this state.
-  //
-  // TODO(https://crbug.com/432518638): Make more strict association with
-  // `PrefetchContainer::LoadState` and `PrefetchResponseReader::LoadState`
-  // and verify it by adding CHECK()s.
-  //
-  // Also, refer to `request().attempt()` for triggering outcome and failure
-  // reasons for metrics.
-  // `PreloadingAttempt::SetFailureReason()` can be only called on this state.
-  // Note that these states of `request().attempt()` don't directly affect
-  // `PrefetchResponseReader`'s servability.
-  // (e.g. `PrefetchResponseReader::GetServableState()` can be still
-  // `kServable` even if `request().attempt()` has a failure).
-  kStarted,
-  kDeterminedHead,
-  kFailedDeterminedHead,
-  kCompleted,
-  kFailed,
+  // --- Phase 3. The holdback check has completed.
+  // `PrefetchService::StartSinglePrefetch()` has been called.
 
   // [Final state] Heldback due to `PreloadingAttempt::ShouldHoldback()`.
   kFailedHeldback,
+
+  // Prefetch is started. On or after this state:
+  // - `PrefetchContainer` has corresponding `PrefetchResponseReader`(s), and
+  //   `PrefetchContainerLoadState` and `PrefetchResponseReader::LoadState` are
+  //   aligned.
+  // - `PreloadingAttempt::SetFailureReason()` can be called.
+  kStarted,
+
+  // --- Phase 4. The non-redirect prefetch response is determined.
+  // `PrefetchContainer::OnDeterminedHead()` has been called.
+  // [Observer] `PrefetchContainerObserver::OnDeterminedHead()`.
+  kDeterminedHead,
+  kFailedDeterminedHead,
+
+  // --- Phase 5. [Final state] The prefetch completed successfully or failed.
+  // `PrefetchContainer::OnPrefetchComplete()` has been called.
+  // [Observer] `PrefetchContainerObserver::OnPrefetchCompletedOrFailed()`.
+  kCompleted,
+  kFailed,
 };
 
 // This class contains the state for a request to prefetch a specific URL.
@@ -172,64 +169,135 @@ enum class PrefetchContainerLoadState {
 // - `PrefetchService::OnGotEligibilityForRedirect()` [redirect].
 // A new `PrefetchStreamingURLLoader` is also created if needed in
 // `PrefetchService::MakePrefetchRequest()`.
-class CONTENT_EXPORT PrefetchContainer {
+//
+// Do not pass `PrefetchContainer` to outside //content using
+// `PrefetchDeduplicationEntry`.
+class CONTENT_EXPORT PrefetchContainer
+    : public content::PrefetchDeduplicationEntry {
  public:
   // In non-test, `PrefetchContainer` should be only created and owned by
   // `PrefetchService`.
   static std::unique_ptr<PrefetchContainer> Create(
       base::PassKey<PrefetchService>,
-      std::unique_ptr<const PrefetchRequest> request);
+      std::unique_ptr<const PrefetchRequest> request,
+      std::unique_ptr<PrePrefetchContainer> pre_prefetch_container);
   static std::unique_ptr<PrefetchContainer> CreateForTesting(
-      std::unique_ptr<const PrefetchRequest> request);
+      std::unique_ptr<const PrefetchRequest> request,
+      std::unique_ptr<PrePrefetchContainer> pre_prefetch_container = nullptr);
+
+  // Called when the response for |prefetch_container| has started. Based on
+  // |head|, returns a status to inform the |PrefetchStreamingURLLoader| whether
+  // the prefetch is servable. If servable, then `std::nullopt` will be
+  // returned, otherwise a failure status is returned.
+  // This is `static` just to handle `WeakPtr` check.
+  static std::optional<PrefetchErrorOnResponseReceived>
+  OnPrefetchResponseStarted(base::WeakPtr<PrefetchContainer> prefetch_container,
+                            network::mojom::URLResponseHead* head);
 
   // Use `Create*()` above.
-  PrefetchContainer(base::PassKey<PrefetchContainer>,
-                    std::unique_ptr<const PrefetchRequest> request);
+  // TODO(crbug.com/452389538): Receiving `PrefetchRequest` and
+  // `PrePrefetchContainer` whose only `PrefetchRequest` is moved out (when
+  // `PrefetchService::AddPrefetchRequestFromPrePrefetch()`) is confusing.
+  // Revisit to find a better interface.
+  PrefetchContainer(
+      base::PassKey<PrefetchContainer>,
+      std::unique_ptr<const PrefetchRequest> request,
+      std::unique_ptr<PrePrefetchContainer> pre_prefetch_container);
 
-  ~PrefetchContainer();
+  ~PrefetchContainer() override;
 
   PrefetchContainer(const PrefetchContainer&) = delete;
   PrefetchContainer& operator=(const PrefetchContainer&) = delete;
 
-  // Observer interface to listen to lifecycle events of `PrefetchContainer`.
-  //
-  // Each callback is called at most once in the lifecycle of a container.
-  //
-  // Be careful about using this. This is designed only for
-  // `PrefetchMatchResolver` and some other prefetch-internal classes.
-  class Observer : public base::CheckedObserver {
-   public:
-    // Called at the head of dtor.
-    //
-    // TODO(crbug.com/356314759): Update the description to "Called just
-    // before dtor is called."
-    virtual void OnWillBeDestroyed(PrefetchContainer& prefetch_container) = 0;
-    // Called when initial eligibility is got.
-    virtual void OnGotInitialEligibility(PrefetchContainer& prefetch_container,
-                                         PreloadingEligibility eligibility) = 0;
-    // Called if non-redirect header of prefetch response is determined, i.e.
-    // successfully received or fetch requests including redirects failed.
-    // Callers can check success/failure by `GetNonRedirectHead()`.
-    virtual void OnDeterminedHead(PrefetchContainer& prefetch_container) = 0;
-    // Called when load of prefetch completed or failed.
-    virtual void OnPrefetchCompletedOrFailed(
-        PrefetchContainer& prefetch_container,
-        const network::URLLoaderCompletionStatus& completion_status,
-        const std::optional<int>& response_code) = 0;
-  };
+  // ----------------------------------------------------------------
+  // Values that never change throughout `PrefetchContainer` lifetime.
 
-  void OnWillBeDestroyed();
+  const PrefetchRequest& request() const { return *request_; }
 
+  // Equivalent to `request().key()`.
   const PrefetchKey& key() const;
 
+  // `content::PrefetchDeduplicationEntry` overrides.
   // The initial URL that was requested to be prefetched.
-  const GURL& GetURL() const;
+  // Equivalent to `request().key().url()`.
+  const GURL& GetURL() const override;
+
+  // Equivalent to `request().no_vary_search_hint()`.
+  // Exposed for `PrefetchMatchResolver`.
+  const std::optional<net::HttpNoVarySearchData>& GetNoVarySearchHint()
+      const override;
+
+  // ----------------------------------------------------------------
+  // Values that can become non-null upon transitioning to
+  // `PrefetchContainerLoadState::kEligible` or
+  // `PrefetchContainerLoadState::kFailedIneligible`, and never change after
+  // that.
+
+  // Returns non-null if and only if after transitioning to
+  // `PrefetchContainerLoadState::kEligible` or
+  // `PrefetchContainerLoadState::kFailedIneligible`.
+  const std::optional<PreloadingEligibility>& GetInitialEligibility() const {
+    return initial_eligibility_;
+  }
+
+  // ----------------------------------------------------------------
+  // Values that can become non-null upon transitioning to
+  // `PrefetchContainerLoadState::kDeterminedHead` or
+  // `PrefetchContainerLoadState::kFailedDeterminedHead`, and never change after
+  // that.
+
+  // `GetNonRedirect*()` methods return the `PrefetchResponseReader` or
+  // `ResponseHead` of the prefetched non-redirect response, respectively, if
+  // already received its head. Ruturns nullptr otherwise.
+  // Note: These can return non-null even on
+  // `PrefetchContainerLoadState::kFailed`.
+  //
+  // More precisely, returns non-null on:
+  // - `PrefetchContainerLoadState::kDeterminedHead` (always)
+  // - `PrefetchContainerLoadState::kCompleted` (always)
+  // - `PrefetchContainerLoadState::kFailedDeterminedHead` (in some cases)
+  // - `PrefetchContainerLoadState::kFailed` (in some cases)
+  // (See also the comment of `PrefetchResponseReader::GetHead()`)
+  //
+  // Note: When `GetNonRedirect*()` methods return non-null, it always points to
+  // the final `PrefetchResponseReader` and isn't affected by
+  // https://crbug.com/432518638, because when the non-redirect response is
+  // received all redirects are already completed.
+  const PrefetchResponseReader* GetNonRedirectResponseReader() const;
+  const network::mojom::URLResponseHead* GetNonRedirectHead() const;
+
+  // Returns the HTTP response code of the non-redirect response, if received.
+  // Note that this returns the response code even on failures, e.g. when a
+  // non-2xx response is received, or the prefetch is failed after response is
+  // received. This is for the intentional usage of getting the non-2xxx
+  // response code for failed response.
+  std::optional<int> GetResponseCode() const;
+
+  // ----------------------------------------------------------------
+  // Values that can become non-null upon transitioning to
+  // `PrefetchContainerLoadState::kCompleted` or
+  // `PrefetchContainerLoadState::kFailed`, and
+  // never change after that.
+
+  // Returns the completion status. This returns non-null if and only if on
+  // `PrefetchContainerLoadState::kCompleted` or
+  // `PrefetchContainerLoadState::kFailed`.
+  const std::optional<network::URLLoaderCompletionStatus>& GetCompletionStatus()
+      const;
+
+  // ----------------------------------------------------------------
+
+  // Returns `true` if the `prefetch_container` is stale. I.e.
+  // the prefetch either is not or never will be servable to a
+  // navigation.
+  //
+  // Note: This is currently used for WebView initiated prefetches so
+  // consideration should be taken if updating the underlying implementation (or
+  // its dependencies).
+  bool IsPrefetchStale() const override;
 
   // The current URL being fetched.
   GURL GetCurrentURL() const;
-
-  // The previous URL, if this has been redirected. Invalid to call otherwise.
-  GURL GetPreviousURL() const;
 
   // Whether or not an isolated network context is required to the next
   // prefetch.
@@ -241,32 +309,20 @@ class CONTENT_EXPORT PrefetchContainer {
 
   base::WeakPtr<PrefetchResponseReader> GetResponseReaderForCurrentPrefetch();
 
-  // Whether or not the prefetch proxy would be required to fetch the given url
-  // based on |prefetch_type_|.
-  bool IsProxyRequiredForURL(const GURL& url) const;
-
   const network::ResourceRequest* GetResourceRequest() const {
     return resource_request_.get();
   }
-  void MakeResourceRequest();
-
-  // Updates |referrer_| after a redirect.
-  void UpdateReferrer(
-      const GURL& new_referrer_url,
-      const network::mojom::ReferrerPolicy& new_referrer_policy);
-
-  // Equivalent to `request().no_vary_search_hint()`.
-  // Exposed for `PrefetchMatchResolver`.
-  const std::optional<net::HttpNoVarySearchData>& GetNoVarySearchHint() const;
 
   base::WeakPtr<PrefetchContainer> GetWeakPtr() {
     return weak_method_factory_.GetWeakPtr();
   }
-
-  // Sets the time that the latest earlier prefetch unmatch happened that this
-  // prefetch could've been served to. Please see
-  // `time_prefetch_match_missed_` for more details.
-  void SetPrefetchMatchMissedTimeForMetrics(base::TimeTicks time);
+  base::WeakPtr<const PrefetchContainer> GetWeakPtr() const {
+    return weak_method_factory_.GetWeakPtr();
+  }
+  // Be cautious when using this, as this is like a const cast.
+  base::WeakPtr<PrefetchContainer> GetMutableWeakPtr() const {
+    return weak_method_factory_.GetMutableWeakPtr();
+  }
 
   // The status of the current prefetch. Note that |HasPrefetchStatus| will be
   // initially false until |SetPrefetchStatus| is called. |SetPrefetchStatus|
@@ -281,36 +337,21 @@ class CONTENT_EXPORT PrefetchContainer {
   void SetLoadState(LoadState prefetch_status);
   LoadState GetLoadState() const;
 
-  const PrefetchRequest& request() const { return *request_; }
-
-  // Controls ownership of the |ProxyLookupClientImpl| used during the
-  // eligibility check.
-  void TakeProxyLookupClient(
-      std::unique_ptr<ProxyLookupClientImpl> proxy_lookup_client);
-  std::unique_ptr<ProxyLookupClientImpl> ReleaseProxyLookupClient();
-
-  // Called when it is added to `PrefetchService::owned_prefetches_`.
-  void OnAddedToPrefetchService();
-
   // Whether or not the prefetch was determined to be eligibile.
   void OnEligibilityCheckComplete(PreloadingEligibility eligibility);
 
-  // Adds a the new URL to |redirect_chain_|.
-  void AddRedirectHop(const net::RedirectInfo& redirect_info);
+  // Adds `url` (the next URL to prefetch) to |redirect_chain_|.
+  void AddRedirectHop(const GURL& url);
 
-  void UpdateResourceRequest(const net::RedirectInfo& redirect_info);
-
-  // The length of the redirect chain for this prefetch.
-  size_t GetRedirectChainSize() const { return redirect_chain_.size(); }
+  // Performs the actual modification to `resource_request_` upon redirect.
+  void UpdateResourceRequest(
+      const net::RedirectInfo& redirect_info,
+      const network::HttpRequestHeadersUpdateParams& headers_update_params);
 
   // Whether this prefetch is a decoy. Decoy prefetches will not store the
   // response, and not serve any prefetched resources.
   void SetIsDecoy(bool is_decoy) { is_decoy_ = is_decoy; }
   bool IsDecoy() const { return is_decoy_; }
-
-  // Whether the prefetch request is cross-site/cross-origin for given origin.
-  bool IsCrossSiteRequest(const url::Origin& origin) const;
-  bool IsCrossOriginRequest(const url::Origin& origin) const;
 
   // Whether this prefetch is potentially contaminated by cross-site state.
   // If so, it may need special handling for privacy.
@@ -318,21 +359,26 @@ class CONTENT_EXPORT PrefetchContainer {
   bool IsCrossSiteContaminated() const { return is_cross_site_contaminated_; }
   void MarkCrossSiteContaminated();
 
-  // Allows for |PrefetchCookieListener|s to be reigsitered for
+  // Allows for |PrefetchCookieListener|s to be registered for
   // `GetCurrentSingleRedirectHopToPrefetch()`.
-  void RegisterCookieListener(network::mojom::CookieManager* cookie_manager);
   void PauseAllCookieListeners();
   void ResumeAllCookieListeners();
 
-  // The network context used to make network requests, copy cookies, etc. for
-  // the given `is_isolated_network_context_required`.
-  PrefetchNetworkContext* GetNetworkContext(
-      bool is_isolated_network_context_required) const;
+  // The isolated network context used to make network requests, copy cookies,
+  // etc. This is a per-`PrefetchContainer` instance that can be used for all
+  // redirect hops where needed.
+  // This returns `nullptr` when the isolated network context for `this` is not
+  // yet created.
+  PrefetchIsolatedNetworkContext* GetIsolatedNetworkContext() const;
 
-  // The network context used to make network requests for the next prefetch.
-  PrefetchNetworkContext* GetOrCreateNetworkContextForCurrentPrefetch();
+  // Creates the isolated network context.
+  PrefetchIsolatedNetworkContext* CreateIsolatedNetworkContext(
+      mojo::Remote<network::mojom::NetworkContext> isolated_network_context);
 
-  // Closes idle connections for all elements in |network_contexts_|.
+  scoped_refptr<network::SharedURLLoaderFactory>
+  GetOrCreateDefaultNetworkContextURLLoaderFactory();
+
+  // Closes idle connections for all isolated network contexts.
   void CloseIdleConnections();
 
   // Set the currently prefetching |PrefetchStreamingURLLoader|.
@@ -346,81 +392,39 @@ class CONTENT_EXPORT PrefetchContainer {
 
   bool IsStreamingURLLoaderDeletionScheduledForTesting() const;
 
-  // Returns the PrefetchResponseReader of the prefetched non-redirect response
-  // if already received its head. Ruturns nullptr otherwise.
-  const PrefetchResponseReader* GetNonRedirectResponseReader() const;
-  // Returns the head of the prefetched non-redirect response if already
-  // received. Ruturns nullptr otherwise.
-  const network::mojom::URLResponseHead* GetNonRedirectHead() const;
-
   // Clears |streaming_loader_| and cancels its loading, if any of its
-  // corresponding `PrefetchResponseReader` does NOT start serving. Currently
-  // this itself doesn't mark `this` as failed and thus can leave `this`
-  // stalled. Therefore, call this method only if `this` can be no longer used
-  // for serving, e.g. on the destructor or when
-  // `HaveDefaultContextCookiesChanged()` is true.
-  // TODO(crbug.com/40064891): For callsites outside the destructor, remove the
-  // call or mark `this` as failed, because the current behavior (== existing
-  // behavior, previously as `ResetAllStreamingURLLoaders()`) might potentially
-  // cause issues when there are multiple navigations using `this` concurrently.
+  // corresponding `PrefetchResponseReader` does NOT start serving.
+  // This sets/notifies of a failure when called outside `PrefetchContainer`
+  // dtor, so always call this asynchronously outside the dtor.
   void CancelStreamingURLLoaderIfNotServing();
-
-  // Returns whether or not this prefetch has been considered to serve for a
-  // navigation in the past. If it has, then it shouldn't be used for any future
-  // navigations.
-  bool HasPrefetchBeenConsideredToServe() const;
 
   // See `OnPrefetchResponseCompletedCallback`.
   void OnPrefetchComplete(
       bool is_success,
       const network::URLLoaderCompletionStatus& completion_status);
 
-  // Note: Even if this returns `kServable`, `CreateRequestHandler()` can still
-  // fail (returning null handler) due to final checks. See also the comment for
+  // Note: Even if `GetMatchResolverAction().ToServableState()` is `kServable`,
+  // `CreateRequestHandler()` can still fail (returning null handler) due to
+  // final checks. See also the comment for
   // `PrefetchResponseReader::CreateRequestHandler()`.
-  PrefetchServableState GetServableState(
-      base::TimeDelta cacheable_duration) const;
-  PrefetchMatchResolverAction GetMatchResolverAction(
-      base::TimeDelta cacheable_duration) const;
+  PrefetchMatchResolverAction GetMatchResolverAction() const;
 
-  // Starts blocking `PrefetchMatchResolver` until non-redirect response header
-  // is determined or timeouted. `on_maybe_determined_head_callback` will be
-  // called when
-  //
-  // - `PrefetchStreamingURLLoader` succeeded/failed to fetch non-redirect
-  //   response header.
-  // - The argument `timeout` is positive and timeouted.
-  // - `PrefetchContainer` dtor if `kPrefetchUnblockOnCancel` enabled.
-  void StartBlockUntilHead(base::OnceCallback<void(PrefetchContainer&)>
-                               on_maybe_determined_head_callback,
-                           base::TimeDelta timeout);
   // Called when non-redirect response header is determined, i.e.
   // `GetNonRedirectHead()` becomes immutable.
   //
   // This method must be called at most once in the lifecycle of
   // `PrefetchContainer`.
   void OnDeterminedHead(bool is_successful_determined_head);
-  // Unblocks waiting `PrefetchMatchResolver`.
-  //
-  // This method can be called multiple times.
-  void UnblockPrefetchMatchResolver();
 
   void StartTimeoutTimerIfNeeded(base::OnceClosure on_timeout_callback);
 
-  // Returns the time between the prefetch request was sent and the time the
-  // response headers were received. Not set if the prefetch request hasn't been
-  // sent or the response headers haven't arrived.
-  std::optional<base::TimeDelta> GetPrefetchHeaderLatency() const {
-    return header_latency_;
+  // ----------------------------------------------------------------
+  // Testing:
+
+  // Returns the container id used by test utilities.
+  const std::string& ContainerIdForTesting() const {
+    return container_id_for_testing_;
   }
-
-  // Allow for the serving page to metrics when changes to the prefetch occur.
-  void SetServingPageMetrics(base::WeakPtr<PrefetchServingPageMetricsContainer>
-                                 serving_page_metrics_container);
-  void UpdateServingPageMetrics();
-
-  // Returns request id to be used by DevTools and test utilities.
-  const std::string& RequestId() const { return request_id_; }
 
   // Simulates state transitions for:
   // - Passing eligibility check successfully (`LoadState::kEligible`),
@@ -432,10 +436,11 @@ class CONTENT_EXPORT PrefetchContainer {
   // - `SimulatePrefetchEligibleForTest()`
   // - `SimulatePrefetchStartedForTest()`
   // - `SetStreamingURLLoader()`
-  // - `SimulatePrefetchCompletedForTest()`
   void SimulatePrefetchEligibleForTest();
   void SimulatePrefetchStartedForTest();
-  void SimulatePrefetchCompletedForTest();
+  void SimulatePrefetchRedirectedForTest(
+      const GURL& redirect_url,
+      PreloadingEligibility eligibility = PreloadingEligibility::kEligible);
 
   // Simulates a prefetch container that failed at the eligibility check
   // (`LoadState::FailedIneligible`).
@@ -448,11 +453,12 @@ class CONTENT_EXPORT PrefetchContainer {
   static void SetPrefetchResponseCompletedCallbackForTesting(
       PrefetchResponseCompletedCallbackForTesting callback);
 
-  const std::optional<net::HttpNoVarySearchData>& GetNoVarySearchData() const {
+  const std::optional<net::HttpNoVarySearchData>&
+  GetNoVarySearchDataForTesting() const {
     return no_vary_search_data_;
   }
-  // Sets `no_vary_search_data_` from `GetHead()`. Exposed for tests.
-  void MaybeSetNoVarySearchData();
+
+  // ----------------------------------------------------------------
 
   // Called upon detecting a change to cookies within the redirect chain.
   //
@@ -474,11 +480,31 @@ class CONTENT_EXPORT PrefetchContainer {
 
   PrefetchServingHandle CreateServingHandle();
 
-  void AddObserver(Observer* observer);
-  void RemoveObserver(Observer* observer);
+  // Only for temporary const queries to `PrefetchServingHandle`, namely
+  // `HaveDefaultContextCookiesChanged()`.
+  std::unique_ptr<const PrefetchServingHandle> CreateConstServingHandle() const;
+
+  void AddObserver(PrefetchContainerObserver* observer);
+  void RemoveObserver(PrefetchContainerObserver* observer);
 
   bool IsExactMatch(const GURL& url) const;
   bool IsNoVarySearchHeaderMatch(const GURL& url) const;
+
+  // Returns true if this `PrefetchContainer` was constructed from a
+  // `PrePrefetchContainer`.
+  bool IsConstructedFromPrePrefetch() const;
+
+  // Returns true if both `pre_prefetch_loader_` and
+  // `pre_prefetch_loader_client_receiver_` are valid, which means the
+  // initial request can be made by `PrePrefetchContainer`.
+  bool ExistsValidPrePrefetch() const;
+
+  // Uses `pre_prefetch_loader_` and `pre_prefetch_loader_client_receiver_` to
+  // create a new `URLLoaderFactory` that returns the pre-prefetch when
+  // `CreateLoaderAndStart()` is called on the first redirect hop.
+  scoped_refptr<network::SharedURLLoaderFactory>
+  CreatePrePrefetchURLLoaderFactory();
+
   // Checks that the URL matches to the NoVarySearch hint with a precondition.
   //
   // The precondition is that a non redirect header is not received, as
@@ -539,12 +565,6 @@ class CONTENT_EXPORT PrefetchContainer {
   // Handles loader related events. Currently used for DevTools and metrics.
   void NotifyPrefetchRequestWillBeSent(
       const network::mojom::URLResponseHeadPtr* redirect_head);
-  void NotifyPrefetchResponseReceived(
-      const network::mojom::URLResponseHead& head);
-  void NotifyPrefetchRequestComplete(
-      const network::URLLoaderCompletionStatus& completion_status);
-  std::optional<mojo::PendingRemote<network::mojom::DevToolsObserver>>
-  MakeSelfOwnedNetworkServiceDevToolsObserver();
 
   bool is_in_dtor() const { return is_in_dtor_; }
 
@@ -564,16 +584,25 @@ class CONTENT_EXPORT PrefetchContainer {
       base::PassKey<PrefetchServingHandle>,
       PrefetchStatus prefetch_status);
 
+  // ----------------------------------------------------------------
+  // Metrics:
+
+  // Sets the time that the latest earlier prefetch unmatch happened that this
+  // prefetch could've been served to. Please see
+  // `time_prefetch_match_missed_` for more details.
+  void SetPrefetchMatchMissedTimeForMetrics(base::TimeTicks time);
+
+
   const PrefetchContainerMetrics& GetPrefetchContainerMetrics() const {
     return prefetch_container_metrics_;
   }
 
   bool HasPreloadPipelineInfoForMetrics(const PreloadPipelineInfo& other) const;
 
- protected:
-  // Updates metrics based on the result of the prefetch request.
-  void UpdatePrefetchRequestMetrics(
-      const network::mojom::URLResponseHead* head);
+  // TODO(crbug.com/532560786): Remove it if `CHECK` is removed.
+  bool during_observer_notification() const {
+    return during_observer_notification_;
+  }
 
  private:
   // Update |prefetch_status_| and report prefetch status to
@@ -589,20 +618,24 @@ class CONTENT_EXPORT PrefetchContainer {
   void SetTriggeringOutcomeAndFailureReasonFromStatus(
       PrefetchStatus new_prefetch_status);
 
-  // Returns if WebContents-level UA overrides should be applied for a prefetch
-  // request for `request_url`. Note that not only the User-Agent header but
-  // also Client-Hints headers are affected by the UA overrides.
-  // The returned value is for an initial guess and shouldn't be used without a
-  // plan for the header validation (crbug.com/444065296).
-  bool ShouldApplyUserAgentOverride(const GURL& request_url) const;
-  // Adds the User-Agent header by UA override if applicable.
-  void MaybeApplyOverrideForUserAgentHeader(
-      network::ResourceRequest& resource_request);
-  // Adds client hints headers to a request bound for |origin|.
-  void AddClientHintsHeaders(const url::Origin& origin,
-                             net::HttpRequestHeaders* request_headers);
-  // Adds X-Client-Data request header to a request.
-  void AddXClientDataHeader(network::ResourceRequest& request);
+  template <typename Method, typename... Args>
+  void NotifyObservers(Method method, const Args&... args) {
+    base::AutoReset<bool> auto_reset(&during_observer_notification_, true);
+    observers_.Notify(method, *this, args...);
+  }
+
+  // ----------------------------------------------------------------
+  // Prefetching:
+
+  // The previous URL, if this has been redirected. Invalid to call otherwise.
+  GURL GetPreviousURL() const;
+
+  // Returns the devtools request id that should be set to resource request
+  // during `OnPrefetchStarted()`.
+  // Note that this is also called via
+  // `SetPrefetchStatusWithoutUpdatingTriggeringOutcome()`, where resource
+  // request might not yet created.
+  const std::string& GetDevtoolsRequestId() const;
 
   // Returns the `PrefetchSingleRedirectHop` to be prefetched next.
   // This is the last element in `redirect_chain_`, because, during prefetching
@@ -616,13 +649,20 @@ class CONTENT_EXPORT PrefetchContainer {
   const PrefetchSingleRedirectHop& GetPreviousSingleRedirectHopToPrefetch()
       const;
 
-  // Returns "Sec-Purpose" header value for a prefetch request to `request_url`.
-  const char* GetSecPurposeHeaderValue(const GURL& request_url) const;
+  std::optional<PrefetchErrorOnResponseReceived>
+  OnPrefetchResponseStartedInternal(network::mojom::URLResponseHead* head);
 
-  // Called when a prefetch request could not be started because of eligibility
-  // reasons. Should only be called for the initial prefetch request and not
-  // redirects.
-  void OnInitialPrefetchFailedIneligible(PreloadingEligibility eligibility);
+  // Should be called only from `OnPrefetchComplete()`, so that
+  // `OnPrefetchCompletedOrFailed()` is always called after
+  // `OnPrefetchCompleteInternal()`.
+  void OnPrefetchCompleteInternal();
+
+  void NotifyPrefetchResponseReceived(
+      const network::mojom::URLResponseHead& head);
+  void NotifyPrefetchRequestComplete();
+
+  // ----------------------------------------------------------------
+  // Metrics:
 
   std::string GetMetricsSuffix() const;
 
@@ -655,14 +695,6 @@ class CONTENT_EXPORT PrefetchContainer {
   void RecordPrefetchPotentialCandidateServingResultHistogram(
       PrefetchPotentialCandidateServingResult matching_result);
 
-  // Should be called only from `OnPrefetchComplete()`, so that
-  // `OnPrefetchCompletedOrFailed()` is always called after
-  // `OnPrefetchCompleteInternal()`.
-  void OnPrefetchCompleteInternal(
-      const network::URLLoaderCompletionStatus& completion_status);
-
-  PrefetchServableState GetServableStateInternal(
-      base::TimeDelta cacheable_duration) const;
 
   // The prefetch request parameters of the very first initiator/requester of
   // this prefetch at the time of request creation.
@@ -672,16 +704,27 @@ class CONTENT_EXPORT PrefetchContainer {
   // `PrefetchContainer` members outside `request_`.
   const std::unique_ptr<const PrefetchRequest> request_;
 
+  // True if this `PrefetchContainer` was constructed from a
+  // `PrePrefetchContainer`.
+  const bool is_constructed_from_pre_prefetch_ = false;
+
   PrefetchServiceWorkerState service_worker_state_ =
       PrefetchServiceWorkerState::kAllowed;
 
-  // The referrer to use for the request. This is updated through redirects.
-  blink::mojom::Referrer referrer_;
-
-  // Information about the current prefetch request. Updated when a redirect is
-  // encountered, whether or not the direct can be processed by the same URL
-  // loader or requires the instantiation of a new loader.
+  // The `ResourceRequest` for the current prefetch request.
+  // This is initially set in `OnPrefetchStarted()`, which is called from
+  // `PrefetchService` when Prefetch is dequeued and its request is actually
+  // started.
+  // - For normal prefetches, this is created from `PrefetchRequest`.
+  // - For PrePrefetch-initiated prefetches, this is passed from ctor.
+  // This is updated upon redirects, regardless of whether the redirect is
+  // handled by the same URL loader or requires a new loader.
   std::unique_ptr<network::ResourceRequest> resource_request_;
+
+  // ResourceRequest that was used for `PrePrefetch`. This should eventually be
+  // moved to `resource_request_` when the initial resource request after the
+  // validation succeeds.
+  std::unique_ptr<network::ResourceRequest> resource_request_for_pre_prefetch_;
 
   // The No-Vary-Search response data, parsed from the actual response header
   // (`GetHead()`).
@@ -703,10 +746,6 @@ class CONTENT_EXPORT PrefetchContainer {
   // The current status of the prefetch.
   LoadState load_state_ = LoadState::kNotStarted;
 
-  // Looks up the proxy settings in the default network context all URLs in
-  // |redirect_chain_|.
-  std::unique_ptr<ProxyLookupClientImpl> proxy_lookup_client_;
-
   // Whether this prefetch is a decoy or not. If the prefetch is a decoy then
   // any prefetched resources will not be served.
   bool is_decoy_ = false;
@@ -714,10 +753,23 @@ class CONTENT_EXPORT PrefetchContainer {
   // The redirect chain resulting from prefetching |GetURL()|.
   std::vector<std::unique_ptr<PrefetchSingleRedirectHop>> redirect_chain_;
 
-  // The network contexts used for this prefetch. They key corresponds to the
-  // |is_isolated_network_context_required| param of the
-  // |PrefetchNetworkContext|.
-  std::map<bool, std::unique_ptr<PrefetchNetworkContext>> network_contexts_;
+  // The eligibility for the initial request. This is not placed in
+  // `redirect_chain_[0]` to avoid the dependencies from
+  // https://crbug.com/432518638.
+  std::optional<PreloadingEligibility> initial_eligibility_;
+
+  // The completion status of prefetch. This is non-null if and only if on
+  // `PrefetchContainerLoadState::kCompleted` or
+  // `PrefetchContainerLoadState::kFailed`.
+  // TODO(crbug.com/432518638): Refer to the last
+  // `PrefetchResponseReader::completion_status_`. Currently failed completion
+  // can happen on non-last `PrefetchResponseReader`.
+  std::optional<network::URLLoaderCompletionStatus> completion_status_;
+
+  // The network contexts used for this prefetch.
+  scoped_refptr<network::SharedURLLoaderFactory>
+      default_network_context_url_loader_factory_;
+  std::unique_ptr<PrefetchIsolatedNetworkContext> isolated_network_context_;
 
   // The currently prefetching streaming URL loader, prefetching the last
   // element of `redirect_chain_`. Multiple streaming URL loaders can be used in
@@ -728,8 +780,14 @@ class CONTENT_EXPORT PrefetchContainer {
   // `PrefetchStreamingURLLoader` is set here.
   base::WeakPtr<PrefetchStreamingURLLoader> streaming_loader_;
 
-  // The amount of time it took for the headers to be received.
-  std::optional<base::TimeDelta> header_latency_;
+  // The URLLoader and URLLoaderClient created when PrePrefetch.
+  // This should be moved from `PrePrefetchContainer` when `this` ctor, and
+  // connected to PrefetchStreamingURLLoader when starting Prefetch.
+  // It should be consumed after `CreatePrePrefetchURLLoaderFactory()`.
+  mojo::PendingRemote<network::mojom::URLLoader> pre_prefetch_loader_;
+  mojo::PendingReceiver<network::mojom::URLLoaderClient>
+      pre_prefetch_loader_client_receiver_;
+
 
   // Counts how many times this container has been served to the navigation.
   // Only used for the metrics.
@@ -743,13 +801,9 @@ class CONTENT_EXPORT PrefetchContainer {
   // inferences about this logic less practical.
   bool is_cross_site_contaminated_ = false;
 
-  // Reference to metrics related to the page that considered using this
-  // prefetch.
-  base::WeakPtr<PrefetchServingPageMetricsContainer>
-      serving_page_metrics_container_;
 
-  // Request identifier used by DevTools and test utilities.
-  std::string request_id_;
+  // Container id used by test utilities.
+  const std::string container_id_for_testing_;
 
   // Information of preload pipeline that this prefetch belongs/is related to.
   //
@@ -790,7 +844,15 @@ class CONTENT_EXPORT PrefetchContainer {
   // True iff the destructor was called.
   bool is_in_dtor_ = false;
 
-  base::ObserverList<Observer> observers_;
+  // True during notifying `observers_`.
+  // This is used to `DUMP_WILL_BE_CHECK()` the disallowed operations during
+  // `PrefetchContainerObserver` callbacks. Theoretically there can still be
+  // violating corner cases, so `DUMP_WILL_BE_CHECK()` is used, to first monitor
+  // if there are actual violations in the wild.
+  bool during_observer_notification_ = false;
+
+  base::ObserverList<PrefetchContainerObserver> observers_{
+      base::ObserverListPolicy::EXISTING_ONLY};
 
   bool is_likely_ahead_of_prerender_ = false;
 
@@ -801,6 +863,8 @@ class CONTENT_EXPORT PrefetchContainer {
   std::optional<base::TimeTicks> time_prefetch_match_missed_;
 
   PrefetchContainerMetrics prefetch_container_metrics_;
+
+  std::unique_ptr<AssertPrefetchContainerObserver> assert_observer_;
 
   base::WeakPtrFactory<PrefetchContainer> weak_method_factory_{this};
 };

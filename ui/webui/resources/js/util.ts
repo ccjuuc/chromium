@@ -74,7 +74,7 @@ export function appendParam(url: string, key: string, value: string): string {
  *     transitionDuration style value.
  */
 export function ensureTransitionEndEvent(
-    el: HTMLElement, timeOut: number): void {
+    el: HTMLElement, timeOut?: number): void {
   if (timeOut === undefined) {
     const style = getComputedStyle(el);
     timeOut = parseFloat(style.transitionDuration) * 1000;
@@ -128,7 +128,7 @@ export function quoteString(str: string): string {
  */
 export function listenOnce(
     target: EventTarget, eventNames: string[]|string,
-    callback: (e: Event) => any) {
+    callback: (e: Event) => void) {
   const eventNamesArray: string[] =
       Array.isArray(eventNames) ? eventNames : eventNames.split(/ +/);
 
@@ -148,7 +148,7 @@ export function listenOnce(
  * @return Whether a modifier key was down when processing |e|.
  */
 export function hasKeyModifiers(e: KeyboardEvent): boolean {
-  return !!(e.altKey || e.ctrlKey || e.metaKey || e.shiftKey);
+  return e.altKey || e.ctrlKey || e.metaKey || e.shiftKey;
 }
 
 /**

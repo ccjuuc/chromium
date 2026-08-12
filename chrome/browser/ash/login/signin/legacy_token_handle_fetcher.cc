@@ -10,10 +10,9 @@
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/no_destructor.h"
 #include "base/values.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part_ash.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/webui/signin/ash/signin_helper.h"
@@ -44,8 +43,9 @@ class LegacyTokenHandleFetcherShutdownNotifierFactory
     : public BrowserContextKeyedServiceShutdownNotifierFactory {
  public:
   static LegacyTokenHandleFetcherShutdownNotifierFactory* GetInstance() {
-    return base::Singleton<
-        LegacyTokenHandleFetcherShutdownNotifierFactory>::get();
+    static base::NoDestructor<LegacyTokenHandleFetcherShutdownNotifierFactory>
+        instance;
+    return instance.get();
   }
 
   LegacyTokenHandleFetcherShutdownNotifierFactory(
@@ -54,8 +54,7 @@ class LegacyTokenHandleFetcherShutdownNotifierFactory
       const LegacyTokenHandleFetcherShutdownNotifierFactory&) = delete;
 
  private:
-  friend struct base::DefaultSingletonTraits<
-      LegacyTokenHandleFetcherShutdownNotifierFactory>;
+  friend base::NoDestructor<LegacyTokenHandleFetcherShutdownNotifierFactory>;
 
   LegacyTokenHandleFetcherShutdownNotifierFactory()
       : BrowserContextKeyedServiceShutdownNotifierFactory(
@@ -66,9 +65,8 @@ class LegacyTokenHandleFetcherShutdownNotifierFactory
 };
 
 account_manager::AccountManager* GetAccountManager(Profile* profile) {
-  return g_browser_process->platform_part()
-      ->GetAccountManagerFactory()
-      ->GetAccountManager(profile->GetPath().value());
+  return AccountManagerFactory::Get()->GetAccountManager(
+      profile->GetPath().value());
 }
 
 }  // namespace
@@ -172,7 +170,7 @@ void LegacyTokenHandleFetcher::OnNetworkError(int response_code) {
 }
 
 void LegacyTokenHandleFetcher::OnGetTokenInfoResponse(
-    const base::Value::Dict& token_info) {
+    const base::DictValue& token_info) {
   bool success = false;
   if (!token_info.Find("error")) {
     const std::string* handle = token_info.FindString("token_handle");
@@ -209,7 +207,7 @@ void LegacyTokenHandleFetcher::OnGetTokenHash(
     const std::string& token,
     const std::string& account_manager_stored_hash) {
   PrefService* prefs = profile_->GetPrefs();
-  const base::Value::Dict& token_handle_map = prefs->GetDict(kTokenHandleMap);
+  const base::DictValue& token_handle_map = prefs->GetDict(kTokenHandleMap);
   const std::string* pref_stored_hash_val = token_handle_map.FindString(token);
   if (!pref_stored_hash_val) {
     return;

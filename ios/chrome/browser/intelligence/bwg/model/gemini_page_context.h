@@ -11,8 +11,8 @@
 #import <memory>
 
 namespace ios::provider {
-enum class BWGPageContextComputationState;
-enum class BWGPageContextAttachmentState;
+enum class GeminiPageContextComputationState;
+enum class GeminiPageContextAttachmentState;
 }  // namespace ios::provider
 
 namespace optimization_guide::proto {
@@ -21,19 +21,19 @@ class PageContext;
 
 @interface GeminiPageContext : NSObject
 
-// The PageContext for the current WebState. This is a unique_ptr, so subsequent
-// calls to the getter will return a nullptr.
+// The PageContext for the current WebState. Accessing this property returns
+// a copy of the underlying proto, so the context is preserved for future use.
 @property(nonatomic, assign)
     std::unique_ptr<optimization_guide::proto::PageContext>
         uniquePageContext;
 
-// The state of the BWG PageContext computation.
-@property(nonatomic, assign) ios::provider::BWGPageContextComputationState
-    BWGPageContextComputationState;
+// The state of the Gemini PageContext computation.
+@property(nonatomic, assign) ios::provider::GeminiPageContextComputationState
+    geminiPageContextComputationState;
 
 // The state of the BWG PageContext attachment.
-@property(nonatomic, assign)
-    ios::provider::BWGPageContextAttachmentState BWGPageContextAttachmentState;
+@property(nonatomic, assign) ios::provider::GeminiPageContextAttachmentState
+    geminiPageContextAttachmentState;
 
 // The favicon of the attached page. Uses a default icon if it's unavailable.
 @property(nonatomic, strong) UIImage* favicon;

@@ -113,10 +113,6 @@
 #include "chrome/browser/ash/lobster/lobster_service_provider.h"
 #include "chrome/browser/ash/login/lock/screen_locker.h"
 #include "chrome/browser/ash/login/wizard_context.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_installer.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_installer_factory.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_pref_names.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
 #include "chrome/browser/ash/power/ml/smart_dim/ml_agent.h"
@@ -131,10 +127,8 @@
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/component_updater/smart_dim_component_installer.h"
 #include "chrome/browser/extensions/component_loader.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/policy/chrome_policy_conversions_client.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/ash/holding_space/holding_space_keyed_service.h"
 #include "chrome/browser/ui/ash/holding_space/holding_space_keyed_service_factory.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
@@ -145,7 +139,6 @@
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/views/bruschetta/bruschetta_installer_view.h"
 #include "chrome/browser/ui/views/crostini/crostini_uninstaller_view.h"
-#include "chrome/browser/ui/views/plugin_vm/plugin_vm_installer_view.h"
 #include "chrome/browser/ui/web_applications/web_app_dialogs.h"
 #include "chrome/browser/ui/webui/ash/crostini_installer/crostini_installer_dialog.h"
 #include "chrome/browser/ui/webui/ash/crostini_installer/crostini_installer_ui.h"
@@ -153,12 +146,14 @@
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/common/extensions/api/autotest_private.h"
 #include "chrome/common/pref_names.h"
+#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/components/default_pinned_apps/default_pinned_apps.h"
 #include "chromeos/ash/components/metrics/login_event_recorder.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
+#include "chromeos/ash/components/signin/identity_manager_provider.h"
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "chromeos/ash/experiences/arc/metrics/arc_metrics_constants.h"
 #include "chromeos/ash/experiences/arc/mojom/power.mojom.h"
@@ -212,6 +207,7 @@
 #include "extensions/browser/extension_util.h"
 #include "extensions/common/api/extension_action/action_info.h"
 #include "extensions/common/manifest_handlers/background_info.h"
+#include "extensions/common/manifest_handlers/description_info.h"
 #include "extensions/common/manifest_handlers/options_page_info.h"
 #include "extensions/common/permissions/api_permission_set.h"
 #include "extensions/common/permissions/permission_set.h"
@@ -266,10 +262,8 @@ using chromeos::PrinterClass;
 
 // Features used for testing `isFeatureEnabled`.
 BASE_FEATURE(kEnabledFeatureForTest,
-             "EnabledFeatureForTest",
              base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kDisabledFeatureForTest,
-             "DisabledFeatureForTest",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 constexpr char kCrostiniNotAvailableForCurrentUserError[] =
@@ -279,8 +273,7 @@ NOINLINE int AccessArray(const int arr[], const int* index) {
   return UNSAFE_TODO(arr[*index]);
 }
 
-base::Value::List GetHostPermissions(const Extension* ext,
-                                     bool effective_perm) {
+base::ListValue GetHostPermissions(const Extension* ext, bool effective_perm) {
   const PermissionsData* permissions_data = ext->permissions_data();
 
   const URLPatternSet* pattern_set = nullptr;
@@ -292,7 +285,7 @@ base::Value::List GetHostPermissions(const Extension* ext,
     pattern_set = &permissions_data->active_permissions().explicit_hosts();
   }
 
-  base::Value::List permissions;
+  base::ListValue permissions;
   for (const auto& perm : *pattern_set) {
     permissions.Append(perm.GetAsString());
   }
@@ -300,8 +293,8 @@ base::Value::List GetHostPermissions(const Extension* ext,
   return permissions;
 }
 
-base::Value::List GetAPIPermissions(const Extension* ext) {
-  base::Value::List permissions;
+base::ListValue GetAPIPermissions(const Extension* ext) {
+  base::ListValue permissions;
   std::set<std::string> perm_list =
       ext->permissions_data()->active_permissions().GetAPIsAsStrings();
   for (const auto& perm : perm_list) {
@@ -333,9 +326,9 @@ std::string ConvertToString(message_center::NotificationType type) {
   return "unknown";
 }
 
-base::Value::Dict MakeDictionaryFromNotification(
+base::DictValue MakeDictionaryFromNotification(
     const message_center::Notification& notification) {
-  return base::Value::Dict()
+  return base::DictValue()
       .Set("id", notification.id())
       .Set("type", ConvertToString(notification.type()))
       .Set("title", notification.title())
@@ -531,7 +524,7 @@ std::string SetAllowedPref(Profile* profile,
                            const base::Value& value) {
   // Special case for the preference that is stored in the "Local State"
   // profile.
-  if (pref_name == prefs::kEnableAdbSideloadingRequested) {
+  if (pref_name == arc::prefs::kEnableAdbSideloadingRequested) {
     DCHECK(value.is_bool());
     g_browser_process->local_state()->Set(pref_name, value);
     return std::string();
@@ -552,18 +545,12 @@ std::string SetAllowedPref(Profile* profile,
     DCHECK(value.is_bool());
   } else if (pref_name == ash::prefs::kAccessibilityVirtualKeyboardEnabled) {
     DCHECK(value.is_bool());
-  } else if (pref_name == prefs::kDocumentScanAPITrustedExtensions) {
+  } else if (pref_name == ash::prefs::kDocumentScanAPITrustedExtensions) {
     DCHECK(value.is_list());
   } else if (pref_name == ash::prefs::kEnableAutoScreenLock) {
     DCHECK(value.is_bool());
-  } else if (pref_name == prefs::kLanguagePreloadEngines) {
+  } else if (pref_name == ash::prefs::kLanguagePreloadEngines) {
     DCHECK(value.is_string());
-  } else if (pref_name == plugin_vm::prefs::kPluginVmCameraAllowed) {
-    DCHECK(value.is_bool());
-  } else if (pref_name == plugin_vm::prefs::kPluginVmMicAllowed) {
-    DCHECK(value.is_bool());
-  } else if (pref_name == plugin_vm::prefs::kPluginVmDataCollectionAllowed) {
-    DCHECK(value.is_bool());
   } else if (pref_name == prefs::kPrintingAPIExtensionsAllowlist) {
     DCHECK(value.is_list());
   } else if (pref_name == quick_answers::prefs::kQuickAnswersEnabled) {
@@ -998,7 +985,7 @@ void ForwardFrameRateDataAndReset(
 
   // Moves the callback out and erases the mapping first to allow new tracking
   // for |display_id| to start before |callback| run returns.
-  // See https://crbug.com/1098886.
+  // See https://crbug.com/40702167.
   auto callback = it->second->TakeCallback();
   DCHECK(callback);
   trackers->erase(it);
@@ -1305,7 +1292,7 @@ AutotestPrivateLogoutFunction::~AutotestPrivateLogoutFunction() = default;
 ExtensionFunction::ResponseAction AutotestPrivateLogoutFunction::Run() {
   DVLOG(1) << "AutotestPrivateLogoutFunction";
   if (!IsTestMode(browser_context())) {
-    chrome::AttemptUserExit();
+    session_manager::SessionManager::Get()->RequestSignOut();
   }
   return RespondNow(NoArguments());
 }
@@ -1319,7 +1306,7 @@ AutotestPrivateRestartFunction::~AutotestPrivateRestartFunction() = default;
 ExtensionFunction::ResponseAction AutotestPrivateRestartFunction::Run() {
   DVLOG(1) << "AutotestPrivateRestartFunction";
   if (!IsTestMode(browser_context())) {
-    chrome::AttemptRestart();
+    session_manager::SessionManager::Get()->RequestRestart();
   }
   return RespondNow(NoArguments());
 }
@@ -1337,7 +1324,7 @@ ExtensionFunction::ResponseAction AutotestPrivateShutdownFunction::Run() {
   DVLOG(1) << "AutotestPrivateShutdownFunction " << params->force;
 
   if (!IsTestMode(browser_context())) {
-    chrome::AttemptExit();
+    session_manager::SessionManager::Get()->RequestSignOut();
   }
   return RespondNow(NoArguments());
 }
@@ -1351,7 +1338,7 @@ AutotestPrivateLoginStatusFunction::~AutotestPrivateLoginStatusFunction() =
 
 ExtensionFunction::ResponseAction AutotestPrivateLoginStatusFunction::Run() {
   DVLOG(1) << "AutotestPrivateLoginStatusFunction";
-  base::Value::Dict result;
+  base::DictValue result;
   const user_manager::UserManager* user_manager =
       user_manager::UserManager::Get();
 
@@ -1472,7 +1459,7 @@ ExtensionFunction::ResponseAction
 AutotestPrivateGetAllEnterprisePoliciesFunction::Run() {
   DVLOG(1) << "AutotestPrivateGetAllEnterprisePoliciesFunction";
 
-  base::Value::Dict all_policies_dict =
+  base::DictValue all_policies_dict =
       policy::PolicyConversions(
           std::make_unique<policy::ChromePolicyConversionsClient>(
               browser_context()))
@@ -1558,7 +1545,7 @@ AutotestPrivateGetExtensionsInfoFunction::Run() {
   ExtensionActionManager* extension_action_manager =
       ExtensionActionManager::Get(browser_context());
 
-  base::Value::List extensions_values;
+  base::ListValue extensions_values;
   ExtensionList all;
   all.insert(all.end(), extensions.begin(), extensions.end());
   all.insert(all.end(), disabled_extensions.begin(), disabled_extensions.end());
@@ -1570,12 +1557,12 @@ AutotestPrivateGetExtensionsInfoFunction::Run() {
         extension_action_manager->GetExtensionAction(*extension);
 
     extensions_values.Append(
-        base::Value::Dict()
+        base::DictValue()
             .Set("id", id)
             .Set("version", extension->VersionString())
             .Set("name", extension->name())
             .Set("publicKey", extension->public_key())
-            .Set("description", extension->description())
+            .Set("description", DescriptionInfo::GetDescription(*extension))
             .Set("backgroundUrl",
                  BackgroundInfo::GetBackgroundURL(extension).spec())
             .Set("optionsUrl",
@@ -1597,7 +1584,7 @@ AutotestPrivateGetExtensionsInfoFunction::Run() {
   }
 
   return RespondNow(WithArguments(
-      base::Value::Dict().Set("extensions", std::move(extensions_values))));
+      base::DictValue().Set("extensions", std::move(extensions_values))));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1781,7 +1768,7 @@ AutotestPrivateGetVisibleNotificationsFunction::Run() {
 
   message_center::NotificationList::Notifications notification_set =
       message_center::MessageCenter::Get()->GetVisibleNotifications();
-  base::Value::List values;
+  base::ListValue values;
   for (message_center::Notification* notification : notification_set) {
     values.Append(MakeDictionaryFromNotification(*notification));
   }
@@ -1998,7 +1985,7 @@ ExtensionFunction::ResponseAction AutotestPrivateGetArcAppFunction::Run() {
   }
 
   return RespondNow(WithArguments(
-      base::Value::Dict()
+      base::DictValue()
           .Set("name", std::move(app_info->name))
           .Set("packageName", std::move(app_info->package_name))
           .Set("activity", std::move(app_info->activity))
@@ -2084,7 +2071,7 @@ ExtensionFunction::ResponseAction AutotestPrivateGetArcPackageFunction::Run() {
     return RespondNow(Error("ARC is not available"));
   }
 
-  base::Value::Dict package_value;
+  base::DictValue package_value;
   {
     const std::unique_ptr<ArcAppListPrefs::PackageInfo> package_info =
         prefs->GetPackage(params->package_name);
@@ -2393,15 +2380,21 @@ AutotestPrivateGetClipboardTextDataFunction::
 
 ExtensionFunction::ResponseAction
 AutotestPrivateGetClipboardTextDataFunction::Run() {
-  std::u16string data;
   // This clipboard data read is initiated an extension API, then the user
   // shouldn't see a notification if the clipboard is restricted by the rules of
   // data leak prevention policy.
   ui::DataTransferEndpoint data_dst = ui::DataTransferEndpoint(
       ui::EndpointType::kDefault, {.notify_if_restricted = false});
   ui::Clipboard::GetForCurrentThread()->ReadText(
-      ui::ClipboardBuffer::kCopyPaste, &data_dst, &data);
-  return RespondNow(WithArguments(data));
+      ui::ClipboardBuffer::kCopyPaste, std::move(data_dst),
+      base::BindOnce(&AutotestPrivateGetClipboardTextDataFunction::OnTextRead,
+                     this));
+  return RespondLater();
+}
+
+void AutotestPrivateGetClipboardTextDataFunction::OnTextRead(
+    std::u16string data) {
+  Respond(WithArguments(data));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -2673,45 +2666,6 @@ void AutotestPrivateImportCrostiniFunction::CrostiniImported(
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// AutotestPrivateSetPluginVMPolicyFunction
-///////////////////////////////////////////////////////////////////////////////
-
-AutotestPrivateSetPluginVMPolicyFunction::
-    ~AutotestPrivateSetPluginVMPolicyFunction() = default;
-
-ExtensionFunction::ResponseAction
-AutotestPrivateSetPluginVMPolicyFunction::Run() {
-  std::optional<api::autotest_private::SetPluginVMPolicy::Params> params =
-      api::autotest_private::SetPluginVMPolicy::Params::Create(args());
-  EXTENSION_FUNCTION_VALIDATE(params);
-  DVLOG(1) << "AutotestPrivateSetPluginVMPolicyFunction " << params->image_url
-           << ", " << params->image_hash << ", " << params->license_key;
-
-  Profile* profile = Profile::FromBrowserContext(browser_context());
-  plugin_vm::SetFakePluginVmPolicy(profile, params->image_url,
-                                   params->image_hash, params->license_key);
-
-  return RespondNow(NoArguments());
-}
-
-///////////////////////////////////////////////////////////////////////////////
-// AutotestPrivateShowPluginVMInstallerFunction
-///////////////////////////////////////////////////////////////////////////////
-
-AutotestPrivateShowPluginVMInstallerFunction::
-    ~AutotestPrivateShowPluginVMInstallerFunction() = default;
-
-ExtensionFunction::ResponseAction
-AutotestPrivateShowPluginVMInstallerFunction::Run() {
-  DVLOG(1) << "AutotestPrivateShowPluginVMInstallerFunction";
-
-  Profile* profile = Profile::FromBrowserContext(browser_context());
-  plugin_vm::ShowPluginVmInstallerView(profile);
-
-  return RespondNow(NoArguments());
-}
-
-///////////////////////////////////////////////////////////////////////////////
 // AutotestPrivateInstallBorealisFunction
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -2817,7 +2771,7 @@ ExtensionFunction::ResponseAction AutotestPrivateTakeScreenshotFunction::Run() {
   DVLOG(1) << "AutotestPrivateTakeScreenshotFunction";
   auto grabber = std::make_unique<ui::ScreenshotGrabber>();
   auto* const grabber_ptr = grabber.get();
-  // TODO(mash): Fix for mash, http://crbug.com/557397
+  // TODO(mash): Fix for mash, http://crbug.com/40445154
   aura::Window* primary_root = ash::Shell::GetPrimaryRootWindow();
   // Pass the ScreenshotGrabber to the callback so that it stays alive for the
   // duration of the operation, it'll then get deallocated when the callback
@@ -2971,7 +2925,7 @@ void AutotestPrivateGetPrinterListFunction::OnEnterprisePrintersInitialized() {
     std::vector<chromeos::Printer> printer_list =
         printers_manager_->GetPrinters(type);
     for (const auto& printer : printer_list) {
-      results_.Append(base::Value::Dict()
+      results_.Append(base::DictValue()
                           .Set("printerName", printer.display_name())
                           .Set("printerId", printer.id())
                           .Set("printerType", GetPrinterType(type)));
@@ -4333,7 +4287,8 @@ class AutotestPrivateInstallPWAForCurrentURLFunction::PWAInstallManagerObserver
 AutotestPrivateInstallPWAForCurrentURLFunction::
     AutotestPrivateInstallPWAForCurrentURLFunction()
     : auto_accept_pwa_install_confirmation_(
-          web_app::SetAutoAcceptPWAInstallConfirmationForTesting()) {}
+          web_app::SetPwaInstallationAutoRespondForTesting(  // IN-TEST
+              web_app::InstallDialogTestResponse::kAcceptAndLaunch)) {}
 AutotestPrivateInstallPWAForCurrentURLFunction::
     ~AutotestPrivateInstallPWAForCurrentURLFunction() = default;
 
@@ -4352,7 +4307,7 @@ AutotestPrivateInstallPWAForCurrentURLFunction::Run() {
   content::WebContents* web_contents = browser->GetActiveWebContents();
 
   webapps::AppBannerManager* app_banner_manager =
-      webapps::AppBannerManagerDesktop::FromWebContents(web_contents);
+      webapps::AppBannerManager::FromWebContents(web_contents);
   if (!app_banner_manager) {
     return RespondNow(Error("Failed to create AppBannerManager"));
   }
@@ -4622,12 +4577,12 @@ AutotestPrivateGetDesksInfoFunction::~AutotestPrivateGetDesksInfoFunction() =
 ExtensionFunction::ResponseAction AutotestPrivateGetDesksInfoFunction::Run() {
   ash::AutotestDesksApi::DesksInfo desks_info =
       ash::AutotestDesksApi().GetDesksInfo();
-  base::Value::Dict result;
+  base::DictValue result;
   result.Set("activeDeskIndex", desks_info.active_desk_index);
   result.Set("numDesks", desks_info.num_desks);
   result.Set("isAnimating", desks_info.is_animating);
 
-  base::Value::List desk_containers;
+  base::ListValue desk_containers;
   for (std::string& desk_container : desks_info.desk_containers) {
     desk_containers.Append(std::move(desk_container));
   }
@@ -5108,9 +5063,9 @@ AutotestPrivateSetWindowBoundsFunction::
 
 namespace {
 
-base::Value::Dict BuildSetWindowBoundsResult(const gfx::Rect& bounds_in_display,
-                                             int64_t display_id) {
-  base::Value::Dict result;
+base::DictValue BuildSetWindowBoundsResult(const gfx::Rect& bounds_in_display,
+                                           int64_t display_id) {
+  base::DictValue result;
   result.Set("bounds", ToBoundsDictionary(bounds_in_display).ToValue());
   result.Set("displayId", base::NumberToString(display_id));
   return result;
@@ -5687,11 +5642,19 @@ AutotestPrivateGetLoginEventRecorderLoginEventsFunction::Run() {
       ash::LoginEventRecorder::Get()
           ->GetCollectedLoginEventsForTesting();  // IN-TEST
   std::vector<api::autotest_private::LoginEventRecorderData> result_data;
+  // Sample both clocks once, back-to-back, so every event is mapped through
+  // the same wall-clock/TimeTicks anchor and the (sub-microsecond) skew
+  // between the two Now() reads is shared rather than re-incurred per event.
+  const base::Time wall_now = base::Time::Now();
+  const base::TimeTicks ticks_now = base::TimeTicks::Now();
   for (const auto& data : collected_data) {
     api::autotest_private::LoginEventRecorderData event_data;
     event_data.name = data.name();
+    // Map the TimeTicks event time onto wall-clock time by anchoring both
+    // clocks to the current instant.
     event_data.microsecnods_since_unix_epoch =
-        (data.time() - base::TimeTicks::UnixEpoch()).InMicroseconds();
+        (wall_now - (ticks_now - data.time()) - base::Time::UnixEpoch())
+            .InMicroseconds();
     result_data.emplace_back(std::move(event_data));
   }
 
@@ -5779,9 +5742,9 @@ ExtensionFunction::ResponseAction AutotestPrivateGetAccessTokenFunction::Run() {
           &AutotestPrivateGetAccessTokenFunction::RespondWithTimeoutError,
           this));
 
-  Profile* profile = Profile::FromBrowserContext(browser_context());
   signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(profile);
+      ash::IdentityManagerProvider::Get().Find(
+          CHECK_DEREF(ash::AnnotatedAccountId::Get(browser_context())));
   OAuth2AccessTokenManager::ScopeSet scopes(
       params->access_token_params.scopes.begin(),
       params->access_token_params.scopes.end());
@@ -5818,7 +5781,7 @@ void AutotestPrivateGetAccessTokenFunction::OnAccessToken(
     Respond(Error("Failed to get access token: *", error.ToString()));
     return;
   }
-  base::Value::Dict token_dict;
+  base::DictValue token_dict;
   token_dict.Set("accessToken", token_info.token);
   token_dict.Set(
       "expirationTimeUnixMs",
@@ -5956,7 +5919,7 @@ void AutotestPrivateMakeFuseboxTempDirFunction::OnMakeTempDir(
     Respond(Error(error_message));
     return;
   }
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("fuseboxFilePath", fusebox_file_path);
   dict.Set("underlyingFilePath", underlying_file_path);
   Respond(WithArguments(std::move(dict)));
@@ -6415,7 +6378,7 @@ AutotestPrivateGetCurrentInputMethodDescriptorFunction::Run() {
   ash::input_method::InputMethodDescriptor descriptor =
       manager->GetActiveIMEState()->GetCurrentInputMethod();
 
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("keyboardLayout", descriptor.keyboard_layout());
   return RespondNow(WithArguments(std::move(dict)));
 }
@@ -6628,7 +6591,7 @@ void AutotestPrivateAPI::OnClipboardDataChanged() {
   std::unique_ptr<Event> event(
       new Event(events::AUTOTESTPRIVATE_ON_CLIPBOARD_DATA_CHANGED,
                 api::autotest_private::OnClipboardDataChanged::kEventName,
-                base::Value::List()));
+                base::ListValue()));
   event_router->BroadcastEvent(std::move(event));
 }
 

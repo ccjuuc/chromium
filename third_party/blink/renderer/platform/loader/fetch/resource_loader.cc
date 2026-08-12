@@ -51,6 +51,7 @@
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/network/public/cpp/cross_origin_embedder_policy.h"
 #include "services/network/public/cpp/features.h"
+#include "services/network/public/cpp/no_vary_search_header_parser.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/blocked_by_response_reason.mojom-shared.h"
 #include "services/network/public/mojom/fetch_api.mojom-blink.h"
@@ -310,7 +311,7 @@ void ResourceLoader::Start() {
   // stoppable. We also disable throttling and stopping for non-http[s]
   // requests.
   if (resource_->Options().synchronous_policy == kRequestSynchronously ||
-      request.GetKeepalive() || !request.Url().ProtocolIsInHTTPFamily()) {
+      request.GetKeepalive() || !request.Url().ProtocolIsInHttpFamily()) {
     throttle_option =
         ResourceLoadScheduler::ThrottleOption::kCanNotBeStoppedOrThrottled;
   } else if (!IsThrottlableRequestContext(request.GetRequestContext())) {
@@ -354,7 +355,7 @@ void ResourceLoader::Run() {
 
 void ResourceLoader::DidReceiveDecodedData(
     const String& data,
-    std::unique_ptr<ParkableStringImpl::SecureDigest> digest) {
+    std::unique_ptr<SecureStringDigest> digest) {
   resource_->DidReceiveDecodedData(data, std::move(digest));
 }
 
@@ -620,11 +621,13 @@ bool ResourceLoader::WillFollowRedirect(
                              reporting_disposition,
                              new_request->GetRedirectInfo());
 
-    if (Context().CalculateIfAdSubresource(
-            *new_request, /*alias_url=*/std::nullopt, resource_type,
-            options.initiator_info, /*scan_stack_for_ads=*/false,
-            /*out_rule=*/nullptr)) {
-      new_request->SetIsAdResource();
+    if (std::optional<AdProvenance> ad_provenance =
+            Context()
+                .CalculateResourceAnnotations(
+                    *new_request, /*alias_url=*/std::nullopt, resource_type,
+                    options.initiator_info, /*scan_javascript_stack=*/false)
+                .ad_provenance) {
+      new_request->SetIsAdResource(std::move(*ad_provenance));
     }
 
     if (blocked_reason) {
@@ -672,21 +675,6 @@ bool ResourceLoader::WillFollowRedirect(
   DCHECK_EQ(new_request->GetMode(), request_mode);
   DCHECK_EQ(new_request->GetCredentialsMode(), credentials_mode);
 
-  // If `Shared-Storage-Writable` eligibity has changed, update the headers.
-  bool previous_shared_storage_writable_eligible =
-      resource_->LastResourceRequest().GetSharedStorageWritableEligible();
-  bool new_shared_storage_writable_eligible =
-      new_request->GetSharedStorageWritableEligible();
-  if (new_shared_storage_writable_eligible !=
-      previous_shared_storage_writable_eligible) {
-    if (new_shared_storage_writable_eligible) {
-      CHECK(new_request->GetSharedStorageWritableOptedIn());
-      modified_headers.SetHeader(http_names::kSecSharedStorageWritable.Ascii(),
-                                 "?1");
-    } else if (removed_headers) {
-      removed_headers->push_back(http_names::kSecSharedStorageWritable.Ascii());
-    }
-  }
 
   if (new_request->Url() != KURL(new_url)) {
     CancelForRedirectAccessCheckError(new_request->Url(),
@@ -773,7 +761,7 @@ void ResourceLoader::DidReceiveResponse(
     // Callback is bound to a WeakPersistent, as ResourceLoader is kept alive by
     // ResourceFetcher as long as we still care about the result of the load.
     fetcher_->GetBlobRegistry()->RegisterFromStream(
-        mime_type.IsNull() ? g_empty_string : mime_type.LowerASCII(), "",
+        mime_type.IsNull() ? g_empty_string : mime_type.ToAsciiLower(), "",
         std::max(static_cast<int64_t>(0), response.ExpectedContentLength()),
         std::move(body_handle),
         progress_receiver_.BindNewEndpointAndPassRemote(GetLoadingTaskRunner()),
@@ -802,7 +790,7 @@ void ResourceLoader::DidReceiveResponseInternal(
   AtomicString content_encoding =
       response.HttpHeaderField(http_names::kContentEncoding);
   bool used_zstd = false;
-  if (EqualIgnoringASCIICase(content_encoding, "zstd")) {
+  if (EqualIgnoringAsciiCase(content_encoding, "zstd")) {
     fetcher_->GetUseCounter().CountUse(WebFeature::kZstdContentEncoding);
     fetcher_->GetUseCounter().CountUse(
         WebFeature::kZstdContentEncodingForSubresource);
@@ -824,10 +812,10 @@ void ResourceLoader::DidReceiveResponseInternal(
     fetcher_->GetUseCounter().CountUse(WebFeature::kSharedDictionaryUsed);
     fetcher_->GetUseCounter().CountUse(
         WebFeature::kSharedDictionaryUsedForSubresource);
-    if (EqualIgnoringASCIICase(content_encoding, "dcb")) {
+    if (EqualIgnoringAsciiCase(content_encoding, "dcb")) {
       fetcher_->GetUseCounter().CountUse(
           WebFeature::kSharedDictionaryUsedWithSharedBrotli);
-    } else if (EqualIgnoringASCIICase(content_encoding, "dcz")) {
+    } else if (EqualIgnoringAsciiCase(content_encoding, "dcz")) {
       fetcher_->GetUseCounter().CountUse(
           WebFeature::kSharedDictionaryUsedWithSharedZstd);
     }
@@ -844,16 +832,35 @@ void ResourceLoader::DidReceiveResponseInternal(
         WebFeature::kDeviceBoundSessionRegistered);
   }
 
+  if (const AtomicString& value =
+          response.HttpHeaderField(http_names::kNoVarySearch);
+      !value.IsNull()) {
+    // Structured headers are actually required to be ASCII, but converting a
+    // String to Latin1() is cheaper and the structured headers parser will do
+    // the ASCII check for us.
+    if (value.contains("params") &&
+        network::NoVarySearchHasBooleanParamsMember(value.Latin1())) {
+      fetcher_->GetUseCounter().CountUse(
+          WebFeature::kNoVarySearchWithBooleanParams);
+    }
+  }
+
   switch (response.DeviceBoundSessionUsage()) {
     case network::mojom::DeviceBoundSessionUsage::kDeferred:
       fetcher_->GetUseCounter().CountUse(
           WebFeature::kDeviceBoundSessionRequestDeferral);
       [[fallthrough]];
-    case network::mojom::DeviceBoundSessionUsage::kInScopeNotDeferred:
+    case network::mojom::DeviceBoundSessionUsage::kInScopeRefreshNotYetNeeded:
+    case network::mojom::DeviceBoundSessionUsage::kInScopeRefreshNotAllowed:
+    case network::mojom::DeviceBoundSessionUsage::
+        kInScopeProactiveRefreshNotPossible:
+    case network::mojom::DeviceBoundSessionUsage::
+        kInScopeProactiveRefreshAttempted:
       fetcher_->GetUseCounter().CountUse(
           WebFeature::kDeviceBoundSessionRequestInScope);
       break;
-    case network::mojom::DeviceBoundSessionUsage::kNoUsage:
+    case network::mojom::DeviceBoundSessionUsage::kNoSiteMatchNotInScope:
+    case network::mojom::DeviceBoundSessionUsage::kSiteMatchNotInScope:
     case network::mojom::DeviceBoundSessionUsage::kUnknown:
       break;
   }
@@ -950,7 +957,11 @@ void ResourceLoader::DidReceiveResponseInternal(
   // A response should not serve partial content if it was not requested via a
   // Range header: https://fetch.spec.whatwg.org/#main-fetch
   if (response.GetType() == network::mojom::FetchResponseType::kOpaque &&
-      response.HttpStatusCode() == 206 && response.HasRangeRequested() &&
+      (response.HttpStatusCode() == 206 ||
+       (base::FeatureList::IsEnabled(
+            features::kBlockPartialResponseWithoutRange) &&
+        response.HttpStatusCode() == 416)) &&
+      response.HasRangeRequested() &&
       !initial_request.HttpHeaderFields().Contains(http_names::kRange)) {
     HandleError(ResourceError::CancelledDueToAccessCheckError(
         response.CurrentRequestUrl(), ResourceRequestBlockedReason::kOther));
@@ -1273,7 +1284,6 @@ void ResourceLoader::RequestSynchronously() {
   if (!IsLoading()) {
     return;
   }
-  DCHECK_GE(response_out.ToResourceResponse().EncodedBodyLength(), 0);
 
   // Follow the async case convention of not calling DidReceiveData or
   // appending data to m_resource if the response body is empty. Copying the
@@ -1537,13 +1547,16 @@ bool ResourceLoader::ShouldBlockRequestBasedOnSubresourceFilterDnsAliasCheck(
       return true;
     }
 
-    if (!resource_->GetResourceRequest().IsAdResource() &&
-        Context().CalculateIfAdSubresource(
-            resource_->GetResourceRequest(), alias_url, resource_type,
-            options.initiator_info, /*scan_stack_for_ads=*/false,
-            /*out_rule=*/nullptr)) {
-      resource_->SetIsAdResource();
-      cname_alias_info_for_testing_.was_ad_tagged_based_on_alias = true;
+    if (!resource_->GetResourceRequest().IsAdResource()) {
+      if (std::optional<AdProvenance> ad_provenance =
+              Context()
+                  .CalculateResourceAnnotations(
+                      resource_->GetResourceRequest(), alias_url, resource_type,
+                      options.initiator_info, /*scan_javascript_stack=*/false)
+                  .ad_provenance) {
+        resource_->SetIsAdResource(std::move(*ad_provenance));
+        cname_alias_info_for_testing_.was_ad_tagged_based_on_alias = true;
+      }
     }
   }
 

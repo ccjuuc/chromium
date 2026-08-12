@@ -26,6 +26,7 @@
 #include "ui/views/examples/dialog_model_example.h"
 #include "ui/views/examples/fade_animation.h"
 #include "ui/views/examples/flex_layout_example.h"
+#include "ui/views/examples/flex_layout_multiple_order_example.h"
 #include "ui/views/examples/ink_drop_example.h"
 #include "ui/views/examples/label_example.h"
 #include "ui/views/examples/link_example.h"
@@ -49,6 +50,7 @@
 #include "ui/views/examples/tree_view_example.h"
 #include "ui/views/examples/typography_example.h"
 #include "ui/views/examples/vector_example.h"
+#include "ui/views/examples/views_canvas_example.h"
 #include "ui/views/examples/widget_example.h"
 
 namespace views::examples {
@@ -74,6 +76,7 @@ ExampleVector CreateExamples(ExampleVector extra_examples) {
   examples.push_back(std::make_unique<DialogModelExample>());
   examples.push_back(std::make_unique<FadeAnimationExample>());
   examples.push_back(std::make_unique<FlexLayoutExample>());
+  examples.push_back(std::make_unique<FlexLayoutMultipleOrderExample>());
   examples.push_back(std::make_unique<InkDropExample>());
   examples.push_back(std::make_unique<LabelExample>());
   examples.push_back(std::make_unique<LinkExample>());
@@ -97,6 +100,7 @@ ExampleVector CreateExamples(ExampleVector extra_examples) {
   examples.push_back(std::make_unique<TreeViewExample>());
   examples.push_back(std::make_unique<TypographyExample>());
   examples.push_back(std::make_unique<VectorExample>());
+  examples.push_back(std::make_unique<ViewsCanvasExample>());
   examples.push_back(std::make_unique<WidgetExample>());
   return examples;
 }

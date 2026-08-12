@@ -10,10 +10,12 @@ import androidx.test.filters.SmallTest;
 
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
@@ -21,12 +23,12 @@ import org.chromium.base.test.util.Feature;
 /** Tests for {@link TraceEvent}. */
 @RunWith(BaseRobolectricTestRunner.class)
 public class TraceEventTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock TraceEvent.Natives mNativeMock;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
         TraceEventJni.setInstanceForTesting(mNativeMock);
     }
 
@@ -64,6 +66,28 @@ public class TraceEventTest {
         String realEventNameExpected =
                 TraceEvent.BasicLooperMonitor.LOOPER_TASK_PREFIX
                         + "org.chromium.myClass.myMethod(org.chromium.myOtherClass.instance)";
+        Assert.assertEquals(
+                TraceEvent.BasicLooperMonitor.getTraceEventName(realEventName),
+                realEventNameExpected);
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"Android-AppBase"})
+    public void testEventNameWithEmptyTargetNameAndNoSpace() {
+        TraceEvent.setEventNameFilteringEnabled(false);
+        Assert.assertFalse(TraceEvent.eventNameFilteringEnabled());
+
+        // Input string format:
+        // ">>>>> Finished to (TARGET) {HASH_CODE} TARGET_NAME: WHAT"
+        String realEventName =
+                ">>>>> Finished to (org.chromium.myClass.myMethod) " + "{HASH_CODE}: message";
+
+        // Output string format:
+        // "{TraceEvent.BasicLooperMonitor.LOOPER_TASK_PREFIX} TARGET(TARGET_NAME)"
+        String realEventNameExpected =
+                TraceEvent.BasicLooperMonitor.LOOPER_TASK_PREFIX
+                        + "org.chromium.myClass.myMethod()";
         Assert.assertEquals(
                 TraceEvent.BasicLooperMonitor.getTraceEventName(realEventName),
                 realEventNameExpected);

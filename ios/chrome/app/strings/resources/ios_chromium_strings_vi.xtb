@@ -2,16 +2,18 @@
 <!DOCTYPE translationbundle>
 <translationbundle lang="vi">
 <translation id="1000436330784933699">Bạn có thể mở Ống kính tại đây.</translation>
+<translation id="1005291068154454184">Video toàn màn hình hướng dẫn cách đặt Chromium làm trình duyệt mặc định</translation>
 <translation id="1042296835509784301">Mở Trình quản lý mật khẩu trong Chromium.</translation>
 <translation id="1047130070405668746">Chọn Chromium</translation>
 <translation id="1091252999271033193">Tức là lần nào Chromium cũng yêu cầu trang web dành cho thiết bị di động.</translation>
 <translation id="1115463765356382667">Làm theo các đề xuất dưới đây để tận dụng tối đa Chromium.</translation>
 <translation id="1185134272377778587">Giới thiệu về Chromium</translation>
-<translation id="1211450393895337634">Mở Chromium nhanh hơn khi bạn muốn duyệt web trên iPad.</translation>
+<translation id="119044033865561140">Mở Chromium ngay lập tức khi bạn dùng iPad</translation>
 <translation id="1229234641991056119">Sử dụng mật khẩu, nhật ký, dấu trang và thẻ tín dụng từ Safari trong Chromium</translation>
 <translation id="1257458525759135959">Để lưu hình ảnh, hãy nhấn vào Cài đặt để cho phép Chromium thêm vào ảnh của bạn</translation>
 <translation id="1260702988262336471">Mở trình đơn Chromium</translation>
 <translation id="12739128458173458">Để gửi thẻ này tới một thiết bị khác, hãy đăng nhập vào Chromium trên cả hai thiết bị.</translation>
+<translation id="1279797561821266129">Truy cập Chromium nhanh hơn từ thanh dock</translation>
 <translation id="1361748954329991663">Chromium đã lỗi thời. Nếu không có bản cập nhật nào trong <ph name="BEGIN_LINK" />App Store<ph name="END_LINK" />, thì có khả năng thiết bị của bạn không hỗ trợ các phiên bản Chromium mới nữa.</translation>
 <translation id="1383876407941801731">Tìm kiếm</translation>
 <translation id="1423007117030725713">Bắt đầu tìm kiếm trong thẻ mới trên Chromium.</translation>
@@ -22,7 +24,6 @@
 <translation id="1472013873724362412">Tài khoản của bạn không hoạt động trên Chromium. Vui lòng liên hệ với quản trị viên miền của bạn hoặc sử dụng Tài khoản Google thông thường để đăng nhập.</translation>
 <translation id="148576268809812097">Lưu mật khẩu của bạn trong Chromium</translation>
 <translation id="1501302548410882220">Sử dụng Chromium ở mọi nơi</translation>
-<translation id="1502360822835740515">Đặt Chromium làm trình duyệt mặc định của bạn</translation>
 <translation id="1503199973012840174">Phiên bản Chromium bạn đang sử dụng đã lỗi thời. Hãy cập nhật để đảm bảo an toàn.</translation>
 <translation id="1515748263297244785">Sử dụng Chromium cho iPad theo mặc định</translation>
 <translation id="1530961174488670696">Chromium không thể kiểm tra xem có bản cập nhật mới nào không. Hãy thử lại sau.</translation>
@@ -41,6 +42,9 @@
 <translation id="1707458603865303524">Dùng Chromium mỗi khi bạn nhấn vào đường liên kết trong thư/tin nhắn hoặc các ứng dụng khác.</translation>
 <translation id="1722370509450468186">Mật khẩu của bạn sẽ được lưu trong Tài khoản (<ph name="EMAIL" />).</translation>
 <translation id="1747088204252710672">Nguồn cấp dữ liệu thiết kế riêng cho bạn</translation>
+<translation id="1761196287436320018">Bạn đã đạt đến hạn mức <ph name="LIMIT" /> dấu trang của Chromium nên một số dấu trang chưa được lưu vào Tài khoản Google của bạn.
+
+Bạn phải xoá bớt một số dấu trang thì mới có thể lưu dấu trang mới vào tài khoản. Nếu bạn đăng xuất ngay bây giờ, các dấu trang chưa lưu sẽ bị xoá.</translation>
 <translation id="1811860791247653035">Để sử dụng chế độ cá nhân hoá và các tính năng khác, hãy thêm Chromium vào <ph name="FEATURE_NAME_1" /> và <ph name="FEATURE_NAME_2" /></translation>
 <translation id="1838412507805038478">Chromium xác minh rằng <ph name="ISSUER" /> đã cấp chứng chỉ của trang web này.</translation>
 <translation id="1839447949248872139">Mở đường liên kết trong Chromium theo mặc định</translation>
@@ -65,9 +69,6 @@
 <translation id="2313870531055795960">Kiểm tra đối chiếu các URL với danh sách trang web không an toàn được lưu trữ trong Chromium. Nếu một trang web cố ăn cắp mật khẩu của bạn hoặc nếu bạn tải một tệp gây hại xuống, thì Chrome cũng có thể gửi các URL đến tính năng Duyệt web an toàn, bao gồm cả các đoạn nội dung trên trang.</translation>
 <translation id="2314220608288760290">Chromium tự động mở các đường liên kết ẩn danh của YouTube ở chế độ ẩn danh.</translation>
 <translation id="231828342043114302">Để nhận nội dung được cá nhân hoá dựa trên sở thích của bạn, hãy đăng nhập vào Chromium.</translation>
-<translation id="2326738825692478496">Một số dữ liệu Chromium của bạn chưa được lưu vào Tài khoản Google.
-
-Trước khi đăng xuất, hãy đợi một vài phút. Nếu bạn đăng xuất ngay, dữ liệu này sẽ bị xoá.</translation>
 <translation id="2334943301233020675">Các khoá truy cập sau đây không được nhập vào Trình quản lý mật khẩu vì không đáp ứng được các yêu cầu.</translation>
 <translation id="2337722506862731008">Chia sẻ Chromium</translation>
 <translation id="2340423701577464731">Thêm mục trong danh sách đọc vào Chromium</translation>
@@ -75,6 +76,7 @@ Trước khi đăng xuất, hãy đợi một vài phút. Nếu bạn đăng xu�
 <translation id="2386292341327187942">Trong hộp Tiện ích Tìm kiếm, nhập Chromium</translation>
 <translation id="2389827884654658221">Truy cập Chromium nhanh hơn từ màn hình chính của iPad.</translation>
 <translation id="2426113998523353159">Tổ chức của bạn yêu cầu bạn đăng nhập để dùng Chromium.</translation>
+<translation id="244367646885670394">Xác minh danh tính của bạn để lưu mật khẩu này và lấy dữ liệu Chromium trên mọi thiết bị của bạn</translation>
 <translation id="2450140762465183767">Giờ đây, bạn có thể dùng Chromium mỗi khi nhấn vào các đường liên kết trong thư/tin nhắn, tài liệu và các ứng dụng khác.</translation>
 <translation id="2459183986985456602">Mở thẻ mà tôi mở gần đây nhất trong Chromium.</translation>
 <translation id="2476409803017965813">Bạn có thể cập nhật lựa chọn của mình bất cứ lúc nào trong phần cài đặt Chromium.</translation>
@@ -82,15 +84,13 @@ Trước khi đăng xuất, hãy đợi một vài phút. Nếu bạn đăng xu�
 <translation id="2485774047568879945">Đặt Chromium làm trình duyệt mặc định để dễ dàng chia sẻ và mở đường liên kết</translation>
 <translation id="2512597191798760956">Nhấn và giữ biểu tượng Chromium rồi nhấp vào "Chỉnh sửa màn hình chính"</translation>
 <translation id="2517624234762908348">Đồng bộ hóa dữ liệu Chromium</translation>
-<translation id="2575968074225731646">Truy cập Chromium nhanh hơn từ thanh dock trên iPhone.</translation>
 <translation id="2592940277904433508">Tiếp tục sử dụng Chromium</translation>
+<translation id="2601766165676560303">Giao diện Chromium cho iPhone và iPad</translation>
 <translation id="2607609479243848905">Nếu bạn quên cụm mật khẩu hoặc muốn thay đổi chế độ cài đặt này, hãy <ph name="BEGIN_LINK" />xoá dữ liệu Chromium khỏi tài khoản của bạn<ph name="END_LINK" />.</translation>
 <translation id="2640367368802736659">Mẹo khi dùng Chromium: Tìm thông tin về những gì bạn thấy bằng Google Ống kính</translation>
 <translation id="2650312721222849884">Để xem các thẻ của bạn trên bất cứ thiết bị nào mà bạn có dùng Chromium, hãy bật tính năng đồng bộ hóa</translation>
 <translation id="2684230048001240293">Hãy đặt Chromium làm trình duyệt mặc định để đồng bộ hóa các thẻ, mật khẩu và thông tin thanh toán trên mọi thiết bị của bạn</translation>
-<translation id="2729836253097154631">Đăng nhập vào Chromium để sử dụng các dữ liệu của bạn</translation>
 <translation id="2730884209570016437">Chromium không thể sử dụng máy ảnh của bạn do một ứng dụng khác đang dùng máy ảnh.</translation>
-<translation id="2742952311155593352">Quá trình thiết lập Chromium sắp hoàn tất!</translation>
 <translation id="2798503587425057129">Mở Danh sách đọc trên Chromium.</translation>
 <translation id="28276745681323897">Bạn có thể <ph name="BEGIN_LINK" />quy định những dữ liệu Chromium nào được lưu<ph name="END_LINK" /> vào Tài khoản Google của bạn.
 
@@ -104,13 +104,13 @@ Trước khi đăng xuất, hãy đợi một vài phút. Nếu bạn đăng xu�
 <translation id="3054480780637153380">Mở phần cài đặt Chromium trong iOS, sau đó nhấn vào "Ứng dụng trình duyệt mặc định" và chọn Chromium.</translation>
 <translation id="3115956258722352278">Đặt Chromium làm trình duyệt mặc định của bạn?</translation>
 <translation id="3180939591219927904">Bật chế độ "Khoá các thẻ ẩn danh khi bạn đóng Chromium"</translation>
+<translation id="327628223428512207">Nhập cụm mật khẩu để lưu mật khẩu này và lấy dữ liệu Chromium trên mọi thiết bị của bạn</translation>
 <translation id="328933489847748230">{count,plural, =1{Đang hiển thị 1 cửa sổ Chromium}other{Đang hiển thị {count} cửa sổ Chromium}}</translation>
 <translation id="3344973607274501920">Chromium không thể kiểm tra mật khẩu của bạn. Hãy thử kiểm tra kết nối Internet.</translation>
 <translation id="3366305173356742781">Dữ liệu Chromium trong tài khoản của bạn</translation>
 <translation id="3387107508582892610">{THRESHOLD,plural, =1{Thao tác này diễn ra sau {THRESHOLD} phút bạn không dùng đến Chromium. Phạm vi tác động có thể bao gồm nhật ký và tính năng tự động điền.}other{Thao tác này diễn ra sau {THRESHOLD} phút bạn không dùng đến Chromium. Phạm vi tác động có thể bao gồm nhật ký và tính năng tự động điền.}}</translation>
 <translation id="3410395242749598859">Một số dữ liệu Chromium của bạn chưa được lưu vào <ph name="EMAIL" />.
 Hãy thử đợi ít phút rồi chuyển đổi tài khoản. Nếu bạn chuyển đổi tài khoản ngay bây giờ, dữ liệu này sẽ bị xoá.</translation>
-<translation id="3420586870838853527">Mẹo khi dùng Chromium: Chế độ Duyệt web an toàn có tăng cường bảo vệ sẽ giúp bạn an tâm</translation>
 <translation id="3440830787838130530">Dễ dàng chia sẻ bản sao mật khẩu với nhóm gia đình một cách an toàn trong Trình quản lý mật khẩu của Google</translation>
 <translation id="3472200483164753384">Chưa hỗ trợ trên Chromium Canary</translation>
 <translation id="347967311580159871">Để xem thêm các chế độ cài đặt khác có sử dụng dữ liệu để cải thiện trải nghiệm Chromium của bạn, hãy truy cập vào <ph name="BEGIN_LINK" />Các dịch vụ của Google<ph name="END_LINK" />.</translation>
@@ -130,6 +130,7 @@ Hãy thử đợi ít phút rồi chuyển đổi tài khoản. Nếu bạn chuy
 <translation id="377649297473651452">Chế độ xem mở rộng về tính năng Tự động điền của Chromium</translation>
 <translation id="3780779443901618967">Cảnh báo cho bạn về các trang web nguy hiểm, kể cả trang web mà Google chưa từng biết, bằng cách phân tích nhiều dữ liệu trên các trang web hơn so với chế độ bảo vệ tiêu chuẩn. Bạn có thể chọn bỏ qua cảnh báo của Chromium.</translation>
 <translation id="3805899903892079518">Chromium không có quyền truy cập ảnh hoặc video của bạn. Hãy cho phép truy cập Cài đặt iOS &gt; Bảo mật &gt; Ảnh.</translation>
+<translation id="3809591243528646631">Để sử dụng các tính năng đảm bảo an toàn cho trẻ, bạn có thể dùng một Tài khoản Google được thiết lập cho trẻ hoặc dùng Chromium mà không cần tài khoản. <ph name="BEGIN_LINK" />Tìm hiểu thêm<ph name="END_LINK" /></translation>
 <translation id="3816686541346279443">Chromium sẽ đề xuất lưu mật khẩu của bạn.</translation>
 <translation id="3827545470516145620">Bạn đang sử dụng biện pháp bảo mật tiêu chuẩn trên thiết bị này</translation>
 <translation id="3833326979834193417">Chromium tự động chạy tính năng Kiểm tra an toàn hằng ngày để bảo vệ bạn trước các sự cố rò rỉ dữ liệu, trang web không an toàn và những vấn đề khác. Bạn có thể tìm thêm thông tin về tính năng Kiểm tra an toàn trong phần Cài đặt.</translation>
@@ -165,6 +166,7 @@ Dữ liệu của bạn được mã hoá bằng cụm mật khẩu. Nhập cụ
 Để thay đổi chế độ cài đặt này, hãy <ph name="BEGIN_LINK" />xoá dữ liệu Chromium khỏi tài khoản của bạn<ph name="END_LINK" />.</translation>
 <translation id="4578500311756617174">Mẹo khi dùng Chromium: dùng Chromium làm trình duyệt mặc định</translation>
 <translation id="458786853569524949">Giờ đây, bạn có thể dùng Chromium mỗi khi nhấn vào các đường liên kết trong email, tài liệu và các ứng dụng khác.</translation>
+<translation id="4625730353066900738">Tìm hiểu những thông tin cơ bản hữu ích về Chromium để bắt đầu</translation>
 <translation id="4633738821577273991">Bạn có thể dùng tính năng Duyệt web an toàn có tăng cường bảo vệ cho cả hồ sơ Chromium này</translation>
 <translation id="4654936625574199632">Để giúp cải thiện ứng dụng, Chromium sẽ gửi dữ liệu về sự cố và mức sử dụng cho Google. <ph name="BEGIN_LINK" />Quản lý<ph name="END_LINK" /></translation>
 <translation id="4681781466797808448">Bật trình quét của Chromium</translation>
@@ -173,8 +175,8 @@ Dữ liệu của bạn được mã hoá bằng cụm mật khẩu. Nhập cụ
 <translation id="4790638144988730920">Tiếp tục sử dụng dữ liệu Chromium trong Tài khoản Google của bạn.</translation>
 <translation id="4828317641996116749">Chromium không thể kiểm tra một số mật khẩu. Hãy thử lại sau.</translation>
 <translation id="4856138222358683580">Thao tác trên Chromium</translation>
+<translation id="4869706986935301458">Mở Chromium ngay lập tức khi bạn dùng iPhone</translation>
 <translation id="4904452304169763785">Cảnh báo về mọi vấn đề liên quan đến quyền riêng tư hoặc bảo mật mà Chromium phát hiện ra.</translation>
-<translation id="4908570938463711775">Tìm hiểu những thông tin cơ bản hữu ích về Chromium để bắt đầu</translation>
 <translation id="4962295957157529683">Hoàn thành những việc bạn đang làm trong cửa sổ Chromium đang mở khác.</translation>
 <translation id="4985291216379576555">Không có kết nối mạng, Chromium không thể kiểm tra xem có bản cập nhật mới nào không</translation>
 <translation id="4996471330284142407">Với phiên bản Chromium đơn giản, an toàn và nhanh nhất từ trước đến nay, bạn sẽ làm được nhiều việc hơn.</translation>
@@ -188,7 +190,6 @@ Dữ liệu của bạn được mã hoá bằng cụm mật khẩu. Nhập cụ
 <translation id="5131565040785979529">Tổ chức <ph name="DOMAIN" /> của bạn sẽ quản lý tài khoản bạn đăng nhập và cách sử dụng Chromium.</translation>
 <translation id="5134464247000681876">Mở đường liên kết từ Gmail, Maps, YouTube và các ứng dụng khác trong Chromium</translation>
 <translation id="5203244847421322551">Lưu và tự động điền mật khẩu trong Chromium</translation>
-<translation id="5218806323985098884">Khám phá các tính năng mới trong Chromium</translation>
 <translation id="5224391634244552924">Bạn chưa lưu mật khẩu nào. Chromium có thể kiểm tra các mật khẩu của bạn khi bạn lưu các mật khẩu đó.</translation>
 <translation id="5259423875997548710">Tìm kiếm hình ảnh trong Chromium.</translation>
 <translation id="5284913972719948193">Nhập dữ liệu để sử dụng mật khẩu, nhật ký, dấu trang và thẻ tín dụng của bạn trên Chromium</translation>
@@ -220,6 +221,7 @@ Dữ liệu của bạn được mã hoá bằng cụm mật khẩu. Nhập cụ
 <translation id="5731004036450828399">Để đảm bảo an toàn cho khoá truy cập, trước tiên, bạn cần tạo mã PIN khôi phục.
 
         Khoá truy cập được lưu trong Trình quản lý mật khẩu nên bạn có thể sử dụng khoá truy cập trong Chromium trên mọi thiết bị.</translation>
+<translation id="575593940213760950">Đến Trình quản lý mật khẩu cho <ph name="EMAIL" /></translation>
 <translation id="584550191241316896">Đã đăng nhập vào Chromium</translation>
 <translation id="5862307444128926510">Chào mừng bạn đến với Chromium</translation>
 <translation id="5889847953983052353">Khi bật:
@@ -260,7 +262,6 @@ Những yếu tố cần xem xét:
 <translation id="6566303693324540692">Mẹo khi dùng Chromium: Đưa Chromium vào màn hình chính</translation>
 <translation id="6574750762636192517">Quản lý mật khẩu trong Chromium</translation>
 <translation id="6590232959690355435">Mở trang Nhật ký duyệt web trên Chromium.</translation>
-<translation id="6649269674808477353">Mở Chromium nhanh hơn khi bạn muốn duyệt web trên iPhone.</translation>
 <translation id="6674470628873622334">Mở thẻ ẩn danh mới trên Chromium.</translation>
 <translation id="6680609900732453726">Giữ chế độ duyệt web ở chế độ riêng tư bằng tính năng xác thực thiết bị khi bạn đóng Chromium</translation>
 <translation id="6752854822223394465">Tổ chức của bạn đang thiết lập Chromium...</translation>
@@ -292,11 +293,11 @@ Chỉ những người có cụm mật khẩu mới đọc được dữ liệu 
 <translation id="7395825497086981028">Mật khẩu của bạn sẽ được lưu vào Trình quản lý mật khẩu cho <ph name="EMAIL" />.</translation>
 <translation id="7434848749522628428">Khoá truy cập này sẽ được lưu vào Trình quản lý mật khẩu cho <ph name="USER_EMAIL" /></translation>
 <translation id="7504829997542308412">Mở Chromium</translation>
+<translation id="7507535968973352823">Đặt Chromium ở khu vực dưới cùng để truy cập bất cứ lúc nào</translation>
 <translation id="7531461704633548377">Từ Chromium</translation>
 <translation id="7554983317097061001">Mẹo khi dùng Chromium: Di chuyển Chromium vào thanh dock</translation>
 <translation id="7576863740961052505">Quản lý chế độ cài đặt Chromium</translation>
 <translation id="7674213385180944843">Mở Cài đặt &gt; Bảo mật &gt; Máy ảnh &gt; Chromium và bật máy ảnh.</translation>
-<translation id="7685160423563372998">Tạo hình ảnh bằng Gemini trong Chromium</translation>
 <translation id="7733418656985455268">Mẹo khi dùng Chromium: Tìm kiếm bằng Ống kính</translation>
 <translation id="7747820849741499258">Tìm kiếm trong Chromium</translation>
 <translation id="7753923083404296545">Đã mở trong chế độ Ẩn danh của Chromium</translation>
@@ -304,6 +305,7 @@ Chỉ những người có cụm mật khẩu mới đọc được dữ liệu 
 <translation id="7763454117143368771">Hãy đặt Chromium làm trình duyệt mặc định để luôn được bảo vệ khỏi các trang web nguy hiểm và giữ cho mật khẩu của bạn an toàn</translation>
 <translation id="7784950022329154821">Khoá các thẻ ẩn danh khi bạn đóng Chromium</translation>
 <translation id="78025249032851484">Chromium của bạn đã lỗi thời.</translation>
+<translation id="784098351033299289">Chromium sử dụng Google Maps để chỉ đường và cung cấp cho bạn thông tin về địa phương thông qua các đường liên kết đến bản đồ</translation>
 <translation id="7859018312476869945">Khi bạn nhập vào thanh địa chỉ hoặc hộp tìm kiếm, Chromium sẽ gửi nội dung bạn nhập đến công cụ tìm kiếm mặc định để đề xuất cho bạn cụm từ phù hợp hơn. Tính năng này bị tắt trong chế độ Ẩn danh.</translation>
 <translation id="7890287942691234100">Bắt đầu dùng trình quét của Chromium</translation>
 <translation id="7905064834449738336">Khi bạn dùng một mật khẩu đã bị công khai trên mạng, Chromium sẽ cảnh báo cho bạn. Trong quá trình này, mật khẩu và tên người dùng của bạn được mã hoá nên không ai đọc được, kể cả Google.</translation>
@@ -311,7 +313,6 @@ Chỉ những người có cụm mật khẩu mới đọc được dữ liệu 
 <translation id="7934404985878918282">Xem Danh sách đọc trên Chromium</translation>
 <translation id="7935734571048689933">Chromium đang được quản lý</translation>
 <translation id="7951793218148208717">Mở một thẻ mới trong Chromium.</translation>
-<translation id="7957726318578167662">Dễ dàng sử dụng Chromium mỗi khi bạn nhấn vào đường liên kết trong thư/tin nhắn hoặc các ứng dụng khác.</translation>
 <translation id="7980860476903281594">Chromium chia sẻ thông tin vị trí của bạn với những trang web mà bạn cho phép.</translation>
 <translation id="7994322153108931467">Để biết các mẹo hữu ích khi dùng Chromium, hãy bật thông báo trong phần cài đặt của iOS.</translation>
 <translation id="7997159823054171568">Đặt Chromium làm trình duyệt mặc định</translation>
@@ -348,8 +349,8 @@ Chỉ những người có cụm mật khẩu mới đọc được dữ liệu 
 <translation id="8860548555286245440">Mở URL bằng chế độ Ẩn danh trong Chromium</translation>
 <translation id="8880024619507699923">Theo yêu cầu của tổ chức bạn, bạn phải đăng nhập thì mới có thể sử dụng Chromium. <ph name="BEGIN_LINK" />Tìm hiểu thêm<ph name="END_LINK" /></translation>
 <translation id="8900052431807804054">Sở hữu chế độ bảo mật mạnh nhất của Chromium</translation>
-<translation id="8908791447256515663">Truy cập Chromium nhanh hơn từ thanh dock trên iPad.</translation>
 <translation id="8925569192291721236">Luôn cập nhật thông tin theo dõi giá và các mẹo sử dụng Chromium.</translation>
+<translation id="8939412301975414416">Để sử dụng các tính năng đảm bảo an toàn cho trẻ trong Chromium, bạn có thể dùng một Tài khoản Google được thiết lập cho trẻ hoặc dùng Chromium mà không cần tài khoản.</translation>
 <translation id="8950326149985259075">{THRESHOLD,plural, =1{Thao tác này diễn ra sau {THRESHOLD} phút bạn không dùng đến Chromium}other{Thao tác này diễn ra sau {THRESHOLD} phút bạn không dùng đến Chromium}}</translation>
 <translation id="8963279154877372067">Cho phép thông báo của Chromium để nhận thông báo giảm giá</translation>
 <translation id="8975812008711371178">Tìm kiếm bằng giọng nói trong Chromium.</translation>
@@ -368,4 +369,5 @@ Trước khi đăng xuất, hãy đợi một vài phút. Nếu bạn đăng xu�
 <translation id="924957577793602335">Biến Chromium thành trình duyệt của riêng bạn</translation>
 <translation id="981812233959540767">Chơi trò chơi khủng long trên Chromium</translation>
 <translation id="985602178874221306">Tác giả Chromium</translation>
+<translation id="986520777495807752">Đặt Chromium làm trình duyệt mặc định</translation>
 </translationbundle>

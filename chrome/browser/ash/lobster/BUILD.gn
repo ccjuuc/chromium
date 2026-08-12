@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-
 assert(is_chromeos)
 
 static_library("lobster") {
@@ -50,7 +48,10 @@ static_library("lobster") {
     "//base",
     "//chrome/browser:browser_process",
     "//chrome/browser/ash/magic_boost",
+    "//chrome/browser/manta",
+    "//chrome/browser/manta:impl",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/profiles:profile_manager",
     "//chrome/browser/resources/chromeos/mako:resources",
     "//chrome/browser/signin",
     "//chrome/browser/ui/webui/ash/lobster",

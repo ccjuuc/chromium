@@ -5,7 +5,6 @@
 #include "chrome/browser/renderer_context_menu/mock_render_view_context_menu.h"
 
 #include <algorithm>
-#include <vector>
 
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/profiles/profile.h"
@@ -229,7 +228,7 @@ void MockRenderViewContextMenu::AddAccessibilityLabelsServiceItem(
     accessibility_labels_submenu_model_.AddItemWithStringId(
         IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_TOGGLE_ONCE,
         IDS_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_SEND_ONCE);
-    AddSubMenu(IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS,
+    AddSubMenu(kAccessibilityLabelsMenuId,
                l10n_util::GetStringUTF16(
                    IDS_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_MENU_OPTION),
                &accessibility_labels_submenu_model_);

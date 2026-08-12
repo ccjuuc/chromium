@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -33,8 +34,8 @@
 #include "components/sync/engine/cycle/sync_cycle_context.h"
 #include "components/sync/engine/data_type_activation_response.h"
 #include "components/sync/engine/forwarding_data_type_processor.h"
+#include "components/sync/engine/keystore_keys_handler.h"
 #include "components/sync/engine/net/server_connection_manager.h"
-#include "components/sync/engine/nigori/keystore_keys_handler.h"
 #include "components/sync/engine/sync_scheduler_impl.h"
 #include "components/sync/engine/syncer_proto_util.h"
 #include "components/sync/protocol/bookmark_specifics.pb.h"
@@ -43,8 +44,8 @@
 #include "components/sync/protocol/preference_specifics.pb.h"
 #include "components/sync/protocol/sync.pb.h"
 #include "components/sync/protocol/sync_enums.pb.h"
+#include "components/sync/test/fake_connection_manager.h"
 #include "components/sync/test/fake_sync_encryption_handler.h"
-#include "components/sync/test/mock_connection_manager.h"
 #include "components/sync/test/mock_data_type_processor.h"
 #include "components/sync/test/mock_debug_info_getter.h"
 #include "components/sync/test/mock_nudge_handler.h"
@@ -137,7 +138,8 @@ class SyncerTest : public testing::Test,
   void OnMigrationRequested(DataTypeSet types) override {}
 
   void ResetCycle() {
-    cycle_ = std::make_unique<SyncCycle>(context_.get(), this);
+    cycle_ = std::make_unique<SyncCycle>(context_.get(), this,
+                                         signin::AccessTokenInfo());
   }
 
   bool SyncShareNudge() {
@@ -161,7 +163,7 @@ class SyncerTest : public testing::Test,
   }
 
   void SetUp() override {
-    mock_server_ = std::make_unique<MockConnectionManager>();
+    mock_server_ = std::make_unique<FakeConnectionManager>();
     debug_info_getter_ = std::make_unique<MockDebugInfoGetter>();
     std::vector<SyncEngineEventListener*> listeners;
     listeners.push_back(this);
@@ -178,7 +180,9 @@ class SyncerTest : public testing::Test,
         mock_server_.get(), extensions_activity_.get(), listeners,
         debug_info_getter_.get(), data_type_registry_.get(), local_cache_guid(),
         mock_server_->store_birthday(), "fake_bag_of_chips",
-        /*poll_interval=*/base::Minutes(30));
+        /*poll_interval=*/base::Minutes(30),
+        /*account_email=*/"test@example.com",
+        /*sync_access_token_fetcher=*/nullptr);
     auto syncer = std::make_unique<Syncer>(&cancelation_signal_);
     // The syncer is destroyed with the scheduler that owns it.
     syncer_ = syncer.get();
@@ -243,7 +247,7 @@ class SyncerTest : public testing::Test,
   FakeSyncEncryptionHandler encryption_handler_;
   scoped_refptr<ExtensionsActivity> extensions_activity_ =
       new ExtensionsActivity;
-  std::unique_ptr<MockConnectionManager> mock_server_;
+  std::unique_ptr<FakeConnectionManager> mock_server_;
   CancelationSignal cancelation_signal_;
   std::map<DataType, MockDataTypeProcessor> mock_data_type_processors_;
 

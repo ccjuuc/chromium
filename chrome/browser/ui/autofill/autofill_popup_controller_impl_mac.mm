@@ -16,41 +16,23 @@ using base::WeakPtr;
 
 namespace autofill {
 
-// static
-WeakPtr<AutofillSuggestionController> AutofillSuggestionController::GetOrCreate(
-    WeakPtr<AutofillSuggestionController> previous,
-    WeakPtr<AutofillSuggestionDelegate> delegate,
+base::WeakPtr<AutofillSuggestionController>
+CreateAutofillPopupControllerImplMac(
+    base::WeakPtr<AutofillSuggestionDelegate> delegate,
     content::WebContents* web_contents,
-    PopupControllerCommon controller_common,
-    int32_t form_control_ax_id) {
-  if (AutofillPopupControllerImpl* previous_impl =
-          static_cast<AutofillPopupControllerImpl*>(previous.get());
-      previous_impl && previous_impl->delegate_.get() == delegate.get() &&
-      previous_impl->container_view() == controller_common.container_view) {
-    previous_impl->controller_common_ = std::move(controller_common);
-    previous_impl->form_control_ax_id_ = form_control_ax_id;
-    previous_impl->ClearState();
-    return previous_impl->GetWeakPtr();
-  }
-
-  if (previous.get()) {
-    previous->Hide(SuggestionHidingReason::kViewDestroyed);
-  }
-
-  auto* controller = new AutofillPopupControllerImplMac(
-      delegate, web_contents, std::move(controller_common), form_control_ax_id);
-  return controller->GetWeakPtr();
+    PopupControllerCommon controller_common) {
+  return (new AutofillPopupControllerImplMac(delegate, web_contents,
+                                             std::move(controller_common)))
+      ->GetWeakPtr();
 }
 
 AutofillPopupControllerImplMac::AutofillPopupControllerImplMac(
     base::WeakPtr<AutofillSuggestionDelegate> delegate,
     content::WebContents* web_contents,
-    PopupControllerCommon controller_common,
-    int32_t form_control_ax_id)
+    PopupControllerCommon controller_common)
     : AutofillPopupControllerImpl(delegate,
                                   web_contents,
                                   std::move(controller_common),
-                                  form_control_ax_id,
                                   std::nullopt),
       touch_bar_controller_(nil) {}
 
@@ -58,18 +40,22 @@ AutofillPopupControllerImplMac::~AutofillPopupControllerImplMac() = default;
 
 void AutofillPopupControllerImplMac::Show(
     UiSessionId ui_session_id,
-    std::vector<autofill::Suggestion> suggestions,
+    std::vector<Suggestion> suggestions,
     AutofillSuggestionTriggerSource trigger_source,
-    AutoselectFirstSuggestion autoselect_first_suggestion) {
+    AutoselectFirstSuggestion autoselect_first_suggestion,
+    AutofillSuggestionsIgnoreFocusLoss ignore_focus_loss) {
   if (!suggestions.empty() && HasCreditCardSuggestions()) {
     touch_bar_controller_ = [WebTextfieldTouchBarController
         controllerForWindow:[container_view().GetNativeNSView() window]];
     [touch_bar_controller_ showCreditCardAutofillWithController:this];
+  } else if (touch_bar_controller_) {
+    [touch_bar_controller_ hideCreditCardAutofillTouchBar];
+    touch_bar_controller_ = nil;
   }
 
   AutofillPopupControllerImpl::Show(ui_session_id, std::move(suggestions),
-                                    trigger_source,
-                                    autoselect_first_suggestion);
+                                    trigger_source, autoselect_first_suggestion,
+                                    ignore_focus_loss);
   // No code below this line!
   // |Show| may hide the popup and destroy |this|, so |Show| should be the last
   // line.

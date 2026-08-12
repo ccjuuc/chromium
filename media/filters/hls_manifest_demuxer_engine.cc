@@ -9,6 +9,7 @@
 
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/task/bind_post_task.h"
@@ -176,6 +177,35 @@ HlsDemuxerStatusCallback BindOkContinuation(
       std::move(err), std::move(ok));
 }
 
+// Takes two sorted vector<T> and removes the shared elements. This is the
+// similar to discarding the intersection in a venn diagram:
+//       ╭─────────╮      ╭─────────╮
+//    ╭──╯░░░░░░░░░╰──╮╭──╯░░░░░░░░░╰──╮
+//  ╭─╯░░░░░░░░░░░░░░╭╰╯╮░░░░░░░░░░░░░░╰─╮
+// ╭╯░░░░░░░░░░░░░░░╭╯  ╰╮░░░░░░░░░░░░░░░╰╮
+// │░░░░░░░░░░░░░░░░│    │░░░░░░░░░░░░░░░░│
+// │░░░░░░░░░░░░░░░░│    │░░░░░░░░░░░░░░░░│
+// │░░░░░░░░░░░░░░░░│    │░░░░░░░░░░░░░░░░│
+// ╰╮░░░░░░░░░░░░░░░╰╮  ╭╯░░░░░░░░░░░░░░░╭╯
+//  ╰─╮░░░░░░░░░░░░░░╰╭╮╯░░░░░░░░░░░░░░╭─╯
+//    ╰──╮░░░░░░░░░╭──╯╰──╮░░░░░░░░░╭──╯
+//       ╰─────────╯      ╰─────────╯
+template <typename T>
+std::tuple<std::vector<T>, std::vector<T>> DisjointSets(
+    const std::vector<T>& left,
+    const std::vector<T>& right) {
+  std::vector<T> left_comp;
+  std::vector<T> right_comp;
+  auto comp = [](const T& A, const T& B) {
+    return A.stream_id() < B.stream_id();
+  };
+  std::set_difference(left.begin(), left.end(), right.begin(), right.end(),
+                      std::back_inserter(left_comp), comp);
+  std::set_difference(right.begin(), right.end(), left.begin(), left.end(),
+                      std::back_inserter(right_comp), comp);
+  return std::make_tuple(std::move(left_comp), std::move(right_comp));
+}
+
 }  // namespace
 
 HlsManifestDemuxerEngine::~HlsManifestDemuxerEngine() = default;
@@ -185,10 +215,12 @@ HlsManifestDemuxerEngine::HlsManifestDemuxerEngine(
     scoped_refptr<base::SequencedTaskRunner> media_task_runner,
     std::unique_ptr<TrackManager> track_manager,
     bool was_already_tainted,
+    url::Origin security_origin,
     GURL root_playlist_uri,
     MediaLog* media_log)
     : media_task_runner_(std::move(media_task_runner)),
       track_manager_(std::move(track_manager)),
+      security_origin_(std::move(security_origin)),
       root_playlist_uri_(std::move(root_playlist_uri)),
       media_log_(media_log->Clone()),
       network_access_(std::make_unique<HlsNetworkAccessImpl>(std::move(dsp))),
@@ -237,11 +269,11 @@ int64_t HlsManifestDemuxerEngine::GetMemoryUsage() {
   return total_stream_memory_;
 }
 
-bool HlsManifestDemuxerEngine::WouldTaintOrigin() {
+bool HlsManifestDemuxerEngine::WouldTaintOrigin() const {
   return origin_tainted_;
 }
 
-bool HlsManifestDemuxerEngine::IsStreaming() {
+bool HlsManifestDemuxerEngine::IsStreaming() const {
   return !is_seekable_;
 }
 
@@ -290,14 +322,43 @@ void HlsManifestDemuxerEngine::Stop() {
   host_ = nullptr;
 }
 
-void HlsManifestDemuxerEngine::SelectVideoVariant(const MediaTrack::Id&) {
-  // TODO(crbug.com/361853710): Implement behavior here once `add_track_` and
-  // `remove_track_` are called.
+void HlsManifestDemuxerEngine::SelectVideoTrack(const MediaTrack::Id& track) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(media_sequence_checker_);
+  if (rendition_manager_) {
+    rendition_manager_->SetPreferredVideoRendition(track);
+  }
 }
 
-void HlsManifestDemuxerEngine::SelectAudioRendition(const MediaTrack::Id&) {
-  // TODO(crbug.com/361853710): Implement behavior here once `add_track_` and
-  // `remove_track_` are called.
+void HlsManifestDemuxerEngine::SelectAudioTrack(const MediaTrack::Id& track) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(media_sequence_checker_);
+  if (rendition_manager_) {
+    rendition_manager_->SetPreferredAudioRendition(track);
+  }
+}
+
+std::vector<raw_ptr<DemuxerStream>>
+HlsManifestDemuxerEngine::FilterDemuxerStreams(
+    std::vector<raw_ptr<DemuxerStream>>&& all_streams) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(media_sequence_checker_);
+  if (rendition_manager_) {
+    switch (rendition_manager_->GetSupportedStreamTypes()) {
+      case hls::RenditionManager::CodecSupportType::kSupportedAudioOnly: {
+        std::erase_if(all_streams, [](raw_ptr<DemuxerStream> stream) {
+          return stream->type() != DemuxerStream::AUDIO;
+        });
+        break;
+      }
+      case hls::RenditionManager::CodecSupportType::kSupportedVideoOnly: {
+        std::erase_if(all_streams, [](raw_ptr<DemuxerStream> stream) {
+          return stream->type() != DemuxerStream::VIDEO;
+        });
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return all_streams;
 }
 
 void HlsManifestDemuxerEngine::Seek(base::TimeDelta time,
@@ -487,17 +548,14 @@ void HlsManifestDemuxerEngine::UpdateRenditionManifestUri(
     GURL uri,
     HlsDemuxerStatusCallback cb) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(media_sequence_checker_);
-  GURL uri_copy = uri;
-  ReadManifest(
-      std::move(uri_copy),
-      base::BindOnce(&HlsManifestDemuxerEngine::UpdateMediaPlaylistForRole,
-                     weak_factory_.GetWeakPtr(), std::move(role),
-                     std::move(uri), std::move(cb)));
+  ReadManifest(std::move(uri),
+               base::BindOnce(
+                   &HlsManifestDemuxerEngine::UpdateMediaPlaylistForRole,
+                   weak_factory_.GetWeakPtr(), std::move(role), std::move(cb)));
 }
 
 void HlsManifestDemuxerEngine::UpdateMediaPlaylistForRole(
     std::string role,
-    GURL uri,
     HlsDemuxerStatusCallback cb,
     HlsDataSourceProvider::ReadResult maybe_stream) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(media_sequence_checker_);
@@ -507,6 +565,27 @@ void HlsManifestDemuxerEngine::UpdateMediaPlaylistForRole(
     return;
   }
   auto stream = std::move(maybe_stream).value();
+  std::optional<url::Origin> manifest_origin = std::nullopt;
+
+  switch (stream->SecurityInfo().response_origins.size()) {
+    // A single security origin is the norm, and acceptable.
+    case 1: {
+      manifest_origin = *stream->SecurityInfo().response_origins.begin();
+      break;
+    }
+    case 0: {
+      if (stream->uri().has_value() && stream->uri()->SchemeIs("data")) {
+        // Data URIs have no security origin. Any other url should have one.
+        break;
+      }
+      [[fallthrough]];
+    }
+    default: {
+      std::move(cb).Run({HlsDemuxerStatus::Codes::kInvalidManifest,
+                         "Manifest origin was insecurely indeterminate"});
+      return;
+    }
+  }
 
   auto maybe_info = hls::Playlist::IdentifyPlaylist(stream->AsString());
   if (!maybe_info.has_value()) {
@@ -522,8 +601,15 @@ void HlsManifestDemuxerEngine::UpdateMediaPlaylistForRole(
     return;
   }
 
+  if (!manifest_origin && multivariant_root_) {
+    // Media playlists can be loaded from data urls - in which case we just
+    // use the multivariant origin.
+    manifest_origin = multivariant_root_->SecurityOrigin();
+  }
+
   auto maybe_playlist = ParseMediaPlaylistFromStringSource(
-      stream->AsString(), std::move(uri), (*maybe_info).version);
+      stream->AsString(), stream->uri().value(),
+      manifest_origin.value_or(security_origin_), (*maybe_info).version);
   if (!maybe_playlist.has_value()) {
     auto error = std::move(maybe_playlist).error();
     RecordParserFailure(error.code());
@@ -563,24 +649,16 @@ void HlsManifestDemuxerEngine::AdaptationAction(
 
 void HlsManifestDemuxerEngine::UpdateHlsDataSourceStats(
     HlsDataSourceProvider::ReadCb cb,
-    HlsDataSourceProvider::ReadStatus::Or<std::unique_ptr<HlsDataSourceStream>>
-        result) {
+    HlsDataSourceProvider::ReadResult result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(media_sequence_checker_);
   if (!result.has_value()) {
     std::move(cb).Run(std::move(result).error().AddHere());
     return;
   }
   auto stream = std::move(result).value();
-  origin_tainted_ |= stream->would_taint_origin();
+  origin_tainted_ |= stream->SecurityInfo().would_taint_origin;
   total_stream_memory_ = stream->memory_usage();
   std::move(cb).Run(std::move(stream));
-}
-
-void HlsManifestDemuxerEngine::ReadKey(
-    const hls::MediaSegment::EncryptionData& data,
-    HlsDataSourceProvider::ReadCb cb) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(media_sequence_checker_);
-  network_access_->ReadKey(std::move(data), BindStatsUpdate(std::move(cb)));
 }
 
 HlsDataSourceProvider::ReadCb HlsManifestDemuxerEngine::BindStatsUpdate(
@@ -606,14 +684,6 @@ void HlsManifestDemuxerEngine::ReadMediaSegment(
                                     BindStatsUpdate(std::move(cb)));
 }
 
-void HlsManifestDemuxerEngine::ReadStream(
-    std::unique_ptr<HlsDataSourceStream> stream,
-    HlsDataSourceProvider::ReadCb cb) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(media_sequence_checker_);
-  network_access_->ReadStream(std::move(stream),
-                              BindStatsUpdate(std::move(cb)));
-}
-
 void HlsManifestDemuxerEngine::UpdateNetworkSpeed(uint64_t bps) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(media_sequence_checker_);
   if (rendition_manager_) {
@@ -633,6 +703,28 @@ void HlsManifestDemuxerEngine::ParsePlaylist(
     return;
   }
   auto stream = std::move(m_stream).value();
+  std::optional<url::Origin> manifest_origin = std::nullopt;
+
+  switch (stream->SecurityInfo().response_origins.size()) {
+    // A single security origin is the norm, and acceptable.
+    case 1: {
+      manifest_origin = *stream->SecurityInfo().response_origins.begin();
+      break;
+    }
+    case 0: {
+      if (stream->uri().has_value() && stream->uri()->SchemeIs("data")) {
+        // Data URIs have no security origin. Any other url should have one.
+        break;
+      }
+      [[fallthrough]];
+    }
+    default: {
+      std::move(parse_complete_cb)
+          .Run({HlsDemuxerStatus::Codes::kInvalidManifest,
+                "Manifest origin was insecurely indeterminate"});
+      return;
+    }
+  }
 
   // A four hour movie manifest is ~100Kb.
   if (stream->buffer_size() > 102400) {
@@ -658,7 +750,8 @@ void HlsManifestDemuxerEngine::ParsePlaylist(
         return;
       }
       auto playlist = hls::MultivariantPlaylist::Parse(
-          stream->AsString(), parse_info.uri, (*m_info).version);
+          stream->AsString(), stream->uri().value(),
+          manifest_origin.value_or(security_origin_), (*m_info).version);
       if (!playlist.has_value()) {
         auto error = std::move(playlist).error();
         RecordParserFailure(error.code());
@@ -671,13 +764,15 @@ void HlsManifestDemuxerEngine::ParsePlaylist(
                                     std::move(playlist).value());
     }
     case hls::Playlist::Kind::kMediaPlaylist: {
-      if (parse_info.allow_multivariant_playlist) {
-        // Only a root playlist is allowed to be multivariant, so if the root
-        // is only a media playlist, then this entire playback is not
-        // multivariant.
+      if (!manifest_origin && multivariant_root_) {
+        // Media playlists can be loaded from data urls - in which case we just
+        // use the multivariant origin.
+        manifest_origin = multivariant_root_->SecurityOrigin();
       }
+
       auto playlist = ParseMediaPlaylistFromStringSource(
-          stream->AsString(), parse_info.uri, (*m_info).version);
+          stream->AsString(), stream->uri().value(),
+          manifest_origin.value_or(security_origin_), (*m_info).version);
       if (!playlist.has_value()) {
         auto error = std::move(playlist).error();
         RecordParserFailure(error.code());
@@ -697,9 +792,10 @@ hls::ParseStatus::Or<scoped_refptr<hls::MediaPlaylist>>
 HlsManifestDemuxerEngine::ParseMediaPlaylistFromStringSource(
     std::string_view source,
     GURL uri,
+    const url::Origin& manifest_origin,
     hls::types::DecimalInteger version) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(media_sequence_checker_);
-  return hls::MediaPlaylist::Parse(source, uri, version,
+  return hls::MediaPlaylist::Parse(source, uri, manifest_origin, version,
                                    multivariant_root_.get());
 }
 
@@ -751,10 +847,12 @@ void HlsManifestDemuxerEngine::OnMultivariantPlaylist(
 
 HlsDemuxerStatusCallback HlsManifestDemuxerEngine::BindPlaylistLoader(
     hls::RenditionGroup::RenditionTrack rendition,
+    const hls::VariantStream& variant,
     std::string rendition_role,
     HlsDemuxerStatusCallback do_next) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(media_sequence_checker_);
-  const GURL& rendition_uri = std::get<1>(rendition)->GetUri().value();
+  const GURL& rendition_uri = std::get<1>(rendition)->GetUri().value_or(
+      variant.GetPrimaryRenditionUri());
   auto existing = renditions_.find(rendition_role);
   if (existing != renditions_.end() &&
       existing->second->MediaPlaylistUri() == rendition_uri) {
@@ -781,19 +879,62 @@ void HlsManifestDemuxerEngine::OnRenditionsSelected(
     return;
   }
 
+  // after rebinding the playlists to our internal map, update the set of tracks
+  // that we expose to the front end.
+  UpdateSelectableTrackLists();
+
   // Update the codecs list
   std::vector<std::string> no_codecs;
   selected_variant_codecs_ = variant->GetCodecs().value_or(no_codecs);
 
   if (extra.has_value()) {
-    on_complete = BindPlaylistLoader(extra.value(), kAudioOverride,
+    on_complete = BindPlaylistLoader(extra.value(), *variant, kAudioOverride,
                                      std::move(on_complete));
+    track_manager_->SetTrackState(std::get<0>(extra.value()),
+                                  MediaTrack::State::kActive);
   }
   if (primary.has_value()) {
-    on_complete =
-        BindPlaylistLoader(primary.value(), kPrimary, std::move(on_complete));
+    on_complete = BindPlaylistLoader(primary.value(), *variant, kPrimary,
+                                     std::move(on_complete));
+    track_manager_->SetTrackState(std::get<0>(primary.value()),
+                                  MediaTrack::State::kActive);
   }
   std::move(on_complete).Run(OkStatus());
+}
+
+void HlsManifestDemuxerEngine::UpdateSelectableTrackLists() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(media_sequence_checker_);
+  auto audio_seq = rendition_manager_->GetSelectableAudioRenditions();
+  auto video_seq = rendition_manager_->GetSelectableVideoRenditions();
+
+  std::vector<MediaTrack> audio_tracks{audio_seq.begin(), audio_seq.end()};
+  std::vector<MediaTrack> video_tracks{video_seq.begin(), video_seq.end()};
+
+  auto track_sort = [](const MediaTrack& l, const MediaTrack& r) {
+    return l.stream_id() < r.stream_id();
+  };
+
+  std::sort(audio_tracks.begin(), audio_tracks.end(), track_sort);
+  std::sort(video_tracks.begin(), video_tracks.end(), track_sort);
+
+  auto [old_video, new_video] = DisjointSets(video_tracks_, video_tracks);
+  auto [old_audio, new_audio] = DisjointSets(audio_tracks_, audio_tracks);
+
+  for (const auto& track : old_video) {
+    track_manager_->RemoveTrack(track);
+  }
+  for (const auto& track : old_audio) {
+    track_manager_->RemoveTrack(track);
+  }
+  for (const auto& track : new_video) {
+    track_manager_->AddTrack(track);
+  }
+  for (const auto& track : new_audio) {
+    track_manager_->AddTrack(track);
+  }
+
+  audio_tracks_ = std::move(audio_tracks);
+  video_tracks_ = std::move(video_tracks);
 }
 
 void HlsManifestDemuxerEngine::LoadPlaylist(

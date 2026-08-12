@@ -44,13 +44,22 @@ class AndroidBrowserWindowUnitTest : public testing::Test {
   }
 
   void TearDown() override {
-    SetProfileManager(nullptr);
+    // Destroy the native AndroidBrowserWindow before resetting the
+    // ProfileManager. This matches the production destruction order, where
+    // AndroidBrowserWindow is destroyed before its associated Profile.
     InvokeJavaResetAndDestroy();
+    SetProfileManager(nullptr);
   }
 
   AndroidBrowserWindow* InvokeJavaGetOrCreateNativePtr() const {
     return reinterpret_cast<AndroidBrowserWindow*>(
         Java_AndroidBrowserWindowNativeUnitTestSupport_invokeGetOrCreateNativePtr(
+            AttachCurrentThread(), java_test_support_));
+  }
+
+  AndroidBrowserWindow* InvokeJavaGetNativePtr() const {
+    return reinterpret_cast<AndroidBrowserWindow*>(
+        Java_AndroidBrowserWindowNativeUnitTestSupport_invokeGetNativePtr(
             AttachCurrentThread(), java_test_support_));
   }
 
@@ -60,26 +69,20 @@ class AndroidBrowserWindowUnitTest : public testing::Test {
             AttachCurrentThread(), java_test_support_));
   }
 
-  AndroidBrowserWindow* InvokeJavaGetNativePtrForTesting() const {
-    return reinterpret_cast<AndroidBrowserWindow*>(
-        Java_AndroidBrowserWindowNativeUnitTestSupport_invokeGetNativePtrForTesting(
-            AttachCurrentThread(), java_test_support_));
-  }
-
   AndroidBaseWindow* InvokeJavaGetNativeBaseWindowPtrForTesting() const {
     return reinterpret_cast<AndroidBaseWindow*>(
         Java_AndroidBrowserWindowNativeUnitTestSupport_invokeGetNativeBaseWindowPtrForTesting(
             AttachCurrentThread(), java_test_support_));
   }
 
-  void InvokeJavaResetAndDestroy() {
-    Java_AndroidBrowserWindowNativeUnitTestSupport_invokeResetAndDestroy(
+  bool InvokeJavaIsDeleteScheduled() const {
+    return Java_AndroidBrowserWindowNativeUnitTestSupport_invokeIsDeleteScheduled(
         AttachCurrentThread(), java_test_support_);
   }
 
-  void InvokeJavaSetProfileForTesting(Profile* profile) const {
-    Java_AndroidBrowserWindowNativeUnitTestSupport_setProfileForTesting(
-        AttachCurrentThread(), java_test_support_, profile->GetJavaObject());
+  void InvokeJavaResetAndDestroy() {
+    Java_AndroidBrowserWindowNativeUnitTestSupport_invokeResetAndDestroy(
+        AttachCurrentThread(), java_test_support_);
   }
 
  protected:
@@ -122,6 +125,28 @@ TEST_F(AndroidBrowserWindowUnitTest,
   EXPECT_EQ(ptr1, ptr2);
 }
 
+TEST_F(AndroidBrowserWindowUnitTest, JavaGetNativePtrMethodReturnsCreatedPtr) {
+  // Arrange: ensure the native pointer is created first.
+  AndroidBrowserWindow* created_ptr = InvokeJavaGetOrCreateNativePtr();
+
+  // Act: call Java getNativePtr().
+  AndroidBrowserWindow* actual_ptr = InvokeJavaGetNativePtr();
+
+  // Assert: the two pointers should be the same.
+  EXPECT_EQ(created_ptr, actual_ptr);
+}
+
+TEST_F(AndroidBrowserWindowUnitTest,
+       JavaDestroyMethodMarksWindowAsScheduledForDeletion) {
+  // Arrange.
+  InvokeJavaGetOrCreateNativePtr();
+  EXPECT_FALSE(InvokeJavaIsDeleteScheduled());
+
+  // Act: call Java destroy().
+  InvokeJavaResetAndDestroy();
+  EXPECT_TRUE(InvokeJavaIsDeleteScheduled());
+}
+
 TEST_F(AndroidBrowserWindowUnitTest,
        JavaDestroyMethodClearsBrowserWindowAndBaseWindowPtrValuesInJava) {
   // Arrange.
@@ -132,8 +157,7 @@ TEST_F(AndroidBrowserWindowUnitTest,
   InvokeJavaResetAndDestroy();
 
   // Assert: the native pointers on the Java side should be set to null.
-  AndroidBrowserWindow* android_browser_window =
-      InvokeJavaGetNativePtrForTesting();
+  AndroidBrowserWindow* android_browser_window = InvokeJavaGetNativePtr();
   AndroidBaseWindow* android_base_window =
       InvokeJavaGetNativeBaseWindowPtrForTesting();
   EXPECT_EQ(nullptr, android_browser_window);
@@ -223,6 +247,29 @@ TEST_F(AndroidBrowserWindowUnitTest, GetProfileReturnsCorrectProfile) {
 
   // Assert.
   EXPECT_EQ(expected_profile, actual_profile);
+}
+
+TEST_F(AndroidBrowserWindowUnitTest, NotifiesBrowserDidClose) {
+  // Arrange: Ensure the native pointer is created.
+  AndroidBrowserWindow* android_browser_window =
+      InvokeJavaGetOrCreateNativePtr();
+
+  bool callback_run = false;
+  // Register a callback to be notified when the window closes.
+  base::CallbackListSubscription subscription =
+      android_browser_window->RegisterBrowserDidClose(base::BindRepeating(
+          [](bool* run_flag, BrowserWindowInterface* window) {
+            *run_flag = true;
+          },
+          base::Unretained(&callback_run)));
+
+  EXPECT_FALSE(callback_run);
+
+  // Act: Trigger destruction via the Java-facing API.
+  InvokeJavaResetAndDestroy();
+
+  // Assert: Verify the notification was sent.
+  EXPECT_TRUE(callback_run);
 }
 
 DEFINE_JNI(AndroidBrowserWindowNativeUnitTestSupport)

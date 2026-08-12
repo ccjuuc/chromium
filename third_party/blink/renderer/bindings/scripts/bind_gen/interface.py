@@ -422,11 +422,12 @@ def bind_callback_local_vars(code_node, cg_context):
                 "DOMWindow* ${blink_receiver} = "
                 "${class_name}::ToWrappableUnsafe(${isolate},${v8_receiver});")
         else:
-            # ToWrappableUnsafe will always return non-null, so we can use
-            # UnsafeTo via a reference to avoid the nullptr check as well.
+            # In the V8 sandbox attacker model, we can get any DOMWindow because
+            # LocalDOMWindow and RemoteDOMWindow share the same tag, therefore
+            # we need to check at runtime the returned type.
             text = (
-                "LocalDOMWindow* ${blink_receiver} = &UnsafeTo<LocalDOMWindow>("
-                "*${class_name}::ToWrappableUnsafe(${isolate},${v8_receiver}));"
+                "LocalDOMWindow* ${blink_receiver} = To<LocalDOMWindow>("
+                "${class_name}::ToWrappableUnsafe(${isolate},${v8_receiver}));"
             )
     else:
         pattern = (
@@ -456,7 +457,7 @@ def bind_callback_local_vars(code_node, cg_context):
         # the property being processed.
         local_vars.append(
             S("v8_receiver",
-              "v8::Local<v8::Object> ${v8_receiver} = ${info}.HolderV2();"))
+              "v8::Local<v8::Object> ${v8_receiver} = ${info}.Holder();"))
 
     # v8_return_value
     def create_v8_return_value(symbol_node):
@@ -479,8 +480,7 @@ def bind_callback_local_vars(code_node, cg_context):
 
 
 def _make_throw_security_error():
-    return TextNode(
-        "BindingSecurity::FailedAccessCheckFor(${info}.HolderV2());")
+    return TextNode("BindingSecurity::FailedAccessCheckFor(${info}.Holder());")
 
 
 def _make_reflect_content_attribute_key(code_node, cg_context):
@@ -571,7 +571,7 @@ def _make_reflect_process_keyword_state(cg_context):
             ["third_party/blink/renderer/core/keywords.h"]))
     nodes = [
         T("// [ReflectOnly]"),
-        T("const AtomicString reflect_value(${return_value}.LowerASCII());"),
+        T("const AtomicString reflect_value(${return_value}.ToAsciiLower());"),
         branches,
     ]
 
@@ -664,7 +664,7 @@ def _make_blink_api_call(code_node,
         arguments.append("${execution_context}")
     if "Document" in values:
         arguments.append(
-            "*bindings::ToDocumentFromExecutionContext(${execution_context})")
+            "bindings::ToDocumentFromExecutionContext(*${execution_context})")
     if "ThisValue" in values:
         arguments.append("ScriptValue(${isolate}, ${v8_receiver})")
 
@@ -917,6 +917,28 @@ def make_check_constructor_call(cg_context):
             "third_party/blink/renderer/platform/bindings/v8_object_constructor.h"
         ]))
     return node
+
+
+def make_check_not_subclassable_constructor(cg_context):
+    assert isinstance(cg_context, CodeGenContext)
+
+    if "NotSubclassable" not in cg_context.interface.extended_attributes:
+        return None
+
+    node = CxxUnlikelyIfNode(
+        cond=("${info}.NewTarget() != "
+              "${per_context_data}->ConstructorForType("
+              "${class_name}::GetWrapperTypeInfo())"),
+        attribute="[[unlikely]]",
+        body=TextNode("V8ThrowException::ThrowTypeError(${isolate}, "
+                      "\"Illegal constructor\");\n"
+                      "return;"))
+    node.accumulate(
+        CodeGenAccumulator.require_include_headers([
+            "third_party/blink/renderer/platform/bindings/v8_per_context_data.h",
+        ]))
+    return node
+
 
 def make_promise_return_context(cg_context):
     assert isinstance(cg_context, CodeGenContext)
@@ -1810,7 +1832,7 @@ def _make_empty_callback_def(cg_context, function_name):
         arg_decls = [
             "v8::Local<v8::Name> v8_property_name",
             "v8::Local<v8::Value> v8_property_value",
-            "const v8::PropertyCallbackInfo<void>& info",
+            "const v8::PropertyCallbackInfo<v8::Boolean>& info",
         ]
         arg_names = ["v8_property_name", "v8_property_value", "info"]
     elif (cg_context.v8_callback_type ==
@@ -1827,7 +1849,7 @@ def _make_empty_callback_def(cg_context, function_name):
         arg_decls = [
             "v8::Local<v8::Name> v8_property_name",
             "v8::Local<v8::Value> v8_property_value",
-            "const v8::PropertyCallbackInfo<void>& info",
+            "const v8::PropertyCallbackInfo<v8::Boolean>& info",
         ]
         arg_names = ["v8_property_name", "v8_property_value", "info"]
 
@@ -1841,7 +1863,14 @@ def _make_empty_callback_def(cg_context, function_name):
         body.add_template_var(arg_name, arg_name)
 
     bind_callback_local_vars(body, cg_context)
+
     if cg_context.attribute or cg_context.function_like:
+        body.register_code_symbol(
+            SymbolNode(
+                "kPerformDetachCheckFlag",
+                "constexpr auto kPerformDetachCheckFlag = PassAsSpanMarkerBase::Flags::kPerformDetachCheck;"
+            ))
+
         bind_blink_api_arguments(body, cg_context)
         bind_return_value(body, cg_context)
 
@@ -2195,6 +2224,8 @@ def make_constructor_function_def(cg_context, function_name):
         make_report_measure_as(cg_context),
         make_log_activity(cg_context),
         EmptyNode(),
+        make_check_not_subclassable_constructor(cg_context),
+        EmptyNode(),
         make_check_argument_length(cg_context),
         EmptyNode(),
     ])
@@ -2204,7 +2235,7 @@ def make_constructor_function_def(cg_context, function_name):
         text = _format(
             "V8HTMLConstructor::HtmlConstructor("
             "${info}, *${class_name}::GetWrapperTypeInfo(), "
-            "HTMLElementType::{});",
+            "ElementType::{});",
             name_style.constant(cg_context.class_like.identifier))
         body.append(T(text))
         body.accumulate(
@@ -2477,6 +2508,16 @@ def make_no_alloc_direct_call_callback_def(cg_context, function_name,
                           "${v8_arg0_receiver};")),
         S("handle_scope", "v8::HandleScope handle_scope(${isolate});")
     ])
+    # NADC stubs won't have any JS re-entry during argument conversion, so
+    # skip detach check for PassAsSpan arguments.
+    body.register_code_symbol(
+        S(
+            "kPerformDetachCheckFlag",
+            # TODO(caseq): figure out if it makes sense to skip it when we can.
+            # See https://crbug.com/499365904 for details.
+            "constexpr auto kPerformDetachCheckFlag = PassAsSpanMarkerBase::Flags::kPerformDetachCheck;"
+        ))
+
     bind_callback_local_vars(body, cg_context)
 
     if cg_context.may_throw_exception:
@@ -2705,8 +2746,9 @@ def _make_interceptor_callback_args(cg_context, named_or_indexed,
     arg_decls = []
     arg_names = []
 
-    # name/index parameter is used for every interceptor except Enumerator.
-    if callback_type != "Enumerator":
+    # name/index parameter is used for every interceptor except Enumerator
+    # and IndexOf.
+    if callback_type != "Enumerator" and callback_type != "IndexOf":
         if named_or_indexed == "Named":
             arg_decls.append("v8::Local<v8::Name> v8_property_name")
             arg_names.append("v8_property_name")
@@ -2721,7 +2763,7 @@ def _make_interceptor_callback_args(cg_context, named_or_indexed,
     elif callback_type == "Setter":
         arg_decls.append("v8::Local<v8::Value> v8_property_value")
         arg_names.append("v8_property_value")
-        callback_info_type = "void"
+        callback_info_type = "v8::Boolean"
     elif callback_type == "Query":
         callback_info_type = "v8::Integer"
     elif callback_type == "Deleter":
@@ -2732,9 +2774,20 @@ def _make_interceptor_callback_args(cg_context, named_or_indexed,
     elif callback_type == "Definer":
         arg_decls.append("const v8::PropertyDescriptor& v8_property_desc")
         arg_names.append("v8_property_desc")
-        callback_info_type = "void"
+        callback_info_type = "v8::Boolean"
     elif callback_type == "Descriptor":
         callback_info_type = "v8::Value"
+    elif callback_type == "IndexOf":
+        arg_decls.append("v8::Local<v8::Value> needle")
+        arg_names.append("needle")
+        arg_decls.append("uint32_t start_index")
+        arg_names.append("start_index")
+        arg_decls.append("uint32_t end_index")
+        arg_names.append("end_index")
+        arg_decls.append("uint32_t* out_length")
+        arg_names.append("out_length")
+        return_type = "uint32_t"
+        callback_info_type = "void"
     else:
         assert False
     arg_decls.append(
@@ -3064,6 +3117,79 @@ bindings::V8SetReturnValue(${info}, array);
     return func_decl, func_def
 
 
+def make_indexed_property_index_of_callback(cg_context, function_name):
+    assert isinstance(cg_context, CodeGenContext)
+    assert isinstance(function_name, str)
+
+    indexed_getter = (
+        cg_context.interface.indexed_and_named_properties.indexed_getter)
+
+    if not indexed_getter:
+        return None, None
+
+    if not indexed_getter.return_type.is_nullable:
+        return None, None
+
+    return_type, arg_decls, arg_names = _make_interceptor_callback_args(
+        cg_context, "Indexed", "IndexOf")
+    func_decl, func_def = _make_interceptor_callback(cg_context, function_name,
+                                                     return_type, arg_decls,
+                                                     arg_names,
+                                                     cg_context.class_name,
+                                                     "IndexedPropertyIndexOf")
+    body = func_def.body
+    body.add_template_var(
+        "v8_element_class",
+        "V8{}".format(native_value_tag(indexed_getter.return_type.unwrap())))
+
+    T = TextNode
+    F = FormatNode
+
+    body.register_code_symbols([
+        SymbolNode("length", "uint32_t length = ${blink_receiver}->length();"),
+        SymbolNode(
+            "blink_needle",
+            "auto&& blink_needle = ${v8_element_class}::ToWrappable(${isolate}, ${needle});"
+        ),
+    ])
+
+    body.extend([
+        T("""\
+// V8 expects the callback to
+// 1) store the actual collection length to *out_length,\
+"""),
+        T("*${out_length} = ${length};"),
+        EmptyNode(),
+        T("""\
+// 2) check if the needle can appear in the collection,\
+"""),
+        T("""\
+          if (${blink_needle} == nullptr) {
+            return std::numeric_limits<uint32_t>::max();  // Not found.
+          }\
+          """),
+        EmptyNode(),
+        T("""\
+// 3) check if [start_index, min(end_index, length)) range (left-to-right)
+//    contains the needle and return the respective index or UINT32_MAX
+//    otherwise. See v8::IndexedPropertyIndexOfCallback.\
+"""),
+        F("""\
+          ${end_index} = std::min(${end_index}, ${length});
+          for (uint32_t index = ${start_index}; index < ${end_index}; index++) {{
+            auto&& item = ${blink_receiver}->{getter_name}(index);
+            if (item == ${blink_needle}) {{
+              return index;
+            }}
+          }}
+          return std::numeric_limits<uint32_t>::max();  // Not found.\
+          """,
+          getter_name=indexed_getter.identifier),
+    ])
+
+    return func_decl, func_def
+
+
 def make_named_property_getter_callback(cg_context, function_name):
     assert isinstance(cg_context, CodeGenContext)
     assert isinstance(function_name, str)
@@ -3194,7 +3320,7 @@ def make_named_property_setter_callback(cg_context, function_name):
             body.append(
                 TextNode("""\
 // [LegacyOverrideBuiltIns]
-if (${info}.HolderV2()->GetRealNamedPropertyAttributesInPrototypeChain(
+if (${info}.Holder()->GetRealNamedPropertyAttributesInPrototypeChain(
         ${current_context}, ${v8_property_name}).IsJust()) {
   // Do not intercept. Fallback to the existing property.
   return v8::Intercepted::kNo;
@@ -4775,10 +4901,10 @@ def make_property_entries_and_callback_defs(cg_context, attribute_entries,
                     may_use_feature_selector=True)
 
             if runtime_enabled_features:
-              callback_def_nodes.accumulate(
-                  CodeGenAccumulator.require_include_headers([
-                      "third_party/blink/renderer/platform/runtime_enabled_features.h"
-                  ]))
+                callback_def_nodes.accumulate(
+                    CodeGenAccumulator.require_include_headers([
+                        "third_party/blink/renderer/platform/runtime_enabled_features.h"
+                    ]))
 
             if "PerWorldBindings" in member.extended_attributes:
                 assert not isinstance(
@@ -5780,6 +5906,9 @@ def make_indexed_and_named_property_callbacks_and_install_node(cg_context):
         key = lambda interface: len(interface.inclusive_inherited_interfaces)
         return sorted(filter(None, interfaces), key=key)[-1]
 
+    interface.enable_index_of = ("V8EnableIndexOf"
+                                 in interface.extended_attributes)
+
     cg_context = cg_context.make_copy(
         v8_callback_type=CodeGenContext.V8_OTHER_CALLBACK)
 
@@ -5879,6 +6008,10 @@ interface.indexed_and_named_properties.named_getter.extended_attributes:
         add_callback(*make_indexed_property_enumerator_callback(
             cg_context.make_copy(indexed_interceptor_kind="Enumerator"),
             "IndexedPropertyEnumeratorCallback"))
+        if interface.enable_index_of:
+            add_callback(*make_indexed_property_index_of_callback(
+                cg_context.make_copy(indexed_interceptor_kind="IndexOf"),
+                "IndexedPropertyIndexOfCallback"))
 
     if props.indexed_getter or props.named_getter:
         impl_bridge = v8_bridge_class_name(
@@ -5911,6 +6044,11 @@ interface.indexed_and_named_properties.named_getter.extended_attributes:
 % endif
         {impl_bridge}::IndexedPropertyDefinerCallback,
         {impl_bridge}::IndexedPropertyDescriptorCallback,
+% if interface.enable_index_of:
+        {impl_bridge}::IndexedPropertyIndexOfCallback,
+% else:
+        nullptr,  // index_of
+% endif
         v8::Local<v8::Value>(),
         {property_handler_flags}));"""
         install_node.append(
@@ -6330,6 +6468,10 @@ const WrapperTypeInfo ${class_name}::wrapper_type_info_{{
     if class_like.is_interface and class_like.inherited:
         wrapper_type_info_of_inherited = "{}::GetWrapperTypeInfo()".format(
             v8_bridge_class_name(class_like.inherited))
+        wrapper_type_info_def.append(
+            F("static_assert(std::derived_from<{blink_class}, {blink_base_class}>);",
+              blink_class=blink_class_name(class_like),
+              blink_base_class=blink_class_name(class_like.inherited)))
     else:
         wrapper_type_info_of_inherited = "nullptr"
     if (class_like.is_interface or class_like.is_async_iterator

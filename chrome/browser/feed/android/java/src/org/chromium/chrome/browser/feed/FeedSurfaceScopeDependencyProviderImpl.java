@@ -22,6 +22,7 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.xsurface.LoggingParameters;
 import org.chromium.chrome.browser.xsurface.PersistentKeyValueCache;
 import org.chromium.chrome.browser.xsurface.SurfaceHeaderOffsetObserver;
+import org.chromium.chrome.browser.xsurface.feed.FeedSurfaceScopeDependencyProvider;
 import org.chromium.chrome.browser.xsurface.feed.ResourceFetcher;
 import org.chromium.url.GURL;
 
@@ -29,15 +30,14 @@ import org.chromium.url.GURL;
 @JNINamespace("feed::android")
 @NullMarked
 public class FeedSurfaceScopeDependencyProviderImpl
-        implements org.chromium.chrome.browser.xsurface.feed.FeedSurfaceScopeDependencyProvider,
-                ScrollListener {
+        implements FeedSurfaceScopeDependencyProvider, ScrollListener {
     public static class NetworkResponse {
         public boolean success;
         public int statusCode;
         public String[] headerNameAndValues;
         public byte @Nullable [] rawData;
 
-        @CalledByNative("NetworkResponse")
+        @CalledByNative
         public NetworkResponse(
                 boolean success,
                 int statusCode,

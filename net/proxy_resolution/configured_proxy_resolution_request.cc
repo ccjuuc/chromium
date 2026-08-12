@@ -31,11 +31,11 @@ bool CheckDnsCondition(
   }
 }
 
-base::Value::Dict CreateEndHostResolutionNetLogParams(
+base::DictValue CreateEndHostResolutionNetLogParams(
     const url::SchemeHostPort& host,
     const ResolveHostResult& result,
     bool was_resolved_sync) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("host", host.Serialize());
   dict.Set("was_resolved_sync", was_resolved_sync);
   result.AddToDict(dict);
@@ -49,6 +49,7 @@ ConfiguredProxyResolutionRequest::ConfiguredProxyResolutionRequest(
     const GURL& url,
     const std::string& method,
     const NetworkAnonymizationKey& network_anonymization_key,
+    handles::NetworkHandle target_network,
     ProxyInfo* results,
     CompletionOnceCallback user_callback,
     const NetLogWithSource& net_log,
@@ -59,6 +60,7 @@ ConfiguredProxyResolutionRequest::ConfiguredProxyResolutionRequest(
       url_(url),
       method_(method),
       network_anonymization_key_(network_anonymization_key),
+      target_network_(target_network),
       net_log_(net_log),
       priority_(priority),
       creation_time_(base::TimeTicks::Now()) {
@@ -100,7 +102,7 @@ int ConfiguredProxyResolutionRequest::Start() {
           // multiple calls for the same host.
           auto result = service_->RequestHostResolution(
               dns_condition, weak_factory_.GetWeakPtr(),
-              network_anonymization_key_, net_log_, priority_);
+              network_anonymization_key_, target_network_, net_log_, priority_);
           if (result) {
             net_log_.AddEvent(
                 NetLogEventType::PROXY_OVERRIDE_END_HOST_RESOLUTION, [&] {

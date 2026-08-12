@@ -38,7 +38,8 @@ class AutofillSuggestionController : public AutofillPopupViewDelegate {
       base::WeakPtr<AutofillSuggestionDelegate> delegate,
       content::WebContents* web_contents,
       PopupControllerCommon controller_common,
-      int32_t form_control_ax_id);
+      int32_t form_control_ax_id,
+      AutofillSuggestionTriggerSource trigger_source);
 
   using UiSessionId = AutofillClient::SuggestionUiSessionId;
   // Generates a new unique session id for suggestion UI.
@@ -50,7 +51,7 @@ class AutofillSuggestionController : public AutofillPopupViewDelegate {
 
   // Accepts the suggestion at `index`. The suggestion is only accepted if the
   // UI has been shown for at least `kIgnoreEarlyClicksOnSuggestionsDuration` to
-  // allow ruling out accidental UI interactions (crbug.com/1279268).
+  // allow ruling out accidental UI interactions (crbug.com/40058217).
   static constexpr base::TimeDelta kIgnoreEarlyClicksOnSuggestionsDuration =
       base::Milliseconds(500);
   virtual void AcceptSuggestion(
@@ -81,7 +82,8 @@ class AutofillSuggestionController : public AutofillPopupViewDelegate {
   virtual void Show(UiSessionId session_id,
                     std::vector<Suggestion> suggestions,
                     AutofillSuggestionTriggerSource trigger_source,
-                    AutoselectFirstSuggestion autoselect_first_suggestion) = 0;
+                    AutoselectFirstSuggestion autoselect_first_suggestion,
+                    AutofillSuggestionsIgnoreFocusLoss ignore_focus_loss) = 0;
 
   // Returns the unique session id for the suggestions UI that is showing. If
   // no UI is showing, it returns `std::nullopt`. If there are multiple,
@@ -98,6 +100,23 @@ class AutofillSuggestionController : public AutofillPopupViewDelegate {
 
   // Updates the data list values currently shown.
   virtual void UpdateDataListValues(base::span<const SelectOption> options) = 0;
+
+  // Returns true if the controller can be reused for the given parameters.
+  virtual bool MayRecycle(
+      base::WeakPtr<AutofillSuggestionDelegate> delegate,
+      content::WebContents* web_contents,
+      AutofillSuggestionTriggerSource trigger_source) const = 0;
+
+  // Reuses the controller with the new parameters.
+  virtual void Recycle(PopupControllerCommon controller_common,
+                       int32_t form_control_ax_id) = 0;
+
+ private:
+  static base::WeakPtr<AutofillSuggestionController> Create(
+      base::WeakPtr<AutofillSuggestionDelegate> delegate,
+      content::WebContents* web_contents,
+      PopupControllerCommon controller_common,
+      AutofillSuggestionTriggerSource trigger_source);
 
  protected:
   ~AutofillSuggestionController() override = default;

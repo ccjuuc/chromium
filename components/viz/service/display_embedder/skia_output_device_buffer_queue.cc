@@ -188,11 +188,7 @@ SkiaOutputDeviceBufferQueue::SkiaOutputDeviceBufferQueue(
   if (::features::IncreaseBufferCountForHighFrameRate() &&
       capabilities_.number_of_buffers == 5) {
     capabilities_.pending_swap_params.max_pending_swaps = 2;
-    if (::features::Use90HzSwapChainCountFor72fps()) {
-      capabilities_.pending_swap_params.max_pending_swaps_72hz = 3;
-    } else {
-       capabilities_.pending_swap_params.max_pending_swaps_72hz = 2;
-    }
+    capabilities_.pending_swap_params.max_pending_swaps_72hz = 3;
     capabilities_.pending_swap_params.max_pending_swaps_90hz = 3;
     capabilities_.pending_swap_params.max_pending_swaps_120hz = 4;
   }
@@ -542,8 +538,9 @@ bool SkiaOutputDeviceBufferQueue::OverlayDataKeyEqual::operator()(
   return lhs == rhs.mailbox();
 }
 
-void SkiaOutputDeviceBufferQueue::SetVSyncDisplayID(int64_t display_id) {
-  presenter_->SetVSyncDisplayID(display_id);
+void SkiaOutputDeviceBufferQueue::SetVSyncDisplayID(int64_t display_id,
+                                                    bool force_update) {
+  presenter_->SetVSyncDisplayID(display_id, force_update);
 }
 
 }  // namespace viz

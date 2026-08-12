@@ -4,9 +4,9 @@
 
 #include "chrome/browser/devtools/device/tcp_device_provider.h"
 
+#include <algorithm>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
@@ -19,6 +19,7 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "net/base/completion_repeating_callback.h"
 #include "net/base/net_errors.h"
+#include "net/base/network_handle.h"
 #include "net/base/network_isolation_key.h"
 #include "net/dns/public/host_resolver_results.h"
 #include "net/dns/public/resolve_error_info.h"
@@ -83,7 +84,11 @@ class ResolveHostAndOpenSocket final : public network::ResolveHostClientBase {
       return;
     }
     std::unique_ptr<net::StreamSocket> socket(new net::TCPClientSocket(
-        resolved_addresses, nullptr, nullptr, nullptr, net::NetLogSource()));
+        resolved_addresses, nullptr, nullptr, nullptr, net::NetLogSource(),
+        // There are currently no use cases for targeting a network when
+        // forwarding via devtools. This will need to be reconsidered if a need
+        // arises.
+        net::handles::kInvalidNetworkHandle));
     net::StreamSocket* socket_ptr = socket.get();
     auto split_callback = base::SplitOnceCallback(base::BindOnce(
         &RunSocketCallback, std::move(callback_), std::move(socket)));
@@ -119,7 +124,7 @@ void TCPDeviceProvider::QueryDevices(SerialsCallback callback) {
     const std::pair<std::string,
                     AndroidDeviceManager::DeviceInfo::ConnectedState>
         host = {target.host(), AndroidDeviceManager::DeviceInfo::kUnknown};
-    if (base::Contains(result, host)) {
+    if (std::ranges::contains(result, host)) {
       continue;
     }
     result.push_back(host);

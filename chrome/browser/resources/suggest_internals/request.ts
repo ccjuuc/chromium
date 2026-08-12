@@ -11,6 +11,7 @@ import '//resources/cr_elements/icons.html.js';
 import '//resources/cr_elements/cr_chip/cr_chip.js';
 
 import {assert} from '//resources/js/assert.js';
+import {loadTimeData} from '//resources/js/load_time_data.js';
 import {sanitizeInnerHtml} from '//resources/js/parse_html_subset.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
@@ -42,6 +43,7 @@ export class SuggestRequestElement extends CrLitElement {
       responseJson_: {type: String},
       pgcl_: {type: String},
       expanded_: {type: Boolean},
+      webuiRoundedIconsEnabled_: {type: Boolean},
     };
   }
 
@@ -50,6 +52,8 @@ export class SuggestRequestElement extends CrLitElement {
   protected accessor responseJson_: string = '';
   private accessor pgcl_: string = '';
   protected accessor expanded_: boolean = false;
+  protected accessor webuiRoundedIconsEnabled_: boolean =
+      loadTimeData.getBoolean('webuiRoundedIconsEnabled');
 
   override willUpdate(changedProperties: PropertyValues<this>) {
     super.willUpdate(changedProperties);
@@ -95,11 +99,11 @@ export class SuggestRequestElement extends CrLitElement {
   private computePageClassification_(): string {
     assert(this.request);
 
-    if (!this.request.url.url) {
+    if (!this.request.url) {
       return '';
     }
     // Find pgcl value in request url.
-    const url = new URL(this.request.url.url);
+    const url = new URL(this.request.url);
     const queryMatches = url.search.match(/pgcl=(?<pgcl>[^&]*)/);
     // If no pgcl value in request, set pgcl to empty
     if (queryMatches === null || !queryMatches.groups) {
@@ -110,6 +114,9 @@ export class SuggestRequestElement extends CrLitElement {
   }
 
   protected getPageClassificationLabel_(): string {
+    if (!this.pgcl_) {
+      return 'No Page Classification';
+    }
     return PageClassification[parseInt(this.pgcl_)]!;
   }
 
@@ -155,7 +162,7 @@ export class SuggestRequestElement extends CrLitElement {
     }
 
     try {
-      const url = new URL(this.request.url.url);
+      const url = new URL(this.request.url);
       const queryMatches = url.search.match(/(q|delq)=[^&]*/);
       return url.pathname + '?' + (queryMatches ? queryMatches[0] : '');
     } catch (e) {
@@ -171,15 +178,16 @@ export class SuggestRequestElement extends CrLitElement {
   protected getStatusIcon_(): string {
     switch (this.request?.status) {
       case RequestStatus.kHardcoded:
-        return 'suggest:lock';
+        return this.webuiRoundedIconsEnabled_ ? 'suggest:lock-filled' :
+                                                'suggest:lock-old';
       case RequestStatus.kCreated:
-        return 'cr:create';
+        return 'cr:edit-filled';
       case RequestStatus.kSent:
         return 'cr:schedule';
       case RequestStatus.kSucceeded:
         return 'cr:check-circle';
       case RequestStatus.kFailed:
-        return 'cr:cancel';
+        return 'cr:cancel-filled';
       default:
         return '';
     }
@@ -217,7 +225,8 @@ export class SuggestRequestElement extends CrLitElement {
     // conversion from microseconds to milliseconds.
     const windowsEpoch = Date.UTC(1601, 0, 1, 0, 0, 0, 0);
     const unixEpoch = Date.UTC(1970, 0, 1, 0, 0, 0, 0);
-    // |epochDeltaMs| is equivalent to base::Time::kTimeTToMicrosecondsOffset.
+    // |epochDeltaMs| is equivalent to
+    // base::Time::kMicrosecondsFromWindowsToUnixEpoch.
     const epochDeltaMs = unixEpoch - windowsEpoch;
     const startTimeMs = Number(this.request.startTime.internalValue) / 1000;
     return (new Date(startTimeMs - epochDeltaMs)).toLocaleTimeString();
@@ -226,37 +235,21 @@ export class SuggestRequestElement extends CrLitElement {
   protected onCopyRequestClick_() {
     navigator.clipboard.writeText(this.requestDataJson_);
 
-    this.dispatchEvent(new CustomEvent('show-toast', {
-      bubbles: true,
-      composed: true,
-      detail: 'Request Copied to Clipboard',
-    }));
+    this.fire('show-toast', 'Request Copied to Clipboard');
   }
 
   protected onCopyResponseClick_() {
     navigator.clipboard.writeText(this.responseJson_);
 
-    this.dispatchEvent(new CustomEvent('show-toast', {
-      bubbles: true,
-      composed: true,
-      detail: 'Response Copied to Clipboard',
-    }));
+    this.fire('show-toast', 'Response Copied to Clipboard');
   }
 
   protected onHardcodeResponseClick_() {
-    this.dispatchEvent(new CustomEvent('open-hardcode-response-dialog', {
-      bubbles: true,
-      composed: true,
-      detail: this.responseJson_,
-    }));
+    this.fire('open-hardcode-response-dialog', this.responseJson_);
   }
 
   protected onChipClick_(e: CustomEvent<string>) {
-    this.dispatchEvent(new CustomEvent('chip-click', {
-      bubbles: true,
-      composed: true,
-      detail: this.pgcl_,
-    }));
+    this.fire('chip-click', this.pgcl_);
     // Allow chip to be found with aria label (originally hidden).
     const button =
         this.shadowRoot.querySelector<HTMLElement>('cr-expand-button')!;

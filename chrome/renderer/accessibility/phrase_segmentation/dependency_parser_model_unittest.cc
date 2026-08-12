@@ -8,6 +8,7 @@
 #include <string>
 
 #include "base/base_paths.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
@@ -25,7 +26,8 @@ base::File CreateInvalidModelFile() {
   base::File file(file_path, (base::File::FLAG_CREATE | base::File::FLAG_READ |
                               base::File::FLAG_WRITE |
                               base::File::FLAG_CAN_DELETE_ON_CLOSE));
-  EXPECT_TRUE(UNSAFE_TODO(file.WriteAtCurrentPos("12345", 5)));
+  EXPECT_TRUE(
+      file.WriteAtCurrentPosAndCheck(base::byte_span_from_cstring("12345")));
   return file;
 }
 
@@ -125,9 +127,9 @@ TEST_F(DependencyParserModelValidTest, GetDependencyHeads) {
   // #             - cream(11)
   // #               children:
   // #                 - or(10)
-  static const auto input = std::to_array<std::string>(
-      {"Ice", "cream", "is", "a", "frozen", "dessert", "typically", "made",
-       "from", "milk", "or", "cream"});
+  const std::vector<std::string> input = {
+      "Ice",       "cream", "is",   "a",    "frozen", "dessert",
+      "typically", "made",  "from", "milk", "or",     "cream"};
   auto prediction = dependency_parser_model_->GetDependencyHeads(input);
   EXPECT_THAT(prediction,
               ::testing::ElementsAre(1, 5, 5, 5, 5, 5, 7, 5, 9, 7, 11, 9));
