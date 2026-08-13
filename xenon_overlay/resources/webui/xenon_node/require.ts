@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+/* Dynamic Node N-API / Mojo wire bridge; values are intentionally untyped. */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import {PageCallbackRouter, PageHandlerFactory, PageHandlerRemote} from './xenon_node.mojom-webui.js';
 import type {NodeExportInfo, NodeInvokeArg, PageHandlerInterface} from './xenon_node.mojom-webui.js';
 import type {Value} from 'chrome://resources/mojo/mojo/public/mojom/base/values.mojom-webui.js';

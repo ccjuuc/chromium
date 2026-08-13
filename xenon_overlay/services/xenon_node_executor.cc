@@ -40,6 +40,11 @@
 #include "xenon_overlay/chrome/browser/napi/napi_switches.h"
 #include "xenon_overlay/public/mojom/xenon_service.mojom.h"
 
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+#include <delayimp.h>
+#endif
+
 #if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
 #include "uv.h"
 #endif
@@ -52,6 +57,43 @@ constexpr int kMaxValueConversionDepth = 32;
 constexpr char kWireTypeKey[] = "__xenon_node_wire_type__";
 constexpr char kWireValueKey[] = "value";
 constexpr base::TimeDelta kUvLoopPollInterval = base::Milliseconds(10);
+
+#if BUILDFLAG(IS_WIN)
+LONG CALLBACK LogDelayLoadFailure(PEXCEPTION_POINTERS exception) {
+  if (!exception || !exception->ExceptionRecord) {
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+
+  const DWORD code = exception->ExceptionRecord->ExceptionCode;
+  if (code !=
+          VcppException(ERROR_SEVERITY_ERROR, ERROR_PROC_NOT_FOUND) &&
+      code != VcppException(ERROR_SEVERITY_ERROR, ERROR_MOD_NOT_FOUND)) {
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+
+  const EXCEPTION_RECORD* record = exception->ExceptionRecord;
+  if (record->NumberParameters < 1 || !record->ExceptionInformation[0]) {
+    LOG(ERROR) << "[NapiLoader] Delay-load exception code=" << code
+               << " without DelayLoadInfo";
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+
+  const auto* info = reinterpret_cast<const DelayLoadInfo*>(
+      record->ExceptionInformation[0]);
+  const char* dll_name = info->szDll ? info->szDll : "<unknown>";
+  if (info->dlp.fImportByName) {
+    LOG(ERROR) << "[NapiLoader] Delay-load failure: dll=" << dll_name
+               << ", proc="
+               << (info->dlp.szProcName ? info->dlp.szProcName : "<unknown>")
+               << ", win_error=" << info->dwLastError;
+  } else {
+    LOG(ERROR) << "[NapiLoader] Delay-load failure: dll=" << dll_name
+               << ", ordinal=" << info->dlp.dwOrdinal
+               << ", win_error=" << info->dwLastError;
+  }
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
 
 std::optional<base::Value> V8ValueToBaseValue(v8::Isolate* isolate,
                                               v8::Local<v8::Context> context,
@@ -123,7 +165,16 @@ PreparedAddon PrepareAddon(const base::FilePath& requested_path,
     }
   }
 
+#if BUILDFLAG(IS_WIN)
+  PVOID delay_load_handler =
+      AddVectoredExceptionHandler(/*First=*/1, &LogDelayLoadFailure);
+#endif
   prepared.library = base::ScopedNativeLibrary(prepared.path);
+#if BUILDFLAG(IS_WIN)
+  if (delay_load_handler) {
+    RemoveVectoredExceptionHandler(delay_load_handler);
+  }
+#endif
   if (!prepared.library.is_valid()) {
     const base::NativeLibraryLoadError* error = prepared.library.GetError();
     prepared.error = error ? error->ToString() : "Failed to load native addon";
@@ -476,7 +527,7 @@ mojom::NodeExportInfoPtr DescribeExportValue(v8::Isolate* isolate,
   CollectOwnChildExports(isolate, context, object, depth + 1, max_depth,
                          &info->children);
 
-  v8::Local<v8::Value> proto_value = object->GetPrototypeV2();
+  v8::Local<v8::Value> proto_value = object->GetPrototype();
   if (proto_value->IsObject()) {
     v8::Local<v8::Object> proto = proto_value.As<v8::Object>();
     if (!IsBuiltinPrototype(isolate, context, proto)) {
@@ -609,13 +660,13 @@ std::optional<base::Value> V8ArrayBufferToBaseValue(
 }
 
 base::Value MakeTaggedWireValue(const std::string& type) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(kWireTypeKey, type);
   return base::Value(std::move(dict));
 }
 
 base::Value MakeTaggedWireValue(const std::string& type, base::Value value) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(kWireTypeKey, type);
   dict.Set(kWireValueKey, std::move(value));
   return base::Value(std::move(dict));
@@ -693,7 +744,7 @@ std::optional<base::Value> V8ValueToBaseValue(v8::Isolate* isolate,
   }
   if (value->IsArray()) {
     v8::Local<v8::Array> array = value.As<v8::Array>();
-    base::Value::List list;
+    base::ListValue list;
     list.reserve(array->Length());
     for (uint32_t i = 0; i < array->Length(); ++i) {
       v8::Local<v8::Value> element;
@@ -716,7 +767,7 @@ std::optional<base::Value> V8ValueToBaseValue(v8::Isolate* isolate,
   }
   if (value->IsMap()) {
     v8::Local<v8::Array> entries = value.As<v8::Map>()->AsArray();
-    base::Value::List pairs;
+    base::ListValue pairs;
     pairs.reserve(entries->Length() / 2);
     for (uint32_t i = 0; i < entries->Length(); i += 2) {
       v8::Local<v8::Value> key;
@@ -733,7 +784,7 @@ std::optional<base::Value> V8ValueToBaseValue(v8::Isolate* isolate,
       if (!converted_key || !converted_item) {
         return std::nullopt;
       }
-      base::Value::List pair;
+      base::ListValue pair;
       pair.Append(std::move(*converted_key));
       pair.Append(std::move(*converted_item));
       pairs.Append(std::move(pair));
@@ -742,7 +793,7 @@ std::optional<base::Value> V8ValueToBaseValue(v8::Isolate* isolate,
   }
   if (value->IsSet()) {
     v8::Local<v8::Array> entries = value.As<v8::Set>()->AsArray();
-    base::Value::List items;
+    base::ListValue items;
     items.reserve(entries->Length());
     for (uint32_t i = 0; i < entries->Length(); ++i) {
       v8::Local<v8::Value> item;
@@ -775,7 +826,7 @@ std::optional<base::Value> V8ValueToBaseValue(v8::Isolate* isolate,
       return std::nullopt;
     }
 
-    base::Value::Dict dict;
+    base::DictValue dict;
     for (uint32_t i = 0; i < keys->Length(); ++i) {
       v8::Local<v8::Value> key;
       if (!keys->Get(context, i).ToLocal(&key)) {
@@ -856,7 +907,7 @@ v8::MaybeLocal<v8::Value> BaseValueToV8Value(v8::Isolate* isolate,
           .As<v8::Value>();
     }
     case base::Value::Type::LIST: {
-      const base::Value::List& list = value.GetList();
+      const base::ListValue& list = value.GetList();
       v8::Local<v8::Array> array =
           v8::Array::New(isolate, static_cast<int>(list.size()));
       uint32_t index = 0;
@@ -874,7 +925,7 @@ v8::MaybeLocal<v8::Value> BaseValueToV8Value(v8::Isolate* isolate,
       return array.As<v8::Value>();
     }
     case base::Value::Type::DICT: {
-      const base::Value::Dict& dict = value.GetDict();
+      const base::DictValue& dict = value.GetDict();
       const std::string* wire_type = dict.FindString(kWireTypeKey);
       if (wire_type) {
         if (*wire_type == "undefined") {

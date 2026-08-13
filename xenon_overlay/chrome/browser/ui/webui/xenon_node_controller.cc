@@ -137,7 +137,7 @@ void XenonNodeController::PreparePlayerHost(
     PreparePlayerHostCallback callback) {
 #if BUILDFLAG(IS_WIN)
   if (!player_host_widget_) {
-    base::Value::Dict options;
+    base::DictValue options;
     options.Set("title", "Xenon Player");
     options.Set("width", 960);
     options.Set("height", 540);

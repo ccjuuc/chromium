@@ -5,7 +5,7 @@
 import {addNodeModuleLoadedListener, getModuleExportTree, inspectExport, isSameModulePath, preparePlayerHost, require as nodeRequire, whenRequired,} from './require.js';
 import type {NodeExportInfo} from './require.js';
 
-type NativeResult = any;
+type NativeResult = unknown;
 
 const DEFAULT_ADDON_PATH = 'test_addon.node';
 const PC_ADDON_PATH = 'pc_addon.node';
@@ -16,7 +16,7 @@ interface NativeAddon {
       a: number, b: number,
       callback: (value: NativeResult) => void): Promise<NativeResult>;
   StartThread(callback: (message: NativeResult) => void): Promise<NativeResult>;
-  InspectTypes(input: Record<string, any>): Promise<NativeResult>;
+  InspectTypes(input: Record<string, unknown>): Promise<NativeResult>;
   BinaryEcho(input: ArrayBuffer|Uint8Array): Promise<NativeResult>;
   PromiseValue(): Promise<NativeResult>;
   MultiCallback(
@@ -72,7 +72,7 @@ function mediaDisplayName(playUrl: string): string {
 
 declare global {
   interface Window {
-    addon?: NativeAddon&Partial<PcAddon>&Record<string, any>;
+    addon?: NativeAddon&Partial<PcAddon>&Record<string, unknown>;
   }
 }
 
@@ -544,7 +544,7 @@ document.addEventListener('DOMContentLoaded', () => {
     addLog(`[WebUI] const addon = require("${path}")`);
     try {
       const addon = nodeRequire(path) as NativeAddon&Partial<PcAddon>&
-          Record<string, any>;
+          Record<string, unknown>;
       await whenRequired(path);
       if (loadRequestId !== activeLoadRequestId) {
         return;

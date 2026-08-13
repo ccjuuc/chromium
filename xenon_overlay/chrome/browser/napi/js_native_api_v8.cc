@@ -84,7 +84,8 @@ NapiFinalizerData* GetWrapData(napi_env env, v8::Local<v8::Object> object) {
     return nullptr;
   }
   return static_cast<NapiFinalizerData*>(
-      v8::Local<v8::External>::Cast(value)->Value());
+      v8::Local<v8::External>::Cast(value)->Value(
+          v8::kExternalPointerTypeTagDefault));
 }
 
 std::unique_ptr<NapiFinalizerData> TakeFinalizer(NapiFinalizerData* finalizer) {
@@ -150,7 +151,8 @@ static void CallbackDispatcher(const v8::FunctionCallbackInfo<v8::Value>& info) 
     return;
   }
   CallbackData* cbd = static_cast<CallbackData*>(
-      v8::Local<v8::External>::Cast(data_val)->Value());
+      v8::Local<v8::External>::Cast(data_val)->Value(
+          v8::kExternalPointerTypeTagDefault));
 
   NapiValueScope value_scope(cbd->env);
   napi_callback_info__ cb_info{info, cbd->data};
@@ -1068,7 +1070,8 @@ napi_status napi_define_properties(napi_env env, napi_value object, size_t prope
 
     if (desc.method) {
       auto cbd = std::make_unique<CallbackData>(CallbackData{desc.method, desc.data, env});
-      v8::Local<v8::External> ext = v8::External::New(env->isolate, cbd.get());
+      v8::Local<v8::External> ext = v8::External::New(
+          env->isolate, cbd.get(), v8::kExternalPointerTypeTagDefault);
       env->callbacks.push_back(std::move(cbd));
       
       v8::Local<v8::Function> fn;
@@ -1080,13 +1083,15 @@ napi_status napi_define_properties(napi_env env, napi_value object, size_t prope
 
       if (desc.getter) {
         auto cbd = std::make_unique<CallbackData>(CallbackData{desc.getter, desc.data, env});
-        v8::Local<v8::External> ext = v8::External::New(env->isolate, cbd.get());
+        v8::Local<v8::External> ext = v8::External::New(
+            env->isolate, cbd.get(), v8::kExternalPointerTypeTagDefault);
         env->callbacks.push_back(std::move(cbd));
         if (!v8::Function::New(context, CallbackDispatcher, ext).ToLocal(&local_getter)) return napi_generic_failure;
       }
       if (desc.setter) {
         auto cbd = std::make_unique<CallbackData>(CallbackData{desc.setter, desc.data, env});
-        v8::Local<v8::External> ext = v8::External::New(env->isolate, cbd.get());
+        v8::Local<v8::External> ext = v8::External::New(
+            env->isolate, cbd.get(), v8::kExternalPointerTypeTagDefault);
         env->callbacks.push_back(std::move(cbd));
         if (!v8::Function::New(context, CallbackDispatcher, ext).ToLocal(&local_setter)) return napi_generic_failure;
       }
@@ -1108,7 +1113,7 @@ napi_status napi_get_prototype(napi_env env,
   if (!object->Get()->IsObject()) {
     return napi_object_expected;
   }
-  *result = env->CreateValue(object->Get().As<v8::Object>()->GetPrototypeV2());
+  *result = env->CreateValue(object->Get().As<v8::Object>()->GetPrototype());
   return napi_ok;
 }
 
@@ -1226,7 +1231,8 @@ napi_status napi_create_function(napi_env env, const char* utf8name, size_t leng
   v8::Local<v8::Context> context = env->GetContext();
 
   auto cbd = std::make_unique<CallbackData>(CallbackData{cb, data, env});
-  v8::Local<v8::External> ext = v8::External::New(env->isolate, cbd.get());
+  v8::Local<v8::External> ext = v8::External::New(
+      env->isolate, cbd.get(), v8::kExternalPointerTypeTagDefault);
   env->callbacks.push_back(std::move(cbd));
 
   v8::Local<v8::Function> fn;
@@ -1583,7 +1589,8 @@ napi_status napi_define_class(napi_env env,
 
   auto cbd =
       std::make_unique<CallbackData>(CallbackData{constructor, data, env});
-  v8::Local<v8::External> ext = v8::External::New(isolate, cbd.get());
+  v8::Local<v8::External> ext = v8::External::New(
+      isolate, cbd.get(), v8::kExternalPointerTypeTagDefault);
   env->callbacks.push_back(std::move(cbd));
 
   // Only install the constructor on the template. Instance methods are attached
@@ -1707,7 +1714,8 @@ napi_status napi_wrap(napi_env env, napi_value js_object, void* native_object, n
   auto data = std::make_unique<NapiFinalizerData>(
       NapiFinalizerData{env, native_object, finalize_cb, finalize_hint, {}});
   NapiFinalizerData* data_ptr = data.get();
-  v8::Local<v8::External> external = v8::External::New(env->isolate, data_ptr);
+  v8::Local<v8::External> external = v8::External::New(
+      env->isolate, data_ptr, v8::kExternalPointerTypeTagDefault);
   if (!obj->SetPrivate(context, GetWrapPrivateKey(env), external)
            .FromMaybe(false)) {
     return napi_generic_failure;
@@ -1774,7 +1782,8 @@ napi_status napi_remove_wrap(napi_env env, napi_value js_object, void** result) 
 
 napi_status napi_create_external(napi_env env, void* data, napi_finalize finalize_cb, void* finalize_hint, napi_value* result) {
   if (!env || !result) return napi_invalid_arg;
-  v8::Local<v8::External> ext = v8::External::New(env->isolate, data);
+  v8::Local<v8::External> ext = v8::External::New(
+      env->isolate, data, v8::kExternalPointerTypeTagDefault);
   
   if (finalize_cb) {
     auto finalizer = std::make_unique<NapiFinalizerData>(
@@ -1793,7 +1802,8 @@ napi_status napi_create_external(napi_env env, void* data, napi_finalize finaliz
 napi_status napi_get_value_external(napi_env env, napi_value value, void** result) {
   if (!env || !value || !result) return napi_invalid_arg;
   if (!value->Get()->IsExternal()) return napi_invalid_arg;
-  *result = v8::Local<v8::External>::Cast(value->Get())->Value();
+  *result = v8::Local<v8::External>::Cast(value->Get())
+                ->Value(v8::kExternalPointerTypeTagDefault);
   return napi_ok;
 }
 

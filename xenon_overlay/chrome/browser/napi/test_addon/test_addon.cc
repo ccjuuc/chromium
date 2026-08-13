@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <thread>
 
+#include "base/containers/span.h"
 #include "node_api.h"
 
 #if defined(XENON_TEST_UV_COMPAT)
@@ -200,10 +201,10 @@ napi_value BinaryEcho(napi_env env, napi_callback_info info) {
     return nullptr;
   }
 
-  const auto* bytes = static_cast<const uint8_t*>(data);
   uint32_t checksum = 0;
-  for (size_t i = 0; i < byte_length; ++i) {
-    checksum += bytes[i];
+  for (uint8_t byte : UNSAFE_BUFFERS(base::span(
+           static_cast<const uint8_t*>(data), byte_length))) {
+    checksum += byte;
   }
 
   napi_value result;

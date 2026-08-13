@@ -401,12 +401,16 @@ TEST_F(NapiLoaderTest, LoadAndRunTestAddon) {
     v8::Local<v8::Function> callback_fn = v8::Function::New(
         context(),
         [](const v8::FunctionCallbackInfo<v8::Value>& info) {
-          double** out = static_cast<double**>(v8::Local<v8::External>::Cast(info.Data())->Value());
+          double** out = static_cast<double**>(
+              v8::Local<v8::External>::Cast(info.Data())
+                  ->Value(v8::kExternalPointerTypeTagDefault));
           if (info.Length() > 0 && info[0]->IsNumber()) {
             **out = info[0].As<v8::Number>()->Value();
           }
         },
-        v8::External::New(isolate(), cb_data.get())).ToLocalChecked();
+        v8::External::New(isolate(), cb_data.get(),
+                          v8::kExternalPointerTypeTagDefault))
+        .ToLocalChecked();
 
     v8::Local<v8::Value> argv[3] = {
         v8::Number::New(isolate(), 10.0),
@@ -436,13 +440,17 @@ TEST_F(NapiLoaderTest, LoadAndRunTestAddon) {
     v8::Local<v8::Function> callback_fn = v8::Function::New(
         context(),
         [](const v8::FunctionCallbackInfo<v8::Value>& info) {
-          std::string** out = static_cast<std::string**>(v8::Local<v8::External>::Cast(info.Data())->Value());
+          std::string** out = static_cast<std::string**>(
+              v8::Local<v8::External>::Cast(info.Data())
+                  ->Value(v8::kExternalPointerTypeTagDefault));
           if (info.Length() > 0 && info[0]->IsString()) {
             v8::String::Utf8Value utf8(info.GetIsolate(), info[0]);
             **out = *utf8;
           }
         },
-        v8::External::New(isolate(), cb_data.get())).ToLocalChecked();
+        v8::External::New(isolate(), cb_data.get(),
+                          v8::kExternalPointerTypeTagDefault))
+        .ToLocalChecked();
 
     v8::Local<v8::Value> argv[1] = { callback_fn };
     v8::Local<v8::Value> dummy_result;

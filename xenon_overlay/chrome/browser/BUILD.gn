@@ -188,6 +188,7 @@ source_set("browser") {
     "//chrome/browser/ui",
     "//chrome/browser/ui/startup",
     "//chrome/browser/ui/startup:xenon_login_startup_hooks",
+    "//chrome/common/beijing:render_dll_names",
     "//components/crx_file",
     "//components/keep_alive_registry",
     "//components/services/unzip/content",
@@ -199,11 +200,9 @@ source_set("browser") {
     "//gin",
     "//mojo/public/cpp/bindings",
     "//net",
-    "//chrome/common/beijing:render_dll_names",
     "//services/network/public/cpp",
     "//services/network/public/mojom",
     "//skia",
-    "//third_party/expat",
     "//third_party/zlib/google:zip",
     "//ui/base",
     "//ui/compositor",
@@ -251,7 +250,7 @@ if (enable_xenon_service) {
   }
 }
 
-if (enable_xenon_node_uv_compat) {
+if (enable_xenon_node_uv_compat && !is_win) {
   source_set("napi_node_exports") {
     sources = [
       "napi/js_native_api_v8.cc",
@@ -268,26 +267,42 @@ if (enable_xenon_node_uv_compat) {
 }
 
 if (is_win) {
-  shared_library("node") {
-    sources = [
-      "napi/js_native_api_v8.cc",
-      "napi/js_native_api_v8.h",
-    ]
-    include_dirs = [ "napi" ]
-    deps = [
-      "//base",
-      "//v8",
-      "//xenon_overlay/buildflags",
-    ]
-    if (enable_xenon_node_uv_compat) {
-      deps += [ "//xenon_overlay/third_party:libuv" ]
-    }
-  }
-
   if (enable_xenon_node_uv_compat) {
+    node_forwarders_def = "$target_gen_dir/napi_node_forwarders.def"
+    action("generate_napi_node_forwarders") {
+      script = "napi/generate_node_forwarders.py"
+      inputs = [
+        "napi/js_native_api.h",
+        "napi/js_native_api_v8.h",
+        "napi/node_api.h",
+        "//xenon_overlay/third_party/libuv/include/uv.h",
+      ]
+      outputs = [ node_forwarders_def ]
+      args = [
+               "--output",
+               rebase_path(node_forwarders_def, root_build_dir),
+             ] + rebase_path(inputs, root_build_dir)
+    }
+
+    shared_library("node") {
+      sources = [
+        "napi/node_forwarder_stub.cc",
+        node_forwarders_def,
+      ]
+      deps = [ ":generate_napi_node_forwarders" ]
+    }
+
     shared_library("node_exe") {
       output_name = "node"
       output_extension = "exe"
+      sources = [
+        "napi/node_forwarder_stub.cc",
+        node_forwarders_def,
+      ]
+      deps = [ ":generate_napi_node_forwarders" ]
+    }
+  } else {
+    shared_library("node") {
       sources = [
         "napi/js_native_api_v8.cc",
         "napi/js_native_api_v8.h",
@@ -297,26 +312,26 @@ if (is_win) {
         "//base",
         "//v8",
         "//xenon_overlay/buildflags",
-        "//xenon_overlay/third_party:libuv",
       ]
     }
   }
 }
 
 shared_library("test_addon") {
-  testonly = true
   output_extension = "node"
   output_prefix_override = true
   sources = [ "napi/test_addon/test_addon.cc" ]
   include_dirs = [ "napi" ]
-  deps = []
+  deps = [ "//base" ]
   if (enable_xenon_node_uv_compat) {
     defines = [ "XENON_TEST_UV_COMPAT" ]
     include_dirs += [ "//xenon_overlay/third_party/libuv/include" ]
   }
   if (is_win) {
     if (enable_xenon_node_uv_compat) {
+      sources += [ "napi/test_addon/win_delay_load_hook.cc" ]
       deps += [ ":node_exe" ]
+      ldflags = [ "/DELAYLOAD:node.exe" ]
     } else {
       deps += [ ":node" ]
     }

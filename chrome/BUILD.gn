@@ -241,10 +241,14 @@ if (!is_android && !is_mac) {
       ]
 
       if (enable_xenon_node_uv_compat) {
+        sources += [
+          "$root_gen_dir/xenon_overlay/chrome/browser/napi_node_forwarders.def",
+        ]
         deps += [
           "//xenon_overlay/chrome/app:player_container_process",
-          "//xenon_overlay/chrome/browser:napi_node_exports",
+          "//xenon_overlay/chrome/browser:generate_napi_node_forwarders",
         ]
+        data_deps += [ "//xenon_overlay/chrome/browser:test_addon" ]
       }
 
       data_deps += [
