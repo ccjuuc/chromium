@@ -140,7 +140,7 @@ class ComponentExtensionManager {
   extensions::ExtensionId AddExtensionWithManifest(
       content::BrowserContext* context,
       const std::string& extension_name,
-      base::Value::Dict manifest,
+      base::DictValue manifest,
       const base::FilePath& extension_path);
 
   extensions::ExtensionId InstallEncryptedExtension(
@@ -157,7 +157,7 @@ class ComponentExtensionManager {
       base::WeakPtr<Profile> profile,
       const std::string& extension_name,
       OnExtensionLoadedCallback callback,
-      std::pair<base::FilePath, std::optional<base::Value::Dict>> result);
+      std::pair<base::FilePath, std::optional<base::DictValue>> result);
 
   void OnUpdateCheckComplete(base::WeakPtr<Profile> profile,
                              const std::string& extension_name,

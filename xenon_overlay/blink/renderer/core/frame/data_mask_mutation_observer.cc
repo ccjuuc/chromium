@@ -5,7 +5,9 @@
 #include "xenon_overlay/blink/renderer/core/frame/data_mask_mutation_observer.h"
 
 #include "third_party/blink/renderer/bindings/core/v8/v8_mutation_observer_init.h"
+#include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/mutation_record.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "xenon_overlay/blink/renderer/core/frame/data_mask_applier.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 

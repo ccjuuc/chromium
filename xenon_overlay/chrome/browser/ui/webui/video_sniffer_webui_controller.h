@@ -24,10 +24,10 @@ class VideoSnifferWebUIController : public content::WebUIController {
   VideoSnifferWebUIController& operator=(const VideoSnifferWebUIController&) = delete;
 
  private:
-  void HandleGetSniffedMedia(const base::Value::List& args);
-  void HandleClearSniffedMedia(const base::Value::List& args);
-  void HandleDownloadMedia(const base::Value::List& args);
-  void HandleMergeMedia(const base::Value::List& args);
+  void HandleGetSniffedMedia(const base::ListValue& args);
+  void HandleClearSniffedMedia(const base::ListValue& args);
+  void HandleDownloadMedia(const base::ListValue& args);
+  void HandleMergeMedia(const base::ListValue& args);
 };
 
 class VideoSnifferWebUIConfig : public content::WebUIConfig {

@@ -81,7 +81,7 @@ bool CalculateContentSize(XenonReminderNotificationContainer* container,
 std::unique_ptr<XenonReminderNotificationWidget>
 XenonReminderNotificationWidget::CreateForBrowser(Browser* browser,
                                                   BrowserView* browser_view) {
-  if (!browser || !browser->profile()) {
+  if (!browser || !browser->GetProfile()) {
     return nullptr;
   }
   std::unique_ptr<XenonReminderNotificationWidget> widget(
@@ -93,7 +93,7 @@ XenonReminderNotificationWidget::CreateForBrowser(Browser* browser,
 
 XenonReminderNotificationWidget::XenonReminderNotificationWidget(
     Browser* browser)
-    : browser_(browser), profile_(browser->profile()) {
+    : browser_(browser), profile_(browser->GetProfile()) {
   XenonReminderNotificationManager::GetInstance()->AddObserver(this);
 }
 

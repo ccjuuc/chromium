@@ -14,8 +14,9 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "cc/paint/paint_flags.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
@@ -251,7 +252,7 @@ class XenonCommonDialogView : public views::View {
         header->AddChildView(views::CreateVectorImageButtonWithNativeTheme(
             base::BindRepeating(&XenonCommonDialogView::OnCloseButtonClicked,
                                 base::Unretained(this)),
-            vector_icons::kCloseChromeRefreshIcon, 24));
+            vector_icons::kCloseChromeRefreshOldIcon, 24));
     close_button->SetBorder(nullptr);
     close_button->SetPreferredSize(
         gfx::Size(kCloseButtonSize, kCloseButtonSize));
@@ -528,10 +529,14 @@ void XenonCommonDialog::Show(gfx::NativeWindow parent,
                              bool show_mask) {
   // If parent is null or not found in browser list, fallback to active browser
   // window.
-  if (!parent || !chrome::FindBrowserWithWindow(parent)) {
-    Browser* active_browser = chrome::FindLastActive();
-    if (active_browser && active_browser->window()) {
-      parent = active_browser->window()->GetNativeWindow();
+  GlobalBrowserCollection* browsers = GlobalBrowserCollection::GetInstance();
+  if (!parent || !browsers->FindBrowserWithWindow(parent)) {
+    BrowserWindowInterface* active_window = browsers->GetLastActiveBrowser();
+    Browser* active_browser = active_window
+                                  ? active_window->GetBrowserForMigrationOnly()
+                                  : nullptr;
+    if (active_browser && active_browser->GetWindow()) {
+      parent = active_browser->GetWindow()->GetNativeWindow();
     }
   }
 

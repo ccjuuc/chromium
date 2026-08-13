@@ -50,7 +50,7 @@ constexpr int kTipBarBorderThickness = 1;
 std::unique_ptr<XenonTipBarWidget> XenonTipBarWidget::CreateForBrowser(
     Browser* browser,
     BrowserView* browser_view) {
-  if (!browser || !browser->profile()) {
+  if (!browser || !browser->GetProfile()) {
     return nullptr;
   }
   std::unique_ptr<XenonTipBarWidget> tip_bar(new XenonTipBarWidget(browser));

@@ -61,11 +61,11 @@ std::optional<std::string> CalculateFileSha256(const base::FilePath& path) {
   return base::HexEncodeLower(digest);
 }
 
-const std::string* GetPublicKey(const base::Value::Dict& manifest) {
+const std::string* GetPublicKey(const base::DictValue& manifest) {
   return manifest.FindString(extensions::manifest_keys::kPublicKey);
 }
 
-bool ManifestMatchesExpectedId(const base::Value::Dict& manifest,
+bool ManifestMatchesExpectedId(const base::DictValue& manifest,
                                const std::string& expected_extension_id) {
   const std::string* raw_key = GetPublicKey(manifest);
   std::string public_key_bytes;
@@ -85,7 +85,7 @@ std::optional<EncryptedExtensionUpdateMetadata> ReadUpdateMetadata(
     return std::nullopt;
   }
 
-  std::optional<base::Value::Dict> value =
+  std::optional<base::DictValue> value =
       base::JSONReader::ReadDict(contents, base::JSON_PARSE_RFC);
   if (!value) {
     SetError(error, "invalid encrypted extension update metadata");
@@ -254,7 +254,7 @@ std::optional<EncryptedExtensionPackage> ReadEncryptedExtensionPackage(
     return std::nullopt;
   }
 
-  std::optional<base::Value::Dict> manifest = base::JSONReader::ReadDict(
+  std::optional<base::DictValue> manifest = base::JSONReader::ReadDict(
       manifest_entry->second, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!manifest) {
     SetError(error, "component extension manifest is invalid");
@@ -434,7 +434,7 @@ bool PrepareEncryptedExtensionUpdate(const base::FilePath& downloaded_zip_path,
     return false;
   }
 
-  base::Value::Dict update;
+  base::DictValue update;
   update.Set("zip", metadata.zip_filename);
   update.Set("version", metadata.version);
   update.Set("url", metadata.url);

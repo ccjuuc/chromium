@@ -35,7 +35,8 @@
 #include "url/gurl.h"
 #include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "chrome/common/chrome_render_frame.mojom.h"
 #include "content/public/browser/render_frame_host.h"
@@ -764,7 +765,7 @@ void XenonWebDialog::ShowForLogin(content::BrowserContext* context,
 
 void XenonWebDialog::ShowWithOptions(content::BrowserContext* context,
                                      const GURL& url,
-                                     const base::Value::Dict& options,
+                                     const base::DictValue& options,
                                      raw_ptr<views::Widget>* out_widget,
                                      gfx::NativeView parent,
                                      base::OnceClosure on_dialog_closed) {
@@ -826,12 +827,18 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
                                   bool use_custom_modal) {
   content::WebContents* web_contents = nullptr;
   if (modal_type == ui::mojom::ModalType::kChild && parent) {
-    Browser* browser = chrome::FindBrowserWithWindow(parent);
-    if (!browser) {
-      browser = chrome::FindBrowserWithWindow(parent->GetToplevelWindow());
+    GlobalBrowserCollection* browsers = GlobalBrowserCollection::GetInstance();
+    BrowserWindowInterface* browser_window =
+        browsers->FindBrowserWithWindow(parent);
+    if (!browser_window) {
+      browser_window =
+          browsers->FindBrowserWithWindow(parent->GetToplevelWindow());
     }
+    Browser* browser = browser_window
+                           ? browser_window->GetBrowserForMigrationOnly()
+                           : nullptr;
     if (browser) {
-      web_contents = browser->tab_strip_model()->GetActiveWebContents();
+      web_contents = browser->GetTabStripModel()->GetActiveWebContents();
     }
   }
 

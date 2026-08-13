@@ -29,13 +29,13 @@ class SimpleWebUIController : public content::WebUIController {
   // Message handlers for JavaScript chrome.send() calls.
 
   // Handles "getSystemInfo" - returns mock system information.
-  void HandleGetSystemInfo(const base::Value::List& args);
+  void HandleGetSystemInfo(const base::ListValue& args);
 
   // Handles "logMessage" - logs a message from JavaScript.
-  void HandleLogMessage(const base::Value::List& args);
+  void HandleLogMessage(const base::ListValue& args);
 
   // Handles "performAction" - performs an action and sends result back.
-  void HandlePerformAction(const base::Value::List& args);
+  void HandlePerformAction(const base::ListValue& args);
 };
 
 // WebUIConfig for SimpleWebUI - handles URL matching and controller creation.

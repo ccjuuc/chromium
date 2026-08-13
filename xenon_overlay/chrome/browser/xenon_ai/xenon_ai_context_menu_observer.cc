@@ -13,9 +13,10 @@
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_id.h"
 #include "components/renderer_context_menu/render_view_context_menu_proxy.h"
 #include "content/public/browser/context_menu_params.h"
 #include "content/public/browser/web_contents.h"
@@ -196,9 +197,12 @@ void XenonAiContextMenuObserver::ExecuteCommand(int command_id, int event_flags)
       service->SetPendingPrompt(text);
     }
 
-    Browser* browser = chrome::FindBrowserWithTab(web_contents_);
-    if (browser) {
-      if (SidePanelCoordinator* coordinator = SidePanelCoordinator::From(browser)) {
+    BrowserWindowInterface* browser_window =
+        GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+            web_contents_);
+    if (browser_window) {
+      if (SidePanelCoordinator* coordinator =
+              SidePanelCoordinator::From(browser_window)) {
         coordinator->Show(SidePanelEntryId::kXenonAI);
       }
     }

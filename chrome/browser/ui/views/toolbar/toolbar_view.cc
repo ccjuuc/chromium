@@ -22,6 +22,7 @@
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/actor/ui/actor_ui_metrics.h"
 #include "chrome/browser/actor/ui/task_list_bubble/actor_task_list_bubble.h"
 #include "chrome/browser/actor/ui/task_list_bubble/actor_task_list_bubble_controller.h"
@@ -618,7 +619,7 @@ void ToolbarView::Init() {
   auto chromium_leaf_proxy_pref_button = std::make_unique<ToolbarButton>(
       base::BindRepeating(&ToolbarView::ChromiumLeafProxyPrefButtonPressed,
                           base::Unretained(this)));
-  chromium_leaf_proxy_pref_button->SetVectorIcon(kNewTabToolbarButtonIcon);
+  chromium_leaf_proxy_pref_button->SetVectorIcon(kNewTabRefreshOldIcon);
   chromium_leaf_proxy_pref_button->SetTooltipText(
       u"写入 Leaf 代理 pref（内置 VLESS / 分流）");
   chromium_leaf_proxy_pref_button_ =
@@ -1495,10 +1496,10 @@ void ToolbarView::OnThemeChanged() {
 void ToolbarView::ChromiumLeafProxyPrefButtonPressed(const ui::Event& event) {
   (void)event;
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF) && BUILDFLAG(CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY)
-  if (!browser_ || !browser_->profile()) {
+  if (!browser_ || !browser_->GetProfile()) {
     return;
   }
-  PrefService* prefs = browser_->profile()->GetPrefs();
+  PrefService* prefs = browser_->GetProfile()->GetPrefs();
   if (!prefs) {
     return;
   }

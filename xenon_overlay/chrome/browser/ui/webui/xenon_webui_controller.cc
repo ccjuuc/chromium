@@ -63,21 +63,21 @@ class XenonLoginWebUIMessageHandler : public content::WebUIMessageHandler {
                             base::Unretained(this)));
   }
 
-  void HandleLoginDone(const base::Value::List& args) {
+  void HandleLoginDone(const base::ListValue& args) {
     Profile* profile = Profile::FromWebUI(web_ui());
     if (profile) {
       XenonLoginController::GetInstance()->SetAppSessionLoggedIn(profile, true);
     }
   }
 
-  void HandleLogoutTest(const base::Value::List& args) {
+  void HandleLogoutTest(const base::ListValue& args) {
     Profile* profile = Profile::FromWebUI(web_ui());
     if (profile) {
       XenonLoginController::GetInstance()->SetAppSessionLoggedIn(profile, false);
     }
   }
 
-  void HandleClose(const base::Value::List& args) {
+  void HandleClose(const base::ListValue& args) {
     content::WebContents* contents = web_ui()->GetWebContents();
     if (!contents) {
       return;

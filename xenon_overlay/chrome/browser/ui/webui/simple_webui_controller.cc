@@ -67,7 +67,7 @@ SimpleWebUIController::~SimpleWebUIController() = default;
 // -----------------------------------------------------------------------------
 
 void SimpleWebUIController::HandleGetSystemInfo(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   // The first argument is the callback ID for response
   if (args.empty() || !args[0].is_string()) {
     LOG(ERROR) << "HandleGetSystemInfo: Missing callback ID";
@@ -77,7 +77,7 @@ void SimpleWebUIController::HandleGetSystemInfo(
   const std::string& callback_id = args[0].GetString();
 
   // Use mock data instead of real system info
-  base::Value::Dict system_info;
+  base::DictValue system_info;
   system_info.Set("operatingSystem", "MockOS");
   system_info.Set("osVersion", "1.0.0");
   system_info.Set("architecture", "x64");
@@ -93,7 +93,7 @@ void SimpleWebUIController::HandleGetSystemInfo(
       base::Value(std::move(system_info)));
 }
 
-void SimpleWebUIController::HandleLogMessage(const base::Value::List& args) {
+void SimpleWebUIController::HandleLogMessage(const base::ListValue& args) {
   // Expected format: chrome.send('logMessage', ['message text', 'level'])
   if (args.empty() || !args[0].is_string()) {
     LOG(ERROR) << "HandleLogMessage: Invalid arguments";
@@ -117,7 +117,7 @@ void SimpleWebUIController::HandleLogMessage(const base::Value::List& args) {
 }
 
 void SimpleWebUIController::HandlePerformAction(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   // Expected: [callback_id, action_name, ...params]
   if (args.size() < 2 || !args[0].is_string() || !args[1].is_string()) {
     LOG(ERROR) << "HandlePerformAction: Missing callback ID or action name";
@@ -129,7 +129,7 @@ void SimpleWebUIController::HandlePerformAction(
 
   LOG(INFO) << "SimpleWebUIController: Performing action: " << action_name;
 
-  base::Value::Dict result;
+  base::DictValue result;
   result.Set("success", true);
   result.Set("action", action_name);
   result.Set("timestamp", base::Time::Now().InSecondsFSinceUnixEpoch());

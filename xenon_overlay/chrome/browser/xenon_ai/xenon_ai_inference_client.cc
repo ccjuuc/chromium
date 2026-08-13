@@ -264,8 +264,8 @@ class BurnInferencerHost {
                      const std::string& instruction_utf8,
                      std::string* combined_output,
                      std::string* error_message) {
-    base::Value::Dict request =
-        base::Value::Dict()
+    base::DictValue request =
+        base::DictValue()
             .Set("input", input_path.AsUTF8Unsafe())
             .Set("instruction", instruction_utf8)
             .Set("task", "rewrite");

@@ -205,8 +205,6 @@ constexpr APIPermissionInfo::InitInfo permissions_to_register[] = {
     {APIPermissionID::kWebrtcLoggingPrivateAudioDebug,
      "webrtcLoggingPrivate.audioDebug",
      APIPermissionInfo::kFlagCannotBeOptional},
-    {APIPermissionID::kWebstorePrivate, "webstorePrivate",
-     APIPermissionInfo::kFlagCannotBeOptional},
     {APIPermissionID::kXenonPrivate, "xenonPrivate",
      APIPermissionInfo::kFlagCannotBeOptional},
     {APIPermissionID::kShenzhen, "shenzhen",

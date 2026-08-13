@@ -6,7 +6,8 @@
 
 #include "base/logging.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/events/keycodes/keyboard_codes.h"
@@ -29,10 +30,13 @@ constexpr char kTestReminderUrl[] = "https://www.example.com";
 
 }  // namespace
 
-XenonReminderBrowserObserver::XenonReminderBrowserObserver() = default;
+XenonReminderBrowserObserver::XenonReminderBrowserObserver() {
+  browser_collection_observation_.Observe(
+      GlobalBrowserCollection::GetInstance());
+}
 
 XenonReminderBrowserObserver::~XenonReminderBrowserObserver() {
-  BrowserList::GetInstance()->RemoveObserver(this);
+  browser_collection_observation_.Reset();
   // 不在此处对 focus_managers_ 做 Unregister：进程退出时 Browser/Widget 可能已销毁，
   // 各窗口关闭时已在 OnBrowserRemoved 中 Unregister 并 erase。
   reminder_widgets_.clear();
@@ -40,8 +44,13 @@ XenonReminderBrowserObserver::~XenonReminderBrowserObserver() {
   focus_managers_.clear();
 }
 
-void XenonReminderBrowserObserver::OnBrowserAdded(Browser* browser) {
-  if (!browser || !browser->profile()) {
+void XenonReminderBrowserObserver::OnBrowserCreated(
+    BrowserWindowInterface* browser_window) {
+  AttachToBrowser(browser_window->GetBrowserForMigrationOnly());
+}
+
+void XenonReminderBrowserObserver::AttachToBrowser(Browser* browser) {
+  if (!browser || !browser->GetProfile()) {
     return;
   }
   BrowserView* browser_view =
@@ -66,7 +75,9 @@ void XenonReminderBrowserObserver::OnBrowserAdded(Browser* browser) {
   LOG(INFO) << "XenonReminder: attached to browser, Ctrl+Shift+R to test";
 }
 
-void XenonReminderBrowserObserver::OnBrowserRemoved(Browser* browser) {
+void XenonReminderBrowserObserver::OnBrowserClosed(
+    BrowserWindowInterface* browser_window) {
+  Browser* browser = browser_window->GetBrowserForMigrationOnly();
   UnregisterTestAccelerator(browser);
   reminder_widgets_.erase(browser);
   tip_bar_widgets_.erase(browser);

@@ -45,7 +45,7 @@ class RenderDllTestWebUIController : public content::WebUIController {
       delete;
 
  private:
-  void HandleGetDefaultDllPath(const base::Value::List& args);
+  void HandleGetDefaultDllPath(const base::ListValue& args);
 };
 
 class RenderDllTestWebUIConfig : public content::WebUIConfig {

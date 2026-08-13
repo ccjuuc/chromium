@@ -14,7 +14,9 @@
 #include "base/time/time.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
+#include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
@@ -179,9 +181,10 @@ bool IsSidebarAutoHideAllowedByCommandLine() {
 }  // namespace
 
 bool IsXenonSidebarEnabledForBrowser(const Browser* browser) {
-  if (!browser || !browser->is_type_normal() ||
-      !browser->SupportsWindowFeature(
-          Browser::WindowFeature::kFeatureTabStrip)) {
+  if (!browser ||
+      browser->GetType() != BrowserWindowInterface::TYPE_NORMAL ||
+      !WindowFeatureController::From(browser)->SupportsWindowFeature(
+          WindowFeatureController::WindowFeature::kFeatureTabStrip)) {
     return false;
   }
 
@@ -196,7 +199,7 @@ bool IsXenonSidebarAutoHideEnabled() {
 XenonSidebarView::XenonSidebarView(Browser* browser)
     : browser_(browser),
       service_(browser_ ? XenonSidebarServiceFactory::GetForProfile(
-                              browser_->profile())
+                              browser_->GetProfile())
                         : nullptr) {
   if (service_) {
     service_->AddObserver(this);

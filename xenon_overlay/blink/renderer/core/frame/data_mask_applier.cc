@@ -85,7 +85,7 @@ bool TryApplyMaskItemToText(Text& text_node,
   if (!item.dicts.empty()) {
     bool dict_hit = false;
     for (const auto& d : item.dicts) {
-      if (original.Contains(d)) {
+      if (original.contains(d)) {
         dict_hit = true;
         break;
       }
@@ -100,7 +100,7 @@ bool TryApplyMaskItemToText(Text& text_node,
     static constexpr char kBlur[] = "filter: blur(4px);";
     if (existing.IsNull()) {
       parent->setAttribute(html_names::kStyleAttr, AtomicString(kBlur));
-    } else if (!existing.GetString().Contains("filter:")) {
+    } else if (!existing.GetString().contains("filter:")) {
       parent->setAttribute(
           html_names::kStyleAttr,
           AtomicString(existing.GetString() + " " + kBlur));
@@ -118,7 +118,7 @@ bool TryApplyMaskItemToText(Text& text_node,
       RE2::GlobalReplace(&mutable_utf8, re, item.replace_text.Utf8());
     }
   }
-  new_text = String::FromUTF8(mutable_utf8);
+  new_text = String::FromUtf8(mutable_utf8);
 
   for (const auto& d : item.dicts) {
     new_text.Replace(d, item.replace_text);

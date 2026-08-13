@@ -107,7 +107,7 @@ std::string LeafCredentialFromAuthority(
   return cred;
 }
 
-// Serializes userinfo with url::EncodeURIComponent, consistent with encoding
+// Serializes userinfo with url::EncodeUriComponent, consistent with encoding
 // used elsewhere when building URL components (see url/url_util.h).
 std::string LeafProxyUri(const ProxyServer& proxy_server,
                          std::string_view scheme_with_colon_slashslash) {
@@ -120,7 +120,7 @@ std::string LeafProxyUri(const ProxyServer& proxy_server,
   } else {
     std::string encoded;
     url::StdStringCanonOutput o(&encoded);
-    url::EncodeURIComponent(cred, &o);
+    url::EncodeUriComponent(cred, &o);
     o.Complete();
     base_uri =
         base::StrCat({scheme_with_colon_slashslash, encoded, "@", hostport});
@@ -320,7 +320,7 @@ std::string ProxyServerToProxyUri(const ProxyServer& proxy_server) {
 
 namespace {
 
-bool VmessJsonGetPort(const base::Value::Dict& d, int* port_out) {
+bool VmessJsonGetPort(const base::DictValue& d, int* port_out) {
   const base::Value* v = d.Find("port");
   if (!v) {
     return false;
@@ -346,12 +346,12 @@ ProxyServer ProxyServerFromVmessShareBase64Json(std::string_view b64_body,
     return ProxyServer();
   }
 
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(decoded, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_dict()) {
+  std::optional<base::DictValue> parsed =
+      base::JSONReader::ReadDict(decoded, base::JSON_PARSE_RFC);
+  if (!parsed) {
     return ProxyServer();
   }
-  const base::Value::Dict& d = parsed->GetDict();
+  const base::DictValue& d = *parsed;
 
   const std::string* add = d.FindString("add");
   const std::string* id = d.FindString("id");

@@ -11,7 +11,8 @@
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
-#include "chrome/browser/ui/browser_list_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
 #include "chrome/browser/ui/startup/startup_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
@@ -30,7 +31,7 @@ namespace xenon {
 // Gates main browser window creation until the Xenon WebUI login page calls
 // SetAppSessionLoggedIn(true). Handles second-instance activation during login
 // and optional relogin presentation when the session flag is cleared.
-class XenonLoginController : public BrowserListObserver {
+class XenonLoginController : public BrowserCollectionObserver {
  public:
   static XenonLoginController* GetInstance();
 
@@ -81,8 +82,8 @@ class XenonLoginController : public BrowserListObserver {
   void ResumePendingLaunch();
   void RestoreHiddenBrowsers();
 
-  void EnsureBrowserListObserving();
-  void StopBrowserListObserving();
+  void EnsureBrowserCollectionObserving();
+  void StopBrowserCollectionObserving();
   void ReparentLoginWidgetToBrowser(Browser* browser);
   void LayoutLoginWidgetOverAnchorFrame();
   void ObserveAnchorFrameWidget(views::Widget* frame_widget);
@@ -92,9 +93,9 @@ class XenonLoginController : public BrowserListObserver {
   void AcquireLoginGateKeepAlive();
   void ReleaseLoginGateKeepAlive();
 
-  // BrowserListObserver:
-  void OnBrowserSetLastActive(Browser* browser) override;
-  void OnBrowserRemoved(Browser* browser) override;
+  // BrowserCollectionObserver:
+  void OnBrowserActivated(BrowserWindowInterface* browser) override;
+  void OnBrowserClosed(BrowserWindowInterface* browser) override;
 
   void StopLoginWidgetObservation();
   void MaybeReparentLoginWidgetToActiveBrowser();
@@ -141,7 +142,6 @@ class XenonLoginController : public BrowserListObserver {
   raw_ptr<Profile> login_profile_ = nullptr;
   raw_ptr<Browser> login_anchor_browser_ = nullptr;
   bool login_ui_open_ = false;
-  bool browser_list_observation_active_ = false;
   bool suppress_login_close_cleanup_ = false;
   bool quit_after_login_widget_destroy_ = false;
   base::CallbackListSubscription closing_all_browsers_subscription_;
@@ -154,6 +154,9 @@ class XenonLoginController : public BrowserListObserver {
   AnchorFrameWidgetObserver anchor_frame_observer_impl_;
   base::ScopedObservation<views::Widget, views::WidgetObserver>
       anchor_frame_observation_;
+
+  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
+      browser_collection_observation_{this};
 
   base::WeakPtrFactory<XenonLoginController> weak_factory_{this};
 };

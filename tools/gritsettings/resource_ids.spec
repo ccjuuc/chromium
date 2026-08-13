@@ -40,7 +40,7 @@
   },
   # Generated rewrite when custom_exe_name / custom_product_name is set.
   "<(SHARED_INTERMEDIATE_DIR)/chrome/app/chromium_strings.grd": {
-    "META": {"sizes": {"messages": [800]}},
+    "META": {"sizes": {"messages": [900]}},
     "messages": [800],
   },
   "chrome/app/google_chrome_strings.grd": {

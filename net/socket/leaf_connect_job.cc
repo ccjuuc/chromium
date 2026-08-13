@@ -135,12 +135,6 @@ void LeafConnectJob::OnNeedsProxyAuth(
   NOTREACHED();
 }
 
-Error LeafConnectJob::OnDestinationDnsAliasesResolved(
-    const std::set<std::string>& aliases,
-    ConnectJob* job) {
-  return OK;
-}
-
 int LeafConnectJob::DoLoop(int result) {
   DCHECK_NE(next_state_, STATE_NONE);
 

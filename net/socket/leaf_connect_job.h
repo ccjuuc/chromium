@@ -136,9 +136,6 @@ class NET_EXPORT_PRIVATE LeafConnectJob : public ConnectJob,
                          HttpAuthController* auth_controller,
                          base::OnceClosure restart_with_auth_callback,
                          ConnectJob* job) override;
-  Error OnDestinationDnsAliasesResolved(const std::set<std::string>& aliases,
-                                        ConnectJob* job) override;
-
   int DoLoop(int result);
 
   int DoTransportConnect();

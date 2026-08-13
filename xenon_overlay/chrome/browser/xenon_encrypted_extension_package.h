@@ -41,7 +41,7 @@ struct EncryptedExtensionPackage {
       delete;
 
   std::string archive_sha256;
-  base::Value::Dict manifest;
+  base::DictValue manifest;
   base::Version version;
   std::vector<std::pair<base::FilePath, std::string>> resources;
 };

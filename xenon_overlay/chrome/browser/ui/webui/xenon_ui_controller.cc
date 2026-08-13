@@ -9,7 +9,8 @@
 #include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/views/bubble/webui_bubble_manager.h"
 #include "chrome/browser/ui/webui/tab_search/tab_search_ui.h"
 #include "chrome/common/webui_url_constants.h"
@@ -81,7 +82,7 @@ ShadowStyle ShadowStyleFromString(const std::string& style) {
   return ShadowStyle::kBubbleBorder;
 }
 
-XenonMenuShadow ParseXenonMenuShadow(const base::Value::List& args) {
+XenonMenuShadow ParseXenonMenuShadow(const base::ListValue& args) {
   XenonMenuShadow shadow;
 
   if (args.size() >= 1) {
@@ -188,7 +189,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
                             base::Unretained(this)));
   }
 
-  void HandleShowExtension(const base::Value::List& args) {
+  void HandleShowExtension(const base::ListValue& args) {
     AllowJavascript();
     content::WebContents* web_contents = web_ui()->GetWebContents();
     if (!web_contents) {
@@ -198,7 +199,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
         web_contents->GetBrowserContext());
   }
 
-  void HandleShowWidgetShadowTestWindow(const base::Value::List& args) {
+  void HandleShowWidgetShadowTestWindow(const base::ListValue& args) {
     AllowJavascript();
     content::WebContents* web_contents = web_ui()->GetWebContents();
     if (!web_contents) {
@@ -208,7 +209,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
         web_contents->GetTopLevelNativeWindow());
   }
 
-  void HandleShowWidgetShadowSample(const base::Value::List& args) {
+  void HandleShowWidgetShadowSample(const base::ListValue& args) {
     AllowJavascript();
     if (args.size() < 3) {
       return;
@@ -227,7 +228,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
         show_backdrop);
   }
 
-  void HandleShowViewShadowTestWindow(const base::Value::List& args) {
+  void HandleShowViewShadowTestWindow(const base::ListValue& args) {
     AllowJavascript();
     content::WebContents* web_contents = web_ui()->GetWebContents();
     if (!web_contents) {
@@ -237,7 +238,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
         web_contents->GetTopLevelNativeWindow());
   }
 
-  void HandleShowViewBorderTestWindow(const base::Value::List& args) {
+  void HandleShowViewBorderTestWindow(const base::ListValue& args) {
     AllowJavascript();
     content::WebContents* web_contents = web_ui()->GetWebContents();
     if (!web_contents) {
@@ -247,7 +248,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
         web_contents->GetTopLevelNativeWindow());
   }
 
-  void HandleShowViewAnimationTestWindow(const base::Value::List& args) {
+  void HandleShowViewAnimationTestWindow(const base::ListValue& args) {
     AllowJavascript();
     content::WebContents* web_contents = web_ui()->GetWebContents();
     if (!web_contents) {
@@ -257,7 +258,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
         web_contents->GetTopLevelNativeWindow());
   }
 
-  void HandleShowCommonDialog(const base::Value::List& args) {
+  void HandleShowCommonDialog(const base::ListValue& args) {
     AllowJavascript();
 
     if (args.size() < 8) {
@@ -302,13 +303,13 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
         show_mask);
   }
 
-  void HandleShowWebDialog(const base::Value::List& args) {
+  void HandleShowWebDialog(const base::ListValue& args) {
     AllowJavascript();
 
     if (args.empty() || !args[0].is_dict()) {
       return;
     }
-    const base::Value::Dict& options = args[0].GetDict();
+    const base::DictValue& options = args[0].GetDict();
 
     const std::string* url_str = options.FindString("url");
     if (!url_str) {
@@ -330,13 +331,13 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
         base::OnceClosure());
   }
 
-  void HandleShowToast(const base::Value::List& args) {
+  void HandleShowToast(const base::ListValue& args) {
     AllowJavascript();
 
     if (args.empty() || !args[0].is_dict()) {
       return;
     }
-    const base::Value::Dict& options = args[0].GetDict();
+    const base::DictValue& options = args[0].GetDict();
 
     content::WebContents* web_contents = web_ui()->GetWebContents();
     if (!web_contents) {
@@ -375,7 +376,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
 
   void OnToastAction() { FireWebUIListener("toast-action", base::Value(true)); }
 
-  void HandleShowXenonMenuRunner(const base::Value::List& args) {
+  void HandleShowXenonMenuRunner(const base::ListValue& args) {
     AllowJavascript();
 
     content::WebContents* web_contents = web_ui()->GetWebContents();
@@ -399,7 +400,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
                                   ui::mojom::MenuSourceType::kNone, shadow);
   }
 
-  void HandleShowXenonCommonBubble(const base::Value::List& args) {
+  void HandleShowXenonCommonBubble(const base::ListValue& args) {
     AllowJavascript();
 
     content::WebContents* web_contents = web_ui()->GetWebContents();
@@ -417,13 +418,18 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
                               ParseXenonMenuShadow(args));
   }
 
-  void HandleShowXenonWebUIBubble(const base::Value::List& args) {
+  void HandleShowXenonWebUIBubble(const base::ListValue& args) {
     AllowJavascript();
 
     content::WebContents* web_contents = web_ui()->GetWebContents();
     views::Widget* parent_widget = GetParentWidget(web_ui());
-    Browser* browser =
-        web_contents ? chrome::FindBrowserWithTab(web_contents) : nullptr;
+    BrowserWindowInterface* browser_window =
+        web_contents ? GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+                           web_contents)
+                     : nullptr;
+    Browser* browser = browser_window
+                           ? browser_window->GetBrowserForMigrationOnly()
+                           : nullptr;
     if (!web_contents || !parent_widget || !browser) {
       return;
     }
@@ -438,8 +444,8 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
 
     if (!xenon_webui_bubble_manager_) {
       xenon_webui_bubble_manager_ = WebUIBubbleManager::Create<TabSearchUI>(
-          parent_widget->GetContentsView(), browser,
-          GURL(chrome::kChromeUITabSearchURL), IDS_ACCNAME_TAB_SEARCH);
+          browser, GURL(chrome::kChromeUITabSearchURL),
+          IDS_ACCNAME_TAB_SEARCH);
       XenonCommonBubble::ConfigureWebUIBubbleManager(
           xenon_webui_bubble_manager_.get());
     }

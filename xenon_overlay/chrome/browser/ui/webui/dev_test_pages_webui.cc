@@ -80,7 +80,7 @@ RenderDllTestWebUIController::RenderDllTestWebUIController(
 RenderDllTestWebUIController::~RenderDllTestWebUIController() = default;
 
 void RenderDllTestWebUIController::HandleGetDefaultDllPath(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   const base::FilePath path = beijing::RenderDllPathNextToExe();
   web_ui()->CallJavascriptFunctionUnsafe(
       "__setDefaultDllPath", base::Value(path.AsUTF8Unsafe()));

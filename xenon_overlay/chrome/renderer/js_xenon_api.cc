@@ -52,7 +52,8 @@ struct PromiseResolverContext {
 
 void OnPromiseResolved(const v8::FunctionCallbackInfo<v8::Value>& info) {
   v8::Isolate* isolate = info.GetIsolate();
-  void* data = info.Data().As<v8::External>()->Value();
+  void* data = info.Data().As<v8::External>()->Value(
+      v8::kExternalPointerTypeTagDefault);
   auto* resolver_ctx = static_cast<PromiseResolverContext*>(data);
 
   std::string result_str;
@@ -65,7 +66,8 @@ void OnPromiseResolved(const v8::FunctionCallbackInfo<v8::Value>& info) {
 }
 
 void OnPromiseRejected(const v8::FunctionCallbackInfo<v8::Value>& info) {
-  void* data = info.Data().As<v8::External>()->Value();
+  void* data = info.Data().As<v8::External>()->Value(
+      v8::kExternalPointerTypeTagDefault);
   auto* resolver_ctx = static_cast<PromiseResolverContext*>(data);
   std::move(resolver_ctx->callback).Run(std::nullopt);
   delete resolver_ctx;
@@ -114,7 +116,8 @@ class XenonToolExecutorImpl : public mojom::XenonToolExecutor {
       v8::Local<v8::Promise> promise = result.As<v8::Promise>();
       auto* resolver_ctx = new PromiseResolverContext{
           v8::Global<v8::Context>(isolate_, context), std::move(callback)};
-      v8::Local<v8::External> data_ext = v8::External::New(isolate_, resolver_ctx);
+      v8::Local<v8::External> data_ext = v8::External::New(
+          isolate_, resolver_ctx, v8::kExternalPointerTypeTagDefault);
       v8::Local<v8::Function> resolved_fn;
       v8::Local<v8::Function> rejected_fn;
       if (!v8::Function::New(context, OnPromiseResolved, data_ext)

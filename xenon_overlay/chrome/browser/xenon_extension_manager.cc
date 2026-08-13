@@ -53,7 +53,7 @@ namespace xenon {
 namespace {
 
 using ExtensionLoadData =
-    std::pair<base::FilePath, std::optional<base::Value::Dict>>;
+    std::pair<base::FilePath, std::optional<base::DictValue>>;
 
 constexpr int64_t kMaxUpdateDownloadBytes = 256 * 1024 * 1024;
 
@@ -62,7 +62,7 @@ bool UsesEncryptedZip(const ComponentExtensionConfig& config) {
 }
 
 struct CachedEncryptedExtension {
-  base::Value::Dict manifest;
+  base::DictValue manifest;
   std::map<base::FilePath, int> resource_ids;
 };
 
@@ -90,7 +90,7 @@ GetCachedEncryptedExtensions() {
 }
 
 bool ManifestMatchesExpectedExtensionId(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const std::string& expected_extension_id) {
   if (expected_extension_id.empty()) {
     return true;
@@ -106,7 +106,7 @@ bool ManifestMatchesExpectedExtensionId(
 
 struct DirectoryExtensionCandidate {
   base::FilePath path;
-  base::Value::Dict manifest;
+  base::DictValue manifest;
   base::Version version;
 };
 
@@ -363,7 +363,7 @@ extensions::ExtensionRegistry* ComponentExtensionManager::GetExtensionRegistry(
 extensions::ExtensionId ComponentExtensionManager::AddExtensionWithManifest(
     content::BrowserContext* context,
     const std::string& extension_name,
-    base::Value::Dict manifest,
+    base::DictValue manifest,
     const base::FilePath& extension_path) {
   extensions::ComponentLoader* loader = GetComponentLoader(context);
   if (!loader) {
@@ -606,9 +606,9 @@ void ComponentExtensionManager::OnExtensionPathDetermined(
     base::WeakPtr<Profile> profile,
     const std::string& extension_name,
     OnExtensionLoadedCallback callback,
-    std::pair<base::FilePath, std::optional<base::Value::Dict>> result) {
+    std::pair<base::FilePath, std::optional<base::DictValue>> result) {
   base::FilePath path_to_load = result.first;
-  std::optional<base::Value::Dict> manifest = std::move(result.second);
+  std::optional<base::DictValue> manifest = std::move(result.second);
 
   if (!profile || path_to_load.empty() || !manifest.has_value()) {
     LOG(ERROR) << "ComponentExtensionManager: Failed to determine extension "

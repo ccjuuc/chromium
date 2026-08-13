@@ -14,10 +14,11 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
@@ -203,7 +204,10 @@ content::WebContents* XenonReminderCardWebView::AddNewContents(
     const blink::mojom::WindowFeatures& window_features,
     bool user_gesture,
     bool* was_blocked) {
-  Browser* browser = chrome::FindLastActive();
+  BrowserWindowInterface* browser_window =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
+  Browser* browser =
+      browser_window ? browser_window->GetBrowserForMigrationOnly() : nullptr;
   if (!browser) {
     if (was_blocked) {
       *was_blocked = true;
@@ -228,7 +232,10 @@ content::WebContents* XenonReminderCardWebView::OpenURLFromTab(
     const content::OpenURLParams& params,
     base::OnceCallback<void(content::NavigationHandle&)>
         navigation_handle_callback) {
-  Browser* browser = chrome::FindLastActive();
+  BrowserWindowInterface* browser_window =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
+  Browser* browser =
+      browser_window ? browser_window->GetBrowserForMigrationOnly() : nullptr;
   if (!browser) {
     return nullptr;
   }
@@ -308,7 +315,7 @@ void XenonReminderCardWebView::TitleWasSet(content::NavigationEntry* entry) {
 void XenonReminderCardWebView::OnContentHeightReceived(base::Value result) {
   // 支持 { w, h } 或兼容仅返回 height 的 int
   if (result.is_dict()) {
-    const base::Value::Dict& d = result.GetDict();
+    const base::DictValue& d = result.GetDict();
     if (std::optional<int> w = d.FindInt("w"); w && *w > 0 && *w != content_width_) {
       content_width_ = *w;
     }

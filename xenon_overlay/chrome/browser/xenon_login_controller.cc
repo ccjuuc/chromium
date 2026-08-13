@@ -16,9 +16,10 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
@@ -71,25 +72,41 @@ Browser* FindBrowserToParentLoginDialog(Profile* session_profile) {
   }
   Profile* const original = session_profile->GetOriginalProfile();
 
-  if (Browser* last_active = chrome::FindLastActive()) {
-    if (last_active->profile()->GetOriginalProfile() == original &&
-        last_active->window()) {
+  BrowserWindowInterface* last_active_window =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
+  if (Browser* last_active =
+          last_active_window
+              ? last_active_window->GetBrowserForMigrationOnly()
+              : nullptr) {
+    if (last_active->GetProfile()->GetOriginalProfile() == original &&
+        last_active->GetWindow()) {
       return last_active;
     }
   }
 
-  if (Browser* b = chrome::FindLastActiveWithProfile(original)) {
-    if (b->window()) {
+  BrowserWindowInterface* profile_window =
+      ProfileBrowserCollection::GetForProfile(original)->FindTabbedBrowser(
+          /*match_original_profiles=*/true);
+  if (Browser* b = profile_window
+                       ? profile_window->GetBrowserForMigrationOnly()
+                       : nullptr) {
+    if (b->GetWindow()) {
       return b;
     }
   }
 
-  for (Browser* browser : *BrowserList::GetInstance()) {
-    if (browser->profile()->GetOriginalProfile() == original && browser->window()) {
-      return browser;
-    }
-  }
-  return nullptr;
+  Browser* result = nullptr;
+  GlobalBrowserCollection::GetInstance()->ForEach(
+      [&](BrowserWindowInterface* browser_window) {
+        Browser* browser = browser_window->GetBrowserForMigrationOnly();
+        if (browser->GetProfile()->GetOriginalProfile() == original &&
+            browser->GetWindow()) {
+          result = browser;
+          return false;
+        }
+        return true;
+      });
+  return result;
 }
 
 }  // namespace
@@ -151,7 +168,7 @@ void XenonLoginController::AnchorFrameWidgetObserver::OnWidgetDestroying(
 XenonLoginController::~XenonLoginController() {
   StopAnchorFrameObservation();
   StopLoginWidgetObservation();
-  StopBrowserListObserving();
+  StopBrowserCollectionObserving();
 }
 
 // static
@@ -180,27 +197,23 @@ int XenonLoginController::GetReloginPresentation(Profile* profile) {
 
 void XenonLoginController::RestoreHiddenBrowsers() {
   for (Browser* browser : hidden_browsers_) {
-    if (browser && browser->window()) {
-      browser->window()->Show();
+    if (browser && browser->GetWindow()) {
+      browser->GetWindow()->Show();
     }
   }
   hidden_browsers_.clear();
 }
 
-void XenonLoginController::EnsureBrowserListObserving() {
-  if (browser_list_observation_active_) {
+void XenonLoginController::EnsureBrowserCollectionObserving() {
+  if (browser_collection_observation_.IsObserving()) {
     return;
   }
-  BrowserList::AddObserver(this);
-  browser_list_observation_active_ = true;
+  browser_collection_observation_.Observe(
+      GlobalBrowserCollection::GetInstance());
 }
 
-void XenonLoginController::StopBrowserListObserving() {
-  if (!browser_list_observation_active_) {
-    return;
-  }
-  BrowserList::RemoveObserver(this);
-  browser_list_observation_active_ = false;
+void XenonLoginController::StopBrowserCollectionObserving() {
+  browser_collection_observation_.Reset();
 }
 
 void XenonLoginController::StopLoginWidgetObservation() {
@@ -221,7 +234,7 @@ void XenonLoginController::ObserveAnchorFrameWidget(
 
 void XenonLoginController::LayoutLoginWidgetOverAnchorFrame() {
   if (!login_widget_ || !login_anchor_browser_ ||
-      !login_anchor_browser_->window()) {
+      !login_anchor_browser_->GetWindow()) {
     return;
   }
   BrowserView* browser_view =
@@ -254,18 +267,15 @@ void XenonLoginController::MaybeReparentLoginWidgetToActiveBrowser() {
   if (!login_widget_ || !login_profile_) {
     return;
   }
-  for (Browser* browser : *BrowserList::GetInstance()) {
-    if (!browser || !browser->window()) {
-      continue;
-    }
-    if (browser->profile()->GetOriginalProfile() !=
-        login_profile_->GetOriginalProfile()) {
-      continue;
-    }
-    if (browser->window()->IsActive()) {
-      ReparentLoginWidgetToBrowser(browser);
-      return;
-    }
+  BrowserWindowInterface* active_window =
+      GlobalBrowserCollection::GetInstance()->GetActiveBrowser();
+  Browser* active_browser =
+      active_window ? active_window->GetBrowserForMigrationOnly() : nullptr;
+  if (active_browser && active_browser->GetWindow() &&
+      active_browser->GetProfile()->GetOriginalProfile() ==
+          login_profile_->GetOriginalProfile()) {
+    ReparentLoginWidgetToBrowser(active_browser);
+    return;
   }
   if (Browser* b = FindBrowserToParentLoginDialog(login_profile_)) {
     ReparentLoginWidgetToBrowser(b);
@@ -273,7 +283,7 @@ void XenonLoginController::MaybeReparentLoginWidgetToActiveBrowser() {
 }
 
 void XenonLoginController::ReparentLoginWidgetToBrowser(Browser* browser) {
-  if (!login_widget_ || !browser || !browser->window()) {
+  if (!login_widget_ || !browser || !browser->GetWindow()) {
     return;
   }
   if (login_anchor_browser_ == browser) {
@@ -295,11 +305,13 @@ void XenonLoginController::ReparentLoginWidgetToBrowser(Browser* browser) {
   LayoutLoginWidgetOverAnchorFrame();
 }
 
-void XenonLoginController::OnBrowserSetLastActive(Browser* browser) {
+void XenonLoginController::OnBrowserActivated(
+    BrowserWindowInterface* browser_window) {
+  Browser* browser = browser_window->GetBrowserForMigrationOnly();
   if (!login_widget_ || !login_profile_ || !browser) {
     return;
   }
-  if (browser->profile()->GetOriginalProfile() !=
+  if (browser->GetProfile()->GetOriginalProfile() !=
       login_profile_->GetOriginalProfile()) {
     return;
   }
@@ -323,11 +335,13 @@ void XenonLoginController::OnLoginWidgetActivationChanged(views::Widget* widget,
           weak_factory_.GetWeakPtr()));
 }
 
-void XenonLoginController::OnBrowserRemoved(Browser* browser) {
+void XenonLoginController::OnBrowserClosed(
+    BrowserWindowInterface* browser_window) {
+  Browser* browser = browser_window->GetBrowserForMigrationOnly();
   if (!login_widget_ || !login_profile_ || !browser) {
     return;
   }
-  if (browser->profile()->GetOriginalProfile() != login_profile_) {
+  if (browser->GetProfile()->GetOriginalProfile() != login_profile_) {
     return;
   }
   if (login_anchor_browser_ == browser) {
@@ -367,7 +381,7 @@ void XenonLoginController::CloseLoginWidgetForProcessExit() {
 
   weak_factory_.InvalidateWeakPtrs();
   quit_after_login_widget_destroy_ = false;
-  StopBrowserListObserving();
+  StopBrowserCollectionObserving();
   StopAnchorFrameObservation();
   StopLoginWidgetObservation();
   ReleaseLoginGateKeepAlive();
@@ -380,7 +394,7 @@ void XenonLoginController::CloseLoginWidgetForProcessExit() {
 #if BUILDFLAG(IS_WIN)
     base::CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop
         allow_nested_application_tasks;
-    if (login_anchor_browser_ && login_anchor_browser_->window()) {
+    if (login_anchor_browser_ && login_anchor_browser_->GetWindow()) {
       if (BrowserView* browser_view =
               BrowserView::GetBrowserViewForBrowser(login_anchor_browser_)) {
         if (views::Widget* frame_widget = browser_view->GetWidget()) {
@@ -438,7 +452,7 @@ void XenonLoginController::NotifyLoginDialogClosed() {
   StopLoginWidgetObservation();
   login_widget_ = nullptr;
   login_ui_open_ = false;
-  StopBrowserListObserving();
+  StopBrowserCollectionObserving();
   if (!logged_in_at_close) {
     RestoreHiddenBrowsers();
   }
@@ -462,7 +476,7 @@ void XenonLoginController::OnLoginWidgetDestroying(views::Widget* widget) {
 
   login_widget_ = nullptr;
   login_ui_open_ = false;
-  StopBrowserListObserving();
+  StopBrowserCollectionObserving();
 
   if (should_quit && !logged_in_at_close) {
     StopLoginWidgetObservation();
@@ -536,23 +550,26 @@ void XenonLoginController::ShowLoginDialog(Profile* profile, bool is_relogin) {
     parent_browser = FindBrowserToParentLoginDialog(login_profile_);
 
     if (presentation == 1) {
-      for (Browser* browser : *BrowserList::GetInstance()) {
-        if (browser->window()) {
-          browser->window()->Hide();
-          hidden_browsers_.push_back(browser);
-        }
-      }
+      GlobalBrowserCollection::GetInstance()->ForEach(
+          [&](BrowserWindowInterface* browser_window) {
+            Browser* browser = browser_window->GetBrowserForMigrationOnly();
+            if (browser->GetWindow()) {
+              browser->GetWindow()->Hide();
+              hidden_browsers_.push_back(browser);
+            }
+            return true;
+          });
     }
 
     if (presentation == 2) {
-      if (parent_browser && parent_browser->window()) {
-        parent = parent_browser->window()->GetNativeWindow();
+      if (parent_browser && parent_browser->GetWindow()) {
+        parent = parent_browser->GetWindow()->GetNativeWindow();
         modal_type = ui::mojom::ModalType::kWindow;
       }
-    } else if (parent_browser && parent_browser->window()) {
+    } else if (parent_browser && parent_browser->GetWindow()) {
       // presentation 0 / 1: non-modal, but still parent to the active session
       // browser so Z-order and ownership match the user's main window.
-      parent = parent_browser->window()->GetNativeWindow();
+      parent = parent_browser->GetWindow()->GetNativeWindow();
     }
   }
 
@@ -571,7 +588,7 @@ void XenonLoginController::ShowLoginDialog(Profile* profile, bool is_relogin) {
   login_widget_ = widget_out;
   login_ui_open_ = true;
   if (login_widget_) {
-    EnsureBrowserListObserving();
+    EnsureBrowserCollectionObserving();
     StopLoginWidgetObservation();
     login_widget_observation_.Observe(login_widget_.get());
     Browser* anchor =
@@ -587,7 +604,7 @@ void XenonLoginController::ShowLoginDialog(Profile* profile, bool is_relogin) {
 
 void XenonLoginController::ResumePendingLaunch() {
   quit_after_login_widget_destroy_ = false;
-  StopBrowserListObserving();
+  StopBrowserCollectionObserving();
   RestoreHiddenBrowsers();
   base::OnceClosure task;
   if (pending_resume_launch_) {

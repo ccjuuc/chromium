@@ -240,7 +240,9 @@ views::Widget* XenonCommonBubble::Show(views::View* anchor_view,
   auto bubble = std::make_unique<XenonCommonBubble>(
       anchor_view, std::move(text), shadow, views::BubbleBorder::TOP_RIGHT);
   views::Widget* widget =
-      views::BubbleDialogDelegate::CreateBubble(std::move(bubble));
+      views::BubbleDialogDelegate::CreateBubbleDeprecated(
+          std::move(bubble),
+          views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   if (widget) {
     widget->Show();
   }
@@ -264,7 +266,9 @@ views::Widget* XenonCommonBubble::ShowAt(views::View* parent_view,
   }
   bubble->SetAnchorRect(anchor_rect);
   views::Widget* widget =
-      views::BubbleDialogDelegate::CreateBubble(std::move(bubble));
+      views::BubbleDialogDelegate::CreateBubbleDeprecated(
+          std::move(bubble),
+          views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   if (widget) {
     widget->Show();
   }
@@ -274,9 +278,9 @@ views::Widget* XenonCommonBubble::ShowAt(views::View* parent_view,
 std::unique_ptr<views::FrameView> XenonCommonBubble::CreateFrameView(
     views::Widget* widget) {
   const FrameMargins& margin = frame_margins();
-  auto frame = std::make_unique<views::BubbleFrameView>(margin.title.value(),
-                                                        gfx::Insets());
-  frame->SetFootnoteMargins(margin.footnote.value());
+  auto frame =
+      std::make_unique<views::BubbleFrameView>(margin.title, gfx::Insets());
+  frame->SetFootnoteMargins(margin.footnote);
   frame->SetFootnoteView(DisownFootnoteView());
 
   auto border = CreateXenonBubbleBorder(arrow(), GetShadow(), shadow_);

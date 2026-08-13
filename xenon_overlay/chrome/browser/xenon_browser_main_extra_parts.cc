@@ -9,7 +9,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/webui_config_map.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "xenon_overlay/chrome/browser/reminder/xenon_reminder_notification_manager.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_reminder_browser_observer.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
@@ -64,10 +65,9 @@ void XenonBrowserMainExtraParts::PostEarlyInitialization() {
 }
 
 void XenonBrowserMainExtraParts::PostMainMessageLoopRun() {
-  // 在有序关闭阶段从 BrowserList 移除观察者并析构，避免进程退出时
+  // 在有序关闭阶段析构 BrowserCollection 观察者，避免进程退出时
   // 静态析构顺序导致 ObserverList 先于本对象析构而触发 observers_.empty() 的 CHECK
   if (reminder_browser_observer_) {
-    BrowserList::GetInstance()->RemoveObserver(reminder_browser_observer_.get());
     reminder_browser_observer_.reset();
   }
   xenon_fonts::UnregisterXunleiFonts();
@@ -133,10 +133,12 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
   // 初始化提醒 Manager 并注册 Browser 观察者（为每个窗口创建提醒 Widget + 注册 Ctrl+Shift+R 测试快捷键）
   xenon::XenonReminderNotificationManager::GetInstance()->Initialize();
   reminder_browser_observer_ = std::make_unique<xenon::XenonReminderBrowserObserver>();
-  BrowserList::GetInstance()->AddObserver(reminder_browser_observer_.get());
-  for (Browser* browser : *BrowserList::GetInstance()) {
-    reminder_browser_observer_->OnBrowserAdded(browser);
-  }
+  GlobalBrowserCollection::GetInstance()->ForEach(
+      [&](BrowserWindowInterface* browser_window) {
+        reminder_browser_observer_->AttachToBrowser(
+            browser_window->GetBrowserForMigrationOnly());
+        return true;
+      });
 
   // 默认仅加载组件扩展（不自动打开扩展弹窗）；--show-xenon-extension 则打开 Xenon WebUI 浮层
   if (!base::CommandLine::ForCurrentProcess()->HasSwitch("show-xenon-extension")) {

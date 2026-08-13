@@ -62,7 +62,7 @@ void XenonPageHostImpl::EchoObject(base::Value input,
 void XenonPageHostImpl::WrapObjectWithBrowserMeta(
     base::Value input,
     WrapObjectWithBrowserMetaCallback callback) {
-  base::Value::Dict wrapper;
+  base::DictValue wrapper;
   wrapper.Set("payload", std::move(input));
   if (render_frame_host_ && render_frame_host_->IsRenderFrameLive()) {
     wrapper.Set("browser_routing_id", render_frame_host_->GetRoutingID());

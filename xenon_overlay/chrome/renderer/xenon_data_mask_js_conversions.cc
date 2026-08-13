@@ -16,7 +16,7 @@ namespace xenon {
 
 namespace {
 
-const base::Value* FindInDict(const base::Value::Dict& dict,
+const base::Value* FindInDict(const base::DictValue& dict,
                               std::string_view primary,
                               std::string_view alternate = {}) {
   if (auto* v = dict.Find(primary)) {
@@ -28,7 +28,7 @@ const base::Value* FindInDict(const base::Value::Dict& dict,
   return nullptr;
 }
 
-bool GetBool(const base::Value::Dict& dict,
+bool GetBool(const base::DictValue& dict,
              std::string_view camel,
              std::string_view snake,
              bool default_value) {
@@ -40,7 +40,7 @@ bool GetBool(const base::Value::Dict& dict,
   return b.value_or(default_value);
 }
 
-uint32_t GetUint32(const base::Value::Dict& dict,
+uint32_t GetUint32(const base::DictValue& dict,
                    std::string_view camel,
                    std::string_view snake,
                    uint32_t default_value) {
@@ -61,7 +61,7 @@ uint32_t GetUint32(const base::Value::Dict& dict,
   return default_value;
 }
 
-blink::String GetWtfString(const base::Value::Dict& dict,
+blink::String GetWtfString(const base::DictValue& dict,
                            std::string_view camel,
                            std::string_view snake,
                            const blink::String& default_value) {
@@ -70,28 +70,28 @@ blink::String GetWtfString(const base::Value::Dict& dict,
     return default_value;
   }
   if (const std::string* s = v->GetIfString()) {
-    return blink::String::FromUTF8(*s);
+    return blink::String::FromUtf8(*s);
   }
   return default_value;
 }
 
-void AppendWtfStringVector(const base::Value::Dict& dict,
+void AppendWtfStringVector(const base::DictValue& dict,
                            std::string_view camel,
                            std::string_view snake,
                            blink::Vector<blink::String>* out) {
   const base::Value* v = FindInDict(dict, camel, snake);
-  const base::Value::List* list = v ? v->GetIfList() : nullptr;
+  const base::ListValue* list = v ? v->GetIfList() : nullptr;
   if (!list) {
     return;
   }
   for (const base::Value& el : *list) {
     if (const std::string* s = el.GetIfString()) {
-      out->push_back(blink::String::FromUTF8(*s));
+      out->push_back(blink::String::FromUtf8(*s));
     }
   }
 }
 
-void FillRegsFromDict(const base::Value::Dict& d,
+void FillRegsFromDict(const base::DictValue& d,
                       blink::Vector<blink::String>* regs) {
   regs->clear();
   AppendWtfStringVector(d, "regs", "", regs);
@@ -100,7 +100,7 @@ void FillRegsFromDict(const base::Value::Dict& d,
   }
 }
 
-void FillRegsXorFromDict(const base::Value::Dict& d,
+void FillRegsXorFromDict(const base::DictValue& d,
                          blink::Vector<blink::String>* regs_xor) {
   regs_xor->clear();
   AppendWtfStringVector(d, "regsXor", "regs_xor", regs_xor);
@@ -109,7 +109,7 @@ void FillRegsXorFromDict(const base::Value::Dict& d,
   }
 }
 
-bool RegsIsAndFromDict(const base::Value::Dict& d) {
+bool RegsIsAndFromDict(const base::DictValue& d) {
   if (FindInDict(d, "regsIsAnd", "regs_is_and")) {
     return GetBool(d, "regsIsAnd", "regs_is_and", false);
   }
@@ -117,7 +117,7 @@ bool RegsIsAndFromDict(const base::Value::Dict& d) {
                  false);
 }
 
-bool RegsXorIsAndFromDict(const base::Value::Dict& d) {
+bool RegsXorIsAndFromDict(const base::DictValue& d) {
   if (FindInDict(d, "regsXorIsAnd", "regs_xor_is_and")) {
     return GetBool(d, "regsXorIsAnd", "regs_xor_is_and", false);
   }
@@ -125,7 +125,7 @@ bool RegsXorIsAndFromDict(const base::Value::Dict& d) {
                  false);
 }
 
-void FillDictsFromDict(const base::Value::Dict& d,
+void FillDictsFromDict(const base::DictValue& d,
                        blink::Vector<blink::String>* dicts) {
   dicts->clear();
   AppendWtfStringVector(d, "dicts", "", dicts);
@@ -134,7 +134,7 @@ void FillDictsFromDict(const base::Value::Dict& d,
   }
 }
 
-bool DictsFuzzyFromDict(const base::Value::Dict& d) {
+bool DictsFuzzyFromDict(const base::DictValue& d) {
   if (FindInDict(d, "dictsFuzzyCompare", "dicts_fuzzy_compare")) {
     return GetBool(d, "dictsFuzzyCompare", "dicts_fuzzy_compare", false);
   }
@@ -158,7 +158,7 @@ blink::mojom::blink::MaskType ParseMaskType(const base::Value* v) {
   return blink::mojom::blink::MaskType::kReplace;
 }
 
-blink::mojom::blink::MaskItemPtr MaskItemFromDict(const base::Value::Dict& d) {
+blink::mojom::blink::MaskItemPtr MaskItemFromDict(const base::DictValue& d) {
   auto item = blink::mojom::blink::MaskItem::New();
   item->tag_id = GetUint32(d, "tagId", "tag_id", 0);
   item->policy_name =
@@ -192,8 +192,8 @@ bool BuildDataMaskRulesFromValue(const base::Value& value,
   }
   *out_rules = nullptr;
 
-  const base::Value::List* items = nullptr;
-  if (const base::Value::Dict* root = value.GetIfDict()) {
+  const base::ListValue* items = nullptr;
+  if (const base::DictValue* root = value.GetIfDict()) {
     const base::Value* raw_items = FindInDict(*root, "maskItems", "mask_items");
     items = raw_items ? raw_items->GetIfList() : nullptr;
   } else {
@@ -205,7 +205,7 @@ bool BuildDataMaskRulesFromValue(const base::Value& value,
 
   auto rules = blink::mojom::blink::DataMaskRules::New();
   for (const base::Value& entry : *items) {
-    const base::Value::Dict* d = entry.GetIfDict();
+    const base::DictValue* d = entry.GetIfDict();
     if (!d) {
       continue;
     }
@@ -222,7 +222,7 @@ bool BuildXPathConfigFromValue(const base::Value& value,
     return false;
   }
   *out_config = nullptr;
-  const base::Value::Dict* d = value.GetIfDict();
+  const base::DictValue* d = value.GetIfDict();
   if (!d) {
     return false;
   }

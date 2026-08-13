@@ -56,12 +56,12 @@ VideoSnifferWebUIController::VideoSnifferWebUIController(content::WebUI* web_ui)
 VideoSnifferWebUIController::~VideoSnifferWebUIController() = default;
 
 void VideoSnifferWebUIController::HandleGetSniffedMedia(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   auto groups = VideoSnifferManager::GetInstance()->GetGroups();
   
-  base::Value::List result_list;
+  base::ListValue result_list;
   for (const auto& group : groups) {
-    base::Value::Dict item;
+    base::DictValue item;
     item.Set("mimeType", group.mime_type);
     item.Set("url", group.main_url);
     item.Set("segmentCount", static_cast<int>(group.segments.size()));
@@ -73,12 +73,12 @@ void VideoSnifferWebUIController::HandleGetSniffedMedia(
 }
 
 void VideoSnifferWebUIController::HandleClearSniffedMedia(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   VideoSnifferManager::GetInstance()->ClearMedia();
 }
 
 void VideoSnifferWebUIController::HandleDownloadMedia(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   if (args.empty() || !args[0].is_string())
     return;
 
@@ -107,7 +107,7 @@ void VideoSnifferWebUIController::HandleDownloadMedia(
 }
 
 void VideoSnifferWebUIController::HandleMergeMedia(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   if (args.empty() || !args[0].is_string())
     return;
 

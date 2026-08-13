@@ -62,7 +62,7 @@ class XenonWebDialog : public ui::WebDialogDelegate {
 
   static void ShowWithOptions(content::BrowserContext* context,
                               const GURL& url,
-                              const base::Value::Dict& options,
+                              const base::DictValue& options,
                               raw_ptr<views::Widget>* out_widget,
                               gfx::NativeView parent,
                               base::OnceClosure on_dialog_closed);
