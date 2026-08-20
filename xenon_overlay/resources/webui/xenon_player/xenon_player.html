@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Xenon Player</title>
+  <style>
+    html,
+    body,
+    #root {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      overflow: hidden;
+      background: #101216;
+    }
+
+    #boot-status {
+      position: fixed;
+      inset: 0;
+      z-index: 2147483647;
+      display: grid;
+      place-items: center;
+      box-sizing: border-box;
+      padding: 24px;
+      color: #d9dde5;
+      background: #101216;
+      font: 14px/1.5 "Microsoft YaHei", sans-serif;
+      text-align: center;
+    }
+
+    #boot-status[data-phase="error"] {
+      color: #ffb4ab;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <div id="boot-status" data-phase="loading">Starting Xenon Player...</div>
+  <script type="module" src="strings.m.js"></script>
+  <script type="module" src="host.js"></script>
+</body>
+</html>

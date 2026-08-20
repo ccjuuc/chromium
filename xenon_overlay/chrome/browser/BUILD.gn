@@ -218,6 +218,7 @@ source_set("browser") {
     "//xenon_overlay/resources",
     "//xenon_overlay/resources/webui:resources",
     "//xenon_overlay/resources/webui/xenon_node:resources",
+    "//xenon_overlay/resources/webui/xenon_player:resources",
     "//xenon_overlay/xenon/chrome/browser/ui/views:xenon_toast",
   ]
 

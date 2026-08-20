@@ -122,6 +122,10 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
       std::make_unique<xenon::XenonNodeConfig>());
   LOG(INFO) << "XenonBrowserMainExtraParts: Registered XenonNodeConfig";
 
+  content::WebUIConfigMap::GetInstance().AddWebUIConfig(
+      std::make_unique<xenon::XenonPlayerConfig>());
+  LOG(INFO) << "XenonBrowserMainExtraParts: Registered XenonPlayerConfig";
+
 #if BUILDFLAG(ENABLE_XENON_AI)
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<xenon::XenonAiSidePanelUIConfig>());

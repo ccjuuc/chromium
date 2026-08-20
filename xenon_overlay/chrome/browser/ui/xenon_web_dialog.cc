@@ -6,7 +6,9 @@
 
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
@@ -30,6 +32,8 @@
 #include "ui/views/animation/animation_builder.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/webview/web_dialog_view.h"
+#include "ui/views/view_targeter.h"
+#include "ui/views/view_targeter_delegate.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/frame_view.h"
 #include "url/gurl.h"
@@ -40,6 +44,7 @@
 #include "components/constrained_window/constrained_window_views.h"
 #include "chrome/common/chrome_render_frame.mojom.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 
@@ -165,8 +170,8 @@ bool UseDwmRoundedCorners(bool use_dwm) {
   return use_dwm && IsWin11OrLater();
 }
 
-bool UseFramelessCompositorShadow(bool use_dwm) {
-  return !UseDwmRoundedCorners(use_dwm);
+bool UseFramelessCompositorShadow(bool use_dwm, bool show_shadow) {
+  return show_shadow && !UseDwmRoundedCorners(use_dwm);
 }
 
 int FramelessCompositorShadowMargin() {
@@ -188,8 +193,8 @@ bool UseDwmRoundedCorners(bool) {
   return false;
 }
 
-bool UseFramelessCompositorShadow(bool) {
-  return false;
+bool UseFramelessCompositorShadow(bool, bool show_shadow) {
+  return show_shadow;
 }
 
 int FramelessCompositorShadowMargin() {
@@ -199,8 +204,10 @@ int FramelessCompositorShadowMargin() {
 
 void EnlargeForFramelessCompositorShadow(gfx::Size* size,
                                           bool use_native_frame,
-                                          bool use_dwm) {
-  if (!use_native_frame && UseFramelessCompositorShadow(use_dwm)) {
+                                          bool use_dwm,
+                                          bool show_shadow) {
+  if (!use_native_frame &&
+      UseFramelessCompositorShadow(use_dwm, show_shadow)) {
     const int margin = FramelessCompositorShadowMargin();
     size->Enlarge(2 * margin, 2 * margin);
   }
@@ -222,9 +229,11 @@ bool CanResizeFrame(const views::Widget* widget) {
 
 gfx::Rect GetResizeHitTestBounds(const gfx::Size& size,
                                  bool use_native_frame,
-                                 bool use_dwm) {
+                                 bool use_dwm,
+                                 bool show_shadow) {
   gfx::Rect bounds(size);
-  if (!use_native_frame && UseFramelessCompositorShadow(use_dwm)) {
+  if (!use_native_frame &&
+      UseFramelessCompositorShadow(use_dwm, show_shadow)) {
     const int margin = FramelessCompositorShadowMargin();
     bounds.Inset(gfx::Insets(margin));
   }
@@ -364,8 +373,11 @@ void EnableDraggableRegionsForFrame(content::RenderFrameHost* rfh) {
 
 class XenonDraggableRegionsEnabler : public content::WebContentsObserver {
  public:
-  explicit XenonDraggableRegionsEnabler(content::WebContents* web_contents)
-      : content::WebContentsObserver(web_contents) {
+  XenonDraggableRegionsEnabler(content::WebContents* web_contents,
+                               bool use_transparent_background)
+      : content::WebContentsObserver(web_contents),
+        use_transparent_background_(use_transparent_background) {
+    ApplyTransparentBackground();
     if (web_contents && web_contents->GetPrimaryMainFrame()) {
       EnableDraggableRegionsForFrame(web_contents->GetPrimaryMainFrame());
     }
@@ -379,19 +391,37 @@ class XenonDraggableRegionsEnabler : public content::WebContentsObserver {
 
   void DOMContentLoaded(content::RenderFrameHost* render_frame_host) override {
     if (render_frame_host->IsInPrimaryMainFrame()) {
+      ApplyTransparentBackground();
       EnableDraggableRegionsForFrame(render_frame_host);
     }
   }
+
+ private:
+  void ApplyTransparentBackground() {
+    if (!use_transparent_background_ || !web_contents()) {
+      return;
+    }
+    web_contents()->SetPageBaseBackgroundColor(SK_ColorTRANSPARENT);
+    if (content::RenderWidgetHostView* view =
+            web_contents()->GetRenderWidgetHostView()) {
+      view->SetBackgroundColor(SK_ColorTRANSPARENT);
+    }
+  }
+
+  const bool use_transparent_background_;
 };
 
 // Frameless WebDialogView: -webkit-app-region drag + edge resize.
-class XenonWebDialogView : public views::WebDialogView {
+class XenonWebDialogView : public views::WebDialogView,
+                           public views::ViewTargeterDelegate {
  public:
   XenonWebDialogView(content::BrowserContext* context,
                      ui::WebDialogDelegate* delegate,
                      std::unique_ptr<WebContentsHandler> handler)
       : views::WebDialogView(context, delegate, std::move(handler)),
-        xenon_delegate_(static_cast<XenonWebDialog*>(delegate)) {}
+        xenon_delegate_(static_cast<XenonWebDialog*>(delegate)) {
+    SetEventTargeter(std::make_unique<views::ViewTargeter>(this));
+  }
   ~XenonWebDialogView() override = default;
 
   void DraggableRegionsChanged(
@@ -457,6 +487,16 @@ class XenonWebDialogView : public views::WebDialogView {
       }
     }
     return views::WebDialogView::GetCursor(event);
+  }
+
+  views::View* TargetForRect(views::View* root,
+                             const gfx::Rect& rect) override {
+    DCHECK_EQ(root, this);
+    if (UseManualResize() && CanResizeFrame(GetWidget()) &&
+        GetCurrentResizeHitTest(rect.CenterPoint()) != HTNOWHERE) {
+      return this;
+    }
+    return views::ViewTargeterDelegate::TargetForRect(root, rect);
   }
 
   views::ClientView* CreateClientView(views::Widget* widget) override {
@@ -527,17 +567,18 @@ class XenonWebDialogView : public views::WebDialogView {
   }
 
  private:
-  // The non-DWM path uses a translucent window for self-painted shadow. On Win,
   // Chromium removes WS_THICKFRAME from translucent windows, so native resize
-  // cannot work there even if hit-test returns HT*. Handle resize in Views.
+  // cannot work there even if hit-test returns HT*. Handle resize in Views;
+  // this is independent of whether the window paints a shadow.
   bool UseManualResize() const {
     return !xenon_delegate_->UseNativeFrame() &&
-           UseFramelessCompositorShadow(xenon_delegate_->UseDwm());
+           !UseDwmRoundedCorners(xenon_delegate_->UseDwm());
   }
 
   gfx::Rect GetCurrentResizeHitTestBounds() const {
     return GetResizeHitTestBounds(size(), xenon_delegate_->UseNativeFrame(),
-                                  xenon_delegate_->UseDwm());
+                                  xenon_delegate_->UseDwm(),
+                                  xenon_delegate_->ShouldShowShadow());
   }
 
   int GetCurrentResizeHitTest(const gfx::Point& point) const {
@@ -548,7 +589,9 @@ class XenonWebDialogView : public views::WebDialogView {
     gfx::Size minimum_size =
         GetWidget() ? GetWidget()->GetMinimumSize() : gfx::Size();
     minimum_size.SetToMax(gfx::Size(64, 64));
-    if (UseManualResize()) {
+    if (UseFramelessCompositorShadow(
+            xenon_delegate_->UseDwm(),
+            xenon_delegate_->ShouldShowShadow())) {
       const int margin = FramelessCompositorShadowMargin();
       minimum_size.Enlarge(2 * margin, 2 * margin);
     }
@@ -628,7 +671,9 @@ class XenonWebDialogView : public views::WebDialogView {
         SetWebViewCornersRadii(gfx::RoundedCornersF(kDialogCornerRadius));
       }
 #if BUILDFLAG(IS_WIN)
-      if (UseFramelessCompositorShadow(xenon_delegate_->UseDwm())) {
+      if (UseFramelessCompositorShadow(
+              xenon_delegate_->UseDwm(),
+              xenon_delegate_->ShouldShowShadow())) {
         SetupFramelessCompositorShadow();
       } else {
         RemoveDwmBorder();
@@ -639,7 +684,9 @@ class XenonWebDialogView : public views::WebDialogView {
     if (web_contents()) {
       if (!draggable_regions_enabler_) {
         draggable_regions_enabler_ =
-            std::make_unique<XenonDraggableRegionsEnabler>(web_contents());
+            std::make_unique<XenonDraggableRegionsEnabler>(
+                web_contents(),
+                xenon_delegate_->UseTransparentWebContentsBackground());
       }
     }
 
@@ -758,9 +805,9 @@ void XenonWebDialog::ShowForLogin(content::BrowserContext* context,
                modal_type, std::move(on_dialog_closed), show_close_button,
                /*frame=*/false, /*dwm=*/XenonWebDialog::kDefaultUseDwm,
                /*resizable=*/XenonWebDialog::kDefaultResizable,
-               /*minimizable=*/true, /*maximizable=*/true,
-               /*always_on_top=*/false, /*skip_taskbar=*/false,
-               /*show=*/true);
+                /*minimizable=*/true, /*maximizable=*/true,
+                /*always_on_top=*/false, /*skip_taskbar=*/false,
+                /*show=*/true, /*show_shadow=*/true);
 }
 
 void XenonWebDialog::ShowWithOptions(content::BrowserContext* context,
@@ -803,6 +850,7 @@ void XenonWebDialog::ShowWithOptions(content::BrowserContext* context,
       options.FindBool("alwaysOnTop").value_or(false),
       options.FindBool("skipTaskbar").value_or(false),
       options.FindBool("show").value_or(true),
+      options.FindBool("shadow").value_or(true),
       use_custom_modal);
 }
 
@@ -824,6 +872,7 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
                                   bool always_on_top,
                                   bool skip_taskbar,
                                   bool show,
+                                  bool show_shadow,
                                   bool use_custom_modal) {
   content::WebContents* web_contents = nullptr;
   if (modal_type == ui::mojom::ModalType::kChild && parent) {
@@ -851,8 +900,8 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
 
   auto* delegate =
       new XenonWebDialog(url, width, height, title, delegate_modal_type,
-                         std::move(on_dialog_closed), show_close_button, frame,
-                         dwm);
+                          std::move(on_dialog_closed), show_close_button, frame,
+                          dwm, show_shadow);
   delegate->set_can_resize(resizable);
   delegate->set_can_minimize(minimizable);
   delegate->set_can_maximize(maximizable);
@@ -873,6 +922,9 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
     params.dont_show_in_taskbar = skip_taskbar;
     params.type = views::Widget::InitParams::TYPE_WINDOW;
     params.parent = parent;
+    if (!show_shadow) {
+      params.shadow_type = views::Widget::InitParams::ShadowType::kNone;
+    }
     if (!frame) {
 #if BUILDFLAG(IS_WIN)
       if (UseDwmRoundedCorners(dwm)) {
@@ -932,8 +984,58 @@ GURL XenonWebDialog::GetXenonLoginWebUIUrl() {
   return GURL("chrome://xenon-login/");
 }
 
+GURL XenonWebDialog::GetXenonPlayerWebUIUrl() {
+  return GURL("chrome://xenon-player/");
+}
+
+bool XenonWebDialog::UseTransparentWebContentsBackground() const {
+  return url_.SchemeIs("chrome") && url_.host() == "xenon-player";
+}
+
+namespace {
+
+raw_ptr<views::Widget>& XenonPlayerDialogWidget() {
+  static base::NoDestructor<raw_ptr<views::Widget>> widget;
+  return *widget;
+}
+
+void ClearXenonPlayerDialogWidget() {
+  XenonPlayerDialogWidget() = nullptr;
+}
+
+}  // namespace
+
 void XenonWebDialog::ShowXenonOverlay(Profile* profile) {
   Show(profile, GetXenonOverlayWebUIUrl(), 800, 600, u"Xenon Overlay");
+}
+
+void XenonWebDialog::ShowXenonPlayer(Profile* profile) {
+  if (!profile) {
+    LOG(WARNING) << "ShowXenonPlayer: no profile";
+    return;
+  }
+
+  if (XenonPlayerDialogWidget()) {
+    XenonPlayerDialogWidget()->Show();
+    XenonPlayerDialogWidget()->Activate();
+    return;
+  }
+
+  base::DictValue options;
+  options.Set("title", "Xenon Player");
+  options.Set("width", 1280);
+  options.Set("height", 800);
+  options.Set("modal", false);
+  options.Set("frame", false);
+  options.Set("resizable", true);
+  options.Set("minimizable", true);
+  options.Set("maximizable", true);
+  options.Set("showCloseButton", true);
+  options.Set("shadow", false);
+
+  ShowWithOptions(profile, GetXenonPlayerWebUIUrl(), options,
+                  &XenonPlayerDialogWidget(), gfx::NativeView(),
+                  base::BindOnce(&ClearXenonPlayerDialogWidget));
 }
 
 void XenonWebDialog::ShowDataMaskTest(Profile* profile) {
@@ -966,7 +1068,8 @@ XenonWebDialog::XenonWebDialog(const GURL& url,
                                base::OnceClosure on_dialog_closed,
                                bool show_close_button,
                                bool frame,
-                               bool dwm)
+                               bool dwm,
+                               bool show_shadow)
     : url_(url),
       width_(width),
       height_(height),
@@ -975,7 +1078,8 @@ XenonWebDialog::XenonWebDialog(const GURL& url,
       on_dialog_closed_(std::move(on_dialog_closed)),
       show_close_button_(show_close_button),
       frame_(frame),
-      dwm_(dwm) {}
+      dwm_(dwm),
+      show_shadow_(show_shadow) {}
 
 XenonWebDialog::~XenonWebDialog() = default;
 
@@ -996,7 +1100,7 @@ void XenonWebDialog::GetWebUIMessageHandlers(
 
 void XenonWebDialog::GetDialogSize(gfx::Size* size) const {
   size->SetSize(width_, height_);
-  EnlargeForFramelessCompositorShadow(size, frame_, dwm_);
+  EnlargeForFramelessCompositorShadow(size, frame_, dwm_, show_shadow_);
 }
 
 std::string XenonWebDialog::GetDialogArgs() const {

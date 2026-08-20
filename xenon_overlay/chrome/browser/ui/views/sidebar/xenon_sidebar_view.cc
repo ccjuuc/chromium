@@ -33,6 +33,7 @@
 #include "ui/views/layout/box_layout.h"
 #include "url/gurl.h"
 #include "xenon_overlay/chrome/browser/sidebar/xenon_sidebar_service_factory.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 
 namespace xenon {
 
@@ -64,6 +65,7 @@ constexpr SidebarShortcut kShortcuts[] = {
     {"UI", "Xenon UI", "chrome://xenon-ui/"},
     {"N", "Xenon Node", "chrome://xenon-node/"},
     {"PC", "pc_addon", "chrome://xenon-node/#pc_addon"},
+    {"XP", "Xenon Player", "chrome://xenon-player/"},
     {"VT", "Local Video Test", "chrome://local-video-test/"},
     {"RDL", "Render DLL Test", "chrome://render-dll-test/"},
     {"MI", "Media Internals", "chrome://media-internals/"},
@@ -452,6 +454,13 @@ void XenonSidebarView::OnSidebarAlignmentChanged(bool /*right_aligned*/) {
 
 void XenonSidebarView::OpenShortcut(const GURL& url) {
   if (!browser_) {
+    return;
+  }
+
+  // Player boots with preparePlayerHost() HWND binding; open in a WebDialog
+  // instead of a browser tab (same entry as stash electron-player).
+  if (url.host() == "xenon-player") {
+    XenonWebDialog::ShowXenonPlayer(browser_->GetProfile());
     return;
   }
 

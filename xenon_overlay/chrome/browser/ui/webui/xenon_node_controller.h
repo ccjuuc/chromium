@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "base/functional/callback.h"
+#include "base/files/file_path.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "content/public/browser/web_ui.h"
@@ -19,6 +20,7 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
+#include "ui/views/widget/widget_observer.h"
 #include "ui/webui/mojo_web_ui_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_node.mojom.h"
 #include "xenon_overlay/public/mojom/xenon_service.mojom.h"
@@ -29,13 +31,21 @@ class Widget;
 
 namespace xenon {
 
-// WebUI controller for chrome://xenon-node/
+// WebUI controller for chrome://xenon-node/ and chrome://xenon-player/.
+enum class XenonNodeHostKind {
+  kNodeTest,
+  kPlayer,
+};
+
 class XenonNodeController : public ui::MojoWebUIController,
-                            public xenon_node::mojom::PageHandlerFactory,
-                            public xenon_node::mojom::PageHandler,
-                            public mojom::NodeAddonObserver {
+                             public xenon_node::mojom::PageHandlerFactory,
+                             public xenon_node::mojom::PageHandler,
+                             public mojom::NodeAddonObserver,
+                             public views::WidgetObserver {
  public:
-  explicit XenonNodeController(content::WebUI* web_ui);
+  explicit XenonNodeController(content::WebUI* web_ui,
+                               XenonNodeHostKind host_kind =
+                                   XenonNodeHostKind::kNodeTest);
   ~XenonNodeController() override;
 
   XenonNodeController(const XenonNodeController&) = delete;
@@ -52,6 +62,20 @@ class XenonNodeController : public ui::MojoWebUIController,
 
   // xenon_node::mojom::PageHandler:
   void PreparePlayerHost(PreparePlayerHostCallback callback) override;
+  void BindPlayerVideoWindow(
+      const std::string& player_window,
+      BindPlayerVideoWindowCallback callback) override;
+  void ShowPlayerVideoHost(bool show) override;
+  void ControlPlayerWindow(const std::string& action,
+                           bool flag,
+                           ControlPlayerWindowCallback callback) override;
+  void OpenNativeFileDialog(
+      const std::string& title,
+      const std::vector<std::string>& filter_extensions,
+      bool allow_multi,
+      OpenNativeFileDialogCallback callback) override;
+  void ScanDirectoryVideos(const std::string& dir_path,
+                           ScanDirectoryVideosCallback callback) override;
   void RequireNodeModule(const std::string& path) override;
   void InvokeNodeExport(int32_t request_id,
                         const std::string& module_path,
@@ -101,6 +125,15 @@ class XenonNodeController : public ui::MojoWebUIController,
   void OnCallback(int32_t callback_id, std::vector<base::Value> args) override;
   void OnCallbackReleased(int32_t callback_id) override;
 
+  // views::WidgetObserver:
+  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
+  void OnWidgetBoundsChanged(views::Widget* widget,
+                             const gfx::Rect& new_bounds) override;
+  void OnWidgetDestroying(views::Widget* widget) override;
+  void OnWidgetShowStateChanged(views::Widget* widget) override;
+  void OnWidgetVisibilityChanged(views::Widget* widget,
+                                 bool visible) override;
+
   void OnNodeModuleLoaded(
       const std::string& path,
       bool success,
@@ -131,6 +164,9 @@ class XenonNodeController : public ui::MojoWebUIController,
                              bool success,
                              const std::string& error_msg);
   void OnPlayerHostClosed();
+  void DetachPlayerControlWindow();
+  void SyncPlayerHostWindow();
+  void UpdatePlayerWindow();
 
   // Ensures the Utility process is up, then returns a SharedRemote copy (same
   // path as require / xenon_page_handler).
@@ -157,7 +193,13 @@ class XenonNodeController : public ui::MojoWebUIController,
   size_t pending_module_reloads_ = 0;
   bool reload_in_progress_ = false;
   std::vector<base::OnceClosure> deferred_service_operations_;
+  raw_ptr<views::Widget> player_widget_ = nullptr;
   raw_ptr<views::Widget> player_host_widget_ = nullptr;
+  uintptr_t player_window_ = 0;
+  bool player_window_requested_visible_ = false;
+  bool syncing_player_windows_ = false;
+  base::FilePath player_frontend_dir_;
+  const XenonNodeHostKind host_kind_;
 
   base::WeakPtrFactory<XenonNodeController> weak_ptr_factory_{this};
 
@@ -168,6 +210,16 @@ class XenonNodeConfig : public content::WebUIConfig {
  public:
   XenonNodeConfig();
   ~XenonNodeConfig() override;
+
+  std::unique_ptr<content::WebUIController> CreateWebUIController(
+      content::WebUI* web_ui,
+      const GURL& url) override;
+};
+
+class XenonPlayerConfig : public content::WebUIConfig {
+ public:
+  XenonPlayerConfig();
+  ~XenonPlayerConfig() override;
 
   std::unique_ptr<content::WebUIController> CreateWebUIController(
       content::WebUI* web_ui,

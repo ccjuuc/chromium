@@ -71,12 +71,17 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   // Remote / observer checks run from the WebUI page (split Mojo tests).
   static void ShowXenonOverlay(Profile* profile);
 
+  // Opens chrome://xenon-player/ in a WebDialog (sidebar XP). Reuses one instance.
+  static void ShowXenonPlayer(Profile* profile);
+
   // Single source of truth for the WebUI URL shown by ShowXenonOverlay(). The WebUI
   // page exercises `window.xenon` (XenonPageHost) in resources/webui/xenon/index.ts.
   static GURL GetXenonOverlayWebUIUrl();
 
   // Login gate WebUI (`chrome://xenon-login/`)：独立 login HTML/CSS/JS，`chrome.send`。
   static GURL GetXenonLoginWebUIUrl();
+
+  static GURL GetXenonPlayerWebUIUrl();
 
   // test entry for Data Mask (网页打码).
   static void ShowDataMaskTest(Profile* profile);
@@ -88,6 +93,8 @@ class XenonWebDialog : public ui::WebDialogDelegate {
 
   bool UseNativeFrame() const { return frame_; }
   bool UseDwm() const { return dwm_; }
+  bool ShouldShowShadow() const { return show_shadow_; }
+  bool UseTransparentWebContentsBackground() const;
 
 #if BUILDFLAG(IS_WIN)
   void set_event_blocker(std::unique_ptr<ui::EventHandler> blocker) {
@@ -104,7 +111,8 @@ class XenonWebDialog : public ui::WebDialogDelegate {
                  base::OnceClosure on_dialog_closed,
                  bool show_close_button,
                  bool frame,
-                 bool dwm);
+                 bool dwm,
+                 bool show_shadow);
   ~XenonWebDialog() override;
 
   static void ShowInternal(content::BrowserContext* context,
@@ -125,6 +133,7 @@ class XenonWebDialog : public ui::WebDialogDelegate {
                            bool always_on_top,
                            bool skip_taskbar,
                            bool show,
+                           bool show_shadow,
                            bool use_custom_modal = false);
 
   // ui::WebDialogDelegate:
@@ -151,6 +160,7 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   bool show_close_button_ = false;
   bool frame_ = false;
   bool dwm_ = kDefaultUseDwm;
+  bool show_shadow_ = true;
 #if BUILDFLAG(IS_WIN)
   std::unique_ptr<ui::EventHandler> event_blocker_;
 #endif

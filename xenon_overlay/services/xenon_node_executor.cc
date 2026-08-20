@@ -56,6 +56,7 @@ namespace {
 constexpr int kMaxValueConversionDepth = 32;
 constexpr char kWireTypeKey[] = "__xenon_node_wire_type__";
 constexpr char kWireValueKey[] = "value";
+constexpr char kInvokePathPrefix[] = "$xenonInvokePath:";
 constexpr base::TimeDelta kUvLoopPollInterval = base::Milliseconds(10);
 
 #if BUILDFLAG(IS_WIN)
@@ -1648,19 +1649,88 @@ void XenonNodeExecutor::InvokeInstance(
   }
 
   v8::Local<v8::Object> receiver = it->second.object.Get(addon_isolate_);
+  std::string resolved_method_name = method_name;
+
+  // Native addons commonly return another wrapped object (for example,
+  // NativeAplayerStack.getCurrPlayMedia()). Such objects cannot be serialized
+  // as ordinary Mojo values because their useful API lives on the prototype.
+  // The WebUI bridge's reserved $invokePath helper encodes a no-argument
+  // method chain here so the whole chain stays inside the addon isolate and
+  // only the final primitive/result crosses Mojo.
+  if (resolved_method_name.starts_with(kInvokePathPrefix)) {
+    resolved_method_name.erase(0, std::strlen(kInvokePathPrefix));
+    const std::vector<std::string> path = base::SplitString(
+        resolved_method_name, ".", base::KEEP_WHITESPACE,
+        base::SPLIT_WANT_NONEMPTY);
+    if (path.size() < 2) {
+      std::move(callback).Run(false, base::Value(), {},
+                              "Native instance method path is invalid");
+      return;
+    }
+
+    for (size_t i = 0; i + 1 < path.size(); ++i) {
+      v8::Local<v8::Value> getter_value;
+      if (!receiver->Get(context, gin::StringToV8(addon_isolate_, path[i]))
+               .ToLocal(&getter_value) ||
+          !getter_value->IsFunction()) {
+        std::move(callback).Run(
+            false, base::Value(), {},
+            "Instance method path segment is missing: " + path[i]);
+        return;
+      }
+
+      gin::TryCatch try_catch(addon_isolate_);
+      v8::Local<v8::Value> nested_value;
+      if (!getter_value.As<v8::Function>()
+               ->Call(context, receiver, 0, nullptr)
+               .ToLocal(&nested_value)) {
+        std::move(callback).Run(
+            false, base::Value(), {},
+            DescribeCaughtException(path[i], &try_catch));
+        return;
+      }
+      EnsureUvLoopPolling();
+
+      if (nested_value->IsPromise()) {
+        addon_isolate_->PerformMicrotaskCheckpoint();
+        v8::Local<v8::Promise> promise = nested_value.As<v8::Promise>();
+        if (promise->State() != v8::Promise::kFulfilled) {
+          std::move(callback).Run(
+              false, base::Value(), {},
+              "Instance method path returned an unsettled or rejected Promise: " +
+                  path[i]);
+          return;
+        }
+        nested_value = promise->Result();
+      }
+
+      if (!nested_value->IsObject()) {
+        std::move(callback).Run(
+            false, base::Value(), {},
+            "Instance method path did not return an object: " + path[i]);
+        return;
+      }
+      receiver = nested_value.As<v8::Object>();
+    }
+    resolved_method_name = path.back();
+  }
+
   // Ordinary [[Get]] walks the prototype chain, same as JS instance.method.
   v8::Local<v8::Value> method_value;
-  if (!receiver->Get(context, gin::StringToV8(addon_isolate_, method_name))
+  if (!receiver
+           ->Get(context,
+                 gin::StringToV8(addon_isolate_, resolved_method_name))
            .ToLocal(&method_value) ||
       !method_value->IsFunction()) {
     std::move(callback).Run(false, base::Value(), {},
-                            "Instance method is missing: " + method_name);
+                            "Instance method is missing: " +
+                                resolved_method_name);
     return;
   }
   v8::Local<v8::Function> function = method_value.As<v8::Function>();
 
-  InvokeResolvedFunction(context, method_name, function, receiver, client_id,
-                         args, std::move(callback));
+  InvokeResolvedFunction(context, resolved_method_name, function, receiver,
+                         client_id, args, std::move(callback));
 }
 
 void XenonNodeExecutor::GetInstanceProperty(const std::string& module_path,

@@ -4,28 +4,57 @@
 
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_node_controller.h"
 
+#include <algorithm>
+#include <limits>
 #include <mutex>
 #include <utility>
 
 #include "base/atomic_sequence_num.h"
+#include "base/auto_reset.h"
+#include "base/command_line.h"
+#include "base/files/file_enumerator.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/memory/ref_counted_memory.h"
+#include "base/path_service.h"
+#include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "build/build_config.h"
+#include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_browser_interface_broker_registry.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/common/url_constants.h"
+#include "content/public/common/referrer.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
+#include "net/base/url_util.h"
+#include "services/network/public/mojom/content_security_policy.mojom.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/ui_base_types.h"
+#include "ui/views/background.h"
+#include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
 #include "xenon_overlay/public/mojom/xenon_service.mojom.h"
 #include "xenon_overlay/resources/webui/xenon_node/grit/xenon_node_webui_resources.h"
 #include "xenon_overlay/resources/webui/xenon_node/grit/xenon_node_webui_resources_map.h"
+#include "xenon_overlay/resources/webui/xenon_player/grit/xenon_player_webui_resources.h"
+#include "xenon_overlay/resources/webui/xenon_player/grit/xenon_player_webui_resources_map.h"
 
 #if BUILDFLAG(IS_WIN)
+#include <windows.h>  // Must be in front of other Windows header files.
+
+#include <commdlg.h>
+
+#include "ui/display/win/screen_win.h"
 #include "ui/views/win/hwnd_util.h"
 #endif
 
@@ -34,8 +63,88 @@ namespace xenon {
 namespace {
 
 constexpr char kHost[] = "xenon-node";
+constexpr char kPlayerHost[] = "xenon-player";
+constexpr char kPlayerAppPrefix[] = "app/";
+constexpr char kPlayerStaticPrefix[] = "static/";
+constexpr char kPlayerFrontendDirSwitch[] = "xenon-player-frontend-dir";
 constexpr char kServiceRestartingError[] =
     "Utility service restarted; retry the operation";
+
+base::FilePath ResolvePlayerFrontendDir() {
+  const base::CommandLine* command_line =
+      base::CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(kPlayerFrontendDirSwitch)) {
+    base::FilePath path =
+        command_line->GetSwitchValuePath(kPlayerFrontendDirSwitch);
+    if (base::DirectoryExists(path)) {
+      return path;
+    }
+    return {};
+  }
+
+  base::FilePath exe_dir;
+  if (!base::PathService::Get(base::DIR_EXE, &exe_dir)) {
+    return {};
+  }
+  base::FilePath path =
+      exe_dir.Append(FILE_PATH_LITERAL("xenon_player_frontend"));
+  return base::DirectoryExists(path) ? path : base::FilePath();
+}
+
+bool ShouldHandlePlayerAppRequest(const std::string& path) {
+  return base::StartsWith(path, kPlayerAppPrefix) ||
+         base::StartsWith(path, kPlayerStaticPrefix);
+}
+
+scoped_refptr<base::RefCountedMemory> ReadPlayerFrontendAsset(
+    const base::FilePath& frontend_dir,
+    const std::string& request_path) {
+  std::string relative_path = base::StartsWith(request_path, kPlayerAppPrefix)
+                                  ? request_path.substr(
+                                        sizeof(kPlayerAppPrefix) - 1)
+                                  : request_path;
+  if (relative_path.empty()) {
+    relative_path = "index.html";
+  }
+  relative_path = base::UnescapeURLComponent(relative_path,
+                                               base::UnescapeRule::NORMAL);
+
+  const base::FilePath relative =
+      base::FilePath::FromUTF8Unsafe(relative_path);
+  if (relative.empty() || relative.IsAbsolute() || relative.ReferencesParent()) {
+    return nullptr;
+  }
+
+  base::FilePath normalized_root;
+  base::FilePath normalized_file;
+  if (!base::NormalizeFilePath(frontend_dir, &normalized_root) ||
+      !base::NormalizeFilePath(frontend_dir.Append(relative),
+                               &normalized_file) ||
+      (normalized_file != normalized_root &&
+       !normalized_root.IsParent(normalized_file))) {
+    return nullptr;
+  }
+
+  std::string contents;
+  if (!base::ReadFileToString(normalized_file, &contents)) {
+    return nullptr;
+  }
+  return base::MakeRefCounted<base::RefCountedString>(std::move(contents));
+}
+
+void HandlePlayerAppRequest(
+    const base::FilePath& frontend_dir,
+    const std::string& path,
+    content::WebUIDataSource::GotDataCallback callback) {
+  if (frontend_dir.empty()) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(&ReadPlayerFrontendAsset, frontend_dir, path),
+      std::move(callback));
+}
 
 base::AtomicSequenceNumber& NodeClientIdSequence() {
   static base::AtomicSequenceNumber sequence;
@@ -111,23 +220,92 @@ void EnsureTrustedBrokerKnowsXenonNode() {
 
 }  // namespace
 
-XenonNodeController::XenonNodeController(content::WebUI* web_ui)
+XenonNodeController::XenonNodeController(content::WebUI* web_ui,
+                                         XenonNodeHostKind host_kind)
     : ui::MojoWebUIController(web_ui, /*enable_chrome_send=*/false),
-      client_id_(NodeClientIdSequence().GetNext() + 1) {
+      client_id_(NodeClientIdSequence().GetNext() + 1),
+      host_kind_(host_kind) {
   EnsureTrustedBrokerKnowsXenonNode();
 
+  const char* host =
+      host_kind_ == XenonNodeHostKind::kPlayer ? kPlayerHost : kHost;
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
-      web_ui->GetWebContents()->GetBrowserContext(), kHost);
+      web_ui->GetWebContents()->GetBrowserContext(), host);
 
-  for (const auto& resource : kXenonNodeWebuiResources) {
-    source->AddResourcePath(resource.path, resource.id);
+  if (host_kind_ == XenonNodeHostKind::kPlayer) {
+    for (const auto& resource : kXenonPlayerWebuiResources) {
+      source->AddResourcePath(resource.path, resource.id);
+    }
+    source->SetDefaultResource(IDR_XENON_PLAYER_WEBUI_XENON_PLAYER_HTML);
+    source->DisableTrustedTypesCSP();
+    source->OverrideContentSecurityPolicy(
+        network::mojom::CSPDirectiveName::ScriptSrc,
+        "script-src 'self' chrome://resources 'unsafe-eval';");
+    source->OverrideContentSecurityPolicy(
+        network::mojom::CSPDirectiveName::StyleSrc,
+        "style-src 'self' chrome://resources 'unsafe-inline';");
+    source->OverrideContentSecurityPolicy(
+        network::mojom::CSPDirectiveName::ConnectSrc,
+        "connect-src 'self';");
+    source->OverrideContentSecurityPolicy(
+        network::mojom::CSPDirectiveName::ImgSrc,
+        "img-src 'self' https: http: data: blob:;");
+    source->OverrideContentSecurityPolicy(
+        network::mojom::CSPDirectiveName::MediaSrc,
+        "media-src 'self' https: http: data: blob:;");
+    source->OverrideContentSecurityPolicy(
+        network::mojom::CSPDirectiveName::FontSrc,
+        "font-src 'self' data:;");
+
+    player_frontend_dir_ = ResolvePlayerFrontendDir();
+    base::FilePath executable_path;
+    base::PathService::Get(base::FILE_EXE, &executable_path);
+    source->AddString("execPath", executable_path.AsUTF8Unsafe());
+    source->AddString("frontendDir", player_frontend_dir_.AsUTF8Unsafe());
+    source->AddBoolean("hasFrontend", !player_frontend_dir_.empty());
+    source->UseStringsJs();
+    source->SetRequestFilter(
+        base::BindRepeating(&ShouldHandlePlayerAppRequest),
+        base::BindRepeating(&HandlePlayerAppRequest, player_frontend_dir_));
+
+    std::string open_dialog;
+    content::WebContents* contents = web_ui->GetWebContents();
+    if (net::GetValueForKeyInQuery(contents->GetVisibleURL(), "dialog",
+                                   &open_dialog) &&
+        open_dialog == "1") {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(
+              [](base::WeakPtr<content::WebContents> launcher) {
+                if (!launcher) {
+                  return;
+                }
+                XenonWebDialog::ShowXenonPlayer(Profile::FromBrowserContext(
+                    launcher->GetBrowserContext()));
+                launcher->GetController().LoadURL(
+                    GURL("chrome://newtab/"), content::Referrer(),
+                    ui::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());
+              },
+              contents->GetWeakPtr()));
+    }
+  } else {
+    for (const auto& resource : kXenonNodeWebuiResources) {
+      source->AddResourcePath(resource.path, resource.id);
+    }
+    source->SetDefaultResource(IDR_XENON_NODE_WEBUI_XENON_NODE_HTML);
   }
-  source->SetDefaultResource(IDR_XENON_NODE_WEBUI_XENON_NODE_HTML);
 }
 
 XenonNodeController::~XenonNodeController() {
+  weak_ptr_factory_.InvalidateWeakPtrs();
+  if (player_widget_) {
+    player_widget_->RemoveObserver(this);
+  }
   if (player_host_widget_) {
-    player_host_widget_->CloseNow();
+    DetachPlayerControlWindow();
+    views::Widget* host = player_host_widget_;
+    player_host_widget_ = nullptr;
+    host->CloseNow();
   }
 }
 
@@ -136,47 +314,82 @@ WEB_UI_CONTROLLER_TYPE_IMPL(XenonNodeController)
 void XenonNodeController::PreparePlayerHost(
     PreparePlayerHostCallback callback) {
 #if BUILDFLAG(IS_WIN)
+  HWND web_ui_window = views::HWNDForNativeWindow(
+      web_ui()->GetWebContents()->GetTopLevelNativeWindow());
+  if (!web_ui_window) {
+    std::move(callback).Run("", "", "Player WebUI has no native window");
+    return;
+  }
+
+  views::Widget* widget = views::Widget::GetWidgetForNativeWindow(
+      web_ui()->GetWebContents()->GetTopLevelNativeWindow());
+  if (!widget) {
+    std::move(callback).Run("", "", "Player WebUI has no native widget");
+    return;
+  }
+  if (player_widget_ != widget) {
+    if (player_widget_) {
+      player_widget_->RemoveObserver(this);
+    }
+    player_widget_ = widget;
+    player_widget_->AddObserver(this);
+  }
+
   if (!player_host_widget_) {
     base::DictValue options;
     options.Set("title", "Xenon Player");
-    options.Set("width", 960);
-    options.Set("height", 540);
+    options.Set("width", 1280);
+    options.Set("height", 800);
     options.Set("modal", false);
-    options.Set("frame", true);
-    options.Set("resizable", true);
-    options.Set("minimizable", true);
-    options.Set("maximizable", true);
-    options.Set("showCloseButton", true);
+    options.Set("frame", false);
+    options.Set("dwm", true);
+    options.Set("resizable", false);
+    options.Set("minimizable", false);
+    options.Set("maximizable", false);
+    options.Set("showCloseButton", false);
+    options.Set("skipTaskbar", true);
+    options.Set("show", true);
+    options.Set("shadow", false);
 
     XenonWebDialog::ShowWithOptions(
-        web_ui()->GetWebContents()->GetBrowserContext(), GURL("about:blank"),
+        web_ui()->GetWebContents()->GetBrowserContext(),
+        GURL("data:text/html,<body style='margin:0;background:%23000'></body>"),
         options, &player_host_widget_, gfx::NativeView(),
         base::BindOnce(&XenonNodeController::OnPlayerHostClosed,
                        weak_ptr_factory_.GetWeakPtr()));
-  } else {
-    player_host_widget_->Show();
-    player_host_widget_->Activate();
   }
-
   if (!player_host_widget_ || !player_host_widget_->GetNativeWindow()) {
     std::move(callback).Run("", "", "Failed to create player host window");
     return;
   }
 
-  HWND parent_window =
-      views::HWNDForNativeWindow(player_host_widget_->GetNativeWindow());
-  HWND float_window = views::HWNDForNativeWindow(
-      web_ui()->GetWebContents()->GetTopLevelNativeWindow());
+  HWND parent_window = views::HWNDForWidget(player_host_widget_);
   if (!parent_window) {
     std::move(callback).Run("", "", "Player host has no native window");
     return;
   }
-  if (!float_window) {
-    float_window = parent_window;
+
+  // Match Electron's `parent: playerParentWnd` relationship. An owned control
+  // window stays directly above its video host across activation changes.
+  if (::GetWindow(web_ui_window, GW_OWNER) != parent_window) {
+    ::SetLastError(ERROR_SUCCESS);
+    const LONG_PTR previous_owner = ::SetWindowLongPtr(
+        web_ui_window, GWLP_HWNDPARENT,
+        reinterpret_cast<LONG_PTR>(parent_window));
+    if (!previous_owner && ::GetLastError() != ERROR_SUCCESS) {
+      std::move(callback).Run("", "",
+                              "Failed to attach player control window");
+      return;
+    }
   }
 
+  if (views::View* host_view = player_host_widget_->GetContentsView()) {
+    host_view->SetBackground(views::CreateSolidBackground(SK_ColorBLACK));
+  }
+
+  SyncPlayerHostWindow();
   std::move(callback).Run(
-      base::NumberToString(reinterpret_cast<uintptr_t>(float_window)),
+      base::NumberToString(reinterpret_cast<uintptr_t>(web_ui_window)),
       base::NumberToString(reinterpret_cast<uintptr_t>(parent_window)), "");
 #else
   std::move(callback).Run("", "",
@@ -184,8 +397,390 @@ void XenonNodeController::PreparePlayerHost(
 #endif
 }
 
+void XenonNodeController::BindPlayerVideoWindow(
+    const std::string& player_window,
+    BindPlayerVideoWindowCallback callback) {
+#if BUILDFLAG(IS_WIN)
+  uint64_t player_window_value = 0;
+  if (!base::StringToUint64(player_window, &player_window_value) ||
+      player_window_value == 0 ||
+      player_window_value > std::numeric_limits<uintptr_t>::max()) {
+    std::move(callback).Run("Invalid native player window handle");
+    return;
+  }
+
+  HWND player_hwnd = reinterpret_cast<HWND>(
+      static_cast<uintptr_t>(player_window_value));
+  HWND host_hwnd =
+      player_host_widget_ ? views::HWNDForWidget(player_host_widget_) : nullptr;
+  if (!host_hwnd || !::IsWindow(player_hwnd) ||
+      ::GetParent(player_hwnd) != host_hwnd ||
+      !(::GetWindowLongPtr(player_hwnd, GWL_STYLE) & WS_CHILD)) {
+    std::move(callback).Run(
+        "Native player window is not a direct child of the player host");
+    return;
+  }
+
+  player_window_ = reinterpret_cast<uintptr_t>(player_hwnd);
+  UpdatePlayerWindow();
+  std::move(callback).Run("");
+#else
+  std::move(callback).Run(
+      "Native player hosting is only supported on Windows");
+#endif
+}
+
+void XenonNodeController::ShowPlayerVideoHost(bool show) {
+  player_window_requested_visible_ = show;
+  UpdatePlayerWindow();
+}
+
+void XenonNodeController::ControlPlayerWindow(
+    const std::string& action,
+    bool flag,
+    ControlPlayerWindowCallback callback) {
+  views::Widget* widget = player_widget_;
+  if (!widget) {
+    widget = views::Widget::GetWidgetForNativeWindow(
+        web_ui()->GetWebContents()->GetTopLevelNativeWindow());
+  }
+  if (!widget) {
+    std::move(callback).Run(false, "Player WebUI has no native widget");
+    return;
+  }
+
+  bool state = false;
+  bool should_update_player_window = true;
+  if (action == "minimize") {
+    widget->Minimize();
+    state = true;
+  } else if (action == "toggle-maximize") {
+    if (widget->IsMaximized()) {
+      widget->Restore();
+    } else {
+      widget->Maximize();
+    }
+    state = widget->IsMaximized();
+  } else if (action == "close") {
+    should_update_player_window = false;
+    state = true;
+    widget->Close();
+  } else if (action == "hide") {
+    widget->Hide();
+  } else if (action == "show") {
+    widget->Show();
+    widget->Activate();
+    state = true;
+  } else if (action == "focus") {
+    widget->Activate();
+    state = true;
+  } else if (action == "fullscreen") {
+    widget->SetFullscreen(flag);
+    state = widget->IsFullscreen();
+  } else if (action == "pin") {
+    const ui::ZOrderLevel level = flag ? ui::ZOrderLevel::kFloatingWindow
+                                       : ui::ZOrderLevel::kNormal;
+    widget->SetZOrderLevel(level);
+    if (player_host_widget_) {
+      player_host_widget_->SetZOrderLevel(level);
+    }
+    state = flag;
+  } else {
+    std::move(callback).Run(false,
+                            "Unknown player window action: " + action);
+    return;
+  }
+
+  if (should_update_player_window && widget == player_widget_) {
+    UpdatePlayerWindow();
+  }
+  std::move(callback).Run(state, "");
+}
+
+void XenonNodeController::OpenNativeFileDialog(
+    const std::string& title,
+    const std::vector<std::string>& filter_extensions,
+    bool allow_multi,
+    OpenNativeFileDialogCallback callback) {
+#if BUILDFLAG(IS_WIN)
+  HWND owner = nullptr;
+  if (web_ui()->GetWebContents()->GetTopLevelNativeWindow()) {
+    owner = views::HWNDForNativeWindow(
+        web_ui()->GetWebContents()->GetTopLevelNativeWindow());
+  }
+
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
+      base::BindOnce(
+          [](HWND owner, std::wstring dialog_title,
+             std::vector<std::string> extensions,
+             bool allow_multi) -> std::vector<std::string> {
+            std::wstring patterns;
+            for (const std::string& extension : extensions) {
+              std::wstring item = base::UTF8ToWide(extension);
+              item.erase(std::remove(item.begin(), item.end(), L'.'),
+                         item.end());
+              if (item.empty() || item.find_first_of(L"\\/:*?\"<>|") !=
+                                      std::wstring::npos) {
+                continue;
+              }
+              if (!patterns.empty()) {
+                patterns.append(L";");
+              }
+              patterns.append(L"*.").append(item);
+            }
+            if (patterns.empty()) {
+              patterns = L"*.*";
+            }
+
+            std::wstring filter = L"Media files (" + patterns + L")";
+            filter.push_back(L'\0');
+            filter.append(patterns);
+            filter.push_back(L'\0');
+            filter.append(L"All files (*.*)");
+            filter.push_back(L'\0');
+            filter.append(L"*.*");
+            filter.push_back(L'\0');
+
+            std::vector<wchar_t> buffer(32768, L'\0');
+            OPENFILENAMEW open_file = {};
+            open_file.lStructSize = sizeof(open_file);
+            open_file.hwndOwner = owner;
+            open_file.lpstrFile = buffer.data();
+            open_file.nMaxFile = static_cast<DWORD>(buffer.size());
+            open_file.lpstrTitle = dialog_title.empty()
+                                       ? L"Select media files"
+                                       : dialog_title.c_str();
+            open_file.lpstrFilter = filter.c_str();
+            open_file.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST |
+                              OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST;
+            if (allow_multi) {
+              open_file.Flags |= OFN_ALLOWMULTISELECT;
+            }
+            if (!::GetOpenFileNameW(&open_file)) {
+              return {};
+            }
+
+            std::vector<std::string> paths;
+            UNSAFE_BUFFERS({
+              const wchar_t* item = buffer.data();
+              const base::FilePath first(item);
+              item += first.value().size() + 1;
+              if (*item == L'\0') {
+                paths.push_back(first.AsUTF8Unsafe());
+              } else {
+                while (*item != L'\0') {
+                  const base::FilePath path = first.Append(item);
+                  paths.push_back(path.AsUTF8Unsafe());
+                  item += std::wcslen(item) + 1;
+                }
+              }
+            });
+            return paths;
+          },
+          owner, base::UTF8ToWide(title), filter_extensions, allow_multi),
+      std::move(callback));
+#else
+  std::move(callback).Run({});
+#endif
+}
+
+void XenonNodeController::ScanDirectoryVideos(
+    const std::string& dir_path,
+    ScanDirectoryVideosCallback callback) {
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(
+          [](std::string path) {
+            base::FilePath directory = base::FilePath::FromUTF8Unsafe(path);
+            if (base::PathExists(directory) &&
+                !base::DirectoryExists(directory)) {
+              directory = directory.DirName();
+            }
+
+            std::vector<base::FilePath> files;
+            if (!base::DirectoryExists(directory)) {
+              return std::vector<std::string>();
+            }
+            base::FileEnumerator enumerator(
+                directory, false, base::FileEnumerator::FILES);
+            for (base::FilePath file = enumerator.Next(); !file.empty();
+                 file = enumerator.Next()) {
+              static constexpr const base::FilePath::CharType* kExtensions[] = {
+                  FILE_PATH_LITERAL(".3gp"),  FILE_PATH_LITERAL(".asf"),
+                  FILE_PATH_LITERAL(".avi"),  FILE_PATH_LITERAL(".divx"),
+                  FILE_PATH_LITERAL(".f4v"),  FILE_PATH_LITERAL(".flv"),
+                  FILE_PATH_LITERAL(".iso"),  FILE_PATH_LITERAL(".m2ts"),
+                  FILE_PATH_LITERAL(".m4v"),  FILE_PATH_LITERAL(".mkv"),
+                  FILE_PATH_LITERAL(".mov"),  FILE_PATH_LITERAL(".mp4"),
+                  FILE_PATH_LITERAL(".mpeg"), FILE_PATH_LITERAL(".mpg"),
+                  FILE_PATH_LITERAL(".mts"),  FILE_PATH_LITERAL(".rmvb"),
+                  FILE_PATH_LITERAL(".ts"),   FILE_PATH_LITERAL(".vob"),
+                  FILE_PATH_LITERAL(".webm"), FILE_PATH_LITERAL(".wmv"),
+              };
+              const base::FilePath::StringType extension =
+                  file.FinalExtension();
+              for (const auto* candidate : kExtensions) {
+                if (base::FilePath::CompareEqualIgnoreCase(extension,
+                                                           candidate)) {
+                  files.push_back(file);
+                  break;
+                }
+              }
+            }
+            std::sort(files.begin(), files.end());
+            std::vector<std::string> paths;
+            paths.reserve(files.size());
+            for (const base::FilePath& file : files) {
+              paths.push_back(file.AsUTF8Unsafe());
+            }
+            return paths;
+          },
+          dir_path),
+      std::move(callback));
+}
+
 void XenonNodeController::OnPlayerHostClosed() {
   player_host_widget_ = nullptr;
+  player_window_ = 0;
+  player_window_requested_visible_ = false;
+  if (player_widget_) {
+    player_widget_->Close();
+  }
+}
+
+void XenonNodeController::DetachPlayerControlWindow() {
+#if BUILDFLAG(IS_WIN)
+  if (!player_widget_ || !player_host_widget_) {
+    return;
+  }
+
+  HWND control_hwnd = views::HWNDForWidget(player_widget_);
+  HWND host_hwnd = views::HWNDForWidget(player_host_widget_);
+  if (control_hwnd && host_hwnd &&
+      ::GetWindow(control_hwnd, GW_OWNER) == host_hwnd) {
+    ::SetWindowLongPtr(control_hwnd, GWLP_HWNDPARENT, 0);
+  }
+#endif
+}
+
+void XenonNodeController::SyncPlayerHostWindow() {
+#if BUILDFLAG(IS_WIN)
+  if (syncing_player_windows_ || !player_widget_ || !player_host_widget_) {
+    return;
+  }
+  base::AutoReset<bool> syncing(&syncing_player_windows_, true);
+
+  HWND control_hwnd = views::HWNDForWidget(player_widget_);
+  HWND host_hwnd = views::HWNDForWidget(player_host_widget_);
+  if (!control_hwnd || !host_hwnd) {
+    return;
+  }
+
+  content::WebContents* control_contents = web_ui()->GetWebContents();
+  if (!control_contents) {
+    return;
+  }
+  const gfx::Rect content_bounds =
+      display::win::GetScreenWin()->DIPToScreenRect(
+          control_hwnd, control_contents->GetContainerBounds());
+  if (player_host_widget_->GetWindowBoundsInScreen() != content_bounds) {
+    player_host_widget_->SetBounds(content_bounds);
+  }
+  if (!player_widget_->IsVisible() || player_widget_->IsMinimized()) {
+    if (player_host_widget_->IsVisible()) {
+      player_host_widget_->Hide();
+    }
+    return;
+  }
+
+  if (!player_host_widget_->IsVisible()) {
+    player_host_widget_->ShowInactive();
+  }
+  ::SetWindowPos(host_hwnd, control_hwnd, 0, 0, 0, 0,
+                 SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE);
+#endif
+}
+
+void XenonNodeController::UpdatePlayerWindow() {
+#if BUILDFLAG(IS_WIN)
+  SyncPlayerHostWindow();
+  if (!player_window_ || !player_widget_ || !player_host_widget_) {
+    return;
+  }
+
+  HWND player_hwnd =
+      reinterpret_cast<HWND>(static_cast<uintptr_t>(player_window_));
+  HWND host_hwnd = views::HWNDForWidget(player_host_widget_);
+  if (!::IsWindow(player_hwnd) || !host_hwnd ||
+      ::GetParent(player_hwnd) != host_hwnd) {
+    player_window_ = 0;
+    return;
+  }
+
+  const bool should_show = player_window_requested_visible_ &&
+                           player_widget_->IsVisible() &&
+                           !player_widget_->IsMinimized();
+  if (!should_show) {
+    ::SetWindowPos(player_hwnd, HWND_TOP, 0, 0, 0, 0,
+                   SWP_HIDEWINDOW | SWP_NOACTIVATE | SWP_NOMOVE |
+                       SWP_NOSIZE);
+    return;
+  }
+
+  RECT host_client_bounds = {};
+  if (!::GetClientRect(host_hwnd, &host_client_bounds)) {
+    return;
+  }
+  ::SetWindowPos(player_hwnd, HWND_TOP, 0, 0,
+                 host_client_bounds.right - host_client_bounds.left,
+                 host_client_bounds.bottom - host_client_bounds.top,
+                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+#endif
+}
+
+void XenonNodeController::OnWidgetActivationChanged(views::Widget* widget,
+                                                     bool active) {
+  if (widget == player_widget_ && active) {
+    SyncPlayerHostWindow();
+  }
+}
+
+void XenonNodeController::OnWidgetBoundsChanged(
+    views::Widget* widget,
+    const gfx::Rect&) {
+  if (widget == player_widget_) {
+    UpdatePlayerWindow();
+  }
+}
+
+void XenonNodeController::OnWidgetDestroying(views::Widget* widget) {
+  if (widget != player_widget_) {
+    return;
+  }
+  player_widget_->RemoveObserver(this);
+  player_window_ = 0;
+  player_window_requested_visible_ = false;
+  if (player_host_widget_) {
+    DetachPlayerControlWindow();
+    views::Widget* host = player_host_widget_;
+    player_host_widget_ = nullptr;
+    host->CloseNow();
+  }
+  player_widget_ = nullptr;
+}
+
+void XenonNodeController::OnWidgetShowStateChanged(views::Widget* widget) {
+  if (widget == player_widget_) {
+    UpdatePlayerWindow();
+  }
+}
+
+void XenonNodeController::OnWidgetVisibilityChanged(views::Widget* widget,
+                                                     bool) {
+  if (widget == player_widget_) {
+    UpdatePlayerWindow();
+  }
 }
 
 mojo::SharedRemote<mojom::XenonMainService>
@@ -723,7 +1318,20 @@ XenonNodeConfig::~XenonNodeConfig() = default;
 std::unique_ptr<content::WebUIController> XenonNodeConfig::CreateWebUIController(
     content::WebUI* web_ui,
     const GURL& url) {
-  return std::make_unique<XenonNodeController>(web_ui);
+  return std::make_unique<XenonNodeController>(web_ui,
+                                               XenonNodeHostKind::kNodeTest);
+}
+
+XenonPlayerConfig::XenonPlayerConfig()
+    : content::WebUIConfig(content::kChromeUIScheme, kPlayerHost) {}
+
+XenonPlayerConfig::~XenonPlayerConfig() = default;
+
+std::unique_ptr<content::WebUIController>
+XenonPlayerConfig::CreateWebUIController(content::WebUI* web_ui,
+                                         const GURL& url) {
+  return std::make_unique<XenonNodeController>(web_ui,
+                                               XenonNodeHostKind::kPlayer);
 }
 
 }  // namespace xenon

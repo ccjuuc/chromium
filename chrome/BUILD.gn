@@ -1676,11 +1676,13 @@ if (!is_android) {
       "$root_gen_dir/xenon_overlay/resources/xenon_resources.pak",
       "$root_gen_dir/xenon_overlay/resources/webui/xenon_webui_resources.pak",
       "$root_gen_dir/xenon_overlay/resources/webui/xenon_node/xenon_node_webui_resources.pak",
+      "$root_gen_dir/xenon_overlay/resources/webui/xenon_player/xenon_player_webui_resources.pak",
     ]
     _packed_resources_xenon_grit_dep = [
       "//xenon_overlay/resources:resources_grit",
       "//xenon_overlay/resources/webui:resources",
       "//xenon_overlay/resources/webui/xenon_node:resources",
+      "//xenon_overlay/resources/webui/xenon_player:resources",
     ]
 
     if (enable_resource_allowlist_generation) {

@@ -82,11 +82,29 @@ interface Page {
 
 // Page-to-browser commands for chrome://xenon-node/.
 interface PageHandler {
-  // Creates or reuses a XenonWebDialog as the native player host. Handles are
-  // decimal strings because JavaScript numbers cannot represent every native
-  // pointer value on 64-bit platforms.
+  // Returns the Xenon Player WebDialog as the native player parent. Handles
+  // are decimal strings because JavaScript numbers cannot represent every
+  // native pointer value on 64-bit platforms.
   PreparePlayerHost()
       => (string float_window, string parent_window, string error_msg);
+
+  // Registers the WS_CHILD player window created by pc_addon.
+  BindPlayerVideoWindow(string player_window) => (string error_msg);
+
+  // Mirrors the Electron player window lifecycle used by the original UI.
+  ShowPlayerVideoHost(bool show);
+
+  // Applies a window command to the Xenon Player WebDialog. `state` reports
+  // the resulting boolean state for toggle commands such as maximize.
+  ControlPlayerWindow(string action, bool flag)
+      => (bool state, string error_msg);
+
+  OpenNativeFileDialog(string title,
+                       array<string> filter_extensions,
+                       bool allow_multi)
+      => (array<string> file_paths);
+
+  ScanDirectoryVideos(string dir_path) => (array<string> video_paths);
 
   RequireNodeModule(string path);
 
