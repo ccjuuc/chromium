@@ -7,9 +7,12 @@
 #include <cstdint>
 
 #include "js_native_api_v8.h"
+#include "base/base_paths.h"
 #include "base/command_line.h"
-#include "base/native_library.h"
+#include "base/files/file_path.h"
 #include "base/logging.h"
+#include "base/native_library.h"
+#include "base/path_service.h"
 #include "build/build_config.h"
 #include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/napi/napi_switches.h"
@@ -25,6 +28,24 @@ LoadedNodeAddon::~LoadedNodeAddon() = default;
 LoadedNodeAddon::LoadedNodeAddon(LoadedNodeAddon&&) = default;
 LoadedNodeAddon& LoadedNodeAddon::operator=(LoadedNodeAddon&&) = default;
 
+#if BUILDFLAG(IS_WIN)
+base::NativeLibrary GetLoadedNodeExeModule() {
+  HMODULE module = ::GetModuleHandleW(L"node.exe");
+  if (!module) {
+    base::FilePath exe_dir;
+    if (base::PathService::Get(base::DIR_EXE, &exe_dir)) {
+      base::FilePath node_exe = exe_dir.Append(FILE_PATH_LITERAL("node.exe"));
+      module = ::LoadLibraryW(node_exe.value().c_str());
+    }
+  }
+  return reinterpret_cast<base::NativeLibrary>(module);
+}
+
+void EnsureNodeHostLibraryLoaded() {
+  GetLoadedNodeExeModule();
+}
+#endif
+
 namespace {
 
 using RegisterFunc = napi_value (*)(napi_env, napi_value);
@@ -32,14 +53,17 @@ using RegisterFunc = napi_value (*)(napi_env, napi_value);
 #if BUILDFLAG(IS_WIN) && BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
 using GetRegisteredModuleCountFunc = size_t (*)();
 using GetRegisteredModuleFunc = napi_module* (*)(size_t);
-using RemoveRegisteredModuleFunc = bool (*)(napi_module*);
 
-base::NativeLibrary GetCurrentProcessModule() {
-  return reinterpret_cast<base::NativeLibrary>(::GetModuleHandle(nullptr));
+base::NativeLibrary GetChromeDllModule() {
+  HMODULE module = ::GetModuleHandleW(L"xenon.dll");
+  if (!module) {
+    module = ::GetModuleHandleW(L"chrome.dll");
+  }
+  return reinterpret_cast<base::NativeLibrary>(module);
 }
 
-base::NativeLibrary GetLoadedNodeExeModule() {
-  return reinterpret_cast<base::NativeLibrary>(::GetModuleHandleW(L"node.exe"));
+base::NativeLibrary GetCurrentProcessExeModule() {
+  return reinterpret_cast<base::NativeLibrary>(::GetModuleHandleW(nullptr));
 }
 
 size_t GetRegisteredModuleCount(base::NativeLibrary library) {
@@ -66,16 +90,6 @@ napi_module* GetRegisteredModule(base::NativeLibrary library, size_t index) {
     return nullptr;
   }
   return get_func(index);
-}
-
-bool RemoveRegisteredModule(base::NativeLibrary library, napi_module* module) {
-  if (!library || !module) {
-    return false;
-  }
-  auto* remove_func = reinterpret_cast<RemoveRegisteredModuleFunc>(
-      base::GetFunctionPointerFromNativeLibrary(
-          library, "xenon_napi_remove_registered_module"));
-  return remove_func && remove_func(module);
 }
 
 bool IsAddressInModule(base::NativeLibrary library, const void* address) {
@@ -123,8 +137,7 @@ napi_module* FindRegisteredModuleForAddon(
     base::NativeLibrary host_library,
     const char* host_name,
     base::NativeLibrary addon_library,
-    const char** registered_host_name,
-    base::NativeLibrary* registered_host_library) {
+    const char** registered_host_name) {
   const size_t module_count = GetRegisteredModuleCount(host_library);
   for (size_t index = 0; index < module_count; ++index) {
     napi_module* registered_module = GetRegisteredModule(host_library, index);
@@ -132,13 +145,45 @@ napi_module* FindRegisteredModuleForAddon(
       if (registered_host_name) {
         *registered_host_name = host_name;
       }
-      if (registered_host_library) {
-        *registered_host_library = host_library;
-      }
       return registered_module;
     }
   }
   return nullptr;
+}
+
+napi_module* FindRegisteredModuleAcrossHosts(
+    base::NativeLibrary addon_library,
+    const char** registered_host_name) {
+  const base::NativeLibrary chrome_dll = GetChromeDllModule();
+  const base::NativeLibrary process_exe = GetCurrentProcessExeModule();
+  const base::NativeLibrary node_exe = GetLoadedNodeExeModule();
+
+  napi_module* found = FindRegisteredModuleForAddon(
+      chrome_dll, "xenon/chrome dll", addon_library, registered_host_name);
+  if (found) {
+    return found;
+  }
+  if (process_exe && process_exe != chrome_dll) {
+    found = FindRegisteredModuleForAddon(
+        process_exe, "process exe", addon_library, registered_host_name);
+    if (found) {
+      return found;
+    }
+  }
+  if (node_exe && node_exe != chrome_dll && node_exe != process_exe) {
+    found = FindRegisteredModuleForAddon(
+        node_exe, "node.exe sidecar", addon_library, registered_host_name);
+    if (found) {
+      return found;
+    }
+  }
+  return nullptr;
+}
+
+size_t GetRegisteredModuleCountAcrossHosts() {
+  return GetRegisteredModuleCount(GetChromeDllModule()) +
+         GetRegisteredModuleCount(GetCurrentProcessExeModule()) +
+         GetRegisteredModuleCount(GetLoadedNodeExeModule());
 }
 
 bool IsNodeStaticRegistrationEnabled() {
@@ -157,6 +202,9 @@ v8::Local<v8::Value> LoadAndInitializeNodeAddon(
     const base::FilePath& addon_path,
     LoadedNodeAddon* loaded_addon) {
   VLOG(1) << "[NapiLoader] Loading native library from: " << addon_path.value();
+#if BUILDFLAG(IS_WIN)
+  EnsureNodeHostLibraryLoaded();
+#endif
   base::ScopedNativeLibrary library(addon_path);
   if (!library.is_valid()) {
     const base::NativeLibraryLoadError* error = library.GetError();
@@ -176,11 +224,6 @@ v8::Local<v8::Value> InitializeLoadedNodeAddon(
   if (!loaded_addon || !library.is_valid()) {
     return {};
   }
-#if BUILDFLAG(IS_WIN) && BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
-  base::NativeLibrary current_process_module = GetCurrentProcessModule();
-  base::NativeLibrary node_exe_module = GetLoadedNodeExeModule();
-#endif
-
   base::NativeLibrary library_handle = library.get();
   VLOG(1) << "[NapiLoader] Resolving module entry point...";
   RegisterFunc register_func =
@@ -196,20 +239,12 @@ v8::Local<v8::Value> InitializeLoadedNodeAddon(
 #if BUILDFLAG(IS_WIN) && BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
   if (!register_func) {
     const char* registered_host_name = nullptr;
-    base::NativeLibrary registered_host_library = nullptr;
-    napi_module* registered_module = FindRegisteredModuleForAddon(
-        current_process_module, "current process", library_handle,
-        &registered_host_name, &registered_host_library);
-    if (!registered_module && node_exe_module != current_process_module) {
-      registered_module = FindRegisteredModuleForAddon(
-          node_exe_module, "node.exe sidecar", library_handle,
-          &registered_host_name, &registered_host_library);
-    }
+    napi_module* registered_module = FindRegisteredModuleAcrossHosts(
+        library_handle, &registered_host_name);
 
     if (registered_module) {
       RegisterFunc registered_func = registered_module->nm_register_func;
       const char* registered_module_name = registered_module->nm_modname;
-      RemoveRegisteredModule(registered_host_library, registered_module);
       if (registered_func && IsNodeStaticRegistrationEnabled()) {
         VLOG(1) << "[NapiLoader] Using napi_module_register entry point from "
                 << registered_host_name << ": "
@@ -232,7 +267,15 @@ v8::Local<v8::Value> InitializeLoadedNodeAddon(
 #endif
 
   if (!register_func) {
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+    LOG(ERROR)
+        << "[NapiLoader] Addon does not export napi_register_module_v1/"
+           "node_register_module_v1, and no napi_module_register record "
+           "belongs to this image. registered_count="
+        << GetRegisteredModuleCountAcrossHosts();
+#else
     LOG(ERROR) << "[NapiLoader] Addon does not export entry point.";
+#endif
     return v8::Local<v8::Value>();
   }
   VLOG(1) << "[NapiLoader] Entry point resolved. Creating N-API env...";

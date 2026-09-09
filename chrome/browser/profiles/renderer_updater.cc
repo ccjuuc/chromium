@@ -29,6 +29,10 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "services/network/public/cpp/features.h"
 
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/common/extensions/shenzhenapi_availability.h"
+#endif
+
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/login/signin/merge_session_throttling_utils.h"
 #include "chrome/browser/ash/login/signin/oauth2_login_manager_factory.h"
@@ -226,10 +230,16 @@ void RendererUpdater::UpdateAllRenderers() {
 
 chrome::mojom::DynamicParamsPtr RendererUpdater::CreateRendererDynamicParams()
     const {
+  std::vector<std::string> shenzhen_allowed_domains;
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  shenzhen_allowed_domains =
+      extensions::shenzhenapi_availability::GetAllowedDomains();
+#endif
   return chrome::mojom::DynamicParams::New(
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
       GetBoundSessionThrottlerParams(),
 #endif
       force_google_safesearch_.GetValue(), force_youtube_restrict_.GetValue(),
-      allowed_domains_for_apps_.GetValue());
+      allowed_domains_for_apps_.GetValue(),
+      std::move(shenzhen_allowed_domains));
 }

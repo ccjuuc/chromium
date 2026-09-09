@@ -1,0 +1,10 @@
+{
+  "name": "XLGame",
+  "version": "1.2.5",
+  "author": "Xunlei",
+  "license": "",
+  "main": "plugin.asar/index.js",
+  "clear": true,
+  "monitor": false,
+  "owner": "main-renderer"
+}

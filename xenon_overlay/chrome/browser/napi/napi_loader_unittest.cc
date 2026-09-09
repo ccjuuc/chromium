@@ -25,6 +25,43 @@ napi_value CreateTemporaryValues(napi_env env, napi_callback_info info) {
   return result;
 }
 
+struct MissingArgumentCapture {
+  napi_status get_info_status = napi_generic_failure;
+  size_t actual_argc = 0;
+  bool value_is_live = false;
+  napi_status type_status = napi_generic_failure;
+  napi_valuetype value_type = napi_object;
+  napi_status reference_status = napi_generic_failure;
+};
+
+napi_value CaptureMissingArgument(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  void* data = nullptr;
+  napi_status status =
+      napi_get_cb_info(env, info, &argc, argv, nullptr, &data);
+  auto* capture = static_cast<MissingArgumentCapture*>(data);
+  if (!capture) {
+    return nullptr;
+  }
+
+  capture->get_info_status = status;
+  capture->actual_argc = argc;
+  capture->value_is_live = env->IsLiveValue(argv[0]);
+  if (!capture->value_is_live) {
+    return nullptr;
+  }
+
+  capture->type_status = napi_typeof(env, argv[0], &capture->value_type);
+  napi_ref reference = nullptr;
+  capture->reference_status =
+      napi_create_reference(env, argv[0], 1, &reference);
+  if (reference) {
+    EXPECT_EQ(napi_delete_reference(env, reference), napi_ok);
+  }
+  return nullptr;
+}
+
 void MarkFinalized(napi_env env, void* data, void* hint) {
   *static_cast<bool*>(data) = true;
 }
@@ -168,6 +205,35 @@ TEST_F(NapiLoaderTest, CallbackTemporaryValuesAreReleased) {
   EXPECT_EQ(env->allocated_values.size(), value_count);
 }
 
+TEST_F(NapiLoaderTest, CallbackMissingArgumentsAreUndefined) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  MissingArgumentCapture capture;
+  napi_value function;
+  ASSERT_EQ(napi_create_function(env.get(), "missing", NAPI_AUTO_LENGTH,
+                                 &CaptureMissingArgument, &capture, &function),
+            napi_ok);
+  const size_t value_count = env->allocated_values.size();
+
+  v8::Local<v8::Value> result;
+  ASSERT_TRUE(function->Get()
+                  .As<v8::Function>()
+                  ->Call(context(), v8::Undefined(isolate()), 0, nullptr)
+                  .ToLocal(&result));
+  EXPECT_TRUE(result->IsUndefined());
+  EXPECT_EQ(capture.get_info_status, napi_ok);
+  EXPECT_EQ(capture.actual_argc, 0u);
+  EXPECT_TRUE(capture.value_is_live);
+  EXPECT_EQ(capture.type_status, napi_ok);
+  EXPECT_EQ(capture.value_type, napi_undefined);
+  EXPECT_EQ(capture.reference_status, napi_ok);
+  EXPECT_EQ(env->allocated_values.size(), value_count);
+}
+
 TEST_F(NapiLoaderTest, ReferenceTransitionsBetweenWeakAndStrong) {
   v8::Locker locker(isolate());
   v8::Isolate::Scope isolate_scope(isolate());
@@ -189,6 +255,34 @@ TEST_F(NapiLoaderTest, ReferenceTransitionsBetweenWeakAndStrong) {
   EXPECT_EQ(ref_count, 0u);
   EXPECT_TRUE(reference->is_weak);
   EXPECT_EQ(napi_delete_reference(env.get(), reference), napi_ok);
+}
+
+TEST_F(NapiLoaderTest, CreateReferenceRejectsForeignNapiValue) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  auto* fake = reinterpret_cast<napi_value>(static_cast<uintptr_t>(-1));
+  napi_ref reference = nullptr;
+  EXPECT_EQ(napi_create_reference(env.get(), fake, 1, &reference),
+            napi_invalid_arg);
+  EXPECT_EQ(reference, nullptr);
+}
+
+TEST_F(NapiLoaderTest, SetElementRejectsForeignNapiValue) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  napi_value array;
+  ASSERT_EQ(napi_create_array_with_length(env.get(), 1, &array), napi_ok);
+  auto* fake = reinterpret_cast<napi_value>(static_cast<uintptr_t>(-1));
+  EXPECT_EQ(napi_set_element(env.get(), array, 0, fake), napi_invalid_arg);
+  EXPECT_EQ(napi_set_element(env.get(), fake, 0, array), napi_invalid_arg);
 }
 
 TEST_F(NapiLoaderTest, RemoveWrapCancelsFinalizer) {

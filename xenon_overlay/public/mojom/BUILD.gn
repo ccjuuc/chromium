@@ -2,6 +2,7 @@ import("//mojo/public/tools/bindings/mojom.gni")
 
 mojom("mojom") {
   sources = [
+    "xenon_ipc.mojom",
     "xenon_page_api.mojom",
     "xenon_service.mojom",
   ]

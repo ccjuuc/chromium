@@ -4,10 +4,15 @@
 
 #include <chrono>
 #include <cstdint>
+#include <string>
 #include <thread>
 
 #include "base/containers/span.h"
 #include "node_api.h"
+
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 #if defined(XENON_TEST_UV_COMPAT)
 #include "uv.h"
@@ -86,6 +91,50 @@ napi_value AsyncAdd(napi_env env, napi_callback_info info) {
 
   return nullptr;
 }
+
+#if defined(_WIN32)
+napi_value CanLoadLibrary(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  size_t utf8_length = 0;
+  if (argc != 1 || napi_get_value_string_utf8(env, argv[0], nullptr, 0,
+                                              &utf8_length) != napi_ok) {
+    napi_throw_type_error(env, nullptr, "CanLoadLibrary expects a path");
+    return nullptr;
+  }
+  std::string utf8_path(utf8_length + 1, '\0');
+  size_t copied = 0;
+  if (napi_get_value_string_utf8(env, argv[0], utf8_path.data(),
+                                 utf8_path.size(), &copied) != napi_ok) {
+    napi_throw_type_error(env, nullptr, "Cannot read library path");
+    return nullptr;
+  }
+  utf8_path.resize(copied);
+
+  const int wide_length =
+      ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8_path.data(),
+                            static_cast<int>(copied), nullptr, 0);
+  std::wstring wide_path;
+  if (wide_length > 0) {
+    wide_path.resize(wide_length);
+    ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8_path.data(),
+                          static_cast<int>(copied), wide_path.data(),
+                          wide_length);
+  }
+
+  HMODULE library =
+      wide_path.empty() ? nullptr : ::LoadLibraryW(wide_path.c_str());
+  const bool loaded = library != nullptr;
+  if (library) {
+    ::FreeLibrary(library);
+  }
+  napi_value result;
+  napi_get_boolean(env, loaded, &result);
+  return result;
+}
+#endif
 
 // 3. Thread-safe Callbacks (using napi_threadsafe_function)
 napi_value StartThread(napi_env env, napi_callback_info info) {
@@ -295,6 +344,70 @@ napi_value MultiCallback(napi_env env, napi_callback_info info) {
   return result;
 }
 
+napi_value InvokeNestedCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 1) {
+    napi_throw_type_error(env, "ERR_XENON_NESTED_CALLBACK",
+                          "InvokeNestedCallback expects an options object");
+    return nullptr;
+  }
+
+  napi_value handlers;
+  napi_value first;
+  napi_value callback;
+  bool is_array = false;
+  if (napi_get_named_property(env, argv[0], "handlers", &handlers) != napi_ok ||
+      napi_is_array(env, handlers, &is_array) != napi_ok || !is_array ||
+      napi_get_element(env, handlers, 0, &first) != napi_ok ||
+      napi_get_named_property(env, first, "onValue", &callback) != napi_ok) {
+    napi_throw_type_error(env, "ERR_XENON_NESTED_CALLBACK",
+                          "options.handlers[0].onValue is required");
+    return nullptr;
+  }
+
+  napi_value undefined;
+  napi_value payload;
+  napi_get_undefined(env, &undefined);
+  napi_create_string_utf8(env, "nested callback payload", NAPI_AUTO_LENGTH,
+                          &payload);
+  napi_call_function(env, undefined, callback, 1, &payload, nullptr);
+  return undefined;
+}
+
+napi_value AddOne(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  int32_t value = 0;
+  if (argc > 0) {
+    napi_get_value_int32(env, argv[0], &value);
+  }
+  napi_value result;
+  napi_create_int32(env, value + 1, &result);
+  return result;
+}
+
+napi_value InvokeCallbackWithFunction(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 1) {
+    napi_throw_type_error(env, "ERR_XENON_FUNCTION_CALLBACK",
+                          "InvokeCallbackWithFunction expects a callback");
+    return nullptr;
+  }
+
+  napi_value callable;
+  napi_create_function(env, "addOne", NAPI_AUTO_LENGTH, AddOne, nullptr,
+                       &callable);
+  napi_value undefined;
+  napi_get_undefined(env, &undefined);
+  napi_call_function(env, undefined, argv[0], 1, &callable, nullptr);
+  return undefined;
+}
+
 napi_value ThrowComplexError(napi_env env, napi_callback_info info) {
   napi_throw_type_error(env, "ERR_XENON_COMPLEX",
                         "Complex failure from addon: "
@@ -383,6 +496,10 @@ extern "C" napi_value Init(napi_env env, napi_value exports) {
       {"Add", nullptr, Add, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"AsyncAdd", nullptr, AsyncAdd, nullptr, nullptr, nullptr, napi_default,
        nullptr},
+#if defined(_WIN32)
+      {"CanLoadLibrary", nullptr, CanLoadLibrary, nullptr, nullptr, nullptr,
+       napi_default, nullptr},
+#endif
       {"StartThread", nullptr, StartThread, nullptr, nullptr, nullptr,
        napi_default, nullptr},
       {"InspectTypes", nullptr, InspectTypes, nullptr, nullptr, nullptr,
@@ -393,6 +510,10 @@ extern "C" napi_value Init(napi_env env, napi_value exports) {
        napi_default, nullptr},
       {"MultiCallback", nullptr, MultiCallback, nullptr, nullptr, nullptr,
        napi_default, nullptr},
+      {"InvokeNestedCallback", nullptr, InvokeNestedCallback, nullptr, nullptr,
+       nullptr, napi_default, nullptr},
+      {"InvokeCallbackWithFunction", nullptr, InvokeCallbackWithFunction,
+       nullptr, nullptr, nullptr, napi_default, nullptr},
       {"ThrowComplexError", nullptr, ThrowComplexError, nullptr, nullptr,
        nullptr, napi_default, nullptr},
 #if defined(XENON_TEST_UV_COMPAT)

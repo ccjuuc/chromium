@@ -3,6 +3,7 @@ module xenon.mojom;
 import "mojo/public/mojom/base/values.mojom";
 import "sandbox/policy/mojom/sandbox.mojom";
 import "services/network/public/mojom/url_loader_factory.mojom";
+import "xenon_overlay/public/mojom/xenon_ipc.mojom";
 
 // Multiplexed on the same message pipe as XenonMainService (FIFO ordering).
 interface XenonAssociatedSide {
@@ -14,6 +15,46 @@ interface XenonBrowserObserver {
   OnServiceEvent(string message);
 
   OnThreadCallback(string message);
+
+  // Electron BrowserWindow backing. Called from the Utility ipcMain isolate;
+  // HWND is returned synchronously so getNativeWindowHandle() can run in the
+  // constructor, matching Electron.
+  [Sync]
+  CreateElectronWindow(int32 width,
+                       int32 height,
+                       bool show,
+                       bool frame,
+                       bool transparent,
+                       int32 parent_id,
+                       string title,
+                       string container_id)
+      => (int32 window_id, uint64 hwnd, string error);
+
+  LoadElectronWindowURL(int32 window_id, string url);
+
+  SetElectronWindowVisible(int32 window_id, bool visible);
+
+  // Generic synchronous BrowserWindow operation bridge. The Electron main
+  // isolate lives in Utility, while native Widgets must be controlled on the
+  // Browser UI thread. Commands map to BrowserWindow primitives (bounds,
+  // focus, show state, etc.), never to application/addon function names.
+  [Sync]
+  ElectronWindowCall(int32 window_id,
+                     string command,
+                     mojo_base.mojom.Value arguments)
+      => (mojo_base.mojom.Value result, string error);
+
+  CloseElectronWindow(int32 window_id);
+
+  // Electron `dialog.showOpenDialog`. Must run on the Browser UI thread with
+  // a real owner HWND. Calling GetOpenFileName from Utility never shows a
+  // picker (no UI pump / no owner).
+  [Sync]
+  ShowElectronOpenDialog(string title,
+                         bool directory,
+                         bool allow_multi,
+                         array<string> extensions)
+      => (array<string> file_paths);
 };
 
 // Receives callbacks retained and invoked by a loaded Node addon.
@@ -82,30 +123,90 @@ interface XenonMainService {
   SetBrowserObserver(pending_remote<XenonBrowserObserver> observer);
 
   // One observer per chrome://xenon-node page. Native callback ids are scoped
-  // by client_id so multiple pages cannot consume each other's callbacks.
+  // by context_id + client_id so independent Electron containers cannot
+  // consume each other's callbacks.
   SetNodeAddonObserver(
-      int32 client_id, pending_remote<NodeAddonObserver> observer);
+      string context_id,
+      int32 client_id,
+      pending_remote<NodeAddonObserver> observer);
+
+  // Browser brokers this receiver for a renderer, then leaves the synchronous
+  // native-addon call path entirely.
+  BindNodeAddonHost(
+      string context_id,
+      pending_receiver<xenon.ipc.mojom.NodeAddonHost> receiver);
+
+  // Native Widget/window-message events forwarded to the Electron-compatible
+  // main isolate. Window ids are process-global and containers without the id
+  // simply ignore the event.
+  DispatchElectronWindowEvent(int32 window_id,
+                              string event_name,
+                              mojo_base.mojom.Value arguments);
+
+  // Electron-compatible main JavaScript container. It runs in this unsandboxed
+  // Utility process because the Browser process forbids executable JIT pages.
+  InitializeElectronIpc(xenon.ipc.mojom.IpcMainConfig config)
+      => (bool success, string error_msg);
+
+  RegisterElectronIpcRenderer(
+      string container_id,
+      string endpoint_id,
+      pending_remote<xenon.ipc.mojom.IpcRenderer> renderer,
+      int32 process_id,
+      int32 frame_id,
+      int32 window_id);
+
+  RemoveElectronIpcRenderer(string container_id, string endpoint_id);
+
+  ElectronIpcSend(string container_id,
+                  string endpoint_id,
+                  string channel,
+                  mojo_base.mojom.Value arguments);
+
+  ElectronIpcInvoke(string container_id,
+                    string endpoint_id,
+                    string channel,
+                    mojo_base.mojom.Value arguments)
+      => (xenon.ipc.mojom.IpcResult result);
+
+  // Keep the renderer-facing ipcRenderer.sendSync semantics, but do not make
+  // the Browser -> Utility hop synchronous. The Utility main isolate may call
+  // a native window API that sends a message back to the Browser UI thread;
+  // making both hops synchronous deadlocks those two threads.
+  ElectronIpcSendSync(string container_id,
+                      string endpoint_id,
+                      string channel,
+                      mojo_base.mojom.Value arguments)
+      => (xenon.ipc.mojom.IpcResult result);
 
   // N-API / Node Addon testing methods (runs in the utility process)
-  LoadAddon(string path)
+  [Sync]
+  LoadAddon(string context_id, string path)
       => (bool success, string error_msg, array<NodeExportInfo> exports);
 
   // Expand one export path (e.g. "NativeAplayerStack") one level deeper.
   // For napi_define_class exports, children come from Constructor.prototype
   // (inspection only; invoke uses ConstructExport + InvokeInstance).
-  InspectExport(string module_path, string export_path)
+  InspectExport(string context_id, string module_path, string export_path)
       => (bool success, string error_msg, NodeExportInfo? info);
 
   // `new Constructor(...args)` in the Utility isolate; returns an instance id.
-  ConstructExport(int32 client_id,
+  // Marked [Sync] so Browser can preserve Electron constructor semantics for
+  // renderer code that does not pass JavaScript callbacks.
+  [Sync]
+  ConstructExport(string context_id,
+                  int32 client_id,
                   string module_path,
                   string export_path,
                   array<NodeInvokeArg> args)
       => (bool success, int32 instance_id, string error_msg);
 
   // Call an instance method with `this` = the constructed object (V8 walks
-  // the prototype chain for the method lookup).
-  InvokeInstance(int32 client_id,
+  // the prototype chain for the method lookup). Marked [Sync] so Browser can
+  // return native handles without wrapping them in a Promise.
+  [Sync]
+  InvokeInstance(string context_id,
+                 int32 client_id,
                  string module_path,
                  int32 instance_id,
                  string method_name,
@@ -116,18 +217,24 @@ interface XenonMainService {
           string error_msg);
 
   GetInstanceProperty(
-      string module_path, int32 instance_id, string property_name)
+      string context_id,
+      string module_path,
+      int32 instance_id,
+      string property_name)
       => (bool success, mojo_base.mojom.Value result, string error_msg);
 
-  SetInstanceProperty(string module_path,
+  SetInstanceProperty(string context_id,
+                      string module_path,
                       int32 instance_id,
                       string property_name,
                       mojo_base.mojom.Value value)
       => (bool success, string error_msg);
 
-  ReleaseInstance(string module_path, int32 instance_id);
+  ReleaseInstance(string context_id, string module_path, int32 instance_id);
 
-  InvokeFunction(int32 client_id,
+  [Sync]
+  InvokeFunction(string context_id,
+                 int32 client_id,
                  string module_path,
                  string function_name,
                  array<NodeInvokeArg> args)
@@ -137,16 +244,22 @@ interface XenonMainService {
           string error_msg);
 
   GetExportProperty(
-      string module_path, string object_path, string property_name)
+      string context_id,
+      string module_path,
+      string object_path,
+      string property_name)
       => (bool success, mojo_base.mojom.Value result, string error_msg);
 
-  SetExportProperty(string module_path,
+  SetExportProperty(string context_id,
+                    string module_path,
                     string object_path,
                     string property_name,
                     mojo_base.mojom.Value value)
       => (bool success, string error_msg);
 
   // Batch several invokes in one Mojo round-trip (same module).
-  InvokeMany(string module_path, array<NodeInvokeCall> calls)
+  InvokeMany(string context_id,
+             string module_path,
+             array<NodeInvokeCall> calls)
       => (array<NodeInvokeCallResult> results);
 };

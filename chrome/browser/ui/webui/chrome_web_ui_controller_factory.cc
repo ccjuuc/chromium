@@ -350,10 +350,14 @@ bool ChromeWebUIControllerFactory::IsWebUIAllowedToMakeNetworkRequests(
       origin.host() == chrome::kChromeUIInspectHost ||
       // https://crbug.com/40583261
       origin.host() == chrome::kChromeUIDownloadsHost ||
-      // https://crbug.com/376417346
       origin.host() == chrome::kChromeUIExtensionsHost ||
       origin.host() == "xenon-login" ||
       origin.host() == "xenon-overlay" ||
+      origin.host() == "xenon-player-electron" ||
+      origin.host() == "thunder-2025" ||
+      origin.host() == "xenon-player" ||
+      origin.host() == "xenon-node" ||
+      origin.host() == "xenon-ui" ||
       // https://crbug.com/509216218
       origin.host() == chrome::kChromeUIDrivePickerHostHost;
 }

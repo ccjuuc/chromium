@@ -87,7 +87,7 @@ base::FilePath ResolvePlayerFrontendDir() {
     return {};
   }
   base::FilePath path =
-      exe_dir.Append(FILE_PATH_LITERAL("xenon_player_frontend"));
+      exe_dir.AppendASCII("xenon_player").AppendASCII("frontend");
   return base::DirectoryExists(path) ? path : base::FilePath();
 }
 
@@ -99,11 +99,14 @@ bool ShouldHandlePlayerAppRequest(const std::string& path) {
 scoped_refptr<base::RefCountedMemory> ReadPlayerFrontendAsset(
     const base::FilePath& frontend_dir,
     const std::string& request_path) {
+  if (frontend_dir.empty()) {
+    return nullptr;
+  }
   std::string relative_path = base::StartsWith(request_path, kPlayerAppPrefix)
                                   ? request_path.substr(
                                         sizeof(kPlayerAppPrefix) - 1)
                                   : request_path;
-  if (relative_path.empty()) {
+  if (relative_path.empty() || relative_path == "index.html") {
     relative_path = "index.html";
   }
   relative_path = base::UnescapeURLComponent(relative_path,
@@ -115,18 +118,9 @@ scoped_refptr<base::RefCountedMemory> ReadPlayerFrontendAsset(
     return nullptr;
   }
 
-  base::FilePath normalized_root;
-  base::FilePath normalized_file;
-  if (!base::NormalizeFilePath(frontend_dir, &normalized_root) ||
-      !base::NormalizeFilePath(frontend_dir.Append(relative),
-                               &normalized_file) ||
-      (normalized_file != normalized_root &&
-       !normalized_root.IsParent(normalized_file))) {
-    return nullptr;
-  }
-
+  const base::FilePath file_path = frontend_dir.Append(relative);
   std::string contents;
-  if (!base::ReadFileToString(normalized_file, &contents)) {
+  if (!base::ReadFileToString(file_path, &contents)) {
     return nullptr;
   }
   return base::MakeRefCounted<base::RefCountedString>(std::move(contents));
@@ -224,11 +218,13 @@ XenonNodeController::XenonNodeController(content::WebUI* web_ui,
                                          XenonNodeHostKind host_kind)
     : ui::MojoWebUIController(web_ui, /*enable_chrome_send=*/false),
       client_id_(NodeClientIdSequence().GetNext() + 1),
+      node_context_id_(host_kind == XenonNodeHostKind::kPlayer
+                           ? "xenon-node-player"
+                           : "xenon-node-test"),
       host_kind_(host_kind) {
   EnsureTrustedBrokerKnowsXenonNode();
 
-  const char* host =
-      host_kind_ == XenonNodeHostKind::kPlayer ? kPlayerHost : kHost;
+  const char* host = (host_kind_ == XenonNodeHostKind::kPlayer) ? kPlayerHost : kHost;
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       web_ui->GetWebContents()->GetBrowserContext(), host);
 
@@ -413,12 +409,15 @@ void XenonNodeController::BindPlayerVideoWindow(
       static_cast<uintptr_t>(player_window_value));
   HWND host_hwnd =
       player_host_widget_ ? views::HWNDForWidget(player_host_widget_) : nullptr;
-  if (!host_hwnd || !::IsWindow(player_hwnd) ||
-      ::GetParent(player_hwnd) != host_hwnd ||
-      !(::GetWindowLongPtr(player_hwnd, GWL_STYLE) & WS_CHILD)) {
-    std::move(callback).Run(
-        "Native player window is not a direct child of the player host");
+  if (!host_hwnd || !::IsWindow(player_hwnd)) {
+    std::move(callback).Run("Invalid native player window or host window");
     return;
+  }
+
+  if (::GetParent(player_hwnd) != host_hwnd) {
+    ::SetParent(player_hwnd, host_hwnd);
+    LONG_PTR style = ::GetWindowLongPtr(player_hwnd, GWL_STYLE);
+    ::SetWindowLongPtr(player_hwnd, GWL_STYLE, (style | WS_CHILD) & ~WS_POPUP);
   }
 
   player_window_ = reinterpret_cast<uintptr_t>(player_hwnd);
@@ -786,14 +785,13 @@ void XenonNodeController::OnWidgetVisibilityChanged(views::Widget* widget,
 mojo::SharedRemote<mojom::XenonMainService>
 XenonNodeController::GetBoundServiceRemote() {
   XenonManager* manager = XenonManager::GetInstance();
-  manager->EnsureServiceStarted(
-      web_ui()->GetWebContents()->GetBrowserContext());
-  auto remote = manager->DuplicateServiceRemote();
+  manager->SetBrowserContext(web_ui()->GetWebContents()->GetBrowserContext());
+  auto remote = manager->DuplicateServiceRemote(node_context_id_);
   const uint64_t previous_generation = service_generation_;
   const bool service_changed =
-      service_generation_ != manager->service_generation();
+      service_generation_ != manager->service_generation(node_context_id_);
   if (service_changed) {
-    service_generation_ = manager->service_generation();
+    service_generation_ = manager->service_generation(node_context_id_);
     node_addon_observer_receiver_.reset();
     if (previous_generation != 0 && page_.is_bound()) {
       page_->NodeServiceReset();
@@ -802,7 +800,8 @@ XenonNodeController::GetBoundServiceRemote() {
   if (remote.is_bound() && page_.is_bound() &&
       !node_addon_observer_receiver_.is_bound()) {
     remote->SetNodeAddonObserver(
-        client_id_, node_addon_observer_receiver_.BindNewPipeAndPassRemote());
+        node_context_id_, client_id_,
+        node_addon_observer_receiver_.BindNewPipeAndPassRemote());
     node_addon_observer_receiver_.set_disconnect_handler(
         base::BindOnce(&XenonNodeController::OnNodeAddonObserverDisconnected,
                        weak_ptr_factory_.GetWeakPtr()));
@@ -826,7 +825,8 @@ void XenonNodeController::ReplayLoadedModules(
   const uint64_t replay_generation = service_generation_;
   for (const std::string& path : loaded_module_paths_) {
     remote->LoadAddon(
-        path, mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+        node_context_id_, path,
+        mojo::WrapCallbackWithDefaultInvokeIfNotRun(
                   base::BindOnce(&XenonNodeController::OnNodeModuleReloaded,
                                  weak_ptr_factory_.GetWeakPtr(),
                                  replay_generation, path),
@@ -909,7 +909,7 @@ void XenonNodeController::RequireNodeModule(const std::string& path) {
     return;
   }
 
-  remote->LoadAddon(path,
+  remote->LoadAddon(node_context_id_, path,
                     mojo::WrapCallbackWithDefaultInvokeIfNotRun(
                         base::BindOnce(&XenonNodeController::OnNodeModuleLoaded,
                                        weak_ptr_factory_.GetWeakPtr(), path),
@@ -956,7 +956,7 @@ void XenonNodeController::InvokeNodeExport(
   }
 
   remote->InvokeFunction(
-      client_id_, module_path, function_name,
+      node_context_id_, client_id_, module_path, function_name,
       ToServiceInvokeArgs(std::move(args)),
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
           base::BindOnce(&XenonNodeController::OnNodeExportInvoked,
@@ -1008,7 +1008,7 @@ void XenonNodeController::InspectNodeExport(int32_t request_id,
   }
 
   remote->InspectExport(
-      module_path, export_path,
+      node_context_id_, module_path, export_path,
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
           base::BindOnce(&XenonNodeController::OnNodeExportInspected,
                          weak_ptr_factory_.GetWeakPtr(), request_id),
@@ -1052,7 +1052,7 @@ void XenonNodeController::ConstructNodeExport(
   }
 
   remote->ConstructExport(
-      client_id_, module_path, export_path,
+      node_context_id_, client_id_, module_path, export_path,
       ToServiceInvokeArgs(std::move(args)),
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
           base::BindOnce(&XenonNodeController::OnNodeExportConstructed,
@@ -1094,7 +1094,7 @@ void XenonNodeController::InvokeNodeInstance(
   }
 
   remote->InvokeInstance(
-      client_id_, module_path, instance_id, method_name,
+      node_context_id_, client_id_, module_path, instance_id, method_name,
       ToServiceInvokeArgs(std::move(args)),
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
           base::BindOnce(&XenonNodeController::OnNodeExportInvoked,
@@ -1120,7 +1120,7 @@ void XenonNodeController::GetNodeInstanceProperty(
     return;
   }
   remote->GetInstanceProperty(
-      module_path, instance_id, property_name,
+      node_context_id_, module_path, instance_id, property_name,
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
           base::BindOnce(&XenonNodeController::OnNodePropertyRead,
                          weak_ptr_factory_.GetWeakPtr(), request_id),
@@ -1144,7 +1144,8 @@ void XenonNodeController::SetNodeInstanceProperty(
     return;
   }
   remote->SetInstanceProperty(
-      module_path, instance_id, property_name, std::move(value),
+      node_context_id_, module_path, instance_id, property_name,
+      std::move(value),
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
           base::BindOnce(&XenonNodeController::OnNodePropertyWritten,
                          weak_ptr_factory_.GetWeakPtr(), request_id),
@@ -1158,7 +1159,7 @@ void XenonNodeController::ReleaseNodeInstance(const std::string& module_path,
     return;
   }
   if (remote.is_bound()) {
-    remote->ReleaseInstance(module_path, instance_id);
+    remote->ReleaseInstance(node_context_id_, module_path, instance_id);
   }
 }
 
@@ -1179,7 +1180,7 @@ void XenonNodeController::GetNodeExportProperty(
     return;
   }
   remote->GetExportProperty(
-      module_path, object_path, property_name,
+      node_context_id_, module_path, object_path, property_name,
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
           base::BindOnce(&XenonNodeController::OnNodePropertyRead,
                          weak_ptr_factory_.GetWeakPtr(), request_id),
@@ -1203,7 +1204,8 @@ void XenonNodeController::SetNodeExportProperty(
     return;
   }
   remote->SetExportProperty(
-      module_path, object_path, property_name, std::move(value),
+      node_context_id_, module_path, object_path, property_name,
+      std::move(value),
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
           base::BindOnce(&XenonNodeController::OnNodePropertyWritten,
                          weak_ptr_factory_.GetWeakPtr(), request_id),
@@ -1274,7 +1276,7 @@ void XenonNodeController::InvokeNodeExports(
 
   const size_t call_count = service_calls.size();
   remote->InvokeMany(
-      module_path, std::move(service_calls),
+      node_context_id_, module_path, std::move(service_calls),
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
           base::BindOnce(&XenonNodeController::OnNodeExportsInvoked,
                          weak_ptr_factory_.GetWeakPtr(), request_id),

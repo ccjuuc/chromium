@@ -210,9 +210,25 @@ def CopySectionFilesToStagingDir(config, section, staging_dir, src_dir,
             os.makedirs(dst_dir)
         for src_path in src_paths:
             dst_path = os.path.join(dst_dir, os.path.basename(src_path))
-            if not os.path.exists(dst_path):
-                g_archive_inputs.append(os.path.relpath(src_path, src_dir))
-                shutil.copy(src_path, dst_dir)
+            if os.path.isdir(src_path):
+                # Preserve a matched directory's layout and track every leaf
+                # in the depfile. "directory/**" selects all its children.
+                for root, dirs, files in os.walk(src_path):
+                    dirs.sort()
+                    target = os.path.join(dst_path,
+                                          os.path.relpath(root, src_path))
+                    os.makedirs(target, exist_ok=True)
+                    for filename in sorted(files):
+                        CopyArchiveFile(os.path.join(root, filename),
+                                        os.path.join(target, filename), src_dir)
+            else:
+                CopyArchiveFile(src_path, dst_path, src_dir)
+
+
+def CopyArchiveFile(src_path, dst_path, src_dir):
+    if not os.path.exists(dst_path):
+        g_archive_inputs.append(os.path.relpath(src_path, src_dir))
+        shutil.copy(src_path, dst_path)
 
 
 def GenerateDiffPatch(options, orig_file, new_file, patch_file):

@@ -44,6 +44,25 @@ v8_context_snapshot.bin: %(VersionDir)s\
 Extensions\*.*: %(VersionDir)s\Extensions\
 locales\*.pak: %(VersionDir)s\Locales
 resources\xenon_extension\*.*: %(VersionDir)s\resources\xenon_extension\
+resources\video_controls_extension\*.*: %(VersionDir)s\resources\video_controls_extension\
+
+#
+# Xenon: N-API host + Thunder 2025 (sync via xenon_overlay/tools/sync_thunder_2025.py).
+# Preserve the executable-relative layout. Do not package profiles, logs or
+# downloaded plugin caches from the development output directory.
+#
+node.dll: %(ChromeDir)s\
+node.exe: %(ChromeDir)s\
+msvcp140*.dll: %(ChromeDir)s\
+vcruntime140*.dll: %(ChromeDir)s\
+vccorlib140.dll: %(ChromeDir)s\
+# Keep the hosted Electron application as one relocatable runtime tree.
+thunder_2025\**: %(ChromeDir)s\thunder_2025\
+
+# PL-E (Player Electron) is a separate hosted application. Keep its main
+# bundle and renderer assets together in its own directory so the sidebar entry
+# works after installation as well as from the build directory.
+xenon_player\**: %(ChromeDir)s\xenon_player\
 
 #
 # VisualElements sub-dir.

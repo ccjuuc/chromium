@@ -16,6 +16,7 @@ import("//tools/v8_context_snapshot/v8_context_snapshot.gni")
 import("//ui/base/ui_features.gni")
 import("//ui/gl/features.gni")
 import("//v8/gni/v8.gni")
+import("//xenon_overlay/buildflags/features.gni")
 
 declare_args() {
   # The Chrome archive is maximally compressed in official builds to reduce the
@@ -164,7 +165,7 @@ if (enable_uncompressed_archive) {
 }
 
 action("mini_installer_archive") {
-  script = "//chrome/tools/build/win/create_installer_archive.py"
+  script = "//xenon_overlay/tools/create_xenon_installer_archive.py"
 
   release_file = "chrome.release"
 
@@ -174,6 +175,7 @@ action("mini_installer_archive") {
     "$root_out_dir/${chrome_exe_filename_base}.exe",
     "$root_out_dir/locales/en-US.pak",
     "$root_out_dir/setup.exe",
+    "//chrome/tools/build/win/create_installer_archive.py",
     "//chrome/tools/build/win/makecab.py",
     release_file,
   ]
@@ -221,7 +223,61 @@ action("mini_installer_archive") {
     "//chrome/common/win:eventlog_provider",
     "//chrome/installer/setup",
     "//third_party/icu:icudata",
+    "//xenon_overlay/resources:copy_video_controls_extension",
   ]
+
+  foreach(asset,
+          [
+            "background.js",
+            "content.js",
+            "manifest.json",
+            "options.html",
+            "options.js",
+          ]) {
+    inputs += [ "$root_out_dir/resources/video_controls_extension/$asset" ]
+  }
+
+  if (enable_xenon_node_uv_compat) {
+    deps += [
+      "//xenon_overlay/chrome/browser:node",
+      "//xenon_overlay/chrome/browser:node_exe",
+    ]
+    inputs += [
+      "$root_out_dir/node.dll",
+      "$root_out_dir/node.exe",
+    ]
+  }
+
+  deps += [
+    "//xenon_overlay/resources:copy_thunder_2025",
+    "//xenon_overlay/resources:copy_xenon_player",
+  ]
+
+  # The Xenon wrapper checks the entry points copied by GN targets;
+  # the archive depfile tracks the remaining recursive contents.
+  foreach(asset,
+          [
+            "thunder_2025/Thunder.exe",
+            "thunder_2025/resources/app/package.json",
+            "thunder_2025/resources/app/out/main.js",
+            "thunder_2025/resources/app/Release/node_sqlite3.node",
+            "thunder_2025/resources/app/plugins/player-plugin.asar",
+            "thunder_2025/resources/app/plugins/thunder-pan-plugin.asar",
+            "thunder_2025/resources/app/renderer.asar",
+            "thunder_2025/dk_addon.node",
+            "thunder_2025/pc_addon.node",
+            "thunder_2025/player_helper.node",
+            "thunder_2025/thunder_helper.node",
+            "thunder_2025/player/APlayer.dll",
+            "thunder_2025/SDK/DownloadSDKServer.exe",
+            "xenon_player/main/main.js",
+            "xenon_player/main/xmp.exe",
+            "xenon_player/main/pc_addon.node",
+            "xenon_player/main/player/containor.dll",
+            "xenon_player/frontend/index.html",
+          ]) {
+    args += [ "--xenon-required-file=$asset" ]
+  }
 
   if (enable_hidpi) {
     args += [ "--enable_hidpi=1" ]

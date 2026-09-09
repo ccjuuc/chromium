@@ -197,6 +197,8 @@ class XenonExtensionManager {
  public:
   static XenonExtensionManager* GetInstance();
 
+  void LoadAllExtensions(content::BrowserContext* context);
+
   extensions::ExtensionId LoadExtension(content::BrowserContext* context,
                                         const base::FilePath& extension_path);
 

@@ -12,6 +12,33 @@
  * Panel Structure
  */
 
+audio::-webkit-media-controls-xl-overlay,
+video::-webkit-media-controls-xl-overlay {
+  writing-mode: horizontal-tb;
+  width: inherit;
+  height: inherit;
+  contain: paint !important;
+  direction: ltr;
+  display: flex;
+  flex-direction: column;
+  font-family: 'Roboto', 'Noto', sans-serif;
+  color: #000;
+  justify-content: flex-end;
+  align-items: center;
+  font-size: 14px;
+  position: relative;
+  z-index: 2;
+  pointer-events: none;
+  /* XL speed menu: fixed 48px-tile sizes, do not follow player width. */
+  --xl-speed-list-width: 68px;
+  --xl-speed-list-open-width: 456px;
+  --xl-speed-list-height: 68px;
+  --xl-speed-list-gap: 8px;
+  --xl-speed-item-size: 54px;
+  --xl-speed-item-height: 36px;
+  --xl-speed-item-font: 13px;
+}
+
 audio::-webkit-media-controls,
 video::-webkit-media-controls {
   writing-mode: horizontal-tb;
@@ -26,6 +53,7 @@ video::-webkit-media-controls {
   justify-content: flex-end;
   align-items: center;
   font-size: 14px;
+  pointer-events: auto;
 
   /* The overflow menus use anchor positioning with explicit anchor-names.
   Ensure those names stay scoped within each media element. */
@@ -36,6 +64,14 @@ video::-webkit-media-controls {
   margin-left: env(safe-area-inset-left);
   margin-right: env(safe-area-inset-right);
   margin-bottom: env(safe-area-inset-bottom);
+}
+
+/* Custom players (Video.js etc., no native `controls`): the full-size
+ * `-webkit-media-controls` node under xl-overlay used pointer-events:auto and
+ * stole hits from the page control bar even though XL side buttons do not
+ * overlap it. Pass clicks through; left/right side enclosures keep pe:auto. */
+video:not([controls])::-webkit-media-controls {
+  pointer-events: none;
 }
 
 audio::-webkit-media-controls-enclosure,
@@ -203,7 +239,11 @@ video::-internal-media-controls-playback-speed-button,
 video::-internal-media-controls-picture-in-picture-button,
 audio::-internal-media-controls-audio-track-selection-button,
 video::-internal-media-controls-audio-track-selection-button,
-video::-internal-media-controls-video-track-selection-button {
+video::-internal-media-controls-video-track-selection-button,
+video::-internal-media-controls-xl1-button,
+video::-internal-media-controls-xl2-button,
+video::-internal-media-controls-xl3-button,
+video::-internal-media-controls-xr1-button {
   appearance: -internal-media-control;
   background-size: 20px;
   background-repeat: no-repeat;
@@ -240,7 +280,11 @@ audio::-webkit-media-controls-play-button,
 video::-webkit-media-controls-fullscreen-button,
 audio::-webkit-media-controls-fullscreen-button,
 video::-internal-media-controls-overflow-button,
-audio::-internal-media-controls-overflow-button {
+audio::-internal-media-controls-overflow-button,
+video::-internal-media-controls-xl1-button,
+video::-internal-media-controls-xl2-button,
+video::-internal-media-controls-xl3-button,
+video::-internal-media-controls-xr1-button {
   position: relative;
 }
 
@@ -249,7 +293,11 @@ audio::-webkit-media-controls input[pseudo="-webkit-media-controls-play-button" 
 video::-webkit-media-controls input[pseudo="-webkit-media-controls-fullscreen-button" i]::-internal-media-controls-button-hover-background,
 audio::-webkit-media-controls input[pseudo="-webkit-media-controls-fullscreen-button" i]::-internal-media-controls-button-hover-background,
 video::-webkit-media-controls input[pseudo="-internal-media-controls-overflow-button" i]::-internal-media-controls-button-hover-background,
-audio::-webkit-media-controls input[pseudo="-internal-media-controls-overflow-button" i]::-internal-media-controls-button-hover-background {
+audio::-webkit-media-controls input[pseudo="-internal-media-controls-overflow-button" i]::-internal-media-controls-button-hover-background,
+video::-webkit-media-controls-xl-overlay input[pseudo="-internal-media-controls-xl1-button" i]::-internal-media-controls-button-hover-background,
+video::-webkit-media-controls-xl-overlay input[pseudo="-internal-media-controls-xl2-button" i]::-internal-media-controls-button-hover-background,
+video::-webkit-media-controls-xl-overlay input[pseudo="-internal-media-controls-xl3-button" i]::-internal-media-controls-button-hover-background,
+video::-webkit-media-controls-xl-overlay input[pseudo="-internal-media-controls-xr1-button" i]::-internal-media-controls-button-hover-background {
   background-color: rgba(32, 33, 36, 0);
   background-size: 24px;
   background-repeat: no-repeat;
@@ -290,6 +338,18 @@ video::-webkit-media-controls input[pseudo="-webkit-media-controls-fullscreen-bu
 video::-webkit-media-controls input[pseudo="-internal-media-controls-overflow-button" i]:enabled:hover::-internal-media-controls-button-hover-background,
 video::-webkit-media-controls input[pseudo="-internal-media-controls-overflow-button" i]:enabled:focus::-internal-media-controls-button-hover-background {
   background-color: rgba(32, 33, 36, 0.71);
+}
+
+/* XL side buttons: tile + glyph come from *_48 / *_48_hover PNGs; no CSS fill. */
+video::-webkit-media-controls-xl-overlay input[pseudo="-internal-media-controls-xl1-button" i]:enabled:hover::-internal-media-controls-button-hover-background,
+video::-webkit-media-controls-xl-overlay input[pseudo="-internal-media-controls-xl2-button" i]:enabled:hover::-internal-media-controls-button-hover-background,
+video::-webkit-media-controls-xl-overlay input[pseudo="-internal-media-controls-xl3-button" i]:enabled:hover::-internal-media-controls-button-hover-background,
+video::-webkit-media-controls-xl-overlay input[pseudo="-internal-media-controls-xr1-button" i]:enabled:hover::-internal-media-controls-button-hover-background,
+video::-webkit-media-controls-xl-overlay input[pseudo="-internal-media-controls-xl1-button" i]:enabled:focus-visible::-internal-media-controls-button-hover-background,
+video::-webkit-media-controls-xl-overlay input[pseudo="-internal-media-controls-xl2-button" i]:enabled:focus-visible::-internal-media-controls-button-hover-background,
+video::-webkit-media-controls-xl-overlay input[pseudo="-internal-media-controls-xl3-button" i]:enabled:focus-visible::-internal-media-controls-button-hover-background,
+video::-webkit-media-controls-xl-overlay input[pseudo="-internal-media-controls-xr1-button" i]:enabled:focus-visible::-internal-media-controls-button-hover-background {
+  background-color: transparent;
 }
 
 video::-webkit-media-controls.audio-only input[pseudo="-webkit-media-controls-play-button" i]:enabled:hover::-internal-media-controls-button-hover-background,
@@ -1445,6 +1505,338 @@ video::-internal-media-controls-overlay-cast-button {
 
 video::-internal-media-controls-overlay-cast-button.on {
     background-image: url(default_100_percent/mediaplayer_overlay_cast_on.png);
+}
+
+/**
+ * Xunlei side overlay buttons (xl1/xl2/xl3 left, xr1 right).
+ * Live in the region above the bottom control bar; the xl/xr stack is vertically
+ * centered in that region (not on the full video, not flush above the bar).
+ */
+
+video::-internal-media-controls-left-side-enclosure,
+video::-internal-media-controls-right-side-enclosure {
+  position: absolute;
+  top: 0;
+  /* 48px button panel + ~24px timeline (incl. padding) + 8px gap */
+  bottom: 80px;
+  transform: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 30px;
+  z-index: 2;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  overflow: visible;
+  transition:
+    opacity 0.25s cubic-bezier(0.25, 0.1, 0.25, 1),
+    visibility 0s;
+}
+
+video::-internal-media-controls-left-side-enclosure.transparent,
+video::-internal-media-controls-right-side-enclosure.transparent {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 1s cubic-bezier(0.25, 0.1, 0.25, 1),
+    visibility 0s 1s;
+}
+
+video::-webkit-media-controls-xl-overlay.sizing-large div[pseudo="-internal-media-controls-left-side-enclosure" i],
+video::-webkit-media-controls-xl-overlay.sizing-large div[pseudo="-internal-media-controls-right-side-enclosure" i] {
+  /* 64px button panel + ~24px timeline + 8px gap */
+  bottom: 96px;
+}
+
+/* Custom-control pages (no native `controls` attribute): nearly full height. */
+video:not([controls])::-internal-media-controls-left-side-enclosure,
+video:not([controls])::-internal-media-controls-right-side-enclosure {
+  bottom: 8px;
+  top: 8px;
+}
+
+video::-internal-media-controls-left-side-enclosure {
+  left: 34px;
+}
+
+video::-internal-media-controls-right-side-enclosure {
+  right: 34px;
+  top: 0;
+  bottom: 80px;
+  justify-content: center;
+  align-items: center;
+}
+
+video::-internal-media-controls-xl1-button,
+video::-internal-media-controls-xl2-button,
+video::-internal-media-controls-xl3-button,
+video::-internal-media-controls-xr1-button {
+  width: 48px;
+  min-width: 48px;
+  height: 69px;
+  min-height: 69px;
+  background-color: initial;
+  background-repeat: no-repeat;
+  box-sizing: border-box;
+  /* 48px tile + 8px gap, then 13px label. */
+  padding: 56px 0 0;
+  color: #FFFFFF;
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 13px;
+  letter-spacing: 0;
+  text-align: center;
+  white-space: nowrap;
+  text-shadow: 0 0 4px rgba(0, 0, 0, 0.64);
+}
+
+/* Full 48x48 design tiles (normal / hover), including semi-transparent bg. */
+video::-internal-media-controls-xl1-button {
+  background-image: url(ic_player_download_48.png);
+  background-size: 48px 48px;
+  background-position: center top;
+}
+
+video::-internal-media-controls-xl1-button:enabled:hover,
+video::-internal-media-controls-xl1-button:enabled:focus-visible {
+  background-image: url(ic_player_download_48_hover.png);
+}
+
+video::-internal-media-controls-xl2-button {
+  background-image: url(ic_player_flowplay_48.png);
+  background-size: 48px 48px;
+  background-position: center top;
+}
+
+video::-internal-media-controls-xl2-button:enabled:hover,
+video::-internal-media-controls-xl2-button:enabled:focus-visible {
+  background-image: url(ic_player_flowplay_48_hover.png);
+}
+
+video::-internal-media-controls-xl3-button {
+  background-image: url(ic_player_playback_speed_48.png);
+  background-size: 48px 48px;
+  background-position: center top;
+}
+
+video::-internal-media-controls-xl3-button:enabled:hover,
+video::-internal-media-controls-xl3-button:enabled:focus-visible {
+  background-image: url(ic_player_playback_speed_48_hover.png);
+}
+
+video::-internal-media-controls-xr1-button {
+  background-image: url(ic_player_picture_in_picture_48.png);
+  background-size: 48px 48px;
+  background-position: center top;
+}
+
+video::-internal-media-controls-xr1-button:enabled:hover,
+video::-internal-media-controls-xr1-button:enabled:focus-visible {
+  background-image: url(ic_player_picture_in_picture_48_hover.png);
+}
+
+video::-internal-media-controls-side-spacer {
+  display: block;
+  width: 48px;
+  height: 69px;
+  min-height: 69px;
+  flex-shrink: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+/* Speed-list positioning context: same box as the xl3 48px tile.
+ * Use [pseudo] — `video::-internal-media-controls-xl3-anchor` does not match
+ * this custom id, so the list would otherwise position against the column. */
+video::-webkit-media-controls-xl-overlay [pseudo="-internal-media-controls-xl3-anchor" i] {
+  position: relative !important;
+  display: block;
+  width: 48px;
+  min-width: 48px;
+  height: 69px;
+  min-height: 69px;
+  flex-shrink: 0;
+  overflow: visible;
+  pointer-events: auto;
+}
+
+/* XL side buttons: tile is baked into *_48 PNGs; keep hit box, no fill. */
+video::-webkit-media-controls-xl-overlay input[pseudo="-internal-media-controls-xl1-button" i]::-internal-media-controls-button-hover-background,
+video::-webkit-media-controls-xl-overlay input[pseudo="-internal-media-controls-xl2-button" i]::-internal-media-controls-button-hover-background,
+video::-webkit-media-controls-xl-overlay input[pseudo="-internal-media-controls-xl3-button" i]::-internal-media-controls-button-hover-background,
+video::-webkit-media-controls-xl-overlay input[pseudo="-internal-media-controls-xr1-button" i]::-internal-media-controls-button-hover-background {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  left: 0;
+  top: 0;
+  background-color: transparent;
+  box-shadow: none;
+}
+
+/**
+ * XL side buttons stay 48px regardless of overlay sizing-small.
+ */
+
+/**
+ * XL side playback-speed menu (xl3): horizontal capsule.
+ * 10px transparent border is the hover hotzone; width grows 300ms ease-out.
+ * Visual 436x48 + 10px hotzone on each side = 456x68.
+ */
+video::-internal-media-controls-xl-playback-speed-list,
+video::-webkit-media-controls-xl-overlay [pseudo="-internal-media-controls-xl-playback-speed-list" i] {
+  display: flex;
+  pointer-events: auto;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--xl-speed-list-gap, 8px);
+  width: var(--xl-speed-list-width, 68px);
+  min-width: 0;
+  max-width: var(--xl-speed-list-open-width, 456px);
+  max-height: none;
+  height: var(--xl-speed-list-height, 68px);
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 5px;
+  border: 10px solid transparent;
+  background: rgba(0, 0, 0, 0.70);
+  background-clip: padding-box;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.20);
+  border-radius: 22px;
+  transform-origin: center left;
+  font-size: var(--xl-speed-item-font, 13px);
+  white-space: nowrap;
+  opacity: 0;
+  position: absolute !important;
+  left: calc(100% - 4px) !important;
+  top: -10px !important;
+  right: auto !important;
+  bottom: auto !important;
+  margin: 0 !important;
+  z-index: 3;
+  overlay: none !important;
+  transition:
+    width 300ms ease-out,
+    opacity 300ms ease-out;
+}
+
+video::-internal-media-controls-xl-playback-speed-list.open,
+video::-webkit-media-controls-xl-overlay [pseudo="-internal-media-controls-xl-playback-speed-list" i].open {
+  width: var(--xl-speed-list-open-width, 456px);
+  opacity: 1;
+  overflow: visible;
+}
+
+video::-internal-media-controls-xl-playback-speed-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: var(--xl-speed-item-size, 54px);
+  min-width: var(--xl-speed-item-size, 54px);
+  margin: 0;
+  padding: 0;
+  height: var(--xl-speed-item-height, 36px);
+  line-height: var(--xl-speed-item-height, 36px);
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  font-size: var(--xl-speed-item-font, 13px);
+  font-weight: 400;
+  letter-spacing: 0;
+  color: rgba(255, 255, 255, 0.80);
+  background-color: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+video::-internal-media-controls-xl-playback-speed-list-item span {
+  display: block;
+  max-width: none;
+  line-height: var(--xl-speed-item-height, 36px);
+  color: rgba(255, 255, 255, 0.80);
+}
+
+label[pseudo="-internal-media-controls-xl-playback-speed-list-item"] span {
+  pointer-events: none;
+}
+
+video::-internal-media-controls-xl-playback-speed-list-item[aria-checked="true"] {
+  background-color: rgba(255, 255, 255, 0.40);
+  color: #FFFFFF;
+}
+
+video::-internal-media-controls-xl-playback-speed-list-item[aria-checked="true"] span {
+  color: #FFFFFF;
+}
+
+video::-internal-media-controls-xl-playback-speed-list-item:focus,
+video::-internal-media-controls-xl-playback-speed-list-item:focus-visible,
+video::-internal-media-controls-xl-playback-speed-list-item:hover {
+  background-color: rgba(255, 255, 255, 0.20);
+  outline: none;
+  border: none;
+  color: #FFFFFF;
+}
+
+video::-internal-media-controls-xl-playback-speed-list-item:focus span,
+video::-internal-media-controls-xl-playback-speed-list-item:focus-visible span,
+video::-internal-media-controls-xl-playback-speed-list-item:hover span {
+  color: #FFFFFF;
+}
+
+video::-internal-media-controls-xl-playback-speed-list-item[aria-checked="true"]:focus,
+video::-internal-media-controls-xl-playback-speed-list-item[aria-checked="true"]:focus-visible,
+video::-internal-media-controls-xl-playback-speed-list-item[aria-checked="true"]:hover {
+  background-color: rgba(255, 255, 255, 0.40);
+  color: #FFFFFF;
+}
+
+video::-internal-media-controls-xl-playback-speed-list-item[aria-checked="true"]:focus span,
+video::-internal-media-controls-xl-playback-speed-list-item[aria-checked="true"]:focus-visible span,
+video::-internal-media-controls-xl-playback-speed-list-item[aria-checked="true"]:hover span {
+  color: #FFFFFF;
+}
+
+video::-internal-media-controls-xl-playback-speed-list-item:active {
+  background-color: rgba(255, 255, 255, 0.40);
+}
+
+video::-webkit-media-controls-xl-overlay div[pseudo="-internal-media-controls-xr1-tooltip" i] {
+  position: absolute;
+  /* Align with xr1's 48px tile. Stack: 3 * 69px + 2 * 30px gap = 267px. */
+  top: calc(50% - 133.5px);
+  right: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 80px;
+  height: 48px;
+  padding: 6px;
+  border-radius: 12px;
+  background-color: rgba(0, 0, 0, 0.50);
+  color: #FFFFFF;
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: normal;
+  letter-spacing: 0;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease, visibility 0s 0.15s;
+}
+
+video::-webkit-media-controls-xl-overlay div[pseudo="-internal-media-controls-xr1-tooltip" i].visible {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.15s ease, visibility 0s;
 }
 
 /**

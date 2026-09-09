@@ -66,6 +66,10 @@ constexpr SidebarShortcut kShortcuts[] = {
     {"N", "Xenon Node", "chrome://xenon-node/"},
     {"PC", "pc_addon", "chrome://xenon-node/#pc_addon"},
     {"XP", "Xenon Player", "chrome://xenon-player/"},
+    {"XPE", "Electron Container Test", "chrome://xenon-player-by-elec/"},
+    {"PL-E", "Player via Electron Container",
+     "chrome://xenon-player-electron/"},
+    {"TH", "Thunder 2025", "chrome://thunder-2025/"},
     {"VT", "Local Video Test", "chrome://local-video-test/"},
     {"RDL", "Render DLL Test", "chrome://render-dll-test/"},
     {"MI", "Media Internals", "chrome://media-internals/"},
@@ -457,10 +461,22 @@ void XenonSidebarView::OpenShortcut(const GURL& url) {
     return;
   }
 
-  // Player boots with preparePlayerHost() HWND binding; open in a WebDialog
-  // instead of a browser tab (same entry as stash electron-player).
+  // Player HWND windows are created by packaged main.js BrowserWindow.
+  // Sidebar only activates those widgets — do not open a second WebDialog.
   if (url.host() == "xenon-player") {
     XenonWebDialog::ShowXenonPlayer(browser_->GetProfile());
+    return;
+  }
+  if (url.host() == "xenon-player-by-elec") {
+    XenonWebDialog::ShowXenonPlayerByElec(browser_->GetProfile());
+    return;
+  }
+  if (url.host() == "xenon-player-electron") {
+    XenonWebDialog::ShowXenonPlayerElectron(browser_->GetProfile());
+    return;
+  }
+  if (url.host() == "thunder-2025") {
+    XenonWebDialog::ShowThunder2025(browser_->GetProfile());
     return;
   }
 

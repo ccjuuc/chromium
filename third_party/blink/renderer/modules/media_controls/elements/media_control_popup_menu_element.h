@@ -30,12 +30,12 @@ class MediaControlPopupMenuElement : public MediaControlDivElement {
  protected:
   MediaControlPopupMenuElement(MediaControlsImpl&);
 
-  void SetPosition();
+  virtual void SetPosition();
+
+  virtual Element* PopupAnchor() const;
 
  private:
   class EventListener;
-
-  Element* PopupAnchor() const;
 
   void HideIfNotFocused();
 

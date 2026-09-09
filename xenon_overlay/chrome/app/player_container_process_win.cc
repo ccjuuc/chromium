@@ -8,6 +8,7 @@
 
 #include "base/base_paths.h"
 #include "base/command_line.h"
+#include "base/environment.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
@@ -26,6 +27,8 @@ constexpr base::FilePath::CharType kPlayerDirectoryName[] =
 constexpr base::FilePath::CharType kContainerLibraryName[] =
     FILE_PATH_LITERAL("containor.dll");
 constexpr char kInitializeContainerFunction[] = "InitContainor";
+constexpr char kHostedAppDirectoryEnvironmentVariable[] =
+    "XENON_HOSTED_APP_DIR";
 
 using InitializeContainerFunction = void (*)();
 
@@ -49,9 +52,23 @@ std::optional<int> MaybeRunPlayerContainerProcess(
     return EXIT_FAILURE;
   }
 
-  const base::FilePath container_library = xenon_executable.DirName()
-                                               .Append(kPlayerDirectoryName)
-                                               .Append(kContainerLibraryName);
+  base::FilePath player_directory = xenon_executable.DirName().Append(
+      kPlayerDirectoryName);
+  if (std::unique_ptr<base::Environment> environment =
+          base::Environment::Create()) {
+    if (std::optional<std::string> hosted_directory =
+            environment->GetVar(kHostedAppDirectoryEnvironmentVariable)) {
+      const base::FilePath candidate =
+          base::FilePath::FromUTF8Unsafe(*hosted_directory).Append(
+              kPlayerDirectoryName);
+      if (base::DirectoryExists(candidate)) {
+        player_directory = candidate;
+      }
+    }
+  }
+
+  const base::FilePath container_library =
+      player_directory.Append(kContainerLibraryName);
   if (!base::PathExists(container_library)) {
     LOG(ERROR) << "Player container library is missing: "
                << container_library.AsUTF8Unsafe();

@@ -1,0 +1,14 @@
+{
+  "name": "vip-pay-center",
+  "version": "2.0.7",
+  "author": "Xunlei",
+  "license": "",
+  "description": "",
+  "main": "2.0.7.asar/index.js",
+  "clear": true,
+  "owner": "vip-plugin-controller",
+  "dialogWidth": 860,
+  "dialogHeight": 580,
+  "devtol": false,
+  "isShowLoginDialog": false
+}

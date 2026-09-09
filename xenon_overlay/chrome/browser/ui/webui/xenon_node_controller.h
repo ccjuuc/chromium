@@ -31,7 +31,7 @@ class Widget;
 
 namespace xenon {
 
-// WebUI controller for chrome://xenon-node/ and chrome://xenon-player/.
+// WebUI controller for the Node test and player hosts.
 enum class XenonNodeHostKind {
   kNodeTest,
   kPlayer,
@@ -188,6 +188,7 @@ class XenonNodeController : public ui::MojoWebUIController,
   mojo::Remote<xenon_node::mojom::Page> page_;
   mojo::Receiver<mojom::NodeAddonObserver> node_addon_observer_receiver_{this};
   const int32_t client_id_;
+  const std::string node_context_id_;
   uint64_t service_generation_ = 0;
   std::set<std::string> loaded_module_paths_;
   size_t pending_module_reloads_ = 0;

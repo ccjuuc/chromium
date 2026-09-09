@@ -19,10 +19,12 @@ class XenonBrowserMainExtraParts : public ChromeBrowserMainExtraParts {
 
   // ChromeBrowserMainExtraParts:
   void PostEarlyInitialization() override;
+  void PreProfileInit() override;
   void PostProfileInit(Profile* profile, bool is_initial_profile) override;
   void PostMainMessageLoopRun() override;
 
  private:
+  bool use_embedded_ipc_test_main_ = false;
   std::unique_ptr<xenon::XenonReminderBrowserObserver> reminder_browser_observer_;
 };
 

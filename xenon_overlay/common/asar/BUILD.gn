@@ -1,0 +1,8 @@
+source_set("asar") {
+  sources = [
+    "archive.cc",
+    "archive.h",
+  ]
+
+  deps = [ "//base" ]
+}

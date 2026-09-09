@@ -74,6 +74,15 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   // Opens chrome://xenon-player/ in a WebDialog (sidebar XP). Reuses one instance.
   static void ShowXenonPlayer(Profile* profile);
 
+  // Opens the generic Electron container test page (sidebar XPE).
+  static void ShowXenonPlayerByElec(Profile* profile);
+
+  // Activates BrowserWindows already created by packaged ipcMain main.js.
+  static void ShowXenonPlayerElectron(Profile* profile);
+
+  // Activates thunder_2025 BrowserWindows from the IPC container (sidebar TH).
+  static void ShowThunder2025(Profile* profile);
+
   // Single source of truth for the WebUI URL shown by ShowXenonOverlay(). The WebUI
   // page exercises `window.xenon` (XenonPageHost) in resources/webui/xenon/index.ts.
   static GURL GetXenonOverlayWebUIUrl();
@@ -82,6 +91,9 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   static GURL GetXenonLoginWebUIUrl();
 
   static GURL GetXenonPlayerWebUIUrl();
+  static GURL GetXenonPlayerByElecWebUIUrl();
+  static GURL GetXenonPlayerElectronWebUIUrl();
+  static GURL GetThunder2025WebUIUrl();
 
   // test entry for Data Mask (网页打码).
   static void ShowDataMaskTest(Profile* profile);
@@ -93,8 +105,15 @@ class XenonWebDialog : public ui::WebDialogDelegate {
 
   bool UseNativeFrame() const { return frame_; }
   bool UseDwm() const { return dwm_; }
+  bool UseSystemRoundedCorners() const { return system_rounded_corners_; }
   bool ShouldShowShadow() const { return show_shadow_; }
   bool UseTransparentWebContentsBackground() const;
+
+  // Keep GetDialogContentURL in sync with later LoadURL navigations so a
+  // late InitDialog / WebContents recreate does not reload about:blank.
+  void SetContentURL(const GURL& url) { url_ = url; }
+  static void SetHostedContentURL(views::Widget* widget, const GURL& url);
+  static void SetHostedContentVisible(views::Widget* widget, bool visible);
 
 #if BUILDFLAG(IS_WIN)
   void set_event_blocker(std::unique_ptr<ui::EventHandler> blocker) {
@@ -112,6 +131,7 @@ class XenonWebDialog : public ui::WebDialogDelegate {
                  bool show_close_button,
                  bool frame,
                  bool dwm,
+                 bool system_rounded_corners,
                  bool show_shadow);
   ~XenonWebDialog() override;
 
@@ -127,6 +147,7 @@ class XenonWebDialog : public ui::WebDialogDelegate {
                            bool show_close_button,
                            bool frame,
                            bool dwm,
+                           bool system_rounded_corners,
                            bool resizable,
                            bool minimizable,
                            bool maximizable,
@@ -160,6 +181,7 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   bool show_close_button_ = false;
   bool frame_ = false;
   bool dwm_ = kDefaultUseDwm;
+  bool system_rounded_corners_ = false;
   bool show_shadow_ = true;
 #if BUILDFLAG(IS_WIN)
   std::unique_ptr<ui::EventHandler> event_blocker_;

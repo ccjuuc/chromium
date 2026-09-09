@@ -755,7 +755,16 @@ void ComponentExtensionManager::CheckForUpdates(
 void ComponentExtensionManager::LoadAllExtensions(
     content::BrowserContext* context) {
   for (const auto& [name, config] : configs_) {
-    LoadExtensionFromDefaultPath(context, name);
+    LoadExtensionFromDefaultPath(
+        context, name,
+        base::BindOnce(
+            [](const std::string& name, const extensions::ExtensionId& id) {
+              if (!id.empty()) {
+                LOG(INFO) << "Component extension loaded: " << name << " ("
+                          << id << ")";
+              }
+            },
+            name));
   }
 }
 
@@ -1040,6 +1049,7 @@ void ComponentExtensionManager::OnUnzipComplete(
 namespace {
 
 constexpr char kXenonExtensionName[] = "Xenon Overlay Extension";
+constexpr char kVideoControlsExtensionName[] = "XL Video Controls Bridge";
 
 ComponentExtensionConfig CreateXenonConfig() {
   auto builder =
@@ -1059,24 +1069,14 @@ ComponentExtensionConfig CreateXenonConfig() {
   return builder.Build();
 }
 
-// Example: To register multiple extensions, use ComponentExtensionManager
-// directly:
-//
-// ComponentExtensionConfig CreateSecondExtensionConfig() {
-//   return ComponentExtensionConfigBuilder()
-//       .SetExtensionName("Second Extension")
-//       .SetExpectedExtensionId("another_extension_id_here")
-//       .SetBuiltinPath("resources/second_extension")
-//       .AddAdditionalBuiltinPath("resources/second_extension_v2")  //
-//       Optional: add fallback paths .SetUserDataSubdir("second_extension")
-//       .SetUpdateCheckUrl(GURL("http://localhost:3000/download/second_update_manifest.json"))
-//       .Build();
-// }
-//
-// Then register it (e.g., in browser initialization code):
-// auto* manager = ComponentExtensionManager::GetInstance();  // or use a shared
-// instance manager->RegisterExtension("Second Extension",
-// CreateSecondExtensionConfig()); manager->LoadAllExtensions(context);
+ComponentExtensionConfig CreateVideoControlsConfig() {
+  return ComponentExtensionConfigBuilder()
+      .SetExtensionName(kVideoControlsExtensionName)
+      .SetExpectedExtensionId("ofmfjminmdmfdekchkolhdfidomocgac")
+      .SetBuiltinPath("resources/video_controls_extension")
+      .SetUserDataSubdir("video_controls_extension")
+      .Build();
+}
 
 }  // namespace
 
@@ -1087,9 +1087,15 @@ XenonExtensionManager* XenonExtensionManager::GetInstance() {
 XenonExtensionManager::XenonExtensionManager()
     : xenon_extension_name_(kXenonExtensionName) {
   manager_.RegisterExtension(kXenonExtensionName, CreateXenonConfig());
+  manager_.RegisterExtension(kVideoControlsExtensionName,
+                            CreateVideoControlsConfig());
 }
 
 XenonExtensionManager::~XenonExtensionManager() = default;
+
+void XenonExtensionManager::LoadAllExtensions(content::BrowserContext* context) {
+  manager_.LoadAllExtensions(context);
+}
 
 // static
 base::FilePath XenonExtensionManager::GetDefaultExtensionPath() {

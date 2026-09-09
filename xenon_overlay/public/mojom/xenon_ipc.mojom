@@ -1,0 +1,146 @@
+// Copyright 2026 The Xenon Overlay Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+module xenon.ipc.mojom;
+
+import "mojo/public/mojom/base/values.mojom";
+import "mojo/public/mojom/base/unguessable_token.mojom";
+
+// Result of an Electron-compatible IPC request. Exceptions raised by a main
+// process handler are transported as |error| rather than closing the pipe.
+struct IpcResult {
+  bool success;
+  mojo_base.mojom.Value value;
+  string error;
+};
+
+// Rewrites one packaged renderer directory to one trusted WebUI origin.
+// A container may create windows from multiple renderer bundles, so a single
+// catch-all target is not sufficient.
+struct IpcRendererUrlMapping {
+  string source_path_prefix;
+  string target_base_url;
+};
+
+// Empty |embedded_main_source| means the Utility process resolves the main
+// module from its --xenon-main-js / --xenon-electron-app switches. Packaged
+// diagnostic surfaces can instead provide a CommonJS module as a resource.
+struct IpcMainConfig {
+  // Routes one renderer group to one independent main-process context. Empty
+  // keeps the legacy single-container behavior.
+  string container_id;
+  string embedded_main_source;
+  string virtual_main_path;
+  string app_path;
+  string app_name;
+  string app_version;
+  // Original packaged executable identity (not launched by the container).
+  // Must be an existing absolute file; empty uses the actual host executable.
+  string executable_path;
+  // Absolute directory containing native child-process resources. Independent
+  // of the executable identity and main-module path. Empty defaults to the
+  // executable directory, or app_path when no executable is provided.
+  string runtime_directory;
+  // Browser/embedder user agent used by Electron session.defaultSession.
+  // Empty means the compatibility layer has no authoritative value.
+  string default_user_agent;
+  array<IpcRendererUrlMapping> renderer_url_mappings;
+  // When BrowserWindow.loadURL receives a file: or localhost URL, it is rewritten
+  // to this chrome:// origin so the packaged renderer can keep its ph/ch query.
+  // Deprecated catch-all used by existing integrations; new integrations
+  // should use |renderer_url_mappings|.
+  string renderer_base_url;
+};
+
+// Document-specific Electron metadata. A renderer process can host documents
+// from more than one ipcMain container, so this must not be derived from a
+// process-wide command-line switch.
+struct IpcRendererConfig {
+  string document_path;
+  bool is_guest;
+  bool is_main_frame;
+  string app_name;
+  string app_version;
+  string app_path;
+  string executable_path;
+  string user_data_path;
+  string app_data_path;
+  string local_app_data_path;
+  string home_path;
+  string temp_path;
+};
+
+// Browser-to-renderer half of an IPC endpoint. One endpoint is bound to one
+// renderer Document and is replaced when that Document navigates.
+interface IpcRenderer {
+  Dispatch(string channel, mojo_base.mojom.Value arguments);
+};
+
+// Direct renderer-to-Utility transport for synchronous Node addon calls.
+// The Browser process brokers this endpoint once, but is deliberately not on
+// the call path: a native addon may synchronously message an HWND owned by the
+// Browser UI thread, which must remain free to dispatch that message.
+interface NodeAddonHost {
+  [Sync]
+  RequireNodeModuleSync(string module_path) => (IpcResult result);
+
+  [Sync]
+  InvokeNodeExportSync(string module_path,
+                       string function_name,
+                       mojo_base.mojom.Value arguments)
+      => (IpcResult result);
+
+  [Sync]
+  ConstructNodeExportSync(string module_path,
+                          string export_path,
+                          mojo_base.mojom.Value arguments)
+      => (IpcResult result);
+
+  [Sync]
+  InvokeNodeInstanceSync(string module_path,
+                         int32 instance_id,
+                         string method_name,
+                         mojo_base.mojom.Value arguments)
+      => (IpcResult result);
+
+  // Resolves one member through the instance's ordinary JavaScript property
+  // lookup. The returned value identifies an actual function/value/undefined;
+  // the renderer must not infer native methods from property names.
+  [Sync]
+  InspectNodeInstanceMemberSync(string module_path,
+                                int32 instance_id,
+                                string property_name)
+      => (IpcResult result);
+};
+
+// Renderer-to-browser half of Electron-compatible IPC. The implementation is
+// document-scoped; Browser validates the document and forwards requests to the
+// Utility-process ipcMain container.
+interface IpcHost {
+  // Attach a guest to an about:blank direct child of this document. Browser
+  // resolves the token in the caller's process and validates its ownership.
+  AttachGuest(mojo_base.mojom.UnguessableToken frame_token,
+              mojo_base.mojom.Value preferences) => (IpcResult result);
+  // Queried while installing the renderer compatibility layer, before page
+  // JavaScript runs. Keeping this typed and document-scoped prevents hosted
+  // apps from sharing process.execPath-derived IPC names.
+  [Sync]
+  GetRuntimeConfig() => (IpcRendererConfig? config);
+
+  BindRenderer(pending_remote<IpcRenderer> renderer);
+
+  // Transfers a fresh endpoint to the Utility service. Calls made on the
+  // resulting remote bypass Browser after this one-time broker operation.
+  BindNodeAddonHost(pending_receiver<NodeAddonHost> receiver);
+
+  Send(string channel, mojo_base.mojom.Value arguments);
+
+  Invoke(string channel, mojo_base.mojom.Value arguments)
+      => (IpcResult result);
+
+  [Sync]
+  SendSync(string channel, mojo_base.mojom.Value arguments)
+      => (IpcResult result);
+
+};

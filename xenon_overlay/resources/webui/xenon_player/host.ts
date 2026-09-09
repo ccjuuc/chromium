@@ -77,7 +77,7 @@ async function boot() {
   setBootState({phase: 'loading'});
   if (!loadTimeData.getBoolean('hasFrontend')) {
     throw new Error(
-        'xenon_player_frontend was not found beside the Xenon executable');
+        'xenon_player/frontend was not found beside the Xenon executable');
   }
 
   await installElectronShim(loadTimeData.getString('execPath'));

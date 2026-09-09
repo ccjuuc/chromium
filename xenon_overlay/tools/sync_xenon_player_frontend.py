@@ -3,12 +3,12 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Copy xmp_xdas_2 Electron main-renderer build into chrome.exe's
-xenon_player_frontend/ directory (or a custom dest).
+xenon_player/frontend/ directory (or a custom dest).
 
 Example:
   python xenon_overlay/tools/sync_xenon_player_frontend.py \\
       --src F:/xl-player/xmp_xdas_2/app/build/main-renderer \\
-      --dst out/release_64/xenon_player_frontend
+      --dst out/release_64/xenon_player/frontend
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def main() -> int:
         '--dst',
         type=Path,
         required=True,
-        help='Destination directory (usually <out>/xenon_player_frontend)')
+        help='Destination directory (usually <out>/xenon_player/frontend)')
     parser.add_argument(
         '--include-maps',
         action='store_true',

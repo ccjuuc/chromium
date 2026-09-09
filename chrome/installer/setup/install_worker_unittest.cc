@@ -8,6 +8,8 @@
 #include <string>
 #include <tuple>
 
+#include "base/files/file_util.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/rand_util.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
@@ -272,6 +274,61 @@ class InstallWorkerTest : public testing::Test {
 
 // Tests
 //------------------------------------------------------------------------------
+
+TEST(UnversionedPayloadTest, InstallsNestedAssetsAndRollsBack) {
+  base::ScopedTempDir directory;
+  ASSERT_TRUE(directory.CreateUniqueTempDir());
+  const auto source = directory.GetPath().AppendASCII("source");
+  const auto target = directory.GetPath().AppendASCII("target");
+  const auto backup = directory.GetPath().AppendASCII("backup");
+  const base::Version version("1.0.0.1");
+  ASSERT_TRUE(base::CreateDirectory(source.AppendASCII("app/plugins")));
+  ASSERT_TRUE(base::CreateDirectory(source.AppendASCII(version.GetString())));
+  ASSERT_TRUE(base::CreateDirectory(target));
+  ASSERT_TRUE(base::CreateDirectory(backup));
+  ASSERT_TRUE(base::WriteFile(source.AppendASCII("runtime.dll"), "new"));
+  ASSERT_TRUE(base::WriteFile(target.AppendASCII("runtime.dll"), "old"));
+  ASSERT_TRUE(
+      base::WriteFile(source.AppendASCII("app/plugins/main.js"), "app"));
+  ASSERT_TRUE(base::WriteFile(source.Append(installer::kChromeExe), "browser"));
+  ASSERT_TRUE(base::WriteFile(source.Append(installer::kChromeProxyExe), "proxy"));
+
+  std::unique_ptr<WorkItemList> items(WorkItem::CreateWorkItemList());
+  installer::AddUnversionedPayloadWorkItems(source, target, backup, version,
+                                             items.get());
+  ASSERT_TRUE(items->Do());
+  std::string contents;
+  ASSERT_TRUE(
+      base::ReadFileToString(target.AppendASCII("runtime.dll"), &contents));
+  EXPECT_EQ(contents, "new");
+  EXPECT_TRUE(base::PathExists(target.AppendASCII("app/plugins/main.js")));
+  EXPECT_TRUE(base::PathExists(source.Append(installer::kChromeExe)));
+  EXPECT_TRUE(base::PathExists(source.Append(installer::kChromeProxyExe)));
+  EXPECT_TRUE(base::DirectoryExists(source.AppendASCII(version.GetString())));
+  EXPECT_FALSE(base::PathExists(target.Append(installer::kChromeExe)));
+  EXPECT_FALSE(base::PathExists(target.Append(installer::kChromeProxyExe)));
+
+  items->Rollback();
+  ASSERT_TRUE(
+      base::ReadFileToString(target.AppendASCII("runtime.dll"), &contents));
+  EXPECT_EQ(contents, "old");
+  EXPECT_FALSE(base::PathExists(target.AppendASCII("app")));
+  EXPECT_TRUE(base::PathExists(source.AppendASCII("app/plugins/main.js")));
+}
+
+TEST(UnversionedPayloadTest, ArchiveWithoutExtraAssetsIsUnchanged) {
+  base::ScopedTempDir directory;
+  ASSERT_TRUE(directory.CreateUniqueTempDir());
+  const auto source = directory.GetPath().AppendASCII("source");
+  const base::Version version("1.0.0.1");
+  ASSERT_TRUE(base::CreateDirectory(source.AppendASCII(version.GetString())));
+  ASSERT_TRUE(base::WriteFile(source.Append(installer::kChromeExe), "browser"));
+  ASSERT_TRUE(base::WriteFile(source.Append(installer::kChromeProxyExe), "proxy"));
+  StrictMock<MockWorkItemList> items;
+  installer::AddUnversionedPayloadWorkItems(
+      source, directory.GetPath().AppendASCII("target"), directory.GetPath(),
+      version, &items);
+}
 
 // Chrome for Testing does not support system-level installations.
 #if !BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)

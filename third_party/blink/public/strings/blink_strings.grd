@@ -489,6 +489,18 @@ below:
       <message name="IDS_MEDIA_OVERFLOW_MENU_PLAYBACK_SPEED" desc="Media controls overflow menu item label for a playback speed button. The text for this overflow menu should be short.">
         Playback speed
       </message>
+      <message name="IDS_XL_MEDIA_CONTROLS_SMOOTH_PLAYBACK" desc="Label for the Xunlei media controls smooth playback side button. The text should be short.">
+        Smooth playback
+      </message>
+      <message name="IDS_XL_MEDIA_CONTROLS_PLAYBACK_SPEED_SHORT" desc="Short label for the Xunlei media controls playback speed side button.">
+        Speed
+      </message>
+      <message name="IDS_XL_MEDIA_CONTROLS_ENTER_PICTURE_IN_PICTURE_TOOLTIP" desc="Tooltip shown when hovering the Xunlei media controls picture-in-picture side button.">
+        Open picture in picture
+      </message>
+      <message name="IDS_XL_MEDIA_CONTROLS_EXIT_PICTURE_IN_PICTURE_TOOLTIP" desc="Tooltip shown when hovering the Xunlei media controls picture-in-picture side button while Picture-in-Picture is active.">
+        Close picture in picture
+      </message>
       <message name="IDS_MEDIA_OVERFLOW_MENU_PLAYBACK_SPEED_SUBMENU_TITLE" desc="Media controls overflow menu title for the playback speed submenu. The text for this overflow menu should be short.">
         Options
       </message>

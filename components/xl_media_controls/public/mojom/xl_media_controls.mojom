@@ -1,0 +1,15 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+module xl_media_controls.mojom;
+
+import "url/mojom/url.mojom";
+
+// Renderer (Blink media controls) -> browser: XL media control actions.
+interface XlMediaControlsHost {
+  // Download media from the given URL. Triggered by the xl1 side-button on
+  // the video player controls. The download is initiated on the browser side
+  // to avoid threading issues in the Chromium download pipeline.
+  DownloadMediaUrl(url.mojom.Url media_url, string suggested_filename);
+};

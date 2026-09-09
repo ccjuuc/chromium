@@ -44,6 +44,10 @@ v8::Local<v8::Value> InitializeLoadedNodeAddon(
     base::ScopedNativeLibrary library,
     LoadedNodeAddon* loaded_addon);
 
+#if BUILDFLAG(IS_WIN)
+void EnsureNodeHostLibraryLoaded();
+#endif
+
 }  // namespace xenon
 
 #endif  // XENON_OVERLAY_CHROME_BROWSER_NAPI_NAPI_LOADER_H_

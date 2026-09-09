@@ -1,6 +1,6 @@
 # 标准 N-API 扩展加载流程
 
-本文整理提交 `070e80e2db989ee751debeb9a6d10959a5ef8ee3` 中引入、并在后续迭代中扩展的标准 N-API `.node` 扩展加载链路。当前实现目标是让 `chrome://xenon-node/` 前端可以像 Electron 一样通过：
+本文整理提交 `070e80e2db989ee751debeb9a6d10959a5ef8ee3` 中引入、并在后续迭代中扩展的标准 N-API `.node` 扩展加载链路。当前实现同时服务于 `chrome://xenon-node/` 诊断页和 Electron 容器 renderer；两者都可以像 Electron 一样通过：
 
 ```js
 const addon = require('test_addon.node');
@@ -12,7 +12,7 @@ const addon = require('test_addon.node');
 
 ## 总览
 
-这条链路分为五层：
+诊断 WebUI 链路分为五层：
 
 1. WebUI 前端提供 `window.require()`，模拟 Node/Electron 的 require 入口。
 2. WebUI Typed Mojo 把 `RequireNodeModule` / `InvokeNodeExport` 发给 Browser。
@@ -60,6 +60,27 @@ sequenceDiagram
   Service-->>Controller: OnCallback(id, args)
   Controller-->>Page: NodeCallbackInvoked(id, args)
 ```
+
+上图只表示 `chrome://xenon-node/` 的诊断链路。Electron 容器 renderer 使用另一条
+低延迟链路：
+
+```text
+Hosted renderer require("*.node")
+  -> XenonIpcDocumentHost 在 Browser 校验 origin/container/window 身份
+  -> Browser 一次性代理 NodeAddonHost receiver 到对应 Utility service
+  -> Renderer 直接调用 Utility 的 NodeAddonHost
+  -> XenonNodeExecutor / NapiLoader / addon
+```
+
+Browser 只负责授权、选择 `container_id` 和转交 Mojo endpoint；绑定完成后不位于
+同步 addon 方法调用路径中。这样既保留 Browser 的安全边界，又避免 addon 同步调用
+Win32 HWND 时 Renderer、Browser UI 和 Utility 形成环形等待。诊断页仍通过
+`XenonNodeController` 返回 Promise；Electron renderer 的函数、构造、实例方法和属性
+代理则可以保持其现有同步调用语义。
+
+两条链路最终汇合到同一套 `XenonNodeExecutor` 和 N-API shim。Electron 容器以
+`container_id` 作为执行上下文与 callback 隔离键，因此 TH、PL-E 的 addon、实例、
+callback、libuv loop 和 `runtime_directory` 不共享。
 
 ## 关键文件
 
@@ -507,6 +528,60 @@ submodule 工作区里切换版本。
 `test_addon.node`。它的 `UvTimer(callback)` 使用真实 `uv_timer_init()` /
 `uv_timer_start()`。Windows 已验证 timer 从 `node.exe` ABI 提供者的
 libuv loop 触发，并经 Utility、Mojo、WebUI 回调到前端。
+
+### 容器级原生运行目录
+
+Electron 应用中的原生 addon 经常用 `GetModuleFileName(NULL)` 取宿主 exe，
+再拼出 `SDK/*.dll` 或其它伴生库的绝对路径。在 Xenon 中实际进程是
+`xenon.exe`，而 `process.execPath` 可以是托管应用的 `Thunder.exe`/`xmp.exe` 身份。
+如果只修改 JavaScript 中的 `process.execPath`，无法影响 native 代码里的
+`GetModuleFileName(NULL)`。
+
+`IpcMainConfig.runtime_directory` 为每个 Electron 容器指定独立运行时根。空值时
+按以下顺序推导：
+
+1. `executable_path.DirName()`；
+2. 无 `executable_path` 时使用 `app_path`。
+
+Utility 初始化容器时同时完成两件事：
+
+1. 将根目录设到 `XENON_HOSTED_APP_DIR`，供 addon 后续启动的 Xenon player
+   child 选择 `<runtime>/player/containor.dll`。每个 `container_id` 使用独立
+   Utility Process，因此该环境变量不跨应用共享。
+2. 将根目录传给 `XenonNodeExecutor::SetRuntimeDirectory()`，为后续加载的每个
+   addon 注册伴生 DLL 解析规则。
+
+Windows 实现不全局替换 loader，而是在单个 addon 模块加载后检查其 PE import
+table，只替换以下 IAT slot：
+
+- `LoadLibraryW`
+- `LoadLibraryExW`
+- `LoadLibraryA`
+- `LoadLibraryExA`
+
+hook 从 `_ReturnAddress()` 反查调用者 HMODULE，只有调用者是已注册 addon 时才查询
+该 addon 所属容器的运行目录。一次重定向需要同时满足：
+
+1. addon 请求绝对 DLL 路径；
+2. 原路径位于真实 Xenon exe 目录下；
+3. 保留相对路径后，`runtime_directory` 下的目标文件确实存在；
+4. 目标路径不等于原路径。
+
+例如：
+
+```text
+H:\...\Release_64\SDK\DownloadSDKProxy.dll
+  -> H:\...\Release_64\xenon_player\main\SDK\DownloadSDKProxy.dll
+```
+
+这个机制不改写 `GetModuleFileName()`，不拦截 `CreateProcess()`，不影响未注册
+module，也不按项目名或 DLL 名特判。addon 销毁时会先恢复 IAT，再释放其
+HMODULE，避免留下指向已销毁状态的 slot。
+
+对应回归用例为
+`XenonIpcMainContainerTest.NodeAddonRedirectsHostLibrariesToRuntimeDirectory`。测试 addon
+请求一个不存在的 host-root DLL 路径，只在临时 `runtime_directory` 放置目标，
+用以证明重定向不依赖 TH/PL-E 资源。
 
 ### pc_addon 播放容器
 

@@ -14,6 +14,16 @@ SYMBOL_PATTERN = re.compile(r"\b(?:napi_|uv_|xenon_napi_)[A-Za-z0-9_]+(?=\s*\()"
 DECORATED_COMPATIBILITY_SYMBOLS = (
     "??1CallbackScope@node@@QEAA@XZ",
     "??4CallbackScope@node@@QEAAAEAV01@AEBV01@@Z",
+    "??0HandleScope@v8@@QEAA@PEAVIsolate@1@@Z",
+    "??1HandleScope@v8@@QEAA@XZ",
+    "?Call@Function@v8@@QEAA?AV?$MaybeLocal@VValue@v8@@@2@V?$Local@VContext@v8@@@2@V?$Local@VValue@v8@@@2@HQEAV52@@Z",
+    "?ClearWeak@V8@v8@@CAPEAXPEA_K@Z",
+    "?CreateHandle@HandleScope@v8@@KAPEA_KPEAVIsolate@internal@2@_K@Z",
+    "?DisposeGlobal@V8@v8@@CAXPEA_K@Z",
+    "?GetCurrent@Isolate@v8@@SAPEAV12@XZ",
+    "?GetCurrentContext@Isolate@v8@@QEAA?AV?$Local@VContext@v8@@@2@XZ",
+    "?GlobalizeReference@V8@v8@@CAPEA_KPEAVIsolate@internal@2@PEA_K@Z",
+    "?MakeWeak@V8@v8@@CAXPEA_KPEAXP6AXAEBV?$WeakCallbackInfo@X@2@@ZW4WeakCallbackType@2@@Z",
     "?Reallocate@Allocator@ArrayBuffer@v8@@UEAAPEAXPEAX_K1@Z",
 )
 
