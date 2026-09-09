@@ -55,10 +55,11 @@ using GetRegisteredModuleCountFunc = size_t (*)();
 using GetRegisteredModuleFunc = napi_module* (*)(size_t);
 
 base::NativeLibrary GetChromeDllModule() {
-  HMODULE module = ::GetModuleHandleW(L"xenon.dll");
-  if (!module) {
-    module = ::GetModuleHandleW(L"chrome.dll");
-  }
+#if defined(CUSTOM_CHROME_DLL_NAME_W)
+  HMODULE module = ::GetModuleHandleW(CUSTOM_CHROME_DLL_NAME_W);
+#else
+  HMODULE module = ::GetModuleHandleW(L"chrome.dll");
+#endif
   return reinterpret_cast<base::NativeLibrary>(module);
 }
 

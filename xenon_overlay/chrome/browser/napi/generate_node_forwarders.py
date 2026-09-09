@@ -46,17 +46,22 @@ def collect_symbols(inputs: list[pathlib.Path]) -> list[str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate Windows exports that forward Node APIs to xenon.dll"
+        description="Generate Windows exports that forward Node APIs to the host browser DLL"
     )
+    parser.add_argument("--target-dll", required=True,
+                        help="Target DLL basename to forward Node API exports to")
     parser.add_argument("--output", required=True, type=pathlib.Path)
     parser.add_argument("inputs", nargs="+", type=pathlib.Path)
     args = parser.parse_args()
 
     symbols = collect_symbols(args.inputs)
+    target_dll = args.target_dll
+    if target_dll.lower().endswith(".dll"):
+        target_dll = target_dll[:-4]
     lines = ["EXPORTS"]
-    lines.extend(f"  {symbol}=xenon.{symbol}" for symbol in symbols)
+    lines.extend(f"  {symbol}={target_dll}.{symbol}" for symbol in symbols)
     lines.extend(
-        f'  "{symbol}"="xenon.{symbol}"'
+        f'  "{symbol}"="{target_dll}.{symbol}"'
         for symbol in DECORATED_COMPATIBILITY_SYMBOLS
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)

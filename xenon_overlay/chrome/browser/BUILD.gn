@@ -1,4 +1,5 @@
 import("//build/config/ui.gni")
+import("//chrome/version.gni")
 import("//testing/test.gni")
 import("//third_party/skia/modules/svg/svg.gni")
 import("//xenon_overlay/buildflags/features.gni")
@@ -88,6 +89,7 @@ source_set("napi") {
     "napi/napi_switches.h",
     "napi/node_api.h",
   ]
+  configs += [ "//xenon_overlay/buildflags:custom_names" ]
   deps = [
     "//base",
     "//gin",
@@ -341,6 +343,8 @@ if (is_win) {
       ]
       outputs = [ node_forwarders_def ]
       args = [
+               "--target-dll",
+               chrome_dll_filename_base,
                "--output",
                rebase_path(node_forwarders_def, root_build_dir),
              ] + rebase_path(inputs, root_build_dir)
@@ -414,6 +418,7 @@ test("napi_host_unittests") {
     "napi/napi_loader.h",
     "napi/napi_loader_unittest.cc",
   ]
+  configs += [ "//xenon_overlay/buildflags:custom_names" ]
   deps = [
     "//base",
     "//base/test:run_all_unittests",
