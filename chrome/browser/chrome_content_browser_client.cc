@@ -215,7 +215,6 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/crash_keys.h"
 #include "chrome/common/env_vars.h"
-#include "chrome/common/extensions/shenzhenapi_availability.h"
 #include "chrome/common/google_url_loader_throttle.h"
 #include "chrome/common/logging_chrome.h"
 #include "chrome/common/pref_names.h"
@@ -451,6 +450,14 @@
 #include "url/origin.h"
 #include "url/third_party/mozilla/url_parse.h"
 #include "url/url_constants.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+#include "xenon_overlay/public/xenon_ipc_switches.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/chrome/browser/asar/xenon_asar_url_loader_factory.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
+#include "xenon_overlay/public/mojom/xenon_service.mojom.h"
+#endif
 
 #if BUILDFLAG(IS_WIN)
 #include "base/files/file_util.h"
@@ -2952,10 +2959,8 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
 #endif
 
   if (process_type == switches::kRendererProcess) {
-    std::vector<std::string> allowed_domains = extensions::shenzhenapi_availability::GetAllowedDomains();
-    if (!allowed_domains.empty()) {
-      std::string domains_str = base::JoinString(allowed_domains, ",");
-      command_line->AppendSwitchASCII(extensions::shenzhenapi_availability::kShenzhenAllowedDomainsSwitch, domains_str);
+    if (browser_command_line.HasSwitch(xenon::ipc::switches::kEnable)) {
+      command_line->AppendSwitch(xenon::ipc::switches::kEnable);
     }
 
     content::RenderProcessHost* process =
@@ -5485,6 +5490,15 @@ bool ChromeContentBrowserClient::PreSpawnChild(
 // should be reviewed by the security team.
 bool ChromeContentBrowserClient::IsUtilityCetCompatible(
     const std::string& utility_sub_type) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // Xenon embeds V8 for Electron main modules and native addons. Like renderer
+  // and kServiceWithJit processes, V8 deoptimization requires a CET opt-out
+  // until this build supports CET shadow stacks. This applies to the service,
+  // regardless of which application it hosts.
+  if (utility_sub_type == xenon::mojom::XenonMainService::Name_) {
+    return false;
+  }
+#endif
   if (utility_sub_type == chrome::mojom::UtilWin::Name_) {
     return false;
   }
@@ -6000,7 +6014,8 @@ std::unique_ptr<blink::URLLoaderThrottle> CreateGoogleURLLoaderThrottle(
               policy::policy_prefs::kForceGoogleSafeSearch),
           profile->GetPrefs()->GetInteger(
               policy::policy_prefs::kForceYouTubeRestrict),
-          profile->GetPrefs()->GetString(prefs::kAllowedDomainsForApps));
+          profile->GetPrefs()->GetString(prefs::kAllowedDomainsForApps),
+          /*shenzhen_allowed_domains=*/std::vector<std::string>());
   return std::make_unique<GoogleURLLoaderThrottle>(
 #if BUILDFLAG(IS_ANDROID)
       client_data_header,
@@ -6145,6 +6160,14 @@ ChromeContentBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
   content::WebContents* web_contents =
       content::WebContents::FromFrameTreeNodeId(frame_tree_node_id);
   content::BrowserContext* browser_context = web_contents->GetBrowserContext();
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (scheme == url::kFileScheme &&
+      xenon::XenonElectronWindowHost::GetInstance()
+              ->FindWindowIdForWebContents(web_contents) != 0) {
+    return xenon::CreateAsarURLLoaderFactory();
+  }
+#endif
 
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   if (scheme == extensions::kExtensionScheme) {
@@ -6556,6 +6579,15 @@ void ChromeContentBrowserClient::
   WebContents* web_contents = WebContents::FromRenderFrameHost(frame_host);
 #endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(ENABLE_EXTENSIONS_CORE) || \
         // !BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (web_contents &&
+      xenon::XenonElectronWindowHost::GetInstance()
+              ->FindWindowIdForWebContents(web_contents) != 0) {
+    factories->insert_or_assign(url::kFileScheme,
+                                xenon::CreateAsarURLLoaderFactory());
+  }
+#endif
 
 #if BUILDFLAG(IS_CHROMEOS)
   if (web_contents) {

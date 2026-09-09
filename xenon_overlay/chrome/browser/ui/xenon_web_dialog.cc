@@ -16,6 +16,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/chrome_web_contents_handler.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/context_menu_params.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/mojom/page/draggable_region.mojom.h"
 #include "third_party/skia/include/core/SkRegion.h"
@@ -34,10 +35,16 @@
 #include "ui/views/controls/webview/web_dialog_view.h"
 #include "ui/views/view_targeter.h"
 #include "ui/views/view_targeter_delegate.h"
+#include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/frame_view.h"
-#include "url/gurl.h"
+#include "base/base_paths.h"
+#include "base/files/file_util.h"
+#include "base/path_service.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
 #include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
+#include "xenon_overlay/chrome/browser/xenon_manager.h"
+#include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
@@ -424,15 +431,70 @@ class XenonWebDialogView : public views::WebDialogView,
   }
   ~XenonWebDialogView() override = default;
 
+  void SetContentURL(const GURL& url) {
+    if (xenon_delegate_) {
+      xenon_delegate_->SetContentURL(url);
+    }
+  }
+
+  void SetHostedContentVisible(bool visible) {
+    for (views::View* child : children()) {
+      if (auto* web_view = views::AsViewClass<views::WebView>(child)) {
+        web_view->SetVisible(visible);
+        return;
+      }
+    }
+  }
+
+  void ViewHierarchyChanged(
+      const views::ViewHierarchyChangedDetails& details) override {
+    views::WebDialogView::ViewHierarchyChanged(details);
+    if (!details.is_add || !GetWidget()) {
+      return;
+    }
+    content::WebContents* wc = web_contents();
+    if (!wc || draggable_regions_enabler_) {
+      return;
+    }
+    draggable_regions_enabler_ =
+        std::make_unique<XenonDraggableRegionsEnabler>(
+            wc, xenon_delegate_->UseTransparentWebContentsBackground());
+  }
+
   void DraggableRegionsChanged(
       const std::vector<blink::mojom::DraggableRegionPtr>& regions,
       content::WebContents* contents) override {
-    draggable_region_ = std::make_unique<SkRegion>();
-    for (const auto& region : regions) {
-      draggable_region_->op(
-          gfx::RectToSkIRect(region->bounds),
-          region->draggable ? SkRegion::kUnion_Op : SkRegion::kDifference_Op);
+    if (contents != web_contents()) {
+      return;
     }
+    draggable_region_ = std::make_unique<SkRegion>();
+    // Pass 1: Union all draggable areas.
+    for (const auto& region : regions) {
+      if (region && region->draggable) {
+        draggable_region_->op(gfx::RectToSkIRect(region->bounds),
+                              SkRegion::kUnion_Op);
+      }
+    }
+    // Pass 2: Subtract all non-draggable areas (e.g. close buttons, inputs, controls).
+    // This ensures child/overlapping buttons with -webkit-app-region: no-drag
+    // are never overwritten by a parent/sibling drag container or header title.
+    for (const auto& region : regions) {
+      if (region && !region->draggable) {
+        draggable_region_->op(gfx::RectToSkIRect(region->bounds),
+                              SkRegion::kDifference_Op);
+      }
+    }
+  }
+
+  bool HandleContextMenu(content::RenderFrameHost& render_frame_host,
+                         const content::ContextMenuParams& params) override {
+    // Electron BrowserWindow never shows Chromium's native context menu.
+    // Page-authored menus (DOM `contextmenu`) already ran in the renderer.
+    if (XenonElectronWindowHost::GetInstance()->FindWindowIdForWebContents(
+            web_contents()) > 0) {
+      return true;
+    }
+    return views::WebDialogView::HandleContextMenu(render_frame_host, params);
   }
 
   void AddedToWidget() override {
@@ -665,7 +727,14 @@ class XenonWebDialogView : public views::WebDialogView,
       SetBackground(nullptr);
       SetPaintToLayer();
       layer()->SetFillsBoundsOpaquely(false);
-      if (!UseDwmRoundedCorners(xenon_delegate_->UseDwm())) {
+      // A transparent Electron canvas must not acquire the compositor's
+      // default rounded card. Normal dialogs still use the standard radius
+      // when DWM rounding is unavailable.
+      const bool transparent_canvas =
+          xenon_delegate_->UseTransparentWebContentsBackground();
+      if (!transparent_canvas &&
+          !UseDwmRoundedCorners(xenon_delegate_->UseDwm() ||
+                                xenon_delegate_->UseSystemRoundedCorners())) {
         layer()->SetRoundedCornerRadius(
             gfx::RoundedCornersF(kDialogCornerRadius));
         SetWebViewCornersRadii(gfx::RoundedCornersF(kDialogCornerRadius));
@@ -691,7 +760,24 @@ class XenonWebDialogView : public views::WebDialogView,
     }
 
     ui::Layer* widget_layer = GetWidget()->GetLayer();
+    if (widget_layer &&
+        xenon_delegate_->UseTransparentWebContentsBackground()) {
+      widget_layer->SetFillsBoundsOpaquely(false);
+    }
+#if BUILDFLAG(IS_WIN)
+    gfx::NativeWindow native_window = GetWidget()->GetNativeWindow();
+    if (native_window && native_window->layer() &&
+        xenon_delegate_->UseTransparentWebContentsBackground()) {
+      native_window->layer()->SetFillsBoundsOpaquely(false);
+    }
+#endif
     if (!widget_layer) {
+      return;
+    }
+    if (!xenon_delegate_->ShouldShowShadow() &&
+        xenon_delegate_->UseTransparentWebContentsBackground()) {
+      widget_layer->SetOpacity(1.0f);
+      widget_layer->SetTransform(gfx::Transform());
       return;
     }
     widget_layer->SetOpacity(0.0f);
@@ -781,6 +867,28 @@ class XenonWebDialogView : public views::WebDialogView,
 
 }  // namespace
 
+void XenonWebDialog::SetHostedContentURL(views::Widget* widget,
+                                         const GURL& url) {
+  if (!widget) {
+    return;
+  }
+  auto* view = static_cast<XenonWebDialogView*>(widget->widget_delegate());
+  if (view) {
+    view->SetContentURL(url);
+  }
+}
+
+void XenonWebDialog::SetHostedContentVisible(views::Widget* widget,
+                                             bool visible) {
+  if (!widget) {
+    return;
+  }
+  auto* view = static_cast<XenonWebDialogView*>(widget->widget_delegate());
+  if (view) {
+    view->SetHostedContentVisible(visible);
+  }
+}
+
 void XenonWebDialog::Show(content::BrowserContext* context,
                           const GURL& url,
                           int width,
@@ -804,6 +912,7 @@ void XenonWebDialog::ShowForLogin(content::BrowserContext* context,
   ShowInternal(context, url, width, height, title, out_widget, parent,
                modal_type, std::move(on_dialog_closed), show_close_button,
                /*frame=*/false, /*dwm=*/XenonWebDialog::kDefaultUseDwm,
+               /*system_rounded_corners=*/false,
                /*resizable=*/XenonWebDialog::kDefaultResizable,
                 /*minimizable=*/true, /*maximizable=*/true,
                 /*always_on_top=*/false, /*skip_taskbar=*/false,
@@ -843,6 +952,7 @@ void XenonWebDialog::ShowWithOptions(content::BrowserContext* context,
       options.FindBool("showCloseButton").value_or(true),
       options.FindBool("frame").value_or(false),
       options.FindBool("dwm").value_or(XenonWebDialog::kDefaultUseDwm),
+      options.FindBool("systemRoundedCorners").value_or(false),
       options.FindBool("resizable").value_or(
           XenonWebDialog::kDefaultResizable),
       options.FindBool("minimizable").value_or(true),
@@ -866,6 +976,7 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
                                   bool show_close_button,
                                   bool frame,
                                   bool dwm,
+                                  bool system_rounded_corners,
                                   bool resizable,
                                   bool minimizable,
                                   bool maximizable,
@@ -901,7 +1012,7 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
   auto* delegate =
       new XenonWebDialog(url, width, height, title, delegate_modal_type,
                           std::move(on_dialog_closed), show_close_button, frame,
-                          dwm, show_shadow);
+                          dwm, system_rounded_corners, show_shadow);
   delegate->set_can_resize(resizable);
   delegate->set_can_minimize(minimizable);
   delegate->set_can_maximize(maximizable);
@@ -927,12 +1038,16 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
     }
     if (!frame) {
 #if BUILDFLAG(IS_WIN)
-      if (UseDwmRoundedCorners(dwm)) {
-        // Keep DWM-rounded windows opaque like XlDlcWebDialog. Translucent
-        // windows lose WS_THICKFRAME in Chromium's Win HWND style setup, which
-        // leaves only the resize cursor without actual resizing.
-        params.rounded_corners = gfx::RoundedCornersF(kDwmRoundedCornerHintRadius);
-      } else {
+      const bool use_system_rounded_corners =
+          UseDwmRoundedCorners(dwm || system_rounded_corners);
+      if (use_system_rounded_corners) {
+        params.rounded_corners =
+            gfx::RoundedCornersF(kDwmRoundedCornerHintRadius);
+      }
+      if (!dwm) {
+        // Transparent BrowserWindows remain layered even when DWM owns their
+        // outer clip. Chromium removes WS_THICKFRAME in this mode, so the
+        // WebDialogView manual-resize path remains active.
         params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
       }
 #else
@@ -948,6 +1063,14 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
           std::make_unique<ModalEventBlocker>(parent, widget));
     }
 #endif
+    // Match Electron BrowserWindow: no explicit origin → center on screen.
+    // Owned/parented overlays keep the parent-relative placement from Init.
+    if (!parent) {
+      const gfx::Size size = widget->GetWindowBoundsInScreen().size();
+      if (!size.IsEmpty()) {
+        widget->CenterWindow(size);
+      }
+    }
     if (show) {
       widget->Show();
     }
@@ -988,8 +1111,28 @@ GURL XenonWebDialog::GetXenonPlayerWebUIUrl() {
   return GURL("chrome://xenon-player/");
 }
 
+GURL XenonWebDialog::GetXenonPlayerByElecWebUIUrl() {
+  return GURL("chrome://xenon-player-by-elec/");
+}
+
+GURL XenonWebDialog::GetXenonPlayerElectronWebUIUrl() {
+  return GURL("chrome://xenon-player-electron/");
+}
+
+GURL XenonWebDialog::GetThunder2025WebUIUrl() {
+  return GURL("chrome://thunder-2025/");
+}
+
 bool XenonWebDialog::UseTransparentWebContentsBackground() const {
-  return url_.SchemeIs("chrome") && url_.host() == "xenon-player";
+  // Electron playerControlWnd is created with transparent:true (dwm=false).
+  // The first URL is about:blank; still keep the WebContents clear so the
+  // native video HWND can show through CSS-transparent areas.
+  if (!dwm_) {
+    return true;
+  }
+  return url_.SchemeIs("chrome") && (url_.host() == "xenon-player" ||
+                                     url_.host() == "xenon-player-by-elec" ||
+                                     url_.host() == "xenon-player-electron");
 }
 
 namespace {
@@ -1001,6 +1144,15 @@ raw_ptr<views::Widget>& XenonPlayerDialogWidget() {
 
 void ClearXenonPlayerDialogWidget() {
   XenonPlayerDialogWidget() = nullptr;
+}
+
+raw_ptr<views::Widget>& XenonPlayerByElecDialogWidget() {
+  static base::NoDestructor<raw_ptr<views::Widget>> widget;
+  return *widget;
+}
+
+void ClearXenonPlayerByElecDialogWidget() {
+  XenonPlayerByElecDialogWidget() = nullptr;
 }
 
 }  // namespace
@@ -1038,6 +1190,102 @@ void XenonWebDialog::ShowXenonPlayer(Profile* profile) {
                   base::BindOnce(&ClearXenonPlayerDialogWidget));
 }
 
+void XenonWebDialog::ShowXenonPlayerByElec(Profile* profile) {
+  if (!profile) {
+    LOG(WARNING) << "ShowXenonPlayerByElec: no profile";
+    return;
+  }
+
+  if (XenonPlayerByElecDialogWidget()) {
+    XenonPlayerByElecDialogWidget()->Show();
+    XenonPlayerByElecDialogWidget()->Activate();
+    return;
+  }
+
+  XenonManager* manager = XenonManager::GetInstance();
+  manager->SetBrowserContext(profile);
+  const std::string container_id = manager->GetElectronIpcContainerForOrigin(
+      "chrome://xenon-player-by-elec");
+  if (!manager->EnsureElectronIpcStarted(container_id)) {
+    LOG(ERROR) << "ShowXenonPlayerByElec: failed to start container "
+               << container_id;
+    return;
+  }
+
+  base::DictValue options;
+  options.Set("title", "Electron Container Test");
+  options.Set("width", 1280);
+  options.Set("height", 800);
+  options.Set("modal", false);
+  options.Set("frame", false);
+  options.Set("resizable", true);
+  options.Set("minimizable", true);
+  options.Set("maximizable", true);
+  options.Set("showCloseButton", true);
+  options.Set("shadow", false);
+
+  ShowWithOptions(profile, GetXenonPlayerByElecWebUIUrl(), options,
+                  &XenonPlayerByElecDialogWidget(), gfx::NativeView(),
+                  base::BindOnce(&ClearXenonPlayerByElecDialogWidget));
+}
+
+void XenonWebDialog::ShowXenonPlayerElectron(Profile* profile) {
+  if (!profile) {
+    LOG(WARNING) << "ShowXenonPlayerElectron: no profile";
+    return;
+  }
+  XenonManager* manager = XenonManager::GetInstance();
+  manager->SetBrowserContext(profile);
+  if (!XenonElectronWindowHost::GetInstance()->HasWindowsForContainer(
+          "xenon-player-test")) {
+    base::FilePath executable_dir;
+    if (base::PathService::Get(base::DIR_EXE, &executable_dir)) {
+      const base::FilePath player_dir =
+          executable_dir.AppendASCII("xenon_player").AppendASCII("main");
+      const base::FilePath player_main_path = player_dir.AppendASCII("main.js");
+      std::string player_main_source;
+      if (base::ReadFileToString(player_main_path, &player_main_source)) {
+        auto player_config = xenon::ipc::mojom::IpcMainConfig::New();
+        player_config->container_id = "xenon-player-test";
+        player_config->embedded_main_source = std::move(player_main_source);
+        player_config->virtual_main_path = player_main_path.AsUTF8Unsafe();
+        player_config->app_path = player_dir.AsUTF8Unsafe();
+        player_config->runtime_directory = player_dir.AsUTF8Unsafe();
+        player_config->app_name = "xmp";
+        // Preserve the packaged executable identity for process.execPath and
+        // app.getPath("exe"). The container does not launch this executable.
+        player_config->executable_path =
+            player_dir.AppendASCII("xmp.exe").AsUTF8Unsafe();
+        player_config->renderer_base_url = "chrome://xenon-player-electron/";
+        manager->SetElectronIpcContainerForOrigin(
+            "chrome://xenon-player-electron", "xenon-player-test");
+        manager->InitializeElectronIpc(std::move(player_config));
+      }
+    }
+  }
+  if (!XenonElectronWindowHost::GetInstance()->ActivateForContainer(
+          "xenon-player-test")) {
+    LOG(WARNING) << "ShowXenonPlayerElectron: waiting for ipcMain BrowserWindow";
+  }
+}
+
+void XenonWebDialog::ShowThunder2025(Profile* profile) {
+  if (!profile) {
+    LOG(WARNING) << "ShowThunder2025: no profile";
+    return;
+  }
+  XenonManager* manager = XenonManager::GetInstance();
+  manager->SetBrowserContext(profile);
+  if (!manager->EnsureElectronIpcStarted("thunder-2025")) {
+    LOG(ERROR) << "ShowThunder2025: failed to start Electron container";
+    return;
+  }
+  if (!XenonElectronWindowHost::GetInstance()->ActivateForContainer(
+          "thunder-2025")) {
+    LOG(WARNING) << "ShowThunder2025: waiting for ipcMain BrowserWindow";
+  }
+}
+
 void XenonWebDialog::ShowDataMaskTest(Profile* profile) {
   LOG(INFO)
       << "DataMask test enabled from XenonWebDialog (Rule injected natively).";
@@ -1069,6 +1317,7 @@ XenonWebDialog::XenonWebDialog(const GURL& url,
                                bool show_close_button,
                                bool frame,
                                bool dwm,
+                               bool system_rounded_corners,
                                bool show_shadow)
     : url_(url),
       width_(width),
@@ -1079,6 +1328,7 @@ XenonWebDialog::XenonWebDialog(const GURL& url,
       show_close_button_(show_close_button),
       frame_(frame),
       dwm_(dwm),
+      system_rounded_corners_(system_rounded_corners),
       show_shadow_(show_shadow) {}
 
 XenonWebDialog::~XenonWebDialog() = default;
@@ -1118,6 +1368,12 @@ void XenonWebDialog::OnCloseContents(content::WebContents* source,
                                      bool* out_close_dialog) {
   if (out_close_dialog) {
     *out_close_dialog = true;
+  }
+  if (source) {
+    if (views::Widget* widget =
+            views::Widget::GetTopLevelWidgetForNativeView(source->GetNativeView())) {
+      widget->Hide();
+    }
   }
 }
 

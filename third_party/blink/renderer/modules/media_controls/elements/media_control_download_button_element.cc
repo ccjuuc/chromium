@@ -82,19 +82,27 @@ const char* MediaControlDownloadButtonElement::GetNameForHistograms() const {
   return IsOverflowElement() ? "DownloadOverflowButton" : "DownloadButton";
 }
 
-void MediaControlDownloadButtonElement::DefaultEventHandler(Event& event) {
+void MediaControlDownloadButtonElement::Download() {
   const KURL& url = MediaElement().downloadURL();
-  if ((event.type() == event_type_names::kClick ||
-       event.type() == event_type_names::kGesturetap) &&
-      !(url.IsNull() || url.IsEmpty())) {
-    Platform::Current()->RecordAction(
-        UserMetricsAction("Media.Controls.Download"));
-    ResourceRequest request(url);
-    request.SetSuggestedFilename(MediaElement().title());
-    request.SetRequestContext(mojom::blink::RequestContextType::DOWNLOAD);
-    request.SetRequestorOrigin(GetExecutionContext()->GetSecurityOrigin());
-    GetDocument().GetFrame()->DownloadURL(
-        request, network::mojom::blink::RedirectMode::kError);
+  if (url.IsNull() || url.IsEmpty()) {
+    return;
+  }
+
+  Platform::Current()->RecordAction(
+      UserMetricsAction("Media.Controls.Download"));
+  ResourceRequest request(url);
+  request.SetSuggestedFilename(MediaElement().title());
+  request.SetRequestContext(mojom::blink::RequestContextType::DOWNLOAD);
+  request.SetRequestorOrigin(GetExecutionContext()->GetSecurityOrigin());
+  if (auto* frame = GetDocument().GetFrame()) {
+    frame->DownloadURL(request, network::mojom::blink::RedirectMode::kError);
+  }
+}
+
+void MediaControlDownloadButtonElement::DefaultEventHandler(Event& event) {
+  if (event.type() == event_type_names::kClick ||
+      event.type() == event_type_names::kGesturetap) {
+    Download();
   }
   MediaControlInputElement::DefaultEventHandler(event);
 }

@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "XL Video Controls Bridge",
+  "version": "1.0.5",
+  "description": "Bridge Xenon built-in video side controls: show xl1–xr1 and relay xlcontrolaction events.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAz3wYbXFkAOQbf6BAliTrrm8wdrORG63UDura8/2re0QuTkOwtHPEEZ3aTD9SfBElmX0bfoWS2xLSzNsQR9IZeehIoLEAGxAK1Ttn7yhSsl5CCmwUusOknlX67/O51oW4wY6M3a9TJ/eDFpRJ+CoGyZXj8UC3SHRqsNk2iN28icjUxYFcFIukbNxd+7v2reU3TVLROh4tj2AG/M5knWS8aefDa3YPzBJpGQa59G/VL1D4T6DtWxBt+6pWU610YQVk3w+Wl0dxtL/hzQTpg186OQsQDnDyHLg4AFBhy63SLhWGm77riJsniXkkvyP4NKMM2bmfsOZbaxEYvw4uDD5FgQIDAQAB",
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "host_permissions": ["<all_urls>"],
+  "options_page": "options.html"
+}
+

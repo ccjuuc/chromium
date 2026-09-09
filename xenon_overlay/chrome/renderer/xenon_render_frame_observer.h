@@ -5,6 +5,8 @@
 #ifndef XENON_OVERLAY_CHROME_RENDERER_XENON_RENDER_FRAME_OBSERVER_H_
 #define XENON_OVERLAY_CHROME_RENDERER_XENON_RENDER_FRAME_OBSERVER_H_
 
+#include <optional>
+
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_frame_observer.h"
 #include "third_party/blink/public/web/web_navigation_type.h"
@@ -18,6 +20,7 @@ namespace xenon {
 class XenonRenderFrameObserver : public content::RenderFrameObserver {
  public:
   explicit XenonRenderFrameObserver(content::RenderFrame* render_frame);
+  ~XenonRenderFrameObserver() override;
 
   XenonRenderFrameObserver(const XenonRenderFrameObserver&) = delete;
   XenonRenderFrameObserver& operator=(const XenonRenderFrameObserver&) = delete;
@@ -30,9 +33,12 @@ class XenonRenderFrameObserver : public content::RenderFrameObserver {
       std::optional<blink::WebNavigationType> navigation_type) override;
 
   void DidClearWindowObject() override;
+  void DidCreateScriptContext(v8::Local<v8::Context> context,
+                              int32_t world_id) override;
 
   bool IsPageUrlEligibleForApi(const GURL& url) const;
   bool ShouldExposeXenonApi() const;
+  bool ShouldAttemptElectronIpcInstall() const;
 
   GURL last_navigation_url_;
 };

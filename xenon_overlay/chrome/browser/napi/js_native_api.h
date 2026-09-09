@@ -193,6 +193,22 @@ NAPI_EXTERN napi_status napi_define_class(napi_env env, const char* utf8name, si
 NAPI_EXTERN napi_status napi_wrap(napi_env env, napi_value js_object, void* native_object, napi_finalize finalize_cb, void* finalize_hint, napi_ref* result);
 NAPI_EXTERN napi_status napi_unwrap(napi_env env, napi_value js_object, void** result);
 NAPI_EXTERN napi_status napi_remove_wrap(napi_env env, napi_value js_object, void** result);
+NAPI_EXTERN napi_status napi_add_finalizer(napi_env env,
+                                           napi_value js_object,
+                                           void* native_object,
+                                           napi_finalize finalize_cb,
+                                           void* finalize_hint,
+                                           napi_ref* result);
+
+// Environment data and diagnostics
+NAPI_EXTERN napi_status napi_set_instance_data(napi_env env,
+                                               void* data,
+                                               napi_finalize finalize_cb,
+                                               void* finalize_hint);
+NAPI_EXTERN napi_status napi_get_instance_data(napi_env env, void** data);
+NAPI_EXTERN napi_status napi_get_last_error_info(
+    napi_env env,
+    const napi_extended_error_info** result);
 
 // External values
 NAPI_EXTERN napi_status napi_create_external(napi_env env, void* data, napi_finalize finalize_cb, void* finalize_hint, napi_value* result);

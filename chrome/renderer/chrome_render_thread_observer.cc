@@ -52,6 +52,10 @@
 #include "third_party/blink/public/web/web_security_policy.h"
 #include "third_party/blink/public/web/web_view.h"
 
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/common/extensions/shenzhenapi_availability.h"
+#endif
+
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/renderer/ash_merge_session_loader_throttle.h"
 #endif
@@ -138,6 +142,11 @@ ChromeRenderThreadObserver::ChromeRenderThreadObserver()
   // Configure modules that need access to resources.
   net::NetModule::SetResourceProvider(ChromeNetResourceProvider);
   media::SetLocalizedStringProvider(ChromeMediaLocalizedStringProvider);
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  // The common module's default is the Browser policy source. Renderer must
+  // fail closed until RendererConfiguration delivers the Browser snapshot.
+  extensions::shenzhenapi_availability::SetAllowedDomains({});
+#endif
 }
 
 ChromeRenderThreadObserver::~ChromeRenderThreadObserver() = default;
@@ -212,6 +221,10 @@ void ChromeRenderThreadObserver::SetInitialConfiguration(
 
 void ChromeRenderThreadObserver::SetConfiguration(
     chrome::mojom::DynamicParamsPtr params) {
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  extensions::shenzhenapi_availability::SetAllowedDomains(
+      params->shenzhen_allowed_domains);
+#endif
   base::AutoLock lock(dynamic_params_lock_);
   dynamic_params_ = std::move(params);
 }

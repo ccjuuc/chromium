@@ -61,6 +61,7 @@ bool IsComponentExtensionAllowlisted(const std::string& extension_id) {
       extension_misc::kComponentUpdaterTTSEngineExtensionId,
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
       "mkkhnfilihmphalmfjjbobdnaikhbeoi",  // Xenon Overlay Extension
+      "ofmfjminmdmfdekchkolhdfidomocgac",  // XL Video Controls Bridge
 #if !BUILDFLAG(IS_ANDROID)
       extension_misc::kAimEligibilityExtensionId,
       extension_misc::kIndigoExtensionId,

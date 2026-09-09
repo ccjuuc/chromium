@@ -2,21 +2,32 @@ import("//xenon_overlay/buildflags/features.gni")
 
 source_set("xenon_service") {
   sources = [
+    "../chrome/browser/ipc/xenon_ipc_main_container.cc",
+    "../chrome/browser/ipc/xenon_ipc_main_container.h",
     "xenon_node_executor.cc",
     "xenon_node_executor.h",
+    "xenon_net_pipe_bridge.cc",
+    "xenon_net_pipe_bridge.h",
     "xenon_service_impl.cc",
     "xenon_service_impl.h",
   ]
 
   deps = [
     "//base",
+    "//chrome/common:constants",
+    "//components/version_info",
+    "//crypto",
     "//gin",
     "//mojo/public/cpp/bindings",
     "//services/network/public/cpp",
+    "//ui/base",
     "//v8",
     "//xenon_overlay/buildflags",
+    "//xenon_overlay/chrome/browser:app_runtime",
     "//xenon_overlay/chrome/browser:napi",
+    "//xenon_overlay/chrome/browser:os_bridge",
     "//xenon_overlay/public/mojom",
+    "//xenon_overlay/resources:resources_grit",
   ]
 
   if (enable_xenon_node_uv_compat) {

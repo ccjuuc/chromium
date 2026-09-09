@@ -26,7 +26,26 @@ copy("copy_extension") {
   }
 }
 
+video_controls_extension_files = [
+  "video_controls_extension/background.js",
+  "video_controls_extension/content.js",
+  "video_controls_extension/manifest.json",
+  "video_controls_extension/options.html",
+  "video_controls_extension/options.js",
+]
+
+copy("copy_video_controls_extension") {
+  sources = video_controls_extension_files
+  outputs =
+      [ "$root_out_dir/resources/video_controls_extension/{{source_file_part}}" ]
+}
+
 if (is_mac) {
+  bundle_data("copy_video_controls_extension_mac") {
+    sources = video_controls_extension_files
+    outputs = [ "{{bundle_resources_dir}}/resources/video_controls_extension/{{source_file_part}}" ]
+  }
+
   bundle_data("copy_extension_mac") {
     if (xenon_extension_source == "zip") {
       sources = [ "xenon_extension.zip" ]
@@ -45,13 +64,64 @@ if (is_mac) {
   }
 }
 
+if (is_win) {
+  action("copy_thunder_2025") {
+    script = "//xenon_overlay/tools/copy_runtime_tree.py"
+    src_dir = "thunder_2025"
+    dst_dir = "$root_out_dir/thunder_2025"
+    stamp_file = "$target_gen_dir/copy_thunder_2025.stamp"
+    depfile = "$target_gen_dir/copy_thunder_2025.d"
+
+    outputs = [ stamp_file ]
+    args = [
+      "--src",
+      rebase_path(src_dir, root_build_dir),
+      "--dest",
+      rebase_path(dst_dir, root_build_dir),
+      "--stamp",
+      rebase_path(stamp_file, root_build_dir),
+      "--depfile",
+      rebase_path(depfile, root_build_dir),
+    ]
+  }
+
+  action("copy_xenon_player") {
+    script = "//xenon_overlay/tools/copy_runtime_tree.py"
+    src_dir = "xenon_player"
+    dst_dir = "$root_out_dir/xenon_player"
+    stamp_file = "$target_gen_dir/copy_xenon_player.stamp"
+    depfile = "$target_gen_dir/copy_xenon_player.d"
+
+    outputs = [ stamp_file ]
+    args = [
+      "--src",
+      rebase_path(src_dir, root_build_dir),
+      "--dest",
+      rebase_path(dst_dir, root_build_dir),
+      "--stamp",
+      rebase_path(stamp_file, root_build_dir),
+      "--depfile",
+      rebase_path(depfile, root_build_dir),
+    ]
+  }
+}
+
 group("resources") {
   public_deps = [
     ":resources_grit",
     ":copy_extension",
+    ":copy_video_controls_extension",
   ]
+
+  if (is_win) {
+    public_deps += [
+      ":copy_thunder_2025",
+      ":copy_xenon_player",
+    ]
+  }
 
   if (is_mac) {
     public_deps += [ ":copy_extension_mac" ]
+    public_deps += [ ":copy_video_controls_extension_mac" ]
   }
 }

@@ -61,15 +61,22 @@ class NapiValueScope {
       : env_(env), start_value_index_(env->allocated_values.size()) {}
 
   ~NapiValueScope() {
-    if (start_value_index_ < env_->allocated_values.size()) {
-      env_->allocated_values.resize(start_value_index_);
-    }
+    env_->TrimAllocatedValues(start_value_index_);
   }
 
  private:
   napi_env env_;
   size_t start_value_index_;
 };
+
+bool RejectDeadNapiValue(napi_env env, napi_value value, const char* api) {
+  if (env && env->IsLiveValue(value)) {
+    return false;
+  }
+  LOG(WARNING) << "N-API " << api << " rejected non-owned napi_value "
+               << value;
+  return true;
+}
 
 v8::Local<v8::Private> GetWrapPrivateKey(napi_env env) {
   return v8::Private::ForApi(
@@ -177,7 +184,15 @@ napi_env__::~napi_env__() {
       finalizer->callback(this, finalizer->data, finalizer->hint);
     }
   }
+  if (instance_data_finalize) {
+    NapiValueScope value_scope(this);
+    instance_data_finalize(this, instance_data, instance_data_finalize_hint);
+  }
+  instance_data = nullptr;
+  instance_data_finalize = nullptr;
+  instance_data_finalize_hint = nullptr;
   callbacks.clear();
+  live_values.clear();
   allocated_values.clear();
   context.Reset();
   last_exception.Reset();
@@ -187,8 +202,23 @@ napi_value napi_env__::CreateValue(v8::Local<v8::Value> local_val) {
   auto val = std::make_unique<napi_value__>();
   val->Reset(isolate, local_val);
   napi_value res = val.get();
+  live_values.insert(res);
   allocated_values.push_back(std::move(val));
   return res;
+}
+
+void napi_env__::TrimAllocatedValues(size_t new_size) {
+  if (new_size >= allocated_values.size()) {
+    return;
+  }
+  for (size_t i = new_size; i < allocated_values.size(); ++i) {
+    live_values.erase(allocated_values[i].get());
+  }
+  allocated_values.resize(new_size);
+}
+
+bool napi_env__::IsLiveValue(napi_value v) const {
+  return v && live_values.contains(v);
 }
 
 napi_ref__::napi_ref__(v8::Isolate* isolate) : isolate(isolate) {}
@@ -240,9 +270,7 @@ napi_status napi_open_handle_scope(napi_env env, napi_handle_scope* result) {
 
 napi_status napi_close_handle_scope(napi_env env, napi_handle_scope scope) {
   if (!env || !scope) return napi_invalid_arg;
-  if (scope->start_value_index < env->allocated_values.size()) {
-    env->allocated_values.resize(scope->start_value_index);
-  }
+  env->TrimAllocatedValues(scope->start_value_index);
   delete scope;
   return napi_ok;
 }
@@ -256,10 +284,9 @@ napi_status napi_open_escapable_handle_scope(napi_env env, napi_escapable_handle
 
 napi_status napi_close_escapable_handle_scope(napi_env env, napi_escapable_handle_scope scope) {
   if (!env || !scope) return napi_invalid_arg;
-  if (scope->start_value_index < env->allocated_values.size()) {
-    env->allocated_values.resize(scope->start_value_index);
-  }
+  env->TrimAllocatedValues(scope->start_value_index);
   if (scope->escaped_value) {
+    env->live_values.insert(scope->escaped_value.get());
     env->allocated_values.push_back(std::move(scope->escaped_value));
   }
   delete scope;
@@ -267,7 +294,7 @@ napi_status napi_close_escapable_handle_scope(napi_env env, napi_escapable_handl
 }
 
 napi_status napi_escape_handle(napi_env env, napi_escapable_handle_scope scope, napi_value escapee, napi_value* result) {
-  if (!env || !scope || !escapee || !result) return napi_invalid_arg;
+  if (!env || !scope || !env->IsLiveValue(escapee) || !result) return napi_invalid_arg;
   if (scope->escaped_value) {
     return napi_escape_called_twice;
   }
@@ -275,6 +302,7 @@ napi_status napi_escape_handle(napi_env env, napi_escapable_handle_scope scope, 
   scope->escaped_value = std::make_unique<napi_value__>();
   scope->escaped_value->Reset(env->isolate, escaped);
   *result = scope->escaped_value.get();
+  env->live_values.insert(*result);
   return napi_ok;
 }
 
@@ -1006,7 +1034,10 @@ napi_status napi_get_named_property(napi_env env, napi_value object, const char*
 }
 
 napi_status napi_set_element(napi_env env, napi_value object, uint32_t index, napi_value value) {
-  if (!env || !object || !value) return napi_invalid_arg;
+  if (!env || RejectDeadNapiValue(env, object, "napi_set_element(object)") ||
+      RejectDeadNapiValue(env, value, "napi_set_element(value)")) {
+    return napi_invalid_arg;
+  }
   v8::Local<v8::Context> context = env->GetContext();
   v8::Local<v8::Object> obj;
   if (!object->Get()->ToObject(context).ToLocal(&obj)) return napi_object_expected;
@@ -1341,6 +1372,13 @@ napi_status napi_get_cb_info(napi_env env, napi_callback_info cbinfo, size_t* ar
     for (size_t i = 0; i < copy_count; ++i) {
       argv[i] = env->CreateValue(v8_info[static_cast<int>(i)]);
     }
+    // Node-API requires unused entries in the caller-provided argv buffer to
+    // contain JavaScript undefined when fewer arguments were supplied. Native
+    // addons commonly access these entries without checking the returned
+    // actual argument count.
+    for (size_t i = copy_count; i < count; ++i) {
+      argv[i] = env->CreateValue(v8::Undefined(env->isolate));
+    }
     *argc = actual_count;
   } else if (argc) {
     *argc = static_cast<size_t>(v8_info.Length());
@@ -1384,7 +1422,10 @@ napi_status napi_new_instance(napi_env env, napi_value constructor, size_t argc,
 // --- References ---
 
 napi_status napi_create_reference(napi_env env, napi_value value, uint32_t initial_refcount, napi_ref* result) {
-  if (!env || !value || !result) return napi_invalid_arg;
+  if (!env || !result ||
+      RejectDeadNapiValue(env, value, "napi_create_reference")) {
+    return napi_invalid_arg;
+  }
   auto ref = std::make_unique<napi_ref__>(env->isolate);
   ref->global_value.Reset(env->isolate, value->Get());
   ref->ref_count = initial_refcount;
@@ -1775,6 +1816,66 @@ napi_status napi_remove_wrap(napi_env env, napi_value js_object, void** result) 
     removed->callback = nullptr;
     removed->persistent.Reset();
   }
+  return napi_ok;
+}
+
+napi_status napi_add_finalizer(napi_env env,
+                               napi_value js_object,
+                               void* native_object,
+                               napi_finalize finalize_cb,
+                               void* finalize_hint,
+                               napi_ref* result) {
+  if (!env || !js_object || !finalize_cb) {
+    return napi_invalid_arg;
+  }
+  v8::Local<v8::Context> context = env->GetContext();
+  v8::Local<v8::Object> object;
+  if (!js_object->Get()->ToObject(context).ToLocal(&object)) {
+    return napi_object_expected;
+  }
+
+  auto finalizer = std::make_unique<NapiFinalizerData>(NapiFinalizerData{
+      env, native_object, finalize_cb, finalize_hint, {}});
+  NapiFinalizerData* finalizer_ptr = finalizer.get();
+  finalizer_ptr->persistent.Reset(env->isolate, object);
+  finalizer_ptr->persistent.SetWeak(finalizer_ptr, OnNapiFinalizerFirstPass,
+                                    v8::WeakCallbackType::kParameter);
+  env->finalizers.push_back(std::move(finalizer));
+
+  if (result) {
+    return napi_create_reference(env, js_object, 0, result);
+  }
+  return napi_ok;
+}
+
+napi_status napi_set_instance_data(napi_env env,
+                                   void* data,
+                                   napi_finalize finalize_cb,
+                                   void* finalize_hint) {
+  if (!env) {
+    return napi_invalid_arg;
+  }
+  env->instance_data = data;
+  env->instance_data_finalize = finalize_cb;
+  env->instance_data_finalize_hint = finalize_hint;
+  return napi_ok;
+}
+
+napi_status napi_get_instance_data(napi_env env, void** data) {
+  if (!env || !data) {
+    return napi_invalid_arg;
+  }
+  *data = env->instance_data;
+  return napi_ok;
+}
+
+napi_status napi_get_last_error_info(
+    napi_env env,
+    const napi_extended_error_info** result) {
+  if (!env || !result) {
+    return napi_invalid_arg;
+  }
+  *result = &env->last_error_info;
   return napi_ok;
 }
 
@@ -2267,6 +2368,86 @@ class __declspec(dllexport) CallbackScope {
 CallbackScope::~CallbackScope() = default;
 }  // namespace node
 
+// Older Electron/Node addons reference a small V8 C++ ABI surface from
+// node.exe. Newer V8 versions inline or move these entry points, so expose
+// ABI-compatible adapters from the host instead of tying addon loading to a
+// particular application DLL.
+class XenonV8HandleScopeAccess : public v8::HandleScope {
+ public:
+  using v8::HandleScope::CreateHandle;
+};
+
+extern "C" v8::HandleScope* XenonV8HandleScopeConstructor(
+    v8::HandleScope* scope,
+    v8::Isolate* isolate) {
+  return ::new (static_cast<void*>(scope)) v8::HandleScope(isolate);
+}
+
+extern "C" void XenonV8HandleScopeDestructor(v8::HandleScope* scope) {
+  scope->~HandleScope();
+}
+
+extern "C" v8::internal::Address* XenonV8CreateHandle(
+    v8::internal::Isolate* isolate,
+    v8::internal::Address value) {
+  return XenonV8HandleScopeAccess::CreateHandle(
+      reinterpret_cast<v8::Isolate*>(isolate), value);
+}
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wreturn-type-c-linkage"
+extern "C" v8::MaybeLocal<v8::Value> XenonV8FunctionCall(
+    v8::Function* function,
+    v8::Local<v8::Context> context,
+    v8::Local<v8::Value> receiver,
+    int argc,
+    v8::Local<v8::Value>* argv) {
+  return function->Call(context, receiver, argc, argv);
+}
+
+extern "C" v8::Isolate* XenonV8IsolateGetCurrent() {
+  return v8::Isolate::GetCurrent();
+}
+
+extern "C" v8::Local<v8::Context> XenonV8IsolateGetCurrentContext(
+    v8::Isolate* isolate) {
+  return isolate->GetCurrentContext();
+}
+#pragma clang diagnostic pop
+
+extern "C" v8::internal::Address* XenonV8GlobalizeReference(
+    v8::internal::Isolate* isolate,
+    v8::internal::Address value) {
+  return v8::api_internal::GlobalizeReference(isolate, value);
+}
+
+extern "C" void XenonV8DisposeGlobal(v8::internal::Address* location) {
+  v8::api_internal::DisposeGlobal(location);
+}
+
+extern "C" void XenonV8MakeWeak(
+    v8::internal::Address* location,
+    void* parameter,
+    v8::WeakCallbackInfo<void>::Callback callback,
+    v8::WeakCallbackType type) {
+  v8::api_internal::MakeWeak(location, parameter, callback, type);
+}
+
+extern "C" void* XenonV8ClearWeak(v8::internal::Address* location) {
+  return v8::api_internal::ClearWeak(location);
+}
+
+#pragma comment(linker, "/export:??0HandleScope@v8@@QEAA@PEAVIsolate@1@@Z=XenonV8HandleScopeConstructor")
+#pragma comment(linker, "/export:??1HandleScope@v8@@QEAA@XZ=XenonV8HandleScopeDestructor")
+#pragma comment(linker, "/export:?CreateHandle@HandleScope@v8@@KAPEA_KPEAVIsolate@internal@2@_K@Z=XenonV8CreateHandle")
+#pragma comment(linker, "/export:?Call@Function@v8@@QEAA?AV?$MaybeLocal@VValue@v8@@@2@V?$Local@VContext@v8@@@2@V?$Local@VValue@v8@@@2@HQEAV52@@Z=XenonV8FunctionCall")
+#pragma comment(linker, "/export:?GetCurrent@Isolate@v8@@SAPEAV12@XZ=XenonV8IsolateGetCurrent")
+#pragma comment(linker, "/export:?GetCurrentContext@Isolate@v8@@QEAA?AV?$Local@VContext@v8@@@2@XZ=XenonV8IsolateGetCurrentContext")
+#pragma comment(linker, "/export:?GlobalizeReference@V8@v8@@CAPEA_KPEAVIsolate@internal@2@PEA_K@Z=XenonV8GlobalizeReference")
+#pragma comment(linker, "/export:?DisposeGlobal@V8@v8@@CAXPEA_K@Z=XenonV8DisposeGlobal")
+#pragma comment(linker, "/export:?MakeWeak@V8@v8@@CAXPEA_KPEAXP6AXAEBV?$WeakCallbackInfo@X@2@@ZW4WeakCallbackType@2@@Z=XenonV8MakeWeak")
+#pragma comment(linker, "/export:?ClearWeak@V8@v8@@CAPEAXPEA_K@Z=XenonV8ClearWeak")
+
 extern "C" void* XenonV8ArrayBufferAllocatorReallocate(
     void* self,
     void* data,
@@ -2305,61 +2486,56 @@ extern "C" void* XenonV8ArrayBufferAllocatorReallocate(
 #pragma comment(linker, "/export:?Reallocate@Allocator@ArrayBuffer@v8@@UEAAPEAXPEAX_K1@Z=XenonV8ArrayBufferAllocatorReallocate")
 #endif
 
-static std::vector<napi_module*>& GetRegisteredModules() {
-  static base::NoDestructor<std::vector<napi_module*>> modules;
-  return *modules;
-}
-
-static std::mutex& GetRegisteredModulesLock() {
-  static std::mutex lock;
-  return lock;
-}
+static constexpr size_t kMaxRegisteredModules = 256;
+static napi_module* g_registered_modules[kMaxRegisteredModules];
+static std::atomic<size_t> g_registered_module_count{0};
 
 void napi_module_register(napi_module* mod) {
   if (!mod) {
     return;
   }
-  std::lock_guard<std::mutex> guard(GetRegisteredModulesLock());
-  GetRegisteredModules().push_back(mod);
+  size_t idx = g_registered_module_count.fetch_add(1, std::memory_order_relaxed);
+  if (idx < kMaxRegisteredModules) {
+    g_registered_modules[idx] = mod;
+  }
 }
 
 NAPI_EXTERN void xenon_napi_clear_registered_modules(void) {
-  std::lock_guard<std::mutex> guard(GetRegisteredModulesLock());
-  GetRegisteredModules().clear();
+  g_registered_module_count.store(0, std::memory_order_relaxed);
 }
 
 NAPI_EXTERN size_t xenon_napi_get_registered_module_count(void) {
-  std::lock_guard<std::mutex> guard(GetRegisteredModulesLock());
-  return GetRegisteredModules().size();
+  size_t count = g_registered_module_count.load(std::memory_order_relaxed);
+  return count > kMaxRegisteredModules ? kMaxRegisteredModules : count;
 }
 
 NAPI_EXTERN napi_module* xenon_napi_get_registered_module(size_t index) {
-  std::lock_guard<std::mutex> guard(GetRegisteredModulesLock());
-  auto& modules = GetRegisteredModules();
-  if (index >= modules.size()) {
+  if (index >= xenon_napi_get_registered_module_count()) {
     return nullptr;
   }
-  return modules[index];
+  return g_registered_modules[index];
 }
 
 NAPI_EXTERN bool xenon_napi_remove_registered_module(napi_module* mod) {
-  std::lock_guard<std::mutex> guard(GetRegisteredModulesLock());
-  auto& modules = GetRegisteredModules();
-  auto module = std::find(modules.begin(), modules.end(), mod);
-  if (module == modules.end()) {
-    return false;
+  size_t count = xenon_napi_get_registered_module_count();
+  for (size_t i = 0; i < count; ++i) {
+    if (g_registered_modules[i] == mod) {
+      for (size_t j = i; j + 1 < count; ++j) {
+        g_registered_modules[j] = g_registered_modules[j + 1];
+      }
+      g_registered_module_count.fetch_sub(1, std::memory_order_relaxed);
+      return true;
+    }
   }
-  modules.erase(module);
-  return true;
+  return false;
 }
 
 NAPI_EXTERN napi_module* xenon_napi_get_last_registered_module(void) {
-  std::lock_guard<std::mutex> guard(GetRegisteredModulesLock());
-  auto& modules = GetRegisteredModules();
-  if (modules.empty()) {
+  size_t count = xenon_napi_get_registered_module_count();
+  if (count == 0) {
     return nullptr;
   }
-  return modules.back();
+  return g_registered_modules[count - 1];
 }
 
 struct napi_async_work__ {

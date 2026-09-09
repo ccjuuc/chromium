@@ -9,8 +9,23 @@
 #include "build/buildflag.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "xenon_overlay/buildflags/buildflags.h"
+#include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
 
 namespace xenon {
+
+TEST(XenonManagerTest, RegisterElectronIpcDoesNotStartService) {
+  base::test::TaskEnvironment task_environment;
+
+  constexpr char kContainerId[] = "lazy-registration-test";
+  XenonManager* manager = XenonManager::GetInstance();
+  auto config = ipc::mojom::IpcMainConfig::New();
+  config->container_id = kContainerId;
+  config->app_name = "Lazy Registration Test";
+
+  ASSERT_TRUE(manager->RegisterElectronIpc(std::move(config)));
+  EXPECT_EQ(0u, manager->service_generation(kContainerId));
+  EXPECT_TRUE(manager->GetElectronIpcRendererConfigForContainer(kContainerId));
+}
 
 TEST(XenonManagerTest, Ping_WhenDisconnected_ReturnsNotRunning) {
   base::test::TaskEnvironment task_environment;

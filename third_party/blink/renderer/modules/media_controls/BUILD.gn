@@ -4,6 +4,7 @@
 
 import("//third_party/blink/renderer/modules/modules.gni")
 import("//tools/grit/grit_rule.gni")
+import("//xenon_overlay/buildflags/features.gni")
 
 if (is_android) {
   import("//build/config/android/rules.gni")
@@ -67,6 +68,12 @@ blink_modules_sources("media_controls") {
     "elements/media_control_remaining_time_display_element.h",
     "elements/media_control_scrubbing_message_element.cc",
     "elements/media_control_scrubbing_message_element.h",
+    "elements/media_control_side_button_element.cc",
+    "elements/media_control_side_button_element.h",
+    "elements/media_control_side_enclosure_element.cc",
+    "elements/media_control_side_enclosure_element.h",
+    "elements/media_control_side_spacer_element.cc",
+    "elements/media_control_side_spacer_element.h",
     "elements/media_control_slider_element.cc",
     "elements/media_control_slider_element.h",
     "elements/media_control_text_track_list_element.cc",
@@ -113,6 +120,14 @@ blink_modules_sources("media_controls") {
     "//third_party/blink/renderer/modules/screen_orientation",
     "//ui/strings",
   ]
+
+  if (enable_xenon_service) {
+    defines = [ "FOR_XL" ]
+    deps += [
+      "//components/xl_media_controls/public/mojom:mojom_blink",
+      "//mojo/public/cpp/bindings",
+    ]
+  }
 }
 
 grit("media_controls_resources") {
@@ -148,6 +163,9 @@ grit("media_controls_resources") {
     "resources/ic_fullscreen_exit.svg",
     "resources/ic_fullscreen_exit_white.svg",
     "resources/ic_fullscreen_white.svg",
+    "resources/ic_launch.svg",
+    "resources/ic_launch_white.svg",
+    "resources/ic_lightning_white.svg",
     "resources/ic_menu.svg",
     "resources/ic_menu_white.svg",
     "resources/ic_no_source.svg",
@@ -164,6 +182,14 @@ grit("media_controls_resources") {
     "resources/ic_play_arrow_white.svg",
     "resources/ic_playback_speed.svg",
     "resources/ic_playback_speed_white.svg",
+    "resources/ic_player_download_48.png",
+    "resources/ic_player_download_48_hover.png",
+    "resources/ic_player_flowplay_48.png",
+    "resources/ic_player_flowplay_48_hover.png",
+    "resources/ic_player_picture_in_picture_48.png",
+    "resources/ic_player_picture_in_picture_48_hover.png",
+    "resources/ic_player_playback_speed_48.png",
+    "resources/ic_player_playback_speed_48_hover.png",
     "resources/ic_subtitles.svg",
     "resources/ic_subtitles_white.svg",
     "resources/ic_video_track.svg",
@@ -172,6 +198,7 @@ grit("media_controls_resources") {
     "resources/ic_volume_off_white.svg",
     "resources/ic_volume_up.svg",
     "resources/ic_volume_up_white.svg",
+    "resources/ic_webpage_picture_in_picture_16.svg",
     "resources/jump_image.svg",
     "resources/mediaControls.css",
     "resources/mediaControls_Android.css",

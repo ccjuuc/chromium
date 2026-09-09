@@ -6,11 +6,9 @@
 
 #include <string>
 #include <vector>
-#include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/no_destructor.h"
-#include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/synchronization/lock.h"
 #include "extensions/common/context_data.h"
@@ -19,8 +17,6 @@
 #include "url/gurl.h"
 
 namespace extensions::shenzhenapi_availability {
-
-const char kShenzhenAllowedDomainsSwitch[] = "shenzhen-allowed-domains";
 
 namespace {
 
@@ -68,23 +64,8 @@ bool IsShenzhenApiAvailable(const std::string& api_full_name,
     return false;
   }
 
-  // Retrieve allowed domains based on process type
-  std::vector<std::string> allowed_domains;
-  auto* cmd_line = base::CommandLine::ForCurrentProcess();
-  if (cmd_line->GetSwitchValueASCII("type") == "renderer") {
-    static base::NoDestructor<std::vector<std::string>> renderer_allowed_domains([]() {
-      auto* renderer_cmd_line = base::CommandLine::ForCurrentProcess();
-      std::string val = renderer_cmd_line->GetSwitchValueASCII(kShenzhenAllowedDomainsSwitch);
-      return base::SplitString(val, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-    }());
-    allowed_domains = *renderer_allowed_domains;
-  } else {
-    // If in the browser process, fetch dynamically from the in-memory store
-    allowed_domains = GetAllowedDomains();
-  }
-
   std::string host(url.host());
-  for (const std::string& pattern : allowed_domains) {
+  for (const std::string& pattern : GetAllowedDomains()) {
     if (MatchDomainPattern(host, pattern)) {
       return true;
     }

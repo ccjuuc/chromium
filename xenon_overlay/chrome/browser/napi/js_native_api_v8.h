@@ -6,6 +6,7 @@
 #define XENON_OVERLAY_CHROME_BROWSER_NAPI_JS_NATIVE_API_V8_H_
 
 #include <memory>
+#include <unordered_set>
 #include <vector>
 
 #include "node_api.h"
@@ -85,12 +86,19 @@ struct napi_env__ {
       nullptr;
 
   std::vector<std::unique_ptr<napi_value__>> allocated_values;
+  std::unordered_set<napi_value> live_values;
   // Function/method CallbackData must outlive exported Functions; kept on the
   // env (env itself is intentionally not torn down by the weak context hook).
   std::vector<std::unique_ptr<CallbackData>> callbacks;
   std::vector<std::unique_ptr<NapiFinalizerData>> finalizers;
+  NAPI_RAW_PTR_EXCLUSION void* instance_data = nullptr;
+  napi_finalize instance_data_finalize = nullptr;
+  NAPI_RAW_PTR_EXCLUSION void* instance_data_finalize_hint = nullptr;
+  napi_extended_error_info last_error_info = {nullptr, nullptr, 0, napi_ok};
 
   napi_value CreateValue(v8::Local<v8::Value> local_val);
+  void TrimAllocatedValues(size_t new_size);
+  bool IsLiveValue(napi_value v) const;
 
   v8::Local<v8::Context> GetContext() const {
     return context.Get(isolate);
@@ -98,8 +106,11 @@ struct napi_env__ {
 };
 
 namespace v8impl {
-inline v8::Local<v8::Value> V8LocalValueFromJsValue(napi_value v) {
-  if (!v) return v8::Local<v8::Value>();
+inline v8::Local<v8::Value> V8LocalValueFromJsValue(napi_env env,
+                                                    napi_value v) {
+  if (!env || !env->IsLiveValue(v)) {
+    return v8::Local<v8::Value>();
+  }
   return v->Get();
 }
 

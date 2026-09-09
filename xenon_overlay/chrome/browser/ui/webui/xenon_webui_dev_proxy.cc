@@ -17,6 +17,7 @@
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
 #include "content/browser/webui/url_data_source_impl.h"
+#include "content/browser/webui/url_data_manager_backend.h"
 #include "content/browser/webui/web_ui_data_source_impl.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition.h"
@@ -145,6 +146,11 @@ class XenonDevProxySource : public content::URLDataSource {
   }
 
   bool ShouldServeMimeTypeAsContentTypeHeader() override { return true; }
+
+  bool ShouldReplaceI18nInJS() override {
+    return original_source_impl_ &&
+           original_source_impl_->source()->ShouldReplaceI18nInJS();
+  }
 
   void StartDataRequest(const GURL& url,
                         const content::WebContents::Getter& wc_getter,
@@ -283,6 +289,30 @@ class XenonDevProxySource : public content::URLDataSource {
   std::list<PendingRequest> pending_requests_;
 };
 
+// Chromium 142 stores template replacements on URLDataSourceImpl rather than
+// URLDataSource. Preserve original WebUI replacements while serving proxy data.
+class XenonDevProxySourceImpl : public content::URLDataSourceImpl {
+ public:
+  XenonDevProxySourceImpl(
+      std::string source_name,
+      std::unique_ptr<content::URLDataSource> source,
+      scoped_refptr<content::URLDataSourceImpl> original_source_impl)
+      : content::URLDataSourceImpl(std::move(source_name), std::move(source)),
+        original_source_impl_(std::move(original_source_impl)) {}
+
+  const ui::TemplateReplacements* GetReplacements() const override {
+    return original_source_impl_
+               ? original_source_impl_->GetReplacements()
+               : nullptr;
+  }
+
+ protected:
+  ~XenonDevProxySourceImpl() override = default;
+
+ private:
+  scoped_refptr<content::URLDataSourceImpl> original_source_impl_;
+};
+
 }  // namespace
 
 bool TrySetupXenonWebuiDevProxy(content::WebUI* web_ui,
@@ -307,12 +337,16 @@ bool TrySetupXenonWebuiDevProxy(content::WebUI* web_ui,
 
   auto* browser_context = web_ui->GetWebContents()->GetBrowserContext();
   auto* impl = static_cast<content::WebUIDataSourceImpl*>(source);
+  impl->EnsureLoadTimeDataDefaultsAdded();
 
-  content::URLDataSource::Add(
-      browser_context,
-      std::make_unique<XenonDevProxySource>(
-          browser_context, webui_host, dev_url,
-          scoped_refptr<content::URLDataSourceImpl>(impl)));
+  auto original_source_impl =
+      scoped_refptr<content::URLDataSourceImpl>(impl);
+  auto proxy_source = std::make_unique<XenonDevProxySource>(
+      browser_context, webui_host, dev_url, original_source_impl);
+  auto proxy_source_impl = base::MakeRefCounted<XenonDevProxySourceImpl>(
+      webui_host, std::move(proxy_source), std::move(original_source_impl));
+  content::URLDataManagerBackend::GetForBrowserContext(browser_context)
+      ->AddDataSource(proxy_source_impl.get());
 
   return true;
 }

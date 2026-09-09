@@ -617,6 +617,14 @@ bool DesktopWindowTreeHostWin::ShouldUseNativeFrame() const {
 }
 
 bool DesktopWindowTreeHostWin::ShouldWindowContentsBeTransparent() const {
+  // Per-pixel-alpha windows (InitParams::kTranslucent) must keep an alpha
+  // swap chain in fullscreen. SetFullscreen() calls UpdateWindowTransparency(),
+  // and the default "opaque while fullscreen" path fills the DirectComposition
+  // surface with the frame color. That covers HWND siblings behind the window
+  // (for example a native video surface under an Electron overlay).
+  if (message_handler_ && message_handler_->is_translucent()) {
+    return true;
+  }
   // The window contents need to be transparent when the titlebar area is drawn
   // by the DWM rather than Chrome, so that area can show through.  This
   // function does not describe the transparency of the whole window appearance,

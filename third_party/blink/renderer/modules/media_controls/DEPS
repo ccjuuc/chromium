@@ -1,4 +1,5 @@
 include_rules = [
+  "+components/xl_media_controls/public/mojom/xl_media_controls.mojom-blink.h",
   "+media/base/media_switches.h",
   "+mojo/public/cpp/bindings",
   "+services/device/public/mojom/screen_orientation.mojom-blink.h",

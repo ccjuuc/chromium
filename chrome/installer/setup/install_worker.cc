@@ -24,6 +24,7 @@
 
 #include "base/command_line.h"
 #include "base/enterprise_util.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -303,6 +304,9 @@ void AddChromeWorkItems(const InstallParams& install_params,
       WorkItem::MoveTreeOptions{.check_for_duplicates = true,
                                 .lenient_deletion = true});
 
+  AddUnversionedPayloadWorkItems(src_path, target_path, temp_path, new_version,
+                                 install_list);
+
   // Copy installer in install directory.
   AddInstallerCopyTasks(install_params, install_list);
 
@@ -551,6 +555,35 @@ void AddPlatformExperienceHelperWorkItems(const InstallerState& installer_state,
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
 }  // namespace
+
+void AddUnversionedPayloadWorkItems(const base::FilePath& source_path,
+                                    const base::FilePath& target_path,
+                                    const base::FilePath& temp_path,
+                                    const base::Version& new_version,
+                                    WorkItemList* install_list) {
+  const base::FilePath version_name =
+      base::FilePath::FromASCII(new_version.GetString());
+  base::FileEnumerator entries(
+      source_path, /*recursive=*/false,
+      base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES);
+  for (base::FilePath entry = entries.Next(); !entry.empty();
+       entry = entries.Next()) {
+    const base::FilePath name = entry.BaseName();
+    if (name == version_name ||
+        base::FilePath::CompareEqualIgnoreCase(name.value(), kChromeExe) ||
+        base::FilePath::CompareEqualIgnoreCase(name.value(), kChromeProxyExe)) {
+      continue;
+    }
+    // The release manifest owns the payload list, not the installer. Use the
+    // same transactional move as versioned assets instead of silently leaving
+    // executable-relative runtime files in the temporary extraction directory.
+    // Do not use the version-directory duplicate check: it compares file sizes,
+    // which cannot identify unchanged assets outside a versioned directory.
+    install_list->AddMoveTreeWorkItem(
+        entry, target_path.Append(name), temp_path,
+        WorkItem::MoveTreeOptions{.lenient_deletion = true});
+  }
+}
 
 // This method adds work items to create (or update) Chrome uninstall entry in
 // either the Control Panel->Add/Remove Programs list or in the Omaha client

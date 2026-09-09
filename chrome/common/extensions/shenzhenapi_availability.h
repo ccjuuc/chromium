@@ -14,12 +14,11 @@ namespace extensions::shenzhenapi_availability {
 // Creates the availability check map for chrome.shenzhenapi API features.
 Feature::FeatureDelegatedAvailabilityCheckMap CreateAvailabilityCheckMap();
 
-// In-memory getter and setter for allowed domains (thread-safe).
+// Process-local, in-memory getter and setter for allowed domains
+// (thread-safe). Browser owns the source policy; Renderer receives a snapshot
+// through chrome.mojom.RendererConfiguration.
 std::vector<std::string> GetAllowedDomains();
 void SetAllowedDomains(const std::vector<std::string>& domains);
-
-// Command-line switch name used to propagate allowed domains to renderer processes.
-extern const char kShenzhenAllowedDomainsSwitch[];
 
 }  // namespace extensions::shenzhenapi_availability
 

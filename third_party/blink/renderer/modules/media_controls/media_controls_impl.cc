@@ -33,6 +33,7 @@
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/public/platform/user_metrics_action.h"
+#include "third_party/blink/public/strings/grit/blink_strings.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_mutation_observer_init.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
@@ -91,6 +92,9 @@
 #include "third_party/blink/renderer/modules/media_controls/elements/media_control_playback_speed_list_element.h"
 #include "third_party/blink/renderer/modules/media_controls/elements/media_control_remaining_time_display_element.h"
 #include "third_party/blink/renderer/modules/media_controls/elements/media_control_scrubbing_message_element.h"
+#include "third_party/blink/renderer/modules/media_controls/elements/media_control_side_button_element.h"
+#include "third_party/blink/renderer/modules/media_controls/elements/media_control_side_enclosure_element.h"
+#include "third_party/blink/renderer/modules/media_controls/elements/media_control_side_spacer_element.h"
 #include "third_party/blink/renderer/modules/media_controls/elements/media_control_text_track_list_element.h"
 #include "third_party/blink/renderer/modules/media_controls/elements/media_control_timeline_element.h"
 #include "third_party/blink/renderer/modules/media_controls/elements/media_control_toggle_closed_captions_button_element.h"
@@ -152,6 +156,8 @@ constexpr base::TimeDelta kDoubleTapDelay = base::Milliseconds(300);
 // media_controls_impl_test.cc
 constexpr base::TimeDelta kTimeToShowVolumeSlider = base::Milliseconds(200);
 constexpr base::TimeDelta kTimeToShowVolumeSliderTest = base::Milliseconds(0);
+constexpr base::TimeDelta kPlaybackSpeedHoverHideDelay =
+    base::Milliseconds(200);
 
 // The number of seconds to jump when double tapping.
 constexpr int kNumberOfSecondsToJump = 10;
@@ -162,7 +168,7 @@ void MaybeParserAppendChild(Element* parent, Element* child) {
     parent->ParserAppendChild(child);
 }
 
-bool ShouldShowPlaybackSpeedButton(HTMLMediaElement& media_element) {
+bool ShouldShowPlaybackSpeedForElement(HTMLMediaElement& media_element) {
   // The page disabled the button via the controlsList attribute.
   if (media_element.ControlsListInternal()->ShouldHidePlaybackRate() &&
       !media_element.UserWantsControlsVisible()) {
@@ -183,6 +189,60 @@ bool ShouldShowPlaybackSpeedButton(HTMLMediaElement& media_element) {
 
   return true;
 }
+
+#if defined(FOR_XL)
+constexpr char kXlDownloadBtnShowAttr[] = "data-xl-download-btn-show";
+constexpr char kXlSmoothBtnShowAttr[] = "data-xl-smooth-btn-show";
+constexpr char kXlSpeedBtnShowAttr[] = "data-xl-speed-btn-show";
+constexpr char kXlPipBtnShowAttr[] = "data-xl-pip-btn-show";
+
+// Parses a tri-state data-xl-*-btn-show attribute. Returns the explicit value
+// if present (empty/true/1 => true; false/0 => false), otherwise `default_on`.
+bool IsXlSideButtonShowAttributeEnabled(const HTMLMediaElement& media,
+                                        const char* attribute_name,
+                                        bool default_on) {
+  const AtomicString name(attribute_name);
+  if (!media.hasAttribute(name)) {
+    return default_on;
+  }
+
+  const AtomicString& value = media.getAttribute(name);
+  if (value.empty()) {
+    return true;
+  }
+  if (EqualIgnoringAsciiCase(value, "false") ||
+      EqualIgnoringAsciiCase(value, "0")) {
+    return false;
+  }
+  if (EqualIgnoringAsciiCase(value, "true") ||
+      EqualIgnoringAsciiCase(value, "1")) {
+    return true;
+  }
+  return default_on;
+}
+
+// Left buttons default hidden until the extension opts in.
+bool ShouldShowXlDownloadButton(const HTMLMediaElement& media) {
+  return IsXlSideButtonShowAttributeEnabled(media, kXlDownloadBtnShowAttr,
+                                            /*default_on=*/false);
+}
+
+bool ShouldShowXlSmoothButton(const HTMLMediaElement& media) {
+  return IsXlSideButtonShowAttributeEnabled(media, kXlSmoothBtnShowAttr,
+                                            /*default_on=*/false);
+}
+
+bool ShouldShowXlSpeedButton(const HTMLMediaElement& media) {
+  return IsXlSideButtonShowAttributeEnabled(media, kXlSpeedBtnShowAttr,
+                                            /*default_on=*/false);
+}
+
+// Right-side PiP button defaults visible; extension can hide via attribute.
+bool ShouldShowXlPipButton(const HTMLMediaElement& media) {
+  return IsXlSideButtonShowAttributeEnabled(media, kXlPipBtnShowAttr,
+                                            /*default_on=*/true);
+}
+#endif  // defined(FOR_XL)
 
 bool ShouldShowTrackSelectionButton(WebMediaPlayer::TrackType track_type,
                                     HTMLMediaElement& element) {
@@ -328,7 +388,13 @@ class MediaControlsImpl::MediaElementMutationCallback
     init->setAttributeFilter(
         {html_names::kDisableremoteplaybackAttr.ToString(),
          html_names::kDisablepictureinpictureAttr.ToString(),
-         html_names::kPosterAttr.ToString()});
+         html_names::kPosterAttr.ToString()
+#if defined(FOR_XL)
+             ,
+         kXlDownloadBtnShowAttr, kXlSmoothBtnShowAttr, kXlSpeedBtnShowAttr,
+         kXlPipBtnShowAttr
+#endif
+        });
     observer_->observe(&controls_->MediaElement(), init, ASSERT_NO_EXCEPTION);
   }
 
@@ -361,6 +427,16 @@ class MediaControlsImpl::MediaElementMutationCallback
       if (record->attributeName() == html_names::kPosterAttr.ToString())
         controls_->UpdateCSSClassFromState();
 
+#if defined(FOR_XL)
+      if (record->attributeName() == kXlDownloadBtnShowAttr ||
+          record->attributeName() == kXlSmoothBtnShowAttr ||
+          record->attributeName() == kXlSpeedBtnShowAttr ||
+          record->attributeName() == kXlPipBtnShowAttr) {
+        controls_->UpdateSideButtonVisibility(
+            controls_->xl_side_buttons_overlay_visible_);
+      }
+#endif
+
       BatchedControlUpdate batch(controls_);
     }
   }
@@ -391,9 +467,17 @@ bool MediaControlsImpl::IsTouchEvent(Event* event) {
 MediaControlsImpl::MediaControlsImpl(HTMLMediaElement& media_element)
     : HTMLDivElement(media_element.GetDocument()),
       MediaControls(media_element),
+      native_controls_container_(nullptr),
       overlay_enclosure_(nullptr),
       overlay_play_button_(nullptr),
       overlay_cast_button_(nullptr),
+      left_side_enclosure_(nullptr),
+      xl1_button_(nullptr),
+      xl2_button_(nullptr),
+      xl3_button_(nullptr),
+      xl3_anchor_(nullptr),
+      right_side_enclosure_(nullptr),
+      xr1_button_(nullptr),
       enclosure_(nullptr),
       panel_(nullptr),
       play_button_(nullptr),
@@ -449,6 +533,10 @@ MediaControlsImpl::MediaControlsImpl(HTMLMediaElement& media_element)
           media_element.GetDocument().GetTaskRunner(TaskType::kInternalMedia),
           this,
           &MediaControlsImpl::VolumeSliderWantedTimerFired),
+      playback_speed_hover_hide_timer_(
+          media_element.GetDocument().GetTaskRunner(TaskType::kInternalMedia),
+          this,
+          &MediaControlsImpl::PlaybackSpeedHoverHideTimerFired),
       text_track_manager_(
           MakeGarbageCollected<MediaControlsTextTrackManager>(media_element)) {
   // On touch devices, start with the assumption that the user will interact via
@@ -463,7 +551,8 @@ MediaControlsImpl* MediaControlsImpl::Create(HTMLMediaElement& media_element,
                                              ShadowRoot& shadow_root) {
   MediaControlsImpl* controls =
       MakeGarbageCollected<MediaControlsImpl>(media_element);
-  controls->SetShadowPseudoId(AtomicString("-webkit-media-controls"));
+  controls->SetShadowPseudoId(
+      AtomicString("-webkit-media-controls-xl-overlay"));
   controls->InitializeControls();
   controls->Reset();
 
@@ -560,10 +649,16 @@ MediaControlsImpl* MediaControlsImpl::Create(HTMLMediaElement& media_element,
 // +-MediaControlDisplayCutoutFullscreenElement
 //       (-internal-media-controls-display-cutout-fullscreen-button)
 void MediaControlsImpl::InitializeControls() {
+  native_controls_container_ =
+      MakeGarbageCollected<HTMLDivElement>(GetDocument());
+  native_controls_container_->SetShadowPseudoId(
+      AtomicString("-webkit-media-controls"));
+  ParserAppendChild(native_controls_container_);
+
   if (ShouldShowVideoControls()) {
     loading_panel_ =
         MakeGarbageCollected<MediaControlLoadingPanelElement>(*this);
-    ParserAppendChild(loading_panel_);
+    native_controls_container_->ParserAppendChild(loading_panel_);
   }
 
   overlay_enclosure_ =
@@ -578,7 +673,59 @@ void MediaControlsImpl::InitializeControls() {
       MakeGarbageCollected<MediaControlCastButtonElement>(*this, true);
   overlay_enclosure_->ParserAppendChild(overlay_cast_button_);
 
-  ParserAppendChild(overlay_enclosure_);
+  if (ShouldShowVideoControls()) {
+    left_side_enclosure_ =
+        MakeGarbageCollected<MediaControlSideEnclosureElement>(
+            *this, MediaControlSideEnclosurePosition::kLeft);
+    xl1_button_ = MakeGarbageCollected<MediaControlSideButtonElement>(
+        *this, MediaControlSideButtonType::kXl1);
+    xl2_button_ = MakeGarbageCollected<MediaControlSideButtonElement>(
+        *this, MediaControlSideButtonType::kXl2);
+    xl3_button_ = MakeGarbageCollected<MediaControlSideButtonElement>(
+        *this, MediaControlSideButtonType::kXl3);
+    left_side_enclosure_->ParserAppendChild(xl1_button_);
+    left_side_enclosure_->ParserAppendChild(xl2_button_);
+    xl3_anchor_ = MediaControlElementsHelper::CreateDiv(
+        AtomicString("-internal-media-controls-xl3-anchor"),
+        left_side_enclosure_);
+    xl3_anchor_->SetInlineStyleProperty(CSSPropertyID::kPosition,
+                                        CSSValueID::kRelative);
+    xl3_anchor_->SetInlineStyleProperty(CSSPropertyID::kOverflow,
+                                        CSSValueID::kVisible);
+    xl3_anchor_->ParserAppendChild(xl3_button_);
+    ParserAppendChild(left_side_enclosure_);
+
+    right_side_enclosure_ =
+        MakeGarbageCollected<MediaControlSideEnclosureElement>(
+            *this, MediaControlSideEnclosurePosition::kRight);
+    xr1_button_ = MakeGarbageCollected<MediaControlSideButtonElement>(
+        *this, MediaControlSideButtonType::kXr1);
+    right_side_enclosure_->ParserAppendChild(xr1_button_);
+    auto* xr1_tooltip = MediaControlElementsHelper::CreateDiv(
+        AtomicString("-internal-media-controls-xr1-tooltip"),
+        right_side_enclosure_);
+    xr1_tooltip->setInnerText(MediaElement().GetLocale().QueryString(
+        IDS_XL_MEDIA_CONTROLS_ENTER_PICTURE_IN_PICTURE_TOOLTIP));
+    for (int i = 0; i < 2; ++i) {
+      auto* spacer = MakeGarbageCollected<MediaControlSideSpacerElement>(*this);
+      right_side_enclosure_->ParserAppendChild(spacer);
+    }
+    ParserAppendChild(right_side_enclosure_);
+
+    AttachHoverBackground(xl1_button_);
+    AttachHoverBackground(xl2_button_);
+    AttachHoverBackground(xl3_button_);
+    AttachHoverBackground(xr1_button_);
+
+#if defined(FOR_XL)
+    xl1_button_->SetIsWanted(false);
+    xl2_button_->SetIsWanted(false);
+    xl3_button_->SetIsWanted(false);
+    left_side_enclosure_->SetIsWanted(false);
+#endif
+  }
+
+  native_controls_container_->ParserAppendChild(overlay_enclosure_);
 
   // Create an enclosing element for the panel so we can visually offset the
   // controls correctly.
@@ -642,7 +789,7 @@ void MediaControlsImpl::InitializeControls() {
       MakeGarbageCollected<MediaControlPlaybackSpeedButtonElement>(*this);
 
   playback_speed_button_->SetIsWanted(
-      ShouldShowPlaybackSpeedButton(MediaElement()));
+      ShouldShowPlaybackSpeedForElement(MediaElement()));
 
   video_track_selector_button_ =
       MakeGarbageCollected<MediaControlTrackSelectorMenuButtonElement>(
@@ -660,26 +807,34 @@ void MediaControlsImpl::InitializeControls() {
   PopulatePanel();
   enclosure_->ParserAppendChild(panel_);
 
-  ParserAppendChild(enclosure_);
+  native_controls_container_->ParserAppendChild(enclosure_);
 
   text_track_list_ =
       MakeGarbageCollected<MediaControlTextTrackListElement>(*this);
-  ParserAppendChild(text_track_list_);
+  native_controls_container_->ParserAppendChild(text_track_list_);
 
   playback_speed_list_ =
       MakeGarbageCollected<MediaControlPlaybackSpeedListElement>(*this);
+#if defined(FOR_XL)
+  if (xl3_anchor_) {
+    xl3_anchor_->ParserAppendChild(playback_speed_list_);
+  } else {
+    ParserAppendChild(playback_speed_list_);
+  }
+#else
   ParserAppendChild(playback_speed_list_);
+#endif
 
   video_track_selector_list_ =
       MakeGarbageCollected<MediaControlTrackSelectorListElement>(*this, true);
   audio_track_selector_list_ =
       MakeGarbageCollected<MediaControlTrackSelectorListElement>(*this, false);
-  ParserAppendChild(video_track_selector_list_);
-  ParserAppendChild(audio_track_selector_list_);
+  native_controls_container_->ParserAppendChild(video_track_selector_list_);
+  native_controls_container_->ParserAppendChild(audio_track_selector_list_);
 
   overflow_list_ =
       MakeGarbageCollected<MediaControlOverflowMenuListElement>(*this);
-  ParserAppendChild(overflow_list_);
+  native_controls_container_->ParserAppendChild(overflow_list_);
 
   // The order in which we append elements to the overflow list is significant
   // because it determines how the elements show up in the overflow menu
@@ -843,6 +998,9 @@ void MediaControlsImpl::UpdateCSSClassFromState() {
 
   classList().add(toAdd, ASSERT_NO_EXCEPTION);
   classList().remove(toRemove, ASSERT_NO_EXCEPTION);
+  native_controls_container_->classList().add(toAdd, ASSERT_NO_EXCEPTION);
+  native_controls_container_->classList().remove(toRemove,
+                                                 ASSERT_NO_EXCEPTION);
 
   if (loading_panel_)
     loading_panel_->UpdateDisplayState();
@@ -901,8 +1059,10 @@ void MediaControlsImpl::SetClass(const String& class_name,
   AtomicString atomic_class = AtomicString(class_name);
   if (should_have_class && !classList().contains(atomic_class)) {
     classList().Add(atomic_class);
+    native_controls_container_->classList().Add(atomic_class);
   } else if (!should_have_class && classList().contains(atomic_class)) {
     classList().Remove(atomic_class);
+    native_controls_container_->classList().Remove(atomic_class);
   }
 }
 
@@ -1023,7 +1183,11 @@ void MediaControlsImpl::OnControlsListUpdated() {
       download_button_->ShouldDisplayDownloadButton());
 
   playback_speed_button_->SetIsWanted(
-      ShouldShowPlaybackSpeedButton(MediaElement()));
+      ShouldShowPlaybackSpeedForElement(MediaElement()));
+
+#if defined(FOR_XL)
+  UpdateSideButtonVisibility(xl_side_buttons_overlay_visible_);
+#endif
 
   video_track_selector_button_->SetIsWanted(ShouldShowTrackSelectionButton(
       WebMediaPlayer::TrackType::kVideoTrack, MediaElement()));
@@ -1069,6 +1233,7 @@ void MediaControlsImpl::MaybeShow() {
 
   timeline_->OnControlsShown();
   volume_slider_->OnControlsShown();
+  UpdateSideButtonVisibility(true);
   UpdateCSSClassFromState();
   UpdateActingAsAudioControls();
 }
@@ -1085,6 +1250,7 @@ void MediaControlsImpl::Hide() {
 
   if (overlay_play_button_)
     overlay_play_button_->SetIsWanted(false);
+  UpdateSideButtonVisibility(false);
   if (loading_panel_)
     loading_panel_->OnControlsHidden();
 
@@ -1118,8 +1284,14 @@ void MediaControlsImpl::UpdateContainerDisplay() {
 
   // When native controls are not shown and no overlay needs the container, hide
   // it entirely to avoid creating layers that interfere with hit-test ordering.
-  bool should_hide =
-      !MediaElement().ShouldShowControls() && !overlay_cast_button_->IsWanted();
+  // Side enclosures (xl1/xl2/xl3/xr1) live on the xl-overlay root; keep the
+  // overlay displayed whenever they are wanted (including custom players).
+  const bool side_overlay_wanted =
+      (left_side_enclosure_ && left_side_enclosure_->IsWanted()) ||
+      (right_side_enclosure_ && right_side_enclosure_->IsWanted());
+  bool should_hide = !MediaElement().ShouldShowControls() &&
+                     !overlay_cast_button_->IsWanted() &&
+                     !side_overlay_wanted;
   bool is_hidden = InlineStyle() &&
                    InlineStyle()->GetPropertyValue(CSSPropertyID::kDisplay) ==
                        keywords::kNone;
@@ -1157,7 +1329,14 @@ void MediaControlsImpl::MaybeShowOverlayCastButton() {
 void MediaControlsImpl::MakeOpaque() {
   ShowCursor();
   panel_->MakeOpaque();
+  if (left_side_enclosure_) {
+    left_side_enclosure_->MakeOpaque();
+  }
+  if (right_side_enclosure_) {
+    right_side_enclosure_->MakeOpaque();
+  }
   MaybeShowOverlayPlayButton();
+  UpdateSideButtonVisibility(true);
 }
 
 void MediaControlsImpl::MakeOpaqueFromPointerEvent() {
@@ -1177,6 +1356,13 @@ void MediaControlsImpl::MakeTransparent() {
   if (MediaElement().ShouldShowControls())
     HideCursor();
   panel_->MakeTransparent();
+  if (left_side_enclosure_) {
+    left_side_enclosure_->MakeTransparent();
+  }
+  if (right_side_enclosure_) {
+    right_side_enclosure_->MakeTransparent();
+  }
+  UpdateSideButtonVisibility(true);
 }
 
 bool MediaControlsImpl::ShouldHideMediaControls(unsigned behavior_flags) const {
@@ -1333,8 +1519,94 @@ bool MediaControlsImpl::TextTrackListIsWanted() {
 }
 
 void MediaControlsImpl::TogglePlaybackSpeedList() {
+  playback_speed_popup_anchor_ = nullptr;
   playback_speed_list_->SetIsWanted(!playback_speed_list_->IsWanted());
 }
+
+void MediaControlsImpl::TogglePlaybackSpeedListNear(Element* anchor_element) {
+  if (!playback_speed_list_ || !anchor_element ||
+      !ShouldShowPlaybackSpeedButton()) {
+    return;
+  }
+
+  if (PlaybackSpeedListIsWanted() &&
+      playback_speed_popup_anchor_ == anchor_element) {
+    playback_speed_popup_anchor_ = nullptr;
+    playback_speed_list_->SetIsWanted(false);
+    return;
+  }
+
+  HidePopupMenu();
+  playback_speed_popup_anchor_ = anchor_element;
+  playback_speed_list_->SetIsWanted(true);
+}
+
+void MediaControlsImpl::ShowPlaybackSpeedListNear(Element* anchor_element) {
+  playback_speed_hover_hide_timer_.Stop();
+  if (!playback_speed_list_ || !anchor_element ||
+      !ShouldShowPlaybackSpeedButton()) {
+    return;
+  }
+
+  if (PlaybackSpeedListIsWanted() &&
+      playback_speed_popup_anchor_ == anchor_element) {
+#if defined(FOR_XL)
+    playback_speed_list_->EnsureXlOpenAnimation();
+#endif
+    return;
+  }
+
+  HidePopupMenu();
+  playback_speed_popup_anchor_ = anchor_element;
+  playback_speed_list_->SetIsWanted(true);
+}
+
+void MediaControlsImpl::ScheduleHidePlaybackSpeedList() {
+  if (!PlaybackSpeedListIsWanted() || !playback_speed_popup_anchor_) {
+    return;
+  }
+
+  playback_speed_hover_hide_timer_.StartOneShot(kPlaybackSpeedHoverHideDelay,
+                                                FROM_HERE);
+}
+
+void MediaControlsImpl::CancelScheduledPlaybackSpeedListHide() {
+  playback_speed_hover_hide_timer_.Stop();
+}
+
+void MediaControlsImpl::PlaybackSpeedHoverHideTimerFired(TimerBase*) {
+  if (!PlaybackSpeedListIsWanted() || !playback_speed_popup_anchor_) {
+    return;
+  }
+
+  if (playback_speed_popup_anchor_->IsHovered() ||
+      playback_speed_list_->IsHovered()) {
+    return;
+  }
+
+  playback_speed_list_->SetIsWanted(false);
+}
+
+bool MediaControlsImpl::ShouldShowPlaybackSpeedButton() const {
+  return ShouldShowPlaybackSpeedForElement(MediaElement());
+}
+
+Element* MediaControlsImpl::PlaybackSpeedPopupAnchor() const {
+  return playback_speed_popup_anchor_.Get();
+}
+
+void MediaControlsImpl::ClearPlaybackSpeedPopupAnchor() {
+  playback_speed_hover_hide_timer_.Stop();
+  playback_speed_popup_anchor_ = nullptr;
+}
+
+#if defined(FOR_XL)
+void MediaControlsImpl::UpdateXl3PlaybackSpeedLabel() {
+  if (xl3_button_) {
+    xl3_button_->UpdateDisplayType();
+  }
+}
+#endif
 
 void MediaControlsImpl::ToggleTrackSelectionList(
     WebMediaPlayer::TrackType type) {
@@ -1603,14 +1875,15 @@ void MediaControlsImpl::UpdateScrubbingMessageFits() const {
 void MediaControlsImpl::UpdateSizingCSSClass() {
   MediaControlsSizingClass sizing_class =
       MediaControls::GetSizingClass(size_.width());
+  const bool show_video = ShouldShowVideoControls();
 
   SetClass(kMediaControlsSizingSmallCSSClass,
-           ShouldShowVideoControls() &&
-               (sizing_class == MediaControlsSizingClass::kSmall ||
-                sizing_class == MediaControlsSizingClass::kMedium));
+           show_video && (sizing_class == MediaControlsSizingClass::kSmall ||
+                          sizing_class == MediaControlsSizingClass::kMedium));
+  SetClass(kMediaControlsSizingMediumCSSClass,
+           show_video && sizing_class == MediaControlsSizingClass::kMedium);
   SetClass(kMediaControlsSizingLargeCSSClass,
-           ShouldShowVideoControls() &&
-               sizing_class == MediaControlsSizingClass::kLarge);
+           show_video && sizing_class == MediaControlsSizingClass::kLarge);
 }
 
 void MediaControlsImpl::MaybeToggleControlsFromTap() {
@@ -1664,8 +1937,17 @@ void MediaControlsImpl::DefaultEventHandler(Event& event) {
 
   // Do not handle events to not interfere with the rest of the page if no
   // controls should be visible.
-  if (!MediaElement().ShouldShowControls())
+  if (!MediaElement().ShouldShowControls()) {
+#if defined(FOR_XL)
+    if ((left_side_enclosure_ || right_side_enclosure_) &&
+        !IsTouchEvent(&event) &&
+        (event.type() == event_type_names::kPointermove ||
+         event.type() == event_type_names::kPointerout)) {
+      HandlePointerEvent(&event);
+    }
+#endif
     return;
+  }
 
   // Add IgnoreControlsHover to m_hideTimerBehaviorFlags when we see a touch
   // event, to allow the hide-timer to do the right thing when it fires.
@@ -1823,7 +2105,8 @@ void MediaControlsImpl::EnsureAnimatedArrowContainer() {
   if (!animated_arrow_container_element_) {
     animated_arrow_container_element_ =
         MakeGarbageCollected<MediaControlAnimatedArrowContainerElement>(*this);
-    ParserAppendChild(animated_arrow_container_element_);
+    native_controls_container_->ParserAppendChild(
+        animated_arrow_container_element_);
   }
 }
 
@@ -2110,6 +2393,9 @@ void MediaControlsImpl::OnPictureInPictureChanged() {
   // Picture-in-Picture button.
   DCHECK(picture_in_picture_button_);
   picture_in_picture_button_->UpdateDisplayType();
+  if (xr1_button_) {
+    xr1_button_->UpdateDisplayType();
+  }
 }
 
 void MediaControlsImpl::OnPanelKeypress() {
@@ -2370,6 +2656,14 @@ MediaControlOverflowMenuButtonElement& MediaControlsImpl::OverflowButton() {
   return *overflow_menu_;
 }
 
+void MediaControlsImpl::DownloadMediaIfAvailable() {
+  if (!download_button_ || !download_button_->ShouldDisplayDownloadButton()) {
+    return;
+  }
+
+  download_button_->Download();
+}
+
 void MediaControlsImpl::OnWaiting() {
   timeline_->OnMediaStoppedPlaying();
   UpdateCSSClassFromState();
@@ -2379,11 +2673,76 @@ void MediaControlsImpl::OnLoadedData() {
   UpdateCSSClassFromState();
 }
 
+void MediaControlsImpl::UpdateSideButtonVisibility(bool visible) {
+  if (!ShouldShowVideoControls()) {
+    return;
+  }
+
+#if defined(FOR_XL)
+  xl_side_buttons_overlay_visible_ = visible;
+
+  bool overlay_visible = visible;
+  // Custom-control pages (no `controls` attribute) still show the right-side
+  // overlay so xr1 can appear by default.
+  if (!MediaElement().ShouldShowControls()) {
+    overlay_visible = true;
+  }
+
+  const bool show_download =
+      overlay_visible && ShouldShowXlDownloadButton(MediaElement());
+  const bool show_smooth =
+      overlay_visible && ShouldShowXlSmoothButton(MediaElement());
+  const bool show_speed = overlay_visible &&
+                          ShouldShowXlSpeedButton(MediaElement()) &&
+                          ShouldShowPlaybackSpeedForElement(MediaElement());
+
+  if (xl1_button_) {
+    xl1_button_->SetIsWanted(show_download);
+  }
+  if (xl2_button_) {
+    xl2_button_->SetIsWanted(show_smooth);
+  }
+  if (xl3_button_) {
+    xl3_button_->SetIsWanted(show_speed);
+  }
+  if (left_side_enclosure_) {
+    left_side_enclosure_->SetIsWanted(show_download || show_smooth ||
+                                      show_speed);
+  }
+  if (xr1_button_) {
+    xr1_button_->SetIsWanted(overlay_visible &&
+                             ShouldShowXlPipButton(MediaElement()) &&
+                             ShouldShowPictureInPictureButton(MediaElement()));
+  }
+  if (right_side_enclosure_) {
+    right_side_enclosure_->SetIsWanted(xr1_button_ && xr1_button_->IsWanted());
+  }
+#else
+  if (xl1_button_) {
+    xl1_button_->SetIsWanted(visible);
+  }
+  if (xl2_button_) {
+    xl2_button_->SetIsWanted(visible);
+  }
+  if (xl3_button_) {
+    xl3_button_->SetIsWanted(visible &&
+                             ShouldShowPlaybackSpeedForElement(MediaElement()));
+  }
+  if (xr1_button_) {
+    xr1_button_->SetIsWanted(visible &&
+                             ShouldShowPictureInPictureButton(MediaElement()));
+  }
+#endif
+
+  UpdateContainerDisplay();
+}
+
 HTMLVideoElement& MediaControlsImpl::VideoElement() {
   return *To<HTMLVideoElement>(&MediaElement());
 }
 
 void MediaControlsImpl::Trace(Visitor* visitor) const {
+  visitor->Trace(native_controls_container_);
   visitor->Trace(element_mutation_callback_);
   visitor->Trace(element_size_changed_timer_);
   visitor->Trace(tap_timer_);
@@ -2415,15 +2774,24 @@ void MediaControlsImpl::Trace(Visitor* visitor) const {
   visitor->Trace(enclosure_);
   visitor->Trace(text_track_list_);
   visitor->Trace(playback_speed_list_);
+  visitor->Trace(playback_speed_popup_anchor_);
   visitor->Trace(overflow_menu_);
   visitor->Trace(overflow_list_);
   visitor->Trace(cast_button_);
   visitor->Trace(overlay_cast_button_);
+  visitor->Trace(left_side_enclosure_);
+  visitor->Trace(xl1_button_);
+  visitor->Trace(xl2_button_);
+  visitor->Trace(xl3_button_);
+  visitor->Trace(xl3_anchor_);
+  visitor->Trace(right_side_enclosure_);
+  visitor->Trace(xr1_button_);
   visitor->Trace(media_event_listener_);
   visitor->Trace(orientation_lock_delegate_);
   visitor->Trace(rotate_to_fullscreen_delegate_);
   visitor->Trace(display_cutout_delegate_);
   visitor->Trace(hide_media_controls_timer_);
+  visitor->Trace(playback_speed_hover_hide_timer_);
   visitor->Trace(media_button_panel_);
   visitor->Trace(loading_panel_);
   visitor->Trace(display_cutout_fullscreen_button_);

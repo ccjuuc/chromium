@@ -71,6 +71,14 @@ bool AppendPostInstallTasks(const InstallParams& install_params,
 void AddInstallWorkItems(const InstallParams& install_params,
                          WorkItemList* install_list);
 
+// Installs the archive's executable-relative payload with rollback support.
+// The browser/proxy executables and version directory have separate updates.
+void AddUnversionedPayloadWorkItems(const base::FilePath& source_path,
+                                    const base::FilePath& target_path,
+                                    const base::FilePath& temp_path,
+                                    const base::Version& new_version,
+                                    WorkItemList* install_list);
+
 // Adds work items to `list` to register a COM server with the OS after deleting
 // the old ones, which is used to handle the toast notification activation.
 void AddNativeNotificationWorkItems(

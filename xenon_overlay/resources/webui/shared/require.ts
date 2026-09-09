@@ -78,9 +78,57 @@ let serviceGeneration = 0;
 const callbackRouter = new PageCallbackRouter();
 const pageHandler: PageHandlerInterface = new PageHandlerRemote();
 
-PageHandlerFactory.getRemote().createPageHandler(
-    callbackRouter.$.bindNewPipeAndPassRemote(),
-    (pageHandler as PageHandlerRemote).$.bindNewPipeAndPassReceiver());
+function publishPageHandler() {
+  const w = window as any;
+  w.__xenonPageHandler__ = pageHandler;
+  w.__xenonPageCallbackRouter__ = callbackRouter;
+  w.__xenonPageHandlerBound__ = true;
+}
+
+function connectPageHandler() {
+  const w = window as any;
+  // The Electron renderer bootstrap also talks to this factory. A second
+  // createPageHandler() resets the C++ receiver and kills getAplayerWnd.
+  if (w.__xenonPageHandlerBound__) {
+    return;
+  }
+  PageHandlerFactory.getRemote().createPageHandler(
+      callbackRouter.$.bindNewPipeAndPassRemote(),
+      (pageHandler as PageHandlerRemote).$.bindNewPipeAndPassReceiver());
+  publishPageHandler();
+}
+
+connectPageHandler();
+
+export function reconnectPageHandler() {
+  connectPageHandler();
+}
+
+function boundPageHandler(): PageHandlerInterface {
+  const live = (window as any).__xenonPageHandler__;
+  return (live as PageHandlerInterface) || pageHandler;
+}
+
+function isDisconnectedError(error: unknown): boolean {
+  const err = error instanceof Error ? error : null;
+  const text = `${err?.message || error}\n${err?.stack || ''}`.toLowerCase();
+  return text.includes('pipe') || text.includes('closed') ||
+      text.includes('disconnected') || text.includes('connection') ||
+      text.includes('cleanupandflushpendingresponses') ||
+      text.includes('interfaceremotebase');
+}
+
+async function withPageHandler<T>(run: () => (T | Promise<T>)): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (!isDisconnectedError(error)) {
+      throw error;
+    }
+    connectPageHandler();
+    return await run();
+  }
+}
 
 export interface PlayerHostHandles {
   floatWindow: number;
@@ -88,8 +136,8 @@ export interface PlayerHostHandles {
 }
 
 export async function preparePlayerHost(): Promise<PlayerHostHandles> {
-  const {floatWindow, parentWindow, errorMsg} =
-      await pageHandler.preparePlayerHost();
+  const {floatWindow, parentWindow, errorMsg} = await withPageHandler(
+      () => boundPageHandler().preparePlayerHost());
   if (errorMsg) {
     throw new Error(errorMsg);
   }
@@ -111,21 +159,21 @@ export async function bindPlayerVideoWindow(playerWindow: number):
   if (!Number.isSafeInteger(playerWindow) || playerWindow <= 0) {
     throw new Error('Invalid native player window handle');
   }
-  const {errorMsg} =
-      await pageHandler.bindPlayerVideoWindow(String(playerWindow));
+  const {errorMsg} = await withPageHandler(
+      () => boundPageHandler().bindPlayerVideoWindow(String(playerWindow)));
   if (errorMsg) {
     throw new Error(errorMsg);
   }
 }
 
 export async function showPlayerVideoHost(show: boolean): Promise<void> {
-  await pageHandler.showPlayerVideoHost(show);
+  await withPageHandler(() => boundPageHandler().showPlayerVideoHost(show));
 }
 
 export async function controlPlayerWindow(
     action: string, flag = false): Promise<boolean> {
-  const {state, errorMsg} =
-      await pageHandler.controlPlayerWindow(action, flag);
+  const {state, errorMsg} = await withPageHandler(
+      () => boundPageHandler().controlPlayerWindow(action, flag));
   if (errorMsg) {
     throw new Error(errorMsg);
   }
@@ -135,13 +183,13 @@ export async function controlPlayerWindow(
 export async function openNativeFileDialog(
     title: string, filterExtensions: string[] = [],
     allowMulti = false): Promise<string[]> {
-  const {filePaths} = await pageHandler.openNativeFileDialog(
+  const {filePaths} = await boundPageHandler().openNativeFileDialog(
       title, filterExtensions, allowMulti);
   return filePaths;
 }
 
 export async function scanDirectoryVideos(dirPath: string): Promise<string[]> {
-  const {videoPaths} = await pageHandler.scanDirectoryVideos(dirPath);
+  const {videoPaths} = await boundPageHandler().scanDirectoryVideos(dirPath);
   return videoPaths;
 }
 
@@ -150,7 +198,7 @@ const instanceFinalizer = typeof FinalizationRegistry === 'undefined' ?
     new FinalizationRegistry<FinalizedInstance>(
         ({modulePath, instanceId, serviceGeneration: instanceGeneration}) => {
           if (instanceGeneration === serviceGeneration) {
-            pageHandler.releaseNodeInstance(modulePath, instanceId);
+            boundPageHandler().releaseNodeInstance(modulePath, instanceId);
           }
         });
 
@@ -302,6 +350,19 @@ function wireString(value: Value|undefined): string|undefined {
   return value.stringValue;
 }
 
+function wireInt(value: Value|undefined): number|undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (value.intValue !== null && value.intValue !== undefined) {
+    return value.intValue;
+  }
+  if (value.doubleValue !== null && value.doubleValue !== undefined) {
+    return value.doubleValue;
+  }
+  return undefined;
+}
+
 function valueFromWire(value: Value): any {
   if (value.nullValue !== null && value.nullValue !== undefined) {
     return null;
@@ -353,6 +414,20 @@ function valueFromWire(value: Value): any {
         case '-0':
           return -0;
       }
+    }
+    if (wireType === 'native_instance') {
+      const modulePath = wireString(storage['module_path']) ?? '';
+      const instanceId = wireInt(storage['instance_id']);
+      if (!modulePath || instanceId === undefined) {
+        return undefined;
+      }
+      const prototype = storage['prototype'] ?
+          valueFromWire(storage['prototype']) :
+          [];
+      const fields = storage['fields'] ? valueFromWire(storage['fields']) : undefined;
+      return createResolvedNativeInstance(
+          modulePath, instanceId, Array.isArray(prototype) ? prototype : [],
+          fields && typeof fields === 'object' ? fields : undefined);
     }
 
     const result: Record<string, any> = Object.create(null);
@@ -407,7 +482,7 @@ function invokeExport(
     const requestId = nextRequest();
     return new Promise((resolve, reject) => {
       pendingInvokes.set(requestId, {resolve, reject});
-      pageHandler.invokeNodeExport(
+      boundPageHandler().invokeNodeExport(
           requestId, modulePath, functionName, toInvokeArgs(args));
     });
   });
@@ -418,7 +493,7 @@ function constructExportId(
   const requestId = nextRequest();
   return new Promise((resolve, reject) => {
     pendingConstructs.set(requestId, {resolve, reject});
-    pageHandler.constructNodeExport(
+    boundPageHandler().constructNodeExport(
         requestId, modulePath, exportPath, toInvokeArgs(args));
   });
 }
@@ -435,7 +510,7 @@ function invokeInstance(
     const requestId = nextRequest();
     return new Promise((resolve, reject) => {
       pendingInvokes.set(requestId, {resolve, reject});
-      pageHandler.invokeNodeInstance(
+      boundPageHandler().invokeNodeInstance(
           requestId, state.modulePath, instanceId, methodName,
           toInvokeArgs(args));
     });
@@ -451,7 +526,7 @@ function getInstanceProperty(
     const requestId = nextRequest();
     return new Promise((resolve, reject) => {
       pendingPropertyReads.set(requestId, {resolve, reject});
-      pageHandler.getNodeInstanceProperty(
+      boundPageHandler().getNodeInstanceProperty(
           requestId, state.modulePath, instanceId, propertyName);
     });
   });
@@ -466,7 +541,7 @@ function setInstanceProperty(
     const requestId = nextRequest();
     return new Promise((resolve, reject) => {
       pendingPropertyWrites.set(requestId, {resolve, reject});
-      pageHandler.setNodeInstanceProperty(
+      boundPageHandler().setNodeInstanceProperty(
           requestId, state.modulePath, instanceId, propertyName,
           valueToWire(value));
     });
@@ -479,7 +554,7 @@ function getExportProperty(
   const requestId = nextRequest();
   return new Promise((resolve, reject) => {
     pendingPropertyReads.set(requestId, {resolve, reject});
-    pageHandler.getNodeExportProperty(
+    boundPageHandler().getNodeExportProperty(
         requestId, modulePath, objectPath, propertyName);
   });
 }
@@ -490,7 +565,7 @@ function setExportProperty(
   const requestId = nextRequest();
   return new Promise((resolve, reject) => {
     pendingPropertyWrites.set(requestId, {resolve, reject});
-    pageHandler.setNodeExportProperty(
+    boundPageHandler().setNodeExportProperty(
         requestId, modulePath, objectPath, propertyName, valueToWire(value));
   });
 }
@@ -524,7 +599,7 @@ function releaseInstance(
   instanceFinalizer?.unregister(unregisterToken);
   return state.ready.then(instanceId => {
     if (state.serviceGeneration === serviceGeneration) {
-      pageHandler.releaseNodeInstance(state.modulePath, instanceId);
+      boundPageHandler().releaseNodeInstance(state.modulePath, instanceId);
     }
   });
 }
@@ -557,18 +632,93 @@ function defineInstanceMember(prototype: object, info: NodeExportInfo): void {
   });
 }
 
-function createClassExport(
-    modulePath: string, classPath: string, info: NodeExportInfo): any {
-  const target = function XenonNativeClass() {};
-  Object.defineProperty(target, 'name', {
-    configurable: true,
-    value: classPath.split('.').at(-1) ?? classPath,
-  });
-
-  for (const member of info.prototype) {
-    defineInstanceMember(target.prototype, member);
+function wrapNativeInstance(
+    modulePath: string, ready: Promise<number>, proto: object,
+    fields?: Record<string, any>): any {
+  const instanceTarget = Object.create(proto);
+  if (fields) {
+    for (const [key, value] of Object.entries(fields)) {
+      Object.defineProperty(instanceTarget, key, {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value,
+      });
+    }
   }
-  Object.defineProperties(target.prototype, {
+  const state: InstanceState = {
+    modulePath,
+    ready,
+    serviceGeneration,
+    released: false,
+  };
+  state.ready.catch(() => {});
+
+  const instanceProxy = new Proxy(instanceTarget, {
+    get(obj, property, receiver) {
+      if (property === 'then') {
+        return undefined;
+      }
+      if (Reflect.has(obj, property)) {
+        return Reflect.get(obj, property, receiver);
+      }
+      if (typeof property === 'symbol') {
+        return Reflect.get(obj, property, receiver);
+      }
+      if (property === 'length' || /^\d+$/.test(property)) {
+        return undefined;
+      }
+      return getInstanceProperty(state, property);
+    },
+    set(obj, property, value, receiver) {
+      if (typeof property === 'symbol' || Reflect.has(obj, property)) {
+        return Reflect.set(obj, property, value, receiver);
+      }
+      reportAsyncError(setInstanceProperty(state, property, value));
+      return true;
+    },
+  });
+  instanceStates.set(instanceTarget, state);
+  instanceStates.set(instanceProxy, state);
+  state.ready.then(instanceId => {
+    if (state.released) {
+      boundPageHandler().releaseNodeInstance(modulePath, instanceId);
+      return;
+    }
+    instanceFinalizer?.register(
+        instanceProxy, {
+          modulePath,
+          instanceId,
+          serviceGeneration: state.serviceGeneration
+        },
+        instanceProxy);
+  }, () => {});
+  return instanceProxy;
+}
+
+function prototypeMembersFromWire(prototype: any[]): NodeExportInfo[] {
+  if (!Array.isArray(prototype)) {
+    return [];
+  }
+  return prototype
+      .filter(
+          member => member && typeof member.name === 'string' &&
+              (member.kind === 'function' || member.kind === 'class' ||
+               member.kind === undefined))
+      .map(member => ({
+        name: member.name,
+        kind: 'function',
+        enumerable: true,
+        writable: false,
+        hasValue: false,
+        value: {nullValue: 0},
+        children: [],
+        prototype: [],
+      }));
+}
+
+function installNativeInstanceAccessors(prototype: object): void {
+  Object.defineProperties(prototype, {
     __xenonReady: {
       configurable: true,
       get(this: object) {
@@ -602,8 +752,7 @@ function createClassExport(
           return Promise.reject(new TypeError('Invalid native method path'));
         }
         return invokeInstance(
-            requireInstanceState(this),
-            `$xenonInvokePath:${methodPath}`, args);
+            requireInstanceState(this), `$xenonInvokePath:${methodPath}`, args);
       },
     },
     $dispose: {
@@ -613,55 +762,38 @@ function createClassExport(
       },
     },
   });
+}
+
+function createResolvedNativeInstance(
+    modulePath: string, instanceId: number, prototype: any[],
+    fields?: Record<string, any>): any {
+  const target = function XenonNativeInstance() {};
+  for (const member of prototypeMembersFromWire(prototype)) {
+    defineInstanceMember(target.prototype, member);
+  }
+  installNativeInstanceAccessors(target.prototype);
+  return wrapNativeInstance(
+      modulePath, Promise.resolve(instanceId), target.prototype, fields);
+}
+
+function createClassExport(
+    modulePath: string, classPath: string, info: NodeExportInfo): any {
+  const target = function XenonNativeClass() {};
+  Object.defineProperty(target, 'name', {
+    configurable: true,
+    value: classPath.split('.').at(-1) ?? classPath,
+  });
+
+  for (const member of info.prototype) {
+    defineInstanceMember(target.prototype, member);
+  }
+  installNativeInstanceAccessors(target.prototype);
 
   const classProxy = new Proxy(target, {
     construct(_target, args, newTarget) {
-      const instanceTarget = Object.create(newTarget.prototype);
-      const state: InstanceState = {
-        modulePath,
-        ready: constructExportId(modulePath, classPath, [...args]),
-        serviceGeneration,
-        released: false,
-      };
-      state.ready.catch(() => {});
-
-      const instanceProxy = new Proxy(instanceTarget, {
-        get(obj, property, receiver) {
-          if (property === 'then') {
-            return undefined;
-          }
-          if (Reflect.has(obj, property)) {
-            return Reflect.get(obj, property, receiver);
-          }
-          if (typeof property === 'symbol') {
-            return Reflect.get(obj, property, receiver);
-          }
-          return getInstanceProperty(state, property);
-        },
-        set(obj, property, value, receiver) {
-          if (typeof property === 'symbol' || Reflect.has(obj, property)) {
-            return Reflect.set(obj, property, value, receiver);
-          }
-          reportAsyncError(setInstanceProperty(state, property, value));
-          return true;
-        },
-      });
-      instanceStates.set(instanceTarget, state);
-      instanceStates.set(instanceProxy, state);
-      state.ready.then(instanceId => {
-        if (state.released) {
-          pageHandler.releaseNodeInstance(modulePath, instanceId);
-          return;
-        }
-        instanceFinalizer?.register(
-            instanceProxy, {
-              modulePath,
-              instanceId,
-              serviceGeneration: state.serviceGeneration
-            },
-            instanceProxy);
-      }, () => {});
-      return instanceProxy;
+      return wrapNativeInstance(
+          modulePath, constructExportId(modulePath, classPath, [...args]),
+          newTarget.prototype);
     },
     apply() {
       throw new TypeError(
@@ -1035,7 +1167,7 @@ export function require(path: string): any {
   if (!record) {
     record = createModuleRecord(modulePath);
     moduleCache.set(modulePath, record);
-    pageHandler.requireNodeModule(modulePath);
+    boundPageHandler().requireNodeModule(modulePath);
   }
   return record.proxy;
 }
@@ -1079,7 +1211,7 @@ export function inspectExport(
       resolve,
       reject,
     });
-    pageHandler.inspectNodeExport(requestId, normalizedPath, exportPath);
+    boundPageHandler().inspectNodeExport(requestId, normalizedPath, exportPath);
   });
 }
 
@@ -1105,7 +1237,7 @@ export function invokeMany(
 
   return new Promise((resolve, reject) => {
     pendingManys.set(requestId, {resolve, reject});
-    pageHandler.invokeNodeExports(
+    boundPageHandler().invokeNodeExports(
         requestId, normalizeNodePath(modulePath), wireCalls);
   });
 }
@@ -1118,6 +1250,7 @@ export function removeNodeModuleLoadedListener(listener: ModuleLoadedListener) {
   moduleLoadedListeners.delete(listener);
 }
 
-if (typeof window !== 'undefined') {
+if (typeof window !== 'undefined' &&
+    typeof (window as any).require !== 'function') {
   (window as any).require = require;
 }

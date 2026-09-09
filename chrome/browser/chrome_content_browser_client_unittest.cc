@@ -113,6 +113,11 @@
 #include "ui/base/ui_base_features.h"
 #include "url/gurl.h"
 #include "url/origin.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/public/mojom/xenon_service.mojom.h"
+#endif
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.h"
@@ -855,6 +860,15 @@ TEST_F(ChromeContentBrowserClientGetLoggingFileTest, GetLoggingFile) {
 }
 
 #if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+TEST_F(ChromeContentBrowserClientTest, XenonUtilityJitIsNotCetCompatible) {
+  ChromeContentBrowserClient client;
+  EXPECT_FALSE(client.IsUtilityCetCompatible(
+      xenon::mojom::XenonMainService::Name_));
+  EXPECT_TRUE(client.IsUtilityCetCompatible("unrelated.mojom.Service"));
+}
+#endif
+
 TEST_F(ChromeContentBrowserClientGetLoggingFileTest,
        GetLoggingFileFromCommandLine) {
   base::CommandLine cmd_line(base::CommandLine::NO_PROGRAM);

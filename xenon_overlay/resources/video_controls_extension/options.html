@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>XL Video Controls</title>
+  <style>
+    body { font: 14px system-ui, sans-serif; margin: 16px; max-width: 360px; }
+    label { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+    button { margin-top: 12px; padding: 6px 14px; }
+    #status { margin-top: 8px; color: #666; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h2>侧边按钮显示</h2>
+  <p>对应 video 上的 <code>data-xl-*-btn-show</code> 属性（左键默认隐藏，需扩展开启）。</p>
+  <label><input type="checkbox" id="xl1" /> xl1 下载</label>
+  <label><input type="checkbox" id="xl2" /> xl2 流畅播</label>
+  <label><input type="checkbox" id="xl3" /> xl3 倍速</label>
+  <label><input type="checkbox" id="xr1" /> xr1 画中画</label>
+  <button id="save">保存并刷新所有标签页</button>
+  <div id="status"></div>
+  <script src="options.js"></script>
+</body>
+</html>

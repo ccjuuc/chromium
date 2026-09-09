@@ -30,6 +30,10 @@ struct DynamicParams {
   bool force_safe_search = true;
   int32 youtube_restrict = 0;
   string allowed_domains_for_apps;
+  // Browser-owned allowlist for chrome.shenzhen API availability checks.
+  // This is delivered over Mojo instead of exposing policy in the renderer
+  // process command line.
+  array<string> shenzhen_allowed_domains;
 };
 
 // The renderer configuration parameters are set during the process lock update

@@ -65,6 +65,8 @@ class MediaControlPlaybackSpeedListElement;
 class MediaControlPlayButtonElement;
 class MediaControlRemainingTimeDisplayElement;
 class MediaControlScrubbingMessageElement;
+class MediaControlSideButtonElement;
+class MediaControlSideEnclosureElement;
 class MediaControlTextTrackListElement;
 class MediaControlsTextTrackManager;
 class MediaControlTimelineElement;
@@ -138,7 +140,17 @@ class MODULES_EXPORT MediaControlsImpl final : public HTMLDivElement,
 
   // Methods related to the playback speed menu.
   void TogglePlaybackSpeedList();
+  void TogglePlaybackSpeedListNear(Element* anchor_element);
+  void ShowPlaybackSpeedListNear(Element* anchor_element);
+  void ScheduleHidePlaybackSpeedList();
+  void CancelScheduledPlaybackSpeedListHide();
   bool PlaybackSpeedListIsWanted();
+  bool ShouldShowPlaybackSpeedButton() const;
+  Element* PlaybackSpeedPopupAnchor() const;
+  void ClearPlaybackSpeedPopupAnchor();
+#if defined(FOR_XL)
+  void UpdateXl3PlaybackSpeedLabel();
+#endif
 
   // Methods related to the track selection menu.
   void ToggleTrackSelectionList(WebMediaPlayer::TrackType);
@@ -165,6 +177,7 @@ class MODULES_EXPORT MediaControlsImpl final : public HTMLDivElement,
   // Methods used for Download In-product help.
   const MediaControlOverflowMenuButtonElement& OverflowButton() const;
   MediaControlOverflowMenuButtonElement& OverflowButton();
+  void DownloadMediaIfAvailable();
 
   // Accessors for UI elements.
   const MediaControlCurrentTimeDisplayElement& CurrentTimeDisplay() const;
@@ -294,6 +307,7 @@ class MODULES_EXPORT MediaControlsImpl final : public HTMLDivElement,
   bool ShouldCloseVolumeSlider() const;
 
   void ElementSizeChangedTimerFired(TimerBase*);
+  void PlaybackSpeedHoverHideTimerFired(TimerBase*);
 
   // Update any visible indicators of the current time.
   void UpdateTimeIndicators(bool suppress_aria = false);
@@ -377,10 +391,20 @@ class MODULES_EXPORT MediaControlsImpl final : public HTMLDivElement,
   void OnLoadingProgress();
   void OnLoadedData();
 
+  void UpdateSideButtonVisibility(bool visible);
+
   // Media control elements.
+  Member<HTMLDivElement> native_controls_container_;
   Member<MediaControlOverlayEnclosureElement> overlay_enclosure_;
   Member<MediaControlOverlayPlayButtonElement> overlay_play_button_;
   Member<MediaControlCastButtonElement> overlay_cast_button_;
+  Member<MediaControlSideEnclosureElement> left_side_enclosure_;
+  Member<MediaControlSideButtonElement> xl1_button_;
+  Member<MediaControlSideButtonElement> xl2_button_;
+  Member<MediaControlSideButtonElement> xl3_button_;
+  Member<HTMLDivElement> xl3_anchor_;
+  Member<MediaControlSideEnclosureElement> right_side_enclosure_;
+  Member<MediaControlSideButtonElement> xr1_button_;
   Member<MediaControlPanelEnclosureElement> enclosure_;
   Member<MediaControlPanelElement> panel_;
   Member<MediaControlPlayButtonElement> play_button_;
@@ -464,7 +488,19 @@ class MODULES_EXPORT MediaControlsImpl final : public HTMLDivElement,
   // of the slider
   HeapTaskRunnerTimer<MediaControlsImpl> volume_slider_wanted_timer_;
 
+  // Lets the pointer cross the gap between the XL speed button and its menu.
+  HeapTaskRunnerTimer<MediaControlsImpl> playback_speed_hover_hide_timer_;
+
   Member<MediaControlsTextTrackManager> text_track_manager_;
+
+  // When set, the playback speed popover is positioned relative to this element
+  // (e.g. the XL xl3 side button) instead of the overflow menu button.
+  Member<Element> playback_speed_popup_anchor_;
+
+#if defined(FOR_XL)
+  // Last overlay-visible state passed to UpdateSideButtonVisibility().
+  bool xl_side_buttons_overlay_visible_ = false;
+#endif
 
   bool is_test_mode_ = false;
 };

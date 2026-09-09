@@ -123,6 +123,13 @@ typedef struct {
   const char* release;
 } napi_node_version;
 
+typedef struct {
+  const char* error_message;
+  NAPI_RAW_PTR_EXCLUSION void* engine_reserved;
+  uint32_t engine_error_code;
+  napi_status error_code;
+} napi_extended_error_info;
+
 #define NAPI_AUTO_LENGTH ((size_t)-1)
 #define NAPI_VERSION 1
 

@@ -83,6 +83,7 @@ enum WrappablePointerTag : uint16_t {
   kWebAXObjectProxy,             // content::WebAXObjectProxy
   kWrappedExceptionHandler,      // extensions::WrappedExceptionHandler
   kWrappedHandlerFunction,       // extensions::WrappedHandlerFunction
+  kXenonIpcRenderer,             // xenon::ipc::XenonIpcRenderer
   kXenonPageApi,                 // xenon::JSXenonApi
   // keep-sorted end
   kLastPointerTag,

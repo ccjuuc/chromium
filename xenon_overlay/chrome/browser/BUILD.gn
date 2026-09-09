@@ -102,9 +102,51 @@ source_set("napi") {
   }
 }
 
+source_set("app_runtime") {
+  sources = [
+    "ipc/xenon_app_runtime.cc",
+    "ipc/xenon_app_runtime.h",
+  ]
+  deps = [ "//base" ]
+}
+
+source_set("os_bridge") {
+  sources = [
+    "ipc/xenon_os_bridge.cc",
+    "ipc/xenon_os_bridge.h",
+  ]
+  deps = [
+    "//base",
+    "//xenon_overlay/public/mojom",
+    "//xenon_overlay/third_party:libuv",
+  ]
+}
+
+source_set("sqlite_bridge") {
+  sources = [
+    "ipc/xenon_sqlite_bridge.cc",
+    "ipc/xenon_sqlite_bridge.h",
+  ]
+  deps = [
+    "//base",
+    "//third_party/sqlite",
+    "//xenon_overlay/public/mojom",
+  ]
+}
+
 source_set("browser") {
   defines = []
   sources = [
+    "asar/xenon_asar_url_loader_factory.cc",
+    "asar/xenon_asar_url_loader_factory.h",
+    "ipc/xenon_electron_guest.cc",
+    "ipc/xenon_electron_guest.h",
+    "ipc/xenon_file_system_bridge.cc",
+    "ipc/xenon_file_system_bridge.h",
+    "ipc/xenon_ipc_document_host.cc",
+    "ipc/xenon_ipc_document_host.h",
+    "ipc/xenon_network_request_bridge.cc",
+    "ipc/xenon_network_request_bridge.h",
     "reminder/xenon_reminder_notification_manager.cc",
     "reminder/xenon_reminder_notification_manager.h",
     "reminder/xenon_reminder_notification_observer.h",
@@ -122,6 +164,12 @@ source_set("browser") {
     "ui/webui/xenon_node_controller.h",
     "ui/webui/xenon_page_handler.cc",
     "ui/webui/xenon_page_handler.h",
+    "ui/webui/xenon_player_by_elec_controller.cc",
+    "ui/webui/xenon_player_by_elec_controller.h",
+    "ui/webui/xenon_player_electron_controller.cc",
+    "ui/webui/xenon_player_electron_controller.h",
+    "ui/webui/xenon_thunder_2025_controller.cc",
+    "ui/webui/xenon_thunder_2025_controller.h",
     "ui/webui/xenon_ui_controller.cc",
     "ui/webui/xenon_ui_controller.h",
     "ui/webui/xenon_webui_controller.cc",
@@ -151,6 +199,8 @@ source_set("browser") {
     "ui/xenon_shadow_test_window.h",
     "ui/xenon_tip_bar_widget.cc",
     "ui/xenon_tip_bar_widget.h",
+    "ui/xenon_electron_window_host.cc",
+    "ui/xenon_electron_window_host.h",
     "ui/xenon_web_dialog.cc",
     "ui/xenon_web_dialog.h",
     "xenon_browser_main_extra_parts.cc",
@@ -167,6 +217,8 @@ source_set("browser") {
     "xenon_login_controller.h",
     "xenon_login_startup_registration.cc",
     "xenon_login_startup_registration.h",
+    "xenon_media_controls_host.cc",
+    "xenon_media_controls_host.h",
     "xenon_manager.cc",
     "xenon_manager.h",
     "xenon_page_host_impl.cc",
@@ -176,7 +228,10 @@ source_set("browser") {
   ]
 
   deps = [
+    ":app_runtime",
     ":napi",
+    ":os_bridge",
+    ":sqlite_bridge",
     ":xenon_common_bubble",
     ":xenon_common_dialog",
     ":xenon_prefs",
@@ -190,6 +245,9 @@ source_set("browser") {
     "//chrome/browser/ui/startup:xenon_login_startup_hooks",
     "//chrome/common/beijing:render_dll_names",
     "//components/crx_file",
+    "//components/download/public/common:public",
+    "//components/embedder_support",
+    "//components/xl_media_controls/public/mojom:mojom",
     "//components/keep_alive_registry",
     "//components/services/unzip/content",
     "//components/services/unzip/public/cpp",
@@ -209,10 +267,13 @@ source_set("browser") {
     "//ui/compositor_extra",
     "//ui/display",
     "//ui/gfx",
+    "//ui/gfx/codec",
+    "//ui/menus",
     "//ui/views",
     "//ui/web_dialogs",
     "//ui/webui",
     "//xenon_overlay/buildflags",
+    "//xenon_overlay/common/asar",
     "//xenon_overlay/chrome/browser/ui/webui:mojo_bindings",
     "//xenon_overlay/public/mojom",
     "//xenon_overlay/resources",
@@ -386,4 +447,47 @@ test("xenon_extension_package_unittests") {
     "//url",
   ]
   data = [ "//xenon_overlay/resources/xenon_extension.zip" ]
+}
+
+test("ipc_main_container_unittests") {
+  testonly = true
+  sources = [
+    "../../services/xenon_node_executor.cc",
+    "../../services/xenon_node_executor.h",
+    "ipc/xenon_file_system_bridge.cc",
+    "ipc/xenon_file_system_bridge.h",
+    "ipc/xenon_ipc_main_container.cc",
+    "ipc/xenon_ipc_main_container.h",
+    "ipc/xenon_ipc_main_container_unittest.cc",
+    "ipc/xenon_sqlite_bridge_unittest.cc",
+  ]
+  deps = [
+    ":app_runtime",
+    ":napi",
+    ":os_bridge",
+    ":sqlite_bridge",
+    "//base",
+    "//base/test:run_all_unittests",
+    "//base/test:test_support",
+    "//chrome/common:constants",
+    "//components/version_info",
+    "//crypto",
+    "//gin",
+    "//gin:gin_test",
+    "//mojo/core/embedder",
+    "//mojo/public/cpp/bindings",
+    "//testing/gtest",
+    "//ui/base",
+    "//v8",
+    "//xenon_overlay/common/asar",
+    "//xenon_overlay/public/mojom",
+    "//xenon_overlay/resources:resources_grit",
+  ]
+  data_deps = [ ":test_addon" ]
+  if (is_win) {
+    data = [ "//base/test/data/file_version_info_unittest/FileVersionInfoTest1.dll" ]
+  }
+  if (enable_xenon_node_uv_compat) {
+    deps += [ "//xenon_overlay/third_party:libuv" ]
+  }
 }

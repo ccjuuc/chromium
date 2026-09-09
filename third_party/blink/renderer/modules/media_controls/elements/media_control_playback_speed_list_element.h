@@ -22,18 +22,46 @@ class MediaControlPlaybackSpeedListElement final
 
   void SetIsWanted(bool) final;
 
+#if defined(FOR_XL)
+  // Re-apply the open class if a collapse animation was interrupted by hover.
+  void EnsureXlOpenAnimation();
+#endif
+
   void Trace(Visitor*) const override;
 
  private:
   class RequestAnimationFrameCallback;
+#if defined(FOR_XL)
+  class OpenAnimationFrameCallback;
+#endif
+
+  Element* PopupAnchor() const override;
+
+  void SetPosition() override;
 
   void DefaultEventHandler(Event&) override;
 
   void RefreshPlaybackSpeedListMenu();
 
+#if defined(FOR_XL)
+  bool IsXlSidePopup() const;
+  void PositionXlBesideButton();
+  void CancelXlCollapseAnimation();
+  void FinishXlCollapseAnimation();
+  Element* XlPlaybackSpeedListItemFromEventTarget(Node* target) const;
+  void UpdateXlSideCheckedItem(Element* selected_item);
+
+  // Bumps to cancel a pending collapse PostDelayedTask.
+  int xl_collapse_generation_ = 0;
+#endif
+
+  void ApplyPlaybackRate(double playback_rate);
+
   // Creates the playback speed element in the list.
   Element* CreatePlaybackSpeedListItem(const int display_name,
-                                       const double playback_rate);
+                                       const double playback_rate,
+                                       const String* custom_label = nullptr,
+                                       bool xl_side_item = false);
 
   // Creates the header element of the playback speed list.
   Element* CreatePlaybackSpeedHeaderItem();
