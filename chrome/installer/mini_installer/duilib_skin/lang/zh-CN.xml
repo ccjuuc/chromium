@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DuiLib language resources. Preserve format placeholders and {\n} line breaks. -->
+<Language>
+    <Text id="IDS_MINI_NOTICE" value="提示" />
+    <Text id="IDS_MINI_CONTINUE" value="继续" />
+    <Text id="IDS_MINI_CANCEL" value="取消" />
+    <Text id="IDS_MINI_INSTALLED" value="%s 已安装" />
+    <Text id="IDS_MINI_SYSTEM_CONFLICT" value="检测到本机已存在系统级 %s。{\n}{\n}不能再安装当前用户版本。{\n}请勾选“为所有用户安装”进行升级，或先卸载系统级版本。" />
+    <Text id="IDS_MINI_UPGRADE_CONFIRM" value="检测到本机已安装 %s（相同目录）。{\n}{\n}继续将进行覆盖/升级安装。{\n}若浏览器正在运行，一般无需关闭，新版本将在重启后生效。{\n}{\n}是否继续？" />
+    <Text id="IDS_MINI_PATH_CONFLICT" value="检测到 %s 已安装在：{\n}%s{\n}{\n}不能同时安装到其他目录。{\n}请先卸载现有版本，或将安装路径改回上述目录后再继续。" />
+    <Text id="IDS_MINI_EXTRACT_ARCHIVE" value="正在释放安装文件..." />
+    <Text id="IDS_MINI_EXTRACT_SETUP" value="正在准备安装..." />
+    <Text id="IDS_MINI_INSTALLING" value="正在安装 %s" />
+    <Text id="IDS_MINI_FINISHING" value="正在完成安装..." />
+    <Text id="IDS_MINI_FAILED" value="安装失败，请重试" />
+    <Text id="IDS_MINI_SYSTEM_EXISTS" value="已存在系统级安装，请勾选“为所有用户安装”或先卸载" />
+    <Text id="IDS_MINI_UPGRADE" value="检测到已安装版本，继续将覆盖/升级" />
+    <Text id="IDS_MINI_CUSTOM_EXPANDED" value="自定义安装 ∧" />
+    <Text id="IDS_MINI_CUSTOM" value="自定义安装 ∨" />
+    <Text id="IDS_MINI_ACCEPT_PRIVACY" value="请先阅读并同意隐私协议" />
+    <Text id="IDS_MINI_INVALID_PATH" value="请选择本机固定磁盘上的有效安装目录" />
+    <Text id="IDS_MINI_CONFIRM_PATH" value="请确认安装路径后再继续" />
+    <Text id="IDS_MINI_COMPLETE" value="安装完成" />
+    <Text id="IDS_MINI_FINISH" value="完成安装" />
+    <Text id="IDS_MINI_CLOSE" value="关闭" />
+    <Text id="IDS_MINI_WINDOW_TITLE" value="%s 安装程序" />
+    <Text id="IDS_MINI_INSTALL" value="立即安装" />
+    <Text id="IDS_MINI_PRIVACY" value="我已阅读并同意《隐私协议》" />
+    <Text id="IDS_MINI_DIRECTORY" value="安装目录" />
+    <Text id="IDS_MINI_BROWSE" value="更改目录" />
+    <Text id="IDS_MINI_ALL_USERS" value="为所有用户安装" />
+    <Text id="IDS_MINI_DESKTOP" value="创建桌面快捷方式" />
+    <Text id="IDS_MINI_LAUNCH" value="安装完成后启动" />
+    <Text id="IDS_MINI_DEFAULT" value="设为默认浏览器" />
+    <Text id="IDS_MINI_ELEVATION" value="需要管理员权限时将自动请求提升" />
+    <Text id="IDS_MINI_OK" value="知道了" />
+    <Text id="IDS_MINI_MINIMIZE" value="最小化" />
+</Language>

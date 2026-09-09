@@ -88,6 +88,7 @@ source_set("lib") {
       "mini_installer_ui.h",
     ]
     deps += [ "//third_party/duilib" ]
+    sources += [ "//chrome/install_static/localized_product_name.h" ]
     defines = [ "MINI_INSTALLER_HAS_DUILIB_UI=1" ] +
               chrome_custom_names_defines +
               chrome_custom_install_identity_defines
@@ -381,10 +382,6 @@ template("generate_mini_installer") {
     ]
 
     libs = [ "setupapi.lib" ]
-    if (enable_mini_installer_duilib_ui) {
-      # Product display name is read from VERSIONINFO at runtime.
-      libs += [ "version.lib" ]
-    }
 
     deps = [
       ":copy_signing",

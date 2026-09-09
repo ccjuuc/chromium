@@ -40,6 +40,7 @@ if (is_win) {
       "//base/win/win_handle_types.h",
       "//base/win/win_handle_types_list.inc",
       "//base/win/windows_types.h",
+      "localized_product_name.h",
       "install_constants.h",
       "install_details.cc",
       "install_details.h",

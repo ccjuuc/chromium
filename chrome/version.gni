@@ -573,6 +573,10 @@ if (_use_custom_install_identity) {
     "PRODUCT_FULLNAME=\"${chrome_install_product_name}\"",
     "-e",
     "PRODUCT_SHORTNAME=\"${chrome_install_product_name}\"",
+    "-e",
+    "PRODUCT_INSTALLER_FULLNAME=\"${chrome_install_product_name} Installer\"",
+    "-e",
+    "PRODUCT_INSTALLER_SHORTNAME=\"${chrome_install_product_name} Installer\"",
   ]
 }
 

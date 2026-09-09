@@ -9,9 +9,9 @@
         <HorizontalLayout height="40" inset="20,4,12,0">
             <Label name="brandtitle" text="" width="160" height="24" textcolor="#FF222222" font="1" valign="center" />
             <Control />
-            <Button name="minbtn" tooltip="Minimize" width="30" height="20" align="center" valign="center" normalimage="file='sys_min.png' source='0,0,30,20'" hotimage="file='sys_min.png' source='30,0,60,20'" pushedimage="file='sys_min.png' source='60,0,90,20'" />
+            <Button name="minbtn" resourcetext="true" tooltip="IDS_MINI_MINIMIZE" width="30" height="20" align="center" valign="center" normalimage="file='sys_min.png' source='0,0,30,20'" hotimage="file='sys_min.png' source='30,0,60,20'" pushedimage="file='sys_min.png' source='60,0,90,20'" />
             <Control width="6" />
-            <Button name="closebtn" tooltip="Close" width="32" height="32" align="center" valign="center" normalimage="file='sys_close.png' source='0,0,32,32'" hotimage="file='sys_close.png' source='32,0,64,32'" pushedimage="file='sys_close.png' source='64,0,96,32'" />
+            <Button name="closebtn" resourcetext="true" tooltip="IDS_MINI_CLOSE" width="32" height="32" align="center" valign="center" normalimage="file='sys_close.png' source='0,0,32,32'" hotimage="file='sys_close.png' source='32,0,64,32'" pushedimage="file='sys_close.png' source='64,0,96,32'" />
         </HorizontalLayout>
 
         <VerticalLayout>
@@ -21,7 +21,7 @@
 
             <HorizontalLayout height="52">
                 <Control />
-                <Button name="installbtn" text="立即安装" width="220" height="48" font="1" textcolor="#FF5B6CFF" disabledtextcolor="#FFB0B0B0" align="center" valign="center" bordercolor="#FF8FA0FF" bordersize="1" borderround="8,8" bkcolor="#FFFFFFFF" hotbkcolor="#FFF5F7FF" pushedbkcolor="#FFECEFFF" disabledbkcolor="#FFF7F7F7" />
+                <Button name="installbtn" resourcetext="true" text="IDS_MINI_INSTALL" width="220" height="48" font="1" textcolor="#FF5B6CFF" disabledtextcolor="#FFB0B0B0" align="center" valign="center" bordercolor="#FF8FA0FF" bordersize="1" borderround="8,8" bkcolor="#FFFFFFFF" hotbkcolor="#FFF5F7FF" pushedbkcolor="#FFECEFFF" disabledbkcolor="#FFF7F7F7" />
                 <Control />
             </HorizontalLayout>
 
@@ -36,30 +36,30 @@
             <Control height="*" />
 
             <HorizontalLayout height="36" inset="28,0,28,0">
-                <Option name="privacy" text="我已阅读并同意《隐私协议》" width="250" height="24" font="3" textpadding="26,0,0,0" textcolor="#FF555555" selectedtextcolor="#FF555555" normalimage="file='noselect.png' dest='0,2,20,22'" selectedimage="file='select.png' dest='0,2,20,22'" />
+                <Option name="privacy" resourcetext="true" text="IDS_MINI_PRIVACY" width="250" height="24" font="3" textpadding="26,0,0,0" textcolor="#FF555555" selectedtextcolor="#FF555555" normalimage="file='noselect.png' dest='0,2,20,22'" selectedimage="file='select.png' dest='0,2,20,22'" />
                 <Control />
-                <Button name="custombtn" text="自定义安装 ∨" width="100" height="24" font="3" textcolor="#FF4A7DFF" align="right" valign="center" bkcolor="#00000000" hottextcolor="#FF2F5FE0" />
+                <Button name="custombtn" resourcetext="true" text="IDS_MINI_CUSTOM" width="100" height="24" font="3" textcolor="#FF4A7DFF" align="right" valign="center" bkcolor="#00000000" hottextcolor="#FF2F5FE0" />
             </HorizontalLayout>
 
             <VerticalLayout name="custompanel" visible="false" height="168" inset="28,10,28,16" bkcolor="#FFF7F8FA">
                 <HorizontalLayout height="34">
-                    <Label text="安装目录" width="68" height="34" font="2" textcolor="#FF444444" valign="center" />
+                    <Label name="localized_directory" resourcetext="true" text="IDS_MINI_DIRECTORY" width="68" height="34" font="2" textcolor="#FF444444" valign="center" />
                     <Edit name="installpath" height="30" font="3" textcolor="#FF333333" bkcolor="#FFFFFFFF" bordercolor="#FFD0D5DD" bordersize="1" borderround="4,4" inset="8,6,8,6" />
                     <Control width="10" />
-                    <Button name="browsebtn" text="更改目录" width="72" height="30" font="3" textcolor="#FF4A7DFF" align="center" valign="center" bkcolor="#00000000" hottextcolor="#FF2F5FE0" />
+                    <Button name="browsebtn" resourcetext="true" text="IDS_MINI_BROWSE" width="72" height="30" font="3" textcolor="#FF4A7DFF" align="center" valign="center" bkcolor="#00000000" hottextcolor="#FF2F5FE0" />
                 </HorizontalLayout>
                 <Control height="12" />
                 <HorizontalLayout height="28">
-                    <Option name="systemlevel" text="为所有用户安装" width="210" height="24" font="3" textpadding="26,0,0,0" textcolor="#FF444444" selectedtextcolor="#FF444444" normalimage="file='noselect.png' dest='0,2,20,22'" selectedimage="file='select.png' dest='0,2,20,22'" />
-                    <Option name="desktop" text="创建桌面快捷方式" width="180" height="24" font="3" textpadding="26,0,0,0" textcolor="#FF444444" selectedtextcolor="#FF444444" normalimage="file='noselect.png' dest='0,2,20,22'" selectedimage="file='select.png' dest='0,2,20,22'" />
+                    <Option name="systemlevel" resourcetext="true" text="IDS_MINI_ALL_USERS" width="210" height="24" font="3" textpadding="26,0,0,0" textcolor="#FF444444" selectedtextcolor="#FF444444" normalimage="file='noselect.png' dest='0,2,20,22'" selectedimage="file='select.png' dest='0,2,20,22'" />
+                    <Option name="desktop" resourcetext="true" text="IDS_MINI_DESKTOP" width="180" height="24" font="3" textpadding="26,0,0,0" textcolor="#FF444444" selectedtextcolor="#FF444444" normalimage="file='noselect.png' dest='0,2,20,22'" selectedimage="file='select.png' dest='0,2,20,22'" />
                 </HorizontalLayout>
                 <Control height="8" />
                 <HorizontalLayout height="28">
-                    <Option name="launch" text="安装完成后启动" width="210" height="24" font="3" textpadding="26,0,0,0" textcolor="#FF444444" selectedtextcolor="#FF444444" normalimage="file='noselect.png' dest='0,2,20,22'" selectedimage="file='select.png' dest='0,2,20,22'" />
-                    <Option name="defaultbrowser" text="设为默认浏览器" width="180" height="24" font="3" textpadding="26,0,0,0" textcolor="#FF444444" selectedtextcolor="#FF444444" normalimage="file='noselect.png' dest='0,2,20,22'" selectedimage="file='select.png' dest='0,2,20,22'" />
+                    <Option name="launch" resourcetext="true" text="IDS_MINI_LAUNCH" width="210" height="24" font="3" textpadding="26,0,0,0" textcolor="#FF444444" selectedtextcolor="#FF444444" normalimage="file='noselect.png' dest='0,2,20,22'" selectedimage="file='select.png' dest='0,2,20,22'" />
+                    <Option name="defaultbrowser" resourcetext="true" text="IDS_MINI_DEFAULT" width="180" height="24" font="3" textpadding="26,0,0,0" textcolor="#FF444444" selectedtextcolor="#FF444444" normalimage="file='noselect.png' dest='0,2,20,22'" selectedimage="file='select.png' dest='0,2,20,22'" />
                 </HorizontalLayout>
                 <Control height="8" />
-                <Label text="需要管理员权限时将自动请求提升" height="20" font="3" textcolor="#FF999999" />
+                <Label name="localized_elevation" resourcetext="true" text="IDS_MINI_ELEVATION" height="20" font="3" textcolor="#FF999999" />
             </VerticalLayout>
 
             <Control height="14" />

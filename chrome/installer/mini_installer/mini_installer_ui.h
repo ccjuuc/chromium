@@ -34,10 +34,7 @@ enum InstallerUiStage {
 
 #if defined(MINI_INSTALLER_HAS_DUILIB_UI) && MINI_INSTALLER_HAS_DUILIB_UI
 
-// Resolves the display brand name used by the installer UI:
-// 1) --product-name= / --product-name
-// 2) VERSIONINFO ProductShortName / ProductName (strip trailing " Installer")
-// 3) compile-time CUSTOM_* fallback / "Chromium"
+// Uses the same localized display name as installed shortcuts.
 // Safe to call more than once; subsequent calls are no-ops once initialized.
 void InitInstallerBrandName(HMODULE module, const Configuration& configuration);
 

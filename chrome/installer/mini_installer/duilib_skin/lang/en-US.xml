@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DuiLib language resources. Preserve format placeholders and {\n} line breaks. -->
+<Language>
+    <Text id="IDS_MINI_NOTICE" value="Notice" />
+    <Text id="IDS_MINI_CONTINUE" value="Continue" />
+    <Text id="IDS_MINI_CANCEL" value="Cancel" />
+    <Text id="IDS_MINI_INSTALLED" value="%s is installed" />
+    <Text id="IDS_MINI_SYSTEM_CONFLICT" value="%s is installed for all users.{\n}{\n}Select &quot;Install for all users&quot; to upgrade, or uninstall that version first." />
+    <Text id="IDS_MINI_UPGRADE_CONFIRM" value="%s is already installed in this folder.{\n}{\n}Continue to upgrade. If the browser is running, restart it after installation to use the new version.{\n}{\n}Continue?" />
+    <Text id="IDS_MINI_PATH_CONFLICT" value="%s is installed in:{\n}%s{\n}{\n}Uninstall the existing version or use this folder to continue." />
+    <Text id="IDS_MINI_EXTRACT_ARCHIVE" value="Extracting installation files..." />
+    <Text id="IDS_MINI_EXTRACT_SETUP" value="Preparing setup..." />
+    <Text id="IDS_MINI_INSTALLING" value="Installing %s" />
+    <Text id="IDS_MINI_FINISHING" value="Finishing installation..." />
+    <Text id="IDS_MINI_FAILED" value="Installation failed. Please try again." />
+    <Text id="IDS_MINI_SYSTEM_EXISTS" value="Select &quot;Install for all users&quot; or uninstall the existing version." />
+    <Text id="IDS_MINI_UPGRADE" value="An existing installation will be upgraded." />
+    <Text id="IDS_MINI_CUSTOM_EXPANDED" value="Options ∧" />
+    <Text id="IDS_MINI_CUSTOM" value="Options ∨" />
+    <Text id="IDS_MINI_ACCEPT_PRIVACY" value="Please read and accept the Privacy Agreement." />
+    <Text id="IDS_MINI_INVALID_PATH" value="Choose a valid folder on a local fixed disk." />
+    <Text id="IDS_MINI_CONFIRM_PATH" value="Confirm the installation folder to continue." />
+    <Text id="IDS_MINI_COMPLETE" value="Installation complete" />
+    <Text id="IDS_MINI_FINISH" value="Finish" />
+    <Text id="IDS_MINI_CLOSE" value="Close" />
+    <Text id="IDS_MINI_WINDOW_TITLE" value="%s Installer" />
+    <Text id="IDS_MINI_INSTALL" value="Install now" />
+    <Text id="IDS_MINI_PRIVACY" value="I accept the Privacy Agreement" />
+    <Text id="IDS_MINI_DIRECTORY" value="Folder" />
+    <Text id="IDS_MINI_BROWSE" value="Browse" />
+    <Text id="IDS_MINI_ALL_USERS" value="Install for all users" />
+    <Text id="IDS_MINI_DESKTOP" value="Desktop shortcut" />
+    <Text id="IDS_MINI_LAUNCH" value="Launch after installation" />
+    <Text id="IDS_MINI_DEFAULT" value="Set as default browser" />
+    <Text id="IDS_MINI_ELEVATION" value="Administrator access will be requested if needed." />
+    <Text id="IDS_MINI_OK" value="OK" />
+    <Text id="IDS_MINI_MINIMIZE" value="Minimize" />
+</Language>
