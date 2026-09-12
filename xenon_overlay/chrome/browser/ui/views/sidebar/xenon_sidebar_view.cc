@@ -60,9 +60,25 @@ struct SidebarShortcut {
 };
 
 constexpr SidebarShortcut kShortcuts[] = {
-    {"TH", "Thunder 2025", "chrome://thunder-2025/"},
+    // {"XO", "Xenon Overlay", "chrome://xenon-overlay/"},
+    // {"AI", "Xenon AI", "chrome://xenon-ai-side-panel.top-chrome/"},
+    // {"UI", "Xenon UI", "chrome://xenon-ui/"},
+    // {"N", "Xenon Node", "chrome://xenon-node/"},
+    // {"PC", "pc_addon", "chrome://xenon-node/#pc_addon"},
+    // {"XP", "Xenon Player", "chrome://xenon-player/"},
+    // {"XPE", "Electron Container Test", "chrome://xenon-player-by-elec/"},
     {"PLE", "Player via Electron Container",
      "chrome://xenon-player-electron/"},
+    {"TH", "Thunder 2025", "chrome://thunder-2025/"},
+    // {"VT", "Local Video Test", "chrome://local-video-test/"},
+    // {"RDL", "Render DLL Test", "chrome://render-dll-test/"},
+    // {"MI", "Media Internals", "chrome://media-internals/"},
+    // {"GPU", "GPU Internals", "chrome://gpu/"},
+    // {"VS", "Video Sniffer", "chrome://video-sniffer/"},
+    // {"SW", "Simple WebUI", "chrome://simple-webui/"},
+    // {"LG", "Xenon Login", "chrome://xenon-login/"},
+    // {"VER", "Version", "chrome://version/"},
+    // {"FLG", "Flags", "chrome://flags/"},
 };
 
 class XenonSidebarButton : public views::LabelButton {
