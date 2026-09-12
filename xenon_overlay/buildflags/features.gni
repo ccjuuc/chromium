@@ -22,6 +22,9 @@ declare_args() {
   # Component extension source packaged into Xenon: "zip" for production, or
   # "directory" for plaintext development builds.
   xenon_extension_source = "zip"
+
+  # Controls whether main browser window startup is gated behind the Xenon login dialog.
+  enable_xenon_login_gate = false
 }
 
 # Second block: defaults may reference args from the block above (GN forbids same-block refs).

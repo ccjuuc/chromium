@@ -176,19 +176,20 @@ BrowserWindow Document 提交后，`xenon_ipc_renderer_bootstrap.js` 在页面�
 renderer 窗口会注册独立 endpoint 和 `window_id`，因此 `ipcMain` 可以用
 `event.sender`、`BrowserWindow.fromWebContents()` 和 `event.reply()` 准确返回发起页。
 
-### 6.1 既存 Player 兼容钩子
+### 6.1 早期 Player 兼容钩子的清理与架构解耦
 
-当前通用 renderer bootstrap 中仍有四组由早期 PL-E 接入遗留的兼容逻辑：
+早期在通用 renderer bootstrap 中遗留的四组兼容技术债：
 
-- 收到 `AplayerWndBind` 时缓存 native player HWND；
-- 调用 addon 的 `getAplayerWnd` 时，在异步结果之外使用已缓存 HWND 兜底；
-- 通过 `__xenonPlayerHostApi__` 将 player HWND 同步给 Browser 侧 host；
-- 在缺少 package 元数据时提供 `xmpclient` fallback。
+- 收到 `AplayerWndBind` 时特判缓存 native player HWND；
+- 调用 addon 的 `getAplayerWnd` 时特判函数名并注入 3000ms 超时兜底；
+- 通过全局 `__xenonPlayerHostApi__` 钩子向宿主分发 IPC；
+- 写入硬编码路径与写死 `xmpclient` 的 `package.json`。
 
-这些钩子解释了当前 PL-E 的 HWND 绑定时序，但不属于新容器接入规范。不得为 TH
-或后续项目继续添加类似分支，也不应把它们当作播放成功状态的 mock。后续重构目标是
-将上述行为移动到 PL-E 专用 host adapter，renderer bootstrap 只保留通用 IPC、
-CommonJS 和 addon 代理。
+现已全数清理并完成通用化：
+- `ipcRenderer.send` 纯净透传，无业务 channel 特判；
+- Node addon 导出代理统一处理，无函数名分支；
+- 虚拟挂载对 `package.json` 的查询统一按容器运行时配置动态合成，无需写死文件；
+- HWND 获取与窗口层叠统一由通用窗口接口与 Native Window Handle 体系提供，业务 IPC 自闭环。
 
 ## 7. 原生播放链路
 

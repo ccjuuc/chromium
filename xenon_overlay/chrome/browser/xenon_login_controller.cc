@@ -29,6 +29,7 @@
 #include "ui/gfx/native_ui_types.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
 #include "xenon_overlay/chrome/browser/xenon_prefs.h"
@@ -38,6 +39,7 @@ namespace xenon {
 namespace {
 
 constexpr char kDisableXenonLoginGate[] = "disable-xenon-login-gate";
+constexpr char kEnableXenonLoginGate[] = "enable-xenon-login-gate";
 
 // Defaults must match `XenonWebDialog::ShowForLogin` width/height.
 constexpr int kLoginDialogWidth = 520;
@@ -174,7 +176,17 @@ XenonLoginController::~XenonLoginController() {
 // static
 bool XenonLoginController::IsLoginGateEnabled(
     const base::CommandLine& command_line) {
-  return !ShouldSkipForCommandLine(command_line);
+  if (ShouldSkipForCommandLine(command_line)) {
+    return false;
+  }
+  if (command_line.HasSwitch(kEnableXenonLoginGate)) {
+    return true;
+  }
+#if !BUILDFLAG(ENABLE_XENON_LOGIN_GATE)
+  return false;
+#else
+  return true;
+#endif
 }
 
 // static
