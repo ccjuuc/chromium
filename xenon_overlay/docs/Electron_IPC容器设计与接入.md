@@ -271,11 +271,13 @@ xenon.exe \
 新项目不应在 `XenonIpcMainContainer`、`XenonNodeExecutor` 或 renderer bootstrap 里添加
 项目名判断、业务 channel 特判、mock 数据或固定 SDK 路径。
 
-当前 renderer bootstrap 仍保留早期 Player 接入形成的兼容钩子：
-`AplayerWndBind`、`getAplayerWnd`、`__xenonPlayerHostApi__` 以及 `xmpclient`
-package fallback。这些逻辑不是容器的目标架构，而是已知技术债；封版阶段不再扩散，
-新项目不得依赖或复制。后续清理应将 HWND 获取与 Player host 同步下沉到 PL-E
-专用 host adapter，并由通用窗口接口提供能力，而不是继续增加业务 channel 特判。
+早期 Player 接入形成的兼容技术债（`AplayerWndBind`、`getAplayerWnd`、`__xenonPlayerHostApi__`、
+`xmpclient` package 写死以及 `'xmp'` 默认名称兜底）已全部从通用 renderer bootstrap 中清理：
+
+1. **纯净通用 IPC 透传**：`ipcRenderer.send` 仅透明转发 Mojo transport，不再包含任何业务 channel 判断与全局 hostApi 钩子；
+2. **纯净通用 Addon 导出代理**：`createMojoExportFunction` 对所有导出函数统一走纯净代理调用，无函数名特判或 HWND 兜底；
+3. **动态虚拟 `package.json` 合成**：虚拟挂载（`chrome:\`）对 `package.json` 向上查找按容器的 `hostedAppName` 与 `appVersion` 动态合成，彻底替代了固定 URL 路径与写死 `xmpclient` 的硬编码文件；
+4. **窗口与 HWND 能力归位**：HWND 获取与窗口层次管理统一由通用窗口接口（`getNativeWindowHandle` 等）提供，业务进程通过自身 IPC 闭环。
 
 ## 12. 内置容器
 

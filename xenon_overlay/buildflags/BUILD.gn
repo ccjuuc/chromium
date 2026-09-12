@@ -17,6 +17,7 @@ buildflag_header("buildflags") {
     "ENABLE_XENON_BROWSER_OBSERVER=$enable_xenon_browser_observer",
     "ENABLE_XENON_AI=$enable_xenon_ai",
     "ENABLE_XENON_NODE_UV_COMPAT=$enable_xenon_node_uv_compat",
+    "ENABLE_XENON_LOGIN_GATE=$enable_xenon_login_gate",
     "XENON_EXTENSION_SOURCE_ZIP=$xenon_extension_source_zip",
   ]
 }

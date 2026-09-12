@@ -67,6 +67,9 @@ class XenonLoginController : public BrowserCollectionObserver {
   // Invoked when the login WebDialog finishes (user closed window or navigate).
   void NotifyLoginDialogClosed();
 
+  // Returns true if startup browser launch should defer for the login gate.
+  // Controlled by BUILDFLAG(ENABLE_XENON_LOGIN_GATE) (default false), overridable
+  // at runtime via --enable-xenon-login-gate or --disable-xenon-login-gate.
   static bool IsLoginGateEnabled(const base::CommandLine& command_line);
   static bool IsSessionLoggedIn(Profile* profile);
   static int GetReloginPresentation(Profile* profile);
