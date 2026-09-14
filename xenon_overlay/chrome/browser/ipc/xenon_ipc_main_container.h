@@ -196,9 +196,15 @@ class XenonIpcMainContainer {
                                           std::string* error);
 
   v8::MaybeLocal<v8::Value> ValueToV8(const base::Value& value);
+  v8::MaybeLocal<v8::Value> IpcPayloadToV8(const base::Value& value,
+                                           std::string* error);
   bool V8ToValue(v8::Local<v8::Value> value,
                  base::Value* output,
                  std::string* error);
+  bool V8ToIpcPayload(v8::Local<v8::Value> value,
+                      bool serialized,
+                      base::Value* output,
+                      std::string* error);
   v8::Local<v8::Object> CreateSenderMetadata(const std::string& endpoint_id);
   void DispatchRendererEvent(const std::string& endpoint_id, bool attached);
 
@@ -239,6 +245,8 @@ class XenonIpcMainContainer {
   void CompletePromise(PromiseReplyContext* reply,
                        bool success,
                        v8::Local<v8::Value> value);
+  void FailPendingPromisesForEndpoint(const std::string& endpoint_id,
+                                      const std::string& error);
   void FailAllPendingPromises(const std::string& error);
 
   static void OnPromiseResolved(

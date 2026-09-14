@@ -485,6 +485,7 @@ test("ipc_main_container_unittests") {
     "//ui/base",
     "//v8",
     "//xenon_overlay/common/asar",
+    "//xenon_overlay/common/ipc:value_codec",
     "//xenon_overlay/public/mojom",
     "//xenon_overlay/resources:resources_grit",
   ]

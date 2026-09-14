@@ -1,0 +1,15 @@
+# Copyright 2026 The Xenon Overlay Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+source_set("value_codec") {
+  sources = [
+    "xenon_ipc_value_codec.cc",
+    "xenon_ipc_value_codec.h",
+  ]
+
+  deps = [
+    "//base",
+    "//v8",
+  ]
+}

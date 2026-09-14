@@ -65,6 +65,7 @@
 #include "xenon_overlay/chrome/browser/ipc/xenon_app_runtime.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_os_bridge.h"
 #include "xenon_overlay/chrome/browser/napi/napi_loader.h"
+#include "xenon_overlay/common/ipc/xenon_ipc_value_codec.h"
 #include "xenon_overlay/public/xenon_ipc_switches.h"
 #include "xenon_overlay/resources/grit/xenon_resources.h"
 
@@ -334,6 +335,8 @@ bool IsNativeAddonBesideExecutable(const base::FilePath& normalized,
 struct XenonIpcMainContainer::PromiseReplyContext {
   base::WeakPtr<XenonIpcMainContainer> owner;
   InvokeCallback callback;
+  std::string endpoint_id;
+  bool serialized = false;
 };
 
 struct XenonIpcMainContainer::RendererEndpoint {
@@ -1880,6 +1883,8 @@ void XenonIpcMainContainer::RemoveRenderer(const std::string& endpoint_id) {
     DispatchRendererEvent(endpoint_id, false);
     renderers_.erase(endpoint_id);
   }
+  FailPendingPromisesForEndpoint(
+      endpoint_id, "Renderer disconnected before ipcMain handler completed");
 }
 
 void XenonIpcMainContainer::DispatchRendererEvent(
@@ -1949,11 +1954,41 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::ValueToV8(
   return v8::JSON::Parse(context_.Get(isolate_), json_value);
 }
 
+v8::MaybeLocal<v8::Value> XenonIpcMainContainer::IpcPayloadToV8(
+    const base::Value& value,
+    std::string* error) {
+  if (IsSerializedIpcValue(value)) {
+    return DeserializeIpcValue(isolate_, context_.Get(isolate_), value, error);
+  }
+  v8::Local<v8::Value> converted;
+  if (!ValueToV8(value).ToLocal(&converted)) {
+    if (error) {
+      *error = "Failed to decode private IPC arguments";
+    }
+    return {};
+  }
+  if (error) {
+    error->clear();
+  }
+  return converted;
+}
+
 bool XenonIpcMainContainer::V8ToValue(v8::Local<v8::Value> value,
                                       base::Value* output,
                                       std::string* error) {
   return ConvertV8ToValue(isolate_, context_.Get(isolate_), value, output,
                           error, 0);
+}
+
+bool XenonIpcMainContainer::V8ToIpcPayload(v8::Local<v8::Value> value,
+                                           bool serialized,
+                                           base::Value* output,
+                                           std::string* error) {
+  if (!serialized) {
+    return V8ToValue(value, output, error);
+  }
+  return SerializeIpcValue(isolate_, context_.Get(isolate_), value,
+                           /*rethrow_exception=*/false, output, error);
 }
 
 v8::Local<v8::Object> XenonIpcMainContainer::CreateSenderMetadata(
@@ -1996,7 +2031,10 @@ void XenonIpcMainContainer::Send(const std::string& endpoint_id,
   }
   ScopedV8Context scope(isolate_, context_);
   v8::Local<v8::Value> args_value;
-  if (!ValueToV8(arguments).ToLocal(&args_value)) {
+  std::string decode_error;
+  if (!IpcPayloadToV8(arguments, &decode_error).ToLocal(&args_value)) {
+    LOG(ERROR) << "Failed to decode IPC send '" << channel
+               << "': " << decode_error;
     return;
   }
   v8::Local<v8::Value> argv[] = {
@@ -2028,9 +2066,13 @@ void XenonIpcMainContainer::Invoke(const std::string& endpoint_id,
   }
 
   ScopedV8Context scope(isolate_, context_);
+  const bool serialized = IsSerializedIpcValue(arguments);
   v8::Local<v8::Value> args_value;
-  if (!ValueToV8(arguments).ToLocal(&args_value)) {
-    std::move(callback).Run(ErrorResult("Failed to decode IPC arguments"));
+  std::string decode_error;
+  if (!IpcPayloadToV8(arguments, &decode_error).ToLocal(&args_value)) {
+    std::move(callback).Run(ErrorResult(decode_error.empty()
+                                            ? "Failed to decode IPC arguments"
+                                            : decode_error));
     return;
   }
   v8::Local<v8::Value> argv[] = {
@@ -2051,7 +2093,7 @@ void XenonIpcMainContainer::Invoke(const std::string& endpoint_id,
   if (!result->IsPromise()) {
     base::Value converted;
     std::string error;
-    if (!V8ToValue(result, &converted, &error)) {
+    if (!V8ToIpcPayload(result, serialized, &converted, &error)) {
       std::move(callback).Run(ErrorResult(error));
       return;
     }
@@ -2062,8 +2104,8 @@ void XenonIpcMainContainer::Invoke(const std::string& endpoint_id,
     return;
   }
 
-  auto* reply =
-      new PromiseReplyContext{weak_factory_.GetWeakPtr(), std::move(callback)};
+  auto* reply = new PromiseReplyContext{
+      weak_factory_.GetWeakPtr(), std::move(callback), endpoint_id, serialized};
   pending_promise_replies_.insert(reply);
   v8::Local<v8::External> data =
       v8::External::New(isolate_, reply, v8::kExternalPointerTypeTagDefault);
@@ -2095,9 +2137,13 @@ xenon::ipc::mojom::IpcResultPtr XenonIpcMainContainer::SendSync(
   }
 
   ScopedV8Context scope(isolate_, context_);
+  const bool serialized = IsSerializedIpcValue(arguments);
   v8::Local<v8::Value> args_value;
-  if (!ValueToV8(arguments).ToLocal(&args_value)) {
-    return ErrorResult("Failed to decode synchronous IPC arguments");
+  std::string decode_error;
+  if (!IpcPayloadToV8(arguments, &decode_error).ToLocal(&args_value)) {
+    return ErrorResult(decode_error.empty()
+                           ? "Failed to decode synchronous IPC arguments"
+                           : decode_error);
   }
   v8::Local<v8::Value> argv[] = {
       CreateSenderMetadata(endpoint_id),
@@ -2118,7 +2164,7 @@ xenon::ipc::mojom::IpcResultPtr XenonIpcMainContainer::SendSync(
 
   base::Value converted;
   std::string error;
-  if (!V8ToValue(result, &converted, &error)) {
+  if (!V8ToIpcPayload(result, serialized, &converted, &error)) {
     return ErrorResult(error);
   }
   auto reply = xenon::ipc::mojom::IpcResult::New();
@@ -2137,8 +2183,18 @@ void XenonIpcMainContainer::NativeSendToRenderer(gin::Arguments* args) {
   v8::Local<v8::Value> value = args->PeekNext();
   base::Value arguments;
   std::string error;
-  if (value.IsEmpty() || !V8ToValue(value, &arguments, &error)) {
-    args->ThrowTypeError(error.empty() ? "Invalid IPC arguments" : error);
+  const bool serialized = !IsInternalIpcChannel(channel);
+  const bool converted =
+      !value.IsEmpty() &&
+      (serialized
+           ? SerializeIpcValue(isolate_, context_.Get(isolate_), value,
+                               /*rethrow_exception=*/true, &arguments, &error)
+           : V8ToValue(value, &arguments, &error));
+  if (!converted) {
+    if (!serialized) {
+      args->ThrowTypeError(error.empty() ? "Invalid private IPC arguments"
+                                         : error);
+    }
     return;
   }
   if (endpoint_id == "*") {
@@ -2668,10 +2724,14 @@ void XenonIpcMainContainer::CompletePromise(PromiseReplyContext* reply,
                                             v8::Local<v8::Value> value) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   pending_promise_replies_.erase(reply);
+  if (!reply->callback) {
+    delete reply;
+    return;
+  }
   if (success) {
     base::Value converted;
     std::string error;
-    if (!V8ToValue(value, &converted, &error)) {
+    if (!V8ToIpcPayload(value, reply->serialized, &converted, &error)) {
       std::move(reply->callback).Run(ErrorResult(error));
     } else {
       auto result = xenon::ipc::mojom::IpcResult::New();
@@ -2687,11 +2747,23 @@ void XenonIpcMainContainer::CompletePromise(PromiseReplyContext* reply,
   delete reply;
 }
 
+void XenonIpcMainContainer::FailPendingPromisesForEndpoint(
+    const std::string& endpoint_id,
+    const std::string& error) {
+  for (PromiseReplyContext* reply : pending_promise_replies_) {
+    if (reply->endpoint_id == endpoint_id && reply->callback) {
+      std::move(reply->callback).Run(ErrorResult(error));
+    }
+  }
+}
+
 void XenonIpcMainContainer::FailAllPendingPromises(const std::string& error) {
   std::set<PromiseReplyContext*> pending;
   pending.swap(pending_promise_replies_);
   for (PromiseReplyContext* reply : pending) {
-    std::move(reply->callback).Run(ErrorResult(error));
+    if (reply->callback) {
+      std::move(reply->callback).Run(ErrorResult(error));
+    }
     delete reply;
   }
 }

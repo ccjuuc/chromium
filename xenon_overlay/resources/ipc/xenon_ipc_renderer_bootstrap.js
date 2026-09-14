@@ -57,11 +57,17 @@
       return new EventEmitter();
     }
     this.events_ = new Map();
+    this.maxListeners_ = undefined;
+  }
+  function validateListener(listener) {
+    if (typeof listener !== 'function') {
+      throw new TypeError('The "listener" argument must be a function');
+    }
   }
   EventEmitter.prototype.on = function(name, listener) {
-    if (typeof listener !== 'function') {
-      throw new TypeError('IPC listener must be a function');
-    }
+    validateListener(listener);
+    if (name !== 'newListener')
+      this.emit('newListener', name, listener);
     const listeners = this.events_.get(name) || [];
     listeners.push(listener);
     this.events_.set(name, listeners);
@@ -71,16 +77,30 @@
     return this.on(name, listener);
   };
   EventEmitter.prototype.once = function(name, listener) {
+    validateListener(listener);
     const wrapped = (...args) => {
       this.removeListener(name, wrapped);
       return listener.apply(this, args);
     };
     wrapped.listener = listener;
-    return this.on(name, wrapped);
+    if (name !== 'newListener')
+      this.emit('newListener', name, listener);
+    const listeners = this.events_.get(name) || [];
+    listeners.push(wrapped);
+    this.events_.set(name, listeners);
+    return this;
   };
   EventEmitter.prototype.emit = function(name, ...args) {
     const listeners = this.events_.get(name);
     if (!listeners || !listeners.length) {
+      if (name === 'error') {
+        const error = args[0];
+        throw error instanceof Error ?
+            error :
+            new Error(
+                'Unhandled error.' +
+                (error === undefined ? '' : ` (${error})`));
+      }
       return false;
     }
     for (const listener of [...listeners]) {
@@ -89,17 +109,30 @@
     return true;
   };
   EventEmitter.prototype.removeListener = function(name, listener) {
+    validateListener(listener);
     const listeners = this.events_.get(name);
     if (!listeners) {
       return this;
     }
-    const remaining = listeners.filter(
-        candidate => candidate !== listener && candidate.listener !== listener);
+    let index = -1;
+    for (let i = listeners.length - 1; i >= 0; --i) {
+      if (listeners[i] === listener || listeners[i].listener === listener) {
+        index = i;
+        break;
+      }
+    }
+    if (index < 0)
+      return this;
+    const removed = listeners[index].listener || listeners[index];
+    const remaining = listeners.slice();
+    remaining.splice(index, 1);
     if (remaining.length) {
       this.events_.set(name, remaining);
     } else {
       this.events_.delete(name);
     }
+    if (name !== 'removeListener')
+      this.emit('removeListener', name, removed);
     return this;
   };
   EventEmitter.prototype.off = function(name, listener) {
@@ -107,27 +140,82 @@
   };
   EventEmitter.prototype.removeAllListeners = function(name) {
     if (name === undefined) {
-      this.events_.clear();
-    } else {
-      this.events_.delete(name);
+      if (!this.events_.has('removeListener')) {
+        this.events_.clear();
+        return this;
+      }
+      for (const eventName of [...this.events_.keys()]) {
+        if (eventName !== 'removeListener')
+          this.removeAllListeners(eventName);
+      }
+      this.removeAllListeners('removeListener');
+      return this;
+    }
+    const listeners = this.events_.get(name);
+    if (!listeners)
+      return this;
+    for (let i = listeners.length - 1; i >= 0; --i) {
+      this.removeListener(name, listeners[i]);
     }
     return this;
   };
   EventEmitter.prototype.listeners = function(name) {
+    return (this.events_.get(name) || [])
+        .map(listener => listener.listener || listener);
+  };
+  EventEmitter.prototype.rawListeners = function(name) {
     return [...(this.events_.get(name) || [])];
   };
-  EventEmitter.prototype.listenerCount = function(name) {
-    return (this.events_.get(name) || []).length;
+  EventEmitter.prototype.listenerCount = function(name, listener) {
+    const listeners = this.events_.get(name) || [];
+    if (listener === undefined)
+      return listeners.length;
+    validateListener(listener);
+    return listeners
+        .filter(item => item === listener || item.listener === listener)
+        .length;
   };
-  EventEmitter.prototype.setMaxListeners = function(_n) {
+  EventEmitter.prototype.prependListener = function(name, listener) {
+    validateListener(listener);
+    if (name !== 'newListener')
+      this.emit('newListener', name, listener);
+    const listeners = this.events_.get(name) || [];
+    listeners.unshift(listener);
+    this.events_.set(name, listeners);
+    return this;
+  };
+  EventEmitter.prototype.prependOnceListener = function(name, listener) {
+    validateListener(listener);
+    const wrapped = (...args) => {
+      this.removeListener(name, wrapped);
+      return listener.apply(this, args);
+    };
+    wrapped.listener = listener;
+    if (name !== 'newListener')
+      this.emit('newListener', name, listener);
+    const listeners = this.events_.get(name) || [];
+    listeners.unshift(wrapped);
+    this.events_.set(name, listeners);
+    return this;
+  };
+  EventEmitter.prototype.eventNames = function() {
+    return [...this.events_.keys()];
+  };
+  EventEmitter.prototype.setMaxListeners = function(n) {
+    if (typeof n !== 'number' || n < 0 || Number.isNaN(n)) {
+      throw new RangeError('The value of "n" is out of range');
+    }
+    this.maxListeners_ = n;
     return this;
   };
   EventEmitter.prototype.getMaxListeners = function() {
-    return 100;
+    return this.maxListeners_ === undefined ? EventEmitter.defaultMaxListeners :
+                                              this.maxListeners_;
   };
+  EventEmitter.listenerCount = (emitter, name) => emitter.listenerCount(name);
   EventEmitter.EventEmitter = EventEmitter;
   EventEmitter.default = EventEmitter;
-  EventEmitter.defaultMaxListeners = 100;
+  EventEmitter.defaultMaxListeners = 10;
 
   // Node's async_hooks implementation is embedder-backed. Hosted renderers
   // still need its public context API for libraries such as OpenTelemetry.
@@ -242,6 +330,9 @@
       transport.sendSync(channel, ...args);
   ipcRenderer.invoke = (channel, ...args) => transport.invoke(channel, ...args);
   ipcRenderer.postMessage = (channel, message, transfer) => {
+    if (transfer !== undefined && !Array.isArray(transfer)) {
+      throw new TypeError('The "transfer" argument must be an array');
+    }
     if (transfer && transfer.length) {
       throw new TypeError('MessagePort transfer is not supported by this transport');
     }
@@ -262,7 +353,7 @@
         dispatchNodeAddon && dispatchNodeAddon(channel, values)) {
       return;
     }
-    ipcRenderer.emit(channel, {sender: ipcRenderer}, ...values);
+    ipcRenderer.emit(channel, {sender: ipcRenderer, ports: []}, ...values);
   });
 
   function getAppPathByName(name) {

@@ -5,6 +5,8 @@
 #ifndef XENON_OVERLAY_CHROME_RENDERER_IPC_XENON_IPC_RENDERER_H_
 #define XENON_OVERLAY_CHROME_RENDERER_IPC_XENON_IPC_RENDERER_H_
 
+#include <cstdint>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -76,13 +78,19 @@ class XenonIpcRenderer final : public xenon::ipc::mojom::IpcRenderer,
   bool EnsureNodeAddonConnected();
   bool ReadChannelAndArguments(gin::Arguments* args,
                                std::string* channel,
-                               base::Value* arguments);
+                               base::Value* arguments,
+                               bool* serialized);
   void DispatchNow(const std::string& channel, const base::Value& arguments);
   void OnHostDisconnected();
-  void OnInvoke(v8::Global<v8::Context> global_context,
-                v8::Global<v8::Promise::Resolver> resolver_global,
-                v8::Isolate* isolate,
-                xenon::ipc::mojom::IpcResultPtr result);
+  uint64_t AddPendingInvoke(v8::Local<v8::Promise::Resolver> resolver,
+                            bool serialized);
+  void RejectPendingInvokes(const std::string& error);
+  void OnInvoke(uint64_t request_id, xenon::ipc::mojom::IpcResultPtr result);
+
+  struct PendingInvoke {
+    v8::Global<v8::Promise::Resolver> resolver;
+    bool serialized = false;
+  };
 
   // JavaScript method wrappers retain this binding, even if another context
   // keeps an old wrapper alive. The document observer revokes the transport
@@ -95,6 +103,8 @@ class XenonIpcRenderer final : public xenon::ipc::mojom::IpcRenderer,
   mojo::Receiver<xenon::ipc::mojom::IpcRenderer> receiver_{this};
   v8::Global<v8::Function> dispatch_handler_;
   std::vector<std::pair<std::string, base::Value>> queued_events_;
+  uint64_t next_invoke_id_ = 1;
+  std::map<uint64_t, PendingInvoke> pending_invokes_;
 
   base::WeakPtrFactory<XenonIpcRenderer> weak_factory_{this};
 };

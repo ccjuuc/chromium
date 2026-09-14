@@ -9,8 +9,11 @@
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/memory/ref_counted.h"
 #include "base/strings/string_split.h"
 #include "base/task/thread_pool.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "base/uuid.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/global_routing_id.h"
@@ -18,6 +21,7 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
+#include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "net/base/filename_util.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "url/origin.h"
@@ -31,6 +35,52 @@
 #include "xenon_overlay/public/xenon_ipc_switches.h"
 
 namespace xenon::ipc {
+
+namespace {
+
+constexpr base::TimeDelta kSynchronousIpcTimeout = base::Seconds(30);
+
+xenon::ipc::mojom::IpcResultPtr SynchronousIpcTimeoutResult() {
+  auto result = xenon::ipc::mojom::IpcResult::New();
+  result->success = false;
+  result->value = base::Value();
+  result->error = "Synchronous ipcMain request timed out after 30 seconds";
+  return result;
+}
+
+// A synchronous renderer call is represented by an asynchronous Browser to
+// Utility hop. Completion, pipe failure and timeout may race; only the first
+// result may unblock the renderer, and late results must be harmless.
+class SynchronousIpcReplyState
+    : public base::RefCounted<SynchronousIpcReplyState> {
+ public:
+  explicit SynchronousIpcReplyState(
+      xenon::ipc::mojom::IpcHost::SendSyncCallback callback)
+      : callback_(std::move(callback)) {}
+
+  void StartTimeout() {
+    timeout_.Start(FROM_HERE, kSynchronousIpcTimeout, this,
+                   &SynchronousIpcReplyState::OnTimeout);
+  }
+
+  void Reply(xenon::ipc::mojom::IpcResultPtr result) {
+    if (callback_) {
+      timeout_.Stop();
+      std::move(callback_).Run(std::move(result));
+    }
+  }
+
+ private:
+  friend class base::RefCounted<SynchronousIpcReplyState>;
+  ~SynchronousIpcReplyState() = default;
+
+  void OnTimeout() { Reply(SynchronousIpcTimeoutResult()); }
+
+  xenon::ipc::mojom::IpcHost::SendSyncCallback callback_;
+  base::OneShotTimer timeout_;
+};
+
+}  // namespace
 
 // static
 void XenonIpcDocumentHost::Create(
@@ -78,6 +128,8 @@ void XenonIpcDocumentHost::AttachGuest(
     const base::UnguessableToken& frame_token,
     base::Value preferences,
     AttachGuestCallback callback) {
+  callback = mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(callback),
+                                                         UnavailableResult());
   auto fail = [&callback](const std::string& error) {
     auto result = xenon::ipc::mojom::IpcResult::New();
     result->success = false;
@@ -254,6 +306,8 @@ void XenonIpcDocumentHost::Send(const std::string& channel,
 void XenonIpcDocumentHost::Invoke(const std::string& channel,
                                   base::Value arguments,
                                   InvokeCallback callback) {
+  callback = mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(callback),
+                                                         UnavailableResult());
   if (!IsAllowedDocument() || endpoint_id_.empty() ||
       channel == "__xenon:register-guest") {
     std::move(callback).Run(UnavailableResult());
@@ -299,6 +353,12 @@ void XenonIpcDocumentHost::SendSync(const std::string& channel,
     std::move(callback).Run(UnavailableResult());
     return;
   }
+  auto reply_state =
+      base::MakeRefCounted<SynchronousIpcReplyState>(std::move(callback));
+  reply_state->StartTimeout();
+  callback = mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+      base::BindOnce(&SynchronousIpcReplyState::Reply, reply_state),
+      UnavailableResult());
   if (channel == "__xenon:renderer-web-preferences") {
     arguments = base::Value(
         base::ListValue().Append(render_frame_host().IsInPrimaryMainFrame()));

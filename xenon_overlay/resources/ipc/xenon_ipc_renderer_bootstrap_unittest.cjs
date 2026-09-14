@@ -17,13 +17,14 @@ const addonPath = 'C:\\test-app\\fixture.node';
 // only its native transport. No application modules or network are involved.
 function createRenderer(exportsList = [], overrides = {}, withWindow = false) {
   const calls = [];
+  let dispatchHandler;
   const transport = {
     getRuntimeConfig: () => ({
       appPath: 'C:\\test-app',
       exeDir: 'C:\\test-app',
       execPath: 'C:\\test-app\\host.exe',
     }),
-    setDispatchHandler() {},
+    setDispatchHandler(handler) { dispatchHandler = handler; },
     sendSync(channel, options) {
       assert.equal(channel, '__xenon:fs');
       assert.equal(options.operation, 'exists');
@@ -67,6 +68,7 @@ function createRenderer(exportsList = [], overrides = {}, withWindow = false) {
   return {
     calls,
     context,
+    dispatch: (channel, args) => dispatchHandler(channel, args),
     load: () => context.require(addonPath),
   };
 }
@@ -268,6 +270,75 @@ test('universal ipcRenderer.send and app.getName without business hooks', () => 
   assert.deepEqual(sent, [['AplayerWndBind', 12345]]);
   assert.equal(context.__xenonLastAplayerWnd__, undefined);
   assert.equal(context.__xenonPlayerHostApi__, undefined);
+});
+
+test('ipcRenderer forwards async, sync, invoke and postMessage values unchanged', async () => {
+  const calls = [];
+  const rejection = new Error('transport disconnected');
+  const {context} = createRenderer([], {
+    send(...args) { calls.push(['send', ...args]); },
+    sendSync(...args) {
+      calls.push(['sendSync', ...args]);
+      return {ok: true};
+    },
+    invoke(...args) {
+      calls.push(['invoke', ...args]);
+      return args[0] === 'reject' ? Promise.reject(rejection) : Promise.resolve(42);
+    },
+    postMessage(...args) { calls.push(['postMessage', ...args]); },
+  });
+  const ipcRenderer = context.require('electron').ipcRenderer;
+  const payload = vm.runInContext('({missing: undefined, big: 7n})', context);
+  ipcRenderer.send('send', payload);
+  assert.equal(ipcRenderer.sendSync('sync', payload).ok, true);
+  assert.equal(await ipcRenderer.invoke('invoke', payload), 42);
+  await assert.rejects(ipcRenderer.invoke('reject'), error => error === rejection);
+  ipcRenderer.postMessage('post', payload, []);
+  assert.deepEqual(calls.map(call => call[0]),
+      ['send', 'sendSync', 'invoke', 'invoke', 'postMessage']);
+  assert.equal(calls[0][2], payload);
+  assert.equal(calls[4][2], payload);
+  assert.throws(
+      () => ipcRenderer.postMessage('post', payload, [{}]),
+      /MessagePort transfer is not supported/);
+  assert.throws(() => ipcRenderer.postMessage('post', payload, {}),
+      /"transfer" argument must be an array/);
+});
+
+test('ipcRenderer events expose Electron event shape and EventEmitter semantics', () => {
+  const {context, dispatch} = createRenderer();
+  const ipcRenderer = context.require('electron').ipcRenderer;
+  const order = [];
+  function repeated() { order.push('repeated'); }
+  function once() { order.push('once'); }
+  ipcRenderer.on('fixture', repeated);
+  ipcRenderer.on('fixture', repeated);
+  ipcRenderer.once('fixture', once);
+  ipcRenderer.prependListener('fixture', () => order.push('first'));
+  assert.equal(ipcRenderer.listenerCount('fixture', repeated), 2);
+  assert.equal(ipcRenderer.listeners('fixture')[3], once);
+  assert.notEqual(ipcRenderer.rawListeners('fixture')[3], once);
+  ipcRenderer.removeListener('fixture', repeated);
+  assert.equal(ipcRenderer.listenerCount('fixture', repeated), 1);
+
+  let receivedEvent;
+  let receivedValue;
+  ipcRenderer.on('fixture', (event, value) => {
+    receivedEvent = event;
+    receivedValue = value;
+  });
+  dispatch('fixture', [17]);
+  assert.deepEqual(order, ['first', 'repeated', 'once']);
+  assert.equal(receivedEvent.sender, ipcRenderer);
+  assert.deepEqual(Array.from(receivedEvent.ports), []);
+  assert.equal(receivedValue, 17);
+  assert.equal(ipcRenderer.listenerCount('fixture'), 3);
+  assert.throws(() => ipcRenderer.on('invalid', null), {name: 'TypeError'});
+  assert.throws(() => ipcRenderer.emit('error', new Error('unhandled')),
+      /unhandled/);
+  ipcRenderer.setMaxListeners(0);
+  assert.equal(ipcRenderer.getMaxListeners(), 0);
+  assert.deepEqual(Array.from(ipcRenderer.eventNames()), ['fixture']);
 });
 
 test('executable identity is document-scoped and is not renamed to the app name', () => {

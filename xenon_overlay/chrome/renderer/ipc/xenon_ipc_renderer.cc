@@ -30,6 +30,7 @@
 #include "v8/include/v8-object.h"
 #include "v8/include/v8-promise.h"
 #include "v8/include/v8-script.h"
+#include "xenon_overlay/common/ipc/xenon_ipc_value_codec.h"
 #include "xenon_overlay/resources/grit/xenon_resources.h"
 
 namespace xenon::ipc {
@@ -78,6 +79,11 @@ xenon::ipc::mojom::IpcResultPtr DisconnectedResult() {
   result->value = base::Value();
   result->error = "Browser ipcMain connection was closed";
   return result;
+}
+
+void ThrowIpcError(gin::Arguments* args, const std::string& error) {
+  args->isolate()->ThrowException(v8::Exception::Error(
+      gin::StringToV8(args->isolate(), error).As<v8::String>()));
 }
 
 }  // namespace
@@ -192,6 +198,7 @@ void XenonIpcRenderer::Shutdown() {
   context_.Reset();
   dispatch_handler_.Reset();
   queued_events_.clear();
+  pending_invokes_.clear();
   receiver_.reset();
   node_addon_host_.reset();
   host_.reset();
@@ -309,7 +316,8 @@ bool XenonIpcRenderer::EnsureNodeAddonConnected() {
 
 bool XenonIpcRenderer::ReadChannelAndArguments(gin::Arguments* args,
                                                std::string* channel,
-                                               base::Value* arguments) {
+                                               base::Value* arguments,
+                                               bool* serialized) {
   v8::LocalVector<v8::Value> all = args->GetAll();
   if (all.empty() || !gin::ConvertFromV8(args->isolate(), all[0], channel)) {
     args->ThrowTypeError("IPC channel must be a string");
@@ -321,10 +329,20 @@ bool XenonIpcRenderer::ReadChannelAndArguments(gin::Arguments* args,
   for (size_t i = 1; i < all.size(); ++i) {
     array->Set(context, static_cast<uint32_t>(i - 1), all[i]).Check();
   }
+  *serialized = !IsInternalIpcChannel(*channel);
+  if (*serialized) {
+    std::string error;
+    if (!SerializeIpcValue(args->isolate(), context, array,
+                           /*rethrow_exception=*/true, arguments, &error)) {
+      return false;
+    }
+    return true;
+  }
+
   std::unique_ptr<base::Value> converted =
       content::V8ValueConverter::Create()->FromV8Value(array, context);
   if (!converted || !converted->is_list()) {
-    args->ThrowTypeError("IPC arguments are not structured-clone compatible");
+    args->ThrowTypeError("Invalid private IPC arguments");
     return false;
   }
   *arguments = std::move(*converted);
@@ -334,16 +352,21 @@ bool XenonIpcRenderer::ReadChannelAndArguments(gin::Arguments* args,
 void XenonIpcRenderer::Send(gin::Arguments* args) {
   std::string channel;
   base::Value arguments;
-  if (!ReadChannelAndArguments(args, &channel, &arguments) ||
-      !EnsureConnected()) {
+  bool serialized = false;
+  if (!ReadChannelAndArguments(args, &channel, &arguments, &serialized)) {
+    return;
+  }
+  if (!EnsureConnected()) {
+    ThrowIpcError(args, "Browser ipcMain connection is unavailable");
     return;
   }
   host_->Send(channel, std::move(arguments));
 }
 
 void XenonIpcRenderer::PostMessage(gin::Arguments* args) {
-  // MessagePort transfer is added in the transport phase. Until then this has
-  // Electron's data semantics and deliberately ignores the transfer list.
+  // The JavaScript facade rejects non-empty transfer lists until MessagePort
+  // ownership can be represented by the transport. The message itself uses
+  // the same structured-clone wire format as send().
   Send(args);
 }
 
@@ -362,15 +385,18 @@ void XenonIpcRenderer::AttachGuest(gin::Arguments* args) {
   auto preferences = content::V8ValueConverter::Create()->FromV8Value(
       preferences_value, context);
   if (!frame || !frame->IsWebLocalFrame() || !preferences ||
-      !preferences->is_dict() || !EnsureConnected()) {
+      !preferences->is_dict()) {
     args->ThrowTypeError("Guest frame must be connected and local");
     return;
   }
+  if (!EnsureConnected()) {
+    ThrowIpcError(args, "Browser ipcMain connection is unavailable");
+    return;
+  }
   auto resolver = v8::Promise::Resolver::New(context).ToLocalChecked();
-  auto callback = base::BindOnce(
-      &XenonIpcRenderer::OnInvoke, weak_factory_.GetWeakPtr(),
-      v8::Global<v8::Context>(isolate, context),
-      v8::Global<v8::Promise::Resolver>(isolate, resolver), isolate);
+  const uint64_t request_id = AddPendingInvoke(resolver, false);
+  auto callback = base::BindOnce(&XenonIpcRenderer::OnInvoke,
+                                 weak_factory_.GetWeakPtr(), request_id);
   host_->AttachGuest(frame->ToWebLocalFrame()->GetLocalFrameToken().value(),
                      std::move(*preferences),
                      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
@@ -388,7 +414,8 @@ void XenonIpcRenderer::Invoke(gin::Arguments* args) {
 
   std::string channel;
   base::Value arguments;
-  if (!ReadChannelAndArguments(args, &channel, &arguments)) {
+  bool serialized = false;
+  if (!ReadChannelAndArguments(args, &channel, &arguments, &serialized)) {
     return;
   }
   if (!EnsureConnected()) {
@@ -403,72 +430,107 @@ void XenonIpcRenderer::Invoke(gin::Arguments* args) {
     return;
   }
 
-  v8::Global<v8::Context> global_context(isolate, context);
-  v8::Global<v8::Promise::Resolver> resolver_global(isolate, resolver);
-  auto callback = base::BindOnce(
-      &XenonIpcRenderer::OnInvoke, weak_factory_.GetWeakPtr(),
-      std::move(global_context), std::move(resolver_global), isolate);
+  const uint64_t request_id = AddPendingInvoke(resolver, serialized);
+  auto callback = base::BindOnce(&XenonIpcRenderer::OnInvoke,
+                                 weak_factory_.GetWeakPtr(), request_id);
   host_->Invoke(channel, std::move(arguments),
                 mojo::WrapCallbackWithDefaultInvokeIfNotRun(
                     std::move(callback), DisconnectedResult()));
   args->Return(resolver->GetPromise());
 }
 
-void XenonIpcRenderer::OnInvoke(
-    v8::Global<v8::Context> global_context,
-    v8::Global<v8::Promise::Resolver> resolver_global,
-    v8::Isolate* isolate,
-    xenon::ipc::mojom::IpcResultPtr result) {
+uint64_t XenonIpcRenderer::AddPendingInvoke(
+    v8::Local<v8::Promise::Resolver> resolver,
+    bool serialized) {
+  const uint64_t request_id = next_invoke_id_++;
+  pending_invokes_.emplace(
+      request_id,
+      PendingInvoke{v8::Global<v8::Promise::Resolver>(isolate_, resolver),
+                    serialized});
+  return request_id;
+}
+
+void XenonIpcRenderer::OnInvoke(uint64_t request_id,
+                                xenon::ipc::mojom::IpcResultPtr result) {
   scoped_refptr<XenonIpcRenderer> keep_alive(this);
-  if (context_.IsEmpty() || global_context.IsEmpty() ||
-      resolver_global.IsEmpty()) {
+  auto pending = pending_invokes_.find(request_id);
+  if (context_.IsEmpty() || pending == pending_invokes_.end()) {
     return;
   }
-  v8::HandleScope handle_scope(isolate);
-  v8::Local<v8::Context> context = global_context.Get(isolate);
-  if (context != context_.Get(isolate)) {
-    return;
-  }
+  PendingInvoke invoke = std::move(pending->second);
+  pending_invokes_.erase(pending);
+  v8::HandleScope handle_scope(isolate_);
+  v8::Local<v8::Context> context = context_.Get(isolate_);
   v8::Context::Scope context_scope(context);
   // Renderer isolates use scoped microtasks. Mojo replies arrive outside the
   // original JavaScript call, so resolving or rejecting here requires an
   // active scope; Blink performs the actual checkpoint after this task.
-  v8::MicrotasksScope microtasks(isolate, context->GetMicrotaskQueue(),
+  v8::MicrotasksScope microtasks(isolate_, context->GetMicrotaskQueue(),
                                  v8::MicrotasksScope::kDoNotRunMicrotasks);
-  v8::Local<v8::Promise::Resolver> resolver = resolver_global.Get(isolate);
+  v8::Local<v8::Promise::Resolver> resolver = invoke.resolver.Get(isolate_);
   if (!result || !result->success) {
     const std::string error = result ? result->error : "Invalid IPC reply";
     resolver
-        ->Reject(context, v8::Exception::Error(
-                              gin::StringToV8(isolate, error).As<v8::String>()))
+        ->Reject(context,
+                 v8::Exception::Error(
+                     gin::StringToV8(isolate_, error).As<v8::String>()))
         .Check();
     return;
   }
-  v8::Local<v8::Value> value =
-      content::V8ValueConverter::Create()->ToV8Value(result->value, context);
+  v8::Local<v8::Value> value;
+  if (invoke.serialized) {
+    std::string error;
+    if (!DeserializeIpcValue(isolate_, context, result->value, &error)
+             .ToLocal(&value)) {
+      resolver
+          ->Reject(context, v8::Exception::Error(
+                                gin::StringToV8(
+                                    isolate_,
+                                    error.empty() ? "Invalid IPC reply" : error)
+                                    .As<v8::String>()))
+          .Check();
+      return;
+    }
+  } else {
+    value =
+        content::V8ValueConverter::Create()->ToV8Value(result->value, context);
+  }
   resolver->Resolve(context, value).Check();
 }
 
 void XenonIpcRenderer::SendSync(gin::Arguments* args) {
   std::string channel;
   base::Value arguments;
-  if (!ReadChannelAndArguments(args, &channel, &arguments)) {
+  bool serialized = false;
+  if (!ReadChannelAndArguments(args, &channel, &arguments, &serialized)) {
     return;
   }
   if (!EnsureConnected()) {
-    args->ThrowTypeError("Browser ipcMain connection is unavailable");
+    ThrowIpcError(args, "Browser ipcMain connection is unavailable");
     return;
   }
   xenon::ipc::mojom::IpcResultPtr result;
   if (!host_->SendSync(channel, std::move(arguments), &result) || !result) {
-    args->ThrowTypeError("Synchronous Browser IPC failed");
+    ThrowIpcError(args, "Synchronous Browser IPC failed");
     return;
   }
   if (!result->success) {
-    args->ThrowTypeError(result->error);
+    ThrowIpcError(args, result->error);
     return;
   }
   v8::Local<v8::Context> context = args->GetHolderCreationContext();
+  if (serialized) {
+    std::string error;
+    v8::Local<v8::Value> value;
+    if (!DeserializeIpcValue(isolate_, context, result->value, &error)
+             .ToLocal(&value)) {
+      ThrowIpcError(args,
+                    error.empty() ? "Invalid synchronous IPC reply" : error);
+      return;
+    }
+    args->GetFunctionCallbackInfo()->GetReturnValue().Set(value);
+    return;
+  }
   args->GetFunctionCallbackInfo()->GetReturnValue().Set(
       content::V8ValueConverter::Create()->ToV8Value(result->value, context));
 }
@@ -702,10 +764,21 @@ void XenonIpcRenderer::DispatchNow(const std::string& channel,
   v8::Context::Scope context_scope(context);
   v8::MicrotasksScope microtasks(isolate, context->GetMicrotaskQueue(),
                                  v8::MicrotasksScope::kDoNotRunMicrotasks);
-  v8::Local<v8::Value> argv[] = {
-      gin::StringToV8(isolate, channel),
-      content::V8ValueConverter::Create()->ToV8Value(arguments, context),
-  };
+  v8::Local<v8::Value> decoded_arguments;
+  if (IsSerializedIpcValue(arguments)) {
+    std::string error;
+    if (!DeserializeIpcValue(isolate, context, arguments, &error)
+             .ToLocal(&decoded_arguments)) {
+      LOG(ERROR) << "Failed to decode ipcRenderer event '" << channel
+                 << "': " << error;
+      return;
+    }
+  } else {
+    decoded_arguments =
+        content::V8ValueConverter::Create()->ToV8Value(arguments, context);
+  }
+  v8::Local<v8::Value> argv[] = {gin::StringToV8(isolate, channel),
+                                 decoded_arguments};
   gin::TryCatch try_catch(isolate);
   if (dispatch_handler_.Get(isolate)
           ->Call(context, context->Global(), std::size(argv), argv)
@@ -715,8 +788,27 @@ void XenonIpcRenderer::DispatchNow(const std::string& channel,
   }
 }
 
+void XenonIpcRenderer::RejectPendingInvokes(const std::string& error) {
+  if (context_.IsEmpty() || pending_invokes_.empty()) {
+    pending_invokes_.clear();
+    return;
+  }
+  v8::HandleScope handle_scope(isolate_);
+  v8::Local<v8::Context> context = context_.Get(isolate_);
+  v8::Context::Scope context_scope(context);
+  v8::MicrotasksScope microtasks(isolate_, context->GetMicrotaskQueue(),
+                                 v8::MicrotasksScope::kDoNotRunMicrotasks);
+  v8::Local<v8::Value> exception =
+      v8::Exception::Error(gin::StringToV8(isolate_, error).As<v8::String>());
+  for (auto& entry : pending_invokes_) {
+    entry.second.resolver.Get(isolate_)->Reject(context, exception).Check();
+  }
+  pending_invokes_.clear();
+}
+
 void XenonIpcRenderer::OnHostDisconnected() {
   scoped_refptr<XenonIpcRenderer> keep_alive(this);
+  RejectPendingInvokes("Browser ipcMain connection was closed");
   Shutdown();
 }
 

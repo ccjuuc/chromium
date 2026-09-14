@@ -23,13 +23,20 @@
 #include "base/run_loop.h"
 #include "base/test/test_future.h"
 #include "components/version_info/version_info.h"
+#include "gin/converter.h"
 #include "gin/test/v8_test.h"
 #include "mojo/core/embedder/embedder.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "v8/include/v8-container.h"
+#include "v8/include/v8-context.h"
+#include "v8/include/v8-function.h"
+#include "v8/include/v8-object.h"
+#include "v8/include/v8-script.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_app_runtime.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_file_system_bridge.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_os_bridge.h"
+#include "xenon_overlay/common/ipc/xenon_ipc_value_codec.h"
 #include "xenon_overlay/services/xenon_node_executor.h"
 
 namespace xenon::ipc {
@@ -38,6 +45,7 @@ namespace {
 
 constexpr char kTestMainSource[] = R"JS(
 const {app, BrowserWindow, ipcMain, systemPreferences, Menu, nativeImage} = require('electron');
+const EventEmitter = require('events');
 const net = require('net');
 const path = require('node:path');
 const os = require('os');
@@ -55,6 +63,41 @@ ipcMain.on('test:increment', (_event, amount) => {
 });
 ipcMain.handle('test:get', () => persistentCounter);
 ipcMain.handle('test:async-add', async (_event, left, right) => left + right);
+ipcMain.handle('test:structured-clone-echo', (_event, value) => value);
+ipcMain.handle('test:throws', () => { throw new Error('sync handler failed'); });
+ipcMain.handle('test:rejects', async () => { throw new Error('async handler failed'); });
+ipcMain.handle('test:never-settles', () => new Promise(() => {}));
+ipcMain.handle('test:event-emitter-contract', () => {
+  const emitter = new EventEmitter();
+  const order = [];
+  function repeated() { order.push('repeated'); }
+  function once() { order.push('once'); }
+  emitter.on('fixture', repeated);
+  emitter.on('fixture', repeated);
+  emitter.once('fixture', once);
+  emitter.prependListener('fixture', () => order.push('first'));
+  const onceIsUnwrapped = emitter.listeners('fixture')[3] === once;
+  const rawOnceIsWrapped = emitter.rawListeners('fixture')[3] !== once;
+  emitter.removeListener('fixture', repeated);
+  const duplicateCount = emitter.listenerCount('fixture', repeated);
+  emitter.emit('fixture');
+  let unhandledError = false;
+  try {
+    emitter.emit('error', new Error('fixture error'));
+  } catch (error) {
+    unhandledError = error.message === 'fixture error';
+  }
+  emitter.setMaxListeners(0);
+  return {
+    onceIsUnwrapped,
+    rawOnceIsWrapped,
+    duplicateCount,
+    order: order.join(','),
+    remainingCount: emitter.listenerCount('fixture'),
+    unhandledError,
+    maxListeners: emitter.getMaxListeners(),
+  };
+});
 ipcMain.handle('test:delayed-add', (_event, left, right) =>
     new Promise(resolve => setTimeout(() => resolve(left + right), 10)));
 ipcMain.handle('test:next-tick', () => new Promise(resolve => {
@@ -331,6 +374,24 @@ class XenonIpcMainContainerTest : public gin::V8Test {
     gin::V8Test::TearDown();
   }
 
+  void ExpectSerializedIntegerArguments(const base::Value& arguments,
+                                        int expected) {
+    ASSERT_TRUE(IsSerializedIpcValue(arguments));
+    v8::HandleScope handle_scope(instance_->isolate());
+    v8::Local<v8::Context> context =
+        v8::Local<v8::Context>::New(instance_->isolate(), context_);
+    std::string error;
+    v8::Local<v8::Value> decoded;
+    ASSERT_TRUE(
+        DeserializeIpcValue(instance_->isolate(), context, arguments, &error)
+            .ToLocal(&decoded))
+        << error;
+    ASSERT_TRUE(decoded->IsArray());
+    v8::Local<v8::Value> value;
+    ASSERT_TRUE(decoded.As<v8::Array>()->Get(context, 0).ToLocal(&value));
+    EXPECT_EQ(expected, value->Int32Value(context).FromMaybe(0));
+  }
+
   base::ScopedTempDir temp_dir_;
   base::FilePath main_script_;
   base::DictValue window_bounds_;
@@ -490,6 +551,154 @@ TEST_F(XenonIpcMainContainerTest, InvokeAwaitsPromise) {
   ASSERT_TRUE(result->success) << result->error;
   ASSERT_TRUE(result->value.is_int());
   EXPECT_EQ(42, result->value.GetInt());
+}
+
+TEST_F(XenonIpcMainContainerTest, ApplicationIpcUsesStructuredCloneEndToEnd) {
+  v8::Isolate* isolate = instance_->isolate();
+  v8::HandleScope handle_scope(isolate);
+  v8::Local<v8::Context> context =
+      v8::Local<v8::Context>::New(isolate, context_);
+
+  constexpr char kCreateArguments[] = R"JS((() => {
+    const cyclic = {label: 'root'};
+    cyclic.self = cyclic;
+    return [{
+      missing: undefined,
+      big: 9007199254740993n,
+      date: new Date(1700000000123),
+      regexp: /xenon/gi,
+      map: new Map([['answer', 42]]),
+      set: new Set(['a', 'b']),
+      buffer: new Uint8Array([0, 255, 17]).buffer,
+      nan: NaN,
+      infinity: Infinity,
+      cyclic,
+    }];
+  })())JS";
+  v8::Local<v8::Script> create_script;
+  ASSERT_TRUE(
+      v8::Script::Compile(
+          context, gin::StringToV8(isolate, kCreateArguments).As<v8::String>())
+          .ToLocal(&create_script));
+  v8::Local<v8::Value> arguments;
+  ASSERT_TRUE(create_script->Run(context).ToLocal(&arguments));
+
+  base::Value serialized_arguments;
+  std::string error;
+  ASSERT_TRUE(SerializeIpcValue(isolate, context, arguments,
+                                /*rethrow_exception=*/false,
+                                &serialized_arguments, &error))
+      << error;
+
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "test:structured-clone-echo",
+                     std::move(serialized_arguments), future.GetCallback());
+  xenon::ipc::mojom::IpcResultPtr result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  ASSERT_TRUE(IsSerializedIpcValue(result->value));
+
+  v8::Local<v8::Value> decoded;
+  ASSERT_TRUE(DeserializeIpcValue(isolate, context, result->value, &error)
+                  .ToLocal(&decoded))
+      << error;
+  ASSERT_TRUE(context->Global()
+                  ->Set(context,
+                        gin::StringToV8(isolate, "ipcResult").As<v8::String>(),
+                        decoded)
+                  .FromMaybe(false));
+  constexpr char kValidateResult[] = R"JS((() => {
+    const value = ipcResult;
+    return Object.hasOwn(value, 'missing') && value.missing === undefined &&
+        value.big === 9007199254740993n &&
+        value.date instanceof Date && value.date.getTime() === 1700000000123 &&
+        value.regexp instanceof RegExp && value.regexp.source === 'xenon' &&
+        value.regexp.flags === 'gi' && value.map instanceof Map &&
+        value.map.get('answer') === 42 && value.set instanceof Set &&
+        value.set.has('a') && value.set.has('b') &&
+        value.buffer instanceof ArrayBuffer &&
+        new Uint8Array(value.buffer).join(',') === '0,255,17' &&
+        Number.isNaN(value.nan) && value.infinity === Infinity &&
+        value.cyclic.self === value.cyclic;
+  })())JS";
+  v8::Local<v8::Script> validate_script;
+  ASSERT_TRUE(
+      v8::Script::Compile(
+          context, gin::StringToV8(isolate, kValidateResult).As<v8::String>())
+          .ToLocal(&validate_script));
+  v8::Local<v8::Value> valid;
+  ASSERT_TRUE(validate_script->Run(context).ToLocal(&valid));
+  EXPECT_TRUE(valid->BooleanValue(isolate));
+
+  v8::TryCatch try_catch(isolate);
+  v8::Local<v8::Function> unsupported =
+      v8::Function::New(context,
+                        [](const v8::FunctionCallbackInfo<v8::Value>&) {})
+          .ToLocalChecked();
+  base::Value ignored;
+  EXPECT_FALSE(SerializeIpcValue(isolate, context, unsupported,
+                                 /*rethrow_exception=*/true, &ignored, &error));
+  EXPECT_TRUE(try_catch.HasCaught());
+  EXPECT_FALSE(error.empty());
+}
+
+TEST_F(XenonIpcMainContainerTest, MainEventEmitterMatchesNodeContracts) {
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "test:event-emitter-contract", Arguments({}),
+                     future.GetCallback());
+  xenon::ipc::mojom::IpcResultPtr result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  ASSERT_TRUE(result->value.is_dict());
+  const base::DictValue& contract = result->value.GetDict();
+  EXPECT_EQ(true, contract.FindBool("onceIsUnwrapped"));
+  EXPECT_EQ(true, contract.FindBool("rawOnceIsWrapped"));
+  EXPECT_EQ(1, contract.FindInt("duplicateCount"));
+  EXPECT_EQ("first,repeated,once", *contract.FindString("order"));
+  EXPECT_EQ(2, contract.FindInt("remainingCount"));
+  EXPECT_EQ(true, contract.FindBool("unhandledError"));
+  EXPECT_EQ(0, contract.FindInt("maxListeners"));
+}
+
+TEST_F(XenonIpcMainContainerTest, InvokeReturnsThrownAndRejectedErrors) {
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> thrown_future;
+  container_->Invoke("renderer-1", "test:throws", Arguments({}),
+                     thrown_future.GetCallback());
+  xenon::ipc::mojom::IpcResultPtr thrown = thrown_future.Take();
+  EXPECT_FALSE(thrown->success);
+  EXPECT_NE(std::string::npos, thrown->error.find("sync handler failed"));
+
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> rejected_future;
+  container_->Invoke("renderer-1", "test:rejects", Arguments({}),
+                     rejected_future.GetCallback());
+  xenon::ipc::mojom::IpcResultPtr rejected = rejected_future.Take();
+  EXPECT_FALSE(rejected->success);
+  EXPECT_NE(std::string::npos, rejected->error.find("async handler failed"));
+}
+
+TEST_F(XenonIpcMainContainerTest, ShutdownFailsPendingInvoke) {
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "test:never-settles", Arguments({}),
+                     future.GetCallback());
+  EXPECT_FALSE(future.IsReady());
+
+  container_.reset();
+  xenon::ipc::mojom::IpcResultPtr result = future.Take();
+  EXPECT_FALSE(result->success);
+  EXPECT_NE(std::string::npos, result->error.find("container stopped"));
+}
+
+TEST_F(XenonIpcMainContainerTest, RendererDisconnectFailsPendingInvoke) {
+  FakeIpcRenderer renderer;
+  const std::string endpoint =
+      container_->AddRenderer(renderer.BindNewRemote(), 17, 23);
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke(endpoint, "test:never-settles", Arguments({}),
+                     future.GetCallback());
+  EXPECT_FALSE(future.IsReady());
+
+  container_->RemoveRenderer(endpoint);
+  xenon::ipc::mojom::IpcResultPtr result = future.Take();
+  EXPECT_FALSE(result->success);
+  EXPECT_NE(std::string::npos, result->error.find("Renderer disconnected"));
 }
 
 TEST_F(XenonIpcMainContainerTest, InvokeAwaitsPromiseResolvedByTimer) {
@@ -861,9 +1070,7 @@ TEST_F(XenonIpcMainContainerTest, MainCanReplyToOriginatingRenderer) {
 
   EXPECT_EQ("test:reply-result", renderer.dispatch_future().Get<0>());
   const base::Value& arguments = renderer.dispatch_future().Get<1>();
-  ASSERT_TRUE(arguments.is_list());
-  ASSERT_EQ(1u, arguments.GetList().size());
-  EXPECT_EQ(42, arguments.GetList()[0].GetInt());
+  ExpectSerializedIntegerArguments(arguments, 42);
 }
 
 TEST_F(XenonIpcMainContainerTest, PreloadPreferencesBelongToSenderWindow) {
@@ -1037,7 +1244,7 @@ TEST_F(XenonIpcMainContainerTest, WebContentsSendsOnlyToItsRegisteredRenderer) {
                    Arguments({base::Value(42)}));
   auto [channel, arguments] = renderer.dispatch_future().Take();
   EXPECT_EQ("test:contents-result", channel);
-  EXPECT_EQ(42, arguments.GetList()[0].GetInt());
+  ExpectSerializedIntegerArguments(arguments, 42);
   base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(unrelated_renderer.dispatch_future().IsReady());
 
@@ -1048,7 +1255,7 @@ TEST_F(XenonIpcMainContainerTest, WebContentsSendsOnlyToItsRegisteredRenderer) {
   EXPECT_TRUE(result->value.GetBool());
   auto [frame_channel, frame_arguments] = renderer.dispatch_future().Take();
   EXPECT_EQ("test:frame-result", frame_channel);
-  EXPECT_EQ(43, frame_arguments.GetList()[0].GetInt());
+  ExpectSerializedIntegerArguments(frame_arguments, 43);
 
   // A frame in a different WebContents must not receive this message.
   result = container_->SendSync(

@@ -14,8 +14,17 @@
       return new EventEmitter();
     }
     this._events = new Map();
+    this._maxListeners = undefined;
+  }
+  function validateListener(listener) {
+    if (typeof listener !== 'function') {
+      throw new TypeError('The "listener" argument must be a function');
+    }
   }
   EventEmitter.prototype.on = function(name, listener) {
+    validateListener(listener);
+    if (name !== 'newListener')
+      this.emit('newListener', name, listener);
     const listeners = this._events.get(name) || [];
     listeners.push(listener);
     this._events.set(name, listeners);
@@ -25,44 +34,138 @@
     return this.on(name, listener);
   };
   EventEmitter.prototype.once = function(name, listener) {
+    validateListener(listener);
     const wrapped = (...args) => {
       this.removeListener(name, wrapped);
       return listener.apply(this, args);
     };
     wrapped.listener = listener;
-    return this.on(name, wrapped);
+    if (name !== 'newListener')
+      this.emit('newListener', name, listener);
+    const listeners = this._events.get(name) || [];
+    listeners.push(wrapped);
+    this._events.set(name, listeners);
+    return this;
   };
   EventEmitter.prototype.emit = function(name, ...args) {
     const listeners = this._events.get(name);
-    if (!listeners || listeners.length === 0) return false;
+    if (!listeners || listeners.length === 0) {
+      if (name === 'error') {
+        const error = args[0];
+        throw error instanceof Error ?
+            error :
+            new Error(
+                'Unhandled error.' +
+                (error === undefined ? '' : ` (${error})`));
+      }
+      return false;
+    }
     for (const listener of [...listeners]) listener.apply(this, args);
     return true;
   };
   EventEmitter.prototype.removeListener = function(name, listener) {
+    validateListener(listener);
     const listeners = this._events.get(name);
-    if (!listeners) return this;
-    const filtered = listeners.filter(
-        item => item !== listener && item.listener !== listener);
-    if (filtered.length) this._events.set(name, filtered);
-    else this._events.delete(name);
+    if (!listeners)
+      return this;
+    let index = -1;
+    for (let i = listeners.length - 1; i >= 0; --i) {
+      if (listeners[i] === listener || listeners[i].listener === listener) {
+        index = i;
+        break;
+      }
+    }
+    if (index < 0)
+      return this;
+    const removed = listeners[index].listener || listeners[index];
+    const filtered = listeners.slice();
+    filtered.splice(index, 1);
+    if (filtered.length)
+      this._events.set(name, filtered);
+    else
+      this._events.delete(name);
+    if (name !== 'removeListener')
+      this.emit('removeListener', name, removed);
     return this;
   };
   EventEmitter.prototype.off = function(name, listener) {
     return this.removeListener(name, listener);
   };
   EventEmitter.prototype.removeAllListeners = function(name) {
-    if (name === undefined) this._events.clear();
-    else this._events.delete(name);
+    if (name === undefined) {
+      if (!this._events.has('removeListener')) {
+        this._events.clear();
+        return this;
+      }
+      for (const eventName of [...this._events.keys()]) {
+        if (eventName !== 'removeListener')
+          this.removeAllListeners(eventName);
+      }
+      this.removeAllListeners('removeListener');
+      return this;
+    }
+    const listeners = this._events.get(name);
+    if (!listeners)
+      return this;
+    for (let i = listeners.length - 1; i >= 0; --i) {
+      this.removeListener(name, listeners[i]);
+    }
     return this;
   };
   EventEmitter.prototype.listeners = function(name) {
+    return (this._events.get(name) || [])
+        .map(listener => listener.listener || listener);
+  };
+  EventEmitter.prototype.rawListeners = function(name) {
     return [...(this._events.get(name) || [])];
   };
-  EventEmitter.prototype.listenerCount = function(name) {
-    return (this._events.get(name) || []).length;
+  EventEmitter.prototype.listenerCount = function(name, listener) {
+    const listeners = this._events.get(name) || [];
+    if (listener === undefined)
+      return listeners.length;
+    validateListener(listener);
+    return listeners
+        .filter(item => item === listener || item.listener === listener)
+        .length;
   };
-  EventEmitter.prototype.setMaxListeners = function(n) { return this; };
-  EventEmitter.prototype.getMaxListeners = function() { return 10; };
+  EventEmitter.prototype.prependListener = function(name, listener) {
+    validateListener(listener);
+    if (name !== 'newListener')
+      this.emit('newListener', name, listener);
+    const listeners = this._events.get(name) || [];
+    listeners.unshift(listener);
+    this._events.set(name, listeners);
+    return this;
+  };
+  EventEmitter.prototype.prependOnceListener = function(name, listener) {
+    validateListener(listener);
+    const wrapped = (...args) => {
+      this.removeListener(name, wrapped);
+      return listener.apply(this, args);
+    };
+    wrapped.listener = listener;
+    if (name !== 'newListener')
+      this.emit('newListener', name, listener);
+    const listeners = this._events.get(name) || [];
+    listeners.unshift(wrapped);
+    this._events.set(name, listeners);
+    return this;
+  };
+  EventEmitter.prototype.eventNames = function() {
+    return [...this._events.keys()];
+  };
+  EventEmitter.prototype.setMaxListeners = function(n) {
+    if (typeof n !== 'number' || n < 0 || Number.isNaN(n)) {
+      throw new RangeError('The value of "n" is out of range');
+    }
+    this._maxListeners = n;
+    return this;
+  };
+  EventEmitter.prototype.getMaxListeners = function() {
+    return this._maxListeners === undefined ? EventEmitter.defaultMaxListeners :
+                                              this._maxListeners;
+  };
+  EventEmitter.listenerCount = (emitter, name) => emitter.listenerCount(name);
   EventEmitter.EventEmitter = EventEmitter;
   EventEmitter.default = EventEmitter;
   EventEmitter.defaultMaxListeners = 10;
@@ -402,6 +505,7 @@
   const invokeHandlers = new Map();
   const ipcMain = new EventEmitter();
   ipcMain.handle = (channel, handler) => {
+    validateListener(handler);
     if (invokeHandlers.has(channel)) {
       throw new Error(`Attempted to register a second handler for '${channel}'`);
     }
@@ -424,6 +528,7 @@
         processId: sender.processId,
         routingId: sender.frameId,
       },
+      ports: [],
       reply(channel, ...args) {
         __xenonSendToRenderer(sender.endpointId, channel, args);
       },
