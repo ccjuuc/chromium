@@ -125,7 +125,9 @@ class XenonPlayerElectronController
       std::vector<xenon_node::mojom::NodeInvokeCallPtr> calls) override;
 
   // mojom::NodeAddonObserver:
-  void OnCallback(int32_t callback_id, std::vector<base::Value> args) override;
+  void OnCallback(int32_t callback_id,
+                  std::vector<base::Value> args,
+                  base::Value receiver) override;
   void OnCallbackReleased(int32_t callback_id) override;
 
   // views::WidgetObserver:

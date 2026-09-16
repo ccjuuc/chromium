@@ -11,7 +11,9 @@
 
 #include "base/base64.h"
 #include "base/functional/bind.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/time/time.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_response_headers.h"
@@ -48,9 +50,21 @@ bool IsManagedRequestHeader(std::string_view name) {
          base::EqualsCaseInsensitiveASCII(name, "transfer-encoding");
 }
 
+struct RequestState {
+  std::unique_ptr<network::SimpleURLLoader> loader;
+  NetworkRequestCallback callback;
+
+  void Cancel(const std::string& message) {
+    loader.reset();
+    if (callback) {
+      std::move(callback).Run(Failure(message));
+    }
+  }
+};
+
 }  // namespace
 
-void PerformNetworkRequest(
+base::OnceClosure PerformNetworkRequest(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     base::Value arguments,
     NetworkRequestCallback callback) {
@@ -58,7 +72,7 @@ void PerformNetworkRequest(
       arguments.GetList().empty() ||
       !arguments.GetList().front().is_dict()) {
     std::move(callback).Run(Failure("EINVAL: invalid network request"));
-    return;
+    return {};
   }
 
   const base::DictValue& request = arguments.GetList().front().GetDict();
@@ -67,7 +81,7 @@ void PerformNetworkRequest(
   if (!url.is_valid() || !url.SchemeIsHTTPOrHTTPS()) {
     std::move(callback).Run(
         Failure("EINVAL: network request requires an HTTP(S) URL"));
-    return;
+    return {};
   }
 
   auto resource_request = std::make_unique<network::ResourceRequest>();
@@ -76,6 +90,10 @@ void PerformNetworkRequest(
   resource_request->method = method ? *method : "GET";
   if (resource_request->method.empty()) {
     resource_request->method = "GET";
+  }
+  if (!net::HttpUtil::IsValidHeaderName(resource_request->method)) {
+    std::move(callback).Run(Failure("EINVAL: invalid HTTP method"));
+    return {};
   }
   const bool use_session_cookies =
       request.FindBool("useSessionCookies").value_or(false);
@@ -100,11 +118,23 @@ void PerformNetworkRequest(
   }
 
   std::string body;
+  constexpr size_t kMaxUploadBytes = 32 * 1024 * 1024;
+  if (const std::string* encoded_body = request.FindString("bodyBase64");
+      encoded_body && encoded_body->size() > ((kMaxUploadBytes + 2) / 3) * 4) {
+    std::move(callback).Run(
+        Failure("ERR_BUFFER_TOO_LARGE: HTTP upload exceeds 32 MiB"));
+    return {};
+  }
   if (const std::string* encoded_body = request.FindString("bodyBase64");
       encoded_body && !base::Base64Decode(*encoded_body, &body)) {
     std::move(callback).Run(
         Failure("EINVAL: network request body is not valid base64"));
-    return;
+    return {};
+  }
+  if (body.size() > kMaxUploadBytes) {
+    std::move(callback).Run(
+        Failure("ERR_BUFFER_TOO_LARGE: HTTP upload exceeds 32 MiB"));
+    return {};
   }
 
   static const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
@@ -134,23 +164,44 @@ void PerformNetworkRequest(
       network::SimpleURLLoader::Create(std::move(resource_request),
                                        kTrafficAnnotation);
   loader->SetAllowHttpErrorResults(true);
+  const int timeout_ms = request.FindInt("timeoutMs").value_or(30000);
+  if (timeout_ms <= 0 || timeout_ms > 300000) {
+    std::move(callback).Run(
+        Failure("EINVAL: HTTP timeout must be 1..300000 ms"));
+    return {};
+  }
+  loader->SetTimeoutDuration(base::Milliseconds(timeout_ms));
   if (!body.empty()) {
     loader->AttachStringForUpload(std::move(body));
   }
 
-  network::SimpleURLLoader* loader_ptr = loader.get();
+  auto state = std::make_shared<RequestState>();
+  state->loader = std::move(loader);
+  state->callback = std::move(callback);
+  if (const std::string* redirect = request.FindString("redirect");
+      redirect && *redirect == "error") {
+    state->loader->SetOnRedirectCallback(base::BindRepeating(
+        [](std::weak_ptr<RequestState> weak, const GURL&,
+           const net::RedirectInfo&, const network::mojom::URLResponseHead&,
+           std::vector<std::string>*) {
+          if (auto state = weak.lock()) {
+            state->Cancel("ERR_HTTP_REDIRECT: HTTP redirect was rejected");
+          }
+        },
+        std::weak_ptr<RequestState>(state)));
+  }
+  network::SimpleURLLoader* loader_ptr = state->loader.get();
   loader_ptr->DownloadToString(
       url_loader_factory.get(),
       base::BindOnce(
-          [](std::unique_ptr<network::SimpleURLLoader> loader,
-             NetworkRequestCallback callback,
+          [](std::shared_ptr<RequestState> state,
              std::optional<std::string> response_body) {
+            auto loader = std::move(state->loader);
+            auto callback = std::move(state->callback);
             const int net_error = loader->NetError();
             const network::mojom::URLResponseHead* response_info =
                 loader->ResponseInfo();
-            if ((!response_body || net_error != net::OK) &&
-                !(net_error == net::ERR_INSUFFICIENT_RESOURCES && response_info &&
-                  response_info->headers)) {
+            if (!response_body || net_error != net::OK) {
               std::move(callback).Run(Failure(
                   "Network request failed: " + net::ErrorToString(net_error)));
               return;
@@ -166,6 +217,10 @@ void PerformNetworkRequest(
                            response_info->headers->response_code());
               response.Set("statusMessage",
                            response_info->headers->GetStatusText());
+              const auto version = response_info->headers->GetHttpVersion();
+              response.Set("httpVersion",
+                           base::NumberToString(version.major_value()) + "." +
+                               base::NumberToString(version.minor_value()));
               size_t iterator = 0;
               std::string name;
               std::string value;
@@ -185,8 +240,15 @@ void PerformNetworkRequest(
             response.Set("bodyBase64", base::Base64Encode(body_to_encode));
             std::move(callback).Run(Success(base::Value(std::move(response))));
           },
-          std::move(loader), std::move(callback)),
-      32 * 1024 * 1024);
+          state),
+      network::SimpleURLLoader::kMaxBoundedStringDownloadSize);
+  return base::BindOnce(
+      [](std::weak_ptr<RequestState> weak) {
+        if (auto state = weak.lock()) {
+          state->Cancel("ABORT_ERR: HTTP request was aborted");
+        }
+      },
+      std::weak_ptr<RequestState>(state));
 }
 
 }  // namespace xenon::ipc

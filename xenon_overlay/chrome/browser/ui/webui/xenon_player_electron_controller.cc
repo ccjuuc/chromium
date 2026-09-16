@@ -1099,11 +1099,12 @@ void XenonPlayerElectronController::OnNodePropertyWritten(
   }
 }
 
-void XenonPlayerElectronController::OnCallback(
-    int32_t callback_id,
-    std::vector<base::Value> args) {
+void XenonPlayerElectronController::OnCallback(int32_t callback_id,
+                                               std::vector<base::Value> args,
+                                               base::Value receiver) {
   if (page_.is_bound()) {
-    page_->NodeCallbackInvoked(callback_id, std::move(args));
+    page_->NodeCallbackInvoked(callback_id, std::move(args),
+                               std::move(receiver));
   }
 }
 

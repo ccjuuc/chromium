@@ -58,6 +58,9 @@ struct IpcMainConfig {
 // process-wide command-line switch.
 struct IpcRendererConfig {
   string document_path;
+  // Preserve the app's declared source locations for CommonJS stack-based
+  // module resolution when scripts are served from a trusted WebUI origin.
+  array<IpcRendererUrlMapping> renderer_url_mappings;
   bool is_guest;
   bool is_main_frame;
   string app_name;
@@ -83,26 +86,40 @@ interface IpcRenderer {
 // Browser UI thread, which must remain free to dispatch that message.
 interface NodeAddonHost {
   [Sync]
+  // The successful value contains the exact root NodeExportInfo descriptor.
+  // Nested descriptors are fetched on demand with InspectNodeExportSync.
   RequireNodeModuleSync(string module_path) => (IpcResult result);
+
+  // Describes an already loaded export without evaluating its own getters.
+  // An empty export path describes the actual module.exports value.
+  [Sync]
+  InspectNodeExportSync(string module_path, string export_path)
+      => (IpcResult result);
 
   [Sync]
   InvokeNodeExportSync(string module_path,
                        string function_name,
                        mojo_base.mojom.Value arguments)
-      => (IpcResult result);
+      => (IpcResult result, uint64 pending_promise_id);
 
   [Sync]
   ConstructNodeExportSync(string module_path,
                           string export_path,
-                          mojo_base.mojom.Value arguments)
+                          mojo_base.mojom.Value arguments,
+                          mojo_base.mojom.Value prototype_properties)
       => (IpcResult result);
 
   [Sync]
   InvokeNodeInstanceSync(string module_path,
                          int32 instance_id,
                          string method_name,
-                         mojo_base.mojom.Value arguments)
-      => (IpcResult result);
+                         mojo_base.mojom.Value arguments,
+                         string owner_token)
+      => (IpcResult result, uint64 pending_promise_id);
+
+  // A nonzero sync response token refers to the operation already executed.
+  // It can be consumed once, only on the connection which issued that call.
+  AwaitNodePromise(uint64 pending_promise_id) => (IpcResult result);
 
   // Resolves one member through the instance's ordinary JavaScript property
   // lookup. The returned value identifies an actual function/value/undefined;
@@ -110,8 +127,13 @@ interface NodeAddonHost {
   [Sync]
   InspectNodeInstanceMemberSync(string module_path,
                                 int32 instance_id,
-                                string property_name)
+                                string property_name,
+                                string owner_token)
       => (IpcResult result);
+
+  // GC cleanup is best effort and must not reconnect a closed document.
+  // The token prevents stale releases from touching a restarted service.
+  ReleaseNodeInstance(string module_path, int32 instance_id, string owner_token);
 };
 
 // Renderer-to-browser half of Electron-compatible IPC. The implementation is

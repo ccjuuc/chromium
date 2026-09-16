@@ -86,6 +86,46 @@ void ThrowIpcError(gin::Arguments* args, const std::string& error) {
       gin::StringToV8(args->isolate(), error).As<v8::String>()));
 }
 
+bool ReadNodeInstanceSelector(gin::Arguments* args,
+                              v8::Local<v8::Value> selector,
+                              int32_t* instance_id,
+                              std::string* owner_token) {
+  owner_token->clear();
+  if (!selector->IsObject()) {
+    if (gin::ConvertFromV8(args->isolate(), selector, instance_id)) {
+      return true;
+    }
+    args->ThrowTypeError("Native instance id must be an integer or selector");
+    return false;
+  }
+
+  v8::Local<v8::Context> context = args->GetHolderCreationContext();
+  v8::Local<v8::Object> object = selector.As<v8::Object>();
+  v8::Local<v8::Value> id;
+  if (!object->Get(context, gin::StringToV8(args->isolate(), "instanceId"))
+           .ToLocal(&id)) {
+    // A selector getter/proxy may throw. Preserve that exception instead of
+    // replacing it with an argument validation error in this or the caller.
+    return false;
+  }
+  if (!gin::ConvertFromV8(args->isolate(), id, instance_id)) {
+    args->ThrowTypeError(
+        "Native instance selector.instanceId must be an integer");
+    return false;
+  }
+  v8::Local<v8::Value> token;
+  if (!object->Get(context, gin::StringToV8(args->isolate(), "ownerToken"))
+           .ToLocal(&token)) {
+    return false;
+  }
+  if (!gin::ConvertFromV8(args->isolate(), token, owner_token)) {
+    args->ThrowTypeError(
+        "Native instance selector.ownerToken must be a string");
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 // static
@@ -142,13 +182,17 @@ void XenonIpcRenderer::Install(content::RenderFrame* render_frame,
   set_method("invoke", &XenonIpcRenderer::Invoke);
   set_method("sendSync", &XenonIpcRenderer::SendSync);
   set_method("requireNodeModuleSync", &XenonIpcRenderer::RequireNodeModuleSync);
+  set_method("inspectNodeExportSync", &XenonIpcRenderer::InspectNodeExportSync);
   set_method("invokeNodeExportSync", &XenonIpcRenderer::InvokeNodeExportSync);
   set_method("constructNodeExportSync",
              &XenonIpcRenderer::ConstructNodeExportSync);
+  set_method("constructNodeExportWithPrototypeSync",
+             &XenonIpcRenderer::ConstructNodeExportWithPrototypeSync);
   set_method("invokeNodeInstanceSync",
              &XenonIpcRenderer::InvokeNodeInstanceSync);
   set_method("inspectNodeInstanceMemberSync",
              &XenonIpcRenderer::InspectNodeInstanceMemberSync);
+  set_method("releaseNodeInstance", &XenonIpcRenderer::ReleaseNodeInstance);
   set_method("postMessage", &XenonIpcRenderer::PostMessage);
   set_method("setDispatchHandler", &XenonIpcRenderer::SetDispatchHandler);
   VLOG(1) << "XenonIpcRenderer Install methods attached";
@@ -277,6 +321,23 @@ void XenonIpcRenderer::GetRuntimeConfig(gin::Arguments* args) {
   };
   set_string("appName", runtime_config_->app_name);
   set_string("documentPath", runtime_config_->document_path);
+  v8::Local<v8::Array> mappings = v8::Array::New(
+      isolate, static_cast<int>(runtime_config_->renderer_url_mappings.size()));
+  for (size_t i = 0; i < runtime_config_->renderer_url_mappings.size(); ++i) {
+    const auto& mapping = runtime_config_->renderer_url_mappings[i];
+    v8::Local<v8::Object> entry = v8::Object::New(isolate);
+    entry
+        ->Set(context, gin::StringToV8(isolate, "sourcePathPrefix"),
+              gin::StringToV8(isolate, mapping->source_path_prefix))
+        .Check();
+    entry
+        ->Set(context, gin::StringToV8(isolate, "targetBaseUrl"),
+              gin::StringToV8(isolate, mapping->target_base_url))
+        .Check();
+    mappings->Set(context, static_cast<uint32_t>(i), entry).Check();
+  }
+  value->Set(context, gin::StringToV8(isolate, "rendererUrlMappings"), mappings)
+      .Check();
   value
       ->Set(context, gin::StringToV8(isolate, "isGuest"),
             v8::Boolean::New(isolate, runtime_config_->is_guest))
@@ -588,25 +649,33 @@ void XenonIpcRenderer::InvokeNodeExportSync(gin::Arguments* args) {
     return;
   }
   xenon::ipc::mojom::IpcResultPtr result;
+  uint64_t pending_promise_id = 0;
   if (!node_addon_host_->InvokeNodeExportSync(module_path, function_name,
-                                              std::move(*converted), &result) ||
+                                              std::move(*converted), &result,
+                                              &pending_promise_id) ||
       !result) {
     args->ThrowTypeError("Synchronous native addon invocation failed");
     return;
   }
-  if (!result->success) {
-    args->ThrowTypeError(result->error);
-    return;
-  }
-  args->GetFunctionCallbackInfo()->GetReturnValue().Set(
-      content::V8ValueConverter::Create()->ToV8Value(result->value, context));
+  ReturnNativeInvokeResult(args, std::move(result), pending_promise_id);
 }
 
 void XenonIpcRenderer::ConstructNodeExportSync(gin::Arguments* args) {
+  ConstructNodeExport(args, false);
+}
+
+void XenonIpcRenderer::ConstructNodeExportWithPrototypeSync(
+    gin::Arguments* args) {
+  ConstructNodeExport(args, true);
+}
+
+void XenonIpcRenderer::ConstructNodeExport(gin::Arguments* args,
+                                           bool with_prototype) {
   v8::LocalVector<v8::Value> all = args->GetAll();
+  const size_t first_argument = with_prototype ? 3 : 2;
   std::string module_path;
   std::string export_path;
-  if (all.size() < 2 ||
+  if (all.size() < first_argument ||
       !gin::ConvertFromV8(args->isolate(), all[0], &module_path) ||
       !gin::ConvertFromV8(args->isolate(), all[1], &export_path)) {
     args->ThrowTypeError(
@@ -614,13 +683,39 @@ void XenonIpcRenderer::ConstructNodeExportSync(gin::Arguments* args) {
     return;
   }
   v8::Local<v8::Context> context = args->GetHolderCreationContext();
-  v8::Local<v8::Array> array =
-      v8::Array::New(args->isolate(), static_cast<int>(all.size() - 2));
-  for (size_t i = 2; i < all.size(); ++i) {
-    array->Set(context, static_cast<uint32_t>(i - 2), all[i]).Check();
+  bool conversion_threw = false;
+  const auto convert = [&](v8::Local<v8::Value> value) {
+    v8::TryCatch try_catch(args->isolate());
+    auto converted =
+        content::V8ValueConverter::Create()->FromV8Value(value, context);
+    if (try_catch.HasCaught()) {
+      conversion_threw = true;
+      try_catch.ReThrow();
+    }
+    return converted;
+  };
+  base::Value prototype_properties(base::DictValue{});
+  if (with_prototype) {
+    std::unique_ptr<base::Value> properties = convert(all[2]);
+    if (conversion_threw) {
+      return;
+    }
+    if (!properties || !properties->is_dict()) {
+      args->ThrowTypeError("Native prototype properties must be an object");
+      return;
+    }
+    prototype_properties = std::move(*properties);
   }
-  std::unique_ptr<base::Value> converted =
-      content::V8ValueConverter::Create()->FromV8Value(array, context);
+  v8::Local<v8::Array> array = v8::Array::New(
+      args->isolate(), static_cast<int>(all.size() - first_argument));
+  for (size_t i = first_argument; i < all.size(); ++i) {
+    array->Set(context, static_cast<uint32_t>(i - first_argument), all[i])
+        .Check();
+  }
+  std::unique_ptr<base::Value> converted = convert(array);
+  if (conversion_threw) {
+    return;
+  }
   if (!converted || !converted->is_list()) {
     args->ThrowTypeError(
         "Native addon arguments are not structured-clone compatible");
@@ -632,7 +727,8 @@ void XenonIpcRenderer::ConstructNodeExportSync(gin::Arguments* args) {
   }
   xenon::ipc::mojom::IpcResultPtr result;
   if (!node_addon_host_->ConstructNodeExportSync(
-          module_path, export_path, std::move(*converted), &result) ||
+          module_path, export_path, std::move(*converted),
+          std::move(prototype_properties), &result) ||
       !result) {
     args->ThrowTypeError("Synchronous native construct failed");
     return;
@@ -649,13 +745,16 @@ void XenonIpcRenderer::InvokeNodeInstanceSync(gin::Arguments* args) {
   v8::LocalVector<v8::Value> all = args->GetAll();
   std::string module_path;
   int32_t instance_id = 0;
+  std::string owner_token;
   std::string method_name;
   if (all.size() < 3 ||
       !gin::ConvertFromV8(args->isolate(), all[0], &module_path) ||
-      !gin::ConvertFromV8(args->isolate(), all[1], &instance_id) ||
       !gin::ConvertFromV8(args->isolate(), all[2], &method_name)) {
     args->ThrowTypeError(
         "Native module path, instance id, and method name are required");
+    return;
+  }
+  if (!ReadNodeInstanceSelector(args, all[1], &instance_id, &owner_token)) {
     return;
   }
   v8::Local<v8::Context> context = args->GetHolderCreationContext();
@@ -676,29 +775,92 @@ void XenonIpcRenderer::InvokeNodeInstanceSync(gin::Arguments* args) {
     return;
   }
   xenon::ipc::mojom::IpcResultPtr result;
+  uint64_t pending_promise_id = 0;
   if (!node_addon_host_->InvokeNodeInstanceSync(
           module_path, instance_id, method_name, std::move(*converted),
-          &result) ||
+          owner_token, &result, &pending_promise_id) ||
       !result) {
     args->ThrowTypeError("Synchronous native instance invocation failed");
+    return;
+  }
+  ReturnNativeInvokeResult(args, std::move(result), pending_promise_id);
+}
+
+void XenonIpcRenderer::ReturnNativeInvokeResult(
+    gin::Arguments* args,
+    xenon::ipc::mojom::IpcResultPtr result,
+    uint64_t pending_promise_id) {
+  if (!result->success) {
+    args->ThrowTypeError(result->error);
+    return;
+  }
+  v8::Local<v8::Context> context = args->GetHolderCreationContext();
+  if (!pending_promise_id) {
+    args->GetFunctionCallbackInfo()->GetReturnValue().Set(
+        content::V8ValueConverter::Create()->ToV8Value(result->value, context));
+    return;
+  }
+  v8::Local<v8::Promise::Resolver> resolver;
+  if (!v8::Promise::Resolver::New(context).ToLocal(&resolver)) {
+    return;
+  }
+  const uint64_t request_id = AddPendingInvoke(resolver, false);
+  auto disconnected = xenon::ipc::mojom::IpcResult::New();
+  disconnected->success = false;
+  disconnected->error = "Native Promise connection was closed";
+  // Resetting this remote on disconnect destroys the callback and rejects
+  // this resolver. It does not cancel unrelated Browser IPC requests.
+  node_addon_host_->AwaitNodePromise(
+      pending_promise_id,
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+          base::BindOnce(&XenonIpcRenderer::OnInvoke,
+                         weak_factory_.GetWeakPtr(), request_id),
+          std::move(disconnected)));
+  args->Return(resolver->GetPromise());
+}
+
+void XenonIpcRenderer::InspectNodeExportSync(gin::Arguments* args) {
+  std::string module_path;
+  std::string export_path;
+  if (!args->GetNext(&module_path) || !args->GetNext(&export_path)) {
+    args->ThrowTypeError("Native module path and export path are required");
+    return;
+  }
+  if (!EnsureNodeAddonConnected()) {
+    args->ThrowTypeError("Utility native module connection is unavailable");
+    return;
+  }
+
+  xenon::ipc::mojom::IpcResultPtr result;
+  if (!node_addon_host_->InspectNodeExportSync(module_path, export_path,
+                                               &result) ||
+      !result) {
+    args->ThrowTypeError("Synchronous native export inspection failed");
     return;
   }
   if (!result->success) {
     args->ThrowTypeError(result->error);
     return;
   }
+  v8::Local<v8::Context> context = args->GetHolderCreationContext();
   args->GetFunctionCallbackInfo()->GetReturnValue().Set(
       content::V8ValueConverter::Create()->ToV8Value(result->value, context));
 }
 
 void XenonIpcRenderer::InspectNodeInstanceMemberSync(gin::Arguments* args) {
+  v8::LocalVector<v8::Value> all = args->GetAll();
   std::string module_path;
   int32_t instance_id = 0;
+  std::string owner_token;
   std::string property_name;
-  if (!args->GetNext(&module_path) || !args->GetNext(&instance_id) ||
-      !args->GetNext(&property_name)) {
+  if (all.size() < 3 ||
+      !gin::ConvertFromV8(args->isolate(), all[0], &module_path) ||
+      !gin::ConvertFromV8(args->isolate(), all[2], &property_name)) {
     args->ThrowTypeError(
         "Native module path, instance id, and property name are required");
+    return;
+  }
+  if (!ReadNodeInstanceSelector(args, all[1], &instance_id, &owner_token)) {
     return;
   }
   if (!EnsureNodeAddonConnected()) {
@@ -708,7 +870,7 @@ void XenonIpcRenderer::InspectNodeInstanceMemberSync(gin::Arguments* args) {
 
   xenon::ipc::mojom::IpcResultPtr result;
   if (!node_addon_host_->InspectNodeInstanceMemberSync(
-          module_path, instance_id, property_name, &result) ||
+          module_path, instance_id, property_name, owner_token, &result) ||
       !result) {
     args->ThrowTypeError("Synchronous native instance inspection failed");
     return;
@@ -720,6 +882,27 @@ void XenonIpcRenderer::InspectNodeInstanceMemberSync(gin::Arguments* args) {
   v8::Local<v8::Context> context = args->GetHolderCreationContext();
   args->GetFunctionCallbackInfo()->GetReturnValue().Set(
       content::V8ValueConverter::Create()->ToV8Value(result->value, context));
+}
+
+void XenonIpcRenderer::ReleaseNodeInstance(gin::Arguments* args) {
+  // Finalizers can outlive their document or its native connection. Cleanup
+  // must never create a new connection (and therefore a new instance owner).
+  if (!node_addon_host_.is_bound() || !node_addon_host_.is_connected()) {
+    return;
+  }
+  v8::LocalVector<v8::Value> all = args->GetAll();
+  std::string module_path;
+  int32_t instance_id = 0;
+  std::string owner_token;
+  if (all.size() < 3 ||
+      !gin::ConvertFromV8(args->isolate(), all[0], &module_path) ||
+      !gin::ConvertFromV8(args->isolate(), all[1], &instance_id) ||
+      !gin::ConvertFromV8(args->isolate(), all[2], &owner_token)) {
+    args->ThrowTypeError(
+        "Native module path, instance id, and owner token are required");
+    return;
+  }
+  node_addon_host_->ReleaseNodeInstance(module_path, instance_id, owner_token);
 }
 
 void XenonIpcRenderer::SetDispatchHandler(gin::Arguments* args) {

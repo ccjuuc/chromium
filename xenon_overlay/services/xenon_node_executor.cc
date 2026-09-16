@@ -33,6 +33,7 @@
 #include "base/synchronization/lock.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/unguessable_token.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "gin/arguments.h"
@@ -91,6 +92,8 @@ constexpr char kNativeInstanceWireType[] = "native_instance";
 constexpr char kNativeFunctionWireType[] = "native_function";
 constexpr char kInvokePathPrefix[] = "$xenonInvokePath:";
 constexpr base::TimeDelta kUvLoopPollInterval = base::Milliseconds(10);
+constexpr size_t kMaxPendingNativePromises = 1024;
+constexpr base::TimeDelta kDeferredPromiseLifetime = base::Seconds(30);
 
 #if BUILDFLAG(IS_WIN)
 struct NativeAddonRedirectState {
@@ -387,43 +390,6 @@ PreparedAddon PrepareAddon(const base::FilePath& requested_path,
 // and nested export descriptors without recursively walking arbitrary graphs.
 constexpr int kMaxExportInspectDepth = 1;
 
-bool ShouldSkipExportName(const std::string& name) {
-  // Built-ins from Object/Function/Number prototypes that must never appear as
-  // addon "methods" in the export tree.
-  static constexpr const char* kSkip[] = {
-      "constructor",
-      "caller",
-      "arguments",
-      "prototype",
-      "__proto__",
-      "toString",
-      "valueOf",
-      "toLocaleString",
-      "hasOwnProperty",
-      "isPrototypeOf",
-      "propertyIsEnumerable",
-      "__defineGetter__",
-      "__defineSetter__",
-      "__lookupGetter__",
-      "__lookupSetter__",
-      "toFixed",
-      "toExponential",
-      "toPrecision",
-      "toLocaleString",
-      "call",
-      "apply",
-      "bind",
-      "name",
-      "length",
-  };
-  for (const char* skip : kSkip) {
-    if (name == skip) {
-      return true;
-    }
-  }
-  return false;
-}
-
 std::string DescribeExportKind(v8::Isolate* isolate,
                                v8::Local<v8::Value> value) {
   if (value.IsEmpty() || value->IsUndefined()) {
@@ -545,6 +511,27 @@ bool IsBuiltinPrototype(v8::Isolate* isolate,
   return false;
 }
 
+bool IsPrototypeConstructorLink(v8::Isolate* isolate,
+                                v8::Local<v8::Context> context,
+                                v8::Local<v8::Object> object,
+                                const std::string& name,
+                                v8::Local<v8::Value> value) {
+  if (name != "constructor" || !value->IsFunction()) {
+    return false;
+  }
+  v8::Local<v8::Value> descriptor_value;
+  if (!value.As<v8::Object>()
+           ->GetOwnPropertyDescriptor(context,
+                                      gin::StringToV8(isolate, "prototype"))
+           .ToLocal(&descriptor_value) ||
+      !descriptor_value->IsObject()) {
+    return false;
+  }
+  gin::Dictionary descriptor(isolate, descriptor_value.As<v8::Object>());
+  v8::Local<v8::Value> prototype;
+  return descriptor.Get("value", &prototype) && prototype->SameValue(object);
+}
+
 // Collect only own properties. Prototype members are kept in a separate list.
 void CollectOwnChildExports(v8::Isolate* isolate,
                             v8::Local<v8::Context> context,
@@ -572,7 +559,6 @@ void CollectOwnChildExports(v8::Isolate* isolate,
 
     std::string key_str;
     if (!gin::ConvertFromV8(isolate, key, &key_str) ||
-        ShouldSkipExportName(key_str) ||
         HasExportChildNamed(*children, key_str)) {
       continue;
     }
@@ -610,6 +596,13 @@ void CollectOwnChildExports(v8::Isolate* isolate,
     if (!descriptor.Get("value", &child_value)) {
       continue;
     }
+    // Ignore only the constructor's structural back-reference. A native own
+    // method named bind/call/apply/toString is still part of its real API;
+    // inherited built-ins are excluded by the prototype traversal boundary.
+    if (IsPrototypeConstructorLink(isolate, context, object, key_str,
+                                   child_value)) {
+      continue;
+    }
     descriptor.Get("writable", &writable);
 
     auto info = DescribeExportValue(isolate, context, key_str, child_value,
@@ -623,16 +616,34 @@ void CollectOwnChildExports(v8::Isolate* isolate,
 // napi_define_class exports a constructor Function; instance APIs live on
 // `Constructor.prototype` as own properties. This is bridge metadata only:
 // invocation still uses the original V8 constructor and instance.
+bool GetConstructorPrototypeData(v8::Isolate* isolate,
+                                 v8::Local<v8::Context> context,
+                                 v8::Local<v8::Function> constructor,
+                                 v8::Local<v8::Object>* prototype) {
+  v8::Local<v8::Value> descriptor_value;
+  if (!constructor
+           ->GetOwnPropertyDescriptor(context,
+                                      gin::StringToV8(isolate, "prototype"))
+           .ToLocal(&descriptor_value) ||
+      !descriptor_value->IsObject()) {
+    return false;
+  }
+  gin::Dictionary descriptor(isolate, descriptor_value.As<v8::Object>());
+  v8::Local<v8::Value> value;
+  if (!descriptor.Get("value", &value) || !value->IsObject()) {
+    return false;
+  }
+  *prototype = value.As<v8::Object>();
+  return true;
+}
+
 bool ConstructorHasInstanceMethods(v8::Isolate* isolate,
                                    v8::Local<v8::Context> context,
                                    v8::Local<v8::Function> constructor) {
-  v8::Local<v8::Value> prototype_value;
-  if (!constructor->Get(context, gin::StringToV8(isolate, "prototype"))
-           .ToLocal(&prototype_value) ||
-      !prototype_value->IsObject()) {
+  v8::Local<v8::Object> current;
+  if (!GetConstructorPrototypeData(isolate, context, constructor, &current)) {
     return false;
   }
-  v8::Local<v8::Object> current = prototype_value.As<v8::Object>();
   while (!IsBuiltinPrototype(isolate, context, current)) {
     v8::Local<v8::Array> keys;
     if (current
@@ -646,7 +657,7 @@ bool ConstructorHasInstanceMethods(v8::Isolate* isolate,
         }
         std::string key_str;
         if (gin::ConvertFromV8(isolate, key, &key_str) &&
-            !ShouldSkipExportName(key_str)) {
+            key_str != "constructor") {
           return true;
         }
       }
@@ -667,14 +678,10 @@ void CollectPrototypeExports(
     int child_depth,
     int max_depth,
     std::vector<mojom::NodeExportInfoPtr>* prototype_children) {
-  v8::Local<v8::Value> prototype_value;
-  if (!function->Get(context, gin::StringToV8(isolate, "prototype"))
-           .ToLocal(&prototype_value) ||
-      !prototype_value->IsObject()) {
+  v8::Local<v8::Object> current;
+  if (!GetConstructorPrototypeData(isolate, context, function, &current)) {
     return;
   }
-
-  v8::Local<v8::Object> current = prototype_value.As<v8::Object>();
   while (!IsBuiltinPrototype(isolate, context, current)) {
     CollectOwnChildExports(isolate, context, current, child_depth, max_depth,
                            prototype_children);
@@ -755,6 +762,117 @@ std::vector<mojom::NodeExportInfoPtr> CloneExportTree(
     out.push_back(item.Clone());
   }
   return out;
+}
+
+// The main context needs the exact own shape, including names such as `then`,
+// `length` and `toString`. Inspect descriptors instead of evaluating accessors;
+// nested objects are inspected only when the main context reads them.
+mojom::NodeExportInfoPtr DescribeExactExportValue(
+    v8::Isolate* isolate,
+    v8::Local<v8::Context> context,
+    const std::string& name,
+    v8::Local<v8::Value> value) {
+  auto describe_leaf = [&](const std::string& leaf_name,
+                           v8::Local<v8::Value> leaf) {
+    auto info = mojom::NodeExportInfo::New();
+    info->name = leaf_name;
+    info->kind = DescribeExportKind(isolate, leaf);
+    info->enumerable = true;
+    SetExportValue(isolate, context, leaf, info.get());
+    if (leaf->IsArray()) {
+      info->kind = "array";
+    }
+    if (leaf->IsFunction()) {
+      // Looking at a function's shape must not invoke a custom `prototype`
+      // getter. Only a data descriptor can supply class prototype metadata.
+      v8::Local<v8::Value> descriptor_value;
+      if (leaf.As<v8::Object>()
+              ->GetOwnPropertyDescriptor(context,
+                                         gin::StringToV8(isolate, "prototype"))
+              .ToLocal(&descriptor_value) &&
+          descriptor_value->IsObject()) {
+        v8::Local<v8::Value> prototype;
+        gin::Dictionary descriptor(isolate, descriptor_value.As<v8::Object>());
+        if (descriptor.Get("value", &prototype) && prototype->IsObject()) {
+          v8::Local<v8::Value> current = prototype;
+          while (
+              current->IsObject() &&
+              !IsBuiltinPrototype(isolate, context, current.As<v8::Object>())) {
+            v8::Local<v8::Array> names;
+            // node-addon-api defines prototype methods as non-enumerable.
+            // Classification must use the same complete property set as the
+            // prototype metadata collector below.
+            if (current.As<v8::Object>()
+                    ->GetOwnPropertyNames(
+                        context, v8::PropertyFilter::ALL_PROPERTIES,
+                        v8::KeyConversionMode::kConvertToString)
+                    .ToLocal(&names)) {
+              for (uint32_t index = 0; index < names->Length(); ++index) {
+                v8::Local<v8::Value> key;
+                std::string name;
+                if (names->Get(context, index).ToLocal(&key) &&
+                    gin::ConvertFromV8(isolate, key, &name) &&
+                    name != "constructor") {
+                  info->kind = "class";
+                  break;
+                }
+              }
+            }
+            if (info->kind == "class") {
+              break;
+            }
+            current = current.As<v8::Object>()->GetPrototype();
+          }
+        }
+      }
+    }
+    return info;
+  };
+  auto info = describe_leaf(name, value);
+  if (!value->IsObject()) {
+    return info;
+  }
+  v8::Local<v8::Object> object = value.As<v8::Object>();
+  v8::Local<v8::Array> keys;
+  if (!object
+           ->GetOwnPropertyNames(context, v8::PropertyFilter::ALL_PROPERTIES,
+                                 v8::KeyConversionMode::kConvertToString)
+           .ToLocal(&keys)) {
+    return nullptr;
+  }
+  for (uint32_t i = 0; i < keys->Length(); ++i) {
+    v8::Local<v8::Value> key;
+    v8::Local<v8::Value> descriptor_value;
+    std::string key_name;
+    if (!keys->Get(context, i).ToLocal(&key) || !key->IsName() ||
+        !gin::ConvertFromV8(isolate, key, &key_name) ||
+        !object->GetOwnPropertyDescriptor(context, key.As<v8::Name>())
+             .ToLocal(&descriptor_value) ||
+        !descriptor_value->IsObject()) {
+      return nullptr;
+    }
+    gin::Dictionary descriptor(isolate, descriptor_value.As<v8::Object>());
+    v8::Local<v8::Value> child_value;
+    mojom::NodeExportInfoPtr child;
+    if (descriptor_value.As<v8::Object>()
+            ->HasOwnProperty(context, gin::StringToV8(isolate, "value"))
+            .FromMaybe(false) &&
+        descriptor.Get("value", &child_value)) {
+      child = describe_leaf(key_name, child_value);
+      descriptor.Get("writable", &child->writable);
+    } else {
+      child = mojom::NodeExportInfo::New();
+      child->name = key_name;
+      child->kind = "property";
+    }
+    descriptor.Get("enumerable", &child->enumerable);
+    info->children.push_back(std::move(child));
+  }
+  if (value->IsFunction() && info->kind == "class") {
+    CollectPrototypeExports(isolate, context, value.As<v8::Function>(), 0, 0,
+                            &info->prototype);
+  }
+  return info;
 }
 
 std::vector<mojom::NodeExportInfoPtr> BuildExportTree(
@@ -872,8 +990,13 @@ bool ResolveExportValue(v8::Isolate* isolate,
                         v8::Local<v8::Value>* value,
                         v8::Local<v8::Object>* receiver,
                         std::string* error_msg) {
+  if (export_path.empty()) {
+    *value = exports;
+    *receiver = exports;
+    return true;
+  }
   const std::vector<std::string> parts = base::SplitString(
-      export_path, ".", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+      export_path, ".", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
   if (parts.empty()) {
     *error_msg = "Export path is empty";
     return false;
@@ -1694,49 +1817,114 @@ void XenonNodeExecutor::SetRuntimeDirectory(
   runtime_directory_ = runtime_directory.StripTrailingSeparators();
 }
 
-// static
-void XenonNodeExecutor::FirstWeakCallback(
-    const v8::WeakCallbackInfo<AddonCallback>& data) {
-  data.GetParameter()->function.Reset();
-  data.SetSecondPassCallback(SecondWeakCallback);
+void XenonNodeExecutor::ReleaseCallbacksForClient(int32_t client_id) {
+  if (!addon_isolate_ || addon_context_.IsEmpty()) {
+    return;
+  }
+  AutoV8Scope v8_scope(addon_isolate_, addon_context_);
+  for (auto it = addon_callbacks_.begin(); it != addon_callbacks_.end();) {
+    if (it->first.first == client_id) {
+      it = addon_callbacks_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+void XenonNodeExecutor::RegisterInstanceOwner(uint64_t owner) {
+  if (owner != 0 && !instance_owners_.contains(owner)) {
+    instance_owners_.emplace(owner,
+                             base::UnguessableToken::Create().ToString());
+  }
+}
+
+std::string XenonNodeExecutor::GetInstanceOwnerToken(uint64_t owner) const {
+  auto it = instance_owners_.find(owner);
+  return it == instance_owners_.end() ? std::string() : it->second;
+}
+
+bool XenonNodeExecutor::ValidateInstanceOwnerToken(
+    uint64_t owner,
+    const std::string& token) const {
+  if (owner == 0) {
+    return token.empty();
+  }
+  auto it = instance_owners_.find(owner);
+  return it != instance_owners_.end() && it->second == token;
+}
+
+bool XenonNodeExecutor::IsInstanceOwnerActive(uint64_t owner) const {
+  return owner == 0 || instance_owners_.contains(owner);
+}
+
+void XenonNodeExecutor::ReleaseInstanceOwner(uint64_t owner) {
+  if (owner == 0) {
+    return;
+  }
+  instance_owners_.erase(owner);
+  if (addon_isolate_ && !addon_context_.IsEmpty()) {
+    AutoV8Scope v8_scope(addon_isolate_, addon_context_);
+    for (auto it = addon_instances_.begin(); it != addon_instances_.end();) {
+      const auto current = it++;
+      if (current->second.owner == owner) {
+        RemoveNativeInstance(current->first);
+      }
+    }
+    std::erase_if(addon_callbacks_, [owner](const auto& item) {
+      return item.second->owner == owner;
+    });
+  }
+  // Mark the owner dead before invoking cancellation callbacks, which may
+  // reenter the executor. Promise settlement must not create new handles.
+  CancelPromisesForOwner(owner);
 }
 
 // static
-void XenonNodeExecutor::SecondWeakCallback(
+void XenonNodeExecutor::FirstWeakCallback(
     const v8::WeakCallbackInfo<AddonCallback>& data) {
   AddonCallback* callback = data.GetParameter();
-  if (callback->executor) {
-    callback->executor->OnNativeCallbackCollected(callback);
-  }
+  callback->function.Reset();
+  // Collection notifications may dispatch JavaScript through the service.
+  // Leave the GC callback before doing that, and retain only stable ids so a
+  // disconnect or a new registration can delete this cache entry immediately.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&XenonNodeExecutor::OnNativeCallbackCollected,
+                                callback->executor, callback->client_id,
+                                callback->callback_id, callback->generation));
 }
 
 v8::Local<v8::Function> XenonNodeExecutor::GetOrCreateNativeCallback(
     v8::Local<v8::Context> context,
     int32_t client_id,
     int32_t callback_id,
-    const std::string& module_path) {
+    const std::string& module_path,
+    uint64_t owner) {
   const auto key = std::make_pair(client_id, callback_id);
   auto existing = addon_callbacks_.find(key);
   if (existing != addon_callbacks_.end() &&
-      !existing->second->function.IsEmpty()) {
+      !existing->second->function.IsEmpty() &&
+      existing->second->owner == owner) {
     if (!module_path.empty() && existing->second->module_path.empty()) {
       existing->second->module_path = module_path;
     }
     return existing->second->function.Get(addon_isolate_);
   }
 
+  const uint64_t generation = next_callback_generation_++;
   v8::Local<v8::Function> function =
       gin::CreateFunctionTemplate(
           addon_isolate_,
           base::BindRepeating(&XenonNodeExecutor::OnNativeCallback,
                               weak_factory_.GetWeakPtr(), client_id,
-                              callback_id))
+                              callback_id, generation))
           ->GetFunction(context)
           .ToLocalChecked();
 
   auto callback = std::make_unique<AddonCallback>();
   callback->client_id = client_id;
   callback->callback_id = callback_id;
+  callback->generation = generation;
+  callback->owner = owner;
   callback->module_path = module_path;
   callback->executor = weak_factory_.GetWeakPtr();
   callback->function.Reset(addon_isolate_, function);
@@ -1749,25 +1937,51 @@ v8::Local<v8::Function> XenonNodeExecutor::GetOrCreateNativeCallback(
 
 void XenonNodeExecutor::OnNativeCallback(int32_t client_id,
                                          int32_t callback_id,
+                                         uint64_t generation,
                                          gin::Arguments* arguments) {
-  std::string module_path;
   const auto key = std::make_pair(client_id, callback_id);
   auto callback_it = addon_callbacks_.find(key);
-  if (callback_it != addon_callbacks_.end() && callback_it->second) {
-    module_path = callback_it->second->module_path;
+  // An addon may retain the JavaScript function after its renderer disconnects.
+  // Drop it before serialization, including when the same ids are registered
+  // again: the retained function belongs to an earlier registration.
+  if (!callback_handler_ || callback_it == addon_callbacks_.end() ||
+      callback_it->second->generation != generation ||
+      !IsInstanceOwnerActive(callback_it->second->owner)) {
+    return;
   }
+  const std::string module_path = callback_it->second->module_path;
+  const uint64_t owner = callback_it->second->owner;
 
   v8::Local<v8::Context> context = arguments->GetHolderCreationContext();
   if (context.IsEmpty() && !addon_context_.IsEmpty()) {
     context = addon_context_.Get(addon_isolate_);
+  }
+  v8::Local<v8::Object> receiver;
+  if (context.IsEmpty() || !arguments->GetHolder(&receiver)) {
+    LOG(ERROR) << "Failed to read Node callback receiver";
+    return;
+  }
+  std::optional<base::Value> converted_receiver;
+  if (receiver->StrictEquals(context->Global())) {
+    // The global object contains the whole addon context and must not be
+    // traversed or registered as a native instance.
+    converted_receiver = MakeTaggedWireValue("global");
+  } else {
+    std::string error_msg;
+    converted_receiver = ConvertNativeValue(context, module_path, receiver,
+                                            &error_msg, 0, owner);
+    if (!converted_receiver) {
+      LOG(ERROR) << "Failed to serialize Node callback receiver: " << error_msg;
+      return;
+    }
   }
   std::vector<base::Value> converted_args;
   v8::Local<v8::Value> value;
   int adopted_count = 0;
   while (arguments->GetNext(&value)) {
     std::string error_msg;
-    std::optional<base::Value> converted = ConvertNativeValue(
-        context, module_path, value, &error_msg, 0);
+    std::optional<base::Value> converted =
+        ConvertNativeValue(context, module_path, value, &error_msg, 0, owner);
     if (!converted) {
       LOG(ERROR) << "Failed to serialize Node callback argument: " << error_msg;
       return;
@@ -1781,23 +1995,31 @@ void XenonNodeExecutor::OnNativeCallback(int32_t client_id,
     converted_args.push_back(std::move(*converted));
   }
 
+  // Payload getters may disconnect or replace this callback while converting.
+  callback_it = addon_callbacks_.find(key);
+  if (callback_it == addon_callbacks_.end() ||
+      callback_it->second->generation != generation ||
+      !IsInstanceOwnerActive(owner)) {
+    return;
+  }
   LOG(INFO) << "OnNativeCallback client=" << client_id
             << " cb=" << callback_id << " args=" << converted_args.size()
             << " native_instances=" << adopted_count;
   if (callback_handler_) {
-    callback_handler_.Run(client_id, callback_id, std::move(converted_args));
+    callback_handler_.Run(client_id, callback_id, std::move(converted_args),
+                          std::move(*converted_receiver));
   }
 }
 
-void XenonNodeExecutor::OnNativeCallbackCollected(AddonCallback* callback) {
-  const auto key = std::make_pair(callback->client_id, callback->callback_id);
+void XenonNodeExecutor::OnNativeCallbackCollected(int32_t client_id,
+                                                  int32_t callback_id,
+                                                  uint64_t generation) {
+  const auto key = std::make_pair(client_id, callback_id);
   auto it = addon_callbacks_.find(key);
-  if (it == addon_callbacks_.end() || it->second.get() != callback) {
+  if (it == addon_callbacks_.end() || it->second->generation != generation) {
     return;
   }
 
-  const int32_t client_id = callback->client_id;
-  const int32_t callback_id = callback->callback_id;
   addon_callbacks_.erase(it);
   if (callback_released_handler_) {
     callback_released_handler_.Run(client_id, callback_id);
@@ -1810,7 +2032,12 @@ v8::MaybeLocal<v8::Value> XenonNodeExecutor::WireValueToV8(
     int32_t client_id,
     const std::string& module_path,
     std::string* error_msg,
-    int depth) {
+    int depth,
+    uint64_t owner) {
+  if (!IsInstanceOwnerActive(owner)) {
+    *error_msg = "Native instance owner was closed";
+    return v8::MaybeLocal<v8::Value>();
+  }
   if (depth > kMaxValueConversionDepth) {
     *error_msg = "Argument is nested too deeply";
     return v8::MaybeLocal<v8::Value>();
@@ -1823,7 +2050,7 @@ v8::MaybeLocal<v8::Value> XenonNodeExecutor::WireValueToV8(
     for (const base::Value& item : list) {
       v8::Local<v8::Value> converted;
       if (!WireValueToV8(context, item, client_id, module_path, error_msg,
-                         depth + 1)
+                         depth + 1, owner)
                .ToLocal(&converted) ||
           !array->Set(context, index++, converted).FromMaybe(false)) {
         if (error_msg->empty()) {
@@ -1844,9 +2071,10 @@ v8::MaybeLocal<v8::Value> XenonNodeExecutor::WireValueToV8(
         return v8::MaybeLocal<v8::Value>();
       }
       return GetOrCreateNativeCallback(context, client_id, *callback_id,
-                                       module_path);
+                                       module_path, owner);
     }
-    if (wire_type && *wire_type == kNativeInstanceWireType) {
+    if (wire_type && (*wire_type == kNativeInstanceWireType ||
+                      *wire_type == kNativeFunctionWireType)) {
       const std::optional<int> instance_id = dict.FindInt("instance_id");
       if (!instance_id) {
         *error_msg = "native_instance argument is missing instance_id";
@@ -1858,6 +2086,16 @@ v8::MaybeLocal<v8::Value> XenonNodeExecutor::WireValueToV8(
             "Unknown native instance id: " + std::to_string(*instance_id);
         return v8::MaybeLocal<v8::Value>();
       }
+      if (it->second.owner != owner) {
+        *error_msg = "Native instance does not belong to this owner";
+        return v8::MaybeLocal<v8::Value>();
+      }
+      const std::string* token = dict.FindString("owner_token");
+      if (owner != 0 &&
+          (!token || !ValidateInstanceOwnerToken(owner, *token))) {
+        *error_msg = "Native instance owner token is invalid";
+        return v8::MaybeLocal<v8::Value>();
+      }
       return it->second.object.Get(addon_isolate_).As<v8::Value>();
     }
     if (!wire_type) {
@@ -1865,7 +2103,7 @@ v8::MaybeLocal<v8::Value> XenonNodeExecutor::WireValueToV8(
       for (const auto [key, item] : dict) {
         v8::Local<v8::Value> converted;
         if (!WireValueToV8(context, item, client_id, module_path, error_msg,
-                           depth + 1)
+                           depth + 1, owner)
                  .ToLocal(&converted) ||
             !object
                  ->CreateDataProperty(
@@ -1888,28 +2126,64 @@ void XenonNodeExecutor::AttachNativeInstanceFields(
     const std::string& module_path,
     v8::Local<v8::Object> object,
     base::DictValue& dict,
-    int depth) {
+    int depth,
+    uint64_t owner) {
   if (depth + 1 > kMaxValueConversionDepth) {
     return;
   }
 
+  // Snapshot only data descriptors. Reading inherited accessors here can run
+  // addon code while an unrelated native callback is still on the stack.
+  // Accessors remain available through explicit member inspection.
+  v8::TryCatch try_catch(addon_isolate_);
   std::set<std::string> names;
+  base::DictValue fields;
   v8::Local<v8::Object> current = object;
-  while (true) {
+  while (IsInstanceOwnerActive(owner)) {
     v8::Local<v8::Array> keys;
-    if (current
-            ->GetOwnPropertyNames(context, v8::PropertyFilter::ALL_PROPERTIES,
-                                  v8::KeyConversionMode::kConvertToString)
-            .ToLocal(&keys)) {
-      for (uint32_t i = 0; i < keys->Length(); ++i) {
-        v8::Local<v8::Value> key;
-        if (!keys->Get(context, i).ToLocal(&key)) {
-          continue;
-        }
-        v8::String::Utf8Value key_string(addon_isolate_, key);
-        if (*key_string) {
-          names.emplace(*key_string, key_string.length());
-        }
+    if (!current
+             ->GetOwnPropertyNames(context, v8::PropertyFilter::ALL_PROPERTIES,
+                                   v8::KeyConversionMode::kConvertToString)
+             .ToLocal(&keys)) {
+      return;
+    }
+    for (uint32_t i = 0; i < keys->Length(); ++i) {
+      if (!IsInstanceOwnerActive(owner)) {
+        return;
+      }
+      v8::Local<v8::Value> key;
+      std::string name;
+      if (!keys->Get(context, i).ToLocal(&key) || !key->IsName() ||
+          !gin::ConvertFromV8(addon_isolate_, key, &name)) {
+        return;
+      }
+      if (!names.insert(name).second || name == "constructor" ||
+          name == "prototype" || name == "then") {
+        continue;
+      }
+      v8::Local<v8::Value> descriptor;
+      if (!current->GetOwnPropertyDescriptor(context, key.As<v8::Name>())
+               .ToLocal(&descriptor)) {
+        return;
+      }
+      if (!descriptor->IsObject()) {
+        continue;
+      }
+      v8::Local<v8::Value> property;
+      gin::Dictionary descriptor_dict(addon_isolate_,
+                                      descriptor.As<v8::Object>());
+      if (!descriptor_dict.Get("value", &property) || property.IsEmpty() ||
+          property->IsUndefined() || property->IsFunction()) {
+        continue;
+      }
+      std::string field_error;
+      std::optional<base::Value> converted = ConvertNativeValue(
+          context, module_path, property, &field_error, depth + 1, owner);
+      if (try_catch.HasCaught()) {
+        return;
+      }
+      if (converted) {
+        fields.Set(name, std::move(*converted));
       }
     }
     v8::Local<v8::Value> prototype = current->GetPrototype();
@@ -1920,55 +2194,80 @@ void XenonNodeExecutor::AttachNativeInstanceFields(
     }
     current = prototype.As<v8::Object>();
   }
-
-  base::DictValue fields;
-  for (const std::string& name : names) {
-    if (name == "constructor" || name == "prototype" || name == "then") {
-      continue;
-    }
-    v8::Local<v8::Value> property;
-    if (!object->Get(context, gin::StringToV8(addon_isolate_, name))
-             .ToLocal(&property) ||
-        property.IsEmpty() || property->IsUndefined() ||
-        property->IsFunction()) {
-      continue;
-    }
-    std::string field_error;
-    std::optional<base::Value> converted = ConvertNativeValue(
-        context, module_path, property, &field_error, depth + 1);
-    if (!converted) {
-      continue;
-    }
-    fields.Set(name, std::move(*converted));
-  }
   if (!fields.empty()) {
     dict.Set("fields", std::move(fields));
   }
+}
+
+int32_t XenonNodeExecutor::RegisterNativeInstance(
+    const std::string& module_path,
+    v8::Local<v8::Object> object,
+    uint64_t owner) {
+  const base::FilePath resolved_path = ResolveAddonPath(module_path);
+  const int identity_hash = object->GetIdentityHash();
+  const auto range = addon_instance_ids_by_hash_.equal_range(identity_hash);
+  for (auto it = range.first; it != range.second; ++it) {
+    const auto instance = addon_instances_.find(it->second);
+    if (instance != addon_instances_.end() && instance->second.owner == owner &&
+        instance->second.module_path == resolved_path &&
+        instance->second.object.Get(addon_isolate_)->StrictEquals(object)) {
+      return instance->first;
+    }
+  }
+  const int32_t instance_id = next_instance_id_++;
+  AddonInstance stored;
+  stored.module_path = resolved_path;
+  stored.owner = owner;
+  stored.identity_hash = identity_hash;
+  stored.object.Reset(addon_isolate_, object);
+  addon_instances_.emplace(instance_id, std::move(stored));
+  addon_instance_ids_by_hash_.emplace(identity_hash, instance_id);
+  return instance_id;
+}
+
+void XenonNodeExecutor::RemoveNativeInstance(int32_t instance_id) {
+  const auto instance = addon_instances_.find(instance_id);
+  if (instance == addon_instances_.end()) {
+    return;
+  }
+  const auto range =
+      addon_instance_ids_by_hash_.equal_range(instance->second.identity_hash);
+  for (auto it = range.first; it != range.second; ++it) {
+    if (it->second == instance_id) {
+      addon_instance_ids_by_hash_.erase(it);
+      break;
+    }
+  }
+  addon_instances_.erase(instance);
 }
 
 std::optional<base::Value> XenonNodeExecutor::MaybeAdoptNativeReturn(
     v8::Local<v8::Context> context,
     const std::string& module_path,
     v8::Local<v8::Value> result,
-    int depth) {
+    int depth,
+    uint64_t owner) {
   const bool is_function = result->IsFunction();
   if (!is_function &&
       !LooksLikeNativeHandle(addon_isolate_, context, result)) {
     return std::nullopt;
   }
+  if (!IsInstanceOwnerActive(owner)) {
+    return std::nullopt;
+  }
 
   v8::Local<v8::Object> object = result.As<v8::Object>();
-  const int32_t instance_id = next_instance_id_++;
-  AddonInstance stored;
-  stored.module_path = ResolveAddonPath(module_path);
-  stored.object.Reset(addon_isolate_, object);
-  addon_instances_.insert_or_assign(instance_id, std::move(stored));
+  const int32_t instance_id =
+      RegisterNativeInstance(module_path, object, owner);
 
   base::DictValue dict;
   dict.Set(kWireTypeKey,
            is_function ? kNativeFunctionWireType : kNativeInstanceWireType);
   dict.Set("module_path", module_path);
   dict.Set("instance_id", instance_id);
+  if (owner != 0) {
+    dict.Set("owner_token", GetInstanceOwnerToken(owner));
+  }
   if (is_function) {
     v8::Local<v8::Value> name = result.As<v8::Function>()->GetName();
     if (!name.IsEmpty() && name->IsString()) {
@@ -1991,7 +2290,7 @@ std::optional<base::Value> XenonNodeExecutor::MaybeAdoptNativeReturn(
   }
   dict.Set("prototype", NativePrototypeMembersToWire(addon_isolate_, context,
                                                      object));
-  AttachNativeInstanceFields(context, module_path, object, dict, depth);
+  AttachNativeInstanceFields(context, module_path, object, dict, depth, owner);
   return base::Value(std::move(dict));
 }
 
@@ -2000,7 +2299,12 @@ std::optional<base::Value> XenonNodeExecutor::ConvertNativeValue(
     const std::string& module_path,
     v8::Local<v8::Value> value,
     std::string* error_msg,
-    int depth) {
+    int depth,
+    uint64_t owner) {
+  if (!IsInstanceOwnerActive(owner)) {
+    *error_msg = "Native instance owner was closed";
+    return std::nullopt;
+  }
   if (depth > kMaxValueConversionDepth) {
     *error_msg = "Native export returned a value that is nested too deeply";
     return std::nullopt;
@@ -2010,9 +2314,17 @@ std::optional<base::Value> XenonNodeExecutor::ConvertNativeValue(
   }
   if (!module_path.empty()) {
     if (std::optional<base::Value> adopted =
-            MaybeAdoptNativeReturn(context, module_path, value, depth)) {
+            MaybeAdoptNativeReturn(context, module_path, value, depth, owner)) {
+      if (!IsInstanceOwnerActive(owner)) {
+        *error_msg = "Native instance owner was closed";
+        return std::nullopt;
+      }
       return adopted;
     }
+  }
+  if (!IsInstanceOwnerActive(owner)) {
+    *error_msg = "Native instance owner was closed";
+    return std::nullopt;
   }
   if (value->IsArray()) {
     v8::Local<v8::Array> array = value.As<v8::Array>();
@@ -2025,7 +2337,7 @@ std::optional<base::Value> XenonNodeExecutor::ConvertNativeValue(
         return std::nullopt;
       }
       std::optional<base::Value> converted = ConvertNativeValue(
-          context, module_path, element, error_msg, depth + 1);
+          context, module_path, element, error_msg, depth + 1, owner);
       if (!converted) {
         return std::nullopt;
       }
@@ -2033,7 +2345,13 @@ std::optional<base::Value> XenonNodeExecutor::ConvertNativeValue(
     }
     return base::Value(std::move(list));
   }
-  return V8ValueToBaseValue(addon_isolate_, context, value, error_msg, depth);
+  std::optional<base::Value> converted =
+      V8ValueToBaseValue(addon_isolate_, context, value, error_msg, depth);
+  if (!IsInstanceOwnerActive(owner)) {
+    *error_msg = "Native instance owner was closed";
+    return std::nullopt;
+  }
+  return converted;
 }
 
 void XenonNodeExecutor::InvokeResolvedFunction(
@@ -2045,24 +2363,37 @@ void XenonNodeExecutor::InvokeResolvedFunction(
     int32_t client_id,
     const std::vector<mojom::NodeInvokeArgPtr>& args,
     InvokeFunctionCallback callback,
-    bool allow_pending_promise) {
+    bool allow_pending_promise,
+    DeferPromiseCallback defer_promise,
+    uint64_t promise_owner) {
+  if (!IsInstanceOwnerActive(promise_owner)) {
+    std::move(callback).Run(false, base::Value(), {},
+                            "Native instance owner was closed");
+    return;
+  }
   std::vector<v8::Local<v8::Value>> argv;
   argv.reserve(args.size());
   for (const auto& arg : args) {
+    if (!IsInstanceOwnerActive(promise_owner)) {
+      std::move(callback).Run(false, base::Value(), {},
+                              "Native instance owner was closed");
+      return;
+    }
     if (!arg) {
       std::move(callback).Run(false, base::Value(), {},
                               "Invalid native argument");
       return;
     }
     if (arg->is_callback) {
-      argv.push_back(GetOrCreateNativeCallback(context, client_id,
-                                               arg->callback_id, module_path));
+      argv.push_back(GetOrCreateNativeCallback(
+          context, client_id, arg->callback_id, module_path, promise_owner));
       continue;
     }
 
     std::string error_msg;
     v8::Local<v8::Value> converted;
-    if (!WireValueToV8(context, arg->value, client_id, module_path, &error_msg)
+    if (!WireValueToV8(context, arg->value, client_id, module_path, &error_msg,
+                       0, promise_owner)
              .ToLocal(&converted)) {
       std::move(callback).Run(false, base::Value(), {}, error_msg);
       return;
@@ -2082,48 +2413,55 @@ void XenonNodeExecutor::InvokeResolvedFunction(
                             DescribeCaughtException(function_name, &try_catch));
     return;
   }
+  if (!IsInstanceOwnerActive(promise_owner)) {
+    if (result->IsPromise()) {
+      result.As<v8::Promise>()->MarkAsHandled();
+    }
+    std::move(callback).Run(false, base::Value(), {},
+                            "Native instance owner was closed");
+    return;
+  }
 
   if (result->IsPromise()) {
-    addon_isolate_->PerformMicrotaskCheckpoint();
     v8::Local<v8::Promise> promise = result.As<v8::Promise>();
+    // This bridge forwards rejection to its caller, including rejections
+    // produced by the checkpoint before the renderer can subscribe.
+    promise->MarkAsHandled();
+    addon_isolate_->PerformMicrotaskCheckpoint();
+    if (!IsInstanceOwnerActive(promise_owner)) {
+      std::move(callback).Run(false, base::Value(), {},
+                              "Native instance owner was closed");
+      return;
+    }
     if (promise->State() == v8::Promise::kFulfilled) {
       result = promise->Result();
     } else if (promise->State() == v8::Promise::kRejected) {
       std::move(callback).Run(false, base::Value(), {},
                               "Native export Promise rejected");
       return;
-    } else if (allow_pending_promise) {
+    } else if (defer_promise) {
       const uint64_t promise_id = next_promise_id_++;
-      pending_promises_.emplace(
+      // Retain the original Promise, including settlement before the renderer
+      // subscribes. Mark it handled immediately to prevent spurious unhandled
+      // rejection reports during the two-message handoff.
+      deferred_promises_.emplace(
           promise_id,
-          PendingPromise{module_path, std::move(callback)});
-
-      v8::Local<v8::Function> resolved_fn =
-          gin::CreateFunctionTemplate(
-              addon_isolate_,
-              base::BindRepeating(&XenonNodeExecutor::OnAsyncPromiseResolved,
-                                  weak_factory_.GetWeakPtr(), promise_id))
-              ->GetFunction(context)
-              .ToLocalChecked();
-      v8::Local<v8::Function> rejected_fn =
-          gin::CreateFunctionTemplate(
-              addon_isolate_,
-              base::BindRepeating(&XenonNodeExecutor::OnAsyncPromiseRejected,
-                                  weak_factory_.GetWeakPtr(), promise_id))
-              ->GetFunction(context)
-              .ToLocalChecked();
-
-      if (promise->Then(context, resolved_fn, rejected_fn).IsEmpty()) {
-        auto it = pending_promises_.find(promise_id);
-        if (it != pending_promises_.end()) {
-          auto cb = std::move(it->second.callback);
-          pending_promises_.erase(it);
-          std::move(cb).Run(false, base::Value(), {},
-                            "Failed to attach Promise handlers");
-        }
-        return;
+          DeferredPromise{module_path, promise_owner,
+                          v8::Global<v8::Promise>(addon_isolate_, promise),
+                          base::TimeTicks::Now() + kDeferredPromiseLifetime});
+      // Use one timer, not one delayed task per call: most tokens are consumed
+      // immediately, and a high call rate must not accumulate timeout tasks.
+      if (!deferred_promise_timer_.IsRunning()) {
+        deferred_promise_timer_.Start(
+            FROM_HERE, kDeferredPromiseLifetime, this,
+            &XenonNodeExecutor::ExpireDeferredPromises);
       }
-      EnsureUvLoopPolling();
+      std::move(defer_promise).Run(promise_id);
+      return;
+    } else if (allow_pending_promise) {
+      AwaitPromise(context, module_path, promise, std::move(callback),
+                   promise_owner == 0 ? std::nullopt
+                                      : std::make_optional(promise_owner));
       return;
     } else {
       std::move(callback).Run(
@@ -2135,13 +2473,120 @@ void XenonNodeExecutor::InvokeResolvedFunction(
   }
 
   std::string error_msg;
-  std::optional<base::Value> converted =
-      ConvertNativeValue(context, module_path, result, &error_msg, 0);
+  std::optional<base::Value> converted = ConvertNativeValue(
+      context, module_path, result, &error_msg, 0, promise_owner);
   if (!converted) {
     std::move(callback).Run(false, base::Value(), {}, error_msg);
     return;
   }
   std::move(callback).Run(true, std::move(*converted), {}, "");
+}
+
+void XenonNodeExecutor::AwaitPromise(v8::Local<v8::Context> context,
+                                     const std::string& module_path,
+                                     v8::Local<v8::Promise> promise,
+                                     InvokeFunctionCallback callback,
+                                     std::optional<uint64_t> promise_owner) {
+  const uint64_t promise_id = next_promise_id_++;
+  pending_promises_.emplace(
+      promise_id,
+      PendingPromise{module_path, std::move(callback), promise_owner});
+  v8::Local<v8::Function> resolved_fn =
+      gin::CreateFunctionTemplate(
+          addon_isolate_,
+          base::BindRepeating(&XenonNodeExecutor::OnAsyncPromiseResolved,
+                              weak_factory_.GetWeakPtr(), promise_id))
+          ->GetFunction(context)
+          .ToLocalChecked();
+  v8::Local<v8::Function> rejected_fn =
+      gin::CreateFunctionTemplate(
+          addon_isolate_,
+          base::BindRepeating(&XenonNodeExecutor::OnAsyncPromiseRejected,
+                              weak_factory_.GetWeakPtr(), promise_id))
+          ->GetFunction(context)
+          .ToLocalChecked();
+  if (promise->Then(context, resolved_fn, rejected_fn).IsEmpty()) {
+    auto it = pending_promises_.find(promise_id);
+    if (it != pending_promises_.end()) {
+      auto cb = std::move(it->second.callback);
+      pending_promises_.erase(it);
+      std::move(cb).Run(false, base::Value(), {},
+                        "Failed to attach Promise handlers");
+    }
+    return;
+  }
+  // Then() also handles Promises which settled before subscription.
+  addon_isolate_->PerformMicrotaskCheckpoint();
+  EnsureUvLoopPolling();
+}
+
+void XenonNodeExecutor::AwaitDeferredPromise(uint64_t promise_id,
+                                             uint64_t promise_owner,
+                                             InvokeFunctionCallback callback) {
+  if (!IsInstanceOwnerActive(promise_owner)) {
+    std::move(callback).Run(false, base::Value(), {},
+                            "Native instance owner was closed");
+    return;
+  }
+  auto it = deferred_promises_.find(promise_id);
+  if (it == deferred_promises_.end() || it->second.owner != promise_owner) {
+    std::move(callback).Run(false, base::Value(), {},
+                            "Unknown or expired native Promise");
+    return;
+  }
+  AutoV8Scope v8_scope(addon_isolate_, addon_context_);
+  DeferredPromise deferred = std::move(it->second);
+  deferred_promises_.erase(it);
+  if (deferred_promises_.empty()) {
+    deferred_promise_timer_.Stop();
+  }
+  AwaitPromise(v8_scope.context, deferred.module_path,
+               deferred.promise.Get(addon_isolate_), std::move(callback),
+               promise_owner);
+}
+
+void XenonNodeExecutor::ExpireDeferredPromises() {
+  if (deferred_promises_.empty()) {
+    return;
+  }
+  AutoV8Scope v8_scope(addon_isolate_, addon_context_);
+  const base::TimeTicks now = base::TimeTicks::Now();
+  std::erase_if(deferred_promises_, [now](const auto& item) {
+    return item.second.expires_at <= now;
+  });
+  if (!deferred_promises_.empty()) {
+    deferred_promise_timer_.Start(
+        FROM_HERE, deferred_promises_.begin()->second.expires_at - now, this,
+        &XenonNodeExecutor::ExpireDeferredPromises);
+  }
+}
+
+void XenonNodeExecutor::CancelPromisesForOwner(uint64_t promise_owner) {
+  if (!addon_isolate_) {
+    return;
+  }
+  std::vector<InvokeFunctionCallback> callbacks;
+  {
+    AutoV8Scope v8_scope(addon_isolate_, addon_context_);
+    std::erase_if(deferred_promises_, [promise_owner](const auto& item) {
+      return item.second.owner == promise_owner;
+    });
+    if (deferred_promises_.empty()) {
+      deferred_promise_timer_.Stop();
+    }
+    for (auto it = pending_promises_.begin(); it != pending_promises_.end();) {
+      if (it->second.owner == promise_owner) {
+        callbacks.push_back(std::move(it->second.callback));
+        it = pending_promises_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+  for (auto& callback : callbacks) {
+    std::move(callback).Run(false, base::Value(), {},
+                            "Native Promise connection was closed");
+  }
 }
 
 void XenonNodeExecutor::OnAsyncPromiseResolved(uint64_t promise_id,
@@ -2164,7 +2609,8 @@ void XenonNodeExecutor::OnAsyncPromiseResolved(uint64_t promise_id,
 
   std::string error_msg;
   std::optional<base::Value> converted =
-      ConvertNativeValue(context, pending.module_path, result, &error_msg, 0);
+      ConvertNativeValue(context, pending.module_path, result, &error_msg, 0,
+                         pending.owner.value_or(0));
   if (!converted) {
     std::move(pending.callback).Run(false, base::Value(), {}, error_msg);
     return;
@@ -2193,6 +2639,8 @@ void XenonNodeExecutor::OnAsyncPromiseRejected(uint64_t promise_id,
 }
 
 XenonNodeExecutor::~XenonNodeExecutor() {
+  weak_factory_.InvalidateWeakPtrs();
+  deferred_promise_timer_.Stop();
   uv_loop_timer_.Stop();
   for (auto& [id, pending] : pending_promises_) {
     if (pending.callback) {
@@ -2204,16 +2652,20 @@ XenonNodeExecutor::~XenonNodeExecutor() {
   if (addon_isolate_) {
     if (!addon_context_.IsEmpty()) {
       AutoV8Scope v8_scope(addon_isolate_, addon_context_);
+      deferred_promises_.clear();
       addon_callbacks_.clear();
       addon_instances_.clear();
+      addon_instance_ids_by_hash_.clear();
       addon_modules_.clear();
       addon_path_aliases_.clear();
       addon_context_.Reset();
     } else {
       v8::Locker locker(addon_isolate_);
       v8::Isolate::Scope isolate_scope(addon_isolate_);
+      deferred_promises_.clear();
       addon_callbacks_.clear();
       addon_instances_.clear();
+      addon_instance_ids_by_hash_.clear();
       addon_modules_.clear();
       addon_path_aliases_.clear();
     }
@@ -2374,15 +2826,54 @@ bool XenonNodeExecutor::LoadAddonFromCurrentThread(const std::string& path,
   RegisterModulePath(requested_path, prepared.path);
   AddonModule module;
   module.exports.Reset(addon_isolate_, exports_value);
-  module.export_tree =
-      BuildExportTree(addon_isolate_, context, exports_value.As<v8::Object>(),
-                      kMaxExportInspectDepth);
   module.loaded_addon = std::move(loaded_addon);
   module.resource_redirect = std::move(resource_redirect);
   addon_modules_.insert_or_assign(prepared.path, std::move(module));
   EnsureUvLoopPolling();
   LOG(INFO) << "[XenonNodeExecutor] Loaded native addon "
             << prepared.path.AsUTF8Unsafe();
+  return true;
+}
+
+bool XenonNodeExecutor::InspectExportFromCurrentThread(
+    const std::string& path,
+    const std::string& export_path,
+    mojom::NodeExportInfoPtr* description,
+    std::string* error) {
+  AddonModule* module = FindModule(path);
+  if (!module || !addon_isolate_ || addon_context_.IsEmpty() ||
+      module->exports.IsEmpty()) {
+    *error = "Node addon has not been loaded: " + path;
+    return false;
+  }
+  AutoV8Scope v8_scope(addon_isolate_, addon_context_);
+  v8::Local<v8::Context> context = v8_scope.context;
+  v8::Local<v8::Value> value = module->exports.Get(addon_isolate_);
+  gin::TryCatch try_catch(addon_isolate_);
+  if (!export_path.empty()) {
+    for (const auto& part : base::SplitString(
+             export_path, ".", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL)) {
+      v8::Local<v8::Value> next;
+      if (!value->IsObject() ||
+          !value.As<v8::Object>()
+               ->Get(context, gin::StringToV8(addon_isolate_, part))
+               .ToLocal(&next)) {
+        *error = try_catch.HasCaught()
+                     ? DescribeCaughtException(export_path, &try_catch)
+                     : "Native export path is not an object: " + export_path;
+        return false;
+      }
+      value = next;
+    }
+  }
+  *description =
+      DescribeExactExportValue(addon_isolate_, context, export_path, value);
+  if (!*description) {
+    *error = try_catch.HasCaught()
+                 ? DescribeCaughtException(export_path, &try_catch)
+                 : "Failed to inspect native export descriptors";
+    return false;
+  }
   return true;
 }
 
@@ -2427,7 +2918,7 @@ bool XenonNodeExecutor::ConstructExportFromCurrentThread(
     const std::string& path,
     const std::string& export_path,
     const base::Value& args,
-    int32_t* instance_id,
+    base::Value* instance,
     std::string* error) {
   std::string load_error;
   if (!LoadAddonFromCurrentThread(path, &load_error)) {
@@ -2438,6 +2929,7 @@ bool XenonNodeExecutor::ConstructExportFromCurrentThread(
   }
 
   bool ok = false;
+  int32_t instance_id = 0;
   ConstructExport(
       path, export_path, /*client_id=*/0, ListValueToInvokeArgs(args),
       base::BindOnce(
@@ -2453,8 +2945,41 @@ bool XenonNodeExecutor::ConstructExportFromCurrentThread(
                                          : error_msg;
             }
           },
-          &ok, instance_id, error));
-  return ok;
+          &ok, &instance_id, error));
+  if (!ok) {
+    return false;
+  }
+  AutoV8Scope v8_scope(addon_isolate_, addon_context_);
+  v8::Local<v8::Context> context = v8_scope.context;
+  v8::Local<v8::Object> object =
+      addon_instances_.at(instance_id).object.Get(addon_isolate_);
+  base::DictValue wire;
+  wire.Set(kWireTypeKey, kNativeInstanceWireType);
+  wire.Set("instance_id", instance_id);
+  wire.Set("prototype",
+           NativePrototypeMembersToWire(addon_isolate_, context, object));
+  // Snapshot data descriptors only: constructing a wrapper must not call
+  // unrelated native getters just to discover an instance's fields.
+  auto description =
+      DescribeExactExportValue(addon_isolate_, context, "", object);
+  if (!description) {
+    *error = "Failed to inspect constructed native instance";
+    return false;
+  }
+  base::DictValue fields;
+  for (const auto& child : description->children) {
+    if (child->has_value) {
+      fields.Set(child->name,
+                 child->kind == "bigint"
+                     ? base::Value(base::DictValue()
+                                       .Set(kWireTypeKey, "bigint")
+                                       .Set("value", child->value.Clone()))
+                     : child->value.Clone());
+    }
+  }
+  wire.Set("fields", std::move(fields));
+  *instance = base::Value(std::move(wire));
+  return true;
 }
 
 bool XenonNodeExecutor::InvokeInstanceFromCurrentThread(
@@ -2495,8 +3020,22 @@ bool XenonNodeExecutor::InvokeInstanceFromCurrentThread(
   return ok;
 }
 
+std::vector<mojom::NodeExportInfoPtr> XenonNodeExecutor::GetCachedExportTree(
+    AddonModule* module) {
+  if (!module->export_tree_initialized) {
+    AutoV8Scope v8_scope(addon_isolate_, addon_context_);
+    module->export_tree =
+        BuildExportTree(addon_isolate_, v8_scope.context,
+                        module->exports.Get(addon_isolate_).As<v8::Object>(),
+                        kMaxExportInspectDepth);
+    module->export_tree_initialized = true;
+  }
+  return CloneExportTree(module->export_tree);
+}
+
 void XenonNodeExecutor::LoadAddon(const std::string& path,
-                                  LoadAddonCallback callback) {
+                                  LoadAddonCallback callback,
+                                  bool include_export_tree) {
   if (!EnsureIsolate()) {
     LOG(ERROR) << "[XenonNodeExecutor] Failed to create V8 isolate";
     std::move(callback).Run(false, "Failed to create V8 isolate in utility", {});
@@ -2505,8 +3044,10 @@ void XenonNodeExecutor::LoadAddon(const std::string& path,
 
   if (AddonModule* cached_addon = FindModule(path);
       cached_addon && !cached_addon->exports.IsEmpty()) {
-    std::move(callback).Run(
-        true, "", CloneExportTree(cached_addon->export_tree));
+    std::move(callback).Run(true, "",
+                            include_export_tree
+                                ? GetCachedExportTree(cached_addon)
+                                : std::vector<mojom::NodeExportInfoPtr>());
     return;
   }
 
@@ -2519,7 +3060,8 @@ void XenonNodeExecutor::LoadAddon(const std::string& path,
       base::BindOnce(&PrepareAddon, addon_path, allow_external_addons),
       base::BindOnce(
           [](base::WeakPtr<XenonNodeExecutor> self, base::FilePath addon_path,
-             LoadAddonCallback callback, PreparedAddon prepared) {
+             bool include_export_tree, LoadAddonCallback callback,
+             PreparedAddon prepared) {
             if (!self) {
               std::move(callback).Run(
                   false, "Node executor was destroyed during load", {});
@@ -2533,8 +3075,11 @@ void XenonNodeExecutor::LoadAddon(const std::string& path,
             if (AddonModule* cached =
                     self->FindModule(addon_path.AsUTF8Unsafe());
                 cached && !cached->exports.IsEmpty()) {
-              std::move(callback).Run(true, "",
-                                      CloneExportTree(cached->export_tree));
+              std::move(callback).Run(
+                  true, "",
+                  include_export_tree
+                      ? self->GetCachedExportTree(cached)
+                      : std::vector<mojom::NodeExportInfoPtr>());
               return;
             }
 
@@ -2559,28 +3104,29 @@ void XenonNodeExecutor::LoadAddon(const std::string& path,
                  instance != self->addon_instances_.end();) {
               if (instance->second.module_path == prepared.path ||
                   instance->second.module_path == addon_path) {
-                instance = self->addon_instances_.erase(instance);
+                const int32_t instance_id = (instance++)->first;
+                self->RemoveNativeInstance(instance_id);
               } else {
                 ++instance;
               }
             }
 
-            v8::Local<v8::Object> exports = exports_value.As<v8::Object>();
-            std::vector<mojom::NodeExportInfoPtr> export_tree = BuildExportTree(
-                self->addon_isolate_, context, exports, kMaxExportInspectDepth);
-
             AddonModule module;
             module.exports.Reset(self->addon_isolate_, exports_value);
-            module.export_tree = CloneExportTree(export_tree);
             module.loaded_addon = std::move(loaded_addon);
             module.resource_redirect = std::move(resource_redirect);
             self->RegisterModulePath(addon_path, prepared.path);
-            self->addon_modules_.insert_or_assign(prepared.path,
-                                                  std::move(module));
+            auto entry = self->addon_modules_.insert_or_assign(
+                prepared.path, std::move(module));
             self->EnsureUvLoopPolling();
-            std::move(callback).Run(true, "", std::move(export_tree));
+            std::move(callback).Run(
+                true, "",
+                include_export_tree
+                    ? self->GetCachedExportTree(&entry.first->second)
+                    : std::vector<mojom::NodeExportInfoPtr>());
           },
-          weak_factory_.GetWeakPtr(), addon_path, std::move(callback)));
+          weak_factory_.GetWeakPtr(), addon_path, include_export_tree,
+          std::move(callback)));
 }
 
 void XenonNodeExecutor::InspectExport(const std::string& module_path,
@@ -2658,7 +3204,13 @@ void XenonNodeExecutor::ConstructExport(
     const std::string& export_path,
     int32_t client_id,
     std::vector<mojom::NodeInvokeArgPtr> args,
-    ConstructExportCallback callback) {
+    ConstructExportCallback callback,
+    uint64_t owner,
+    base::DictValue prototype_properties) {
+  if (!IsInstanceOwnerActive(owner)) {
+    std::move(callback).Run(false, 0, "Native instance owner was closed");
+    return;
+  }
   LOG(INFO) << "[XenonNodeExecutor] ConstructExport " << module_path << " "
             << export_path;
   if (!addon_isolate_ || addon_context_.IsEmpty()) {
@@ -2696,22 +3248,31 @@ void XenonNodeExecutor::ConstructExport(
                             "Node export is not constructable: " + export_path);
     return;
   }
+  if (!IsInstanceOwnerActive(owner)) {
+    std::move(callback).Run(false, 0, "Native instance owner was closed");
+    return;
+  }
 
   std::vector<v8::Local<v8::Value>> argv;
   argv.reserve(args.size());
   for (const auto& arg : args) {
+    if (!IsInstanceOwnerActive(owner)) {
+      std::move(callback).Run(false, 0, "Native instance owner was closed");
+      return;
+    }
     if (!arg) {
       std::move(callback).Run(false, 0, "Invalid constructor argument");
       return;
     }
     if (arg->is_callback) {
-      argv.push_back(GetOrCreateNativeCallback(context, client_id,
-                                               arg->callback_id, module_path));
+      argv.push_back(GetOrCreateNativeCallback(
+          context, client_id, arg->callback_id, module_path, owner));
       continue;
     }
     std::string error_msg;
     v8::Local<v8::Value> converted;
-    if (!WireValueToV8(context, arg->value, client_id, module_path, &error_msg)
+    if (!WireValueToV8(context, arg->value, client_id, module_path, &error_msg,
+                       0, owner)
              .ToLocal(&converted)) {
       std::move(callback).Run(false, 0, error_msg);
       return;
@@ -2721,20 +3282,123 @@ void XenonNodeExecutor::ConstructExport(
 
   gin::TryCatch try_catch(addon_isolate_);
   v8::Local<v8::Object> instance;
-  if (!constructor
-           ->NewInstance(context, static_cast<int>(argv.size()), argv.data())
-           .ToLocal(&instance)) {
-    std::move(callback).Run(false, 0,
-                            DescribeCaughtException(export_path, &try_catch));
+  if (!IsInstanceOwnerActive(owner)) {
+    std::move(callback).Run(false, 0, "Native instance owner was closed");
     return;
+  }
+  if (prototype_properties.empty()) {
+    if (!constructor
+             ->NewInstance(context, static_cast<int>(argv.size()), argv.data())
+             .ToLocal(&instance)) {
+      std::move(callback).Run(false, 0,
+                              DescribeCaughtException(export_path, &try_catch));
+      return;
+    }
+  } else {
+    // Userland wrappers (for example sqlite3's EventEmitter mixin) add methods
+    // that native constructors may call immediately. Supply an independent
+    // newTarget prototype before construction, never modify the shared addon
+    // constructor.prototype or replace its native methods.
+    v8::Local<v8::Value> native_prototype;
+    if (!constructor->Get(context, gin::StringToV8(addon_isolate_, "prototype"))
+             .ToLocal(&native_prototype) ||
+        !native_prototype->IsObject()) {
+      std::move(callback).Run(false, 0,
+                              "Native constructor has no object prototype");
+      return;
+    }
+    v8::Local<v8::Object> prototype = v8::Object::New(addon_isolate_);
+    if (!prototype->SetPrototype(context, native_prototype).FromMaybe(false)) {
+      std::move(callback).Run(false, 0,
+                              "Failed to create native instance prototype");
+      return;
+    }
+    for (const auto [name, value] : prototype_properties) {
+      v8::Local<v8::String> key = gin::StringToV8(addon_isolate_, name);
+      const v8::Maybe<bool> present =
+          native_prototype.As<v8::Object>()->Has(context, key);
+      if (present.IsNothing()) {
+        std::move(callback).Run(
+            false, 0, DescribeCaughtException(export_path, &try_catch));
+        return;
+      }
+      if (present.FromJust() || name == "constructor") {
+        continue;
+      }
+      std::string error;
+      v8::Local<v8::Value> converted;
+      if (!WireValueToV8(context, value, client_id, module_path, &error, 0,
+                         owner)
+               .ToLocal(&converted)) {
+        std::move(callback).Run(false, 0, error);
+        return;
+      }
+      if (!converted->IsFunction() ||
+          !prototype->CreateDataProperty(context, key, converted)
+               .FromMaybe(false)) {
+        std::move(callback).Run(false, 0,
+                                "Native prototype additions must be functions");
+        return;
+      }
+    }
+    v8::Local<v8::Function> new_target;
+    v8::Local<v8::Value> reflect;
+    v8::Local<v8::Value> reflect_construct;
+    if (!v8::Function::New(context,
+                           [](const v8::FunctionCallbackInfo<v8::Value>&) {})
+             .ToLocal(&new_target) ||
+        !new_target
+             ->Set(context, gin::StringToV8(addon_isolate_, "prototype"),
+                   prototype)
+             .FromMaybe(false) ||
+        !context->Global()
+             ->Get(context, gin::StringToV8(addon_isolate_, "Reflect"))
+             .ToLocal(&reflect) ||
+        !reflect->IsObject() ||
+        !reflect.As<v8::Object>()
+             ->Get(context, gin::StringToV8(addon_isolate_, "construct"))
+             .ToLocal(&reflect_construct) ||
+        !reflect_construct->IsFunction()) {
+      std::move(callback).Run(
+          false, 0, "Failed to prepare native prototype construction");
+      return;
+    }
+    v8::Local<v8::Array> arguments =
+        v8::Array::New(addon_isolate_, static_cast<int>(argv.size()));
+    for (size_t i = 0; i < argv.size(); ++i) {
+      if (!arguments
+               ->CreateDataProperty(context, static_cast<uint32_t>(i), argv[i])
+               .FromMaybe(false)) {
+        std::move(callback).Run(false, 0,
+                                "Failed to prepare constructor arguments");
+        return;
+      }
+    }
+    if (!IsInstanceOwnerActive(owner)) {
+      std::move(callback).Run(false, 0, "Native instance owner was closed");
+      return;
+    }
+    v8::Local<v8::Value> construct_args[] = {constructor, arguments,
+                                             new_target};
+    v8::Local<v8::Value> constructed;
+    if (!reflect_construct.As<v8::Function>()
+             ->Call(context, reflect, 3, construct_args)
+             .ToLocal(&constructed) ||
+        !constructed->IsObject()) {
+      std::move(callback).Run(false, 0,
+                              DescribeCaughtException(export_path, &try_catch));
+      return;
+    }
+    instance = constructed.As<v8::Object>();
   }
   EnsureUvLoopPolling();
 
-  const int32_t instance_id = next_instance_id_++;
-  AddonInstance stored;
-  stored.module_path = ResolveAddonPath(module_path);
-  stored.object.Reset(addon_isolate_, instance);
-  addon_instances_.insert_or_assign(instance_id, std::move(stored));
+  if (!IsInstanceOwnerActive(owner)) {
+    std::move(callback).Run(false, 0, "Native instance owner was closed");
+    return;
+  }
+  const int32_t instance_id =
+      RegisterNativeInstance(module_path, instance, owner);
   std::move(callback).Run(true, instance_id, "");
 }
 
@@ -2745,7 +3409,22 @@ void XenonNodeExecutor::InvokeInstance(
     int32_t client_id,
     std::vector<mojom::NodeInvokeArgPtr> args,
     InvokeFunctionCallback callback,
-    bool allow_pending_promise) {
+    bool allow_pending_promise,
+    DeferPromiseCallback defer_promise,
+    uint64_t promise_owner) {
+  if (!IsInstanceOwnerActive(promise_owner)) {
+    std::move(callback).Run(false, base::Value(), {},
+                            "Native instance owner was closed");
+    return;
+  }
+  // Check before resolving the method path, which can itself call native code.
+  if ((allow_pending_promise || defer_promise) &&
+      pending_promises_.size() + deferred_promises_.size() >=
+          kMaxPendingNativePromises) {
+    std::move(callback).Run(false, base::Value(), {},
+                            "Too many pending native Promises");
+    return;
+  }
   LOG(INFO) << "[XenonNodeExecutor] InvokeInstance id=" << instance_id << " "
             << method_name;
   if (!addon_isolate_ || addon_context_.IsEmpty()) {
@@ -2766,6 +3445,11 @@ void XenonNodeExecutor::InvokeInstance(
   }
 
   base::FilePath addon_path = ResolveAddonPath(module_path);
+  if (it->second.owner != promise_owner) {
+    std::move(callback).Run(false, base::Value(), {},
+                            "Native instance does not belong to this owner");
+    return;
+  }
   if (it->second.module_path != addon_path) {
     std::move(callback).Run(
         false, base::Value(), {},
@@ -2794,6 +3478,11 @@ void XenonNodeExecutor::InvokeInstance(
     }
 
     for (size_t i = 0; i + 1 < path.size(); ++i) {
+      if (!IsInstanceOwnerActive(promise_owner)) {
+        std::move(callback).Run(false, base::Value(), {},
+                                "Native instance owner was closed");
+        return;
+      }
       v8::Local<v8::Value> getter_value;
       if (!receiver->Get(context, gin::StringToV8(addon_isolate_, path[i]))
                .ToLocal(&getter_value) ||
@@ -2804,6 +3493,11 @@ void XenonNodeExecutor::InvokeInstance(
         return;
       }
 
+      if (!IsInstanceOwnerActive(promise_owner)) {
+        std::move(callback).Run(false, base::Value(), {},
+                                "Native instance owner was closed");
+        return;
+      }
       gin::TryCatch try_catch(addon_isolate_);
       v8::Local<v8::Value> nested_value;
       if (!getter_value.As<v8::Function>()
@@ -2815,9 +3509,19 @@ void XenonNodeExecutor::InvokeInstance(
         return;
       }
       EnsureUvLoopPolling();
+      if (!IsInstanceOwnerActive(promise_owner)) {
+        std::move(callback).Run(false, base::Value(), {},
+                                "Native instance owner was closed");
+        return;
+      }
 
       if (nested_value->IsPromise()) {
         addon_isolate_->PerformMicrotaskCheckpoint();
+        if (!IsInstanceOwnerActive(promise_owner)) {
+          std::move(callback).Run(false, base::Value(), {},
+                                  "Native instance owner was closed");
+          return;
+        }
         v8::Local<v8::Promise> promise = nested_value.As<v8::Promise>();
         if (promise->State() != v8::Promise::kFulfilled) {
           std::move(callback).Run(
@@ -2856,13 +3560,20 @@ void XenonNodeExecutor::InvokeInstance(
 
   InvokeResolvedFunction(context, module_path, resolved_method_name, function,
                          receiver, client_id, args, std::move(callback),
-                         allow_pending_promise);
+                         allow_pending_promise, std::move(defer_promise),
+                         promise_owner);
 }
 
 void XenonNodeExecutor::GetInstanceProperty(const std::string& module_path,
                                             int32_t instance_id,
                                             const std::string& property_name,
-                                            GetPropertyCallback callback) {
+                                            GetPropertyCallback callback,
+                                            uint64_t owner) {
+  if (!IsInstanceOwnerActive(owner)) {
+    std::move(callback).Run(false, base::Value(),
+                            "Native instance owner was closed");
+    return;
+  }
   if (!addon_isolate_ || addon_context_.IsEmpty()) {
     std::move(callback).Run(false, base::Value(),
                             "No Node addon has been loaded");
@@ -2876,6 +3587,11 @@ void XenonNodeExecutor::GetInstanceProperty(const std::string& module_path,
     std::move(callback).Run(
         false, base::Value(),
         "Unknown instance id: " + std::to_string(instance_id));
+    return;
+  }
+  if (it->second.owner != owner) {
+    std::move(callback).Run(false, base::Value(),
+                            "Native instance does not belong to this owner");
     return;
   }
   if (it->second.module_path != ResolveAddonPath(module_path)) {
@@ -2897,7 +3613,7 @@ void XenonNodeExecutor::GetInstanceProperty(const std::string& module_path,
 
   std::string error_msg;
   std::optional<base::Value> converted =
-      ConvertNativeValue(context, module_path, value, &error_msg, 0);
+      ConvertNativeValue(context, module_path, value, &error_msg, 0, owner);
   if (!converted) {
     std::move(callback).Run(false, base::Value(), error_msg);
     return;
@@ -2905,11 +3621,16 @@ void XenonNodeExecutor::GetInstanceProperty(const std::string& module_path,
   std::move(callback).Run(true, std::move(*converted), "");
 }
 
-void XenonNodeExecutor::InspectInstanceMember(
-    const std::string& module_path,
-    int32_t instance_id,
-    const std::string& property_name,
-    GetPropertyCallback callback) {
+void XenonNodeExecutor::InspectInstanceMember(const std::string& module_path,
+                                              int32_t instance_id,
+                                              const std::string& property_name,
+                                              GetPropertyCallback callback,
+                                              uint64_t owner) {
+  if (!IsInstanceOwnerActive(owner)) {
+    std::move(callback).Run(false, base::Value(),
+                            "Native instance owner was closed");
+    return;
+  }
   if (!addon_isolate_ || addon_context_.IsEmpty()) {
     std::move(callback).Run(false, base::Value(),
                             "No Node addon has been loaded");
@@ -2923,6 +3644,11 @@ void XenonNodeExecutor::InspectInstanceMember(
     std::move(callback).Run(
         false, base::Value(),
         "Unknown instance id: " + std::to_string(instance_id));
+    return;
+  }
+  if (it->second.owner != owner) {
+    std::move(callback).Run(false, base::Value(),
+                            "Native instance does not belong to this owner");
     return;
   }
   if (it->second.module_path != ResolveAddonPath(module_path)) {
@@ -2943,6 +3669,11 @@ void XenonNodeExecutor::InspectInstanceMember(
     return;
   }
 
+  if (!IsInstanceOwnerActive(owner)) {
+    std::move(callback).Run(false, base::Value(),
+                            "Native instance owner was closed");
+    return;
+  }
   base::DictValue result;
   if (value->IsUndefined()) {
     result.Set("kind", "undefined");
@@ -2951,7 +3682,7 @@ void XenonNodeExecutor::InspectInstanceMember(
   } else {
     std::string error_msg;
     std::optional<base::Value> converted =
-        ConvertNativeValue(context, module_path, value, &error_msg, 0);
+        ConvertNativeValue(context, module_path, value, &error_msg, 0, owner);
     if (!converted) {
       std::move(callback).Run(false, base::Value(), error_msg);
       return;
@@ -2966,7 +3697,12 @@ void XenonNodeExecutor::SetInstanceProperty(const std::string& module_path,
                                             int32_t instance_id,
                                             const std::string& property_name,
                                             base::Value value,
-                                            SetPropertyCallback callback) {
+                                            SetPropertyCallback callback,
+                                            uint64_t owner) {
+  if (!IsInstanceOwnerActive(owner)) {
+    std::move(callback).Run(false, "Native instance owner was closed");
+    return;
+  }
   if (!addon_isolate_ || addon_context_.IsEmpty()) {
     std::move(callback).Run(false, "No Node addon has been loaded");
     return;
@@ -2980,20 +3716,31 @@ void XenonNodeExecutor::SetInstanceProperty(const std::string& module_path,
         false, "Unknown instance id: " + std::to_string(instance_id));
     return;
   }
+  if (it->second.owner != owner) {
+    std::move(callback).Run(false,
+                            "Native instance does not belong to this owner");
+    return;
+  }
   if (it->second.module_path != ResolveAddonPath(module_path)) {
     std::move(callback).Run(
         false, "Instance does not belong to module: " + module_path);
     return;
   }
 
+  v8::Local<v8::Object> receiver = it->second.object.Get(addon_isolate_);
   std::string error_msg;
   v8::Local<v8::Value> converted;
-  if (!WireValueToV8(context, value, /*client_id=*/0, module_path, &error_msg)
+  if (!WireValueToV8(context, value, /*client_id=*/0, module_path, &error_msg,
+                     0, owner)
            .ToLocal(&converted)) {
     std::move(callback).Run(false, error_msg);
     return;
   }
-  if (!it->second.object.Get(addon_isolate_)
+  if (!IsInstanceOwnerActive(owner)) {
+    std::move(callback).Run(false, "Native instance owner was closed");
+    return;
+  }
+  if (!receiver
            ->Set(context, gin::StringToV8(addon_isolate_, property_name),
                  converted)
            .FromMaybe(false)) {
@@ -3001,17 +3748,28 @@ void XenonNodeExecutor::SetInstanceProperty(const std::string& module_path,
         false, "Failed to write instance property: " + property_name);
     return;
   }
+  if (!IsInstanceOwnerActive(owner)) {
+    std::move(callback).Run(false, "Native instance owner was closed");
+    return;
+  }
   std::move(callback).Run(true, "");
 }
 
 void XenonNodeExecutor::ReleaseInstance(const std::string& module_path,
-                                        int32_t instance_id) {
+                                        int32_t instance_id,
+                                        uint64_t owner,
+                                        const std::string& expected_token) {
+  if (!ValidateInstanceOwnerToken(owner, expected_token) || !addon_isolate_ ||
+      addon_context_.IsEmpty()) {
+    return;
+  }
+  AutoV8Scope v8_scope(addon_isolate_, addon_context_);
   auto it = addon_instances_.find(instance_id);
-  if (it == addon_instances_.end() ||
+  if (it == addon_instances_.end() || it->second.owner != owner ||
       it->second.module_path != ResolveAddonPath(module_path)) {
     return;
   }
-  addon_instances_.erase(it);
+  RemoveNativeInstance(instance_id);
 }
 
 void XenonNodeExecutor::InvokeFunction(
@@ -3020,7 +3778,22 @@ void XenonNodeExecutor::InvokeFunction(
     int32_t client_id,
     std::vector<mojom::NodeInvokeArgPtr> args,
     InvokeFunctionCallback callback,
-    bool allow_pending_promise) {
+    bool allow_pending_promise,
+    DeferPromiseCallback defer_promise,
+    uint64_t promise_owner) {
+  if (!IsInstanceOwnerActive(promise_owner)) {
+    std::move(callback).Run(false, base::Value(), {},
+                            "Native instance owner was closed");
+    return;
+  }
+  // Reject before entering native code, including export property getters.
+  if ((allow_pending_promise || defer_promise) &&
+      pending_promises_.size() + deferred_promises_.size() >=
+          kMaxPendingNativePromises) {
+    std::move(callback).Run(false, base::Value(), {},
+                            "Too many pending native Promises");
+    return;
+  }
   LOG(INFO) << "[XenonNodeExecutor] InvokeFunction " << module_path << " "
             << function_name;
   if (!addon_isolate_ || addon_context_.IsEmpty()) {
@@ -3061,7 +3834,8 @@ void XenonNodeExecutor::InvokeFunction(
 
   InvokeResolvedFunction(context, module_path, function_name, function,
                          receiver, client_id, args, std::move(callback),
-                         allow_pending_promise);
+                         allow_pending_promise, std::move(defer_promise),
+                         promise_owner);
 }
 
 void XenonNodeExecutor::GetExportProperty(const std::string& module_path,

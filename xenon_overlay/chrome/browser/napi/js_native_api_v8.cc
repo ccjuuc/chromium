@@ -21,6 +21,7 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -163,7 +164,19 @@ static void CallbackDispatcher(const v8::FunctionCallbackInfo<v8::Value>& info) 
 
   NapiValueScope value_scope(cbd->env);
   napi_callback_info__ cb_info{info, cbd->data};
+  cbd->env->last_error_info = {nullptr, nullptr, 0, napi_ok};
   napi_value res = cbd->cb(cbd->env, &cb_info);
+  if (!cbd->env->last_exception.IsEmpty()) {
+    // Match Node's CallIntoModule boundary: deliver the pending exception to
+    // this JavaScript call, then release the N-API copy. Retaining it after the
+    // caller catches it can make a later ObjectWrap constructor destroy an
+    // otherwise valid instance during its IsExceptionPending check.
+    v8::Local<v8::Value> exception =
+        cbd->env->last_exception.Get(cbd->env->isolate);
+    cbd->env->last_exception.Reset();
+    cbd->env->isolate->ThrowException(exception);
+    return;
+  }
   v8::Local<v8::Value> return_value =
       res ? res->Get() : v8::Undefined(cbd->env->isolate);
   info.GetReturnValue().Set(return_value);
@@ -1022,15 +1035,69 @@ napi_status napi_has_named_property(napi_env env, napi_value object, const char*
 }
 
 napi_status napi_get_named_property(napi_env env, napi_value object, const char* utf8name, napi_value* result) {
-  if (!env || !object || !utf8name || !result) return napi_invalid_arg;
+  auto finish = [env](napi_status status, const char* message) {
+    if (env) {
+      env->last_error_info = {message, nullptr, 0, status};
+    }
+    return status;
+  };
+  auto log_failure = [&](napi_status status, bool object_empty,
+                         v8::TryCatch* try_catch = nullptr) {
+    std::string exception_message;
+    if (try_catch && try_catch->HasCaught() &&
+        !try_catch->Message().IsEmpty()) {
+      // Message::Get is already a V8 string; do not read exception properties
+      // or coerce the thrown value while preserving the original exception.
+      v8::String::Utf8Value message(env->isolate, try_catch->Message()->Get());
+      if (*message) {
+        exception_message.assign(*message,
+                                 std::min<size_t>(message.length(), 512));
+      }
+    }
+    LOG(ERROR) << "N-API napi_get_named_property failed status=" << status
+               << " env_null=" << !env << " object_null=" << !object
+               << " object_empty=" << object_empty << " name_null=" << !utf8name
+               << " result_null=" << !result << " property="
+               << (utf8name ? std::string_view(utf8name).substr(0, 128)
+                            : std::string_view())
+               << " exception=" << exception_message;
+  };
+  if (!env || !object || !utf8name || !result) {
+    log_failure(napi_invalid_arg, false);
+    return finish(napi_invalid_arg, "Invalid argument");
+  }
+  v8::Local<v8::Value> object_value = object->Get();
+  if (object_value.IsEmpty()) {
+    log_failure(napi_invalid_arg, true);
+    return finish(napi_invalid_arg, "Invalid argument");
+  }
+  v8::TryCatch try_catch(env->isolate);
+  auto failed_v8_operation = [&](napi_status fallback, const char* message) {
+    if (try_catch.HasCaught()) {
+      env->last_exception.Reset(env->isolate, try_catch.Exception());
+      log_failure(napi_pending_exception, false, &try_catch);
+      return finish(napi_pending_exception, "An exception is pending");
+    }
+    log_failure(fallback, false);
+    return finish(fallback, message);
+  };
   v8::Local<v8::Context> context = env->GetContext();
   v8::Local<v8::Object> obj;
-  if (!object->Get()->ToObject(context).ToLocal(&obj)) return napi_object_expected;
-  v8::Local<v8::String> key = v8::String::NewFromUtf8(env->isolate, utf8name, v8::NewStringType::kNormal).ToLocalChecked();
+  if (!object_value->ToObject(context).ToLocal(&obj)) {
+    return failed_v8_operation(napi_object_expected, "An object was expected");
+  }
+  v8::Local<v8::String> key;
+  if (!v8::String::NewFromUtf8(env->isolate, utf8name,
+                               v8::NewStringType::kNormal)
+           .ToLocal(&key)) {
+    return failed_v8_operation(napi_generic_failure, "Unknown failure");
+  }
   v8::Local<v8::Value> val;
-  if (!obj->Get(context, key).ToLocal(&val)) return napi_generic_failure;
+  if (!obj->Get(context, key).ToLocal(&val)) {
+    return failed_v8_operation(napi_generic_failure, "Unknown failure");
+  }
   *result = env->CreateValue(val);
-  return napi_ok;
+  return finish(napi_ok, nullptr);
 }
 
 napi_status napi_set_element(napi_env env, napi_value object, uint32_t index, napi_value value) {
@@ -1289,11 +1356,22 @@ napi_status napi_create_function(napi_env env, const char* utf8name, size_t leng
 }
 
 napi_status napi_call_function(napi_env env, napi_value recv, napi_value func, size_t argc, const napi_value* argv, napi_value* result) {
-  if (!env || !func || (argc > 0 && !argv)) return napi_invalid_arg;
+  if (!env || !func || (argc > 0 && !argv)) {
+    LOG(ERROR) << "N-API napi_call_function failed status=" << napi_invalid_arg
+               << " env_null=" << !env << " func_null=" << !func
+               << " argv_null=" << !argv;
+    return napi_invalid_arg;
+  }
   if (argc > static_cast<size_t>(std::numeric_limits<int>::max())) {
     return napi_invalid_arg;
   }
-  if (!func->Get()->IsFunction()) {
+  v8::Local<v8::Value> function_value = func->Get();
+  if (function_value.IsEmpty() || !function_value->IsFunction()) {
+    LOG(ERROR) << "N-API napi_call_function failed status="
+               << napi_function_expected
+               << " func_empty=" << function_value.IsEmpty()
+               << " func_undefined="
+               << (!function_value.IsEmpty() && function_value->IsUndefined());
     return napi_function_expected;
   }
   v8::Local<v8::Context> context = env->GetContext();
@@ -1341,21 +1419,38 @@ napi_status napi_instanceof(napi_env env,
                             napi_value object,
                             napi_value constructor,
                             bool* result) {
+  auto finish = [env](napi_status status, const char* message) {
+    if (env) {
+      env->last_error_info = {message, nullptr, 0, status};
+    }
+    return status;
+  };
   if (!env || !object || !constructor || !result) {
-    return napi_invalid_arg;
+    return finish(napi_invalid_arg, "Invalid argument");
   }
-  if (!object->Get()->IsObject()) {
-    return napi_object_expected;
+  v8::Local<v8::Value> value = object->Get();
+  v8::Local<v8::Value> constructor_value = constructor->Get();
+  if (value.IsEmpty() || constructor_value.IsEmpty()) {
+    return finish(napi_invalid_arg, "Invalid argument");
   }
-  if (!constructor->Get()->IsFunction()) {
-    return napi_function_expected;
+  *result = false;
+  if (!constructor_value->IsFunction()) {
+    return finish(napi_function_expected, "A function was expected");
   }
-  *result =
-      object->Get()
-          .As<v8::Object>()
-          ->InstanceOf(env->GetContext(), constructor->Get().As<v8::Function>())
-          .FromMaybe(false);
-  return napi_ok;
+  // Node-API accepts any left-hand value. In particular, primitive values are
+  // valid inputs and a custom Symbol.hasInstance must see them unchanged.
+  v8::TryCatch try_catch(env->isolate);
+  v8::Maybe<bool> instance_of = value->InstanceOf(
+      env->GetContext(), constructor_value.As<v8::Function>());
+  if (instance_of.IsNothing()) {
+    if (try_catch.HasCaught()) {
+      env->last_exception.Reset(env->isolate, try_catch.Exception());
+      return finish(napi_pending_exception, "An exception is pending");
+    }
+    return finish(napi_generic_failure, "Unknown failure");
+  }
+  *result = instance_of.FromJust();
+  return finish(napi_ok, nullptr);
 }
 
 napi_status napi_get_cb_info(napi_env env, napi_callback_info cbinfo, size_t* argc, napi_value* argv, napi_value* this_arg, void** data) {
@@ -1424,15 +1519,30 @@ napi_status napi_new_instance(napi_env env, napi_value constructor, size_t argc,
 napi_status napi_create_reference(napi_env env, napi_value value, uint32_t initial_refcount, napi_ref* result) {
   if (!env || !result ||
       RejectDeadNapiValue(env, value, "napi_create_reference")) {
+    if (env) {
+      env->last_error_info = {"Invalid argument", nullptr, 0, napi_invalid_arg};
+    }
+    return napi_invalid_arg;
+  }
+  v8::Local<v8::Value> local_value = value->Get();
+  // The stable Node-API contract permits references only to objects, functions
+  // and symbols. In particular, an omitted optional callback is undefined and
+  // must leave the caller's reference output untouched, not create a truthy
+  // reference that later tries to invoke undefined.
+  if (local_value.IsEmpty() ||
+      !(local_value->IsObject() || local_value->IsFunction() ||
+        local_value->IsSymbol())) {
+    env->last_error_info = {"Invalid argument", nullptr, 0, napi_invalid_arg};
     return napi_invalid_arg;
   }
   auto ref = std::make_unique<napi_ref__>(env->isolate);
-  ref->global_value.Reset(env->isolate, value->Get());
+  ref->global_value.Reset(env->isolate, local_value);
   ref->ref_count = initial_refcount;
   if (initial_refcount == 0) {
     ref->SetWeak();
   }
   *result = ref.release();
+  env->last_error_info = {nullptr, nullptr, 0, napi_ok};
   return napi_ok;
 }
 
@@ -1598,8 +1708,23 @@ napi_status napi_is_exception_pending(napi_env env, bool* result) {
   return napi_ok;
 }
 
-napi_status napi_fatal_error(const char* location, size_t location_len, const char* message, size_t message_len) {
-  LOG(FATAL) << "Fatal error in Node addon: " << std::string(message, message_len) << " at " << std::string(location, location_len);
+napi_status napi_fatal_error(const char* location,
+                             size_t location_len,
+                             const char* message,
+                             size_t message_len) {
+  // Node-API permits NAPI_AUTO_LENGTH for either string, and a null location
+  // when no location is available. Do not turn the length sentinel into an
+  // allocation size: that would abort before the addon's diagnostic is logged.
+  const auto diagnostic = [](const char* text, size_t length) {
+    if (!text || length == 0) {
+      return std::string();
+    }
+    return length == NAPI_AUTO_LENGTH ? std::string(text)
+                                      : std::string(text, length);
+  };
+  LOG(FATAL) << "Fatal error in Node addon: "
+             << diagnostic(message, message_len) << " at "
+             << diagnostic(location, location_len);
 }
 
 // --- Class Creation ---
@@ -1873,6 +1998,9 @@ napi_status napi_get_last_error_info(
     napi_env env,
     const napi_extended_error_info** result) {
   if (!env || !result) {
+    LOG(ERROR) << "N-API napi_get_last_error_info failed status="
+               << napi_invalid_arg << " env_null=" << !env
+               << " result_null=" << !result;
     return napi_invalid_arg;
   }
   *result = &env->last_error_info;

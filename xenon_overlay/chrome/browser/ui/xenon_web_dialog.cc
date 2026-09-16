@@ -381,39 +381,58 @@ class XenonDraggableRegionsEnabler : public content::WebContentsObserver {
   XenonDraggableRegionsEnabler(content::WebContents* web_contents,
                                bool use_transparent_background)
       : content::WebContentsObserver(web_contents),
-        use_transparent_background_(use_transparent_background) {
-    ApplyTransparentBackground();
+        background_color_(use_transparent_background
+                              ? std::make_optional(SK_ColorTRANSPARENT)
+                              : std::nullopt) {
+    ApplyBackgroundColor();
     if (web_contents && web_contents->GetPrimaryMainFrame()) {
       EnableDraggableRegionsForFrame(web_contents->GetPrimaryMainFrame());
     }
   }
 
+  void SetBackgroundColor(SkColor color) {
+    background_color_ = color;
+    ApplyBackgroundColor();
+  }
+
   void RenderFrameCreated(content::RenderFrameHost* render_frame_host) override {
     if (render_frame_host->IsInPrimaryMainFrame()) {
+      if (background_color_ && render_frame_host->GetView()) {
+        render_frame_host->GetView()->SetBackgroundColor(
+            GetViewBackgroundColor());
+      }
       EnableDraggableRegionsForFrame(render_frame_host);
     }
   }
 
   void DOMContentLoaded(content::RenderFrameHost* render_frame_host) override {
     if (render_frame_host->IsInPrimaryMainFrame()) {
-      ApplyTransparentBackground();
+      ApplyBackgroundColor();
       EnableDraggableRegionsForFrame(render_frame_host);
     }
   }
 
  private:
-  void ApplyTransparentBackground() {
-    if (!use_transparent_background_ || !web_contents()) {
+  SkColor GetViewBackgroundColor() const {
+    // RenderWidgetHostView only accepts fully opaque or transparent colors.
+    // The page base color retains intermediate alpha for renderer compositing.
+    return SkColorGetA(*background_color_) == SK_AlphaOPAQUE
+               ? *background_color_
+               : SK_ColorTRANSPARENT;
+  }
+
+  void ApplyBackgroundColor() {
+    if (!background_color_ || !web_contents()) {
       return;
     }
-    web_contents()->SetPageBaseBackgroundColor(SK_ColorTRANSPARENT);
+    web_contents()->SetPageBaseBackgroundColor(*background_color_);
     if (content::RenderWidgetHostView* view =
             web_contents()->GetRenderWidgetHostView()) {
-      view->SetBackgroundColor(SK_ColorTRANSPARENT);
+      view->SetBackgroundColor(GetViewBackgroundColor());
     }
   }
 
-  const bool use_transparent_background_;
+  std::optional<SkColor> background_color_;
 };
 
 // Frameless WebDialogView: -webkit-app-region drag + edge resize.
@@ -435,6 +454,17 @@ class XenonWebDialogView : public views::WebDialogView,
     }
   }
 
+  bool SetHostedContentTitle(const std::u16string& title) {
+    if (!xenon_delegate_ || !GetWidget()) {
+      return false;
+    }
+    // WebDialogView::GetWindowTitle reads the WebDialogDelegate, rather than
+    // WidgetDelegate::params_.title. Update that source before the HWND title.
+    xenon_delegate_->SetContentTitle(title);
+    GetWidget()->UpdateWindowTitle();
+    return true;
+  }
+
   void SetHostedContentVisible(bool visible) {
     for (views::View* child : children()) {
       if (auto* web_view = views::AsViewClass<views::WebView>(child)) {
@@ -442,6 +472,34 @@ class XenonWebDialogView : public views::WebDialogView,
         return;
       }
     }
+  }
+
+  bool SetHostedContentBackgroundColor(SkColor color) {
+    if (!web_contents()) {
+      return false;
+    }
+    xenon_delegate_->SetContentBackgroundColor(color);
+    if (!draggable_regions_enabler_) {
+      draggable_regions_enabler_ =
+          std::make_unique<XenonDraggableRegionsEnabler>(
+              web_contents(),
+              xenon_delegate_->UseTransparentWebContentsBackground());
+    }
+    draggable_regions_enabler_->SetBackgroundColor(color);
+    // An acrylic HWND can keep an opaque native window style while its web
+    // surface has alpha. Do not turn it into a parent-sized overlay window.
+    if (SkColorGetA(color) != SK_AlphaOPAQUE && GetWidget()) {
+      if (ui::Layer* widget_layer = GetWidget()->GetLayer()) {
+        widget_layer->SetFillsBoundsOpaquely(false);
+      }
+#if BUILDFLAG(IS_WIN)
+      gfx::NativeWindow native_window = GetWidget()->GetNativeWindow();
+      if (native_window && native_window->layer()) {
+        native_window->layer()->SetFillsBoundsOpaquely(false);
+      }
+#endif
+    }
+    return true;
   }
 
   void ViewHierarchyChanged(
@@ -876,6 +934,22 @@ void XenonWebDialog::SetHostedContentURL(views::Widget* widget,
   }
 }
 
+void XenonWebDialog::SetContentTitle(const std::u16string& title) {
+  title_ = title;
+  // Notify WebDialogView's accessibility callback as well as maintaining the
+  // title returned by this delegate's GetDialogTitle override.
+  set_dialog_title(title);
+}
+
+bool XenonWebDialog::SetHostedContentTitle(views::Widget* widget,
+                                           const std::u16string& title) {
+  if (!widget) {
+    return false;
+  }
+  auto* view = static_cast<XenonWebDialogView*>(widget->widget_delegate());
+  return view && view->SetHostedContentTitle(title);
+}
+
 void XenonWebDialog::SetHostedContentVisible(views::Widget* widget,
                                              bool visible) {
   if (!widget) {
@@ -885,6 +959,15 @@ void XenonWebDialog::SetHostedContentVisible(views::Widget* widget,
   if (view) {
     view->SetHostedContentVisible(visible);
   }
+}
+
+bool XenonWebDialog::SetHostedContentBackgroundColor(views::Widget* widget,
+                                                   SkColor color) {
+  if (!widget) {
+    return false;
+  }
+  auto* view = static_cast<XenonWebDialogView*>(widget->widget_delegate());
+  return view && view->SetHostedContentBackgroundColor(color);
 }
 
 void XenonWebDialog::Show(content::BrowserContext* context,
@@ -1130,6 +1213,9 @@ GURL XenonWebDialog::GetThunder2025WebUIUrl() {
 }
 
 bool XenonWebDialog::UseTransparentWebContentsBackground() const {
+  if (background_color_) {
+    return SkColorGetA(*background_color_) != SK_AlphaOPAQUE;
+  }
   // Electron playerControlWnd is created with transparent:true (dwm=false).
   // The first URL is about:blank; still keep the WebContents clear so the
   // native video HWND can show through CSS-transparent areas.
@@ -1202,12 +1288,6 @@ void XenonWebDialog::ShowXenonPlayerByElec(Profile* profile) {
     return;
   }
 
-  if (XenonPlayerByElecDialogWidget()) {
-    XenonPlayerByElecDialogWidget()->Show();
-    XenonPlayerByElecDialogWidget()->Activate();
-    return;
-  }
-
   XenonManager* manager = XenonManager::GetInstance();
   manager->SetBrowserContext(profile);
   const std::string container_id = manager->GetElectronIpcContainerForOrigin(
@@ -1215,6 +1295,12 @@ void XenonWebDialog::ShowXenonPlayerByElec(Profile* profile) {
   if (!manager->EnsureElectronIpcStarted(container_id)) {
     LOG(ERROR) << "ShowXenonPlayerByElec: failed to start container "
                << container_id;
+    return;
+  }
+
+  if (XenonPlayerByElecDialogWidget()) {
+    XenonPlayerByElecDialogWidget()->Show();
+    XenonPlayerByElecDialogWidget()->Activate();
     return;
   }
 
@@ -1262,12 +1348,31 @@ void XenonWebDialog::ShowXenonPlayerElectron(Profile* profile) {
         // app.getPath("exe"). The container does not launch this executable.
         player_config->executable_path =
             player_dir.AppendASCII("xmp.exe").AsUTF8Unsafe();
+        // The WebUI frontend is extracted from this packaged renderer. Keep
+        // that source location so bundled CommonJS dependencies resolve their
+        // own package and native addons under resources/app.
+        auto renderer_mapping = xenon::ipc::mojom::IpcRendererUrlMapping::New();
+        renderer_mapping->source_path_prefix =
+            player_dir.AppendASCII("resources")
+                .AppendASCII("app")
+                .AppendASCII("out")
+                .AppendASCII("main-renderer")
+                .AsUTF8Unsafe();
+        renderer_mapping->target_base_url = "chrome://xenon-player-electron/";
+        player_config->renderer_url_mappings.push_back(
+            std::move(renderer_mapping));
         player_config->renderer_base_url = "chrome://xenon-player-electron/";
         manager->SetElectronIpcContainerForOrigin(
             "chrome://xenon-player-electron", "xenon-player-test");
         manager->InitializeElectronIpc(std::move(player_config));
       }
     }
+  }
+  // A crashed Utility can leave its old browser window visible. An explicit
+  // sidebar action must still be able to restart that container.
+  if (!manager->EnsureElectronIpcStarted("xenon-player-test")) {
+    LOG(ERROR) << "ShowXenonPlayerElectron: failed to start Electron container";
+    return;
   }
   if (!XenonElectronWindowHost::GetInstance()->ActivateForContainer(
           "xenon-player-test")) {

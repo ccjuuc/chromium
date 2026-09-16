@@ -22,7 +22,9 @@ using NetworkRequestCallback =
 // Performs one HTTP(S) request for a trusted Electron-compatible renderer.
 // Electron/Node requests are not renderer fetches: routing through the
 // browser network service preserves their headers and avoids renderer CORS.
-void PerformNetworkRequest(
+// The optional returned closure cancels the actual loader. Discarding the
+// closure leaves the request running until its response, error or timeout.
+base::OnceClosure PerformNetworkRequest(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     base::Value arguments,
     NetworkRequestCallback callback);

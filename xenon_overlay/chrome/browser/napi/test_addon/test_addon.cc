@@ -4,6 +4,9 @@
 
 #include <chrono>
 #include <cstdint>
+#include <iterator>
+#include <map>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -490,8 +493,428 @@ napi_value UvTimer(napi_env env, napi_callback_info info) {
 }
 #endif
 
+// Controllable real N-API Promises let the executor tests settle operations
+// before or after subscribing, without timers or a second native invocation.
+struct ControlledPromiseState {
+  uint32_t calls = 0;
+  std::map<uint32_t, napi_deferred> pending;
+  std::map<uint32_t, napi_ref> retained_callbacks;
+  uint32_t callback_payload_reads = 0;
+};
+
+ControlledPromiseState* GetControlledPromiseState(napi_env env) {
+  void* state = nullptr;
+  napi_get_instance_data(env, &state);
+  return static_cast<ControlledPromiseState*>(state);
+}
+
+napi_value ReadOwnedHandle(napi_env env, napi_callback_info info) {
+  napi_value receiver;
+  napi_get_cb_info(env, info, nullptr, nullptr, &receiver, nullptr);
+  napi_value result;
+  napi_get_named_property(env, receiver, "value", &result);
+  return result;
+}
+
+napi_value MakeOwnedObject(napi_env env, int value) {
+  napi_value object;
+  napi_create_object(env, &object);
+  napi_value number;
+  napi_create_int32(env, value, &number);
+  napi_set_named_property(env, object, "value", number);
+  napi_property_descriptor read = {"read",  nullptr, ReadOwnedHandle, nullptr,
+                                   nullptr, nullptr, napi_default,    nullptr};
+  napi_define_properties(env, object, 1, &read);
+  return object;
+}
+
+napi_value OwnedHandleConstructor(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_value receiver;
+  napi_get_cb_info(env, info, &argc, argv, &receiver, nullptr);
+  napi_value value;
+  napi_create_int32(env, 42, &value);
+  napi_set_named_property(env, receiver, "value", value);
+  napi_set_named_property(env, receiver, "child", MakeOwnedObject(env, 7));
+  if (argc) {
+    napi_valuetype type;
+    if (napi_typeof(env, argv[0], &type) == napi_ok && type == napi_function &&
+        napi_call_function(env, receiver, argv[0], 1, &receiver, nullptr) !=
+            napi_ok) {
+      return nullptr;
+    }
+  }
+  return receiver;
+}
+
+napi_value InvokeCallbackWithReceiver(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc != 2) {
+    napi_throw_type_error(env, nullptr, "A callback and receiver are required");
+    return nullptr;
+  }
+  if (napi_call_function(env, argv[1], argv[0], 1, &argv[1], nullptr) !=
+      napi_ok) {
+    return nullptr;
+  }
+  return argv[1];
+}
+
+napi_value EmitPrototypeCallback(napi_env env,
+                                 napi_value receiver,
+                                 const char* event) {
+  napi_value emit;
+  napi_valuetype type;
+  if (napi_get_named_property(env, receiver, "emit", &emit) != napi_ok ||
+      napi_typeof(env, emit, &type) != napi_ok) {
+    return nullptr;
+  }
+  const bool present = type == napi_function;
+  if (present) {
+    napi_value name;
+    napi_create_string_utf8(env, event, NAPI_AUTO_LENGTH, &name);
+    if (napi_call_function(env, receiver, emit, 1, &name, nullptr) != napi_ok) {
+      return nullptr;
+    }
+  }
+  napi_value result;
+  napi_get_boolean(env, present, &result);
+  return result;
+}
+
+napi_value PrototypeCallbackConstructor(napi_env env, napi_callback_info info) {
+  napi_value receiver;
+  napi_get_cb_info(env, info, nullptr, nullptr, &receiver, nullptr);
+  auto value = std::make_unique<int>(42);
+  if (napi_wrap(
+          env, receiver, value.get(),
+          [](napi_env, void* data, void*) { delete static_cast<int*>(data); },
+          nullptr, nullptr) != napi_ok) {
+    return nullptr;
+  }
+  value.release();
+  if (!EmitPrototypeCallback(env, receiver, "constructed")) {
+    return nullptr;
+  }
+  return receiver;
+}
+
+napi_value ReadPrototypeCallback(napi_env env, napi_callback_info info) {
+  napi_value receiver;
+  napi_get_cb_info(env, info, nullptr, nullptr, &receiver, nullptr);
+  void* data = nullptr;
+  if (napi_unwrap(env, receiver, &data) != napi_ok || !data) {
+    return nullptr;
+  }
+  napi_value result;
+  napi_create_int32(env, *static_cast<int*>(data), &result);
+  return result;
+}
+
+napi_value FirePrototypeCallback(napi_env env, napi_callback_info info) {
+  napi_value receiver;
+  napi_get_cb_info(env, info, nullptr, nullptr, &receiver, nullptr);
+  return EmitPrototypeCallback(env, receiver, "later");
+}
+
+struct AsyncPrototypeState {
+  napi_ref wrapper = nullptr;
+  napi_ref callback = nullptr;
+  napi_async_work work = nullptr;
+  int value = 0;
+  napi_status completion_status = napi_ok;
+};
+
+void FinalizeAsyncPrototype(napi_env env, void* data, void*) {
+  auto* state = static_cast<AsyncPrototypeState*>(data);
+  if (state->wrapper) {
+    napi_delete_reference(env, state->wrapper);
+  }
+  delete state;
+}
+
+void ExecuteAsyncPrototype(napi_env, void* data) {
+  static_cast<AsyncPrototypeState*>(data)->value = 42;
+}
+
+void CompleteAsyncPrototype(napi_env env, napi_status status, void* data) {
+  auto* state = static_cast<AsyncPrototypeState*>(data);
+  napi_value receiver = nullptr;
+  napi_value callback = nullptr;
+  state->completion_status = status;
+  if (status == napi_ok) {
+    state->completion_status =
+        napi_get_reference_value(env, state->wrapper, &receiver);
+  }
+  if (state->completion_status == napi_ok && receiver) {
+    state->completion_status =
+        napi_get_reference_value(env, state->callback, &callback);
+  }
+  if (state->completion_status == napi_ok && receiver && callback) {
+    napi_value error;
+    napi_get_null(env, &error);
+    state->completion_status =
+        napi_call_function(env, receiver, callback, 1, &error, nullptr);
+    // Match sqlite3's Work_AfterOpen: the constructor callback runs before
+    // native code reads and calls the instance's inherited emit method.
+    if (state->completion_status == napi_ok &&
+        !EmitPrototypeCallback(env, receiver, "open")) {
+      state->completion_status = napi_generic_failure;
+    }
+  } else if (state->completion_status == napi_ok) {
+    state->completion_status = napi_invalid_arg;
+  }
+  napi_delete_reference(env, state->callback);
+  state->callback = nullptr;
+  napi_delete_async_work(env, state->work);
+  state->work = nullptr;
+  napi_reference_unref(env, state->wrapper, nullptr);
+}
+
+napi_value AsyncPrototypeCallbackConstructor(napi_env env,
+                                             napi_callback_info info) {
+  size_t argc = 1;
+  napi_value callback;
+  napi_value receiver;
+  napi_get_cb_info(env, info, &argc, &callback, &receiver, nullptr);
+  napi_valuetype type;
+  if (argc != 1 || napi_typeof(env, callback, &type) != napi_ok ||
+      type != napi_function) {
+    napi_throw_type_error(env, nullptr, "A constructor callback is required");
+    return nullptr;
+  }
+  auto state = std::make_unique<AsyncPrototypeState>();
+  if (napi_wrap(env, receiver, state.get(), FinalizeAsyncPrototype, nullptr,
+                &state->wrapper) != napi_ok) {
+    return nullptr;
+  }
+  napi_status status = napi_reference_ref(env, state->wrapper, nullptr);
+  if (status == napi_ok) {
+    status = napi_create_reference(env, callback, 1, &state->callback);
+  }
+  if (status == napi_ok) {
+    status = napi_create_async_work(
+        env, nullptr, nullptr, ExecuteAsyncPrototype, CompleteAsyncPrototype,
+        state.get(), &state->work);
+  }
+  if (status == napi_ok) {
+    status = napi_queue_async_work(env, state->work);
+  }
+  if (status != napi_ok) {
+    if (state->work) {
+      napi_delete_async_work(env, state->work);
+    }
+    if (state->callback) {
+      napi_delete_reference(env, state->callback);
+    }
+    napi_delete_reference(env, state->wrapper);
+    napi_remove_wrap(env, receiver, nullptr);
+    napi_throw_error(env, nullptr, "Could not queue prototype callback work");
+    return nullptr;
+  }
+  state.release();
+  return receiver;
+}
+
+napi_value ReadAsyncPrototypeCallback(napi_env env, napi_callback_info info) {
+  napi_value receiver;
+  napi_get_cb_info(env, info, nullptr, nullptr, &receiver, nullptr);
+  void* data = nullptr;
+  if (napi_unwrap(env, receiver, &data) != napi_ok || !data) {
+    return nullptr;
+  }
+  const auto* state = static_cast<AsyncPrototypeState*>(data);
+  napi_value result;
+  napi_create_int32(
+      env, state->completion_status == napi_ok ? state->value : -1, &result);
+  return result;
+}
+
+napi_value MakeOwnedReturns(napi_env env, napi_callback_info info) {
+  napi_value object = MakeOwnedObject(env, 42);
+  napi_set_named_property(env, object, "child", MakeOwnedObject(env, 7));
+  napi_value callable;
+  napi_create_function(env, "addOne", NAPI_AUTO_LENGTH, AddOne, nullptr,
+                       &callable);
+  napi_value array;
+  napi_create_array_with_length(env, 2, &array);
+  napi_set_element(env, array, 0, object);
+  napi_set_element(env, array, 1, callable);
+  return array;
+}
+
+napi_value EchoOwnedHandle(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  return argc == 1 ? argv[0] : nullptr;
+}
+
+napi_value ResolvedOwnedPromise(napi_env env, napi_callback_info info) {
+  napi_deferred deferred;
+  napi_value promise;
+  napi_create_promise(env, &deferred, &promise);
+  napi_resolve_deferred(env, deferred, MakeOwnedReturns(env, info));
+  return promise;
+}
+
+napi_value BeginControlledPromise(napi_env env, napi_callback_info info) {
+  auto* state = GetControlledPromiseState(env);
+  napi_deferred deferred;
+  napi_value promise;
+  napi_create_promise(env, &deferred, &promise);
+  state->pending.emplace(++state->calls, deferred);
+  return promise;
+}
+
+napi_value PendingPromiseWithMicrotaskCallback(napi_env env,
+                                               napi_callback_info info) {
+  size_t argc = 1;
+  napi_value callback;
+  napi_get_cb_info(env, info, &argc, &callback, nullptr, nullptr);
+  napi_deferred deferred;
+  napi_value ready;
+  napi_value undefined;
+  napi_create_promise(env, &deferred, &ready);
+  napi_get_undefined(env, &undefined);
+  napi_resolve_deferred(env, deferred, undefined);
+  napi_value then;
+  napi_get_named_property(env, ready, "then", &then);
+  napi_call_function(env, ready, then, 1, &callback, nullptr);
+  return BeginControlledPromise(env, info);
+}
+
+napi_value ControlledPromiseCallCount(napi_env env, napi_callback_info info) {
+  napi_value result;
+  napi_create_uint32(env, GetControlledPromiseState(env)->calls, &result);
+  return result;
+}
+
+napi_value SettleControlledPromise(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  uint32_t id = 0;
+  bool reject = false;
+  napi_get_value_uint32(env, argv[0], &id);
+  napi_get_value_bool(env, argv[1], &reject);
+  auto* state = GetControlledPromiseState(env);
+  auto it = state->pending.find(id);
+  if (it != state->pending.end()) {
+    napi_value result;
+    napi_create_uint32(env, id, &result);
+    if (reject) {
+      napi_reject_deferred(env, it->second, result);
+    } else {
+      napi_resolve_deferred(env, it->second, result);
+    }
+    state->pending.erase(it);
+  }
+  return ControlledPromiseCallCount(env, info);
+}
+
+napi_value SettleControlledPromiseWithHandles(napi_env env,
+                                              napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  uint32_t id = 0;
+  if (argc != 1 || napi_get_value_uint32(env, argv[0], &id) != napi_ok) {
+    napi_throw_type_error(env, nullptr, "A Promise operation id is required");
+    return nullptr;
+  }
+  auto* state = GetControlledPromiseState(env);
+  auto pending = state->pending.find(id);
+  if (pending != state->pending.end()) {
+    napi_resolve_deferred(env, pending->second, MakeOwnedReturns(env, info));
+    state->pending.erase(pending);
+  }
+  return ControlledPromiseCallCount(env, info);
+}
+
+napi_value RetainCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  uint32_t slot = 0;
+  napi_valuetype type;
+  if (argc != 2 || napi_get_value_uint32(env, argv[0], &slot) != napi_ok ||
+      napi_typeof(env, argv[1], &type) != napi_ok || type != napi_function) {
+    napi_throw_type_error(env, nullptr, "A slot and callback are required");
+    return nullptr;
+  }
+  auto* state = GetControlledPromiseState(env);
+  napi_ref& retained = state->retained_callbacks[slot];
+  if (retained) {
+    napi_delete_reference(env, retained);
+  }
+  napi_create_reference(env, argv[1], 1, &retained);
+  napi_value undefined;
+  napi_get_undefined(env, &undefined);
+  return undefined;
+}
+
+napi_value ReadCallbackPayload(napi_env env, napi_callback_info info) {
+  napi_value result;
+  napi_create_uint32(
+      env, ++GetControlledPromiseState(env)->callback_payload_reads, &result);
+  return result;
+}
+
+napi_value CallRetainedCallback(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  uint32_t slot = 0;
+  if (argc != 1 || napi_get_value_uint32(env, argv[0], &slot) != napi_ok) {
+    napi_throw_type_error(env, nullptr, "A retained callback slot is required");
+    return nullptr;
+  }
+  auto* state = GetControlledPromiseState(env);
+  const auto retained = state->retained_callbacks.find(slot);
+  if (retained == state->retained_callbacks.end()) {
+    napi_throw_error(env, nullptr, "Unknown retained callback slot");
+    return nullptr;
+  }
+  napi_value callback;
+  napi_get_reference_value(env, retained->second, &callback);
+  napi_value payload;
+  napi_create_object(env, &payload);
+  napi_property_descriptor property = {
+      "value", nullptr, nullptr,         ReadCallbackPayload,
+      nullptr, nullptr, napi_enumerable, nullptr};
+  napi_define_properties(env, payload, 1, &property);
+  napi_value undefined;
+  napi_get_undefined(env, &undefined);
+  if (napi_call_function(env, undefined, callback, 1, &payload, nullptr) !=
+      napi_ok) {
+    return nullptr;
+  }
+  napi_value result;
+  napi_create_uint32(env, state->callback_payload_reads, &result);
+  return result;
+}
+
+void FinalizeControlledPromises(napi_env env, void* data, void* hint) {
+  auto* state = static_cast<ControlledPromiseState*>(data);
+  napi_value value;
+  napi_get_undefined(env, &value);
+  for (const auto& [id, deferred] : state->pending) {
+    napi_resolve_deferred(env, deferred, value);
+  }
+  for (const auto& [slot, callback] : state->retained_callbacks) {
+    napi_delete_reference(env, callback);
+  }
+  delete state;
+}
+
 // Init Addon
 extern "C" napi_value Init(napi_env env, napi_value exports) {
+  napi_set_instance_data(env, new ControlledPromiseState(),
+                         FinalizeControlledPromises, nullptr);
   napi_property_descriptor desc[] = {
       {"Add", nullptr, Add, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"AsyncAdd", nullptr, AsyncAdd, nullptr, nullptr, nullptr, napi_default,
@@ -508,11 +931,35 @@ extern "C" napi_value Init(napi_env env, napi_value exports) {
        napi_default, nullptr},
       {"PromiseValue", nullptr, PromiseValue, nullptr, nullptr, nullptr,
        napi_default, nullptr},
+      {"BeginControlledPromise", nullptr, BeginControlledPromise, nullptr,
+       nullptr, nullptr, napi_default, nullptr},
+      {"PendingPromiseWithMicrotaskCallback", nullptr,
+       PendingPromiseWithMicrotaskCallback, nullptr, nullptr, nullptr,
+       napi_default, nullptr},
+      {"ControlledPromiseCallCount", nullptr, ControlledPromiseCallCount,
+       nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"SettleControlledPromise", nullptr, SettleControlledPromise, nullptr,
+       nullptr, nullptr, napi_default, nullptr},
+      {"SettleControlledPromiseWithHandles", nullptr,
+       SettleControlledPromiseWithHandles, nullptr, nullptr, nullptr,
+       napi_default, nullptr},
+      {"MakeOwnedReturns", nullptr, MakeOwnedReturns, nullptr, nullptr, nullptr,
+       napi_default, nullptr},
+      {"EchoOwnedHandle", nullptr, EchoOwnedHandle, nullptr, nullptr, nullptr,
+       napi_default, nullptr},
+      {"ResolvedOwnedPromise", nullptr, ResolvedOwnedPromise, nullptr, nullptr,
+       nullptr, napi_default, nullptr},
+      {"RetainCallback", nullptr, RetainCallback, nullptr, nullptr, nullptr,
+       napi_default, nullptr},
+      {"CallRetainedCallback", nullptr, CallRetainedCallback, nullptr, nullptr,
+       nullptr, napi_default, nullptr},
       {"MultiCallback", nullptr, MultiCallback, nullptr, nullptr, nullptr,
        napi_default, nullptr},
       {"InvokeNestedCallback", nullptr, InvokeNestedCallback, nullptr, nullptr,
        nullptr, napi_default, nullptr},
       {"InvokeCallbackWithFunction", nullptr, InvokeCallbackWithFunction,
+       nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"InvokeCallbackWithReceiver", nullptr, InvokeCallbackWithReceiver,
        nullptr, nullptr, nullptr, napi_default, nullptr},
       {"ThrowComplexError", nullptr, ThrowComplexError, nullptr, nullptr,
        nullptr, napi_default, nullptr},
@@ -522,6 +969,50 @@ extern "C" napi_value Init(napi_env env, napi_value exports) {
 #endif
   };
   napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
+  napi_property_descriptor read = {"read",  nullptr, ReadOwnedHandle, nullptr,
+                                   nullptr, nullptr, napi_default,    nullptr};
+  napi_value constructor;
+  napi_define_class(env, "OwnedHandle", NAPI_AUTO_LENGTH,
+                    OwnedHandleConstructor, nullptr, 1, &read, &constructor);
+  napi_set_named_property(env, exports, "OwnedHandle", constructor);
+  napi_property_descriptor named_methods[] = {
+      {"bind", nullptr, ReadOwnedHandle, nullptr, nullptr, nullptr,
+       napi_default, nullptr},
+      {"call", nullptr, ReadOwnedHandle, nullptr, nullptr, nullptr,
+       napi_default, nullptr},
+      {"apply", nullptr, ReadOwnedHandle, nullptr, nullptr, nullptr,
+       napi_default, nullptr},
+      {"toString", nullptr, ReadOwnedHandle, nullptr, nullptr, nullptr,
+       napi_default, nullptr},
+      {"valueOf", nullptr, ReadOwnedHandle, nullptr, nullptr, nullptr,
+       napi_default, nullptr},
+      {"name", nullptr, ReadOwnedHandle, nullptr, nullptr, nullptr,
+       napi_default, nullptr},
+      {"length", nullptr, ReadOwnedHandle, nullptr, nullptr, nullptr,
+       napi_default, nullptr},
+  };
+  napi_define_class(env, "NamedPrototypeMethods", NAPI_AUTO_LENGTH,
+                    OwnedHandleConstructor, nullptr, std::size(named_methods),
+                    named_methods, &constructor);
+  napi_set_named_property(env, exports, "NamedPrototypeMethods", constructor);
+  napi_property_descriptor prototype_methods[] = {
+      {"read", nullptr, ReadPrototypeCallback, nullptr, nullptr, nullptr,
+       napi_default, nullptr},
+      {"fire", nullptr, FirePrototypeCallback, nullptr, nullptr, nullptr,
+       napi_default, nullptr},
+  };
+  napi_define_class(
+      env, "PrototypeCallback", NAPI_AUTO_LENGTH, PrototypeCallbackConstructor,
+      nullptr, std::size(prototype_methods), prototype_methods, &constructor);
+  napi_set_named_property(env, exports, "PrototypeCallback", constructor);
+  napi_property_descriptor async_read = {
+      "read",       nullptr, ReadAsyncPrototypeCallback,
+      nullptr,      nullptr, nullptr,
+      napi_default, nullptr};
+  napi_define_class(env, "AsyncPrototypeCallback", NAPI_AUTO_LENGTH,
+                    AsyncPrototypeCallbackConstructor, nullptr, 1, &async_read,
+                    &constructor);
+  napi_set_named_property(env, exports, "AsyncPrototypeCallback", constructor);
   return exports;
 }
 

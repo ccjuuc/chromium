@@ -286,11 +286,11 @@ void XenonIpcDocumentHost::BindRenderer(
 
 void XenonIpcDocumentHost::BindNodeAddonHost(
     mojo::PendingReceiver<xenon::ipc::mojom::NodeAddonHost> receiver) {
-  if (!IsAllowedDocument()) {
+  if (!IsAllowedDocument() || endpoint_id_.empty()) {
     ResetAndDeleteThis();
     return;
   }
-  XenonManager::GetInstance()->BindNodeAddonHost(ResolveContainerId(),
+  XenonManager::GetInstance()->BindNodeAddonHost(container_id_, endpoint_id_,
                                                  std::move(receiver));
 }
 

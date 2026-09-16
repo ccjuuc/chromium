@@ -21,6 +21,7 @@
 #include "base/functional/bind.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/task/execution_fence.h"
 #include "base/test/test_future.h"
 #include "components/version_info/version_info.h"
 #include "gin/converter.h"
@@ -49,6 +50,193 @@ const EventEmitter = require('events');
 const net = require('net');
 const path = require('node:path');
 const os = require('os');
+const fs = require('node:fs');
+ipcMain.handle('test:crypto-native', async () => {
+  const crypto = require('node:crypto');
+  const hashes = Object.fromEntries(['md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512']
+    .map(name => [name, crypto.createHash(name).update('a').update('bc').digest('hex')]));
+  const bytes = new Uint8Array([77, 255, 0, 128, 97, 77]);
+  const binaryHash = crypto.createHash('sha256').update(bytes.subarray(1, 5));
+  bytes.fill(0);
+  hashes.binary = binaryHash.digest('hex');
+  const key = Buffer.from([1, 2, 3]);
+  const mac = crypto.createHmac('sha256', key).update('abc');
+  key.fill(0);
+  hashes.hmac = mac.digest('hex');
+  const raw = crypto.createHash('sha256').update('abc').digest();
+  hashes.rawBuffer = Buffer.isBuffer(raw) && raw.length === 32;
+  const digest = crypto.createHash('sha256').update('abc');
+  digest.digest();
+  hashes.errors = [];
+  for (const fn of [() => digest.digest(), () => digest.update('late'),
+      () => crypto.createHash('made-up'), () => crypto.createHmac('sha256'),
+      () => crypto.randomBytes(-1), () => crypto.randomBytes(1, null),
+      () => crypto.createHash('sha256').update('text', 'unsupported'),
+      () => crypto.createHash('sha256').digest('unsupported')]) {
+    try { fn(); hashes.errors.push('no error'); } catch (error) { hashes.errors.push(error.code); }
+  }
+  const previous = Math.random;
+  Math.random = () => { throw new Error('insecure randomness used'); };
+  try {
+    const random = crypto.randomBytes(64);
+    hashes.random = Buffer.isBuffer(random) && random.length === 64 && random.some(value => value !== 0);
+    hashes.uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(crypto.randomUUID());
+    hashes.zero = crypto.randomBytes(0).length;
+    let returned = false;
+    const pending = new Promise((resolve, reject) => {
+      crypto.randomBytes(8, (error, value) => error ? reject(error) : resolve(returned && value.length === 8));
+    });
+    returned = true;
+    hashes.callback = await pending;
+  } finally { Math.random = previous; }
+  return hashes;
+});
+ipcMain.handle('test:builtin-capability-contract', async () => {
+  const stream = require('node:stream');
+  const errors = [];
+  const collect = call => {
+    try { call(); } catch (error) { errors.push(error.code); }
+  };
+  for (const name of ['http', 'https']) {
+    const http = require(name);
+    for (const method of ['createServer']) {
+      collect(() => http[method]('https://fixture.invalid'));
+    }
+  }
+  collect(() => new stream.Readable().pipe(new stream.Writable()));
+  collect(() => new stream.Writable().write(Buffer.from([0, 255])));
+  const writer = new stream.Writable();
+  let finishes = 0;
+  writer.on('finish', () => ++finishes);
+  let returned = false;
+  const pending = new Promise(resolve => writer.end('must not disappear', error => {
+    errors.push(error.code);
+    resolve(returned);
+  }));
+  returned = true;
+  const asynchronous = await pending;
+  for (const method of ['chmod', 'chown']) {
+    try { await fs.promises[method]('unused', 0o644); }
+    catch (error) { errors.push(error.code); }
+  }
+  function UserlandSink() { stream.call(this); }
+  Object.setPrototypeOf(UserlandSink.prototype, stream.prototype);
+  UserlandSink.prototype.write = function(value) { this.emit('data', value); };
+  const sink = new UserlandSink();
+  let kept;
+  sink.on('data', value => { kept = value; });
+  sink.write('kept');
+  return {errors, asynchronous, finishes, kept,
+    aliases: stream === require('stream') && stream.Stream === stream &&
+        stream.Duplex !== stream.Readable && sink instanceof EventEmitter};
+});
+ipcMain.handle('test:buffer-base64-native', () => {
+  const buffer = Buffer.from([99, 251, 255, 254, 99]);
+  const view = buffer.subarray(1, 4);
+  return {
+    base64: view.toString('base64'),
+    base64url: view.toString('base64url'),
+    range: buffer.toString('base64', 1, 4),
+    paddedView: Buffer.from([0, 255]).subarray(1).toString('base64'),
+    decoded: Array.from(Buffer.from('+//+', 'base64')),
+    decodedUrl: Array.from(Buffer.from('-__-', 'base64url')),
+    tolerant: Array.from(Buffer.from(' _w \n', 'base64')),
+    empty: Buffer.alloc(0).toString('base64'),
+  };
+});
+ipcMain.handle('test:buffer-contract', () => {
+  const bytes = new Uint8Array([1, 2, 3, 4]);
+  const copied = Buffer.from(bytes.subarray(1, 3));
+  bytes[1] = 9;
+  const shared = Buffer.from(bytes.buffer, 1, 2);
+  shared[1] = 8;
+  const sliced = copied.slice(1);
+  sliced[0] = 7;
+  const wide = Buffer.from(new Uint16Array([0x1234, 0x5678]));
+  let rangeCode;
+  try { Buffer.from(bytes.buffer, 4, 1); }
+  catch (error) { rangeCode = error.code; }
+  return copied[0] === 2 && copied[1] === 7 && bytes[2] === 8 &&
+      shared.buffer === bytes.buffer && shared.byteOffset === 1 &&
+      sliced.buffer === copied.buffer && sliced.byteOffset === copied.byteOffset + 1 &&
+      Buffer.isBuffer(copied) && Buffer.isBuffer(sliced) && !Buffer.isBuffer(bytes) &&
+      wide.length === 2 && wide[0] === 0x34 && wide[1] === 0x78 &&
+      Buffer.from(new DataView(bytes.buffer)).length === 0 &&
+      rangeCode === 'ERR_BUFFER_OUT_OF_BOUNDS';
+});
+ipcMain.handle('test:fs-write', async (_event, path) => {
+  const bytes = new Uint8Array([99, 0, 255, 128, 65, 99]);
+  const pending = fs.promises.writeFile(path, bytes.subarray(1, 5));
+  bytes.fill(42);
+  await pending;
+  return true;
+});
+ipcMain.handle('test:fs-write-stream', (_event, path) => new Promise(resolve => {
+  const writer = fs.createWriteStream(path, {flags: 'a'});
+  const events = [];
+  writer.on('error', error => events.push(error.code));
+  writer.on('finish', () => events.push('finish'));
+  writer.on('close', () => resolve({events, bytesWritten: writer.bytesWritten,
+    finished: writer.writableFinished, closed: writer.closed, fd: writer.fd}));
+  const bytes = new Uint8Array([99, 0, 255, 128, 99]);
+  writer.write(bytes.subarray(1, 4), error => events.push(error?.code || 'write'));
+  bytes.fill(42);
+  writer.end('4142', 'hex', error => events.push(error?.code || 'end'));
+}));
+ipcMain.handle('test:fs-read', async (_event, path) =>
+  Array.from(await fs.promises.readFile(path)));
+ipcMain.handle('test:fs-sync', (_event, path) => {
+  const bytes = new Uint8Array([99, 0, 255, 128, 65, 99]);
+  fs.writeFileSync(path, bytes.subarray(1, 5));
+  return Array.from(fs.readFileSync(path));
+});
+ipcMain.handle('test:fs-callback', (_event, path, write) =>
+  new Promise((resolve, reject) => {
+    let returned = false;
+    const callback = (error, data) => {
+      if (error) {
+        resolve({returned, code: error.code, path: error.path,
+          syscall: error.syscall});
+      } else {
+        resolve({returned, data: data ? Array.from(data) : null});
+      }
+    };
+    if (write) fs.writeFile(path, new Uint8Array([0, 255, 128, 65]), callback);
+    else fs.readFile(path, callback);
+    returned = true;
+  }));
+ipcMain.handle('test:fs-promise-error', async (_event, path) => {
+  try { await fs.promises.readFile(path); }
+  catch (error) { return {code: error.code, path: error.path, syscall: error.syscall}; }
+});
+ipcMain.handle('test:fs-operations', async (_event, root) => {
+  const nested = path.join(root, 'nested', 'child');
+  await fs.promises.mkdir(nested, {recursive: true});
+  const source = path.join(nested, 'source');
+  const copy = path.join(nested, 'copy');
+  const moved = path.join(nested, 'moved');
+  await fs.promises.writeFile(source, new Uint8Array([0, 255, 128, 65]));
+  await fs.promises.copyFile(source, copy);
+  await fs.promises.rename(copy, moved);
+  await fs.promises.access(moved);
+  const stat = await fs.promises.stat(moved);
+  const names = (await fs.promises.readdir(nested)).sort();
+  const bytes = Array.from(await fs.promises.readFile(moved));
+  await fs.promises.rm(path.join(root, 'nested'), {recursive: true});
+  return {size: stat.size, isFile: stat.isFile(), names, bytes};
+});
+ipcMain.handle('test:fs-unsupported', async () => {
+  const errors = [];
+  for (const call of [() => fs.openSync('unused', 'r'),
+    () => fs.watch('unused'),
+    () => fs.promises.open('unused', 'r')]) {
+    try { await call(); } catch (error) { errors.push(error.code); }
+  }
+  await new Promise(resolve => fs.open('unused', 'r', error => {
+    errors.push(error.code); resolve();
+  }));
+  return errors;
+});
 let persistentCounter = 0;
 let pendingNetSocket;
 let createdWindow;
@@ -401,6 +589,333 @@ class XenonIpcMainContainerTest : public gin::V8Test {
   std::unique_ptr<XenonIpcMainContainer> container_;
 };
 
+TEST_F(XenonIpcMainContainerTest,
+       MainBuiltinCapabilitiesNeverDiscardDataAsSuccess) {
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "test:builtin-capability-contract",
+                     Arguments({}), future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& values = result->value.GetDict();
+  EXPECT_EQ(true, values.FindBool("aliases"));
+  EXPECT_EQ(true, values.FindBool("asynchronous"));
+  EXPECT_EQ(0, values.FindInt("finishes"));
+  ASSERT_TRUE(values.FindString("kept"));
+  EXPECT_EQ("kept", *values.FindString("kept"));
+  const auto* errors = values.FindList("errors");
+  ASSERT_TRUE(errors);
+  ASSERT_EQ(7u, errors->size());
+  for (const auto& code : *errors) {
+    EXPECT_EQ("ERR_NOT_SUPPORTED", code.GetString());
+  }
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       MainCryptoUsesRealDigestsKeysAndSecureRandomness) {
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "test:crypto-native", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& values = result->value.GetDict();
+  for (const auto& [name, expected] :
+       {std::pair{"md5", "900150983cd24fb0d6963f7d28e17f72"},
+        std::pair{"sha1", "a9993e364706816aba3e25717850c26c9cd0d89d"},
+        std::pair{"sha224",
+                  "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7"},
+        std::pair{
+            "sha256",
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+        std::pair{"sha384",
+                  "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff"
+                  "5bed8086072ba1e7cc2358baeca134c825a7"},
+        std::pair{
+            "sha512",
+            "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a21"
+            "92992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"},
+        std::pair{
+            "binary",
+            "7db24bcd8c65b9e0d5c5e147be130fbce7f757295538b0e69888ee7cf545e7ae"},
+        std::pair{"hmac",
+                  "200fd2f9dada90b91212225a6b5e5975512edffd02503bb98ea612ca904d"
+                  "aa24"}}) {
+    ASSERT_TRUE(values.FindString(name));
+    EXPECT_EQ(expected, *values.FindString(name));
+  }
+  for (const char* key : {"rawBuffer", "random", "uuid", "callback"}) {
+    EXPECT_EQ(true, values.FindBool(key)) << key;
+  }
+  EXPECT_EQ(0, values.FindInt("zero"));
+  ASSERT_TRUE(values.FindList("errors"));
+  EXPECT_EQ(
+      Arguments(
+          {base::Value("ERR_CRYPTO_HASH_FINALIZED"),
+           base::Value("ERR_CRYPTO_HASH_FINALIZED"),
+           base::Value("ERR_NOT_SUPPORTED"),
+           base::Value("ERR_INVALID_ARG_TYPE"), base::Value("ERR_OUT_OF_RANGE"),
+           base::Value("ERR_INVALID_ARG_TYPE"),
+           base::Value("ERR_NOT_SUPPORTED"), base::Value("ERR_NOT_SUPPORTED")}),
+      *values.Find("errors"));
+}
+
+TEST_F(XenonIpcMainContainerTest, MainBufferBase64UsesRealV8AndHonorsSubviews) {
+  // No Node atob/btoa stubs: the bootstrap executes inside the actual hosted
+  // V8 isolate, including the intrinsic encoder's ArrayBufferView handling.
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "test:buffer-base64-native", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& values = result->value.GetDict();
+  for (const auto& [key, expected] :
+       {std::pair{"base64", "+//+"}, std::pair{"base64url", "-__-"},
+        std::pair{"range", "+//+"}, std::pair{"paddedView", "/w=="},
+        std::pair{"empty", ""}}) {
+    ASSERT_TRUE(values.FindString(key));
+    EXPECT_EQ(expected, *values.FindString(key));
+  }
+  for (const char* key : {"decoded", "decodedUrl"}) {
+    ASSERT_TRUE(values.Find(key));
+    EXPECT_EQ(Arguments({base::Value(251), base::Value(255), base::Value(254)}),
+              *values.Find(key));
+  }
+  ASSERT_TRUE(values.Find("tolerant"));
+  EXPECT_EQ(Arguments({base::Value(255)}), *values.Find("tolerant"));
+}
+
+TEST_F(XenonIpcMainContainerTest, MainBufferContractMatchesNodeInRealV8) {
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "test:buffer-contract", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  ASSERT_TRUE(result->value.is_bool());
+  EXPECT_TRUE(result->value.GetBool());
+}
+
+TEST_F(XenonIpcMainContainerTest, MainFileWriteRunsOnWorkerAndSnapshotsBytes) {
+  const base::FilePath path = temp_dir_.GetPath().AppendASCII("bytes.bin");
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> write;
+  {
+    // While the worker is fenced, even pumping the main sequence must not do
+    // the filesystem work. A Promise wrapper around synchronous I/O fails this.
+    base::ScopedThreadPoolExecutionFence fence;
+    container_->Invoke("renderer-1", "test:fs-write",
+                       Arguments({base::Value(path.AsUTF8Unsafe())}),
+                       write.GetCallback());
+    base::RunLoop().RunUntilIdle();
+    EXPECT_FALSE(write.IsReady());
+    EXPECT_FALSE(base::PathExists(path));
+    base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> responsive;
+    container_->Invoke("renderer-1", "test:get", Arguments({}),
+                       responsive.GetCallback());
+    EXPECT_TRUE(responsive.IsReady());
+    EXPECT_TRUE(responsive.Get()->success);
+  }
+  auto result = write.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  std::string contents;
+  ASSERT_TRUE(base::ReadFileToString(path, &contents));
+  EXPECT_EQ(std::string("\0\xff\x80"
+                        "A",
+                        4),
+            contents);
+
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> read;
+  container_->Invoke("renderer-1", "test:fs-read",
+                     Arguments({base::Value(path.AsUTF8Unsafe())}),
+                     read.GetCallback());
+  result = read.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ(Arguments({base::Value(0), base::Value(255), base::Value(128),
+                       base::Value(65)}),
+            result->value);
+}
+
+TEST_F(XenonIpcMainContainerTest, MainSyncFileApisPreserveBinaryData) {
+  const base::FilePath path = temp_dir_.GetPath().AppendASCII("sync.bin");
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  base::ScopedThreadPoolExecutionFence fence;
+  container_->Invoke("renderer-1", "test:fs-sync",
+                     Arguments({base::Value(path.AsUTF8Unsafe())}),
+                     future.GetCallback());
+  ASSERT_TRUE(future.IsReady());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ(Arguments({base::Value(0), base::Value(255), base::Value(128),
+                       base::Value(65)}),
+            result->value);
+  std::string contents;
+  ASSERT_TRUE(base::ReadFileToString(path, &contents));
+  EXPECT_EQ(std::string("\0\xff\x80"
+                        "A",
+                        4),
+            contents);
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       MainFileCallbacksAreAsynchronousAndBinarySafe) {
+  const base::FilePath path = temp_dir_.GetPath().AppendASCII("callback.bin");
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> write;
+  {
+    base::ScopedThreadPoolExecutionFence fence;
+    container_->Invoke(
+        "renderer-1", "test:fs-callback",
+        Arguments({base::Value(path.AsUTF8Unsafe()), base::Value(true)}),
+        write.GetCallback());
+    base::RunLoop().RunUntilIdle();
+    EXPECT_FALSE(write.IsReady());
+    EXPECT_FALSE(base::PathExists(path));
+  }
+  auto result = write.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ(true, result->value.GetDict().FindBool("returned"));
+
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> read;
+  container_->Invoke(
+      "renderer-1", "test:fs-callback",
+      Arguments({base::Value(path.AsUTF8Unsafe()), base::Value(false)}),
+      read.GetCallback());
+  result = read.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ(true, result->value.GetDict().FindBool("returned"));
+  ASSERT_TRUE(result->value.GetDict().Find("data"));
+  EXPECT_EQ(Arguments({base::Value(0), base::Value(255), base::Value(128),
+                       base::Value(65)}),
+            *result->value.GetDict().Find("data"));
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       MainWriteStreamWaitsForWorkerAndPersistsBytes) {
+  const base::FilePath path = temp_dir_.GetPath().AppendASCII("stream.bin");
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  {
+    base::ScopedThreadPoolExecutionFence fence;
+    container_->Invoke("renderer-1", "test:fs-write-stream",
+                       Arguments({base::Value(path.AsUTF8Unsafe())}),
+                       future.GetCallback());
+    base::RunLoop().RunUntilIdle();
+    EXPECT_FALSE(future.IsReady());
+    EXPECT_FALSE(base::PathExists(path));
+  }
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& value = result->value.GetDict();
+  EXPECT_EQ(5, value.FindInt("bytesWritten"));
+  EXPECT_EQ(true, value.FindBool("finished"));
+  EXPECT_EQ(true, value.FindBool("closed"));
+  ASSERT_TRUE(value.Find("fd"));
+  EXPECT_TRUE(value.Find("fd")->is_none());
+  ASSERT_TRUE(value.Find("events"));
+  EXPECT_EQ(Arguments({base::Value("write"), base::Value("end"),
+                       base::Value("finish")}),
+            *value.Find("events"));
+  std::string contents;
+  ASSERT_TRUE(base::ReadFileToString(path, &contents));
+  EXPECT_EQ(std::string("\0\xff\x80"
+                        "AB",
+                        5),
+            contents);
+}
+
+TEST_F(XenonIpcMainContainerTest, MainAsyncFileErrorsHaveCodeAndPath) {
+  const base::FilePath path = temp_dir_.GetPath().AppendASCII("missing.bin");
+  for (const char* channel : {"test:fs-callback", "test:fs-promise-error"}) {
+    base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+    container_->Invoke("renderer-1", channel,
+                       Arguments({base::Value(path.AsUTF8Unsafe())}),
+                       future.GetCallback());
+    auto result = future.Take();
+    ASSERT_TRUE(result->success) << result->error;
+    const auto& error = result->value.GetDict();
+    ASSERT_TRUE(error.FindString("code"));
+    EXPECT_EQ("ENOENT", *error.FindString("code"));
+    ASSERT_TRUE(error.FindString("path"));
+    EXPECT_EQ(path.AsUTF8Unsafe(), *error.FindString("path"));
+    ASSERT_TRUE(error.FindString("syscall"));
+    EXPECT_EQ("open", *error.FindString("syscall"));
+  }
+}
+
+TEST_F(XenonIpcMainContainerTest, MainAsyncFileOperationsUseRealFilesystem) {
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke(
+      "renderer-1", "test:fs-operations",
+      Arguments({base::Value(temp_dir_.GetPath().AsUTF8Unsafe())}),
+      future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& data = result->value.GetDict();
+  EXPECT_EQ(4, data.FindInt("size"));
+  EXPECT_EQ(true, data.FindBool("isFile"));
+  ASSERT_TRUE(data.Find("names"));
+  EXPECT_EQ(Arguments({base::Value("moved"), base::Value("source")}),
+            *data.Find("names"));
+  ASSERT_TRUE(data.Find("bytes"));
+  EXPECT_EQ(Arguments({base::Value(0), base::Value(255), base::Value(128),
+                       base::Value(65)}),
+            *data.Find("bytes"));
+  EXPECT_FALSE(base::PathExists(temp_dir_.GetPath().AppendASCII("nested")));
+}
+
+TEST_F(XenonIpcMainContainerTest, MainFileReplyIsSafeAfterRendererRemoval) {
+  const base::FilePath path = temp_dir_.GetPath().AppendASCII("detached.bin");
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  {
+    base::ScopedThreadPoolExecutionFence fence;
+    container_->Invoke("renderer-1", "test:fs-write",
+                       Arguments({base::Value(path.AsUTF8Unsafe())}),
+                       future.GetCallback());
+    container_->RemoveRenderer("renderer-1");
+    ASSERT_TRUE(future.IsReady());
+    EXPECT_FALSE(future.Get()->success);
+  }
+  task_environment_.RunUntilIdle();
+  std::string contents;
+  ASSERT_TRUE(base::ReadFileToString(path, &contents));
+  EXPECT_EQ(std::string("\0\xff\x80"
+                        "A",
+                        4),
+            contents);
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       MainFileReplyIsSafeAfterContainerDestruction) {
+  const base::FilePath path = temp_dir_.GetPath().AppendASCII("shutdown.bin");
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  {
+    base::ScopedThreadPoolExecutionFence fence;
+    container_->Invoke("renderer-1", "test:fs-write",
+                       Arguments({base::Value(path.AsUTF8Unsafe())}),
+                       future.GetCallback());
+    container_.reset();
+    ASSERT_TRUE(future.IsReady());
+    EXPECT_FALSE(future.Get()->success);
+  }
+  // The submitted write may finish, but the reply cannot enter the dead
+  // isolate.
+  task_environment_.RunUntilIdle();
+  std::string contents;
+  ASSERT_TRUE(base::ReadFileToString(path, &contents));
+  EXPECT_EQ(std::string("\0\xff\x80"
+                        "A",
+                        4),
+            contents);
+}
+
+TEST_F(XenonIpcMainContainerTest, MainUnsupportedFileApisFailExplicitly) {
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "test:fs-unsupported", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  ASSERT_TRUE(result->value.is_list());
+  ASSERT_EQ(4u, result->value.GetList().size());
+  for (const auto& code : result->value.GetList()) {
+    EXPECT_EQ("ERR_NOT_SUPPORTED", code.GetString());
+  }
+}
+
 TEST_F(XenonIpcMainContainerTest, MainStateSurvivesIndependentMessages) {
   container_->Send("renderer-1", "test:increment", Arguments({base::Value(2)}));
   container_->Send("renderer-2", "test:increment", Arguments({base::Value(3)}));
@@ -485,6 +1000,30 @@ TEST_F(XenonIpcMainContainerTest, WebContentsUserAgentUsesNativeBridge) {
   EXPECT_EQ("DefaultAgent/1.0", *user_agents.FindString("before"));
   EXPECT_EQ("XenonTest/1.0", *user_agents.FindString("after"));
   EXPECT_EQ("XenonTest/1.0", user_agent_);
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       AppendFileCreatesMissingFileAndPreservesBytes) {
+  const base::FilePath path = temp_dir_.GetPath().AppendASCII("new-append.bin");
+  const std::string bytes("\0\xff\x80", 3);
+  for (int i = 0; i < 2; ++i) {
+    base::DictValue options;
+    options.Set("dataBase64", base::Base64Encode(bytes));
+    auto result = PerformFileSystemCall(
+        FileSystemArguments("append_file", path, std::move(options)));
+    ASSERT_TRUE(result->success) << result->error;
+  }
+  std::string contents;
+  ASSERT_TRUE(base::ReadFileToString(path, &contents));
+  EXPECT_EQ(bytes + bytes, contents);
+  const base::FilePath empty =
+      temp_dir_.GetPath().AppendASCII("empty-append.log");
+  base::DictValue empty_options;
+  empty_options.Set("dataBase64", "");
+  auto opened = PerformFileSystemCall(
+      FileSystemArguments("append_file", empty, std::move(empty_options)));
+  ASSERT_TRUE(opened->success) << opened->error;
+  EXPECT_TRUE(base::PathExists(empty));
 }
 
 TEST_F(XenonIpcMainContainerTest, FileSystemCallUsesRealFilesystem) {
@@ -1272,35 +1811,36 @@ TEST_F(XenonIpcMainContainerTest, NetSocketBuffersWritesUntilConnected) {
   FakeIpcRenderer renderer;
   const std::string endpoint =
       container_->AddRenderer(renderer.BindNewRemote(), 17, 23);
+  base::test::TestFuture<const std::string&, base::Value> native_send;
+  container_->SetNetPipeSender(native_send.GetRepeatingCallback());
 
   container_->Send(endpoint, "test:net-write-before-connect", Arguments({}));
-  auto [connect_channel, connect_arguments] =
-      renderer.dispatch_future().Take();
+  auto [connect_channel, connect_arguments] = native_send.Take();
   ASSERT_EQ("__xenon:net:connect", connect_channel);
-  ASSERT_TRUE(connect_arguments.is_list());
-  ASSERT_EQ(1u, connect_arguments.GetList().size());
-  const base::DictValue& connect = connect_arguments.GetList()[0].GetDict();
+  ASSERT_TRUE(connect_arguments.is_dict());
+  const base::DictValue& connect = connect_arguments.GetDict();
   const std::string* from_id = connect.FindString("fromId");
   ASSERT_TRUE(from_id);
 
   base::DictValue connected;
   connected.Set("toId", *from_id);
   connected.Set("peerId", "renderer-test-peer");
-  container_->Send(
-      endpoint, "__xenon:net:connected",
-      Arguments({base::Value(std::move(connected))}));
+  container_->Send("@main", "__xenon:net:connected",
+                   Arguments({base::Value(std::move(connected))}));
 
-  auto [data_channel, data_arguments] = renderer.dispatch_future().Take();
+  auto [data_channel, data_arguments] = native_send.Take();
   ASSERT_EQ("__xenon:net:data", data_channel);
-  ASSERT_TRUE(data_arguments.is_list());
-  ASSERT_EQ(1u, data_arguments.GetList().size());
-  const base::DictValue& data = data_arguments.GetList()[0].GetDict();
+  ASSERT_TRUE(data_arguments.is_dict());
+  const base::DictValue& data = data_arguments.GetDict();
   EXPECT_EQ("renderer-test-peer", *data.FindString("toId"));
   const base::DictValue* wire = data.FindDict("wire");
   ASSERT_TRUE(wire);
   const std::string* encoded = wire->FindString("d");
   ASSERT_TRUE(encoded);
   EXPECT_FALSE(encoded->empty());
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(renderer.dispatch_future().IsReady());
+  container_->SetNetPipeSender({});
 }
 
 TEST_F(XenonIpcMainContainerTest, CommonJsCanRequireNodeApiAddon) {
@@ -1415,7 +1955,7 @@ TEST_F(XenonIpcMainContainerTest, NodeAddonResolvesCallbacksNestedInObjects) {
       base::BindRepeating(
           [](int32_t* received_id, std::vector<base::Value>* received_args,
              int32_t client_id, int32_t callback_id,
-             std::vector<base::Value> args) {
+             std::vector<base::Value> args, base::Value) {
             EXPECT_EQ(17, client_id);
             *received_id = callback_id;
             *received_args = std::move(args);
@@ -1482,7 +2022,7 @@ TEST_F(XenonIpcMainContainerTest, NodeAddonReturnsCallableFunctionHandles) {
   executor.SetCallbackHandlers(
       base::BindRepeating(
           [](std::vector<base::Value>* received_args, int32_t client_id,
-             int32_t callback_id, std::vector<base::Value> args) {
+             int32_t callback_id, std::vector<base::Value> args, base::Value) {
             EXPECT_EQ(17, client_id);
             EXPECT_EQ(42, callback_id);
             *received_args = std::move(args);

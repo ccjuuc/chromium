@@ -62,10 +62,17 @@ class XenonIpcRenderer final : public xenon::ipc::mojom::IpcRenderer,
   void Invoke(gin::Arguments* args);
   void SendSync(gin::Arguments* args);
   void RequireNodeModuleSync(gin::Arguments* args);
+  void InspectNodeExportSync(gin::Arguments* args);
   void InvokeNodeExportSync(gin::Arguments* args);
   void ConstructNodeExportSync(gin::Arguments* args);
+  void ConstructNodeExportWithPrototypeSync(gin::Arguments* args);
+  void ConstructNodeExport(gin::Arguments* args, bool with_prototype);
   void InvokeNodeInstanceSync(gin::Arguments* args);
   void InspectNodeInstanceMemberSync(gin::Arguments* args);
+  void ReleaseNodeInstance(gin::Arguments* args);
+  void ReturnNativeInvokeResult(gin::Arguments* args,
+                                xenon::ipc::mojom::IpcResultPtr result,
+                                uint64_t pending_promise_id);
   void PostMessage(gin::Arguments* args);
   void SetDispatchHandler(gin::Arguments* args);
 

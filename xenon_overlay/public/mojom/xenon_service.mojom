@@ -59,7 +59,8 @@ interface XenonBrowserObserver {
 
 // Receives callbacks retained and invoked by a loaded Node addon.
 interface NodeAddonObserver {
-  OnCallback(int32 callback_id, array<mojo_base.mojom.Value> args);
+  OnCallback(int32 callback_id, array<mojo_base.mojom.Value> args,
+             mojo_base.mojom.Value receiver);
 
   OnCallbackReleased(int32 callback_id);
 };
@@ -134,6 +135,7 @@ interface XenonMainService {
   // native-addon call path entirely.
   BindNodeAddonHost(
       string context_id,
+      string endpoint_id,
       pending_receiver<xenon.ipc.mojom.NodeAddonHost> receiver);
 
   // Native Widget/window-message events forwarded to the Electron-compatible

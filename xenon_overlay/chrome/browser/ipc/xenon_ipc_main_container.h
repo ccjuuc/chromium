@@ -11,11 +11,13 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/values.h"
@@ -24,10 +26,15 @@
 #include "v8/include/v8-context.h"
 #include "v8/include/v8-forward.h"
 #include "v8/include/v8-persistent-handle.h"
+#include "v8/include/v8-promise.h"
 #include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
 
 namespace gin {
 class Arguments;
+}
+
+namespace network {
+class SharedURLLoaderFactory;
 }
 
 namespace xenon {
@@ -66,6 +73,11 @@ class XenonIpcMainContainer {
     base::RepeatingCallback<bool(const std::string& path, std::string* error)>
         load;
     base::RepeatingCallback<bool(const std::string& path,
+                                 const std::string& export_path,
+                                 base::Value* description,
+                                 std::string* error)>
+        describe;
+    base::RepeatingCallback<bool(const std::string& path,
                                  const std::string& function_name,
                                  const base::Value& args,
                                  base::Value* result,
@@ -74,7 +86,7 @@ class XenonIpcMainContainer {
     base::RepeatingCallback<bool(const std::string& path,
                                  const std::string& export_path,
                                  const base::Value& args,
-                                 int32_t* instance_id,
+                                 base::Value* instance,
                                  std::string* error)>
         construct;
     base::RepeatingCallback<bool(const std::string& path,
@@ -126,6 +138,10 @@ class XenonIpcMainContainer {
   bool Initialize(EmbeddedMainModule main_module);
   void SetNativeAddonHooks(NativeAddonHooks hooks);
   void SetWindowHooks(WindowHooks hooks);
+  void SetNetPipeSender(
+      base::RepeatingCallback<void(const std::string&, base::Value)> sender);
+  void SetNetworkLoaderFactory(
+      scoped_refptr<network::SharedURLLoaderFactory> factory);
   void MarkAppReady();
   void Shutdown();
   bool is_initialized() const { return initialized_; }
@@ -191,9 +207,13 @@ class XenonIpcMainContainer {
   v8::MaybeLocal<v8::Value> LoadCommonJsModule(
       const base::FilePath& requested_path,
       std::string* error);
+  v8::MaybeLocal<v8::Value> LoadResolvedCommonJsModule(
+      const base::FilePath& normalized,
+      std::string* error);
   v8::MaybeLocal<v8::Value> RequireModule(const std::string& request,
                                           const base::FilePath& parent_file,
-                                          std::string* error);
+                                          std::string* error,
+                                          bool resolve_only = false);
 
   v8::MaybeLocal<v8::Value> ValueToV8(const base::Value& value);
   v8::MaybeLocal<v8::Value> IpcPayloadToV8(const base::Value& value,
@@ -212,14 +232,22 @@ class XenonIpcMainContainer {
   void NativeGetPath(gin::Arguments* args);
   void NativeNetworkInterfaces(gin::Arguments* args);
   void NativeSendToRenderer(gin::Arguments* args);
-  void NativeFsExists(gin::Arguments* args);
-  void NativeFsReadFile(gin::Arguments* args);
-  void NativeFsWriteFile(gin::Arguments* args);
-  void NativeFsStat(gin::Arguments* args);
-  void NativeFsReaddir(gin::Arguments* args);
-  void NativeFsMkdir(gin::Arguments* args);
-  void NativeFsUnlink(gin::Arguments* args);
+  void NativeNetSend(gin::Arguments* args);
+  bool ReadFileSystemArguments(gin::Arguments* args, base::Value* arguments);
+  void NativeFsCall(gin::Arguments* args);
+  void NativeFsCallAsync(gin::Arguments* args);
+  void OnFileSystemCallComplete(uint64_t request_id,
+                                xenon::ipc::mojom::IpcResultPtr result);
   void NativeCryptoCipher(gin::Arguments* args);
+  void NativeCryptoDigest(gin::Arguments* args);
+  void NativeCryptoRandom(gin::Arguments* args);
+  void NativeHttpRequest(gin::Arguments* args);
+  void NativeHttpAbort(gin::Arguments* args);
+  void OnHttpRequestComplete(uint64_t request_id,
+                             xenon::ipc::mojom::IpcResultPtr result);
+  void NativeZlibCall(gin::Arguments* args);
+  void OnZlibCallComplete(uint64_t request_id,
+                          xenon::ipc::mojom::IpcResultPtr result);
   void NativeShowOpenDialog(gin::Arguments* args);
   void NativeCreateBrowserWindow(gin::Arguments* args);
   void NativeLoadBrowserWindowURL(gin::Arguments* args);
@@ -227,6 +255,7 @@ class XenonIpcMainContainer {
   void NativeBrowserWindowCall(gin::Arguments* args);
   void NativeCloseBrowserWindow(gin::Arguments* args);
   void NativeInvokeExport(gin::Arguments* args);
+  void NativeDescribeExport(gin::Arguments* args);
   void NativeConstructExport(gin::Arguments* args);
   void NativeInvokeInstance(gin::Arguments* args);
   v8::MaybeLocal<v8::Value> CreateNativeAddonForwarder(
@@ -268,10 +297,26 @@ class XenonIpcMainContainer {
   v8::Global<v8::Function> shutdown_app_;
 
   std::map<std::string, v8::Global<v8::Value>> module_cache_;
+  // Successful requests only; an entry is valid while its module record lives.
+  std::map<std::pair<std::string, std::string>, std::string>
+      module_resolution_cache_;
   std::map<std::string, std::unique_ptr<xenon::LoadedNodeAddon>>
       loaded_node_addons_;
   std::map<std::string, RendererEndpoint> renderers_;
   std::set<PromiseReplyContext*> pending_promise_replies_;
+  // Only accessed on the V8 sequence. Workers hold plain data and a weak reply,
+  // never a V8 handle or a pointer into the container.
+  std::map<uint64_t, v8::Global<v8::Promise::Resolver>> pending_fs_calls_;
+  uint64_t next_fs_request_id_ = 1;
+  std::map<uint64_t, v8::Global<v8::Promise::Resolver>> pending_zlib_calls_;
+  uint64_t next_zlib_request_id_ = 1;
+  struct HttpRequestInfo {
+    v8::Global<v8::Promise::Resolver> resolver;
+    base::OnceClosure cancel;
+  };
+  scoped_refptr<network::SharedURLLoaderFactory> network_loader_factory_;
+  std::map<uint64_t, HttpRequestInfo> pending_http_requests_;
+  uint64_t next_http_request_id_ = 1;
   int next_timer_id_ = 1;
   std::map<int, std::unique_ptr<TimerInfo>> timers_;
 
@@ -282,6 +327,8 @@ class XenonIpcMainContainer {
   std::optional<std::string> embedded_main_source_;
   NativeAddonHooks native_addon_hooks_;
   WindowHooks window_hooks_;
+  base::RepeatingCallback<void(const std::string&, base::Value)>
+      net_pipe_sender_;
   std::string app_name_ = "Application";
   std::string app_version_ = "0.0.0";
   std::string default_user_agent_;

@@ -6,9 +6,11 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/base64.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
@@ -32,6 +34,16 @@ xenon::ipc::mojom::IpcResultPtr Failure(const std::string& error) {
   result->success = false;
   result->error = error;
   return result;
+}
+
+xenon::ipc::mojom::IpcResultPtr FileContentsResult(
+    const base::DictValue& request,
+    const std::string& contents) {
+  if (request.FindBool("returnBytes").value_or(false)) {
+    return Success(base::Value(
+        base::Value::BlobStorage(contents.begin(), contents.end())));
+  }
+  return Success(base::Value(base::Base64Encode(contents)));
 }
 
 bool ResolveAsarEntry(const base::FilePath& path,
@@ -121,7 +133,7 @@ xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
       if (!asar_archive->ReadFile(asar_relative_path, &contents)) {
         return error("ENOENT", "no such file or directory", "open");
       }
-      return Success(base::Value(base::Base64Encode(contents)));
+      return FileContentsResult(request, contents);
     }
     if (*operation == "realpath") {
       return Success(base::Value(*path_string));
@@ -155,12 +167,20 @@ xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
     if (!base::ReadFileToString(path, &contents)) {
       return error("ENOENT", "no such file or directory", "open");
     }
-    return Success(base::Value(base::Base64Encode(contents)));
+    return FileContentsResult(request, contents);
   }
   if (*operation == "write_file" || *operation == "append_file") {
-    const std::string* encoded = request.FindString("dataBase64");
-    std::string data;
-    if (!encoded || !base::Base64Decode(*encoded, &data)) {
+    const base::Value* bytes = request.Find("data");
+    std::string decoded;
+    std::string_view data;
+    if (bytes && bytes->is_blob()) {
+      const auto& blob = bytes->GetBlob();
+      data = std::string_view(reinterpret_cast<const char*>(blob.data()),
+                              blob.size());
+    } else if (const std::string* encoded = request.FindString("dataBase64");
+               encoded && base::Base64Decode(*encoded, &decoded)) {
+      data = decoded;
+    } else {
       return error("EINVAL", "invalid file data", "write");
     }
     if (!base::DirectoryExists(path.DirName())) {
@@ -169,9 +189,18 @@ xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
     if (base::DirectoryExists(path)) {
       return error("EISDIR", "illegal operation on a directory", "open");
     }
-    const bool ok = *operation == "append_file"
-                        ? base::AppendToFile(path, data)
-                        : base::WriteFile(path, data);
+    bool ok;
+    if (*operation == "append_file") {
+      // Node appendFile and WriteStream(flags: 'a') create a missing file.
+      // Open/create with append semantics atomically; exists-then-write would
+      // race another writer and could truncate its data.
+      base::File file(path,
+                      base::File::FLAG_OPEN_ALWAYS | base::File::FLAG_APPEND);
+      ok = file.IsValid() &&
+           file.WriteAtCurrentPosAndCheck(base::as_byte_span(data));
+    } else {
+      ok = base::WriteFile(path, data);
+    }
     return ok ? Success() : error("EACCES", "permission denied", "open");
   }
   if (*operation == "readdir") {

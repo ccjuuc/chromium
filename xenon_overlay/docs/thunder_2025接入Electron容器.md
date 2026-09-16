@@ -230,7 +230,7 @@ dir out\Release_64\thunder_2025\SDK\DownloadSDKServer.exe
 启动调试：
 
 ```bat
-out\Release_64\xenon.exe --remote-debugging-port=9222 --enable-logging
+out\Release_64\xlb153.exe --remote-debugging-port=9222 --enable-logging
 ```
 
 定位顺序：
@@ -248,3 +248,24 @@ out\Release_64\xenon.exe --remote-debugging-port=9222 --enable-logging
 
 修复顺序应是“源产物 -> 同步布局 -> 容器配置 -> URL 映射 -> addon/SDK”。
 不应通过修改 TH 业务参数或添加播放/登录 mock 掩盖容器问题。
+
+### 10.1 主窗口标题修复与验收（2026-09-16）
+
+TH main 未显式设置窗口标题，HTML 的 `<title>` 为“迅雷”，但原生窗口显示
+“Electron Window”。原因有三处：host 对空标题使用硬编码兜底；设置标题时只改了
+`WidgetDelegate` 的参数，而 `WebDialogView` 实际读取派生类 `XenonWebDialog`
+的 `title_`；页面 `TitleWasSet` 也没有同步到 main。
+
+修复使用真实 delegate 的标题 setter，并将页面标题变化送回 main：先派发
+BrowserWindow 的可取消 `page-title-updated` 事件，未调用 `preventDefault()` 时
+执行 `setTitle`，随后派发 WebContents 事件。未指定标题时默认值为 `Electron`，
+显式传入的空标题保持为空。
+
+全量 JS 回归 **275/275 通过、零跳过**；生产 `chrome` 构建 **239/239 完成，
+退出码 0**。重启 9222 后，TH 原生主窗口 `1707340` 与 `document.title` 均为
+“迅雷”，`sdkInitReady: true`、`accountInitState: 2`。将页面标题临时改为
+“迅雷 · 标题同步验证”后，同一原生窗口随之更新；验证后已恢复“迅雷”并清理探针。
+本轮实机标题验收范围为 TH 主窗口及其动态页面标题同步。
+
+记录位于 `out/ple-update-7135-20260916/`：`title-production-build.log`、
+`title-native-validation.json` 和 `title-th-acceptance.json`。

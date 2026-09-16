@@ -54,7 +54,8 @@ interface Page {
                    array<NodeCallbackResult> callback_results,
                    string error_msg);
 
-  NodeCallbackInvoked(int32 callback_id, array<mojo_base.mojom.Value> args);
+  NodeCallbackInvoked(int32 callback_id, array<mojo_base.mojom.Value> args,
+                      mojo_base.mojom.Value receiver);
 
   NodeCallbackReleased(int32 callback_id);
 

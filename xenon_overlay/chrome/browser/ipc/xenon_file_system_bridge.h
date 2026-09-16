@@ -12,6 +12,9 @@ namespace xenon::ipc {
 
 // Performs one real filesystem operation for a trusted Electron-compatible
 // renderer. Call this only from a sequence that permits blocking I/O.
+// Requests can provide write bytes in `data` (a blob) and request read bytes
+// with `returnBytes`. Legacy renderer callers use dataBase64/Base64 results.
+// This function performs blocking I/O; asynchronous callers must use a worker.
 xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments);
 
 }  // namespace xenon::ipc

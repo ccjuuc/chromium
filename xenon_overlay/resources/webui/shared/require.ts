@@ -388,6 +388,9 @@ function valueFromWire(value: Value): any {
   if (value.dictionaryValue !== null && value.dictionaryValue !== undefined) {
     const storage = value.dictionaryValue.storage;
     const wireType = wireString(storage[WIRE_TYPE_KEY]);
+    if (wireType === 'global') {
+      return globalThis;
+    }
     if (wireType === 'undefined') {
       return undefined;
     }
@@ -1024,13 +1027,14 @@ callbackRouter.nodeInvokeResult.addListener(
     });
 
 callbackRouter.nodeCallbackInvoked.addListener(
-    (callbackId: number, args: Value[]) => {
+    (callbackId: number, args: Value[], receiver?: Value) => {
       const callback = callbacks.get(callbackId);
       if (!callback) {
         return;
       }
       try {
-        callback(...args.map(valueFromWire));
+        callback.apply(receiver === undefined ? undefined : valueFromWire(receiver),
+                       args.map(valueFromWire));
       } catch (error) {
         queueMicrotask(() => {
           throw error;

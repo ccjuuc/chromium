@@ -15,10 +15,29 @@ Example:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
+
+
+def normalize_preloads(source: Path, archive: Path,
+                       asar_module: Path) -> tuple[dict[str, bytes], int]:
+    """Validate preloads and decode only exact matching vendor archive entries."""
+    node = shutil.which('node')
+    if not node:
+        raise RuntimeError('Node.js is required to validate application preloads')
+    helper = Path(__file__).with_name('normalize_player_preloads.cjs')
+    result = subprocess.run(
+        [node, str(helper), str(source), str(archive), str(asar_module)],
+        capture_output=True, text=True, encoding='utf-8', check=False)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or 'Preload normalization failed')
+    payload = json.loads(result.stdout)
+    return ({name: base64.b64decode(data)
+             for name, data in payload['scripts'].items()}, payload['normalized'])
 
 
 def copy_tree(src: Path, dst: Path, *, include_maps: bool) -> tuple[int, int]:
@@ -86,6 +105,15 @@ def main() -> int:
             '<project>/cppsrc/build/Release when present, otherwise '
             '--player-sdk'))
     parser.add_argument('--include-maps', action='store_true')
+    parser.add_argument(
+        '--app-version', default='1.0.0',
+        help='Application version written to the generated package.json')
+    parser.add_argument(
+        '--source-archive', type=Path,
+        help='Matching original vendor archive (default: <player-sdk>/resources/app/out.asar)')
+    parser.add_argument(
+        '--vendor-asar-module', type=Path,
+        help='Original vendor ASAR module (default: <src>/../asar/security-asar/lib/asar.js)')
     args = parser.parse_args()
     args.src = args.src.resolve()
     args.out = args.out.resolve()
@@ -141,8 +169,30 @@ def main() -> int:
             file=sys.stderr)
         return 1
 
+    # The vendor postbuild encrypts app/build scripts in place. Convert its
+    # preloads back to public CommonJS source before deleting any old runtime.
+    # Product encryption formats and keys stay in the source project's tool.
+    archive = (args.source_archive or
+               args.player_sdk / 'resources' / 'app' / 'out.asar').resolve()
+    asar_module = (args.vendor_asar_module or
+                   args.src.parent / 'asar' / 'security-asar' / 'lib' /
+                   'asar.js').resolve()
+    try:
+        preload_scripts, normalized_count = normalize_preloads(
+            args.src, archive, asar_module)
+    except (RuntimeError, ValueError, OSError) as error:
+        print(f'preload validation failed: {error}', file=sys.stderr)
+        return 1
+
     main_dst = args.out / 'xenon_player' / 'main'
     frontend_dst = args.out / 'xenon_player' / 'frontend'
+
+    # Do not follow a junction or symlink when replacing an existing runtime.
+    # Check both destinations before deleting either tree.
+    for destination in (main_dst, frontend_dst):
+        if destination.resolve() != destination:
+            print(f'unsafe runtime destination: {destination}', file=sys.stderr)
+            return 1
 
     if main_dst.exists():
         shutil.rmtree(main_dst)
@@ -164,11 +214,15 @@ def main() -> int:
                 src, main_dst / sub, include_maps=args.include_maps)
             print(f'main/{sub}: copied {copied} (skipped maps={skipped})')
 
+    for relative, source in preload_scripts.items():
+        (main_dst / relative).write_bytes(source)
+    print(f'preloads: validated {len(preload_scripts)}, normalized {normalized_count}')
+
     # Minimal package.json
     (main_dst / 'package.json').write_text(
         json.dumps({
             'name': 'xmp',
-            'version': '1.0.0',
+            'version': args.app_version,
             'main': 'main.js',
         }, indent=2) + '\n',
         encoding='utf-8')
@@ -216,12 +270,23 @@ def main() -> int:
                 include_maps=True)
             sdk_file_count += copied
 
-        # Copy companion DLLs beside the main bundle.
-        # Exclude legacy Electron runtime DLLs (e.g. XDASKernel.dll) that Xenon replaces.
-        for dll_path in args.player_sdk.glob('*.dll'):
-            if dll_path.name.lower() == 'xdaskernel.dll':
+        # Copy the released SDK's companion resources beside the main bundle.
+        # Only known helper executables are included: xmp.exe was copied above,
+        # and an unrelated application host must not be imported with the SDK.
+        helper_executables = {
+            'mediainfo.exe', 'associatehelper.exe', 'xlbugreport.exe',
+        }
+        companion_suffixes = {'.dll', '.pem', '.vsr', '.xml', '.ico'}
+        for companion_path in args.player_sdk.iterdir():
+            if not companion_path.is_file():
                 continue
-            shutil.copy2(dll_path, main_dst / dll_path.name)
+            if companion_path.name.lower() == 'xdaskernel.dll':
+                continue
+            if (companion_path.suffix.lower() not in companion_suffixes and
+                    companion_path.name.lower() not in helper_executables):
+                continue
+            shutil.copy2(companion_path, main_dst / companion_path.name)
+            sdk_file_count += 1
         print(
             f'PL-E SDK: copied {sdk_file_count} files and runtime to {main_dst}')
         print(f'PL-E native build: {args.native_dir}')

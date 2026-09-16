@@ -59,6 +59,15 @@
     this.events_ = new Map();
     this.maxListeners_ = undefined;
   }
+  // Native addon wrappers can copy these methods without calling the
+  // constructor. Keep their listener state local to each receiver.
+  function eventMap(emitter) {
+    if (!Object.prototype.hasOwnProperty.call(emitter, 'events_') ||
+        !(emitter.events_ instanceof Map)) {
+      emitter.events_ = new Map();
+    }
+    return emitter.events_;
+  }
   function validateListener(listener) {
     if (typeof listener !== 'function') {
       throw new TypeError('The "listener" argument must be a function');
@@ -68,14 +77,12 @@
     validateListener(listener);
     if (name !== 'newListener')
       this.emit('newListener', name, listener);
-    const listeners = this.events_.get(name) || [];
+    const listeners = eventMap(this).get(name) || [];
     listeners.push(listener);
-    this.events_.set(name, listeners);
+    eventMap(this).set(name, listeners);
     return this;
   };
-  EventEmitter.prototype.addListener = function(name, listener) {
-    return this.on(name, listener);
-  };
+  EventEmitter.prototype.addListener = EventEmitter.prototype.on;
   EventEmitter.prototype.once = function(name, listener) {
     validateListener(listener);
     const wrapped = (...args) => {
@@ -85,13 +92,13 @@
     wrapped.listener = listener;
     if (name !== 'newListener')
       this.emit('newListener', name, listener);
-    const listeners = this.events_.get(name) || [];
+    const listeners = eventMap(this).get(name) || [];
     listeners.push(wrapped);
-    this.events_.set(name, listeners);
+    eventMap(this).set(name, listeners);
     return this;
   };
   EventEmitter.prototype.emit = function(name, ...args) {
-    const listeners = this.events_.get(name);
+    const listeners = eventMap(this).get(name);
     if (!listeners || !listeners.length) {
       if (name === 'error') {
         const error = args[0];
@@ -110,7 +117,7 @@
   };
   EventEmitter.prototype.removeListener = function(name, listener) {
     validateListener(listener);
-    const listeners = this.events_.get(name);
+    const listeners = eventMap(this).get(name);
     if (!listeners) {
       return this;
     }
@@ -127,31 +134,29 @@
     const remaining = listeners.slice();
     remaining.splice(index, 1);
     if (remaining.length) {
-      this.events_.set(name, remaining);
+      eventMap(this).set(name, remaining);
     } else {
-      this.events_.delete(name);
+      eventMap(this).delete(name);
     }
     if (name !== 'removeListener')
       this.emit('removeListener', name, removed);
     return this;
   };
-  EventEmitter.prototype.off = function(name, listener) {
-    return this.removeListener(name, listener);
-  };
+  EventEmitter.prototype.off = EventEmitter.prototype.removeListener;
   EventEmitter.prototype.removeAllListeners = function(name) {
     if (name === undefined) {
-      if (!this.events_.has('removeListener')) {
-        this.events_.clear();
+      if (!eventMap(this).has('removeListener')) {
+        eventMap(this).clear();
         return this;
       }
-      for (const eventName of [...this.events_.keys()]) {
+      for (const eventName of [...eventMap(this).keys()]) {
         if (eventName !== 'removeListener')
           this.removeAllListeners(eventName);
       }
       this.removeAllListeners('removeListener');
       return this;
     }
-    const listeners = this.events_.get(name);
+    const listeners = eventMap(this).get(name);
     if (!listeners)
       return this;
     for (let i = listeners.length - 1; i >= 0; --i) {
@@ -160,14 +165,14 @@
     return this;
   };
   EventEmitter.prototype.listeners = function(name) {
-    return (this.events_.get(name) || [])
+    return (eventMap(this).get(name) || [])
         .map(listener => listener.listener || listener);
   };
   EventEmitter.prototype.rawListeners = function(name) {
-    return [...(this.events_.get(name) || [])];
+    return [...(eventMap(this).get(name) || [])];
   };
   EventEmitter.prototype.listenerCount = function(name, listener) {
-    const listeners = this.events_.get(name) || [];
+    const listeners = eventMap(this).get(name) || [];
     if (listener === undefined)
       return listeners.length;
     validateListener(listener);
@@ -179,9 +184,9 @@
     validateListener(listener);
     if (name !== 'newListener')
       this.emit('newListener', name, listener);
-    const listeners = this.events_.get(name) || [];
+    const listeners = eventMap(this).get(name) || [];
     listeners.unshift(listener);
-    this.events_.set(name, listeners);
+    eventMap(this).set(name, listeners);
     return this;
   };
   EventEmitter.prototype.prependOnceListener = function(name, listener) {
@@ -193,13 +198,13 @@
     wrapped.listener = listener;
     if (name !== 'newListener')
       this.emit('newListener', name, listener);
-    const listeners = this.events_.get(name) || [];
+    const listeners = eventMap(this).get(name) || [];
     listeners.unshift(wrapped);
-    this.events_.set(name, listeners);
+    eventMap(this).set(name, listeners);
     return this;
   };
   EventEmitter.prototype.eventNames = function() {
-    return [...this.events_.keys()];
+    return [...eventMap(this).keys()];
   };
   EventEmitter.prototype.setMaxListeners = function(n) {
     if (typeof n !== 'number' || n < 0 || Number.isNaN(n)) {
@@ -649,27 +654,86 @@
   // --- 5. Buffer & Util ---
   const textEncoder = new TextEncoder();
   const textDecoder = new TextDecoder();
+  const nativeToBase64 = Uint8Array.prototype.toBase64;
+  const nativeFromBase64 = Uint8Array.fromBase64;
+  // Some older JS hosts expose an experimental API that ignores byteOffset.
+  const nativeBase64HandlesViews = !nativeToBase64 ||
+      nativeToBase64.call(new Uint8Array([0, 255]).subarray(1)) === '/w==';
+  const arrayBufferByteLength = Object.getOwnPropertyDescriptor(
+      ArrayBuffer.prototype, 'byteLength').get;
+  const sharedArrayBufferByteLength = typeof SharedArrayBuffer === 'function' ?
+      Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, 'byteLength').get : null;
+
+  function decodeBase64(value) {
+    if (nativeFromBase64) {
+      try {
+        return nativeFromBase64(value);
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
+      }
+    }
+    // Node Buffer accepts both alphabets, ignores non-alphabet characters and
+    // stops at padding. Keep canonical input on V8's allocation-efficient path.
+    let normalized = value.split('=', 1)[0].replace(/-/g, '+')
+        .replace(/_/g, '/').replace(/[^A-Za-z0-9+/]/g, '');
+    if (normalized.length % 4 === 1) normalized = normalized.slice(0, -1);
+    if (nativeFromBase64) return nativeFromBase64(normalized);
+    const binary = atob(normalized);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; ++i) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  function encodeBase64(bytes, urlSafe) {
+    if (nativeToBase64) {
+      const view = nativeBase64HandlesViews || bytes.byteOffset === 0 ?
+          bytes : new Uint8Array(bytes);
+      return nativeToBase64.call(view, urlSafe ?
+          {alphabet: 'base64url', omitPadding: true} : undefined);
+    }
+    // Older JS hosts lack the native API. Bounded chunks avoid both a long
+    // chain of per-byte strings and the argument limit of one large apply().
+    const chunks = [];
+    for (let offset = 0; offset < bytes.length; offset += 8192) {
+      chunks.push(String.fromCharCode.apply(
+          null, bytes.subarray(offset, offset + 8192)));
+    }
+    const encoded = btoa(chunks.join(''));
+    return urlSafe ? encoded.replace(/\+/g, '-').replace(/\//g, '_')
+        .replace(/=+$/, '') : encoded;
+  }
 
   class Buffer extends Uint8Array {
-    static from(value, encoding) {
+    static from(value, encoding, length) {
       if (typeof value === 'string') {
         if (encoding === 'hex') {
           const match = value.match(/.{1,2}/g) || [];
           return new Buffer(match.map(byte => parseInt(byte, 16)));
         }
-        if (encoding === 'base64') {
-          const binary = atob(value);
-          const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-          return new Buffer(bytes.buffer);
+        if (encoding === 'base64' || encoding === 'base64url') {
+          const bytes = decodeBase64(value);
+          return new Buffer(bytes.buffer, bytes.byteOffset, bytes.byteLength);
         }
         return new Buffer(textEncoder.encode(value).buffer);
       }
       if (ArrayBuffer.isView(value)) {
-        return new Buffer(value.buffer, value.byteOffset, value.byteLength);
+        // Typed arrays contribute elements, not their underlying byte layout.
+        return new Buffer(value);
       }
       if (value instanceof ArrayBuffer) {
-        return new Buffer(value);
+        let offset = encoding === undefined ? 0 : +encoding;
+        if (Number.isNaN(offset)) offset = 0;
+        const available = value.byteLength - offset;
+        if (length !== undefined) {
+          length = +length;
+          if (!(length > 0)) length = 0;
+        }
+        if (available < 0 || (length !== undefined && length > available)) {
+          const error = new RangeError('Buffer offset or length is outside the ArrayBuffer');
+          error.code = 'ERR_BUFFER_OUT_OF_BOUNDS';
+          throw error;
+        }
+        return new Buffer(value, offset, length);
       }
       if (Array.isArray(value)) {
         return new Buffer(Uint8Array.from(value).buffer);
@@ -684,11 +748,49 @@
     }
 
     static isBuffer(obj) {
-      return obj instanceof Uint8Array;
+      return obj instanceof Buffer;
     }
 
-    static byteLength(string, encoding) {
-      return Buffer.from(string, encoding).length;
+    static byteLength(value, encoding) {
+      if (typeof value !== 'string') {
+        if (ArrayBuffer.isView(value)) return value.byteLength;
+        // Intrinsic getters also recognize ArrayBuffers from another realm.
+        try { return arrayBufferByteLength.call(value); } catch (_) {}
+        if (sharedArrayBufferByteLength) {
+          try { return sharedArrayBufferByteLength.call(value); } catch (_) {}
+        }
+        const error = new TypeError('value must be a string, Buffer, or ArrayBuffer');
+        error.code = 'ERR_INVALID_ARG_TYPE';
+        throw error;
+      }
+      const length = value.length;
+      switch (typeof encoding === 'string' ? encoding.toLowerCase() : '') {
+        case 'ascii': case 'latin1': case 'binary': return length;
+        case 'utf16le': case 'utf-16le': case 'ucs2': case 'ucs-2':
+          return length * 2;
+        case 'hex': return Math.floor(length / 2);
+        case 'base64': case 'base64url': {
+          // Node estimates from the encoded length, including any whitespace.
+          let unpadded = length;
+          if (unpadded && value.charCodeAt(unpadded - 1) === 61) --unpadded;
+          if (unpadded && value.charCodeAt(unpadded - 1) === 61) --unpadded;
+          return Math.floor(unpadded * 3 / 4);
+        }
+      }
+      // UTF-8 is also Node's fallback for an unknown encoding. Count directly
+      // so Content-Length does not allocate an encoded copy of the request.
+      let bytes = 0;
+      for (let i = 0; i < length; ++i) {
+        const code = value.charCodeAt(i);
+        if (code < 0x80) ++bytes;
+        else if (code < 0x800) bytes += 2;
+        else if (code >= 0xd800 && code <= 0xdbff && i + 1 < length &&
+                 value.charCodeAt(i + 1) >= 0xdc00 && value.charCodeAt(i + 1) <= 0xdfff) {
+          bytes += 4;
+          ++i;
+        } else bytes += 3;
+      }
+      return bytes;
     }
 
     static concat(list, totalLength) {
@@ -719,18 +821,14 @@
       if (encoding === 'hex') {
         return Array.from(view).map(b => b.toString(16).padStart(2, '0')).join('');
       }
-      if (encoding === 'base64') {
-        let binary = '';
-        for (let i = 0; i < view.byteLength; i++) {
-          binary += String.fromCharCode(view[i]);
-        }
-        return btoa(binary);
+      if (encoding === 'base64' || encoding === 'base64url') {
+        return encodeBase64(view, encoding === 'base64url');
       }
       return textDecoder.decode(view);
     }
 
     slice(start, end) {
-      return Buffer.from(Uint8Array.prototype.slice.call(this, start, end));
+      return this.subarray(start, end);
     }
 
     copy(target, targetStart = 0, sourceStart = 0, sourceEnd = this.length) {
@@ -769,6 +867,34 @@
     readUInt8(offset = 0) {
       return this[offset];
     }
+    readUIntLE(offset, byteLength) {
+      if (offset === undefined || typeof byteLength !== 'number') {
+        const error = new TypeError('offset and byteLength must be numbers');
+        error.code = 'ERR_INVALID_ARG_TYPE';
+        throw error;
+      }
+      if (!Number.isInteger(byteLength) || byteLength < 1 || byteLength > 6) {
+        const error = new RangeError('byteLength must be an integer from 1 to 6');
+        error.code = 'ERR_OUT_OF_RANGE';
+        throw error;
+      }
+      if (typeof offset !== 'number') {
+        const error = new TypeError('offset must be a number');
+        error.code = 'ERR_INVALID_ARG_TYPE';
+        throw error;
+      }
+      if (this[offset] === undefined || this[offset + byteLength - 1] === undefined) {
+        const error = new RangeError('offset is outside the bounds of the Buffer');
+        error.code = Math.floor(offset) === offset && this.length < byteLength ?
+            'ERR_BUFFER_OUT_OF_BOUNDS' : 'ERR_OUT_OF_RANGE';
+        throw error;
+      }
+      let value = 0;
+      for (let i = byteLength - 1; i >= 0; --i) {
+        value = value * 256 + this[offset + i];
+      }
+      return value;
+    }
     writeInt8(value, offset = 0) {
       this[offset] = value & 0xff;
       return offset + 1;
@@ -784,6 +910,10 @@
     }
     readUInt16LE(offset = 0) {
       return this[offset] | (this[offset + 1] << 8);
+    }
+    readInt16LE(offset = 0) {
+      const value = this.readUIntLE(offset, 2);
+      return value & 0x8000 ? value - 0x10000 : value;
     }
     writeUInt16BE(value, offset = 0) {
       this[offset] = (value >>> 8) & 0xff;
@@ -857,6 +987,10 @@
       return true;
     }
   }
+
+  Object.defineProperty(Buffer.prototype, 'readUintLE', {
+    value: Buffer.prototype.readUIntLE, configurable: true, writable: true,
+  });
 
   const utilModule = {
     promisify: fn => (...args) => new Promise((resolve, reject) => {
@@ -1066,8 +1200,9 @@
   }
 
   function fsBytes(data) {
-    return Buffer.isBuffer(data) || ArrayBuffer.isView(data) ?
-        Buffer.from(data) : Buffer.from(String(data), 'utf8');
+    return ArrayBuffer.isView(data) ?
+        Buffer.from(new Uint8Array(data.buffer, data.byteOffset, data.byteLength)) :
+        Buffer.from(String(data), 'utf8');
   }
 
   function fsNativeStats(stat) {
@@ -1097,13 +1232,31 @@
     return transform ? promise.then(transform) : promise;
   }
 
-  function fsCallback(promise, callback, includeValue = false) {
+  function fsValidateCallback(callback) {
     if (typeof callback !== 'function') {
-      throw new TypeError('Callback must be a function');
+      const error = new TypeError('The callback argument must be a function');
+      error.code = 'ERR_INVALID_ARG_TYPE';
+      throw error;
+    }
+  }
+
+  function fsCallback(operation, callback, includeValue = false) {
+    fsValidateCallback(callback);
+    let promise;
+    try {
+      promise = operation();
+    } catch (error) {
+      promise = Promise.reject(error);
     }
     promise.then(
         value => includeValue ? callback(null, value) : callback(null),
         error => callback(error));
+  }
+
+  function fsUnsupported(method) {
+    const error = new Error(`fs.${method} is not supported by this runtime`);
+    error.code = 'ERR_NOT_SUPPORTED';
+    throw error;
   }
 
   const fsModule = {
@@ -1153,9 +1306,7 @@
       if (parent) {
         fsEnsureDir(parent);
       }
-      const bytes = Buffer.isBuffer(data) || ArrayBuffer.isView(data) ?
-          Buffer.from(data) :
-          Buffer.from(String(data), 'utf8');
+      const bytes = fsBytes(data);
       memFiles.set(p, {type: 'file', data: bytes, mtimeMs: Date.now()});
     },
     mkdirSync: (path, opts) => {
@@ -1253,9 +1404,7 @@
           throw err;
         }
       }
-      const extra = Buffer.isBuffer(data) || ArrayBuffer.isView(data) ?
-          Buffer.from(data) :
-          Buffer.from(String(data), 'utf8');
+      const extra = fsBytes(data);
       fsModule.writeFileSync(path, Buffer.concat([prev, extra]));
     },
     renameSync: (oldPath, newPath) => {
@@ -1289,10 +1438,6 @@
       }
       fsModule.writeFileSync(dest, fsModule.readFileSync(src));
     },
-    chmodSync: (path, _mode) => fsUsesVirtualMount(path) ?
-        undefined : fsNativeSync('chmod', path),
-    createReadStream: () => new streamModule.Readable(),
-    createWriteStream: () => new streamModule.Writable(),
     promises: {},
   };
 
@@ -1301,7 +1446,7 @@
       callback = options;
       options = undefined;
     }
-    fsCallback(fsAsyncOperation(
+    fsCallback(() => fsAsyncOperation(
         path, 'read_file', {}, () => fsModule.readFileSync(path, options),
         encoded => fsUsesVirtualMount(path) ? encoded : fsReadResult(encoded, options)),
         callback, true);
@@ -1312,27 +1457,27 @@
       options = undefined;
     }
     const extra = {dataBase64: fsBytes(data).toString('base64')};
-    fsCallback(fsAsyncOperation(
+    fsCallback(() => fsAsyncOperation(
         path, 'write_file', extra,
         () => fsModule.writeFileSync(path, data, options)), callback);
   };
   fsModule.stat = (path, options, callback) => {
     if (typeof options === 'function') callback = options;
-    fsCallback(fsAsyncOperation(
+    fsCallback(() => fsAsyncOperation(
         path, 'stat', {}, () => fsModule.statSync(path),
         stat => fsUsesVirtualMount(path) ? stat : fsNativeStats(stat)),
         callback, true);
   };
   fsModule.lstat = (path, options, callback) => {
     if (typeof options === 'function') callback = options;
-    fsCallback(fsAsyncOperation(
+    fsCallback(() => fsAsyncOperation(
         path, 'lstat', {}, () => fsModule.lstatSync(path),
         stat => fsUsesVirtualMount(path) ? stat : fsNativeStats(stat)),
         callback, true);
   };
   fsModule.readdir = (path, options, callback) => {
     if (typeof options === 'function') callback = options;
-    fsCallback(fsAsyncOperation(
+    fsCallback(() => fsAsyncOperation(
         path, 'readdir', {}, () => fsModule.readdirSync(path)), callback, true);
   };
   fsModule.mkdir = (path, options, callback) => {
@@ -1341,10 +1486,10 @@
       options = undefined;
     }
     const extra = {recursive: Boolean(options && options.recursive)};
-    fsCallback(fsAsyncOperation(
+    fsCallback(() => fsAsyncOperation(
         path, 'mkdir', extra, () => fsModule.mkdirSync(path, options)), callback);
   };
-  fsModule.unlink = (path, callback) => fsCallback(fsAsyncOperation(
+  fsModule.unlink = (path, callback) => fsCallback(() => fsAsyncOperation(
       path, 'unlink', {}, () => fsModule.unlinkSync(path)), callback);
   fsModule.rm = (path, options, callback) => {
     if (typeof options === 'function') {
@@ -1355,7 +1500,7 @@
       recursive: Boolean(options && options.recursive),
       force: Boolean(options && options.force),
     };
-    fsCallback(fsAsyncOperation(
+    fsCallback(() => fsAsyncOperation(
         path, 'rm', extra, () => fsModule.rmSync(path, options)), callback);
   };
   fsModule.rmdir = (path, options, callback) => {
@@ -1364,12 +1509,12 @@
       options = undefined;
     }
     const extra = {recursive: Boolean(options && options.recursive)};
-    fsCallback(fsAsyncOperation(
+    fsCallback(() => fsAsyncOperation(
         path, 'rmdir', extra, () => fsModule.rmdirSync(path, options)), callback);
   };
   fsModule.access = (path, mode, callback) => {
     if (typeof mode === 'function') callback = mode;
-    fsCallback(fsAsyncOperation(
+    fsCallback(() => fsAsyncOperation(
         path, 'access', {}, () => fsModule.accessSync(path, mode)), callback);
   };
   fsModule.appendFile = (path, data, options, callback) => {
@@ -1378,28 +1523,24 @@
       options = undefined;
     }
     const extra = {dataBase64: fsBytes(data).toString('base64')};
-    fsCallback(fsAsyncOperation(
+    fsCallback(() => fsAsyncOperation(
         path, 'append_file', extra,
         () => fsModule.appendFileSync(path, data, options)), callback);
   };
   fsModule.rename = (oldPath, newPath, callback) => fsCallback(
-      fsUsesVirtualMount(oldPath) ?
+      () => fsUsesVirtualMount(oldPath) ?
           Promise.resolve().then(() => fsModule.renameSync(oldPath, newPath)) :
           fsNativeAsync('rename', oldPath, {destination: normalizeFsPath(newPath)}),
       callback);
   fsModule.copyFile = (src, dest, flags, callback) => {
     if (typeof flags === 'function') callback = flags;
-    fsCallback(fsUsesVirtualMount(src) ?
+    fsCallback(() => fsUsesVirtualMount(src) ?
         Promise.resolve().then(() => fsModule.copyFileSync(src, dest)) :
         fsNativeAsync('copy_file', src, {destination: normalizeFsPath(dest)}),
         callback);
   };
-  fsModule.chmod = (path, mode, callback) => fsCallback(fsAsyncOperation(
-      path, 'chmod', {}, () => fsModule.chmodSync(path, mode)), callback);
   fsModule.exists = (path, callback) => {
-    if (typeof callback !== 'function') {
-      throw new TypeError('Callback must be a function');
-    }
+    fsValidateCallback(callback);
     const promise = fsUsesVirtualMount(path) ?
         Promise.resolve(fsModule.existsSync(path)) :
         fsNativeAsync('exists', path);
@@ -1412,7 +1553,7 @@
   fsModule.realpathSync = realpathSync;
   const realpath = (path, options, callback) => {
     if (typeof options === 'function') callback = options;
-    fsCallback(fsAsyncOperation(
+    fsCallback(() => fsAsyncOperation(
         path, 'realpath', {}, () => String(path)), callback, true);
   };
   realpath.native = realpath;
@@ -1457,11 +1598,458 @@
     copyFile: (src, dest) => fsUsesVirtualMount(src) ?
         Promise.resolve().then(() => fsModule.copyFileSync(src, dest)) :
         fsNativeAsync('copy_file', src, {destination: normalizeFsPath(dest)}),
-    chmod: (path, mode) => fsAsyncOperation(
-        path, 'chmod', {}, () => fsModule.chmodSync(path, mode)),
     realpath: (path) => fsAsyncOperation(
         path, 'realpath', {}, () => String(path)),
   };
+  // These APIs need descriptors, streaming, watchers, or permission support.
+  // Do not return empty streams or report success without doing the operation.
+  for (const method of [
+    'watch', 'watchFile', 'unwatchFile',
+    'chmodSync', 'chownSync', 'openSync', 'closeSync', 'readSync', 'writeSync',
+  ]) {
+    fsModule[method] = () => fsUnsupported(method);
+  }
+  for (const method of ['chmod', 'chown', 'open', 'close', 'read', 'write']) {
+    fsModule[method] = (...args) => fsCallback(
+        async () => fsUnsupported(method), args[args.length - 1]);
+  }
+  for (const method of ['chmod', 'chown', 'open']) {
+    fsModule.promises[method] = async () => fsUnsupported('promises.' + method);
+  }
+  // ReadStream currently reads through the existing whole-file worker bridge,
+  // then delivers bounded chunks. No OS descriptor or fake open event is exposed.
+  class FileReadStream extends Readable {
+    constructor(path, options = {}) {
+      super();
+      if (typeof options === 'string') options = {encoding: options};
+      if (!options || typeof options !== 'object') throw new TypeError('Invalid ReadStream options');
+      if (options.fd != null || options.fs || (options.flags && options.flags !== 'r') ||
+          options.autoClose === false) return fsUnsupported('ReadStream options');
+      this.path = path;
+      this.pending = true;
+      this.readable = true;
+      this.readableEnded = false;
+      this.destroyed = false;
+      this.closed = false;
+      this.bytesRead = 0;
+      this._flowing = null;
+      this._queued = false;
+      this._resumeQueued = false;
+      this._bytes = null;
+      this._offset = 0;
+      this._encoding = null;
+      this._decoder = {needed: 0};
+      this._emitClose = options.emitClose !== false;
+      this._chunkSize = options.highWaterMark === undefined ? 65536 : options.highWaterMark;
+      const start = options.start === undefined ? 0 : options.start;
+      const end = options.end === undefined ? Infinity : options.end;
+      if (!Number.isSafeInteger(start) || start < 0 ||
+          (end !== Infinity && (!Number.isSafeInteger(end) || end < start)) ||
+          !Number.isSafeInteger(this._chunkSize) || this._chunkSize <= 0) {
+        const error = new RangeError('Invalid ReadStream range or highWaterMark');
+        error.code = 'ERR_OUT_OF_RANGE';
+        throw error;
+      }
+      if (options.encoding) this.setEncoding(options.encoding);
+      this._signal = options.signal;
+      this._abort = () => {
+        const error = new Error('The operation was aborted');
+        error.name = 'AbortError';
+        error.code = 'ABORT_ERR';
+        this.destroy(error);
+      };
+      if (this._signal) {
+        if (this._signal.aborted) queueMicrotask(this._abort);
+        else this._signal.addEventListener('abort', this._abort, {once: true});
+      }
+      Promise.resolve().then(() => this.destroyed ? null : fsModule.promises.readFile(path))
+          .then(bytes => {
+            if (this.destroyed) return;
+            this.pending = false;
+            this._bytes = (Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)).subarray(start,
+                end === Infinity ? bytes.length : Math.min(bytes.length, end + 1));
+            this.emit('ready');
+            this._schedule();
+          }, error => this.destroy(error));
+    }
+    on(name, listener) {
+      super.on(name, listener);
+      if (name === 'data' && this._flowing !== false) this.resume();
+      return this;
+    }
+    once(name, listener) {
+      super.once(name, listener);
+      if (name === 'data' && this._flowing !== false) this.resume();
+      return this;
+    }
+    setEncoding(encoding) {
+      if (!['utf8', 'utf-8'].includes(String(encoding).toLowerCase()))
+        return fsUnsupported('ReadStream encoding ' + encoding);
+      this._encoding = 'utf8';
+      return this;
+    }
+    pause() {
+      if (this._flowing !== false) {
+        this._flowing = false;
+        this.emit('pause');
+      }
+      return this;
+    }
+    resume() {
+      if (this.destroyed || this.readableEnded) return this;
+      if (!this._flowing && !this._resumeQueued) {
+        this._resumeQueued = true;
+        queueMicrotask(() => {
+          this._resumeQueued = false;
+          if (this._flowing && !this.destroyed) this.emit('resume');
+        });
+      }
+      this._flowing = true;
+      this._schedule();
+      return this;
+    }
+    isPaused() { return this._flowing === false; }
+    _decodeUtf8(bytes, final = false) {
+      const state = this._decoder;
+      let result = '';
+      for (let i = 0; i < bytes.length; ++i) {
+        const byte = bytes[i];
+        if (!state.needed) {
+          if (byte <= 0x7f) { result += String.fromCharCode(byte); continue; }
+          state.seen = 0;
+          state.lower = 0x80;
+          state.upper = 0xbf;
+          if (byte >= 0xc2 && byte <= 0xdf) {
+            state.needed = 1; state.point = byte & 0x1f;
+          } else if (byte >= 0xe0 && byte <= 0xef) {
+            state.needed = 2; state.point = byte & 0x0f;
+            if (byte === 0xe0) state.lower = 0xa0;
+            if (byte === 0xed) state.upper = 0x9f;
+          } else if (byte >= 0xf0 && byte <= 0xf4) {
+            state.needed = 3; state.point = byte & 7;
+            if (byte === 0xf0) state.lower = 0x90;
+            if (byte === 0xf4) state.upper = 0x8f;
+          } else {
+            result += '\ufffd';
+          }
+        } else if (byte < state.lower || byte > state.upper) {
+          state.needed = 0;
+          result += '\ufffd';
+          --i;
+        } else {
+          state.lower = 0x80;
+          state.upper = 0xbf;
+          state.point = (state.point << 6) | (byte & 0x3f);
+          if (++state.seen === state.needed) {
+            result += String.fromCodePoint(state.point);
+            state.needed = 0;
+          }
+        }
+      }
+      if (final && state.needed) {
+        state.needed = 0;
+        result += '\ufffd';
+      }
+      return result;
+    }
+    _schedule() {
+      if (this._queued || !this._flowing || !this._bytes || this.destroyed) return;
+      this._queued = true;
+      queueMicrotask(() => {
+        this._queued = false;
+        if (!this._flowing || !this._bytes || this.destroyed) return;
+        if (this._offset >= this._bytes.length) {
+          if (this._encoding) {
+            const tail = this._decodeUtf8(new Uint8Array(0), true);
+            if (tail) this.emit('data', tail);
+            if (!this._flowing || this.destroyed) return;
+          }
+          this.readableEnded = true;
+          this.readable = false;
+          this._bytes = null;
+          this.emit('end');
+          this.destroy();
+          return;
+        }
+        const end = Math.min(this._offset + this._chunkSize, this._bytes.length);
+        const bytes = this._bytes.subarray(this._offset, end);
+        this._offset = end;
+        this.bytesRead += bytes.length;
+        // Decode incrementally: the main bootstrap's TextDecoder fallback is
+        // not streaming, and per-chunk TextDecoder would also strip BOMs.
+        const chunk = this._encoding ? this._decodeUtf8(bytes) : bytes;
+        if (chunk.length) this.emit('data', chunk);
+        this._schedule();
+      });
+    }
+    destroy(error) {
+      if (this.destroyed) return this;
+      this.destroyed = true;
+      this.pending = false;
+      this.readable = false;
+      this._bytes = null;
+      if (this._signal) this._signal.removeEventListener('abort', this._abort);
+      queueMicrotask(() => {
+        try { if (error) this.emit('error', error); }
+        finally {
+          this.closed = true;
+          if (this._emitClose) this.emit('close');
+        }
+      });
+      return this;
+    }
+    close(callback) {
+      if (callback) {
+        if (this.closed) queueMicrotask(callback);
+        else this.once('close', callback);
+      }
+      return this.destroy();
+    }
+  }
+  fsModule.ReadStream = FileReadStream;
+  fsModule.createReadStream = (path, options) => new FileReadStream(path, options);
+
+  // Path-based writer over the real asynchronous filesystem bridge. Each
+  // operation opens/closes its file; no persistent descriptor or open event is
+  // invented. Descriptor-based writes and positioned writes remain unsupported.
+  class FileWriteStream extends Writable {
+    constructor(path, options = {}) {
+      super();
+      if (typeof options === 'string') options = {encoding: options};
+      if (!options || typeof options !== 'object') throw new TypeError('Invalid WriteStream options');
+      if (options.fd != null || options.fs || options.start !== undefined ||
+          options.autoClose === false || options.flush || options.objectMode ||
+          (options.mode !== undefined && options.mode !== 0o666)) {
+        return fsUnsupported('WriteStream options');
+      }
+      const flags = options.flags === undefined ? 'w' : options.flags;
+      if (flags !== 'w' && flags !== 'a') return fsUnsupported('WriteStream flags ' + flags);
+      const highWaterMark = options.highWaterMark === undefined ? 16384 : options.highWaterMark;
+      if (!Number.isSafeInteger(highWaterMark) || highWaterMark < 0) {
+        throw Object.assign(new RangeError('Invalid WriteStream highWaterMark'), {code: 'ERR_OUT_OF_RANGE'});
+      }
+      this.path = path;
+      this.fd = null;
+      this.pending = true;
+      this.writable = true;
+      this.writableEnded = false;
+      this.writableFinished = false;
+      this.destroyed = false;
+      this.closed = false;
+      this.errored = null;
+      this.bytesWritten = 0;
+      this.writableLength = 0;
+      this.writableHighWaterMark = highWaterMark;
+      this.writableNeedDrain = false;
+      this.writableCorked = 0;
+      this._writes = [];
+      this._endCallbacks = [];
+      this._closeCallbacks = [];
+      this._busy = true;
+      this._closeScheduled = false;
+      this._finishScheduled = false;
+      this._emitClose = options.emitClose !== false;
+      this.setDefaultEncoding(options.encoding === undefined ? 'utf8' : options.encoding);
+      this._signal = options.signal;
+      this._abort = () => this.destroy(Object.assign(new Error('The operation was aborted'),
+          {name: 'AbortError', code: 'ABORT_ERR'}));
+      if (this._signal) {
+        if (typeof this._signal.addEventListener !== 'function' ||
+            typeof this._signal.removeEventListener !== 'function') {
+          throw Object.assign(new TypeError('signal must be an AbortSignal'), {code: 'ERR_INVALID_ARG_TYPE'});
+        }
+        if (this._signal.aborted) queueMicrotask(this._abort);
+        else this._signal.addEventListener('abort', this._abort, {once: true});
+      }
+      Promise.resolve().then(() => {
+        if (this.destroyed) return;
+        return flags === 'a' ? fsModule.promises.appendFile(path, Buffer.alloc(0)) :
+                               fsModule.promises.writeFile(path, Buffer.alloc(0));
+      }).then(() => {
+        this._busy = false;
+        this.pending = false;
+        if (this.destroyed) return this._completeClose();
+        // A completed create/truncate is observable, without fabricating an fd.
+        this.emit('ready');
+        this._pump();
+      }, error => {
+        this._busy = false;
+        this.pending = false;
+        this.destroy(error);
+      });
+    }
+    _callback(callback, error) {
+      if (callback) queueMicrotask(() => callback(error));
+    }
+    _validateCallback(callback) {
+      if (callback !== undefined) fsValidateCallback(callback);
+    }
+    _error(code, message) {
+      return Object.assign(new Error(message), {code});
+    }
+    setDefaultEncoding(encoding) {
+      if (typeof encoding !== 'string' ||
+          !['utf8', 'utf-8', 'hex', 'base64', 'base64url', 'ascii', 'latin1',
+            'binary', 'ucs2', 'ucs-2', 'utf16le', 'utf-16le'].includes(encoding.toLowerCase())) {
+        throw this._error('ERR_UNKNOWN_ENCODING', 'Unknown encoding: ' + encoding);
+      }
+      this._defaultEncoding = encoding;
+      return this;
+    }
+    write(chunk, encoding, callback) {
+      if (typeof encoding === 'function') { callback = encoding; encoding = undefined; }
+      this._validateCallback(callback);
+      if (this.destroyed) {
+        this._callback(callback, this.errored || this._error('ERR_STREAM_DESTROYED', 'Cannot write after destroy'));
+        return false;
+      }
+      if (this.writableEnded) {
+        const error = this._error('ERR_STREAM_WRITE_AFTER_END', 'write after end');
+        this._callback(callback, error);
+        this.destroy(error);
+        return false;
+      }
+      let bytes;
+      if (typeof chunk === 'string') {
+        const selected = encoding || this._defaultEncoding;
+        const previous = this._defaultEncoding;
+        this.setDefaultEncoding(selected);
+        this._defaultEncoding = previous;
+        bytes = Buffer.from(chunk, selected);
+      } else if (ArrayBuffer.isView(chunk)) {
+        bytes = Buffer.from(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+      } else {
+        throw Object.assign(new TypeError('WriteStream data must be a string or ArrayBuffer view'),
+            {code: 'ERR_INVALID_ARG_TYPE'});
+      }
+      this._writes.push({bytes, callback});
+      this.writableLength += bytes.length;
+      const accepted = this.writableLength < this.writableHighWaterMark;
+      if (!accepted) this.writableNeedDrain = true;
+      this._pump();
+      return accepted;
+    }
+    _pump() {
+      if (this._busy || this.pending || this.destroyed || this.writableCorked) return;
+      const entry = this._writes.shift();
+      if (!entry) {
+        if (this.writableEnded) this._finish();
+        return;
+      }
+      this._busy = true;
+      // Byte storage is snapped at write(), before user code can mutate it.
+      Promise.resolve().then(() => fsModule.promises.appendFile(this.path, entry.bytes)).then(() => {
+        this._busy = false;
+        this.bytesWritten += entry.bytes.length;
+        this.writableLength -= entry.bytes.length;
+        this._callback(entry.callback, this.destroyed ?
+            (this.errored || this._error('ERR_STREAM_DESTROYED', 'Stream was destroyed')) : undefined);
+        if (this.destroyed) return this._completeClose();
+        if (this.writableNeedDrain && this.writableLength === 0 && !this.writableEnded) {
+          this.writableNeedDrain = false;
+          queueMicrotask(() => {
+            if (!this.destroyed && !this.writableEnded && this.writableLength === 0) this.emit('drain');
+          });
+        }
+        this._pump();
+      }, error => {
+        this._busy = false;
+        this.writableLength -= entry.bytes.length;
+        this._callback(entry.callback, error);
+        this.destroy(error);
+      });
+    }
+    end(chunk, encoding, callback) {
+      if (typeof chunk === 'function') { callback = chunk; chunk = undefined; encoding = undefined; }
+      else if (typeof encoding === 'function') { callback = encoding; encoding = undefined; }
+      this._validateCallback(callback);
+      if (this.destroyed) {
+        this._callback(callback, this.errored ||
+            (this.writableFinished ? undefined : this._error('ERR_STREAM_DESTROYED', 'Stream was destroyed')));
+        return this;
+      }
+      if (this.writableFinished && (chunk === undefined || chunk === null)) {
+        this._callback(callback);
+        return this;
+      }
+      if (chunk !== undefined && chunk !== null) this.write(chunk, encoding);
+      if (callback) this._endCallbacks.push(callback);
+      this.writableEnded = true;
+      this.writable = false;
+      this.writableCorked = 0;
+      this._pump();
+      return this;
+    }
+    _finish() {
+      if (this._finishScheduled || this.writableFinished) return;
+      this._finishScheduled = true;
+      queueMicrotask(() => {
+        if (this.destroyed) return;
+        this.emit('prefinish');
+        if (this.destroyed) return;
+        this.writableFinished = true;
+        this.writableNeedDrain = false;
+        for (const callback of this._endCallbacks.splice(0)) this._callback(callback);
+        queueMicrotask(() => {
+          if (this.destroyed) return;
+          try { this.emit('finish'); }
+          finally { this.destroy(); }
+        });
+      });
+    }
+    cork() { ++this.writableCorked; }
+    uncork() {
+      if (this.writableCorked) --this.writableCorked;
+      this._pump();
+    }
+    destroy(error) {
+      if (this.destroyed) {
+        if (error && !this.errored) this.errored = error;
+        this._completeClose();
+        return this;
+      }
+      this.destroyed = true;
+      this.writable = false;
+      this.errored = error || null;
+      if (this._signal) this._signal.removeEventListener('abort', this._abort);
+      this._completeClose();
+      return this;
+    }
+    _completeClose() {
+      // The native bridge cannot cancel an already submitted file operation.
+      // close waits for it, so no write can complete after the close event.
+      if (this._busy || this._closeScheduled) return;
+      this._closeScheduled = true;
+      this.pending = false;
+      const error = this.errored || this._error('ERR_STREAM_DESTROYED', 'Stream was destroyed');
+      for (const entry of this._writes.splice(0)) this._callback(entry.callback, error);
+      for (const callback of this._endCallbacks.splice(0)) this._callback(callback, error);
+      this.writableLength = 0;
+      this.writableNeedDrain = false;
+      queueMicrotask(() => {
+        try {
+          if (this.errored) this.emit('error', this.errored);
+        } finally {
+          this.closed = true;
+          for (const callback of this._closeCallbacks.splice(0)) this._callback(callback);
+          if (this._emitClose) this.emit('close');
+        }
+      });
+    }
+    close(callback) {
+      this._validateCallback(callback);
+      if (callback) {
+        if (this.closed) this._callback(callback);
+        else this._closeCallbacks.push(callback);
+      }
+      if (!this.destroyed) this.end();
+      return this;
+    }
+  }
+  fsModule.WriteStream = FileWriteStream;
+  fsModule.createWriteStream = (path, options) => new FileWriteStream(path, options);
+
+
   fsModule.default = fsModule;
 
   // --- 7. Process Object ---
@@ -1532,18 +2120,114 @@
   const pendingMojoInvokes = new Map();
   const pendingMojoConstructs = new Map();
   const mojoCallbacks = new Map();
-  const nativeModuleCache = new Map();
   const nativeHandleSymbol = Symbol('xenon.nativeHandle');
-  const asyncNativeInstanceMethods = new Set();
-  const asyncNativeExportMethods = new Set();
+  const nativePrototypeMethods = new WeakSet();
+  const nativeProxyCache = new Map();
+  const pendingNativeConstructors = new Set();
   let nextMojoRequestId = 1;
   let nextMojoCallbackId = 1;
   let nativeServiceGeneration = 0;
+  // Serialization replaces native arguments with ids. Keep only the collected
+  // handles alive until the corresponding async native operation completes.
+  const pendingNativeHandleRoots = new Set();
+  function retainNativeHandles(result, handles) {
+    if (!handles || !result || typeof result.then !== 'function') return result;
+    pendingNativeHandleRoots.add(handles);
+    return Promise.resolve(result).then(value => {
+      pendingNativeHandleRoots.delete(handles);
+      return value;
+    }, error => {
+      pendingNativeHandleRoots.delete(handles);
+      throw error;
+    });
+  }
+  // The held record must never reference the handle or its proxy. Register the
+  // handle, so an extracted instance method also keeps its native receiver live.
+  const nativeHandleFinalizer = typeof FinalizationRegistry === 'function' &&
+      typeof transport.releaseNodeInstance === 'function' ?
+      new FinalizationRegistry(record => {
+        const key = nativeProxyKey(record);
+        const cached = key && nativeProxyCache.get(key);
+        // A wire value can arrive after collection but before this finalizer.
+        // A replacement wrapper then owns this same lease; do not release it.
+        if (cached && cached.record !== record) return;
+        if (key) nativeProxyCache.delete(key);
+        try {
+          transport.releaseNodeInstance(
+              record.modulePath, record.instanceId, record.ownerToken);
+        } catch (_error) {
+          // Disconnected owners are reclaimed by the service. Cleanup must not
+          // reconnect or turn a GC callback into an unhandled application error.
+        }
+      }) : null;
 
-  function isPendingPromiseError(error) {
-    const message = String(error && error.message ? error.message : error || '');
-    return message.includes('pending Promise') ||
-        message.includes('only settled Promise');
+  function trackNativeHandle(handle) {
+    if (!nativeHandleFinalizer || handle.tracked ||
+        typeof handle.modulePath !== 'string' ||
+        !Number.isInteger(handle.instanceId) ||
+        typeof handle.ownerToken !== 'string' || !handle.ownerToken) return;
+    const record = Object.freeze({
+      modulePath: handle.modulePath,
+      instanceId: handle.instanceId,
+      ownerToken: handle.ownerToken,
+    });
+    nativeHandleFinalizer.register(handle, record);
+    handle.finalizerRecord = record;
+    handle.tracked = true;
+  }
+
+  function nativeProxyKey(handle) {
+    if (typeof WeakRef !== 'function' || !handle.ownerToken ||
+        !Number.isInteger(handle.instanceId)) return null;
+    return JSON.stringify([handle.modulePath, handle.ownerToken, handle.instanceId]);
+  }
+
+  function rememberNativeProxy(handle, proxy) {
+    const key = nativeProxyKey(handle);
+    if (key) nativeProxyCache.set(key, {
+      handle: new WeakRef(handle), proxy: new WeakRef(proxy),
+      record: handle.finalizerRecord,
+    });
+  }
+
+  function cachedNativeProxy(handle) {
+    const key = nativeProxyKey(handle);
+    return key && nativeProxyCache.get(key);
+  }
+
+  function invokeNativeCallback(callback, args, receiver) {
+    const invoke = () => {
+      try {
+        callback.apply(adoptNativeReturn(receiver),
+            args.map(arg => adoptNativeReturn(arg)));
+      } catch (error) {
+        console.error('[Xenon Node Callback Error]', error);
+      }
+    };
+    // Native constructors can call back before their async IPC reply has
+    // registered the wrapper. Wait for those replies before resolving `this`.
+    if (receiver && receiver.__xenon_node_wire_type__ === 'native_instance' &&
+        pendingNativeConstructors.size) {
+      Promise.allSettled([...pendingNativeConstructors]).then(invoke);
+    } else {
+      invoke();
+    }
+  }
+
+  function assignNativeInstanceResult(handle, result) {
+    const id = result && typeof result === 'object' ? result.instance_id : result;
+    if (!Number.isInteger(id)) {
+      throw new TypeError('Native constructor returned an invalid instance id');
+    }
+    handle.instanceId = id;
+    if (result && typeof result.owner_token === 'string') {
+      handle.ownerToken = result.owner_token;
+    }
+    trackNativeHandle(handle);
+  }
+
+  function nativeInstanceSelector(handle, instanceId) {
+    return handle.ownerToken ? {instanceId, ownerToken: handle.ownerToken} : instanceId;
   }
 
   function callbackWire(callback) {
@@ -1572,11 +2256,7 @@
       return true;
     }
     const args = Array.isArray(values[1]) ? values[1] : [];
-    try {
-      callback(...args.map(arg => adoptNativeReturn(arg)));
-    } catch (error) {
-      console.error('[Xenon Node Callback Error]', error);
-    }
+    invokeNativeCallback(callback, args, values[2]);
     return true;
   };
 
@@ -1599,18 +2279,16 @@
       __xenon_node_wire_type__: 'native_instance',
       module_path: handle.modulePath,
       instance_id: instanceId,
+      ...(handle.ownerToken ? {owner_token: handle.ownerToken} : {}),
     };
   }
 
-  function wireNativeArgumentSync(value, seen = new Map()) {
+  function wireNativeArgumentSync(value, seen = new Map(), retainedHandles) {
     const handle = getNativeHandle(value);
     if (handle) {
-      let instanceId = handle.instanceId;
-      if (!Number.isInteger(instanceId) ||
-          handle.generation !== nativeServiceGeneration) {
-        instanceId = reviveNativeHandle(handle);
-      }
-      return nativeInstanceWire(handle, instanceId);
+      if (retainedHandles) retainedHandles.add(handle);
+      assertNativeHandleLive(handle);
+      return nativeInstanceWire(handle, handle.instanceId);
     }
     if (typeof value === 'function') {
       return callbackWire(value);
@@ -1634,22 +2312,23 @@
       const result = [];
       seen.set(value, result);
       for (const item of value) {
-        result.push(wireNativeArgumentSync(item, seen));
+        result.push(wireNativeArgumentSync(item, seen, retainedHandles));
       }
       return result;
     }
     const result = {};
     seen.set(value, result);
     for (const [key, item] of Object.entries(value)) {
-      result[key] = wireNativeArgumentSync(item, seen);
+      result[key] = wireNativeArgumentSync(item, seen, retainedHandles);
     }
     return result;
   }
 
-  async function wireNativeArgumentAsync(value, seen = new Map()) {
+  async function wireNativeArgumentAsync(value, seen = new Map(), retainedHandles) {
     const handle = getNativeHandle(value);
     if (handle) {
-      const instanceId = await resolvedHandleInstanceId(handle, false);
+      if (retainedHandles) retainedHandles.add(handle);
+      const instanceId = await resolvedHandleInstanceId(handle);
       return nativeInstanceWire(handle, instanceId);
     }
     if (typeof value === 'function') {
@@ -1674,14 +2353,14 @@
       const result = [];
       seen.set(value, result);
       for (const item of value) {
-        result.push(await wireNativeArgumentAsync(item, seen));
+        result.push(await wireNativeArgumentAsync(item, seen, retainedHandles));
       }
       return result;
     }
     const result = {};
     seen.set(value, result);
     for (const [key, item] of Object.entries(value)) {
-      result[key] = await wireNativeArgumentAsync(item, seen);
+      result[key] = await wireNativeArgumentAsync(item, seen, retainedHandles);
     }
     return result;
   }
@@ -1793,14 +2472,11 @@
       pending.resolve(adoptNativeReturn(valueFromMojo(result)));
     });
 
-    router.nodeCallbackInvoked.addListener((callbackId, args) => {
+    router.nodeCallbackInvoked.addListener((callbackId, args, receiver) => {
       const cb = mojoCallbacks.get(callbackId);
       if (cb) {
-        try {
-          cb(...args.map(arg => adoptNativeReturn(valueFromMojo(arg))));
-        } catch (err) {
-          console.error('[Xenon Node Callback Error]', err);
-        }
+        invokeNativeCallback(cb, args.map(valueFromMojo),
+            receiver === undefined ? undefined : valueFromMojo(receiver));
       }
     });
 
@@ -2032,13 +2708,17 @@
   }
 
   function createNativeFunctionProxy(value, fallbackModulePath) {
-    const handle = {
+    let handle = {
       modulePath: value.module_path || fallbackModulePath,
       className: '',
-      ctorArgs: [],
       instanceId: Number(value.instance_id),
+      ownerToken: value.owner_token,
       generation: nativeServiceGeneration,
     };
+    const cached = cachedNativeProxy(handle);
+    const previousProxy = cached && cached.proxy.deref();
+    if (previousProxy) return previousProxy;
+    handle = cached && cached.handle.deref() || handle;
     const proxy = function(...args) {
       if (globalThis.__xenonNodeAddonTrace === true) {
         try {
@@ -2077,8 +2757,20 @@
       } catch (_error) {
       }
     }
-    handle.proxy = proxy;
+    trackNativeHandle(handle);
+    rememberNativeProxy(handle, proxy);
     return proxy;
+  }
+
+  function adoptNativeCallResult(value, modulePath, retainedHandles) {
+    // The transport returns a Promise only when the operation already started
+    // in Utility is still pending. Await that operation without invoking it
+    // again; synchronous results keep their original return type.
+    if (value && typeof value.then === 'function') {
+      return retainNativeHandles(Promise.resolve(value).then(result =>
+          adoptNativeReturn(result, modulePath)), retainedHandles);
+    }
+    return adoptNativeReturn(value, modulePath);
   }
 
   function adoptNativeReturn(value, fallbackModulePath) {
@@ -2089,6 +2781,7 @@
       return value;
     }
     const wireType = value.__xenon_node_wire_type__;
+    if (wireType === 'global') return globalThis;
     if (wireType === 'undefined') {
       return undefined;
     }
@@ -2123,8 +2816,8 @@
       return createNativeInstanceProxy({
         modulePath: value.module_path || fallbackModulePath,
         className: value.class_name || '',
-        ctorArgs: [],
         instanceId: Number(value.instance_id),
+        ownerToken: value.owner_token,
         generation: nativeServiceGeneration,
       }, prototypeMembers, null, value.fields);
     }
@@ -2135,134 +2828,74 @@
     return result;
   }
 
-  function reviveNativeHandle(handle) {
-    if (!handle || !handle.className) {
-      throw new Error('Unknown instance id');
+  function assertNativeHandleLive(handle) {
+    if (!handle || handle.released ||
+        handle.generation !== nativeServiceGeneration) {
+      const error = new Error('Native instance has been released or its service connection changed');
+      error.code = 'ERR_NATIVE_INSTANCE_INVALIDATED';
+      throw error;
     }
-    try {
-      reloadNativeNodeModule(handle.modulePath);
-    } catch (error) {
-      if (!isDeadNativeServiceError(error)) {
-        throw error;
-      }
-    }
-    const args = (handle.ctorArgs || []).filter(arg => typeof arg !== 'function');
-    handle.instanceId = transport.constructNodeExportSync(
-        handle.modulePath, handle.className,
-        ...args.map(arg => wireNativeArgumentSync(arg)));
-    handle.generation = nativeServiceGeneration;
-    return handle.instanceId;
   }
 
-  function resolvedHandleInstanceId(handle, forceRevive) {
+  function resolvedHandleInstanceId(handle) {
+    assertNativeHandleLive(handle);
     return Promise.resolve(handle.instanceId).then((instanceId) => {
-      if (typeof instanceId === 'number') {
-        handle.instanceId = instanceId;
-      }
-      if (!forceRevive && typeof handle.instanceId === 'number' &&
-          handle.generation === nativeServiceGeneration) {
+      assertNativeHandleLive(handle);
+      assignNativeInstanceResult(handle, instanceId);
+      if (Number.isInteger(handle.instanceId)) {
         return handle.instanceId;
       }
-      return reviveNativeHandle(handle);
+      throw new TypeError('Native addon instance id is not resolved');
     });
   }
 
-  function invokeInstanceMethod(
-      handle, methodName, methodArgs, didRevive) {
+  function invokeInstanceMethod(handle, methodName, methodArgs) {
+    assertNativeHandleLive(handle);
     const modulePath = handle.modulePath;
-    const userCallbacks = methodArgs.filter(arg => typeof arg === 'function');
-    const fireUserCallbacksOnce = (...cbArgs) => {
-      if (fireUserCallbacksOnce.settled) {
-        return;
-      }
-      fireUserCallbacksOnce.settled = true;
-      for (const cb of userCallbacks) {
-        try {
-          cb(...cbArgs);
-        } catch (error) {
-          console.error('[Xenon Node Callback Error]', error);
-        }
-      }
-    };
-    if (methodName === 'waitLoadFinish' && userCallbacks.length) {
-      globalThis.setTimeout(() => {
-        if (!fireUserCallbacksOnce.settled) {
-          console.warn(
-              '[Xenon Renderer] waitLoadFinish timed out; continuing');
-          fireUserCallbacksOnce();
-        }
-      }, 8000);
-    }
-    const wrappedArgs = userCallbacks.length ? methodArgs.map(arg => {
-      if (typeof arg !== 'function') {
-        return arg;
-      }
-      return (...cbArgs) => {
-        fireUserCallbacksOnce.settled = true;
-        return arg(...cbArgs);
-      };
-    }) : methodArgs;
-    const instanceKey = `${modulePath}::${methodName}`;
-    const runSync = (instanceId) => adoptNativeReturn(
+    const retainedHandles = new Set([handle]);
+    const runSync = (instanceId) => adoptNativeCallResult(
         transport.invokeNodeInstanceSync(
-            modulePath, instanceId, methodName,
-            ...wrappedArgs.map(arg => typeof arg === 'function' ?
-                                        arg :
-                                        wireNativeArgumentSync(arg))),
-        modulePath);
+            modulePath, nativeInstanceSelector(handle, instanceId), methodName,
+            ...methodArgs.map(arg => wireNativeArgumentSync(arg, new Map(), retainedHandles))),
+        modulePath, retainedHandles);
     if (typeof handle.instanceId === 'number' &&
-        handle.generation === nativeServiceGeneration &&
-        !argsHaveCallback(wrappedArgs) &&
-        !asyncNativeInstanceMethods.has(instanceKey) &&
         typeof transport.invokeNodeInstanceSync === 'function') {
-      try {
-        return runSync(handle.instanceId);
-      } catch (error) {
-        if (isPendingPromiseError(error)) {
-          asyncNativeInstanceMethods.add(instanceKey);
-        } else if (!didRevive && isDeadNativeServiceError(error)) {
-          try {
-            return runSync(reviveNativeHandle(handle));
-          } catch (retryError) {
-            if (isPendingPromiseError(retryError)) {
-              asyncNativeInstanceMethods.add(instanceKey);
-            } else {
-              console.warn(
-                  '[Xenon Renderer] native instance method failed:', methodName,
-                  retryError);
-              return undefined;
-            }
-          }
-        } else {
-          console.warn(
-              '[Xenon Renderer] native instance method failed:', methodName,
-              error);
-          return undefined;
-        }
-      }
+      return runSync(handle.instanceId);
     }
-    return resolvedHandleInstanceId(handle, false).then((instanceId) => {
-      return Promise.all(wrappedArgs.map(arg => wireNativeArgumentAsync(arg)))
+    return retainNativeHandles(resolvedHandleInstanceId(handle).then((instanceId) => {
+      return Promise.all(methodArgs.map(arg => wireNativeArgumentAsync(arg, new Map(), retainedHandles)))
           .then(wiredArgs => transport.invoke(
               '__xenon:node-addon:invoke-instance', {
                 modulePath,
                 instanceId,
+                ...(handle.ownerToken ? {ownerToken: handle.ownerToken} : {}),
                 methodName,
                 arguments: wiredArgs,
               }));
-    }).then(result => adoptNativeReturn(result, modulePath)).catch((error) => {
-      if (!didRevive && isDeadNativeServiceError(error)) {
-        reviveNativeHandle(handle);
-        return invokeInstanceMethod(handle, methodName, methodArgs, true);
-      }
-      console.warn(
-          '[Xenon Renderer] native instance method failed:', methodName,
-          error);
-      throw error;
-    });
+    }).then(result => adoptNativeReturn(result, handle.modulePath)), retainedHandles);
   }
 
   function createNativeInstanceProxy(handle, prototypeMembers, proto, fields) {
+    if (handle.instanceId && typeof handle.instanceId === 'object' &&
+        typeof handle.instanceId.then !== 'function') {
+      const result = handle.instanceId;
+      handle.instanceId = result.instance_id;
+      handle.ownerToken = result.owner_token;
+    }
+    const cached = cachedNativeProxy(handle);
+    const previousProxy = cached && cached.proxy.deref();
+    if (previousProxy) {
+      if (fields && typeof fields === 'object') {
+        for (const [key, fieldValue] of Object.entries(fields)) {
+          Object.defineProperty(previousProxy, key, {
+            configurable: true, enumerable: true, writable: true,
+            value: adoptNativeReturn(fieldValue, handle.modulePath),
+          });
+        }
+      }
+      return previousProxy;
+    }
+    handle = cached && cached.handle.deref() || handle;
     const baseInstance = Object.create(proto || null);
     Object.defineProperty(baseInstance, nativeHandleSymbol, {
       configurable: false,
@@ -2280,6 +2913,7 @@
 
     for (const member of (prototypeMembers || [])) {
       if (member.kind === 'function' || member.kind === 'class') {
+        if (proto && member.name in proto) continue;
         Object.defineProperty(baseInstance, member.name, {
           configurable: true,
           enumerable: false,
@@ -2302,28 +2936,25 @@
       }
     }
 
+    const boundNativeMethods = new Map();
     const proxy = new Proxy(baseInstance, {
       get(target, prop, receiver) {
         if (typeof prop === 'symbol' || prop in target) {
-          return Reflect.get(target, prop, receiver);
+          const value = Reflect.get(target, prop, receiver);
+          if (typeof value !== 'function' || !nativePrototypeMethods.has(value)) return value;
+          if (!boundNativeMethods.has(value)) {
+            boundNativeMethods.set(value, (...args) => invokeInstanceMethod(handle, prop, args));
+          }
+          return boundNativeMethods.get(value);
         }
         if (typeof prop !== 'string' || !Number.isInteger(handle.instanceId) ||
             typeof transport.inspectNodeInstanceMemberSync !== 'function') {
           return undefined;
         }
-        let instanceId = handle.instanceId;
-        if (handle.generation !== nativeServiceGeneration) {
-          try {
-            instanceId = reviveNativeHandle(handle);
-          } catch (error) {
-            if (!isDeadNativeServiceError(error)) {
-              throw error;
-            }
-            return undefined;
-          }
-        }
+        assertNativeHandleLive(handle);
+        const instanceId = handle.instanceId;
         let member = transport.inspectNodeInstanceMemberSync(
-            handle.modulePath, instanceId, prop);
+            handle.modulePath, nativeInstanceSelector(handle, instanceId), prop);
         if (!member || member.kind === 'undefined') {
           return undefined;
         }
@@ -2345,76 +2976,63 @@
         return undefined;
       },
     });
-    handle.proxy = proxy;
     if (handle.instanceId && typeof handle.instanceId.then === 'function') {
       const pendingId = handle.instanceId;
-      pendingId.then(instanceId => {
-        if (handle.instanceId === pendingId && Number.isInteger(instanceId)) {
-          handle.instanceId = instanceId;
-        }
-      }, () => {});
+      handle.instanceId = pendingId.then(result => {
+        assignNativeInstanceResult(handle, result);
+        rememberNativeProxy(handle, proxy);
+        return handle.instanceId;
+      });
+      const registration = handle.instanceId;
+      pendingNativeConstructors.add(registration);
+      registration.then(() => pendingNativeConstructors.delete(registration),
+          () => pendingNativeConstructors.delete(registration));
+      // A constructor with callbacks returns its wrapper immediately. Preserve
+      // rejection for a later method call without creating an unhandled chain.
+      handle.instanceId.catch(() => {});
+    } else {
+      assignNativeInstanceResult(handle, handle.instanceId);
+      rememberNativeProxy(handle, proxy);
     }
     return proxy;
   }
 
   function createMojoExportFunction(modulePath, functionName) {
     return function(...args) {
-      // Node addon calls without JavaScript callbacks are synchronous. Keep
-      // the asynchronous observer path only for callback-bearing invocations.
-      if (!argsHaveCallback(args)) {
-        const exportKey = `${modulePath}::${functionName}`;
-        const invokeSync = () => adoptNativeReturn(
+      if (new.target) {
+        const Constructor = createMojoClassExport(modulePath, functionName);
+        // Native functions may be constructors even when their initial shape
+        // has no instance members. Preserve the consumer's prototype before
+        // entering native code so inherited JS methods are included as well.
+        return Reflect.construct(Constructor, args, new.target);
+      }
+      // Native calls return synchronously or continue the original Promise.
+      // Callback values use the same observer ids without changing the native
+      // function's immediate return value into a Promise.
+      const retainedHandles = new Set();
+      if (typeof transport.invokeNodeExportSync === 'function') {
+        const invokeSync = () => adoptNativeCallResult(
             transport.invokeNodeExportSync(
                 modulePath, functionName,
-                ...args.map(arg => typeof arg === 'function' ?
-                                       arg :
-                                       wireNativeArgumentSync(arg))),
-            modulePath);
-        if (!asyncNativeExportMethods.has(exportKey)) {
-          try {
-            return invokeSync();
-          } catch (error) {
-            if (isPendingPromiseError(error)) {
-              asyncNativeExportMethods.add(exportKey);
-            } else if (isDeadNativeServiceError(error)) {
-              try {
-                reloadNativeNodeModule(modulePath);
-                return invokeSync();
-              } catch (retryError) {
-                if (isPendingPromiseError(retryError)) {
-                  asyncNativeExportMethods.add(exportKey);
-                } else {
-                  console.warn(
-                      '[Xenon Renderer] native export failed after reload:',
-                      functionName, retryError);
-                  throw retryError;
-                }
-              }
-            } else {
-              console.warn(
-                  '[Xenon Renderer] native export failed:', functionName, error);
-              throw error;
-            }
-          }
-        }
+                ...args.map(arg => wireNativeArgumentSync(arg, new Map(), retainedHandles))),
+            modulePath, retainedHandles);
+        return invokeSync();
       }
-      return Promise.all(args.map(arg => wireNativeArgumentAsync(arg)))
+      return retainNativeHandles(Promise.all(args.map(arg =>
+          wireNativeArgumentAsync(arg, new Map(), retainedHandles)))
           .then(wiredArgs => transport.invoke(
               '__xenon:node-addon:invoke-export', {
                 modulePath,
                 functionName,
                 arguments: wiredArgs,
               }))
-          .then(result => adoptNativeReturn(result, modulePath));
+          .then(result => adoptNativeReturn(result, modulePath)), retainedHandles);
     };
   }
 
   function buildExportFromMojoInfo(modulePath, item, parentPath = '') {
     const fullPath = parentPath ? `${parentPath}.${item.name}` : item.name;
-    if (item.kind === 'function') {
-      return createMojoExportFunction(modulePath, fullPath);
-    }
-    if (item.kind === 'class') {
+    if (item.kind === 'function' || item.kind === 'class') {
       return createMojoClassExport(modulePath, fullPath, item);
     }
     if (item.children && item.children.length > 0) {
@@ -2428,35 +3046,147 @@
   }
 
   function createMojoClassExport(modulePath, className, info = {}) {
+    const nativeMethodNames = new Set((info.prototype || []).filter(member =>
+        member.kind === 'function' || member.kind === 'class').map(member => member.name));
     function ConstructorProxy(...args) {
+      if (!new.target) return createMojoExportFunction(modulePath, className)(...args);
       let instanceId;
-      if (!argsHaveCallback(args) &&
-          typeof transport.constructNodeExportSync === 'function') {
-        instanceId = transport.constructNodeExportSync(
+      const retainedHandles = new Set();
+      const prototypeProperties = Object.create(null);
+      const seenNames = new Set();
+      for (let prototype = new.target.prototype;
+           prototype && prototype !== Object.prototype;
+           prototype = Object.getPrototypeOf(prototype)) {
+        for (const key of Object.getOwnPropertyNames(prototype)) {
+          if (seenNames.has(key)) continue;
+          seenNames.add(key);
+          const property = Object.getOwnPropertyDescriptor(prototype, key);
+          // A JS wrapper around an existing native method may call its saved
+          // original. Keep the native implementation to avoid callback recursion.
+          if (key !== 'constructor' && !nativeMethodNames.has(key) &&
+              property && typeof property.value === 'function') {
+            prototypeProperties[key] = wireNativeArgumentSync(property.value);
+          }
+        }
+      }
+      const hasPrototypeProperties = Object.keys(prototypeProperties).length > 0;
+      const constructSync = hasPrototypeProperties ?
+          transport.constructNodeExportWithPrototypeSync : transport.constructNodeExportSync;
+      if (typeof constructSync === 'function') {
+        const wiredArgs = args.map(arg => wireNativeArgumentSync(arg, new Map(), retainedHandles));
+        instanceId = constructSync.call(transport,
             modulePath, className,
-            ...args.map(arg => typeof arg === 'function' ?
-                                   arg :
-                                   wireNativeArgumentSync(arg)));
+            ...(hasPrototypeProperties ? [prototypeProperties, ...wiredArgs] : wiredArgs));
       } else {
-        instanceId = Promise.all(
-            args.map(arg => wireNativeArgumentAsync(arg)))
+        instanceId = retainNativeHandles(Promise.all(
+            args.map(arg => wireNativeArgumentAsync(arg, new Map(), retainedHandles)))
             .then(wiredArgs => transport.invoke(
                 '__xenon:node-addon:construct-export', {
                   modulePath,
                   exportPath: className,
+                  ...(hasPrototypeProperties ? {prototypeProperties} : {}),
                   arguments: wiredArgs,
-                }));
+                })), retainedHandles);
       }
       return createNativeInstanceProxy({
         modulePath,
         className,
-        ctorArgs: args.filter(arg => typeof arg !== 'function'),
         instanceId,
         generation: nativeServiceGeneration,
-      }, info.prototype || [], ConstructorProxy.prototype);
+      }, info.prototype || [], new.target.prototype);
+    }
+
+    for (const name of nativeMethodNames) {
+      if (name === 'constructor') continue;
+      const method = function(...args) {
+        return invokeInstanceMethod(getNativeHandle(this), name, args);
+      };
+      nativePrototypeMethods.add(method);
+      Object.defineProperty(ConstructorProxy.prototype, name, {
+        configurable: true, enumerable: false, writable: true, value: method,
+      });
     }
 
     return ConstructorProxy;
+  }
+
+  function buildExactNativeExport(modulePath, info, exportPath = '') {
+    if (!info || info.kind === 'undefined') return undefined;
+    if (info.kind === 'null') return null;
+    if (info.kind === 'symbol' || info.kind === 'external') {
+      const error = new Error(`Native export kind ${info.kind} is not supported`);
+      error.code = 'ERR_NOT_SUPPORTED';
+      throw error;
+    }
+    if (info.kind === 'bigint') return BigInt(valueFromMojo(info.value));
+    const callable = info.kind === 'function' || info.kind === 'class';
+    if (!callable && info.kind !== 'object' && info.kind !== 'array') {
+      return valueFromMojo(info.value);
+    }
+    const target = callable ?
+        createMojoClassExport(modulePath, exportPath, info) :
+        (info.kind === 'array' ? [] : {});
+    for (const child of (info.children || [])) {
+      const key = child.name;
+      const childPath = exportPath ? `${exportPath}.${key}` : key;
+      const enumerable = child.enumerable !== false;
+      const writable = child.writable !== false;
+      const composite = ['object', 'array', 'function', 'class'].includes(child.kind);
+      const read = (allowComposite = true) => {
+        // The native protocol addresses exports with dot-separated paths.
+        // Never silently redirect a literal dotted/empty property to another export.
+        if (!key || key.includes('.')) {
+          const error = new Error('Native export names containing dots or empty names are not supported');
+          error.code = 'ERR_NOT_SUPPORTED';
+          throw error;
+        }
+        const description = transport.inspectNodeExportSync(modulePath, childPath);
+        if (!allowComposite && description &&
+            ['object', 'array', 'function', 'class'].includes(description.kind)) {
+          const error = new Error('Native accessors returning objects or functions require a retained value handle');
+          error.code = 'ERR_NOT_SUPPORTED';
+          throw error;
+        }
+        return buildExactNativeExport(modulePath, description, childPath);
+      };
+      const current = Object.getOwnPropertyDescriptor(target, key);
+      if (current && !current.configurable) {
+        // A constructor's local prototype must remain the prototype used by
+        // its instance wrappers. Other immutable built-ins retain their shape.
+        if (key !== 'prototype' && current.writable && !composite && child.kind !== 'property') {
+          Object.defineProperty(target, key, {value: buildExactNativeExport(modulePath, child, childPath)});
+        }
+        continue;
+      }
+      if (child.kind === 'property') {
+        Object.defineProperty(target, key, {
+          configurable: true, enumerable, get() { return read(false); },
+          set() {
+            const error = new Error('Native export accessor assignment is not supported');
+            error.code = 'ERR_NOT_SUPPORTED';
+            throw error;
+          },
+        });
+      } else if (composite) {
+        Object.defineProperty(target, key, {
+          configurable: true, enumerable,
+          get() {
+            const value = read();
+            Object.defineProperty(target, key, {configurable: true, enumerable, writable, value});
+            return value;
+          },
+          set: writable ? function(value) {
+            Object.defineProperty(target, key, {configurable: true, enumerable, writable, value});
+          } : undefined,
+        });
+      } else {
+        Object.defineProperty(target, key, {
+          configurable: true, enumerable, writable,
+          value: buildExactNativeExport(modulePath, child, childPath),
+        });
+      }
+    }
+    return target;
   }
 
   // node-sqlite3 API backed by real SQLite on a document-owned worker sequence.
@@ -2712,75 +3442,33 @@
     verbose: () => sqlite3Module,
   };
 
-  function isDeadNativeServiceError(error) {
-    const message = String(error && error.message ? error.message : error || '');
-    return message.includes('Utility native module service is unavailable') ||
-        message.includes('No Node addon has been loaded') ||
-        message.includes('Synchronous native') ||
-        message.includes('Native module load failed') ||
-        message.includes('Unknown instance id') ||
-        message.includes('Utility service restarted');
-  }
-
-  function reloadNativeNodeModule(normalizedPath) {
-    nativeModuleCache.delete(normalizedPath);
-    return loadNativeNodeModule(normalizedPath);
-  }
-
   function loadNativeNodeModule(normalizedPath) {
-    const baseName = String(normalizedPath).split(/[/\\]/).pop().toLowerCase();
-    if (baseName === 'node_sqlite3.node') {
-      nativeModuleCache.set(normalizedPath, {
-        path: normalizedPath,
-        target: sqlite3Module,
-        proxy: sqlite3Module,
-        loadPromise: Promise.resolve(sqlite3Module),
-      });
-      return sqlite3Module;
+    const exportsList = transport.requireNodeModuleSync(normalizedPath);
+    // Current hosts return the exact root in the load reply. Avoid building,
+    // copying and discarding a legacy export tree plus a second sync IPC.
+    if (exportsList && !Array.isArray(exportsList) &&
+        typeof exportsList.kind === 'string') {
+      return buildExactNativeExport(normalizedPath, exportsList);
     }
-
-    let cached = nativeModuleCache.get(normalizedPath);
-    if (cached) return cached.proxy;
-
-    const target = {};
-    let loadResolve, loadReject;
-    const loadPromise = new Promise((resolve, reject) => {
-      loadResolve = resolve;
-      loadReject = reject;
-    });
-
-    const record = { path: normalizedPath, target, proxy: null, loadPromise };
-
-    record.proxy = new Proxy(target, {
-      get(obj, prop, receiver) {
-        if (prop === 'then') return undefined;
-        if (prop === '__xenonReady') return loadPromise;
-        if (prop === '__esModule') return true;
-        if (prop === 'default') return receiver;
-        // The synchronous load below supplies the native export list. Missing
-        // properties must stay undefined so optional feature detection works.
-        return Reflect.get(obj, prop, receiver);
-      }
-    });
-
-    nativeModuleCache.set(normalizedPath, record);
-
-    try {
-      const exportsList = transport.requireNodeModuleSync(normalizedPath);
-      for (const item of (exportsList || [])) {
-        target[item.name] = buildExportFromMojoInfo(normalizedPath, item);
-      }
-      loadResolve(record.proxy);
-    } catch (error) {
-      nativeModuleCache.delete(normalizedPath);
-      loadReject(error);
-      // require() reports the synchronous exception; mark the readiness
-      // promise handled so it does not also produce an unhandled rejection.
-      loadPromise.catch(() => {});
+    if (typeof transport.inspectNodeExportSync === 'function') {
+      return buildExactNativeExport(normalizedPath,
+          transport.inspectNodeExportSync(normalizedPath, ''));
+    }
+    // Older transports expose only a shallow tree. Current hosts provide the
+    // root descriptor above, including its actual type and lazy nested shape.
+    if (!Array.isArray(exportsList)) {
+      const error = new Error('Native module load returned an invalid export descriptor');
+      error.code = 'ERR_INVALID_NATIVE_EXPORTS';
       throw error;
     }
-
-    return record.proxy;
+    const target = {};
+    for (const item of exportsList) {
+      Object.defineProperty(target, item.name, {
+        value: buildExportFromMojoInfo(normalizedPath, item),
+        enumerable: true, configurable: true, writable: true,
+      });
+    }
+    return target;
   }
 
   // Node `net` named-pipe / socket pairing. Same-isolate listen+connect is
@@ -2818,11 +3506,7 @@
       return {t: 's', d: data};
     }
     const u8 = data instanceof Uint8Array ? data : Buffer.from(String(data));
-    let raw = '';
-    for (let i = 0; i < u8.length; i++) {
-      raw += String.fromCharCode(u8[i]);
-    }
-    return {t: 'b', d: raw};
+    return {t: 'b64', d: Buffer.from(u8.buffer, u8.byteOffset, u8.byteLength).toString('base64')};
   }
 
   function netWireToBytes(wire) {
@@ -2830,12 +3514,7 @@
       return Buffer.from(String(wire && wire.d || ''), 'utf8');
     }
     if (wire.t === 'b64') {
-      const raw = atob(String(wire.d || ''));
-      const u8 = new Uint8Array(raw.length);
-      for (let i = 0; i < raw.length; i++) {
-        u8[i] = raw.charCodeAt(i);
-      }
-      return Buffer.from(u8);
+      return Buffer.from(String(wire.d || ''), 'base64');
     }
     const raw = String(wire.d || '');
     const u8 = new Uint8Array(raw.length);
@@ -2882,6 +3561,8 @@
     }
     socket._closed = true;
     socket._connected = false;
+    socket.connecting = false;
+    socket._connectCb = null;
     socket._pendingWrites.length = 0;
     if (socket._id) {
       netSockets.delete(socket._id);
@@ -2936,12 +3617,16 @@
           this._connected = true;
           this.connecting = false;
           queueMicrotask(() => {
+            if (this._closed || incoming._closed) return;
             server.emit('connection', incoming);
+            // A server or client connection listener can synchronously destroy
+            // either endpoint. Do not continue the queued handshake afterward.
+            if (this._closed || incoming._closed) return;
             this.emit('connect');
-            if (this._connectCb) {
-              this._connectCb();
-              this._connectCb = null;
-            }
+            if (this._closed || incoming._closed) return;
+            const callback = this._connectCb;
+            this._connectCb = null;
+            if (callback) callback.call(this);
           });
           return this;
         }
@@ -3166,13 +3851,38 @@
     return false;
   };
 
+  function streamUnsupportedError(method) {
+    const error = new Error(`stream.${method} is not supported by this runtime`);
+    error.code = 'ERR_NOT_SUPPORTED';
+    return error;
+  }
+  function streamValidateCallback(callback) {
+    if (typeof callback !== 'function') {
+      const error = new TypeError('The callback argument must be a function');
+      error.code = 'ERR_INVALID_ARG_TYPE';
+      throw error;
+    }
+  }
+  function streamFailOperation(method, callback) {
+    const error = streamUnsupportedError(method);
+    if (callback === undefined) throw error;
+    streamValidateCallback(callback);
+    queueMicrotask(() => callback(error));
+  }
+
+  // Keep the callable constructors and EventEmitter inheritance used by
+  // userland stream implementations. These base classes do not implement an
+  // I/O queue: operations must fail explicitly until a subclass supplies one.
   function Stream() {
+    if (!(this instanceof Stream)) return new Stream();
     EventEmitter.call(this);
   }
   Object.setPrototypeOf(Stream.prototype, EventEmitter.prototype);
   Object.setPrototypeOf(Stream, EventEmitter);
+  Stream.prototype.pipe = function() { throw streamUnsupportedError('pipe'); };
 
   function Readable(options) {
+    if (!(this instanceof Readable)) return new Readable(options);
     Stream.call(this);
     if (options) {
       if (typeof options.read === 'function') this._read = options.read;
@@ -3181,53 +3891,80 @@
   }
   Object.setPrototypeOf(Readable.prototype, Stream.prototype);
   Object.setPrototypeOf(Readable, Stream);
-  Readable.prototype.pipe = function(dest) { return dest; };
-  Readable.prototype.read = function() { return null; };
+  Readable.prototype.read = function() { throw streamUnsupportedError('Readable.read'); };
+  Readable.prototype.push = function() { throw streamUnsupportedError('Readable.push'); };
 
   function Writable(options) {
+    if (!(this instanceof Writable)) return new Writable(options);
     Stream.call(this);
-    if (options && typeof options.write === 'function') {
-      this._write = options.write;
-    }
+    if (options && typeof options.write === 'function') this._write = options.write;
   }
   Object.setPrototypeOf(Writable.prototype, Stream.prototype);
   Object.setPrototypeOf(Writable, Stream);
-  Writable.prototype.write = function() { return true; };
-  Writable.prototype.end = function() {};
+  Writable.prototype.write = function(chunk, encoding, callback) {
+    if (typeof encoding === 'function') callback = encoding;
+    streamFailOperation('Writable.write', callback);
+    return false;
+  };
+  Writable.prototype.end = function(chunk, encoding, callback) {
+    if (typeof chunk === 'function') callback = chunk;
+    else if (typeof encoding === 'function') callback = encoding;
+    streamFailOperation('Writable.end', callback);
+    return this;
+  };
 
   function Duplex(options) {
+    if (!(this instanceof Duplex)) return new Duplex(options);
     Readable.call(this, options);
+    if (options && typeof options.write === 'function') this._write = options.write;
   }
   Object.setPrototypeOf(Duplex.prototype, Readable.prototype);
   Object.setPrototypeOf(Duplex, Readable);
-  Duplex.prototype.write = function() { return true; };
-  Duplex.prototype.end = function() {};
+  Duplex.prototype.write = Writable.prototype.write;
+  Duplex.prototype.end = Writable.prototype.end;
 
   function Transform(options) {
+    if (!(this instanceof Transform)) return new Transform(options);
     Duplex.call(this, options);
+    if (options && typeof options.transform === 'function') {
+      this._transform = options.transform;
+    }
   }
   Object.setPrototypeOf(Transform.prototype, Duplex.prototype);
   Object.setPrototypeOf(Transform, Duplex);
+  Transform.prototype._transform = function(chunk, encoding, callback) {
+    streamFailOperation('Transform._transform', callback);
+  };
 
   function PassThrough(options) {
+    if (!(this instanceof PassThrough)) return new PassThrough(options);
     Transform.call(this, options);
   }
   Object.setPrototypeOf(PassThrough.prototype, Transform.prototype);
   Object.setPrototypeOf(PassThrough, Transform);
 
-  // Node's `require('stream')` is the Stream constructor with Readable/etc.
-  // attached as properties. Hosted winston/readable-stream call
-  // `inherits(X, require('stream'))` / read `.prototype` on that export.
-  Stream.EventEmitter = EventEmitter;
   Stream.Stream = Stream;
   Stream.Readable = Readable;
   Stream.Writable = Writable;
   Stream.Duplex = Duplex;
   Stream.Transform = Transform;
   Stream.PassThrough = PassThrough;
+  Stream.EventEmitter = EventEmitter;
   Stream.pipeline = (...args) => {
-    const cb = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
-    if (cb) cb(null);
+    const callback = args.pop();
+    streamValidateCallback(callback);
+    streamFailOperation('pipeline', callback);
+    const streams = Array.isArray(args[0]) ? args[0] : args;
+    return streams[streams.length - 1];
+  };
+  Stream.finished = (stream, options, callback) => {
+    if (typeof options === 'function') callback = options;
+    streamValidateCallback(callback);
+    let active = true;
+    queueMicrotask(() => {
+      if (active) callback(streamUnsupportedError('finished'));
+    });
+    return () => { active = false; };
   };
   Stream.default = Stream;
   const streamModule = Stream;
@@ -3424,13 +4161,25 @@
     return 64;
   }
 
+  function snapshotDigestInput(data, encoding) {
+    if (typeof data === 'string') return Buffer.from(data, encoding || 'utf8');
+    if (ArrayBuffer.isView(data)) {
+      return Buffer.from(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+    }
+    // Buffer.from(ArrayBuffer) shares its storage; digest inputs must be
+    // captured when update/createHmac is called, before user mutation.
+    if (Object.prototype.toString.call(data) === '[object ArrayBuffer]' ||
+        Object.prototype.toString.call(data) === '[object SharedArrayBuffer]') {
+      return Buffer.from(new Uint8Array(data));
+    }
+    return Buffer.from(data);
+  }
+
   function createHashObject(algorithm, initialChunks) {
     const chunks = initialChunks ? initialChunks.slice() : [];
     return {
       update(data, encoding) {
-        chunks.push(typeof data === 'string' ?
-                    Buffer.from(data, encoding || 'utf8') :
-                    Buffer.from(data));
+        chunks.push(snapshotDigestInput(data, encoding));
         return this;
       },
       digest(encoding) {
@@ -3502,25 +4251,84 @@
     };
   }
 
+  function randomArgumentError(name, value, range) {
+    const error = typeof value === 'number' ?
+        new RangeError(`${name} is outside ${range}`) :
+        new TypeError(`${name} must be a number`);
+    error.code = typeof value === 'number' ? 'ERR_OUT_OF_RANGE' : 'ERR_INVALID_ARG_TYPE';
+    return error;
+  }
+  function randomByteCount(value, name, elementSize, maximum) {
+    const bytes = typeof value === 'number' ? value * elementSize : NaN;
+    if (typeof value !== 'number' || !Number.isFinite(bytes) || bytes < 0 ||
+        bytes > Math.min(maximum, 0x7fffffff)) {
+      throw randomArgumentError(name, value, `0..${Math.min(maximum, 0x7fffffff)}`);
+    }
+    return Math.floor(bytes);
+  }
+  function randomTargetBytes(buf, offset = 0, size) {
+    const view = ArrayBuffer.isView(buf);
+    const buffer = view ? buf.buffer : buf;
+    if (!view && !(buffer instanceof ArrayBuffer) &&
+        !(typeof SharedArrayBuffer === 'function' && buffer instanceof SharedArrayBuffer)) {
+      const error = new TypeError('buf must be an ArrayBuffer or an ArrayBuffer view');
+      error.code = 'ERR_INVALID_ARG_TYPE';
+      throw error;
+    }
+    const elementSize = buf.BYTES_PER_ELEMENT || 1;
+    const byteOffset = randomByteCount(offset, 'offset', elementSize, buf.byteLength);
+    const byteLength = size === undefined ? buf.byteLength - byteOffset :
+        randomByteCount(size, 'size', elementSize, buf.byteLength - byteOffset);
+    return new Uint8Array(buffer, (view ? buf.byteOffset : 0) + byteOffset, byteLength);
+  }
+  function fillSecureRandom(bytes) {
+    const source = globalThis.crypto;
+    if (!source || typeof source.getRandomValues !== 'function') {
+      const error = new Error('A secure random source is not available');
+      error.code = 'ERR_NOT_SUPPORTED';
+      throw error;
+    }
+    // WebCrypto limits each call to 65536 bytes, independent of view type.
+    for (let offset = 0; offset < bytes.length; offset += 65536) {
+      source.getRandomValues(bytes.subarray(offset, offset + 65536));
+    }
+  }
+  function randomCompleteAsync(bytes, buf, callback) {
+    queueMicrotask(() => {
+      try {
+        fillSecureRandom(bytes);
+      } catch (error) {
+        callback(error);
+        return;
+      }
+      callback(null, buf);
+    });
+  }
+
   const cryptoModule = {
-    randomBytes: (size) => {
-      const buf = Buffer.alloc(size || 0);
-      if (globalThis.crypto && globalThis.crypto.getRandomValues) {
-        globalThis.crypto.getRandomValues(buf);
+    randomBytes(size, callback) {
+      if (callback !== undefined) fsValidateCallback(callback);
+      const length = randomByteCount(size, 'size', 1, 0x7fffffff);
+      const buf = Buffer.alloc(length);
+      if (callback !== undefined) {
+        randomCompleteAsync(buf, buf, callback);
+        return;
       }
+      fillSecureRandom(buf);
       return buf;
     },
-    randomFillSync: (buf) => {
-      if (globalThis.crypto && globalThis.crypto.getRandomValues && buf) {
-        globalThis.crypto.getRandomValues(buf);
-      }
+    randomFillSync(buf, offset = 0, size) {
+      fillSecureRandom(randomTargetBytes(buf, offset, size));
       return buf;
     },
-    randomFill: (buf, cb) => {
-      if (globalThis.crypto && globalThis.crypto.getRandomValues && buf) {
-        globalThis.crypto.getRandomValues(buf);
+    randomFill(buf, offset, size, callback) {
+      if (typeof offset === 'function') {
+        callback = offset; offset = 0; size = undefined;
+      } else if (typeof size === 'function') {
+        callback = size; size = undefined;
       }
-      if (typeof cb === 'function') cb(null, buf);
+      fsValidateCallback(callback);
+      randomCompleteAsync(randomTargetBytes(buf, offset, size), buf, callback);
     },
     createCipheriv: (algorithm, key, iv) =>
       createCipherObject(algorithm, key, iv, true),
@@ -3528,17 +4336,16 @@
       createCipherObject(algorithm, key, iv, false),
     createHash: (algorithm) => createHashObject(algorithm),
     createHmac: (algorithm, key) => {
+      const keySnapshot = snapshotDigestInput(key);
       const chunks = [];
       return {
         update(data, encoding) {
-          chunks.push(typeof data === 'string' ?
-                      Buffer.from(data, encoding || 'utf8') :
-                      Buffer.from(data));
+          chunks.push(snapshotDigestInput(data, encoding));
           return this;
         },
         digest(encoding) {
           const digestBytes = hmacBytes(
-              algorithm, key, Buffer.concat(chunks));
+              algorithm, keySnapshot, Buffer.concat(chunks));
           const buf = Buffer.from(digestBytes);
           return encoding ? buf.toString(encoding) : buf;
         },
@@ -3576,11 +4383,499 @@
   urlModule.default = urlModule;
 
   // --- 9. Standard globalThis.require ---
-  const previousRequire =
-      typeof globalThis.require === 'function' ? globalThis.require : null;
+  const hostedCjsCache = Object.create(null);
+  const moduleResolutionCache = new Map();
+  function createZlibModule(call) {
+    const constants = {
+      Z_NO_FLUSH: 0, Z_PARTIAL_FLUSH: 1, Z_SYNC_FLUSH: 2, Z_FULL_FLUSH: 3,
+      Z_FINISH: 4, Z_BLOCK: 5, Z_TREES: 6, Z_OK: 0, Z_STREAM_END: 1,
+      Z_NEED_DICT: 2, Z_ERRNO: -1, Z_STREAM_ERROR: -2, Z_DATA_ERROR: -3,
+      Z_MEM_ERROR: -4, Z_BUF_ERROR: -5, Z_VERSION_ERROR: -6,
+      Z_NO_COMPRESSION: 0, Z_BEST_SPEED: 1, Z_BEST_COMPRESSION: 9,
+      Z_DEFAULT_COMPRESSION: -1, Z_FILTERED: 1, Z_HUFFMAN_ONLY: 2, Z_RLE: 3,
+      Z_FIXED: 4, Z_DEFAULT_STRATEGY: 0, Z_MIN_WINDOWBITS: 8, Z_MAX_WINDOWBITS: 15,
+      Z_DEFAULT_WINDOWBITS: 15, Z_MIN_CHUNK: 64, Z_DEFAULT_CHUNK: 16384,
+      Z_MIN_MEMLEVEL: 1, Z_MAX_MEMLEVEL: 9, Z_DEFAULT_MEMLEVEL: 8,
+      Z_MIN_LEVEL: -1, Z_MAX_LEVEL: 9, Z_DEFAULT_LEVEL: -1,
+    };
+    function codedError(code, message, Type = Error) {
+      const error = new Type(message);
+      error.code = code;
+      return error;
+    }
+    function nativeError(error) {
+      if (error && error.code) return error;
+      const message = String(error && error.message || error);
+      const code = /(?:^|\b)(Z_[A-Z_]+|ERR_[A-Z_]+):/.exec(message);
+      return codedError(code ? code[1] : 'ERR_OPERATION_FAILED', message);
+    }
+    function bytes(input) {
+      if (typeof input === 'string') return Buffer.from(input);
+      if (ArrayBuffer.isView(input)) {
+        return Buffer.from(new Uint8Array(input.buffer, input.byteOffset, input.byteLength));
+      }
+      if (input instanceof ArrayBuffer) return Buffer.from(new Uint8Array(input));
+      throw codedError('ERR_INVALID_ARG_TYPE', 'zlib input must be a string or binary buffer', TypeError);
+    }
+    function options(value) {
+      if (value === undefined || value === null) return {};
+      if (typeof value !== 'object' || Array.isArray(value)) {
+        throw codedError('ERR_INVALID_ARG_TYPE', 'zlib options must be an object', TypeError);
+      }
+      const result = {};
+      const ranges = {level: [-1, 9], windowBits: [9, 15], memLevel: [1, 9],
+        strategy: [0, 4], chunkSize: [64, 2147483647], maxOutputLength: [1, 67108864]};
+      for (const [key, setting] of Object.entries(value)) {
+        const value = setting;
+        if (value === undefined) continue;
+        if (key === 'flush' || key === 'finishFlush') {
+          if (value !== (key === 'flush' ? 0 : 4)) {
+            throw codedError('ERR_NOT_SUPPORTED', 'Partial zlib flush is not supported');
+          }
+        } else if (!ranges[key]) {
+          throw codedError('ERR_NOT_SUPPORTED', 'Unsupported zlib option: ' + key);
+        } else if (!Number.isInteger(value) || value < ranges[key][0] || value > ranges[key][1]) {
+          throw codedError('ERR_OUT_OF_RANGE', 'Invalid zlib option: ' + key, RangeError);
+        }
+        result[key] = value;
+      }
+      return result;
+    }
+    const codes = {};
+    for (const name of ['Z_OK', 'Z_STREAM_END', 'Z_NEED_DICT', 'Z_ERRNO',
+        'Z_STREAM_ERROR', 'Z_DATA_ERROR', 'Z_MEM_ERROR', 'Z_BUF_ERROR', 'Z_VERSION_ERROR']) {
+      codes[name] = constants[name];
+      codes[constants[name]] = name;
+    }
+    const result = Object.assign({constants, codes}, constants);
+    for (const name of ['gzip', 'gunzip', 'deflate', 'inflate', 'deflateRaw', 'inflateRaw', 'unzip']) {
+      result[name + 'Sync'] = (input, opts) => {
+        const data = bytes(input), settings = options(opts);
+        try { return Buffer.from(call(name, data, settings, false)); }
+        catch (error) { throw nativeError(error); }
+      };
+      result[name] = (input, opts, callback) => {
+        if (typeof opts === 'function') { callback = opts; opts = undefined; }
+        if (typeof callback !== 'function') {
+          throw codedError('ERR_INVALID_ARG_TYPE', 'zlib callback must be a function', TypeError);
+        }
+        const data = bytes(input), settings = options(opts);
+        let pending;
+        try { pending = call(name, data, settings, true); }
+        catch (error) { queueMicrotask(() => callback(nativeError(error))); return; }
+        Promise.resolve(pending).then(value => callback(null, Buffer.from(value)),
+                                      error => callback(nativeError(error)));
+      };
+    }
+    for (const name of ['Gzip', 'Gunzip', 'Deflate', 'Inflate', 'DeflateRaw', 'InflateRaw', 'Unzip',
+        'BrotliCompress', 'BrotliDecompress']) {
+      const unsupported = function() {
+        throw codedError('ERR_NOT_SUPPORTED', 'zlib.' + name + ' streaming is not supported');
+      };
+      result[name] = unsupported;
+      result['create' + name] = unsupported;
+    }
+    for (const name of ['brotliCompress', 'brotliDecompress']) {
+      result[name + 'Sync'] = () => {
+        throw codedError('ERR_NOT_SUPPORTED', 'zlib.' + name + ' is not supported');
+      };
+      result[name] = (input, opts, callback) => {
+        if (typeof opts === 'function') callback = opts;
+        if (typeof callback !== 'function') {
+          throw codedError('ERR_INVALID_ARG_TYPE', 'zlib callback must be a function', TypeError);
+        }
+        queueMicrotask(() => callback(codedError('ERR_NOT_SUPPORTED', 'zlib.' + name + ' is not supported')));
+      };
+    }
+    return result;
+  }
+  let canonicalModuleRoots;
+  const builtinModuleCache = new Map();
+  const builtinModuleNames = new Set([
+    'assert', 'async_hooks', 'buffer', 'child_process', 'constants', 'crypto',
+    'dns', 'events', 'fs', 'fs/promises', 'http', 'http2', 'https', 'net', 'os',
+    'path', 'path/posix', 'path/win32', 'querystring', 'readline', 'stream',
+    'string_decoder', 'timers', 'tls', 'tty', 'url', 'util', 'zlib',
+  ]);
+  // These modules are importable for dependency discovery. TLS operations require
+  // a TLS transport; a plain net socket must never stand in for encryption.
+  const tlsModule = (() => {
+    const unavailable = operation => {
+      const error = new Error(`TLS ${operation} is not supported by this runtime`);
+      error.code = 'ERR_NOT_SUPPORTED';
+      throw error;
+    };
+    class TLSSocket extends EventEmitter {
+      constructor() { super(); unavailable('TLSSocket'); }
+    }
+    class Server extends EventEmitter {
+      constructor() { super(); unavailable('Server'); }
+    }
+    class SecureContext {
+      constructor() { unavailable('SecureContext'); }
+    }
+    return {
+      TLSSocket, Server, SecureContext,
+      connect: () => unavailable('connect'),
+      createServer: () => unavailable('createServer'),
+      createSecureContext: () => unavailable('createSecureContext'),
+      checkServerIdentity: () => unavailable('checkServerIdentity'),
+      getCiphers: () => unavailable('getCiphers'),
+    };
+  })();
 
-  const hostedCjsCache = new Map();
+  // Non-terminal readline consumes real stream data and preserves UTF-8 and
+  // CRLF boundaries across chunks. Interactive terminal editing is separate.
+  const readlineModule = (() => {
+    const unsupported = operation => {
+      const error = new Error(`readline ${operation} is not supported by this runtime`);
+      error.code = 'ERR_NOT_SUPPORTED';
+      throw error;
+    };
+    const invalid = name => {
+      const error = new TypeError(`Invalid readline ${name}`);
+      error.code = 'ERR_INVALID_ARG_TYPE';
+      throw error;
+    };
+    // The main isolate's TextDecoder fallback is not incremental, so keep the
+    // UTF-8 decoder state here instead of losing split multibyte characters.
+    function decodeChunk(state, chunk) {
+      const bytes = ArrayBuffer.isView(chunk) ?
+          new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength) :
+          new Uint8Array(chunk);
+      let result = '';
+      for (let i = 0; i < bytes.length; ++i) {
+        const byte = bytes[i];
+        if (!state.needed) {
+          if (byte <= 0x7f) { result += String.fromCharCode(byte); continue; }
+          state.seen = 0;
+          state.lower = 0x80;
+          state.upper = 0xbf;
+          if (byte >= 0xc2 && byte <= 0xdf) {
+            state.needed = 1; state.point = byte & 0x1f;
+          } else if (byte >= 0xe0 && byte <= 0xef) {
+            state.needed = 2; state.point = byte & 0x0f;
+            if (byte === 0xe0) state.lower = 0xa0;
+            if (byte === 0xed) state.upper = 0x9f;
+          } else if (byte >= 0xf0 && byte <= 0xf4) {
+            state.needed = 3; state.point = byte & 7;
+            if (byte === 0xf0) state.lower = 0x90;
+            if (byte === 0xf4) state.upper = 0x8f;
+          } else {
+            result += '\ufffd';
+          }
+        } else if (byte < state.lower || byte > state.upper) {
+          state.needed = 0;
+          result += '\ufffd';
+          --i;
+        } else {
+          state.lower = 0x80;
+          state.upper = 0xbf;
+          state.point = (state.point << 6) | (byte & 0x3f);
+          if (++state.seen === state.needed) {
+            result += String.fromCodePoint(state.point);
+            state.needed = 0;
+          }
+        }
+      }
+      return result;
+    }
+    class Interface extends EventEmitter {
+      constructor(options, output, completer, terminal) {
+        super();
+        if (options && typeof options.on === 'function') {
+          options = {input: options, output, completer, terminal};
+        }
+        options = options || {};
+        const input = options.input;
+        if (!input || typeof input.on !== 'function' ||
+            typeof input.removeListener !== 'function') invalid('input');
+        this.input = input;
+        this.output = options.output;
+        this.terminal = options.terminal === undefined ?
+            !!(this.output && this.output.isTTY) : !!options.terminal;
+        if (this.terminal) unsupported('terminal editing');
+        this.closed = false;
+        this.paused = false;
+        this.line = '';
+        this._prompt = options.prompt === undefined ? '> ' : String(options.prompt);
+        this._question = null;
+        this._decoder = {needed: 0};
+        this._lastCR = null;
+        this._crlfDelay = Math.max(100, Number(options.crlfDelay) || 100);
+        this._onData = chunk => {
+          if (this.closed) return;
+          const text = typeof chunk === 'string' ? chunk :
+              decodeChunk(this._decoder, chunk);
+          this._consume(text);
+        };
+        this._onEnd = () => {
+          if (this.closed) return;
+          // Node readline emits its buffered text without flushing an
+          // incomplete UTF-8 byte sequence when the input ends.
+          this._decoder.needed = 0;
+          if (this.line) {
+            const line = this.line;
+            this.line = '';
+            this._emitLine(line);
+          }
+          this.close();
+        };
+        this._onError = error => this.emit('error', error);
+        input.on('data', this._onData);
+        input.on('end', this._onEnd);
+        input.on('error', this._onError);
+        this._signal = options.signal;
+        this._onAbort = () => this.close();
+        if (this._signal) {
+          if (this._signal.aborted) queueMicrotask(this._onAbort);
+          else this._signal.addEventListener('abort', this._onAbort, {once: true});
+        }
+        if (typeof input.resume === 'function') input.resume();
+      }
+      _emitLine(line) {
+        if (this.closed) return;
+        if (this._question) {
+          const callback = this._question;
+          this._question = null;
+          callback(line);
+        } else {
+          this.emit('line', line);
+        }
+      }
+      _consume(text) {
+        for (const char of text) {
+          if (this.closed) break;
+          if (char === '\n' && this._lastCR !== null &&
+              Date.now() - this._lastCR <= this._crlfDelay) {
+            this._lastCR = null;
+            continue;
+          }
+          this._lastCR = null;
+          if (char === '\r' || char === '\n') {
+            const line = this.line;
+            this.line = '';
+            if (char === '\r') this._lastCR = Date.now();
+            this._emitLine(line);
+          } else {
+            this.line += char;
+          }
+        }
+      }
+      close() {
+        if (this.closed) return;
+        this.closed = true;
+        this._question = null;
+        this.input.removeListener('data', this._onData);
+        this.input.removeListener('end', this._onEnd);
+        this.input.removeListener('error', this._onError);
+        if (this._signal) this._signal.removeEventListener('abort', this._onAbort);
+        if (typeof this.input.pause === 'function') this.input.pause();
+        this.emit('close');
+      }
+      pause() {
+        if (!this.paused) {
+          this.paused = true;
+          if (typeof this.input.pause === 'function') this.input.pause();
+          this.emit('pause');
+        }
+        return this;
+      }
+      resume() {
+        if (this.paused && !this.closed) {
+          this.paused = false;
+          if (typeof this.input.resume === 'function') this.input.resume();
+          this.emit('resume');
+        }
+        return this;
+      }
+      setPrompt(prompt) { this._prompt = String(prompt); }
+      getPrompt() { return this._prompt; }
+      prompt() {
+        if (this.closed) return;
+        this.resume();
+        if (this.output) this.output.write(this._prompt);
+      }
+      question(query, options, callback) {
+        if (typeof options === 'function') callback = options;
+        else if (options && options.signal) unsupported('question AbortSignal');
+        if (typeof callback !== 'function') invalid('question callback');
+        if (this.closed) {
+          const error = new Error('readline was closed');
+          error.code = 'ERR_USE_AFTER_CLOSE';
+          throw error;
+        }
+        if (this._question) return;
+        this._question = callback;
+        this.resume();
+        if (this.output) this.output.write(String(query));
+      }
+      write(data, key) {
+        if (key !== undefined) unsupported('keypress editing');
+        this.resume();
+        this._onData(data);
+      }
+    }
+    return {
+      Interface,
+      createInterface: (...args) => new Interface(...args),
+      emitKeypressEvents: () => unsupported('emitKeypressEvents'),
+      clearLine: () => unsupported('clearLine'),
+      clearScreenDown: () => unsupported('clearScreenDown'),
+      cursorTo: () => unsupported('cursorTo'),
+      moveCursor: () => unsupported('moveCursor'),
+    };
+  })();
+  // Expose the module independently of process creation. No process, PID, exit
+  // status or successful callback may be fabricated without an OS operation.
+  const childProcessModule = (() => {
+    const unavailable = operation => {
+      const error = new Error(`child_process.${operation} is not supported by this runtime`);
+      error.code = 'ERR_NOT_SUPPORTED';
+      throw error;
+    };
+    class ChildProcess extends EventEmitter {
+      constructor() { super(); unavailable('ChildProcess'); }
+      spawn() { return unavailable('ChildProcess.spawn'); }
+      kill() { return unavailable('ChildProcess.kill'); }
+      send() { return unavailable('ChildProcess.send'); }
+      disconnect() { return unavailable('ChildProcess.disconnect'); }
+    }
+    return {
+      ChildProcess,
+      _forkChild: () => unavailable('_forkChild'),
+      spawn: () => unavailable('spawn'),
+      spawnSync: () => unavailable('spawnSync'),
+      exec: () => unavailable('exec'),
+      execSync: () => unavailable('execSync'),
+      execFile: () => unavailable('execFile'),
+      execFileSync: () => unavailable('execFileSync'),
+      fork: () => unavailable('fork'),
+    };
+  })();
+  // HTTP/2 protocol constants are data, not evidence of an available session.
+  // Keep this module distinct from HTTP/1 and fail when transport is requested.
+  const http2Module = (() => {
+    const unavailable = operation => {
+      const error = new Error(`http2.${operation} is not supported by this runtime`);
+      error.code = 'ERR_NOT_SUPPORTED';
+      throw error;
+    };
+    class Http2ServerRequest extends EventEmitter {
+      constructor() { super(); unavailable('Http2ServerRequest'); }
+    }
+    class Http2ServerResponse extends EventEmitter {
+      constructor() { super(); unavailable('Http2ServerResponse'); }
+    }
+    const constants = {
+      HTTP2_HEADER_SCHEME: ':scheme',
+      HTTP2_HEADER_METHOD: ':method',
+      HTTP2_HEADER_PATH: ':path',
+      HTTP2_HEADER_STATUS: ':status',
+      HTTP2_HEADER_AUTHORITY: ':authority',
+    };
+    return {
+      constants,
+      sensitiveHeaders: Symbol('sensitiveHeaders'),
+      Http2ServerRequest, Http2ServerResponse,
+      connect: () => unavailable('connect'),
+      createServer: () => unavailable('createServer'),
+      createSecureServer: () => unavailable('createSecureServer'),
+      performServerHandshake: () => unavailable('performServerHandshake'),
+      getPackedSettings: () => unavailable('getPackedSettings'),
+      getUnpackedSettings: () => unavailable('getUnpackedSettings'),
+      getDefaultSettings: () => Object.assign(Object.create(null), {
+        headerTableSize: 4096, enablePush: true, initialWindowSize: 65535,
+        maxFrameSize: 16384, maxConcurrentStreams: 4294967295,
+        maxHeaderSize: 65535, maxHeaderListSize: 65535,
+        enableConnectProtocol: false,
+      }),
+    };
+  })();
   let hostedCjsLoadingFile = '';
+
+  function moduleError(code, message) {
+    return Object.assign(new Error(message), {code});
+  }
+
+  function builtinModuleId(request) {
+    if (typeof request !== 'string') {
+      throw Object.assign(new TypeError('Module name must be a string'),
+                          {code: 'ERR_INVALID_ARG_TYPE'});
+    }
+    if (!request || request.includes('\0')) {
+      throw Object.assign(new TypeError('Module name must not be empty or contain null bytes'),
+                          {code: 'ERR_INVALID_ARG_VALUE'});
+    }
+    if (request.startsWith('node:')) {
+      const name = request.slice(5);
+      if (!builtinModuleNames.has(name)) {
+        throw moduleError('ERR_UNKNOWN_BUILTIN_MODULE',
+                          `No such built-in module: ${request}`);
+      }
+      return name;
+    }
+    return builtinModuleNames.has(request) || request === 'electron' ||
+        request === 'xenon:sqlite3' ? request : '';
+  }
+
+  function moduleFilenameFromSource(filename) {
+    if (typeof filename !== 'string' || !filename) return filename;
+    let sourceUrl;
+    try { sourceUrl = new URL(filename); } catch (_error) { return filename; }
+    const configuredMappings = injectedPaths.rendererUrlMappings;
+    const mappings = Array.isArray(configuredMappings) ? configuredMappings : [];
+    const candidates = mappings.map(mapping => {
+      try {
+        return {root: mapping.sourcePathPrefix, url: new URL(mapping.targetBaseUrl)};
+      } catch (_error) { return null; }
+    }).filter(mapping => mapping && typeof mapping.root === 'string' &&
+        pathModule.isAbsolute(mapping.root));
+    // Old hosts only expose the current document's path. This fallback is for
+    // that one origin, and is disabled whenever the host supplies mappings.
+    if (!mappings.length && injectedPaths.documentPath && globalThis.location) {
+      try {
+        const location = globalThis.location;
+        const documentUrl = new URL(location.href ||
+            `${location.protocol}//${location.hostname}${location.pathname || '/index.html'}`);
+        const documentName = decodeURIComponent(documentUrl.pathname);
+        const documentParts = documentName.split('/').filter(Boolean);
+        let root = pathModule.normalize(injectedPaths.documentPath);
+        // Preserve the corresponding relative filename instead of assigning a
+        // script in another origin to this application's module directory.
+        for (const part of documentParts.slice().reverse()) {
+          if (pathModule.basename(root).toLowerCase() !== part.toLowerCase()) {
+            root = '';
+            break;
+          }
+          root = pathModule.dirname(root);
+        }
+        if (root) candidates.push({root, url: new URL('/', documentUrl)});
+      } catch (_error) {}
+    }
+    candidates.sort((a, b) => b.url.pathname.length - a.url.pathname.length);
+    for (const mapping of candidates) {
+      const target = mapping.url;
+      const prefix = target.pathname.endsWith('/') ? target.pathname : target.pathname + '/';
+      if (sourceUrl.protocol !== target.protocol || sourceUrl.host !== target.host ||
+          sourceUrl.username || sourceUrl.password || !sourceUrl.pathname.startsWith(prefix)) continue;
+      const suffix = sourceUrl.pathname.slice(prefix.length);
+      // Encoded separators must not turn a URL component into a filesystem
+      // traversal or a different drive. Canonical root checks still run at load.
+      if (/%(?:2f|5c)/i.test(suffix)) return filename;
+      let relative;
+      try { relative = decodeURIComponent(suffix); } catch (_error) { return filename; }
+      if (relative.includes('\0') || relative.includes('\\') ||
+          relative.split('/').some(part => part === '..' || part.includes(':'))) return filename;
+      const root = pathModule.normalize(mapping.root);
+      const resolved = pathModule.resolve(root, relative || '.');
+      const lower = resolved.toLowerCase();
+      if (lower === root.toLowerCase() || lower.startsWith(root.replace(/[\\/]+$/, '').toLowerCase() + '\\')) {
+        return resolved;
+      }
+    }
+    return filename;
+  }
 
   function installBindingsFileNameShim() {
     if (globalThis.__xenonBindingsFileNameShim) {
@@ -3605,38 +4900,18 @@
         }
         innerPST = function(err, stack) {
           const fallback = hostedCjsLoadingFile;
-          const mapped = (stack || []).map((site) => ({
-            getFileName: () => {
-              try {
-                return site.getFileName() || fallback;
-              } catch (_e) {
-                return fallback;
+          const mapped = (stack || []).map(site => new Proxy(site, {
+            get(target, property) {
+              if (property === 'getFileName' || property === 'getScriptNameOrSourceURL') {
+                return () => {
+                  try { return moduleFilenameFromSource(target[property]()) || fallback; }
+                  catch (_error) { return fallback; }
+                };
               }
+              // V8 CallSite methods require the original internal receiver.
+              const value = Reflect.get(target, property, target);
+              return typeof value === 'function' ? value.bind(target) : value;
             },
-            getLineNumber: () => {
-              try {
-                return site.getLineNumber();
-              } catch (_e) {
-                return 1;
-              }
-            },
-            getColumnNumber: () => {
-              try {
-                return site.getColumnNumber();
-              } catch (_e) {
-                return 1;
-              }
-            },
-            getFunctionName: () => {
-              try {
-                return site.getFunctionName();
-              } catch (_e) {
-                return '';
-              }
-            },
-            getEvalOrigin: () => fallback,
-            isNative: () => false,
-            toString: () => String(fallback || ''),
           }));
           return fn(err, mapped);
         };
@@ -3645,57 +4920,161 @@
     });
   }
 
-  function resolveHostedCjs(request) {
-    if (typeof request !== 'string') {
-      return '';
+  // Browser-loaded bundles use bindings before any hosted CommonJS module is
+  // required, so install the filename mapping for the document itself.
+  installBindingsFileNameShim();
+
+  function resolveHostedCjs(request, parentFile = globalThis.__filename) {
+    parentFile = moduleFilenameFromSource(parentFile);
+    const builtin = builtinModuleId(request);
+    if (builtin) return request.startsWith('node:') ? request : builtin;
+    if (request.startsWith('#')) {
+      throw moduleError('ERR_NOT_SUPPORTED', 'Package imports are not supported');
     }
-    if (request.indexOf('.') < 0 && request.indexOf('/') < 0 &&
-        request.indexOf('\\') < 0) {
-      return '';
+    const cacheKey = `${parentFile}\0${request}`;
+    const cachedPath = moduleResolutionCache.get(cacheKey);
+    if (cachedPath) {
+      // A deleted or failed module must be resolved again, including realpath
+      // and the permitted-root check. Successful cached modules need no IPC.
+      if (hostedCjsCache[cachedPath]) return cachedPath;
+      moduleResolutionCache.delete(cacheKey);
     }
-    let resolved = pathModule.normalize(normalizeFsPath(request));
-    if (!pathModule.isAbsolute(resolved)) {
-      return '';
-    }
-    const lower = resolved.toLowerCase();
-    const roots = [exeDir, appPath].filter(Boolean).map(
-        root => pathModule.normalize(normalizeFsPath(root)).toLowerCase());
-    if (!roots.some(root => lower === root || lower.startsWith(root + '\\'))) {
-      return '';
-    }
-    const tryPaths = [];
-    if (/\.(js|json|cjs)$/i.test(resolved)) {
-      tryPaths.push(resolved);
-    } else {
-      tryPaths.push(
-          resolved + '.js', pathModule.join(resolved, 'index.js'),
-          resolved + '.json');
-    }
-    for (const candidate of tryPaths) {
-      try {
-        if (fsModule.existsSync(candidate) ||
-            fsNativeSync('exists', candidate)) {
-          return candidate;
+    const canonicalPath = filename => {
+      const normalized = pathModule.normalize(filename);
+      // ASAR members retain their virtual identity in the Browser bridge;
+      // they are not standalone paths that the OS can normalize.
+      return fsUsesVirtualMount(normalized) ? normalized :
+          pathModule.normalize(fsNativeSync('realpath', normalized));
+    };
+    if (!canonicalModuleRoots) {
+      canonicalModuleRoots = [];
+      for (const root of new Set([appPath, exeDir].filter(Boolean))) {
+        const configured = pathModule.normalize(root);
+        try {
+          canonicalModuleRoots.push({configured, canonical: canonicalPath(configured)});
+        } catch (error) {
+          if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
         }
-      } catch (_e) {
       }
     }
-    return '';
+    const within = (filename, roots) => {
+      const lower = pathModule.normalize(filename).toLowerCase();
+      return roots.some(root => {
+        const normalized = root.replace(/[\\/]+$/, '').toLowerCase();
+        return lower === normalized || lower.startsWith(normalized + '\\');
+      });
+    };
+    const realRoots = canonicalModuleRoots.map(root => root.canonical);
+    const permittedPaths = canonicalModuleRoots.flatMap(
+        root => [root.configured, root.canonical]);
+    const inRoot = filename => within(filename, permittedPaths);
+    const entries = new Map();
+    const inspect = filename => {
+      filename = pathModule.normalize(filename);
+      if (!inRoot(filename)) return null;
+      if (entries.has(filename)) return entries.get(filename);
+      const virtual = memFiles.get(normalizeFsPath(filename));
+      if (virtual) {
+        const entry = {type: virtual.type, filename};
+        entries.set(filename, entry);
+        return entry;
+      }
+      try {
+        const stat = fsNativeSync('stat', filename);
+        const canonical = canonicalPath(filename);
+        if (!within(canonical, realRoots)) {
+          throw moduleError('MODULE_NOT_FOUND', `Cannot find module '${request}'`);
+        }
+        const entry = {
+          type: stat.isFile ? 'file' : stat.isDirectory ? 'dir' : '',
+          filename: canonical,
+        };
+        entries.set(filename, entry);
+        return entry;
+      } catch (error) {
+        if (error.code === 'ENOENT' || error.code === 'ENOTDIR') {
+          entries.set(filename, null);
+          return null;
+        }
+        throw error;
+      }
+    };
+    const packageJson = directory => {
+      const entry = inspect(pathModule.join(directory, 'package.json'));
+      if (!entry || entry.type !== 'file') return null;
+      const filename = entry.filename;
+      try {
+        return JSON.parse(readHostedCjsSource(filename));
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          throw moduleError('ERR_INVALID_PACKAGE_CONFIG',
+                            `Invalid package config ${filename}: ${error.message}`);
+        }
+        throw error;
+      }
+    };
+    const asFile = filename => {
+      const exact = inspect(filename);
+      if (exact && exact.type === 'file') return exact.filename;
+      for (const extension of ['.js', '.json', '.node']) {
+        const entry = inspect(filename + extension);
+        if (entry && entry.type === 'file') return entry.filename;
+      }
+      return '';
+    };
+    const asPath = (filename, depth = 0) => {
+      if (depth > 32) {
+        throw moduleError('ERR_INVALID_PACKAGE_CONFIG', 'Package main resolution is too deeply nested');
+      }
+      const file = asFile(filename);
+      if (file) return file;
+      const directory = inspect(filename);
+      if (!directory || directory.type !== 'dir') return '';
+      filename = directory.filename;
+      const pkg = packageJson(filename);
+      if (pkg && typeof pkg.main === 'string' && pkg.main) {
+        const main = pathModule.resolve(filename, pkg.main);
+        if (main !== filename) {
+          const resolved = asPath(main, depth + 1);
+          if (resolved) return resolved;
+        }
+      }
+      for (const index of ['index.js', 'index.json', 'index.node']) {
+        const entry = inspect(pathModule.join(filename, index));
+        if (entry && entry.type === 'file') return entry.filename;
+      }
+      return '';
+    };
+    let resolved = '';
+    if (pathModule.isAbsolute(request) || /^\.\.?([\\/]|$)/.test(request)) {
+      resolved = asPath(pathModule.resolve(pathModule.dirname(parentFile), request));
+    } else {
+      const parts = request.replace(/\\/g, '/').split('/');
+      const packageName = parts[0].startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
+      let directory = pathModule.dirname(parentFile);
+      while (inRoot(directory)) {
+        if (pathModule.basename(directory).toLowerCase() !== 'node_modules') {
+          const modules = pathModule.join(directory, 'node_modules');
+          const pkg = packageJson(pathModule.join(modules, packageName));
+          if (pkg && Object.prototype.hasOwnProperty.call(pkg, 'exports')) {
+            throw moduleError('ERR_NOT_SUPPORTED',
+                              `Package exports are not supported: ${packageName}`);
+          }
+          resolved = asPath(pathModule.join(modules, request));
+          if (resolved) break;
+        }
+        const parent = pathModule.dirname(directory);
+        if (parent === directory) break;
+        directory = parent;
+      }
+    }
+    if (!resolved) throw moduleError('MODULE_NOT_FOUND', `Cannot find module '${request}'`);
+    if (hostedCjsCache[resolved]) moduleResolutionCache.set(cacheKey, resolved);
+    return resolved;
   }
 
-  function loadHostedCjsModule(request) {
-    const resolved = resolveHostedCjs(request);
-    if (!resolved) {
-      return undefined;
-    }
-    if (hostedCjsCache.has(resolved)) {
-      return hostedCjsCache.get(resolved).exports;
-    }
-    if (/\.json$/i.test(resolved)) {
-      const parsed = JSON.parse(readHostedCjsSource(resolved));
-      hostedCjsCache.set(resolved, {exports: parsed});
-      return parsed;
-    }
+  function loadHostedCjsModule(resolved) {
+    if (hostedCjsCache[resolved]) return hostedCjsCache[resolved].exports;
     installBindingsFileNameShim();
     const moduleObject = {
       exports: {},
@@ -3706,27 +5085,33 @@
       parent: null,
       paths: [],
     };
-    hostedCjsCache.set(resolved, moduleObject);
+    hostedCjsCache[resolved] = moduleObject;
     const previousLoading = hostedCjsLoadingFile;
     hostedCjsLoadingFile = resolved;
     try {
-      const code = readHostedCjsSource(resolved);
       // Bind relative requires to this module, including requires called by
       // exported functions after the module's initial evaluation has finished.
-      const moduleRequire = request => electronRequire(
-          typeof request === 'string' && /^\.\.?([\\/]|$)/.test(request) ?
-              pathModule.resolve(pathModule.dirname(resolved), request) : request);
-      moduleRequire.resolve = request => resolveHostedCjs(
-          pathModule.resolve(pathModule.dirname(resolved), request)) || request;
+      const moduleRequire = request => electronRequire(request, resolved);
+      moduleRequire.resolve = request => resolveHostedCjs(request, resolved);
+      moduleRequire.cache = hostedCjsCache;
       moduleObject.require = moduleRequire;
-      const fn = new Function(
-          'exports', 'require', 'module', '__filename', '__dirname', 'process', 'Buffer',
-          code + '\n//# sourceURL=' + resolved.replace(/\\/g, '/'));
-      fn.call(moduleObject.exports, moduleObject.exports, moduleRequire, moduleObject, resolved,
-          pathModule.dirname(resolved), process, Buffer);
+      if (/\.node$/i.test(resolved)) {
+        moduleObject.exports = loadNativeNodeModule(resolved);
+      } else {
+        const code = readHostedCjsSource(resolved).replace(/^\uFEFF/, '');
+        if (/\.json$/i.test(resolved)) {
+          moduleObject.exports = JSON.parse(code);
+        } else {
+          const fn = new Function(
+              'exports', 'require', 'module', '__filename', '__dirname', 'process', 'Buffer',
+              code.replace(/^#![^\r\n]*/, '') + '\n//# sourceURL=' + resolved.replace(/\\/g, '/'));
+          fn.call(moduleObject.exports, moduleObject.exports, moduleRequire, moduleObject, resolved,
+              pathModule.dirname(resolved), process, Buffer);
+        }
+      }
       moduleObject.loaded = true;
     } catch (error) {
-      hostedCjsCache.delete(resolved);
+      delete hostedCjsCache[resolved];
       throw error;
     } finally {
       hostedCjsLoadingFile = previousLoading;
@@ -3742,12 +5127,15 @@
         fsReadResult(fsNativeSync('read_file', filename), 'utf8');
   }
 
-  const electronRequire = globalThis.require = function(request) {
+  function loadBuiltinModule(request) {
     if (typeof request !== 'string') {
       throw new TypeError('Module name must be a string');
     }
 
-    const norm = request.replace(/\\/g, '/').toLowerCase();
+    const norm = request;
+    if (norm === 'http2') return http2Module;
+    if (norm === 'path/win32') return pathModule.win32;
+    if (norm === 'path/posix') return pathModule.posix;
 
     // Electron
     if (norm === 'electron' || norm === 'node:electron') {
@@ -3885,10 +5273,7 @@
 
     // TLS
     if (norm === 'tls' || norm === 'node:tls') {
-      return {
-        connect: () => new netModule.Socket(),
-        createServer: () => new EventEmitter(),
-      };
+      return tlsModule;
     }
 
     // HTTP / HTTPS — Node ClientRequest surface backed by the browser network
@@ -3921,20 +5306,52 @@
         let aborted = false;
         const options = typeof opt === 'string' ? {href: opt} : (opt || {});
 
-        req.write = (chunk) => {
+        const cancelPendingRequest = () => {
+          aborted = true;
+          bodyChunks.length = 0;
+          if (timeoutId !== null) {
+            clearTimeout(timeoutId);
+            timeoutId = null;
+          }
+        };
+        req.write = (chunk, encoding) => {
+          if (aborted) return false;
           if (chunk == null) {
             return true;
           }
           if (typeof chunk === 'string') {
-            bodyChunks.push(chunk);
-          } else if (chunk instanceof Uint8Array || Buffer.isBuffer(chunk)) {
-            bodyChunks.push(Buffer.from(chunk));
+            const format = typeof encoding === 'string' ? encoding.toLowerCase() : 'utf8';
+            if (['latin1', 'binary', 'ascii'].includes(format)) {
+              const bytes = Buffer.alloc(chunk.length);
+              for (let i = 0; i < chunk.length; ++i) bytes[i] = chunk.charCodeAt(i) & 255;
+              bodyChunks.push(bytes);
+            } else if (['utf16le', 'utf-16le', 'ucs2', 'ucs-2'].includes(format)) {
+              const bytes = Buffer.alloc(chunk.length * 2);
+              for (let i = 0; i < chunk.length; ++i) {
+                const code = chunk.charCodeAt(i);
+                bytes[i * 2] = code & 255;
+                bytes[i * 2 + 1] = code >>> 8;
+              }
+              bodyChunks.push(bytes);
+            } else if (['utf8', 'utf-8', 'hex', 'base64', 'base64url'].includes(format)) {
+              bodyChunks.push(Buffer.from(chunk, format));
+            } else {
+              const error = new TypeError(`Unknown encoding: ${encoding}`);
+              error.code = 'ERR_UNKNOWN_ENCODING';
+              throw error;
+            }
+          } else if (ArrayBuffer.isView(chunk)) {
+            // Snapshot the visible raw bytes once at write time, including
+            // non-byte typed arrays and DataView subviews.
+            bodyChunks.push(Buffer.from(new Uint8Array(
+                chunk.buffer, chunk.byteOffset, chunk.byteLength)));
           } else {
             bodyChunks.push(String(chunk));
           }
           return true;
         };
         req.setTimeout = (ms, onTimeout) => {
+          if (aborted) return req;
           if (timeoutId) {
             clearTimeout(timeoutId);
             timeoutId = null;
@@ -3944,7 +5361,8 @@
             return req;
           }
           timeoutId = setTimeout(() => {
-            aborted = true;
+            if (aborted) return;
+            cancelPendingRequest();
             const err = new Error('Request timeout');
             err.code = 'ETIMEDOUT';
             req.emit('timeout');
@@ -3956,31 +5374,23 @@
           return req;
         };
         req.abort = () => {
-          aborted = true;
-          if (timeoutId) {
-            clearTimeout(timeoutId);
-            timeoutId = null;
-          }
+          cancelPendingRequest();
           return req;
         };
         req.destroy = (err) => {
-          aborted = true;
-          if (timeoutId) {
-            clearTimeout(timeoutId);
-            timeoutId = null;
-          }
+          cancelPendingRequest();
           if (err) {
             req.emit('error', err);
           }
           return req;
         };
-        req.end = (chunk) => {
-          if (finished) {
+        req.end = (chunk, encoding) => {
+          if (finished || aborted) {
             return req;
           }
           finished = true;
           if (chunk != null) {
-            req.write(chunk);
+            req.write(chunk, encoding);
           }
           const timeoutMs = Number(options.timeout);
           if (timeoutMs > 0 && !timeoutId) {
@@ -3996,9 +5406,11 @@
               let bodyBuffer = Buffer.alloc(0);
               if (method !== 'GET' && method !== 'HEAD' && bodyChunks.length) {
                 bodyBuffer = Buffer.concat(bodyChunks.map(part =>
-                    typeof part === 'string' ? Buffer.from(part) :
-                    Buffer.from(part)));
+                    typeof part === 'string' ? Buffer.from(part) : part));
               }
+              // The encoded request owns its payload after submission. Do not
+              // keep the caller's queued upload snapshots on the request.
+              bodyChunks.length = 0;
               // Electron/Node requests use the browser network service rather
               // than renderer fetch. This preserves caller headers and avoids
               // applying renderer CORS policy to a Node networking API.
@@ -4033,10 +5445,12 @@
                 cb(incoming);
               }
               queueMicrotask(() => {
+                if (aborted) return;
                 if (responseBody.length) {
                   incoming.emit('data', responseEncoding ?
                       responseBody.toString(responseEncoding) : responseBody);
                 }
+                if (aborted) return;
                 incoming.emit('end');
               });
             } catch (error) {
@@ -4069,22 +5483,19 @@
 
     // Child Process
     if (norm === 'child_process' || norm === 'node:child_process') {
-      return {
-        exec: (_cmd, _opt, cb) => { if (typeof cb === 'function') cb(null, '', ''); },
-        execSync: () => '',
-        spawn: () => new EventEmitter(),
-        fork: () => new EventEmitter(),
-      };
+      return childProcessModule;
     }
 
     // Zlib
     if (norm === 'zlib' || norm === 'node:zlib') {
-      return {
-        createGzip: () => new EventEmitter(),
-        createGunzip: () => new EventEmitter(),
-        gzip: (_buf, cb) => { if (typeof cb === 'function') cb(null, Buffer.alloc(0)); },
-        gunzip: (_buf, cb) => { if (typeof cb === 'function') cb(null, Buffer.alloc(0)); },
-      };
+      return createZlibModule((operation, data, options, asynchronous) => {
+        const request = {operation, dataBase64: data.toString('base64'), options};
+        if (asynchronous) {
+          return transport.invoke('__xenon:zlib', request)
+              .then(value => Buffer.from(value, 'base64'));
+        }
+        return Buffer.from(transport.sendSync('__xenon:zlib', request), 'base64');
+      });
     }
 
     // Assert
@@ -4102,13 +5513,7 @@
 
     // Readline
     if (norm === 'readline' || norm === 'node:readline') {
-      return {
-        createInterface: () => ({
-          on: () => {},
-          close: () => {},
-          question: (_q, cb) => { if (typeof cb === 'function') cb(''); },
-        }),
-      };
+      return readlineModule;
     }
 
     // FS
@@ -4116,69 +5521,29 @@
       return norm.includes('promises') ? fsModule.promises : fsModule;
     }
 
-    if (norm === 'sqlite3' || norm.endsWith('/sqlite3')) {
+    if (norm === 'xenon:sqlite3') {
       return sqlite3Module;
     }
+    throw moduleError('ERR_NOT_SUPPORTED', `Module '${request}' is not supported by this runtime`);
+  }
 
-    // Native Node-API Addon (*.node)
-    if (norm.endsWith('.node')) {
-      const baseName = String(request).split(/[/\\]/).pop();
-      if (baseName.toLowerCase() === 'node_sqlite3.node') {
-        return sqlite3Module;
+  const electronRequire = globalThis.require = function(request, parentFile = globalThis.__filename) {
+    const builtin = builtinModuleId(request);
+    if (builtin) {
+      if (!builtinModuleCache.has(builtin)) {
+        builtinModuleCache.set(builtin, loadBuiltinModule(builtin));
       }
-      // Keep qualified native module paths qualified. Different Electron apps
-      // may intentionally ship same-named addons with different ABIs or SDK
-      // versions, so the canonical path (not the basename) is module identity.
-      const requestedPath = normalizeFsPath(request);
-      const isQualifiedPath = /[/\\]/.test(request);
-      let targetPath = isQualifiedPath ? requestedPath : baseName;
-      // Application roots are intentionally virtualized for normal renderer
-      // fs access. Native loading is different: addons must be unpacked real
-      // files. Honor an existing qualified path exactly. For a missing or
-      // unqualified path, resolve within the current application before using
-      // the host executable directory.
-      let found = isQualifiedPath &&
-          Boolean(fsNativeSync('exists', requestedPath));
-      const appCandidates = [
-        appPath + '\\' + baseName,
-        appPath + '\\build\\Release\\' + baseName,
-        appPath + '\\Release\\' + baseName,
-      ];
-      if (!found) {
-        for (const cand of appCandidates) {
-          if (Boolean(fsNativeSync('exists', cand))) {
-            targetPath = cand;
-            found = true;
-            break;
-          }
-        }
-      }
-      if (!found && Boolean(fsNativeSync('exists', exeDir + '\\' + baseName))) {
-        targetPath = exeDir + '\\' + baseName;
-        found = true;
-      }
-      if (!found) {
-        const error = new Error(`Cannot find module '${request}'`);
-        error.code = 'MODULE_NOT_FOUND';
-        throw error;
-      }
-      return loadNativeNodeModule(targetPath);
+      return builtinModuleCache.get(builtin);
     }
-
-    const hostedCjsPath = resolveHostedCjs(request);
-    if (hostedCjsPath) {
-      return loadHostedCjsModule(hostedCjsPath);
-    }
-
-    if (previousRequire) {
-      return previousRequire.apply(this, arguments);
-    }
-
-    throw new Error(`Cannot find module '${String(request)}'`);
+    const resolved = resolveHostedCjs(request, parentFile);
+    const exports = loadHostedCjsModule(resolved);
+    moduleResolutionCache.set(`${parentFile}\0${request}`, resolved);
+    return exports;
   };
 
   globalThis.Buffer = Buffer;
-  globalThis.require.resolve = path => path;
+  globalThis.require.resolve = request => resolveHostedCjs(request);
+  globalThis.require.cache = hostedCjsCache;
   globalThis.require.main = undefined;
   globalThis.require.extensions = { '.js': () => {}, '.json': () => {}, '.node': () => {} };
   globalThis.__xenonElectronRequire = globalThis.require;

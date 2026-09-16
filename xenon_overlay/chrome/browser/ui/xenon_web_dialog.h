@@ -1,9 +1,12 @@
 #ifndef XENON_OVERLAY_CHROME_BROWSER_UI_XENON_WEB_DIALOG_H_
 #define XENON_OVERLAY_CHROME_BROWSER_UI_XENON_WEB_DIALOG_H_
 
+#include <optional>
+
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/web_dialogs/web_dialog_delegate.h"
@@ -113,7 +116,13 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   // late InitDialog / WebContents recreate does not reload about:blank.
   void SetContentURL(const GURL& url) { url_ = url; }
   static void SetHostedContentURL(views::Widget* widget, const GURL& url);
+  void SetContentTitle(const std::u16string& title);
+  static bool SetHostedContentTitle(views::Widget* widget,
+                                    const std::u16string& title);
   static void SetHostedContentVisible(views::Widget* widget, bool visible);
+  static bool SetHostedContentBackgroundColor(views::Widget* widget,
+                                             SkColor color);
+  void SetContentBackgroundColor(SkColor color) { background_color_ = color; }
 
 #if BUILDFLAG(IS_WIN)
   void set_event_blocker(std::unique_ptr<ui::EventHandler> blocker) {
@@ -181,6 +190,7 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   bool show_close_button_ = false;
   bool frame_ = false;
   bool dwm_ = kDefaultUseDwm;
+  std::optional<SkColor> background_color_;
   bool system_rounded_corners_ = false;
   bool show_shadow_ = true;
 #if BUILDFLAG(IS_WIN)

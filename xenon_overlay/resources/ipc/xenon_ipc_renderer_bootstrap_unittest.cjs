@@ -15,7 +15,7 @@ const addonPath = 'C:\\test-app\\fixture.node';
 
 // Exercise the complete production bootstrap through require(), replacing
 // only its native transport. No application modules or network are involved.
-function createRenderer(exportsList = [], overrides = {}, withWindow = false) {
+function createRenderer(exportsList = [], overrides = {}, withWindow = false, initializeContext) {
   const calls = [];
   let dispatchHandler;
   const transport = {
@@ -27,6 +27,11 @@ function createRenderer(exportsList = [], overrides = {}, withWindow = false) {
     setDispatchHandler(handler) { dispatchHandler = handler; },
     sendSync(channel, options) {
       assert.equal(channel, '__xenon:fs');
+      if (options.operation === 'realpath') return options.path;
+      if (options.operation === 'stat') {
+        if (options.path === addonPath) return {isFile: true, isDirectory: false};
+        throw new Error('ENOENT: no such file or directory');
+      }
       assert.equal(options.operation, 'exists');
       return options.path === addonPath;
     },
@@ -51,6 +56,10 @@ function createRenderer(exportsList = [], overrides = {}, withWindow = false) {
     URL,
     URLSearchParams,
     queueMicrotask,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
     atob,
     btoa,
     location: {
@@ -64,6 +73,7 @@ function createRenderer(exportsList = [], overrides = {}, withWindow = false) {
     context.window = context;
     context.document = {readyState: 'loading', addEventListener() {}};
   }
+  if (initializeContext) initializeContext(context);
   vm.runInContext(bootstrapSource, context, {filename: bootstrapPath});
   return {
     calls,
@@ -82,6 +92,14 @@ function createPreloadRenderer(preload, files, extraPreferences = {}) {
       }
       assert.equal(channel, '__xenon:fs');
       if (request.operation === 'exists') return files.has(request.path);
+      if (request.operation === 'realpath') return request.path;
+      if (request.operation === 'stat') {
+        if (files.has(request.path)) return {isFile: true, isDirectory: false};
+        if ([...files.keys()].some(name => name.startsWith(request.path + '\\'))) {
+          return {isFile: false, isDirectory: true};
+        }
+        throw new Error('ENOENT: no such file or directory');
+      }
       assert.equal(request.operation, 'read_file');
       assert.ok(files.has(request.path));
       return Buffer.from(files.get(request.path)).toString('base64');
@@ -182,6 +200,11 @@ test('guest preload retains Node closures without exposing transport to remote p
       if (channel === '__xenon:renderer-web-preferences')
         return {preload, contextIsolation: false, nodeIntegration: false};
       if (request.operation === 'exists') return files.has(request.path);
+      if (request.operation === 'realpath') return request.path;
+      if (request.operation === 'stat') {
+        if (files.has(request.path)) return {isFile: true, isDirectory: false};
+        throw new Error('ENOENT: no such file or directory');
+      }
       return Buffer.from(files.get(request.path)).toString('base64');
     },
   }, true);
@@ -462,18 +485,215 @@ test('declared native function errors still propagate instead of using a fallbac
   assert.throws(() => addon.readValue?.() ?? 'fallback', value => value === error);
 });
 
-test('module identity, readiness and existing interop aliases are preserved', async () => {
+test('synchronous native module loads preserve identity without fabricated exports', async () => {
   const {load, calls} = createRenderer();
   const addon = load();
   assert.equal(load(), addon);
-  assert.equal(await addon.__xenonReady, addon);
+  assert.equal(addon.__xenonReady, undefined);
   assert.equal(await Promise.resolve(addon), addon);
-  assert.equal(addon.default, addon);
-  assert.equal(addon.__esModule, true);
+  assert.equal(addon.default, undefined);
+  assert.equal(addon.__esModule, undefined);
   assert.equal(addon.then, undefined);
   addon.localValue = 9;
   assert.equal(load().localValue, 9);
   assert.equal(typeof addon.toString, 'function');
+  assert.deepEqual(calls, [['require', addonPath]]);
+});
+
+test('native loading consumes the root descriptor in one reply and inspects nested values once', () => {
+  let loads = 0;
+  const inspections = [];
+  const {context, load} = createRenderer([], {
+    requireNodeModuleSync() {
+      ++loads;
+      return {kind: 'object', children: [
+        {name: 'version', kind: 'number', value: 2},
+        {name: 'nested', kind: 'object'},
+      ]};
+    },
+    inspectNodeExportSync(modulePath, exportPath) {
+      inspections.push(exportPath);
+      assert.equal(exportPath, 'nested');
+      return {kind: 'object', children: [{name: 'value', kind: 'number', value: 42}]};
+    },
+  });
+  const addon = load();
+  assert.equal(load(), addon);
+  assert.equal(addon.version, 2);
+  assert.deepEqual(inspections, []);
+  assert.equal(addon.nested.value, 42);
+  assert.equal(addon.nested.value, 42);
+  assert.deepEqual(inspections, ['nested']);
+  assert.equal(loads, 1);
+  delete context.require.cache[addonPath];
+  assert.notEqual(load(), addon);
+  assert.equal(loads, 2);
+});
+
+test('invalid native load replies throw without caching an empty success', () => {
+  let attempts = 0;
+  const {load} = createRenderer([], {requireNodeModuleSync() {
+    if (++attempts === 1) return null;
+    return {kind: 'object', children: []};
+  }});
+  assert.throws(load, {code: 'ERR_INVALID_NATIVE_EXPORTS'});
+  assert.equal(typeof load(), 'object');
+  assert.equal(attempts, 2);
+});
+
+test('exact native descriptors preserve deep objects, arrays, statics and declared names', () => {
+  const reads = [];
+  const number = (name, value) => ({name, kind: 'number', value, enumerable: true, writable: true});
+  const descriptions = {
+    '': {kind: 'object', children: [
+      {name: 'nested', kind: 'object'}, {name: 'items', kind: 'array'},
+      {name: 'run', kind: 'function'}, {name: 'then', kind: 'function'},
+      number('default', 7), {name: '__esModule', kind: 'boolean', value: false},
+      {name: 'absentValue', kind: 'undefined'},
+    ]},
+    nested: {kind: 'object', children: [{name: 'deep', kind: 'object'}]},
+    'nested.deep': {kind: 'object', children: [number('answer', 42)]},
+    items: {kind: 'array', children: [number('0', 9), number('length', 1)]},
+    run: {kind: 'function', children: [number('version', 2), number('length', 1)]},
+    then: {kind: 'function', children: []},
+  };
+  const {load, calls} = createRenderer([], {inspectNodeExportSync(modulePath, exportPath) {
+    assert.equal(modulePath, addonPath);
+    reads.push(exportPath);
+    return descriptions[exportPath];
+  }});
+  const addon = load();
+  assert.deepEqual(reads, ['']);
+  assert.equal(addon.missing, undefined);
+  assert.equal(Object.hasOwn(addon, 'missing'), false);
+  assert.equal(Object.hasOwn(addon, 'absentValue'), true);
+  assert.equal(addon.absentValue, undefined);
+  assert.equal(addon.default, 7);
+  assert.equal(addon.__esModule, false);
+  assert.equal(addon.nested.deep.answer, 42);
+  assert.equal(addon.nested, addon.nested);
+  assert.equal(addon.nested.deep, addon.nested.deep);
+  assert.equal(Array.isArray(addon.items), true);
+  assert.deepEqual(Array.from(addon.items), [9]);
+  assert.equal(addon.run.version, 2);
+  assert.equal(addon.run.length, 1);
+  assert.equal(addon.run(4), 42);
+  assert.equal(typeof addon.then, 'function');
+  assert.deepEqual(reads, ['', 'nested', 'nested.deep', 'items', 'run', 'then']);
+  assert.deepEqual(calls, [['require', addonPath], ['invoke', addonPath, 'run', 4]]);
+});
+
+test('exact native roots retain primitive and callable types including root construction', () => {
+  for (const [description, expected] of [
+    [{kind: 'number', value: 7}, 7], [{kind: 'string', value: 'native'}, 'native'],
+    [{kind: 'bigint', value: '9007199254740993'}, 9007199254740993n],
+    [{kind: 'undefined'}, undefined], [{kind: 'null'}, null],
+  ]) {
+    const {load} = createRenderer([], {inspectNodeExportSync() { return description; }});
+    assert.equal(load(), expected);
+  }
+  for (const kind of ['function', 'class']) {
+    const {load, calls} = createRenderer([], {
+      inspectNodeExportSync() { return {kind, children: [], prototype: []}; },
+    });
+    const addon = load();
+    assert.equal(typeof addon, 'function');
+    assert.equal(addon.call(null, 3), 42);
+    const instance = new addon(4);
+    assert.equal(instance.__instanceId, 7);
+    assert.equal(instance instanceof addon, true);
+    assert.deepEqual(calls, [
+      ['require', addonPath], ['invoke', addonPath, '', 3], ['construct', addonPath, '', 4],
+    ]);
+  }
+});
+
+test('exact native accessors run only on reads and propagate failures', () => {
+  let reads = 0;
+  const error = new Error('getter failed');
+  const {load} = createRenderer([], {inspectNodeExportSync(modulePath, exportPath) {
+    if (!exportPath) return {kind: 'object', children: [{name: 'value', kind: 'property'}]};
+    if (++reads === 3) throw error;
+    return {kind: 'number', value: reads};
+  }});
+  const addon = load();
+  assert.equal(reads, 0);
+  assert.deepEqual(Object.keys(addon), ['value']);
+  assert.equal(reads, 0);
+  assert.equal(addon.value, 1);
+  assert.equal(addon.value, 2);
+  assert.throws(() => addon.value, value => value === error);
+  assert.throws(() => { addon.value = 9; }, {code: 'ERR_NOT_SUPPORTED'});
+});
+
+test('native dotted property names never dispatch to a different export', () => {
+  const {load} = createRenderer([], {inspectNodeExportSync() {
+    return {kind: 'object', children: [{name: 'wrong.path', kind: 'function'}]};
+  }});
+  assert.throws(() => load()['wrong.path'], {code: 'ERR_NOT_SUPPORTED'});
+});
+
+test('native accessors never re-evaluate a getter to invoke its returned value', () => {
+  for (const kind of ['object', 'array', 'function', 'class']) {
+    let reads = 0;
+    const {load, calls} = createRenderer([], {inspectNodeExportSync(modulePath, exportPath) {
+      if (!exportPath) return {kind: 'object', children: [{name: 'pick', kind: 'property'}]};
+      ++reads;
+      return {kind, children: []};
+    }});
+    assert.throws(() => load().pick, {code: 'ERR_NOT_SUPPORTED'});
+    assert.equal(reads, 1);
+    assert.deepEqual(calls, [['require', addonPath]]);
+  }
+});
+
+test('native require cache invalidation reloads the exports from transport', () => {
+  const {context, load, calls} = createRenderer();
+  const first = load();
+  first.localValue = 17;
+  delete context.require.cache[addonPath];
+  const second = load();
+  assert.notEqual(second, first);
+  assert.equal(second.localValue, undefined);
+  assert.equal(calls.length, 2);
+});
+
+test('function-kind native constructors snapshot the actual new.target prototype', () => {
+  for (const exact of [false, true]) {
+    let additions;
+    const descriptor = {name: 'Factory', kind: 'function', children: [], prototype: []};
+    const {load} = createRenderer(exact ? descriptor : [descriptor], {
+      constructNodeExportWithPrototypeSync(module, name, properties) {
+        assert.equal(module, addonPath);
+        assert.equal(name, exact ? '' : 'Factory');
+        additions = properties;
+        return 17;
+      },
+    });
+    const Factory = exact ? load() : load().Factory;
+    Factory.prototype.emit = function() {};
+    class Derived extends Factory {
+      consumerMethod() {}
+    }
+    const instance = new Derived();
+    assert.ok(instance instanceof Derived);
+    assert.ok(instance instanceof Factory);
+    assert.equal(additions.emit.__xenon_node_wire_type__, 'callback');
+    assert.equal(additions.consumerMethod.__xenon_node_wire_type__, 'callback');
+    assert.equal(Object.hasOwn(additions, 'constructor'), false);
+  }
+});
+
+test('native modules preserve declared then, default and __esModule exports without invoking them', () => {
+  const {load, calls} = createRenderer([
+    {name: 'then', kind: 'function'},
+    {name: 'default', kind: 'value', value: {intValue: 7}},
+    {name: '__esModule', kind: 'value', value: {boolValue: false}},
+  ]);
+  const addon = load();
+  assert.equal(typeof addon.then, 'function');
+  assert.equal(addon.default, 7);
+  assert.equal(addon.__esModule, false);
   assert.deepEqual(calls, [['require', addonPath]]);
 });
 
@@ -546,7 +766,7 @@ function createSqliteRenderer(respond = () => undefined) {
       }
     },
   });
-  return {context, requests, sqlite: context.require('sqlite3')};
+  return {context, requests, sqlite: context.require('xenon:sqlite3')};
 }
 function drainDatabase(db) {
   return new Promise(resolve => db.wait(resolve));
@@ -785,6 +1005,11 @@ test('CommonJS bindings formatter restoration keeps default Error.stack a string
             Buffer.from(request.dataBase64, 'base64').toString('utf8'));
         return true;
       }
+      if (request.operation === 'realpath') return request.path;
+      if (request.operation === 'stat') {
+        if (files.has(request.path)) return {isFile: true, isDirectory: false};
+        throw new Error('ENOENT: no such file or directory');
+      }
       if (request.operation === 'read_file') {
         assert.ok(files.has(request.path));
         return Buffer.from(files.get(request.path)).toString('base64');
@@ -797,4 +1022,130 @@ test('CommonJS bindings formatter restoration keeps default Error.stack a string
   assert.equal(result.customIsArray, true);
   assert.equal(result.sameFormatter, true);
   assert.equal(result.stackType, 'string');
+});
+
+for (const fallback of [false, true]) {
+  test(`Buffer base64 preserves Node bytes, views and padding (fallback=${fallback})`, () => {
+    const {context} = createRenderer([], {}, false, context => {
+      if (fallback) vm.runInContext(
+          'Uint8Array.prototype.toBase64 = undefined; Uint8Array.fromBase64 = undefined;', context);
+    });
+    for (const size of [0, 1, 2, 3, 255, 8191, 8192, 8193, 65536, 1048576]) {
+      const bytes = Buffer.alloc(size + 4);
+      for (let i = 0; i < bytes.length; ++i) bytes[i] = (i * 73 + 19) & 255;
+      const view = bytes.subarray(2, size + 2);
+      const shim = context.Buffer.from(view);
+      for (const encoding of ['base64', 'base64url']) {
+        const encoded = shim.toString(encoding);
+        assert.equal(encoded, view.toString(encoding));
+        assert.deepEqual(Buffer.from(context.Buffer.from(encoded, encoding)), view);
+        assert.equal(shim.toString(encoding, 1, size - 1), view.subarray(1, size - 1).toString(encoding));
+      }
+    }
+    for (const value of ['Zg', 'Zm8', ' \tZm9v\r\n', '-_8', '+/8=', 'Z!m@9#v',
+                         'A', 'AAAAA', 'Zg===', 'Zg=trailing', '!!!', '']) {
+      assert.deepEqual(Buffer.from(context.Buffer.from(value, 'base64')),
+                       Buffer.from(value, 'base64'), value);
+    }
+  });
+}
+
+test('builtins use exact names and stable identities without substituting unsupported modules', () => {
+  const {context} = createRenderer();
+  for (const name of ['buffer', 'fs', 'events', 'path', 'http', 'http2', 'https', 'dns', 'timers', 'url', 'tls', 'readline', 'zlib', 'child_process']) {
+    assert.equal(context.require(name), context.require(name));
+    assert.equal(context.require(name), context.require('node:' + name));
+    assert.equal(context.require.resolve('node:' + name), 'node:' + name);
+  }
+  assert.equal(context.require('path/win32'), context.require('path').win32);
+  assert.equal(context.require('path/posix'), context.require('path').posix);
+  for (const request of ['node:electron', 'node:FS', 'node:not-a-builtin']) {
+    assert.throws(() => context.require(request), {code: 'ERR_UNKNOWN_BUILTIN_MODULE'});
+  }
+  assert.notEqual(context.require('http2'), context.require('http'));
+  assert.throws(() => context.require('http2').connect('https://localhost'),
+                {code: 'ERR_NOT_SUPPORTED'});
+  assert.throws(() => context.require('child_process').spawn('unavailable.exe'),
+                {code: 'ERR_NOT_SUPPORTED'});
+  assert.throws(() => context.require('FS'), {code: 'MODULE_NOT_FOUND'});
+  assert.notEqual(context.require('tls'), context.require('net'));
+  assert.throws(() => context.require('tls').connect({host: 'localhost', port: 443}),
+                {code: 'ERR_NOT_SUPPORTED'});
+});
+
+test('CommonJS resolves parent packages, scoped packages and package main without executing resolve', () => {
+  const root = 'C:\\test-app';
+  const files = new Map([
+    [root + '\\feature\\index.js', `module.exports = () => [require('value'), require('@scope/pkg'), require.resolve('value')];`],
+    [root + '\\feature\\node_modules\\value\\index.json', '17'],
+    [root + '\\node_modules\\value\\index.json', '23'],
+    [root + '\\node_modules\\@scope\\pkg\\package.json', '{"main":"lib/entry.cjs"}'],
+    [root + '\\node_modules\\@scope\\pkg\\lib\\entry.cjs', 'globalThis.packageRuns = (globalThis.packageRuns || 0) + 1; module.exports = 42;'],
+  ]);
+  const {context} = createPreloadRenderer('', files);
+  const entry = root + '\\node_modules\\@scope\\pkg\\lib\\entry.cjs';
+  assert.equal(context.require.resolve('@scope/pkg'), entry);
+  assert.equal(context.packageRuns, undefined);
+  const load = context.require(root + '\\feature');
+  assert.deepEqual(Array.from(load()), [17, 42, root + '\\feature\\node_modules\\value\\index.json']);
+  assert.equal(context.require('value'), 23);
+  assert.equal(context.packageRuns, 1);
+});
+
+test('CommonJS honors exact filenames, cycles, current exports and cache invalidation', () => {
+  const root = 'C:\\test-app';
+  const files = new Map([
+    [root + '\\a.js', `exports.before = true; require('./b'); module.exports = {after: true};`],
+    [root + '\\b.js', `module.exports = require('./a').before;`],
+    [root + '\\extensionless', `module.exports = 7;`],
+    [root + '\\extensionless.js', `module.exports = 8;`],
+    [root + '\\explicit.cjs', `globalThis.runs = (globalThis.runs || 0) + 1; module.exports = undefined;`],
+  ]);
+  const {context} = createPreloadRenderer('', files);
+  assert.equal(context.require(root + '\\extensionless'), 7);
+  assert.equal(context.require(root + '\\a').after, true);
+  assert.equal(context.require(root + '\\b'), true);
+  assert.throws(() => context.require(root + '\\explicit'), {code: 'MODULE_NOT_FOUND'});
+  const filename = root + '\\explicit.cjs';
+  assert.equal(context.require(filename), undefined);
+  assert.equal(context.require(filename), undefined);
+  assert.equal(context.runs, 1);
+  delete context.require.cache[filename];
+  context.require(filename);
+  assert.equal(context.runs, 2);
+});
+
+test('require loads real sqlite3 packages and addons and never substitutes missing native paths', () => {
+  const root = 'C:\\test-app';
+  const native = root + '\\node_sqlite3.node';
+  const files = new Map([
+    [root + '\\node_modules\\sqlite3\\index.js', 'module.exports = {fromPackage: true};'],
+    [root + '\\nested\\sqlite3.js', 'module.exports = 91;'],
+    [native, 'native fixture'],
+    [root + '\\build\\Release\\missing.node', 'wrong same-named fixture'],
+  ]);
+  const {context, calls} = createPreloadRenderer('', files);
+  assert.equal(context.require('sqlite3').fromPackage, true);
+  assert.equal(context.require(root + '\\nested\\sqlite3'), 91);
+  assert.equal(context.require(native).Database, undefined);
+  assert.deepEqual(calls, [['require', native]]);
+  assert.equal(typeof context.require('xenon:sqlite3').Database, 'function');
+  assert.throws(() => context.require(root + '\\missing.node'), {code: 'MODULE_NOT_FOUND'});
+  assert.equal(calls.length, 1);
+});
+
+test('module exceptions preserve identity and unsupported package maps never bypass exports', () => {
+  const root = 'C:\\test-app';
+  const files = new Map([
+    [root + '\\throw.js', 'throw globalThis.sentinel;'],
+    [root + '\\node_modules\\mapped\\package.json', '{"exports":"./entry.js","main":"entry.js"}'],
+    [root + '\\node_modules\\mapped\\entry.js', 'module.exports = 42;'],
+  ]);
+  const {context} = createPreloadRenderer('', files);
+  context.sentinel = {originalError: true};
+  assert.throws(() => context.require(root + '\\throw.js'), error => error === context.sentinel);
+  assert.equal(context.require.cache[root + '\\throw.js'], undefined);
+  assert.throws(() => context.require('mapped'), {code: 'ERR_NOT_SUPPORTED'});
+  assert.throws(() => context.require('mapped/entry.js'), {code: 'ERR_NOT_SUPPORTED'});
+  assert.throws(() => context.require('#alias'), {code: 'ERR_NOT_SUPPORTED'});
 });

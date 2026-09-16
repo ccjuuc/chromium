@@ -171,8 +171,8 @@ void XenonManager::InitializeServiceConnection(
 }
 
 XenonManager::ContainerServiceConnection*
-XenonManager::EnsureContainerServiceStarted(
-    const std::string& container_id) {
+XenonManager::EnsureContainerServiceStarted(const std::string& container_id,
+                                            bool explicit_restart) {
   const std::string normalized_id =
       container_id.empty() ? "default" : container_id;
   if (ContainerServiceConnection* existing =
@@ -181,6 +181,13 @@ XenonManager::EnsureContainerServiceStarted(
       return existing;
     }
     container_services_.erase(normalized_id);
+  }
+
+  // Old documents keep sending IPC after a Utility crash. Starting their saved
+  // main module again would create another set of windows on every crash. Only
+  // an explicit browser action may retry a previously launched container.
+  if (!explicit_restart && service_generation(normalized_id) != 0) {
+    return nullptr;
   }
 
   mojo::Remote<mojom::XenonMainService> launched =
@@ -296,7 +303,7 @@ bool XenonManager::EnsureElectronIpcStarted(const std::string& container_id) {
                << normalized_id;
     return false;
   }
-  return EnsureContainerServiceStarted(normalized_id) != nullptr;
+  return EnsureContainerServiceStarted(normalized_id, true) != nullptr;
 }
 
 void XenonManager::InitializeElectronIpc(ipc::mojom::IpcMainConfigPtr config) {
@@ -312,7 +319,7 @@ void XenonManager::InitializeElectronIpc(ipc::mojom::IpcMainConfigPtr config) {
     return;
   }
   ContainerServiceConnection* connection =
-      EnsureContainerServiceStarted(container_id);
+      EnsureContainerServiceStarted(container_id, true);
   // A newly launched connection initializes its saved config as part of the
   // launch. Reinitialize only when the service already existed.
   if (connection && service_already_existed) {
@@ -376,6 +383,9 @@ XenonManager::GetElectronIpcRendererConfigForContainer(
   renderer_config->app_version = config_it->second->app_version;
   renderer_config->app_path = config_it->second->app_path;
   renderer_config->executable_path = config_it->second->executable_path;
+  for (const auto& mapping : config_it->second->renderer_url_mappings) {
+    renderer_config->renderer_url_mappings.push_back(mapping.Clone());
+  }
   // file: documents keep their real (possibly ASAR) path. For mapped WebUI
   // documents, reverse the app's declared URL mapping to retain relative
   // CommonJS/preload resolution instead of substituting app.getAppPath().
@@ -446,10 +456,12 @@ void XenonManager::RemoveElectronIpcRenderer(
 
 void XenonManager::BindNodeAddonHost(
     const std::string& container_id,
+    const std::string& endpoint_id,
     mojo::PendingReceiver<ipc::mojom::NodeAddonHost> receiver) {
   if (ContainerServiceConnection* connection =
           EnsureContainerServiceStarted(container_id)) {
-    connection->remote->BindNodeAddonHost(container_id, std::move(receiver));
+    connection->remote->BindNodeAddonHost(container_id, endpoint_id,
+                                          std::move(receiver));
   }
 }
 
@@ -567,8 +579,11 @@ void XenonManager::OnDisconnected() {
 void XenonManager::OnContainerServiceDisconnected(
     const std::string& container_id) {
   LOG(ERROR) << "Electron container service disconnected / crashed: "
-             << container_id;
+             << container_id << "; waiting for an explicit restart";
   container_services_.erase(container_id);
+#if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
+  XenonElectronWindowHost::GetInstance()->CloseForContainer(container_id);
+#endif
 }
 
 void XenonManager::ShutdownForProcessExit() {

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <optional>
 #include <utility>
@@ -23,16 +24,19 @@
 #include "components/embedder_support/user_agent_utils.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "content/public/common/color_parser.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/geometry/point.h"
@@ -88,6 +92,119 @@ base::Value BoundsToValue(const gfx::Rect& bounds) {
   value.Set("width", bounds.width());
   value.Set("height", bounds.height());
   return base::Value(std::move(value));
+}
+
+base::Value SizeToValue(const gfx::Size& size) {
+  base::DictValue value;
+  value.Set("width", size.width());
+  value.Set("height", size.height());
+  return base::Value(std::move(value));
+}
+
+base::Value DisplayToValue(const display::Display& display) {
+  base::DictValue value;
+  value.Set("id", static_cast<double>(display.id()));
+  value.Set("bounds", BoundsToValue(display.bounds()));
+  value.Set("workArea", BoundsToValue(display.work_area()));
+  value.Set("size", SizeToValue(display.size()));
+  value.Set("workAreaSize", SizeToValue(display.work_area_size()));
+  value.Set("scaleFactor", display.device_scale_factor());
+  value.Set("rotation", display.RotationAsDegree());
+  value.Set("internal", display.IsInternal());
+  value.Set("label", display.label());
+  value.Set("colorDepth", display.color_depth());
+  value.Set("depthPerComponent", display.depth_per_component());
+  value.Set("monochrome", display.is_monochrome());
+  value.Set("displayFrequency", display.display_frequency());
+  return base::Value(std::move(value));
+}
+
+std::optional<int> FindScreenCoordinate(const base::DictValue& dict,
+                                        const std::string& key) {
+  const base::Value* value = dict.Find(key);
+  if (!value || (!value->is_int() && !value->is_double())) {
+    return std::nullopt;
+  }
+  const double number = value->GetDouble();
+  if (!std::isfinite(number) || std::trunc(number) != number ||
+      number < std::numeric_limits<int>::min() ||
+      number > std::numeric_limits<int>::max()) {
+    return std::nullopt;
+  }
+  return static_cast<int>(number);
+}
+
+bool CallElectronScreen(const base::Value& arguments,
+                        base::Value* result,
+                        std::string* error) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  *result = base::Value();
+  error->clear();
+  const base::DictValue* options = arguments.GetIfDict();
+  const std::string* method = options ? options->FindString("method") : nullptr;
+  if (!method) {
+    *error = "screen call requires a method";
+    return false;
+  }
+  display::Screen* screen = display::Screen::Get();
+  if (!screen) {
+    *error = "screen is unavailable";
+    return false;
+  }
+  if (*method == "getCursorScreenPoint") {
+    const gfx::Point point = screen->GetCursorScreenPoint();
+    base::DictValue value;
+    value.Set("x", point.x());
+    value.Set("y", point.y());
+    *result = base::Value(std::move(value));
+    return true;
+  }
+  if (*method == "getAllDisplays") {
+    base::ListValue displays;
+    for (const auto& display : screen->GetAllDisplays()) {
+      displays.Append(DisplayToValue(display));
+    }
+    *result = base::Value(std::move(displays));
+    return true;
+  }
+
+  display::Display display;
+  if (*method == "getPrimaryDisplay") {
+    display = screen->GetPrimaryDisplay();
+  } else if (*method == "getDisplayMatching") {
+    const base::DictValue* rect = options->FindDict("rect");
+    const auto x = rect ? FindScreenCoordinate(*rect, "x") : std::nullopt;
+    const auto y = rect ? FindScreenCoordinate(*rect, "y") : std::nullopt;
+    const auto width =
+        rect ? FindScreenCoordinate(*rect, "width") : std::nullopt;
+    const auto height =
+        rect ? FindScreenCoordinate(*rect, "height") : std::nullopt;
+    if (!x || !y || !width || !height || *width < 0 || *height < 0 ||
+        static_cast<int64_t>(*x) + *width > std::numeric_limits<int>::max() ||
+        static_cast<int64_t>(*y) + *height > std::numeric_limits<int>::max()) {
+      *error = "screen.getDisplayMatching requires a valid integer rectangle";
+      return false;
+    }
+    display = screen->GetDisplayMatching(gfx::Rect(*x, *y, *width, *height));
+  } else if (*method == "getDisplayNearestPoint") {
+    const base::DictValue* point = options->FindDict("point");
+    const auto x = point ? FindScreenCoordinate(*point, "x") : std::nullopt;
+    const auto y = point ? FindScreenCoordinate(*point, "y") : std::nullopt;
+    if (!x || !y) {
+      *error = "screen.getDisplayNearestPoint requires a valid integer point";
+      return false;
+    }
+    display = screen->GetDisplayNearestPoint(gfx::Point(*x, *y));
+  } else {
+    *error = "Unsupported screen method: " + *method;
+    return false;
+  }
+  if (!display.is_valid()) {
+    *error = "screen display is unavailable";
+    return false;
+  }
+  *result = DisplayToValue(display);
+  return true;
 }
 
 #if BUILDFLAG(IS_WIN)
@@ -345,6 +462,36 @@ class XenonElectronWindowHost::HostedWebContentsObserver
     }
   }
 
+  void TitleWasSet(content::NavigationEntry* entry) override {
+    auto window = owner_->windows_.find(window_id_);
+    if (!web_contents() || window == owner_->windows_.end() ||
+        !window->second.has_loaded_url) {
+      return;
+    }
+    // Electron uses the raw entry title, with a filename fallback only for
+    // untitled file pages. GetTitle() on WebContents may substitute a network
+    // URL, which must not become the native window's title.
+    if (!entry) {
+      entry = web_contents()->GetController().GetLastCommittedEntry();
+    }
+    std::u16string title;
+    bool explicit_set = true;
+    if (entry) {
+      title = entry->GetTitle();
+      if (title.empty() && entry->GetURL().SchemeIsFile()) {
+        title = base::UTF8ToUTF16(entry->GetURL().ExtractFileName());
+        explicit_set = false;
+      }
+    }
+    base::DictValue details;
+    details.Set("title", base::UTF16ToUTF8(title));
+    details.Set("explicitSet", explicit_set);
+    // Main must emit the cancellable BrowserWindow event before changing the
+    // native title. It applies the default through the normal set-title call.
+    owner_->NotifyEvent(window_id_, "web-contents-page-title-updated",
+                        base::Value(std::move(details)));
+  }
+
  private:
   bool IsLoadedPrimaryMainFrame(
       content::RenderFrameHost* render_frame_host) const {
@@ -576,7 +723,7 @@ bool XenonElectronWindowHost::CreateHostedWindow(content::BrowserContext* contex
   entry.sync_bounds_with_parent = transparent && parent_id > 0;
 
   base::DictValue options;
-  options.Set("title", title.empty() ? "Electron Window" : title);
+  options.Set("title", title);
   options.Set("width", width > 0 ? width : 800);
   options.Set("height", height > 0 ? height : 600);
   options.Set("modal", false);
@@ -802,13 +949,18 @@ bool XenonElectronWindowHost::Call(int32_t window_id,
                                    const base::Value& arguments,
                                    base::Value* result,
                                    std::string* error) {
+  // Screen queries have no BrowserWindow owner; reserve id zero only for this
+  // internal command and leave all ordinary window routing unchanged.
+  if (window_id == 0 && command == "screen") {
+    return CallElectronScreen(arguments, result, error);
+  }
   if (auto* guest = ipc::XenonElectronGuest::FromId(window_id)) {
     return guest->Call(command, arguments, result, error);
   }
   auto it = windows_.find(window_id);
   if (it == windows_.end() || !it->second.widget) {
-    *error = "Unknown Electron BrowserWindow id=" +
-             base::NumberToString(window_id);
+    *error =
+        "Unknown Electron BrowserWindow id=" + base::NumberToString(window_id);
     return false;
   }
   if (command == "hide" || command == "show" || command == "close" ||
@@ -1019,8 +1171,39 @@ bool XenonElectronWindowHost::Call(int32_t window_id,
       *error = "set-title expects title";
       return false;
     }
-    widget->widget_delegate()->SetTitle(base::UTF8ToUTF16(*title));
-    widget->UpdateWindowTitle();
+    if (!XenonWebDialog::SetHostedContentTitle(widget,
+                                               base::UTF8ToUTF16(*title))) {
+      *error = "BrowserWindow title delegate is unavailable";
+      return false;
+    }
+    return true;
+  }
+  if (command == "set-background-color") {
+    const std::string* color = options ? options->FindString("color") : nullptr;
+    if (!color) {
+      *error = "set-background-color expects a color string";
+      return false;
+    }
+    std::string css_color = *color;
+    // Electron uses alpha-first hexadecimal colors; the CSS parser expects
+    // alpha last. Other supported CSS formats can pass through unchanged.
+    if (css_color.starts_with('#')) {
+      if (css_color.size() == 5) {
+        css_color = "#" + color->substr(2) + color->substr(1, 1);
+      } else if (css_color.size() == 9) {
+        css_color = "#" + color->substr(3) + color->substr(1, 2);
+      }
+    }
+    SkColor background = SK_ColorTRANSPARENT;
+    if (css_color != "transparent" &&
+        !content::ParseCssColorString(css_color, &background)) {
+      *error = "Invalid BrowserWindow background color";
+      return false;
+    }
+    if (!XenonWebDialog::SetHostedContentBackgroundColor(widget, background)) {
+      *error = "BrowserWindow WebContents is unavailable";
+      return false;
+    }
     return true;
   }
   if (command == "set-opacity") {
@@ -1228,6 +1411,35 @@ void XenonElectronWindowHost::Close(int32_t window_id) {
   widget->Close();
 }
 
+void XenonElectronWindowHost::CloseForContainer(
+    const std::string& container_id) {
+  if (!closing_containers_.insert(container_id).second) {
+    return;
+  }
+  pending_activate_containers_.erase(container_id);
+
+  // An asynchronous Close() leaves the old entry available to a sidebar
+  // retry. Destroy its WebContents and remove the entry before a fresh main
+  // can create windows. Closing an owner can also remove its owned windows,
+  // so do not retain iterators or widget pointers across CloseNow().
+  for (;;) {
+    auto it = std::find_if(windows_.begin(), windows_.end(),
+                           [&container_id](const auto& item) {
+                             return item.second.container_id == container_id;
+                           });
+    if (it == windows_.end()) {
+      break;
+    }
+    views::Widget* widget = it->second.widget;
+    if (!widget) {
+      windows_.erase(it);
+      continue;
+    }
+    widget->CloseNow();
+  }
+  closing_containers_.erase(container_id);
+}
+
 void XenonElectronWindowHost::ShutdownForProcessExit() {
   if (shutting_down_) {
     return;
@@ -1254,6 +1466,11 @@ void XenonElectronWindowHost::NotifyEvent(int32_t window_id,
                                           const std::string& event_name,
                                           base::Value arguments) {
   if (shutting_down_) {
+    return;
+  }
+  auto it = windows_.find(window_id);
+  if (it == windows_.end() ||
+      closing_containers_.contains(it->second.container_id)) {
     return;
   }
   XenonManager::GetInstance()->DispatchElectronWindowEvent(

@@ -63,6 +63,9 @@ class XenonElectronWindowHost : public views::WidgetObserver {
   std::string GetContainerIdForWebContents(
       content::WebContents* web_contents) const;
   void Close(int32_t window_id);
+  // Synchronously destroys the windows of a disconnected ipcMain container.
+  // Their events cannot be delivered to the old process or a later restart.
+  void CloseForContainer(const std::string& container_id);
   // Synchronously destroys every hosted BrowserWindow before its
   // BrowserContext is torn down. No window events are dispatched while the
   // process is shutting down.
@@ -158,6 +161,7 @@ class XenonElectronWindowHost : public views::WidgetObserver {
   int32_t next_id_ = 1;
   bool pending_activate_ = false;
   bool shutting_down_ = false;
+  std::set<std::string> closing_containers_;
   std::set<std::string> pending_activate_containers_;
   bool synchronizing_overlay_bounds_ = false;
   bool synchronizing_overlay_show_state_ = false;

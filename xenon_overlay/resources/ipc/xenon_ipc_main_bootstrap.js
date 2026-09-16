@@ -16,6 +16,15 @@
     this._events = new Map();
     this._maxListeners = undefined;
   }
+  // Native addon wrappers can copy these methods without calling the
+  // constructor. Keep their listener state local to each receiver.
+  function eventMap(emitter) {
+    if (!Object.prototype.hasOwnProperty.call(emitter, '_events') ||
+        !(emitter._events instanceof Map)) {
+      emitter._events = new Map();
+    }
+    return emitter._events;
+  }
   function validateListener(listener) {
     if (typeof listener !== 'function') {
       throw new TypeError('The "listener" argument must be a function');
@@ -25,14 +34,12 @@
     validateListener(listener);
     if (name !== 'newListener')
       this.emit('newListener', name, listener);
-    const listeners = this._events.get(name) || [];
+    const listeners = eventMap(this).get(name) || [];
     listeners.push(listener);
-    this._events.set(name, listeners);
+    eventMap(this).set(name, listeners);
     return this;
   };
-  EventEmitter.prototype.addListener = function(name, listener) {
-    return this.on(name, listener);
-  };
+  EventEmitter.prototype.addListener = EventEmitter.prototype.on;
   EventEmitter.prototype.once = function(name, listener) {
     validateListener(listener);
     const wrapped = (...args) => {
@@ -42,13 +49,13 @@
     wrapped.listener = listener;
     if (name !== 'newListener')
       this.emit('newListener', name, listener);
-    const listeners = this._events.get(name) || [];
+    const listeners = eventMap(this).get(name) || [];
     listeners.push(wrapped);
-    this._events.set(name, listeners);
+    eventMap(this).set(name, listeners);
     return this;
   };
   EventEmitter.prototype.emit = function(name, ...args) {
-    const listeners = this._events.get(name);
+    const listeners = eventMap(this).get(name);
     if (!listeners || listeners.length === 0) {
       if (name === 'error') {
         const error = args[0];
@@ -65,7 +72,7 @@
   };
   EventEmitter.prototype.removeListener = function(name, listener) {
     validateListener(listener);
-    const listeners = this._events.get(name);
+    const listeners = eventMap(this).get(name);
     if (!listeners)
       return this;
     let index = -1;
@@ -81,30 +88,28 @@
     const filtered = listeners.slice();
     filtered.splice(index, 1);
     if (filtered.length)
-      this._events.set(name, filtered);
+      eventMap(this).set(name, filtered);
     else
-      this._events.delete(name);
+      eventMap(this).delete(name);
     if (name !== 'removeListener')
       this.emit('removeListener', name, removed);
     return this;
   };
-  EventEmitter.prototype.off = function(name, listener) {
-    return this.removeListener(name, listener);
-  };
+  EventEmitter.prototype.off = EventEmitter.prototype.removeListener;
   EventEmitter.prototype.removeAllListeners = function(name) {
     if (name === undefined) {
-      if (!this._events.has('removeListener')) {
-        this._events.clear();
+      if (!eventMap(this).has('removeListener')) {
+        eventMap(this).clear();
         return this;
       }
-      for (const eventName of [...this._events.keys()]) {
+      for (const eventName of [...eventMap(this).keys()]) {
         if (eventName !== 'removeListener')
           this.removeAllListeners(eventName);
       }
       this.removeAllListeners('removeListener');
       return this;
     }
-    const listeners = this._events.get(name);
+    const listeners = eventMap(this).get(name);
     if (!listeners)
       return this;
     for (let i = listeners.length - 1; i >= 0; --i) {
@@ -113,14 +118,14 @@
     return this;
   };
   EventEmitter.prototype.listeners = function(name) {
-    return (this._events.get(name) || [])
+    return (eventMap(this).get(name) || [])
         .map(listener => listener.listener || listener);
   };
   EventEmitter.prototype.rawListeners = function(name) {
-    return [...(this._events.get(name) || [])];
+    return [...(eventMap(this).get(name) || [])];
   };
   EventEmitter.prototype.listenerCount = function(name, listener) {
-    const listeners = this._events.get(name) || [];
+    const listeners = eventMap(this).get(name) || [];
     if (listener === undefined)
       return listeners.length;
     validateListener(listener);
@@ -132,9 +137,9 @@
     validateListener(listener);
     if (name !== 'newListener')
       this.emit('newListener', name, listener);
-    const listeners = this._events.get(name) || [];
+    const listeners = eventMap(this).get(name) || [];
     listeners.unshift(listener);
-    this._events.set(name, listeners);
+    eventMap(this).set(name, listeners);
     return this;
   };
   EventEmitter.prototype.prependOnceListener = function(name, listener) {
@@ -146,13 +151,13 @@
     wrapped.listener = listener;
     if (name !== 'newListener')
       this.emit('newListener', name, listener);
-    const listeners = this._events.get(name) || [];
+    const listeners = eventMap(this).get(name) || [];
     listeners.unshift(wrapped);
-    this._events.set(name, listeners);
+    eventMap(this).set(name, listeners);
     return this;
   };
   EventEmitter.prototype.eventNames = function() {
-    return [...this._events.keys()];
+    return [...eventMap(this).keys()];
   };
   EventEmitter.prototype.setMaxListeners = function(n) {
     if (typeof n !== 'number' || n < 0 || Number.isNaN(n)) {
@@ -1101,6 +1106,7 @@
     }
     isDestroyed() { return webContentsState.get(this).destroyed; }
     getURL() { return this._url || ''; }
+    getTitle() { return this._pageTitle || ''; }
     loadURL(url, options) {
       if (options && typeof options === 'object' && options.userAgent) {
         this.setUserAgent(options.userAgent);
@@ -1302,6 +1308,7 @@
            !pathModule.isAbsolute(this._webPreferences.preload))) {
         throw new TypeError('BrowserWindow preload must be an absolute path');
       }
+      const title = options.title === undefined ? 'Electron' : String(options.title);
       const created =
           (typeof __xenonCreateBrowserWindow === 'function')
               ? __xenonCreateBrowserWindow({
@@ -1313,7 +1320,7 @@
                   parentId: options.parent && options.parent.id
                       ? options.parent.id
                       : 0,
-                  title: String(options.title || ''),
+                  title,
                 })
               : {id: browserWindows.length + 1, hwnd: '0'};
       this.id = created.id;
@@ -1342,8 +1349,11 @@
       };
       this._minSize = {width: 0, height: 0};
       this._maxSize = {width: 0, height: 0};
-      this._title = String(options.title || '');
-      this._backgroundColor = options.backgroundColor || '#000000';
+      this._title = title;
+      this._backgroundColor = '#000000';
+      if (options.backgroundColor !== undefined) {
+        this.setBackgroundColor(options.backgroundColor);
+      }
       this._windowMessageHooks = new Map();
       if (options.alwaysOnTop) {
         this.setAlwaysOnTop(true);
@@ -1480,8 +1490,9 @@
     }
     setSkipTaskbar() {}
     setTitle(title) {
-      this._title = String(title || '');
-      callBrowserWindow(this, 'set-title', {title: this._title});
+      const value = String(title ?? '');
+      callBrowserWindow(this, 'set-title', {title: value});
+      this._title = value;
     }
     getTitle() { return this._title; }
     setBounds(bounds) {
@@ -1547,7 +1558,15 @@
     getOpacity() { return this._opacity; }
     setHasShadow(value) { this._hasShadow = Boolean(value); }
     hasShadow() { return this._hasShadow; }
-    setBackgroundColor(color) { this._backgroundColor = color; }
+    setBackgroundColor(color) {
+      if (typeof __xenonBrowserWindowCall !== 'function') {
+        const error = new Error('BrowserWindow background color host is unavailable');
+        error.code = 'ERR_NOT_SUPPORTED';
+        throw error;
+      }
+      callBrowserWindow(this, 'set-background-color', {color});
+      this._backgroundColor = color;
+    }
     getBackgroundColor() { return this._backgroundColor; }
     setAspectRatio() {}
     setKiosk() {}
@@ -1663,6 +1682,22 @@
       nativeMenuClicks.clear();
       if (menu) {
         menu.emit('menu-will-close');
+      }
+      return;
+    }
+    if (eventName === 'web-contents-page-title-updated' && details) {
+      const title = String(details.title ?? '');
+      const explicitSet = Boolean(details.explicitSet);
+      const contents = win.webContents;
+      contents._pageTitle = title;
+      const event = createBrowserWindowEvent(win, true);
+      win.emit('page-title-updated', event, title, explicitSet);
+      if (!event.defaultPrevented && !win.isDestroyed()) {
+        win.setTitle(title);
+      }
+      if (!contents.isDestroyed()) {
+        contents.emit('page-title-updated',
+            createBrowserWindowEvent(contents), title, explicitSet);
       }
       return;
     }
@@ -1856,25 +1891,23 @@
     nativeImage: {createEmpty: () => ({}), createFromPath: path => ({path})},
     clipboard: {readText: () => '', writeText() {}, clear() {}},
     screen: (() => {
-      const display = {
-        id: 1,
-        bounds: {x: 0, y: 0, width: 1920, height: 1080},
-        workArea: {x: 0, y: 0, width: 1920, height: 1080},
-        workAreaSize: {width: 1920, height: 1080},
-        size: {width: 1920, height: 1080},
-        scaleFactor: 1,
+      const call = (method, options = {}) => {
+        if (typeof __xenonBrowserWindowCall !== 'function') {
+          const error = new Error('Electron screen host is unavailable');
+          error.code = 'ERR_NOT_SUPPORTED';
+          throw error;
+        }
+        // Screen queries have no BrowserWindow. The host reserves id 0 for
+        // these application-wide reads on its UI thread.
+        return __xenonBrowserWindowCall(0, 'screen', {method, ...options});
       };
-      return {
-        getPrimaryDisplay: () => display,
-        getAllDisplays: () => [display],
-        getDisplayMatching: () => display,
-        getDisplayNearestPoint: () => display,
-        getCursorScreenPoint: () => ({x: 0, y: 0}),
-        on() {},
-        off() {},
-        addListener() {},
-        removeListener() {},
-      };
+      return Object.assign(new EventEmitter(), {
+        getPrimaryDisplay: () => call('getPrimaryDisplay'),
+        getAllDisplays: () => call('getAllDisplays'),
+        getDisplayMatching: rect => call('getDisplayMatching', {rect}),
+        getDisplayNearestPoint: point => call('getDisplayNearestPoint', {point}),
+        getCursorScreenPoint: () => call('getCursorScreenPoint'),
+      });
     })(),
     autoUpdater,
   };
@@ -1884,8 +1917,93 @@
   // Node.js Built-in Modules (Buffer, fs, crypto, util, url, stream, etc.)
   // =========================================================================
 
+  const nativeToBase64 = Uint8Array.prototype.toBase64;
+  const nativeFromBase64 = Uint8Array.fromBase64;
+  const nativeBase64HandlesViews = !nativeToBase64 ||
+      nativeToBase64.call(new Uint8Array([0, 255]).subarray(1)) === '/w==';
+  const arrayBufferByteLength = Object.getOwnPropertyDescriptor(
+      ArrayBuffer.prototype, 'byteLength').get;
+  const sharedArrayBufferByteLength = typeof SharedArrayBuffer === 'function' ?
+      Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, 'byteLength').get : null;
+
+  function decodeBase64(value) {
+    if (nativeFromBase64) {
+      try {
+        return nativeFromBase64(value);
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
+      }
+    }
+    let normalized = value.split('=', 1)[0].replace(/-/g, '+')
+        .replace(/_/g, '/').replace(/[^A-Za-z0-9+/]/g, '');
+    if (normalized.length % 4 === 1) normalized = normalized.slice(0, -1);
+    if (nativeFromBase64) return nativeFromBase64(normalized);
+    const binary = atob(normalized);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; ++i) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  function encodeBase64(bytes, urlSafe) {
+    if (nativeToBase64) {
+      const view = nativeBase64HandlesViews || bytes.byteOffset === 0 ?
+          bytes : new Uint8Array(bytes);
+      return nativeToBase64.call(view, urlSafe ?
+          {alphabet: 'base64url', omitPadding: true} : undefined);
+    }
+    const chunks = [];
+    for (let offset = 0; offset < bytes.length; offset += 8192) {
+      chunks.push(String.fromCharCode.apply(
+          null, bytes.subarray(offset, offset + 8192)));
+    }
+    const encoded = btoa(chunks.join(''));
+    return urlSafe ? encoded.replace(/\+/g, '-').replace(/\//g, '_')
+        .replace(/=+$/, '') : encoded;
+  }
+
   class Buffer extends Uint8Array {
-    static from(data, encoding) {
+    static byteLength(value, encoding) {
+      if (typeof value !== 'string') {
+        if (ArrayBuffer.isView(value)) return value.byteLength;
+        // Intrinsic getters also recognize ArrayBuffers from another realm.
+        try { return arrayBufferByteLength.call(value); } catch (_) {}
+        if (sharedArrayBufferByteLength) {
+          try { return sharedArrayBufferByteLength.call(value); } catch (_) {}
+        }
+        const error = new TypeError('value must be a string, Buffer, or ArrayBuffer');
+        error.code = 'ERR_INVALID_ARG_TYPE';
+        throw error;
+      }
+      const length = value.length;
+      switch (typeof encoding === 'string' ? encoding.toLowerCase() : '') {
+        case 'ascii': case 'latin1': case 'binary': return length;
+        case 'utf16le': case 'utf-16le': case 'ucs2': case 'ucs-2':
+          return length * 2;
+        case 'hex': return Math.floor(length / 2);
+        case 'base64': case 'base64url': {
+          // Node estimates from the encoded length, including any whitespace.
+          let unpadded = length;
+          if (unpadded && value.charCodeAt(unpadded - 1) === 61) --unpadded;
+          if (unpadded && value.charCodeAt(unpadded - 1) === 61) --unpadded;
+          return Math.floor(unpadded * 3 / 4);
+        }
+      }
+      // UTF-8 is also Node's fallback for an unknown encoding. Count directly
+      // so Content-Length does not allocate an encoded copy of the request.
+      let bytes = 0;
+      for (let i = 0; i < length; ++i) {
+        const code = value.charCodeAt(i);
+        if (code < 0x80) ++bytes;
+        else if (code < 0x800) bytes += 2;
+        else if (code >= 0xd800 && code <= 0xdbff && i + 1 < length &&
+                 value.charCodeAt(i + 1) >= 0xdc00 && value.charCodeAt(i + 1) <= 0xdfff) {
+          bytes += 4;
+          ++i;
+        } else bytes += 3;
+      }
+      return bytes;
+    }
+    static from(data, encoding, length) {
       if (typeof data === 'string') {
         if (encoding === 'hex') {
           const bytes = [];
@@ -1893,16 +2011,29 @@
             bytes.push(parseInt(data.substr(i, 2), 16));
           }
           return new Buffer(bytes);
-        } else if (encoding === 'base64') {
-          const bin = typeof atob === 'function' ? atob(data) : '';
-          const bytes = new Uint8Array(bin.length);
-          for (let i = 0; i < bin.length; ++i) bytes[i] = bin.charCodeAt(i);
-          return new Buffer(bytes);
+        } else if (encoding === 'base64' || encoding === 'base64url') {
+          const bytes = decodeBase64(data);
+          return new Buffer(bytes.buffer, bytes.byteOffset, bytes.byteLength);
         }
         const encoder = new TextEncoder();
         return new Buffer(encoder.encode(data));
       }
-      if (Array.isArray(data) || data instanceof Uint8Array || data instanceof ArrayBuffer) {
+      if (data instanceof ArrayBuffer) {
+        let offset = encoding === undefined ? 0 : +encoding;
+        if (Number.isNaN(offset)) offset = 0;
+        const available = data.byteLength - offset;
+        if (length !== undefined) {
+          length = +length;
+          if (!(length > 0)) length = 0;
+        }
+        if (available < 0 || (length !== undefined && length > available)) {
+          const error = new RangeError('Buffer offset or length is outside the ArrayBuffer');
+          error.code = 'ERR_BUFFER_OUT_OF_BOUNDS';
+          throw error;
+        }
+        return new Buffer(data, offset, length);
+      }
+      if (Array.isArray(data) || ArrayBuffer.isView(data)) {
         return new Buffer(data);
       }
       return new Buffer(0);
@@ -1913,7 +2044,7 @@
       return b;
     }
     static allocUnsafe(size) { return new Buffer(size); }
-    static isBuffer(obj) { return obj instanceof Buffer || obj instanceof Uint8Array; }
+    static isBuffer(obj) { return obj instanceof Buffer; }
     static concat(list, totalLength) {
       if (!Array.isArray(list)) return new Buffer(0);
       if (totalLength === undefined) {
@@ -1933,14 +2064,12 @@
       const slice = this.subarray(start, end);
       if (encoding === 'hex') {
         return Array.from(slice).map(b => b.toString(16).padStart(2, '0')).join('');
-      } else if (encoding === 'base64') {
-        let bin = '';
-        for (let i = 0; i < slice.length; ++i) bin += String.fromCharCode(slice[i]);
-        return typeof btoa === 'function' ? btoa(bin) : '';
+      } else if (encoding === 'base64' || encoding === 'base64url') {
+        return encodeBase64(slice, encoding === 'base64url');
       }
       return new TextDecoder().decode(slice);
     }
-    slice(start, end) { return new Buffer(this.subarray(start, end)); }
+    slice(start, end) { return this.subarray(start, end); }
     _view() {
       return new DataView(this.buffer, this.byteOffset, this.byteLength);
     }
@@ -1958,246 +2087,716 @@
     readInt32LE(offset = 0) {
       return this._view().getInt32(offset, true);
     }
+    readInt16LE(offset = 0) {
+      const value = this.readUIntLE(offset, 2);
+      return value & 0x8000 ? value - 0x10000 : value;
+    }
     readBigUInt64LE(offset = 0) {
       return this._view().getBigUint64(offset, true);
     }
     readBigInt64LE(offset = 0) {
       return this._view().getBigInt64(offset, true);
     }
-    readUIntLE(offset = 0, byteLength = 4) {
-      if (byteLength === 8) {
-        return this.readBigUInt64LE(offset);
+    readUIntLE(offset, byteLength) {
+      if (offset === undefined || typeof byteLength !== 'number') {
+        const error = new TypeError('offset and byteLength must be numbers');
+        error.code = 'ERR_INVALID_ARG_TYPE';
+        throw error;
       }
-      if (byteLength === 4) {
-        return this.readUInt32LE(offset);
+      if (!Number.isInteger(byteLength) || byteLength < 1 || byteLength > 6) {
+        const error = new RangeError('byteLength must be an integer from 1 to 6');
+        error.code = 'ERR_OUT_OF_RANGE';
+        throw error;
       }
-      if (byteLength === 2) {
-        return this._view().getUint16(offset, true);
+      if (typeof offset !== 'number') {
+        const error = new TypeError('offset must be a number');
+        error.code = 'ERR_INVALID_ARG_TYPE';
+        throw error;
       }
-      if (byteLength === 1) {
-        return this[offset];
+      if (this[offset] === undefined || this[offset + byteLength - 1] === undefined) {
+        const error = new RangeError('offset is outside the bounds of the Buffer');
+        error.code = Math.floor(offset) === offset && this.length < byteLength ?
+            'ERR_BUFFER_OUT_OF_BOUNDS' : 'ERR_OUT_OF_RANGE';
+        throw error;
       }
       let value = 0;
-      for (let i = 0; i < byteLength; ++i) {
-        value += this[offset + i] * (2 ** (8 * i));
+      for (let i = byteLength - 1; i >= 0; --i) {
+        value = value * 256 + this[offset + i];
       }
       return value;
     }
   }
+  Object.defineProperty(Buffer.prototype, 'readUintLE', {
+    value: Buffer.prototype.readUIntLE, configurable: true, writable: true,
+  });
   globalThis.Buffer = Buffer;
 
   const fsConstants = {
-    F_OK: 0,
-    R_OK: 4,
-    W_OK: 2,
-    X_OK: 1,
+    F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1,
+  };
+  const fsError = (error, request) => {
+    const match = /^([A-Z][A-Z0-9_]+):/.exec(error.message || '');
+    if (match) error.code = match[1];
+    error.path = request.path;
+    const syscall = /, ([a-z_]+) '/.exec(error.message || '');
+    if (syscall) error.syscall = syscall[1];
+    return error;
+  };
+  const fsRequest = (operation, path, options = {}) =>
+    ({...options, operation, path: String(path)});
+  const fsCallSync = (request, data) => {
+    try {
+      const value = __xenonFsCall(request, data);
+      return value === null ? undefined : value;
+    } catch (error) {
+      throw fsError(error, request);
+    }
+  };
+  const fsCallAsync = async (request, data) => {
+    try {
+      const value = await __xenonFsCallAsync(request, data);
+      return value === null ? undefined : value;
+    } catch (error) {
+      throw fsError(error, request);
+    }
+  };
+  const fsUnsupported = method => {
+    const error = new Error(`fs.${method} is not supported by this runtime`);
+    error.code = 'ERR_NOT_SUPPORTED';
+    throw error;
+  };
+  const fsValidateCallback = callback => {
+    if (typeof callback !== 'function') {
+      const error = new TypeError('The callback argument must be a function');
+      error.code = 'ERR_INVALID_ARG_TYPE';
+      throw error;
+    }
+  };
+  const fsCallback = (callback, operation) => {
+    fsValidateCallback(callback);
+    // Separate fulfillment/rejection callbacks ensure a user callback throwing
+    // does not cause the same callback to be invoked for a second time.
+    operation().then(value => callback(null, value), error => callback(error));
+  };
+  const fsEncoding = options =>
+    typeof options === 'string' ? options : options?.encoding;
+  const fsReadResult = (bytes, options) => {
+    const buffer = Buffer.from(bytes);
+    const encoding = fsEncoding(options);
+    return encoding ? buffer.toString(encoding) : buffer;
+  };
+  const fsWriteData = (data, options) => {
+    if (typeof data === 'string') return Buffer.from(data, fsEncoding(options));
+    if (ArrayBuffer.isView(data)) {
+      return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    }
+    const error = new TypeError('File data must be a string, Buffer, or an ArrayBuffer view');
+    error.code = 'ERR_INVALID_ARG_TYPE';
+    throw error;
+  };
+  const fsWriteRequest = (path, options) => {
+    const flag = typeof options === 'object' ? options?.flag : undefined;
+    if (flag !== undefined && flag !== 'w' && flag !== 'a') {
+      return fsUnsupported('writeFile with flag ' + flag);
+    }
+    return fsRequest(flag === 'a' ? 'append_file' : 'write_file', path);
+  };
+  const fsStatResult = stat => ({
+    isFile: () => stat.isFile,
+    isDirectory: () => stat.isDirectory,
+    isSymbolicLink: () => stat.isSymbolicLink,
+    size: stat.size,
+    mtime: new Date(stat.mtimeMs),
+    mtimeMs: stat.mtimeMs,
+    birthtime: new Date(stat.birthtimeMs),
+    birthtimeMs: stat.birthtimeMs,
+    mode: stat.isDirectory ? 0o777 : 0o666,
+  });
+
+  const fsPromises = {
+    async readFile(path, options) {
+      return fsReadResult(await fsCallAsync(
+        fsRequest('read_file', path, {returnBytes: true})), options);
+    },
+    async writeFile(path, data, options) {
+      return fsCallAsync(fsWriteRequest(path, options), fsWriteData(data, options));
+    },
+    async appendFile(path, data, options) {
+      const appendOptions = typeof options === 'string' ? {encoding: options, flag: 'a'} :
+          {flag: 'a', ...options};
+      return fsCallAsync(fsWriteRequest(path, appendOptions), fsWriteData(data, appendOptions));
+    },
+    async stat(path) {
+      return fsStatResult(await fsCallAsync(fsRequest('stat', path)));
+    },
+    async lstat(path) {
+      return fsStatResult(await fsCallAsync(fsRequest('lstat', path)));
+    },
+    async readdir(path) { return fsCallAsync(fsRequest('readdir', path)); },
+    async mkdir(path, options) {
+      return fsCallAsync(fsRequest('mkdir', path, {recursive: Boolean(options?.recursive)}));
+    },
+    async unlink(path) { return fsCallAsync(fsRequest('unlink', path)); },
+    async rm(path, options) {
+      return fsCallAsync(fsRequest('rm', path, {
+        recursive: Boolean(options?.recursive), force: Boolean(options?.force),
+      }));
+    },
+    async access(path, mode = 0) {
+      if (mode !== 0) return fsUnsupported('access with permission mode');
+      return fsCallAsync(fsRequest('access', path));
+    },
+    async realpath(path) { return fsCallAsync(fsRequest('realpath', path)); },
+    async copyFile(src, dest, flags = 0) {
+      if (flags !== 0) return fsUnsupported('copyFile with flags');
+      return fsCallAsync(fsRequest('copy_file', src, {destination: String(dest)}));
+    },
+    async rename(oldPath, newPath) {
+      return fsCallAsync(fsRequest('rename', oldPath, {destination: String(newPath)}));
+    },
+    async open() { return fsUnsupported('promises.open'); },
+    async chmod() { return fsUnsupported('promises.chmod'); },
+    async chown() { return fsUnsupported('promises.chown'); },
   };
 
   const fsModule = {
     constants: fsConstants,
+    promises: fsPromises,
     existsSync(path) {
-      return Boolean(__xenonFsExists(String(path)));
+      try { return Boolean(fsCallSync(fsRequest('exists', path))); }
+      catch { return false; }
     },
     readFileSync(path, options) {
-      const encoding = typeof options === 'string' ? options : options?.encoding;
-      const content = __xenonFsReadFile(String(path));
-      if (content === undefined) {
-        throw new Error(`ENOENT: no such file or directory, open '${path}'`);
-      }
-      if (encoding === 'utf8' || encoding === 'utf-8') {
-        return content;
-      }
-      return Buffer.from(content);
+      return fsReadResult(fsCallSync(
+        fsRequest('read_file', path, {returnBytes: true})), options);
     },
     writeFileSync(path, data, options) {
-      let text = data;
-      if (Buffer.isBuffer(data)) {
-        text = data.toString('utf8');
-      } else if (typeof data !== 'string') {
-        text = String(data);
-      }
-      if (!__xenonFsWriteFile(String(path), text)) {
-        throw new Error(`EACCES: permission denied, open '${path}'`);
-      }
+      return fsCallSync(fsWriteRequest(path, options), fsWriteData(data, options));
     },
-    statSync(path) {
-      const stat = __xenonFsStat(String(path));
-      if (!stat.exists) {
-        throw new Error(`ENOENT: no such file or directory, stat '${path}'`);
-      }
-      return {
-        isFile: () => stat.isFile,
-        isDirectory: () => stat.isDirectory,
-        isSymbolicLink: () => false,
-        size: stat.size,
-        mtime: new Date(stat.mtimeMs),
-        mtimeMs: stat.mtimeMs,
-        birthtime: new Date(stat.birthtimeMs),
-        birthtimeMs: stat.birthtimeMs,
-        mode: stat.isDirectory ? 0o777 : 0o666,
-      };
-    },
-    lstatSync(path) {
-      return fsModule.statSync(path);
-    },
-    readdirSync(path) {
-      return __xenonFsReaddir(String(path));
-    },
+    statSync(path) { return fsStatResult(fsCallSync(fsRequest('stat', path))); },
+    lstatSync(path) { return fsStatResult(fsCallSync(fsRequest('lstat', path))); },
+    readdirSync(path) { return fsCallSync(fsRequest('readdir', path)); },
     mkdirSync(path, options) {
-      return __xenonFsMkdir(String(path));
+      return fsCallSync(fsRequest('mkdir', path, {recursive: Boolean(options?.recursive)}));
     },
-    unlinkSync(path) {
-      return __xenonFsUnlink(String(path));
+    unlinkSync(path) { return fsCallSync(fsRequest('unlink', path)); },
+    rmdirSync(path, options) {
+      return fsCallSync(fsRequest('rmdir', path, {recursive: Boolean(options?.recursive)}));
     },
-    rmdirSync(path) {
-      return __xenonFsUnlink(String(path));
+    rmSync(path, options) {
+      return fsCallSync(fsRequest('rm', path, {
+        recursive: Boolean(options?.recursive), force: Boolean(options?.force),
+      }));
     },
-    rmSync(path) {
-      return __xenonFsUnlink(String(path));
-    },
-    accessSync(path, mode) {
-      if (!fsModule.existsSync(path)) {
-        throw new Error(`ENOENT: no such file or directory, access '${path}'`);
-      }
+    accessSync(path, mode = 0) {
+      if (mode !== 0) return fsUnsupported('accessSync with permission mode');
+      return fsCallSync(fsRequest('access', path));
     },
     readFile(path, options, callback) {
-      if (typeof options === 'function') {
-        callback = options;
-        options = {};
-      }
-      process.nextTick(() => {
-        try {
-          const res = fsModule.readFileSync(path, options);
-          callback(null, res);
-        } catch (err) {
-          callback(err);
-        }
-      });
+      if (typeof options === 'function') { callback = options; options = undefined; }
+      fsCallback(callback, () => fsPromises.readFile(path, options));
     },
     writeFile(path, data, options, callback) {
-      if (typeof options === 'function') {
-        callback = options;
-        options = {};
-      }
-      process.nextTick(() => {
-        try {
-          fsModule.writeFileSync(path, data, options);
-          callback(null);
-        } catch (err) {
-          callback(err);
-        }
-      });
+      if (typeof options === 'function') { callback = options; options = undefined; }
+      fsCallback(callback, () => fsPromises.writeFile(path, data, options));
     },
-    stat(path, callback) {
-      process.nextTick(() => {
-        try {
-          callback(null, fsModule.statSync(path));
-        } catch (err) {
-          callback(err);
-        }
-      });
-    },
-    readdir(path, callback) {
-      process.nextTick(() => {
-        try {
-          callback(null, fsModule.readdirSync(path));
-        } catch (err) {
-          callback(err);
-        }
-      });
-    },
+    stat(path, callback) { fsCallback(callback, () => fsPromises.stat(path)); },
+    lstat(path, callback) { fsCallback(callback, () => fsPromises.lstat(path)); },
+    readdir(path, callback) { fsCallback(callback, () => fsPromises.readdir(path)); },
     mkdir(path, options, callback) {
-      if (typeof options === 'function') {
-        callback = options;
-      }
-      process.nextTick(() => {
-        try {
-          fsModule.mkdirSync(path);
-          callback(null);
-        } catch (err) {
-          callback(err);
-        }
-      });
+      if (typeof options === 'function') { callback = options; options = undefined; }
+      fsCallback(callback, () => fsPromises.mkdir(path, options));
     },
-    unlink(path, callback) {
-      process.nextTick(() => {
-        try {
-          fsModule.unlinkSync(path);
-          callback(null);
-        } catch (err) {
-          callback(err);
-        }
-      });
+    unlink(path, callback) { fsCallback(callback, () => fsPromises.unlink(path)); },
+    rm(path, options, callback) {
+      if (typeof options === 'function') { callback = options; options = undefined; }
+      fsCallback(callback, () => fsPromises.rm(path, options));
+    },
+    rmdir(path, options, callback) {
+      if (typeof options === 'function') { callback = options; options = undefined; }
+      fsCallback(callback, () => fsCallAsync(
+        fsRequest('rmdir', path, {recursive: Boolean(options?.recursive)})));
+    },
+    access(path, mode, callback) {
+      if (typeof mode === 'function') { callback = mode; mode = undefined; }
+      fsCallback(callback, () => fsPromises.access(path, mode));
     },
     exists(path, callback) {
-      process.nextTick(() => callback(fsModule.existsSync(path)));
+      fsValidateCallback(callback);
+      fsCallback((error, value) => callback(!error && Boolean(value)),
+        () => fsCallAsync(fsRequest('exists', path)));
+    },
+    copyFile(src, dest, flags, callback) {
+      if (typeof flags === 'function') { callback = flags; flags = undefined; }
+      fsCallback(callback, () => fsPromises.copyFile(src, dest, flags));
+    },
+    copyFileSync(src, dest, flags = 0) {
+      if (flags !== 0) return fsUnsupported('copyFileSync with flags');
+      return fsCallSync(fsRequest('copy_file', src, {destination: String(dest)}));
+    },
+    rename(oldPath, newPath, callback) {
+      fsCallback(callback, () => fsPromises.rename(oldPath, newPath));
+    },
+    renameSync(oldPath, newPath) {
+      return fsCallSync(fsRequest('rename', oldPath, {destination: String(newPath)}));
     },
   };
 
-  const realpathFn = (p, options, callback) => {
-    if (typeof options === 'function') { callback = options; }
-    if (callback) process.nextTick(() => callback(null, String(p)));
-    return String(p);
+  const realpathFn = (path, options, callback) => {
+    if (typeof options === 'function') callback = options;
+    fsCallback(callback, () => fsPromises.realpath(path, options));
   };
   realpathFn.native = realpathFn;
-
-  const realpathSyncFn = (p, options) => String(p);
-  realpathSyncFn.native = realpathSyncFn;
-
   fsModule.realpath = realpathFn;
+  const realpathSyncFn = path => fsCallSync(fsRequest('realpath', path));
+  realpathSyncFn.native = realpathSyncFn;
   fsModule.realpathSync = realpathSyncFn;
-  fsModule.createReadStream = (p, opts) => new Readable();
-  fsModule.createWriteStream = (p, opts) => new Writable();
-  fsModule.watch = (p, opts, listener) => new EventEmitter();
-  fsModule.watchFile = (p, opts, listener) => {};
-  fsModule.unwatchFile = (p, listener) => {};
-  fsModule.chmod = (p, m, cb) => { if (cb) cb(null); };
-  fsModule.chmodSync = (p, m) => {};
-  fsModule.chown = (p, u, g, cb) => { if (cb) cb(null); };
-  fsModule.chownSync = (p, u, g) => {};
-  fsModule.copyFile = (src, dest, flags, cb) => {
-    if (typeof flags === 'function') { cb = flags; }
-    try { fsModule.copyFileSync(src, dest, flags); if (cb) cb(null); } catch (e) { if (cb) cb(e); }
-  };
-  fsModule.copyFileSync = (src, dest, flags) => {
-    const data = fsModule.readFileSync(src);
-    fsModule.writeFileSync(dest, data);
-  };
-  fsModule.rename = (oldPath, newPath, cb) => {
-    try { fsModule.renameSync(oldPath, newPath); if (cb) cb(null); } catch (e) { if (cb) cb(e); }
-  };
-  fsModule.renameSync = (oldPath, newPath) => {
-    fsModule.copyFileSync(oldPath, newPath);
-    try { fsModule.unlinkSync(oldPath); } catch {}
-  };
-  fsModule.open = (p, flags, mode, cb) => {
-    if (typeof mode === 'function') cb = mode;
-    if (cb) process.nextTick(() => cb(null, 3));
-  };
-  fsModule.openSync = (p, flags, mode) => 3;
-  fsModule.close = (fd, cb) => { if (cb) process.nextTick(() => cb(null)); };
-  fsModule.closeSync = fd => {};
-  fsModule.read = (fd, buf, off, len, pos, cb) => { if (cb) process.nextTick(() => cb(null, 0, buf)); };
-  fsModule.readSync = (fd, buf, off, len, pos) => 0;
-  fsModule.write = (fd, buf, off, len, pos, cb) => { if (cb) process.nextTick(() => cb(null, buf ? buf.length : 0, buf)); };
-  fsModule.writeSync = (fd, buf, off, len, pos) => buf ? buf.length : 0;
 
-  const fsPromises = {
-    readFile: async (path, options) => fsModule.readFileSync(path, options),
-    writeFile: async (path, data, options) => fsModule.writeFileSync(path, data, options),
-    stat: async path => fsModule.statSync(path),
-    lstat: async path => fsModule.lstatSync(path),
-    readdir: async path => fsModule.readdirSync(path),
-    mkdir: async (path, options) => fsModule.mkdirSync(path, options),
-    unlink: async path => fsModule.unlinkSync(path),
-    rm: async (path, options) => fsModule.rmSync(path),
-    access: async (path, mode) => fsModule.accessSync(path, mode),
-    realpath: async (path, options) => String(path),
-    copyFile: async (src, dest, flags) => fsModule.copyFileSync(src, dest, flags),
-    rename: async (oldPath, newPath) => fsModule.renameSync(oldPath, newPath),
-    open: async (path, flags, mode) => ({ fd: 3, close: async () => {}, readFile: async () => Buffer.alloc(0), writeFile: async () => {} }),
-  };
-  fsModule.promises = fsPromises;
+  // Do not fabricate descriptors, streams, watchers, or successful I/O.
+  for (const method of [
+    'watch', 'watchFile', 'unwatchFile',
+    'chmodSync', 'chownSync', 'openSync', 'closeSync', 'readSync', 'writeSync',
+  ]) {
+    fsModule[method] = () => fsUnsupported(method);
+  }
+  for (const method of ['chmod', 'chown', 'open', 'close', 'read', 'write']) {
+    fsModule[method] = (...args) => fsCallback(args[args.length - 1],
+      async () => fsUnsupported(method));
+  }
+
+  // ReadStream currently reads through the existing whole-file worker bridge,
+  // then delivers bounded chunks. No OS descriptor or fake open event is exposed.
+  class FileReadStream extends Readable {
+    constructor(path, options = {}) {
+      super();
+      if (typeof options === 'string') options = {encoding: options};
+      if (!options || typeof options !== 'object') throw new TypeError('Invalid ReadStream options');
+      if (options.fd != null || options.fs || (options.flags && options.flags !== 'r') ||
+          options.autoClose === false) return fsUnsupported('ReadStream options');
+      this.path = path;
+      this.pending = true;
+      this.readable = true;
+      this.readableEnded = false;
+      this.destroyed = false;
+      this.closed = false;
+      this.bytesRead = 0;
+      this._flowing = null;
+      this._queued = false;
+      this._resumeQueued = false;
+      this._bytes = null;
+      this._offset = 0;
+      this._encoding = null;
+      this._decoder = {needed: 0};
+      this._emitClose = options.emitClose !== false;
+      this._chunkSize = options.highWaterMark === undefined ? 65536 : options.highWaterMark;
+      const start = options.start === undefined ? 0 : options.start;
+      const end = options.end === undefined ? Infinity : options.end;
+      if (!Number.isSafeInteger(start) || start < 0 ||
+          (end !== Infinity && (!Number.isSafeInteger(end) || end < start)) ||
+          !Number.isSafeInteger(this._chunkSize) || this._chunkSize <= 0) {
+        const error = new RangeError('Invalid ReadStream range or highWaterMark');
+        error.code = 'ERR_OUT_OF_RANGE';
+        throw error;
+      }
+      if (options.encoding) this.setEncoding(options.encoding);
+      this._signal = options.signal;
+      this._abort = () => {
+        const error = new Error('The operation was aborted');
+        error.name = 'AbortError';
+        error.code = 'ABORT_ERR';
+        this.destroy(error);
+      };
+      if (this._signal) {
+        if (this._signal.aborted) queueMicrotask(this._abort);
+        else this._signal.addEventListener('abort', this._abort, {once: true});
+      }
+      Promise.resolve().then(() => this.destroyed ? null : fsModule.promises.readFile(path))
+          .then(bytes => {
+            if (this.destroyed) return;
+            this.pending = false;
+            this._bytes = (Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)).subarray(start,
+                end === Infinity ? bytes.length : Math.min(bytes.length, end + 1));
+            this.emit('ready');
+            this._schedule();
+          }, error => this.destroy(error));
+    }
+    on(name, listener) {
+      super.on(name, listener);
+      if (name === 'data' && this._flowing !== false) this.resume();
+      return this;
+    }
+    once(name, listener) {
+      super.once(name, listener);
+      if (name === 'data' && this._flowing !== false) this.resume();
+      return this;
+    }
+    setEncoding(encoding) {
+      if (!['utf8', 'utf-8'].includes(String(encoding).toLowerCase()))
+        return fsUnsupported('ReadStream encoding ' + encoding);
+      this._encoding = 'utf8';
+      return this;
+    }
+    pause() {
+      if (this._flowing !== false) {
+        this._flowing = false;
+        this.emit('pause');
+      }
+      return this;
+    }
+    resume() {
+      if (this.destroyed || this.readableEnded) return this;
+      if (!this._flowing && !this._resumeQueued) {
+        this._resumeQueued = true;
+        queueMicrotask(() => {
+          this._resumeQueued = false;
+          if (this._flowing && !this.destroyed) this.emit('resume');
+        });
+      }
+      this._flowing = true;
+      this._schedule();
+      return this;
+    }
+    isPaused() { return this._flowing === false; }
+    _decodeUtf8(bytes, final = false) {
+      const state = this._decoder;
+      let result = '';
+      for (let i = 0; i < bytes.length; ++i) {
+        const byte = bytes[i];
+        if (!state.needed) {
+          if (byte <= 0x7f) { result += String.fromCharCode(byte); continue; }
+          state.seen = 0;
+          state.lower = 0x80;
+          state.upper = 0xbf;
+          if (byte >= 0xc2 && byte <= 0xdf) {
+            state.needed = 1; state.point = byte & 0x1f;
+          } else if (byte >= 0xe0 && byte <= 0xef) {
+            state.needed = 2; state.point = byte & 0x0f;
+            if (byte === 0xe0) state.lower = 0xa0;
+            if (byte === 0xed) state.upper = 0x9f;
+          } else if (byte >= 0xf0 && byte <= 0xf4) {
+            state.needed = 3; state.point = byte & 7;
+            if (byte === 0xf0) state.lower = 0x90;
+            if (byte === 0xf4) state.upper = 0x8f;
+          } else {
+            result += '\ufffd';
+          }
+        } else if (byte < state.lower || byte > state.upper) {
+          state.needed = 0;
+          result += '\ufffd';
+          --i;
+        } else {
+          state.lower = 0x80;
+          state.upper = 0xbf;
+          state.point = (state.point << 6) | (byte & 0x3f);
+          if (++state.seen === state.needed) {
+            result += String.fromCodePoint(state.point);
+            state.needed = 0;
+          }
+        }
+      }
+      if (final && state.needed) {
+        state.needed = 0;
+        result += '\ufffd';
+      }
+      return result;
+    }
+    _schedule() {
+      if (this._queued || !this._flowing || !this._bytes || this.destroyed) return;
+      this._queued = true;
+      queueMicrotask(() => {
+        this._queued = false;
+        if (!this._flowing || !this._bytes || this.destroyed) return;
+        if (this._offset >= this._bytes.length) {
+          if (this._encoding) {
+            const tail = this._decodeUtf8(new Uint8Array(0), true);
+            if (tail) this.emit('data', tail);
+            if (!this._flowing || this.destroyed) return;
+          }
+          this.readableEnded = true;
+          this.readable = false;
+          this._bytes = null;
+          this.emit('end');
+          this.destroy();
+          return;
+        }
+        const end = Math.min(this._offset + this._chunkSize, this._bytes.length);
+        const bytes = this._bytes.subarray(this._offset, end);
+        this._offset = end;
+        this.bytesRead += bytes.length;
+        // Decode incrementally: the main bootstrap's TextDecoder fallback is
+        // not streaming, and per-chunk TextDecoder would also strip BOMs.
+        const chunk = this._encoding ? this._decodeUtf8(bytes) : bytes;
+        if (chunk.length) this.emit('data', chunk);
+        this._schedule();
+      });
+    }
+    destroy(error) {
+      if (this.destroyed) return this;
+      this.destroyed = true;
+      this.pending = false;
+      this.readable = false;
+      this._bytes = null;
+      if (this._signal) this._signal.removeEventListener('abort', this._abort);
+      queueMicrotask(() => {
+        try { if (error) this.emit('error', error); }
+        finally {
+          this.closed = true;
+          if (this._emitClose) this.emit('close');
+        }
+      });
+      return this;
+    }
+    close(callback) {
+      if (callback) {
+        if (this.closed) queueMicrotask(callback);
+        else this.once('close', callback);
+      }
+      return this.destroy();
+    }
+  }
+  fsModule.ReadStream = FileReadStream;
+  fsModule.createReadStream = (path, options) => new FileReadStream(path, options);
+
+  // Path-based writer over the real asynchronous filesystem bridge. Each
+  // operation opens/closes its file; no persistent descriptor or open event is
+  // invented. Descriptor-based writes and positioned writes remain unsupported.
+  class FileWriteStream extends Writable {
+    constructor(path, options = {}) {
+      super();
+      if (typeof options === 'string') options = {encoding: options};
+      if (!options || typeof options !== 'object') throw new TypeError('Invalid WriteStream options');
+      if (options.fd != null || options.fs || options.start !== undefined ||
+          options.autoClose === false || options.flush || options.objectMode ||
+          (options.mode !== undefined && options.mode !== 0o666)) {
+        return fsUnsupported('WriteStream options');
+      }
+      const flags = options.flags === undefined ? 'w' : options.flags;
+      if (flags !== 'w' && flags !== 'a') return fsUnsupported('WriteStream flags ' + flags);
+      const highWaterMark = options.highWaterMark === undefined ? 16384 : options.highWaterMark;
+      if (!Number.isSafeInteger(highWaterMark) || highWaterMark < 0) {
+        throw Object.assign(new RangeError('Invalid WriteStream highWaterMark'), {code: 'ERR_OUT_OF_RANGE'});
+      }
+      this.path = path;
+      this.fd = null;
+      this.pending = true;
+      this.writable = true;
+      this.writableEnded = false;
+      this.writableFinished = false;
+      this.destroyed = false;
+      this.closed = false;
+      this.errored = null;
+      this.bytesWritten = 0;
+      this.writableLength = 0;
+      this.writableHighWaterMark = highWaterMark;
+      this.writableNeedDrain = false;
+      this.writableCorked = 0;
+      this._writes = [];
+      this._endCallbacks = [];
+      this._closeCallbacks = [];
+      this._busy = true;
+      this._closeScheduled = false;
+      this._finishScheduled = false;
+      this._emitClose = options.emitClose !== false;
+      this.setDefaultEncoding(options.encoding === undefined ? 'utf8' : options.encoding);
+      this._signal = options.signal;
+      this._abort = () => this.destroy(Object.assign(new Error('The operation was aborted'),
+          {name: 'AbortError', code: 'ABORT_ERR'}));
+      if (this._signal) {
+        if (typeof this._signal.addEventListener !== 'function' ||
+            typeof this._signal.removeEventListener !== 'function') {
+          throw Object.assign(new TypeError('signal must be an AbortSignal'), {code: 'ERR_INVALID_ARG_TYPE'});
+        }
+        if (this._signal.aborted) queueMicrotask(this._abort);
+        else this._signal.addEventListener('abort', this._abort, {once: true});
+      }
+      Promise.resolve().then(() => {
+        if (this.destroyed) return;
+        return flags === 'a' ? fsModule.promises.appendFile(path, Buffer.alloc(0)) :
+                               fsModule.promises.writeFile(path, Buffer.alloc(0));
+      }).then(() => {
+        this._busy = false;
+        this.pending = false;
+        if (this.destroyed) return this._completeClose();
+        // A completed create/truncate is observable, without fabricating an fd.
+        this.emit('ready');
+        this._pump();
+      }, error => {
+        this._busy = false;
+        this.pending = false;
+        this.destroy(error);
+      });
+    }
+    _callback(callback, error) {
+      if (callback) queueMicrotask(() => callback(error));
+    }
+    _validateCallback(callback) {
+      if (callback !== undefined) fsValidateCallback(callback);
+    }
+    _error(code, message) {
+      return Object.assign(new Error(message), {code});
+    }
+    setDefaultEncoding(encoding) {
+      if (typeof encoding !== 'string' ||
+          !['utf8', 'utf-8', 'hex', 'base64', 'base64url', 'ascii', 'latin1',
+            'binary', 'ucs2', 'ucs-2', 'utf16le', 'utf-16le'].includes(encoding.toLowerCase())) {
+        throw this._error('ERR_UNKNOWN_ENCODING', 'Unknown encoding: ' + encoding);
+      }
+      this._defaultEncoding = encoding;
+      return this;
+    }
+    write(chunk, encoding, callback) {
+      if (typeof encoding === 'function') { callback = encoding; encoding = undefined; }
+      this._validateCallback(callback);
+      if (this.destroyed) {
+        this._callback(callback, this.errored || this._error('ERR_STREAM_DESTROYED', 'Cannot write after destroy'));
+        return false;
+      }
+      if (this.writableEnded) {
+        const error = this._error('ERR_STREAM_WRITE_AFTER_END', 'write after end');
+        this._callback(callback, error);
+        this.destroy(error);
+        return false;
+      }
+      let bytes;
+      if (typeof chunk === 'string') {
+        const selected = encoding || this._defaultEncoding;
+        const previous = this._defaultEncoding;
+        this.setDefaultEncoding(selected);
+        this._defaultEncoding = previous;
+        bytes = Buffer.from(chunk, selected);
+      } else if (ArrayBuffer.isView(chunk)) {
+        bytes = Buffer.from(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+      } else {
+        throw Object.assign(new TypeError('WriteStream data must be a string or ArrayBuffer view'),
+            {code: 'ERR_INVALID_ARG_TYPE'});
+      }
+      this._writes.push({bytes, callback});
+      this.writableLength += bytes.length;
+      const accepted = this.writableLength < this.writableHighWaterMark;
+      if (!accepted) this.writableNeedDrain = true;
+      this._pump();
+      return accepted;
+    }
+    _pump() {
+      if (this._busy || this.pending || this.destroyed || this.writableCorked) return;
+      const entry = this._writes.shift();
+      if (!entry) {
+        if (this.writableEnded) this._finish();
+        return;
+      }
+      this._busy = true;
+      // Byte storage is snapped at write(), before user code can mutate it.
+      Promise.resolve().then(() => fsModule.promises.appendFile(this.path, entry.bytes)).then(() => {
+        this._busy = false;
+        this.bytesWritten += entry.bytes.length;
+        this.writableLength -= entry.bytes.length;
+        this._callback(entry.callback, this.destroyed ?
+            (this.errored || this._error('ERR_STREAM_DESTROYED', 'Stream was destroyed')) : undefined);
+        if (this.destroyed) return this._completeClose();
+        if (this.writableNeedDrain && this.writableLength === 0 && !this.writableEnded) {
+          this.writableNeedDrain = false;
+          queueMicrotask(() => {
+            if (!this.destroyed && !this.writableEnded && this.writableLength === 0) this.emit('drain');
+          });
+        }
+        this._pump();
+      }, error => {
+        this._busy = false;
+        this.writableLength -= entry.bytes.length;
+        this._callback(entry.callback, error);
+        this.destroy(error);
+      });
+    }
+    end(chunk, encoding, callback) {
+      if (typeof chunk === 'function') { callback = chunk; chunk = undefined; encoding = undefined; }
+      else if (typeof encoding === 'function') { callback = encoding; encoding = undefined; }
+      this._validateCallback(callback);
+      if (this.destroyed) {
+        this._callback(callback, this.errored ||
+            (this.writableFinished ? undefined : this._error('ERR_STREAM_DESTROYED', 'Stream was destroyed')));
+        return this;
+      }
+      if (this.writableFinished && (chunk === undefined || chunk === null)) {
+        this._callback(callback);
+        return this;
+      }
+      if (chunk !== undefined && chunk !== null) this.write(chunk, encoding);
+      if (callback) this._endCallbacks.push(callback);
+      this.writableEnded = true;
+      this.writable = false;
+      this.writableCorked = 0;
+      this._pump();
+      return this;
+    }
+    _finish() {
+      if (this._finishScheduled || this.writableFinished) return;
+      this._finishScheduled = true;
+      queueMicrotask(() => {
+        if (this.destroyed) return;
+        this.emit('prefinish');
+        if (this.destroyed) return;
+        this.writableFinished = true;
+        this.writableNeedDrain = false;
+        for (const callback of this._endCallbacks.splice(0)) this._callback(callback);
+        queueMicrotask(() => {
+          if (this.destroyed) return;
+          try { this.emit('finish'); }
+          finally { this.destroy(); }
+        });
+      });
+    }
+    cork() { ++this.writableCorked; }
+    uncork() {
+      if (this.writableCorked) --this.writableCorked;
+      this._pump();
+    }
+    destroy(error) {
+      if (this.destroyed) {
+        if (error && !this.errored) this.errored = error;
+        this._completeClose();
+        return this;
+      }
+      this.destroyed = true;
+      this.writable = false;
+      this.errored = error || null;
+      if (this._signal) this._signal.removeEventListener('abort', this._abort);
+      this._completeClose();
+      return this;
+    }
+    _completeClose() {
+      // The native bridge cannot cancel an already submitted file operation.
+      // close waits for it, so no write can complete after the close event.
+      if (this._busy || this._closeScheduled) return;
+      this._closeScheduled = true;
+      this.pending = false;
+      const error = this.errored || this._error('ERR_STREAM_DESTROYED', 'Stream was destroyed');
+      for (const entry of this._writes.splice(0)) this._callback(entry.callback, error);
+      for (const callback of this._endCallbacks.splice(0)) this._callback(callback, error);
+      this.writableLength = 0;
+      this.writableNeedDrain = false;
+      queueMicrotask(() => {
+        try {
+          if (this.errored) this.emit('error', this.errored);
+        } finally {
+          this.closed = true;
+          for (const callback of this._closeCallbacks.splice(0)) this._callback(callback);
+          if (this._emitClose) this.emit('close');
+        }
+      });
+    }
+    close(callback) {
+      this._validateCallback(callback);
+      if (callback) {
+        if (this.closed) this._callback(callback);
+        else this._closeCallbacks.push(callback);
+      }
+      if (!this.destroyed) this.end();
+      return this;
+    }
+  }
+  fsModule.WriteStream = FileWriteStream;
+  fsModule.createWriteStream = (path, options) => new FileWriteStream(path, options);
+
 
   const utilModule = {
     TextEncoder: typeof TextEncoder !== 'undefined' ? TextEncoder : class TextEncoder {
@@ -2318,6 +2917,60 @@
     };
   }
 
+  function cryptoArgumentError(message) {
+    return Object.assign(new TypeError(message), {code: 'ERR_INVALID_ARG_TYPE'});
+  }
+  function digestEncoding(encoding) {
+    if (typeof encoding !== 'string') throw cryptoArgumentError('Encoding must be a string');
+    const normalized = encoding.toLowerCase();
+    if (normalized === 'utf-8') return 'utf8';
+    if (['utf8', 'hex', 'base64', 'base64url'].includes(normalized)) return normalized;
+    throw Object.assign(new Error('Unsupported digest encoding: ' + encoding),
+                        {code: 'ERR_NOT_SUPPORTED'});
+  }
+  function cryptoBytes(value, encoding) {
+    if (typeof value === 'string') {
+      const normalized = digestEncoding(encoding === undefined ? 'utf8' : encoding);
+      // Match Node's partial hex decoding, including an unmatched final nibble.
+      if (normalized === 'hex') value = value.match(/^(?:[0-9a-fA-F]{2})*/)[0];
+      return Buffer.from(value, normalized);
+    }
+    if (ArrayBuffer.isView(value)) {
+      return Buffer.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+    }
+    if (value instanceof ArrayBuffer) return Buffer.from(new Uint8Array(value));
+    throw cryptoArgumentError('Crypto data must be a string or binary buffer');
+  }
+  function createDigestObject(algorithm, key) {
+    if (typeof algorithm !== 'string') throw cryptoArgumentError('Algorithm must be a string');
+    const normalized = algorithm.toLowerCase().replace(/-/g, '');
+    if (!['md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512'].includes(normalized)) {
+      throw Object.assign(new Error('Unsupported digest algorithm: ' + algorithm),
+                          {code: 'ERR_NOT_SUPPORTED'});
+    }
+    const keyBytes = key === undefined ? null : cryptoBytes(key);
+    let chunks = [];
+    let finalized = false;
+    function checkState() {
+      if (finalized) throw Object.assign(new Error('Digest already called'), {code: 'ERR_CRYPTO_HASH_FINALIZED'});
+    }
+    return {
+      update(data, encoding) {
+        checkState();
+        chunks.push(cryptoBytes(data, encoding));
+        return this;
+      },
+      digest(encoding) {
+        checkState();
+        const outputEncoding = encoding === undefined ? undefined : digestEncoding(encoding);
+        finalized = true;
+        const input = Buffer.concat(chunks);
+        chunks = [];
+        const result = Buffer.from(__xenonCryptoDigest(normalized, input, keyBytes));
+        return outputEncoding ? result.toString(outputEncoding) : result;
+      },
+    };
+  }
   const cryptoModule = {
     createCipheriv(algorithm, key, iv) {
       return createCipherObject(algorithm, key, iv, true);
@@ -2326,39 +2979,34 @@
       return createCipherObject(algorithm, key, iv, false);
     },
     createHash(algorithm) {
-      let data = '';
-      return {
-        update(chunk) {
-          if (typeof chunk === 'string') data += chunk;
-          else if (Buffer.isBuffer(chunk)) data += chunk.toString('utf8');
-          return this;
-        },
-        digest(encoding = 'hex') {
-          let hash = 0;
-          for (let i = 0; i < data.length; i++) {
-            hash = ((hash << 5) - hash) + data.charCodeAt(i);
-            hash |= 0;
-          }
-          const hex = Math.abs(hash).toString(16).padStart(32, '0');
-          if (encoding === 'hex') return hex;
-          return Buffer.from(hex, 'hex');
-        },
-      };
+      return createDigestObject(algorithm);
     },
     createHmac(algorithm, key) {
-      return cryptoModule.createHash(algorithm);
+      if (key === undefined) throw cryptoArgumentError('HMAC requires a key');
+      return createDigestObject(algorithm, key);
     },
-    randomBytes(size) {
-      const buf = Buffer.alloc(size);
-      for (let i = 0; i < size; ++i) buf[i] = Math.floor(Math.random() * 256);
-      return buf;
+    randomBytes(size, callback) {
+      if (typeof size !== 'number') throw cryptoArgumentError('Size must be a number');
+      if (!Number.isInteger(size) || size < 0 || size > 0x7fffffff) {
+        throw Object.assign(new RangeError('Size is out of range'), {code: 'ERR_OUT_OF_RANGE'});
+      }
+      if (callback !== undefined && typeof callback !== 'function') {
+        throw cryptoArgumentError('Callback must be a function');
+      }
+      const generate = () => Buffer.from(__xenonCryptoRandom(size));
+      if (callback === undefined) return generate();
+      queueMicrotask(() => {
+        let bytes;
+        try { bytes = generate(); } catch (error) { callback(error); return; }
+        callback(null, bytes);
+      });
     },
     randomUUID() {
-      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-        const r = Math.random() * 16 | 0;
-        const v = c === 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-      });
+      const bytes = cryptoModule.randomBytes(16);
+      bytes[6] = (bytes[6] & 15) | 64;
+      bytes[8] = (bytes[8] & 63) | 128;
+      const hex = bytes.toString('hex');
+      return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
     },
   };
 
@@ -2410,94 +3058,121 @@
     },
   };
 
-  function Stream() {
-    if (!(this instanceof Stream)) {
-      return new Stream();
+  function streamUnsupportedError(method) {
+    const error = new Error(`stream.${method} is not supported by this runtime`);
+    error.code = 'ERR_NOT_SUPPORTED';
+    return error;
+  }
+  function streamValidateCallback(callback) {
+    if (typeof callback !== 'function') {
+      const error = new TypeError('The callback argument must be a function');
+      error.code = 'ERR_INVALID_ARG_TYPE';
+      throw error;
     }
+  }
+  function streamFailOperation(method, callback) {
+    const error = streamUnsupportedError(method);
+    if (callback === undefined) throw error;
+    streamValidateCallback(callback);
+    queueMicrotask(() => callback(error));
+  }
+
+  // Keep the callable constructors and EventEmitter inheritance used by
+  // userland stream implementations. These base classes do not implement an
+  // I/O queue: operations must fail explicitly until a subclass supplies one.
+  function Stream() {
+    if (!(this instanceof Stream)) return new Stream();
     EventEmitter.call(this);
   }
   Object.setPrototypeOf(Stream.prototype, EventEmitter.prototype);
   Object.setPrototypeOf(Stream, EventEmitter);
-  Stream.prototype.pipe = function(dest) { return dest; };
+  Stream.prototype.pipe = function() { throw streamUnsupportedError('pipe'); };
 
   function Readable(options) {
-    if (!(this instanceof Readable)) {
-      return new Readable(options);
-    }
+    if (!(this instanceof Readable)) return new Readable(options);
     Stream.call(this);
+    if (options) {
+      if (typeof options.read === 'function') this._read = options.read;
+      if (typeof options.destroy === 'function') this._destroy = options.destroy;
+    }
   }
   Object.setPrototypeOf(Readable.prototype, Stream.prototype);
   Object.setPrototypeOf(Readable, Stream);
-  Readable.prototype.read = function() { return null; };
-  Readable.prototype.push = function() { return false; };
+  Readable.prototype.read = function() { throw streamUnsupportedError('Readable.read'); };
+  Readable.prototype.push = function() { throw streamUnsupportedError('Readable.push'); };
 
   function Writable(options) {
-    if (!(this instanceof Writable)) {
-      return new Writable(options);
-    }
+    if (!(this instanceof Writable)) return new Writable(options);
     Stream.call(this);
+    if (options && typeof options.write === 'function') this._write = options.write;
   }
   Object.setPrototypeOf(Writable.prototype, Stream.prototype);
   Object.setPrototypeOf(Writable, Stream);
-  Writable.prototype.write = function(chunk, encoding, cb) {
-    if (typeof encoding === 'function') {
-      cb = encoding;
-    }
-    if (cb) {
-      cb();
-    }
-    return true;
+  Writable.prototype.write = function(chunk, encoding, callback) {
+    if (typeof encoding === 'function') callback = encoding;
+    streamFailOperation('Writable.write', callback);
+    return false;
   };
-  Writable.prototype.end = function(chunk, encoding, cb) {
-    if (typeof encoding === 'function') {
-      cb = encoding;
-    } else if (typeof chunk === 'function') {
-      cb = chunk;
-    }
-    if (cb) {
-      cb();
-    }
-    this.emit('finish');
+  Writable.prototype.end = function(chunk, encoding, callback) {
+    if (typeof chunk === 'function') callback = chunk;
+    else if (typeof encoding === 'function') callback = encoding;
+    streamFailOperation('Writable.end', callback);
+    return this;
   };
 
-  function Transform(options) {
-    if (!(this instanceof Transform)) {
-      return new Transform(options);
-    }
+  function Duplex(options) {
+    if (!(this instanceof Duplex)) return new Duplex(options);
     Readable.call(this, options);
+    if (options && typeof options.write === 'function') this._write = options.write;
   }
-  Object.setPrototypeOf(Transform.prototype, Readable.prototype);
-  Object.setPrototypeOf(Transform, Readable);
-  Transform.prototype._transform = function(chunk, encoding, cb) {
-    if (cb) {
-      cb();
+  Object.setPrototypeOf(Duplex.prototype, Readable.prototype);
+  Object.setPrototypeOf(Duplex, Readable);
+  Duplex.prototype.write = Writable.prototype.write;
+  Duplex.prototype.end = Writable.prototype.end;
+
+  function Transform(options) {
+    if (!(this instanceof Transform)) return new Transform(options);
+    Duplex.call(this, options);
+    if (options && typeof options.transform === 'function') {
+      this._transform = options.transform;
     }
+  }
+  Object.setPrototypeOf(Transform.prototype, Duplex.prototype);
+  Object.setPrototypeOf(Transform, Duplex);
+  Transform.prototype._transform = function(chunk, encoding, callback) {
+    streamFailOperation('Transform._transform', callback);
   };
 
   function PassThrough(options) {
-    if (!(this instanceof PassThrough)) {
-      return new PassThrough(options);
-    }
+    if (!(this instanceof PassThrough)) return new PassThrough(options);
     Transform.call(this, options);
   }
   Object.setPrototypeOf(PassThrough.prototype, Transform.prototype);
   Object.setPrototypeOf(PassThrough, Transform);
 
-  // Node's `require('stream')` is the Stream constructor with classes
-  // attached as properties (readable-stream does `module.exports = require('stream')`
-  // then `Parent.call(this)`).
   Stream.Stream = Stream;
   Stream.Readable = Readable;
   Stream.Writable = Writable;
-  Stream.Duplex = Readable;
+  Stream.Duplex = Duplex;
   Stream.Transform = Transform;
   Stream.PassThrough = PassThrough;
   Stream.EventEmitter = EventEmitter;
   Stream.pipeline = (...args) => {
-    const cb = typeof args[args.length - 1] === 'function' ? args.pop() : () => {};
-    cb(null);
+    const callback = args.pop();
+    streamValidateCallback(callback);
+    streamFailOperation('pipeline', callback);
+    const streams = Array.isArray(args[0]) ? args[0] : args;
+    return streams[streams.length - 1];
   };
-  Stream.finished = (stream, cb) => { if (cb) cb(null); };
+  Stream.finished = (stream, options, callback) => {
+    if (typeof options === 'function') callback = options;
+    streamValidateCallback(callback);
+    let active = true;
+    queueMicrotask(() => {
+      if (active) callback(streamUnsupportedError('finished'));
+    });
+    return () => { active = false; };
+  };
   const streamModule = Stream;
 
   class StringDecoder {
@@ -2507,27 +3182,33 @@
   }
   const stringDecoderModule = { StringDecoder };
 
-  const childProcessModule = {
-    spawn: () => {
-      const cp = new EventEmitter();
-      cp.stdout = new Readable();
-      cp.stderr = new Readable();
-      cp.stdin = new Writable();
-      cp.pid = 0;
-      cp.kill = () => true;
-      return cp;
-    },
-    exec: (cmd, opts, cb) => {
-      if (typeof opts === 'function') { cb = opts; }
-      if (cb) process.nextTick(() => cb(null, '', ''));
-    },
-    execFile: (file, args, opts, cb) => {
-      if (typeof opts === 'function') { cb = opts; }
-      if (typeof args === 'function') { cb = args; }
-      if (cb) process.nextTick(() => cb(null, '', ''));
-    },
-    fork: () => childProcessModule.spawn(),
-  };
+  // Expose the module independently of process creation. No process, PID, exit
+  // status or successful callback may be fabricated without an OS operation.
+  const childProcessModule = (() => {
+    const unavailable = operation => {
+      const error = new Error(`child_process.${operation} is not supported by this runtime`);
+      error.code = 'ERR_NOT_SUPPORTED';
+      throw error;
+    };
+    class ChildProcess extends EventEmitter {
+      constructor() { super(); unavailable('ChildProcess'); }
+      spawn() { return unavailable('ChildProcess.spawn'); }
+      kill() { return unavailable('ChildProcess.kill'); }
+      send() { return unavailable('ChildProcess.send'); }
+      disconnect() { return unavailable('ChildProcess.disconnect'); }
+    }
+    return {
+      ChildProcess,
+      _forkChild: () => unavailable('_forkChild'),
+      spawn: () => unavailable('spawn'),
+      spawnSync: () => unavailable('spawnSync'),
+      exec: () => unavailable('exec'),
+      execSync: () => unavailable('execSync'),
+      execFile: () => unavailable('execFile'),
+      execFileSync: () => unavailable('execFileSync'),
+      fork: () => unavailable('fork'),
+    };
+  })();
 
   function assert(condition, message) {
     if (!condition) throw new Error(message || 'Assertion failed');
@@ -2538,90 +3219,123 @@
   assert.equal = assert.strictEqual;
   assert.notEqual = (a, b, m) => { if (a === b) throw new Error(m || `Expected ${a} !== ${b}`); };
 
-  const zlibConstants = {
-    Z_NO_FLUSH: 0,
-    Z_PARTIAL_FLUSH: 1,
-    Z_SYNC_FLUSH: 2,
-    Z_FULL_FLUSH: 3,
-    Z_FINISH: 4,
-    Z_BLOCK: 5,
-    Z_TREES: 6,
-    Z_OK: 0,
-    Z_STREAM_END: 1,
-    Z_NEED_DICT: 2,
-    Z_ERRNO: -1,
-    Z_STREAM_ERROR: -2,
-    Z_DATA_ERROR: -3,
-    Z_MEM_ERROR: -4,
-    Z_BUF_ERROR: -5,
-    Z_VERSION_ERROR: -6,
-    Z_NO_COMPRESSION: 0,
-    Z_BEST_SPEED: 1,
-    Z_BEST_COMPRESSION: 9,
-    Z_DEFAULT_COMPRESSION: -1,
-    Z_FILTERED: 1,
-    Z_HUFFMAN_ONLY: 2,
-    Z_RLE: 3,
-    Z_FIXED: 4,
-    Z_DEFAULT_STRATEGY: 0,
-  };
-  const constantsModule = Object.assign({}, fsConstants, zlibConstants);
-  const zlibModule = Object.assign({
-    constants: zlibConstants,
-    codes: {
-      Z_OK: 0,
-      Z_STREAM_END: 1,
-      Z_NEED_DICT: 2,
-      Z_ERRNO: -1,
-      Z_STREAM_ERROR: -2,
-      Z_DATA_ERROR: -3,
-      Z_MEM_ERROR: -4,
-      Z_BUF_ERROR: -5,
-      Z_VERSION_ERROR: -6,
-    },
-    createGzip: () => new Transform(),
-    createGunzip: () => new Transform(),
-    createDeflate: () => new Transform(),
-    createInflate: () => new Transform(),
-    createDeflateRaw: () => new Transform(),
-    createInflateRaw: () => new Transform(),
-    createUnzip: () => new Transform(),
-    gzipSync: buf => buf,
-    gunzipSync: buf => buf,
-    deflateSync: buf => buf,
-    inflateSync: buf => buf,
-    deflateRawSync: buf => buf,
-    inflateRawSync: buf => buf,
-    unzipSync: buf => buf,
-    gzip: (buf, opts, cb) => {
-      if (typeof opts === 'function') { cb = opts; }
-      if (cb) Promise.resolve().then(() => cb(null, buf));
-    },
-    gunzip: (buf, opts, cb) => {
-      if (typeof opts === 'function') { cb = opts; }
-      if (cb) Promise.resolve().then(() => cb(null, buf));
-    },
-    deflate: (buf, opts, cb) => {
-      if (typeof opts === 'function') { cb = opts; }
-      if (cb) Promise.resolve().then(() => cb(null, buf));
-    },
-    inflate: (buf, opts, cb) => {
-      if (typeof opts === 'function') { cb = opts; }
-      if (cb) Promise.resolve().then(() => cb(null, buf));
-    },
-    deflateRaw: (buf, opts, cb) => {
-      if (typeof opts === 'function') { cb = opts; }
-      if (cb) Promise.resolve().then(() => cb(null, buf));
-    },
-    inflateRaw: (buf, opts, cb) => {
-      if (typeof opts === 'function') { cb = opts; }
-      if (cb) Promise.resolve().then(() => cb(null, buf));
-    },
-    unzip: (buf, opts, cb) => {
-      if (typeof opts === 'function') { cb = opts; }
-      if (cb) Promise.resolve().then(() => cb(null, buf));
-    },
-  }, zlibConstants);
+  function createZlibModule(call) {
+    const constants = {
+      Z_NO_FLUSH: 0, Z_PARTIAL_FLUSH: 1, Z_SYNC_FLUSH: 2, Z_FULL_FLUSH: 3,
+      Z_FINISH: 4, Z_BLOCK: 5, Z_TREES: 6, Z_OK: 0, Z_STREAM_END: 1,
+      Z_NEED_DICT: 2, Z_ERRNO: -1, Z_STREAM_ERROR: -2, Z_DATA_ERROR: -3,
+      Z_MEM_ERROR: -4, Z_BUF_ERROR: -5, Z_VERSION_ERROR: -6,
+      Z_NO_COMPRESSION: 0, Z_BEST_SPEED: 1, Z_BEST_COMPRESSION: 9,
+      Z_DEFAULT_COMPRESSION: -1, Z_FILTERED: 1, Z_HUFFMAN_ONLY: 2, Z_RLE: 3,
+      Z_FIXED: 4, Z_DEFAULT_STRATEGY: 0, Z_MIN_WINDOWBITS: 8, Z_MAX_WINDOWBITS: 15,
+      Z_DEFAULT_WINDOWBITS: 15, Z_MIN_CHUNK: 64, Z_DEFAULT_CHUNK: 16384,
+      Z_MIN_MEMLEVEL: 1, Z_MAX_MEMLEVEL: 9, Z_DEFAULT_MEMLEVEL: 8,
+      Z_MIN_LEVEL: -1, Z_MAX_LEVEL: 9, Z_DEFAULT_LEVEL: -1,
+    };
+    function codedError(code, message, Type = Error) {
+      const error = new Type(message);
+      error.code = code;
+      return error;
+    }
+    function nativeError(error) {
+      if (error && error.code) return error;
+      const message = String(error && error.message || error);
+      const code = /(?:^|\b)(Z_[A-Z_]+|ERR_[A-Z_]+):/.exec(message);
+      return codedError(code ? code[1] : 'ERR_OPERATION_FAILED', message);
+    }
+    function bytes(input) {
+      if (typeof input === 'string') return Buffer.from(input);
+      if (ArrayBuffer.isView(input)) {
+        return Buffer.from(new Uint8Array(input.buffer, input.byteOffset, input.byteLength));
+      }
+      if (input instanceof ArrayBuffer) return Buffer.from(new Uint8Array(input));
+      throw codedError('ERR_INVALID_ARG_TYPE', 'zlib input must be a string or binary buffer', TypeError);
+    }
+    function options(value) {
+      if (value === undefined || value === null) return {};
+      if (typeof value !== 'object' || Array.isArray(value)) {
+        throw codedError('ERR_INVALID_ARG_TYPE', 'zlib options must be an object', TypeError);
+      }
+      const result = {};
+      const ranges = {level: [-1, 9], windowBits: [9, 15], memLevel: [1, 9],
+        strategy: [0, 4], chunkSize: [64, 2147483647], maxOutputLength: [1, 67108864]};
+      for (const [key, setting] of Object.entries(value)) {
+        const value = setting;
+        if (value === undefined) continue;
+        if (key === 'flush' || key === 'finishFlush') {
+          if (value !== (key === 'flush' ? 0 : 4)) {
+            throw codedError('ERR_NOT_SUPPORTED', 'Partial zlib flush is not supported');
+          }
+        } else if (!ranges[key]) {
+          throw codedError('ERR_NOT_SUPPORTED', 'Unsupported zlib option: ' + key);
+        } else if (!Number.isInteger(value) || value < ranges[key][0] || value > ranges[key][1]) {
+          throw codedError('ERR_OUT_OF_RANGE', 'Invalid zlib option: ' + key, RangeError);
+        }
+        result[key] = value;
+      }
+      return result;
+    }
+    const codes = {};
+    for (const name of ['Z_OK', 'Z_STREAM_END', 'Z_NEED_DICT', 'Z_ERRNO',
+        'Z_STREAM_ERROR', 'Z_DATA_ERROR', 'Z_MEM_ERROR', 'Z_BUF_ERROR', 'Z_VERSION_ERROR']) {
+      codes[name] = constants[name];
+      codes[constants[name]] = name;
+    }
+    const result = Object.assign({constants, codes}, constants);
+    for (const name of ['gzip', 'gunzip', 'deflate', 'inflate', 'deflateRaw', 'inflateRaw', 'unzip']) {
+      result[name + 'Sync'] = (input, opts) => {
+        const data = bytes(input), settings = options(opts);
+        try { return Buffer.from(call(name, data, settings, false)); }
+        catch (error) { throw nativeError(error); }
+      };
+      result[name] = (input, opts, callback) => {
+        if (typeof opts === 'function') { callback = opts; opts = undefined; }
+        if (typeof callback !== 'function') {
+          throw codedError('ERR_INVALID_ARG_TYPE', 'zlib callback must be a function', TypeError);
+        }
+        const data = bytes(input), settings = options(opts);
+        let pending;
+        try { pending = call(name, data, settings, true); }
+        catch (error) { queueMicrotask(() => callback(nativeError(error))); return; }
+        Promise.resolve(pending).then(value => callback(null, Buffer.from(value)),
+                                      error => callback(nativeError(error)));
+      };
+    }
+    for (const name of ['Gzip', 'Gunzip', 'Deflate', 'Inflate', 'DeflateRaw', 'InflateRaw', 'Unzip',
+        'BrotliCompress', 'BrotliDecompress']) {
+      const unsupported = function() {
+        throw codedError('ERR_NOT_SUPPORTED', 'zlib.' + name + ' streaming is not supported');
+      };
+      result[name] = unsupported;
+      result['create' + name] = unsupported;
+    }
+    for (const name of ['brotliCompress', 'brotliDecompress']) {
+      result[name + 'Sync'] = () => {
+        throw codedError('ERR_NOT_SUPPORTED', 'zlib.' + name + ' is not supported');
+      };
+      result[name] = (input, opts, callback) => {
+        if (typeof opts === 'function') callback = opts;
+        if (typeof callback !== 'function') {
+          throw codedError('ERR_INVALID_ARG_TYPE', 'zlib callback must be a function', TypeError);
+        }
+        queueMicrotask(() => callback(codedError('ERR_NOT_SUPPORTED', 'zlib.' + name + ' is not supported')));
+      };
+    }
+    return result;
+  }
+  const zlibModule = createZlibModule((operation, data, options, asynchronous) =>
+      __xenonZlibCall(operation, data, options, asynchronous));
+  const constantsModule = Object.assign({}, fsConstants, zlibModule.constants);
+  ipcMain.on('__xenon:zlib', (event, request) => {
+    event.returnValue = Buffer.from(__xenonZlibCall(request.operation,
+        Buffer.from(request.dataBase64, 'base64'), request.options || {}, false))
+        .toString('base64');
+  });
+  ipcMain.handle('__xenon:zlib', async (_event, request) => {
+    const result = await __xenonZlibCall(request.operation,
+        Buffer.from(request.dataBase64, 'base64'), request.options || {}, true);
+    return Buffer.from(result).toString('base64');
+  });
   const netModule = (() => {
     function normalizeNetPath(value) {
       let path = String(value || '');
@@ -2653,15 +3367,14 @@
         return {t: 's', d: data};
       }
       const u8 = data instanceof Uint8Array ? data : Buffer.from(String(data));
-      let raw = '';
-      for (let i = 0; i < u8.length; i++) {
-        raw += String.fromCharCode(u8[i]);
-      }
-      return {t: 'b', d: raw};
+      return {t: 'b64', d: Buffer.from(u8.buffer, u8.byteOffset, u8.byteLength).toString('base64')};
     }
     function netWireToBytes(wire) {
       if (!wire || wire.t === 's') {
         return Buffer.from(String(wire && wire.d || ''), 'utf8');
+      }
+      if (wire.t === 'b64') {
+        return Buffer.from(String(wire.d || ''), 'base64');
       }
       const raw = String(wire.d || '');
       const u8 = new Uint8Array(raw.length);
@@ -2672,13 +3385,23 @@
     }
 
     const netServers = new Map();
+    const nativeNetServers = new Map();
     const netSockets = new Map();
     let nextNetSocketId = 1;
+    let nextNetServerId = 1;
+
+    function isNamedPipePath(path) {
+      return /^\\\\\.\\pipe\\/i.test(String(path || ''));
+    }
 
     function sendXenonNet(channel, payload, endpointId) {
-      if (typeof __xenonSendToRenderer === 'function') {
-        __xenonSendToRenderer(endpointId || '*', channel, [payload]);
+      if (typeof __xenonNetSend === 'function') {
+        __xenonNetSend(channel, payload);
+        return;
       }
+      const error = new Error('The native net transport is unavailable');
+      error.code = 'ERR_NOT_SUPPORTED';
+      throw error;
     }
     function allocNetSocket(socket) {
       socket._id = 'm-' + (nextNetSocketId++);
@@ -2697,6 +3420,8 @@
       }
       socket._closed = true;
       socket._connected = false;
+      socket.connecting = false;
+      socket._connectCb = null;
       socket._pendingWrites.length = 0;
       if (socket._id) {
         netSockets.delete(socket._id);
@@ -2742,7 +3467,7 @@
           const path = normalizeNetPath(netPathFromListenOrConnect(args));
           allocNetSocket(this);
           const server = netServers.get(path);
-          if (server) {
+          if (server && !isNamedPipePath(path)) {
             const incoming = new module.Socket();
             incoming._connected = true;
             incoming._peer = this;
@@ -2751,11 +3476,14 @@
             this._connected = true;
             this.connecting = false;
             queueMicrotask(() => {
+              if (this._closed || incoming._closed) return;
               server.emit('connection', incoming);
+              if (this._closed || incoming._closed) return;
               this.emit('connect');
-              if (this._connectCb) {
-                this._connectCb();
+              if (!this._closed && this._connectCb) {
+                const callback = this._connectCb;
                 this._connectCb = null;
+                callback.call(this);
               }
             });
             return this;
@@ -2765,6 +3493,7 @@
           return this;
         }
         write(data) {
+          if (this._closed) return false;
           if (this._peer) {
             deliverNetBytes(this._peer, data);
             return true;
@@ -2808,6 +3537,17 @@
               args[args.length - 1] : null;
           this._path = normalizeNetPath(netPathFromListenOrConnect(args));
           netServers.set(this._path, this);
+          if (isNamedPipePath(this._path)) {
+            this._closing = false;
+            this._nativeId = 'server-m-' + (nextNetServerId++);
+            this._listenCb = cb;
+            nativeNetServers.set(this._nativeId, this);
+            sendXenonNet('__xenon:net:listen', {
+              serverId: this._nativeId,
+              path: this._path,
+            });
+            return this;
+          }
           queueMicrotask(() => {
             this.emit('listening');
             if (cb) {
@@ -2819,6 +3559,13 @@
         close(cb) {
           if (this._path) {
             netServers.delete(this._path);
+          }
+          if (this._nativeId) {
+            this._closing = true;
+            this._closeCb = typeof cb === 'function' ? cb : null;
+            this._listenCb = null;
+            sendXenonNet('__xenon:net:unlisten', {serverId: this._nativeId});
+            return this;
           }
           if (typeof cb === 'function') {
             cb();
@@ -2853,6 +3600,45 @@
     dispatchXenonNet = (channel, payload, sender) => {
       const msg = payload || {};
       const endpointId = sender && sender.endpointId ? sender.endpointId : '*';
+      if (channel === '__xenon:net:listening') {
+        const server = nativeNetServers.get(msg.serverId);
+        if (server && !server._closing) {
+          server.emit('listening');
+          if (server._listenCb) {
+            const callback = server._listenCb;
+            server._listenCb = null;
+            callback.call(server);
+          }
+        }
+        return true;
+      }
+      if (channel === '__xenon:net:connection') {
+        const server = nativeNetServers.get(msg.serverId);
+        if (!msg.socketId) return true;
+        if (!server || server._closing) {
+          sendXenonNet('__xenon:net:close', {toId: msg.socketId});
+          return true;
+        }
+        const incoming = new module.Socket();
+        incoming._id = msg.socketId;
+        incoming._peerId = msg.socketId;
+        incoming._connected = true;
+        netSockets.set(incoming._id, incoming);
+        server.emit('connection', incoming);
+        return true;
+      }
+      if (channel === '__xenon:net:server-closed') {
+        const server = nativeNetServers.get(msg.serverId);
+        if (server) {
+          nativeNetServers.delete(msg.serverId);
+          server._nativeId = null;
+          const callback = server._closeCb;
+          server._closeCb = null;
+          if (callback) callback.call(server);
+          server.emit('close');
+        }
+        return true;
+      }
       if (channel === '__xenon:net:connect') {
         const server = netServers.get(normalizeNetPath(msg.path));
         if (!server) {
@@ -2879,7 +3665,13 @@
       }
       if (channel === '__xenon:net:connected') {
         const socket = netSockets.get(msg.toId);
-        if (!socket || socket._connected) {
+        if (!socket) {
+          if (msg.peerId) {
+            sendXenonNet('__xenon:net:close', {toId: msg.peerId});
+          }
+          return true;
+        }
+        if (socket._connected) {
           return true;
         }
         socket._peerId = msg.peerId;
@@ -2887,9 +3679,10 @@
         socket._connected = true;
         socket.connecting = false;
         socket.emit('connect');
-        if (socket._connectCb) {
-          socket._connectCb();
+        if (!socket._closed && socket._connectCb) {
+          const callback = socket._connectCb;
           socket._connectCb = null;
+          callback.call(socket);
         }
         // net.Socket.write() is allowed while connecting. Flush only after
         // connect listeners have run so protocol clients see normal ordering.
@@ -2911,13 +3704,26 @@
         return true;
       }
       if (channel === '__xenon:net:error') {
+        if (msg.serverId) {
+          const server = nativeNetServers.get(msg.serverId);
+          if (server) {
+            netServers.delete(server._path);
+            nativeNetServers.delete(msg.serverId);
+            server._nativeId = null;
+            const error = new Error(msg.code || 'net error');
+            error.code = msg.code;
+            server.emit('error', error);
+          }
+          return true;
+        }
         const socket = netSockets.get(msg.toId);
-        if (socket && !socket._connected) {
+        if (socket && !socket._closed) {
           const err = new Error(msg.code || 'net error');
           err.code = msg.code;
           socket.connecting = false;
           socket._pendingWrites.length = 0;
           socket.emit('error', err);
+          closeNetSocket(socket, false);
         }
         return true;
       }
@@ -2926,31 +3732,676 @@
 
     return module;
   })();
-  const httpModule = {
-    createServer: () => new EventEmitter(),
-    request: () => {
-      const req = new EventEmitter();
-      req.write = () => {};
-      req.end = () => {};
-      return req;
-    },
-    get: (url, cb) => {
-      const req = httpModule.request();
-      if (cb) {
-        const res = new EventEmitter();
-        res.statusCode = 200;
-        res.headers = {};
-        process.nextTick(() => cb(res));
+  function createMainNetwork(nativeRequest, nativeAbort) {
+    function error(code, message, name = 'Error') {
+      const result = new Error(message); result.code = code; result.name = name; return result;
+    }
+    const unsupported = method => { throw error('ERR_NOT_SUPPORTED', method + ' is not supported'); };
+    function networkError(value) {
+      if (value && value.code) return value;
+      const message = String(value && value.message || value);
+      const code = /(?:ABORT_ERR|ERR_[A-Z_]+|EINVAL)/.exec(message);
+      return error(code ? code[0] : 'ERR_NETWORK', message);
+    }
+    function binary(value) {
+      if (value == null) return null;
+      if (typeof value === 'string') return Buffer.from(value);
+      if (ArrayBuffer.isView(value)) return Buffer.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+      if (value instanceof ArrayBuffer) return Buffer.from(new Uint8Array(value));
+      if (value instanceof URLSearchParams) return Buffer.from(value.toString());
+      return unsupported('Streaming, Blob and FormData request bodies');
+    }
+    class Headers {
+      constructor(init) {
+        this._values = new Map();
+        if (init == null) return;
+        if (typeof init[Symbol.iterator] === 'function') {
+          for (const pair of init) {
+            if (!pair || pair.length !== 2) throw new TypeError('Invalid header entry');
+            this.append(pair[0], pair[1]);
+          }
+        } else {
+          for (const [key, value] of Object.entries(init)) this.append(key, value);
+        }
       }
-      return req;
-    },
-    Agent: class {},
-  };
-  const httpsModule = Object.assign({}, httpModule);
+      _name(name) {
+        name = String(name).toLowerCase();
+        if (!/^[!#$%&'*+.^_\x60|~0-9a-z-]+$/.test(name)) throw new TypeError('Invalid header name');
+        return name;
+      }
+      _value(value) {
+        value = String(value).trim();
+        if (/[\r\n\0]/.test(value)) throw new TypeError('Invalid header value');
+        return value;
+      }
+      append(name, value) {
+        name = this._name(name); value = this._value(value);
+        this._values.set(name, this._values.has(name) ? this._values.get(name) + ', ' + value : value);
+      }
+      set(name, value) { this._values.set(this._name(name), this._value(value)); }
+      get(name) { return this._values.get(this._name(name)) ?? null; }
+      has(name) { return this._values.has(this._name(name)); }
+      delete(name) { this._values.delete(this._name(name)); }
+      *entries() { yield* [...this._values].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0); }
+      *keys() { for (const [key] of this.entries()) yield key; }
+      *values() { for (const [, value] of this.entries()) yield value; }
+      forEach(callback, self) { for (const [key, value] of this.entries()) callback.call(self, value, key, this); }
+      [Symbol.iterator]() { return this.entries(); }
+      get [Symbol.toStringTag]() { return 'Headers'; }
+    }
+    class AbortSignal extends EventEmitter {
+      constructor() { super(); this.aborted = false; this.reason = undefined; this.onabort = null; }
+      addEventListener(name, callback, options) {
+        if (options && options.once) this.once(name, callback); else this.on(name, callback);
+      }
+      removeEventListener(name, callback) { this.removeListener(name, callback); }
+      throwIfAborted() { if (this.aborted) throw this.reason; }
+      static abort(reason) { const controller = new AbortController(); controller.abort(reason); return controller.signal; }
+      static timeout(delay) {
+        if (!Number.isInteger(delay) || delay < 0) throw new RangeError('Invalid timeout');
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(error('ETIMEDOUT', 'The operation timed out', 'TimeoutError')), delay);
+        return controller.signal;
+      }
+      get [Symbol.toStringTag]() { return 'AbortSignal'; }
+    }
+    class AbortController {
+      constructor() { this.signal = new AbortSignal(); }
+      abort(reason = error('ABORT_ERR', 'The operation was aborted', 'AbortError')) {
+        const signal = this.signal;
+        if (signal.aborted) return;
+        signal.aborted = true; signal.reason = reason;
+        const event = {type: 'abort', target: signal};
+        signal.emit('abort', event);
+        if (typeof signal.onabort === 'function') signal.onabort.call(signal, event);
+      }
+      get [Symbol.toStringTag]() { return 'AbortController'; }
+    }
+    class Body {
+      _setBody(value) {
+        this._bytes = binary(value);
+        if (this._bytes && this._bytes.length > 32 * 1024 * 1024) throw error('ERR_BUFFER_TOO_LARGE', 'HTTP upload exceeds 32 MiB');
+        this.bodyUsed = false;
+      }
+      _consume() {
+        if (this.bodyUsed) throw new TypeError('Body has already been consumed');
+        this.bodyUsed = true;
+        return this._bytes || Buffer.alloc(0);
+      }
+      async text() {
+        // Fetch uses the WHATWG UTF-8 decoder, including BOM removal and
+        // replacement of malformed sequences. Buffer.toString keeps the BOM.
+        const bytes = this._consume();
+        const text = [];
+        let i = bytes.length >= 3 && bytes[0] === 239 && bytes[1] === 187 && bytes[2] === 191 ? 3 : 0;
+        while (i < bytes.length) {
+          const first = bytes[i++];
+          if (first < 128) { text.push(String.fromCharCode(first)); continue; }
+          let needed = first >= 194 && first <= 223 ? 1 : first >= 224 && first <= 239 ? 2 : first >= 240 && first <= 244 ? 3 : 0;
+          if (!needed) { text.push('\uFFFD'); continue; }
+          let code = first & (needed === 1 ? 31 : needed === 2 ? 15 : 7);
+          let valid = true;
+          for (let part = 0; part < needed; ++part) {
+            const next = bytes[i];
+            const low = part === 0 && first === 224 ? 160 : part === 0 && first === 240 ? 144 : 128;
+            const high = part === 0 && first === 237 ? 159 : part === 0 && first === 244 ? 143 : 191;
+            if (next === undefined || next < low || next > high) { valid = false; break; }
+            ++i; code = (code << 6) | (next & 63);
+          }
+          text.push(valid ? String.fromCodePoint(code) : '\uFFFD');
+        }
+        return text.join('');
+      }
+      async json() { return JSON.parse(await this.text()); }
+      async arrayBuffer() {
+        const value = this._consume();
+        return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+      }
+      get body() { return unsupported('Streaming response bodies'); }
+    }
+    class Request extends Body {
+      constructor(input, init = {}) {
+        super();
+        const source = input instanceof Request ? input : null;
+        if (source && source.bodyUsed) throw new TypeError('Request body has already been consumed');
+        this.url = String(source ? source.url : input);
+        const parsed = new URL(this.url);
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new TypeError('fetch requires an HTTP(S) URL');
+        this.url = parsed.href;
+        this.method = String(init.method || (source && source.method) || 'GET').toUpperCase();
+        if (!/^[!#$%&'*+.^_\x60|~0-9a-z-]+$/i.test(this.method)) throw new TypeError('Invalid HTTP method');
+        this.headers = new Headers(init.headers === undefined && source ? source.headers : init.headers);
+        const body = init.body === undefined && source ? source._bytes : init.body;
+        if (body != null && (this.method === 'GET' || this.method === 'HEAD')) throw new TypeError('GET and HEAD requests cannot have a body');
+        this._setBody(body);
+        if (!this.headers.has('content-type') && typeof body === 'string') this.headers.set('content-type', 'text/plain;charset=UTF-8');
+        if (!this.headers.has('content-type') && body instanceof URLSearchParams) this.headers.set('content-type', 'application/x-www-form-urlencoded;charset=UTF-8');
+        this.signal = init.signal === undefined && source ? source.signal : init.signal;
+        if (this.signal != null && typeof this.signal.addEventListener !== 'function') throw new TypeError('Invalid AbortSignal');
+        this.redirect = init.redirect || (source && source.redirect) || 'follow';
+        if (!['follow', 'error'].includes(this.redirect)) unsupported('fetch redirect mode ' + this.redirect);
+        this._credentials = init.credentials || (source && source.credentials) || 'same-origin';
+        if (!['omit', 'include', 'same-origin'].includes(this._credentials)) throw new TypeError('Invalid credentials mode');
+        if (init.integrity) unsupported('fetch integrity');
+      }
+      clone() { return new Request(this); }
+      get credentials() { return this._credentials; }
+      get [Symbol.toStringTag]() { return 'Request'; }
+    }
+    class Response extends Body {
+      constructor(body = null, init = {}) {
+        super();
+        this.status = init.status === undefined ? 200 : Number(init.status);
+        if (!Number.isInteger(this.status) || this.status < 200 || this.status > 599) throw new RangeError('Invalid response status');
+        this.statusText = String(init.statusText || '');
+        this.headers = new Headers(init.headers);
+        this.url = init.url || '';
+        this.redirected = Boolean(init.redirected);
+        this.type = 'basic';
+        this._setBody(body);
+      }
+      get ok() { return this.status >= 200 && this.status < 300; }
+      clone() {
+        if (this.bodyUsed) throw new TypeError('Response body has already been consumed');
+        return new Response(this._bytes, this);
+      }
+      get [Symbol.toStringTag]() { return 'Response'; }
+    }
+    function fetch(input, init) {
+      let request;
+      try { request = new Request(input, init); }
+      catch (failure) { return Promise.reject(failure); }
+      const signal = request.signal;
+      if (signal && signal.aborted) return Promise.reject(signal.reason || error('ABORT_ERR', 'The operation was aborted', 'AbortError'));
+      if (input instanceof Request) input.bodyUsed = true;
+      return new Promise((resolve, reject) => {
+        let operation;
+        let finished = false;
+        const cleanup = () => { if (signal) signal.removeEventListener('abort', abort); };
+        const fail = reason => { if (finished) return; finished = true; cleanup(); reject(reason); };
+        const abort = () => {
+          fail(signal.reason || error('ABORT_ERR', 'The operation was aborted', 'AbortError'));
+          if (operation) nativeAbort(operation.id);
+        };
+        if (signal) signal.addEventListener('abort', abort, {once: true});
+        try {
+          operation = nativeRequest({url: request.url, method: request.method,
+            headers: Object.fromEntries(request.headers),
+            bodyBase64: request._bytes ? request._bytes.toString('base64') : '',
+            useSessionCookies: request.credentials === 'include', redirect: request.redirect,
+            timeoutMs: 300000});
+          Promise.resolve(operation.promise).then(value => {
+            if (finished) return;
+            let response;
+            try {
+              response = new Response(Buffer.from(value.bodyBase64 || '', 'base64'), {
+                status: value.statusCode, statusText: value.statusMessage,
+                headers: value.headers, url: value.finalUrl || request.url,
+                redirected: !!value.finalUrl && value.finalUrl !== request.url});
+            } catch (failure) { fail(failure); return; }
+            finished = true; cleanup(); resolve(response);
+          }, failure => fail(networkError(failure)));
+        } catch (failure) { fail(networkError(failure)); }
+      });
+    }
+    class IncomingMessage extends EventEmitter {
+      constructor(response) {
+        super();
+        this.statusCode = response.statusCode;
+        this.statusMessage = response.statusMessage || '';
+        this.headers = Object.fromEntries(new Headers(response.headers));
+        // Chromium has already decoded compressed response bodies. Expose
+        // headers matching the delivered bytes so Node consumers do not unzip
+        // them twice. Fetch retains the original response headers separately.
+        if (this.headers['content-encoding']) {
+          delete this.headers['content-encoding'];
+          delete this.headers['content-length'];
+        }
+        this.rawHeaders = Object.entries(this.headers).flat();
+        this.url = response.finalUrl || '';
+        this.httpVersion = response.httpVersion || '';
+        this.complete = false; this.readableEnded = false; this.destroyed = false;
+        this._data = Buffer.from(response.bodyBase64 || '', 'base64');
+        this._flowing = false; this._scheduled = false; this._delivered = false;
+      }
+      on(name, listener) {
+        super.on(name, listener);
+        if (name === 'data' && !this._paused) { this._flowing = true; this._pump(); }
+        return this;
+      }
+      addListener(name, listener) { return this.on(name, listener); }
+      setEncoding(encoding) { this._encoding = encoding || 'utf8'; return this; }
+      pause() { this._paused = true; this._flowing = false; return this; }
+      resume() { this._paused = false; this._flowing = true; this._pump(); return this; }
+      _pump() {
+        if (this._scheduled || this.destroyed || this.readableEnded) return;
+        this._scheduled = true;
+        queueMicrotask(() => {
+          this._scheduled = false;
+          if (!this._flowing || this.destroyed || this.readableEnded) return;
+          if (!this._delivered) {
+            this._delivered = true;
+            if (this._data.length) this.emit('data', this._encoding ? this._data.toString(this._encoding) : this._data);
+            this._data = Buffer.alloc(0);
+            this._pump();
+            return;
+          }
+          this.complete = true; this.readableEnded = true;
+          this.emit('end'); this._close();
+        });
+      }
+      pipe(destination, options = {}) {
+        this.on('data', chunk => {
+          if (destination.write(chunk) === false) {
+            this.pause(); destination.once('drain', () => this.resume());
+          }
+        });
+        if (options.end !== false) this.once('end', () => destination.end());
+        destination.emit('pipe', this);
+        return destination;
+      }
+      destroy(reason) {
+        if (this.destroyed) return this;
+        this.destroyed = true; this._data = Buffer.alloc(0);
+        queueMicrotask(() => { if (reason) this.emit('error', reason); this._close(); });
+        return this;
+      }
+      _close() { if (!this._closed) { this._closed = true; this.emit('close'); } }
+    }
+    function httpModuleFor(protocol) {
+      class ClientRequest extends EventEmitter {
+        constructor(input, options, callback) {
+          super();
+          if (typeof options === 'function') { callback = options; options = undefined; }
+          let settings = {};
+          let url;
+          if (typeof input === 'string' || input instanceof URL) url = new URL(String(input));
+          else settings = {...input};
+          settings = {...settings, ...(options || {})};
+          if (!url) {
+            const host = settings.hostname || settings.host || 'localhost';
+            const port = settings.port ? ':' + settings.port : '';
+            url = new URL((settings.protocol || protocol) + '//' + host + port + (settings.path || '/'));
+          } else if (settings.path) url = new URL(settings.path, url.href);
+          if (url.protocol !== protocol) throw error('ERR_INVALID_PROTOCOL', 'Protocol ' + url.protocol + ' is not supported by this module');
+          this._url = url.href;
+          this.method = String(settings.method || 'GET').toUpperCase();
+          this._headers = new Headers(settings.headers);
+          if (settings.auth && !this._headers.has('authorization')) this._headers.set('authorization', 'Basic ' + Buffer.from(String(settings.auth)).toString('base64'));
+          this._chunks = []; this._length = 0; this._sent = false;
+          this.destroyed = false; this.aborted = false; this.writableEnded = false;
+          this._closed = false; this._timeout = Number(settings.timeout) || 0;
+          if (callback) this.once('response', callback);
+          if (settings.signal) {
+            this._signal = settings.signal;
+            this._onAbort = () => this.destroy(settings.signal.reason || error('ABORT_ERR', 'The operation was aborted', 'AbortError'));
+            if (settings.signal.aborted) queueMicrotask(this._onAbort);
+            else settings.signal.addEventListener('abort', this._onAbort, {once: true});
+          }
+        }
+        setHeader(name, value) { if (this._sent) throw error('ERR_HTTP_HEADERS_SENT', 'Headers already sent'); this._headers.set(name, value); return this; }
+        getHeader(name) { return this._headers.get(name) ?? undefined; }
+        getHeaders() { return Object.fromEntries(this._headers); }
+        hasHeader(name) { return this._headers.has(name); }
+        removeHeader(name) { if (this._sent) throw error('ERR_HTTP_HEADERS_SENT', 'Headers already sent'); this._headers.delete(name); }
+        write(chunk, encoding, callback) {
+          if (typeof encoding === 'function') { callback = encoding; encoding = undefined; }
+          if (this.writableEnded || this.destroyed) throw error('ERR_STREAM_WRITE_AFTER_END', 'write after end');
+          const data = typeof chunk === 'string' ? Buffer.from(chunk, encoding) : binary(chunk);
+          if (!data) throw new TypeError('Invalid HTTP body chunk');
+          if (this._length + data.length > 32 * 1024 * 1024) throw error('ERR_BUFFER_TOO_LARGE', 'HTTP upload exceeds 32 MiB');
+          this._chunks.push(data); this._length += data.length;
+          if (callback) queueMicrotask(callback);
+          return true;
+        }
+        end(chunk, encoding, callback) {
+          if (typeof chunk === 'function') { callback = chunk; chunk = undefined; }
+          else if (typeof encoding === 'function') { callback = encoding; encoding = undefined; }
+          if (this.writableEnded || this.destroyed) return this;
+          if (chunk !== undefined && chunk !== null) this.write(chunk, encoding);
+          this.writableEnded = true; this._sent = true;
+          if (callback) this.once('finish', callback);
+          const request = {url: this._url, method: this.method, headers: this.getHeaders(),
+            bodyBase64: Buffer.concat(this._chunks).toString('base64'), timeoutMs: 300000,
+            redirect: 'error'};
+          this._chunks.length = 0;
+          try {
+            this._operation = nativeRequest(request);
+            this._armTimeout();
+            queueMicrotask(() => { if (!this.destroyed) this.emit('finish'); });
+            Promise.resolve(this._operation.promise).then(value => {
+              if (this.destroyed) return;
+              clearTimeout(this._timer);
+              this._operation = null;
+              const incoming = new IncomingMessage(value);
+              this.res = incoming;
+              incoming.once('end', () => this._close());
+              this.emit('response', incoming);
+              if (!incoming._data.length) incoming.resume();
+            }, reason => { if (!this.destroyed) this.destroy(networkError(reason)); });
+          } catch (reason) { this.destroy(networkError(reason)); }
+          return this;
+        }
+        _armTimeout() {
+          clearTimeout(this._timer);
+          if (this._timeout > 0 && this._sent && !this.destroyed) this._timer = setTimeout(() => this.emit('timeout'), this._timeout);
+        }
+        setTimeout(delay, callback) {
+          if (!Number.isFinite(delay) || delay < 0) throw new RangeError('Invalid timeout');
+          this._timeout = delay;
+          if (callback) this.once('timeout', callback);
+          this._armTimeout(); return this;
+        }
+        _close() {
+          if (this._closed) return;
+          this._closed = true; clearTimeout(this._timer);
+          if (this._signal) this._signal.removeEventListener('abort', this._onAbort);
+          this.emit('close');
+        }
+        destroy(reason) {
+          if (this.destroyed) return this;
+          this.destroyed = true; this._chunks.length = 0; clearTimeout(this._timer);
+          if (this._operation) nativeAbort(this._operation.id);
+          if (this.res) this.res.destroy();
+          queueMicrotask(() => { if (reason) this.emit('error', reason); this._close(); });
+          return this;
+        }
+        abort() { if (this.aborted) return; this.aborted = true; this.emit('abort'); this.destroy(); }
+        setNoDelay() { return unsupported('Per-request TCP no-delay settings'); }
+        setSocketKeepAlive() { return unsupported('Per-request TCP keepalive settings'); }
+        flushHeaders() { return unsupported('Streaming request headers'); }
+      }
+      class Agent {
+        constructor(options = {}) {
+          if (options.rejectUnauthorized === false || options.ca || options.cert || options.key || options.proxy) unsupported('Custom HTTP Agent TLS/proxy settings');
+          this.options = {...options}; this.protocol = protocol;
+        }
+        destroy() {}
+      }
+      const result = {ClientRequest, IncomingMessage, Agent, globalAgent: new Agent(),
+        request: (input, options, callback) => new ClientRequest(input, options, callback),
+        get(input, options, callback) { const request = new ClientRequest(input, options, callback); request.end(); return request; },
+        createServer: () => unsupported('HTTP createServer')};
+      return result;
+    }
+    return {http: httpModuleFor('http:'), https: httpModuleFor('https:'),
+      globals: {fetch, Headers, Request, Response, AbortController, AbortSignal}};
+  }
+
+  const mainNetwork = createMainNetwork(
+      request => __xenonHttpRequest(request), id => __xenonHttpAbort(id));
+  const httpModule = mainNetwork.http;
+  const httpsModule = mainNetwork.https;
+  Object.assign(globalThis, mainNetwork.globals);
+  // HTTP/2 protocol constants are data, not evidence of an available session.
+  // Keep this module distinct from HTTP/1 and fail when transport is requested.
+  const http2Module = (() => {
+    const unavailable = operation => {
+      const error = new Error(`http2.${operation} is not supported by this runtime`);
+      error.code = 'ERR_NOT_SUPPORTED';
+      throw error;
+    };
+    class Http2ServerRequest extends EventEmitter {
+      constructor() { super(); unavailable('Http2ServerRequest'); }
+    }
+    class Http2ServerResponse extends EventEmitter {
+      constructor() { super(); unavailable('Http2ServerResponse'); }
+    }
+    const constants = {
+      HTTP2_HEADER_SCHEME: ':scheme',
+      HTTP2_HEADER_METHOD: ':method',
+      HTTP2_HEADER_PATH: ':path',
+      HTTP2_HEADER_STATUS: ':status',
+      HTTP2_HEADER_AUTHORITY: ':authority',
+    };
+    return {
+      constants,
+      sensitiveHeaders: Symbol('sensitiveHeaders'),
+      Http2ServerRequest, Http2ServerResponse,
+      connect: () => unavailable('connect'),
+      createServer: () => unavailable('createServer'),
+      createSecureServer: () => unavailable('createSecureServer'),
+      performServerHandshake: () => unavailable('performServerHandshake'),
+      getPackedSettings: () => unavailable('getPackedSettings'),
+      getUnpackedSettings: () => unavailable('getUnpackedSettings'),
+      getDefaultSettings: () => Object.assign(Object.create(null), {
+        headerTableSize: 4096, enablePush: true, initialWindowSize: 65535,
+        maxFrameSize: 16384, maxConcurrentStreams: 4294967295,
+        maxHeaderSize: 65535, maxHeaderListSize: 65535,
+        enableConnectProtocol: false,
+      }),
+    };
+  })();
   const ttyModule = { isatty: () => false };
-  const readlineModule = {
-    createInterface: () => new EventEmitter(),
-  };
+  // These modules are importable for dependency discovery. TLS operations require
+  // a TLS transport; a plain net socket must never stand in for encryption.
+  const tlsModule = (() => {
+    const unavailable = operation => {
+      const error = new Error(`TLS ${operation} is not supported by this runtime`);
+      error.code = 'ERR_NOT_SUPPORTED';
+      throw error;
+    };
+    class TLSSocket extends EventEmitter {
+      constructor() { super(); unavailable('TLSSocket'); }
+    }
+    class Server extends EventEmitter {
+      constructor() { super(); unavailable('Server'); }
+    }
+    class SecureContext {
+      constructor() { unavailable('SecureContext'); }
+    }
+    return {
+      TLSSocket, Server, SecureContext,
+      connect: () => unavailable('connect'),
+      createServer: () => unavailable('createServer'),
+      createSecureContext: () => unavailable('createSecureContext'),
+      checkServerIdentity: () => unavailable('checkServerIdentity'),
+      getCiphers: () => unavailable('getCiphers'),
+    };
+  })();
+
+  // Non-terminal readline consumes real stream data and preserves UTF-8 and
+  // CRLF boundaries across chunks. Interactive terminal editing is separate.
+  const readlineModule = (() => {
+    const unsupported = operation => {
+      const error = new Error(`readline ${operation} is not supported by this runtime`);
+      error.code = 'ERR_NOT_SUPPORTED';
+      throw error;
+    };
+    const invalid = name => {
+      const error = new TypeError(`Invalid readline ${name}`);
+      error.code = 'ERR_INVALID_ARG_TYPE';
+      throw error;
+    };
+    // The main isolate's TextDecoder fallback is not incremental, so keep the
+    // UTF-8 decoder state here instead of losing split multibyte characters.
+    function decodeChunk(state, chunk) {
+      const bytes = ArrayBuffer.isView(chunk) ?
+          new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength) :
+          new Uint8Array(chunk);
+      let result = '';
+      for (let i = 0; i < bytes.length; ++i) {
+        const byte = bytes[i];
+        if (!state.needed) {
+          if (byte <= 0x7f) { result += String.fromCharCode(byte); continue; }
+          state.seen = 0;
+          state.lower = 0x80;
+          state.upper = 0xbf;
+          if (byte >= 0xc2 && byte <= 0xdf) {
+            state.needed = 1; state.point = byte & 0x1f;
+          } else if (byte >= 0xe0 && byte <= 0xef) {
+            state.needed = 2; state.point = byte & 0x0f;
+            if (byte === 0xe0) state.lower = 0xa0;
+            if (byte === 0xed) state.upper = 0x9f;
+          } else if (byte >= 0xf0 && byte <= 0xf4) {
+            state.needed = 3; state.point = byte & 7;
+            if (byte === 0xf0) state.lower = 0x90;
+            if (byte === 0xf4) state.upper = 0x8f;
+          } else {
+            result += '\ufffd';
+          }
+        } else if (byte < state.lower || byte > state.upper) {
+          state.needed = 0;
+          result += '\ufffd';
+          --i;
+        } else {
+          state.lower = 0x80;
+          state.upper = 0xbf;
+          state.point = (state.point << 6) | (byte & 0x3f);
+          if (++state.seen === state.needed) {
+            result += String.fromCodePoint(state.point);
+            state.needed = 0;
+          }
+        }
+      }
+      return result;
+    }
+    class Interface extends EventEmitter {
+      constructor(options, output, completer, terminal) {
+        super();
+        if (options && typeof options.on === 'function') {
+          options = {input: options, output, completer, terminal};
+        }
+        options = options || {};
+        const input = options.input;
+        if (!input || typeof input.on !== 'function' ||
+            typeof input.removeListener !== 'function') invalid('input');
+        this.input = input;
+        this.output = options.output;
+        this.terminal = options.terminal === undefined ?
+            !!(this.output && this.output.isTTY) : !!options.terminal;
+        if (this.terminal) unsupported('terminal editing');
+        this.closed = false;
+        this.paused = false;
+        this.line = '';
+        this._prompt = options.prompt === undefined ? '> ' : String(options.prompt);
+        this._question = null;
+        this._decoder = {needed: 0};
+        this._lastCR = null;
+        this._crlfDelay = Math.max(100, Number(options.crlfDelay) || 100);
+        this._onData = chunk => {
+          if (this.closed) return;
+          const text = typeof chunk === 'string' ? chunk :
+              decodeChunk(this._decoder, chunk);
+          this._consume(text);
+        };
+        this._onEnd = () => {
+          if (this.closed) return;
+          // Node readline emits its buffered text without flushing an
+          // incomplete UTF-8 byte sequence when the input ends.
+          this._decoder.needed = 0;
+          if (this.line) {
+            const line = this.line;
+            this.line = '';
+            this._emitLine(line);
+          }
+          this.close();
+        };
+        this._onError = error => this.emit('error', error);
+        input.on('data', this._onData);
+        input.on('end', this._onEnd);
+        input.on('error', this._onError);
+        this._signal = options.signal;
+        this._onAbort = () => this.close();
+        if (this._signal) {
+          if (this._signal.aborted) queueMicrotask(this._onAbort);
+          else this._signal.addEventListener('abort', this._onAbort, {once: true});
+        }
+        if (typeof input.resume === 'function') input.resume();
+      }
+      _emitLine(line) {
+        if (this.closed) return;
+        if (this._question) {
+          const callback = this._question;
+          this._question = null;
+          callback(line);
+        } else {
+          this.emit('line', line);
+        }
+      }
+      _consume(text) {
+        for (const char of text) {
+          if (this.closed) break;
+          if (char === '\n' && this._lastCR !== null &&
+              Date.now() - this._lastCR <= this._crlfDelay) {
+            this._lastCR = null;
+            continue;
+          }
+          this._lastCR = null;
+          if (char === '\r' || char === '\n') {
+            const line = this.line;
+            this.line = '';
+            if (char === '\r') this._lastCR = Date.now();
+            this._emitLine(line);
+          } else {
+            this.line += char;
+          }
+        }
+      }
+      close() {
+        if (this.closed) return;
+        this.closed = true;
+        this._question = null;
+        this.input.removeListener('data', this._onData);
+        this.input.removeListener('end', this._onEnd);
+        this.input.removeListener('error', this._onError);
+        if (this._signal) this._signal.removeEventListener('abort', this._onAbort);
+        if (typeof this.input.pause === 'function') this.input.pause();
+        this.emit('close');
+      }
+      pause() {
+        if (!this.paused) {
+          this.paused = true;
+          if (typeof this.input.pause === 'function') this.input.pause();
+          this.emit('pause');
+        }
+        return this;
+      }
+      resume() {
+        if (this.paused && !this.closed) {
+          this.paused = false;
+          if (typeof this.input.resume === 'function') this.input.resume();
+          this.emit('resume');
+        }
+        return this;
+      }
+      setPrompt(prompt) { this._prompt = String(prompt); }
+      getPrompt() { return this._prompt; }
+      prompt() {
+        if (this.closed) return;
+        this.resume();
+        if (this.output) this.output.write(this._prompt);
+      }
+      question(query, options, callback) {
+        if (typeof options === 'function') callback = options;
+        else if (options && options.signal) unsupported('question AbortSignal');
+        if (typeof callback !== 'function') invalid('question callback');
+        if (this.closed) {
+          const error = new Error('readline was closed');
+          error.code = 'ERR_USE_AFTER_CLOSE';
+          throw error;
+        }
+        if (this._question) return;
+        this._question = callback;
+        this.resume();
+        if (this.output) this.output.write(String(query));
+      }
+      write(data, key) {
+        if (key !== undefined) unsupported('keypress editing');
+        this.resume();
+        this._onData(data);
+      }
+    }
+    return {
+      Interface,
+      createInterface: (...args) => new Interface(...args),
+      emitKeypressEvents: () => unsupported('emitKeypressEvents'),
+      clearLine: () => unsupported('clearLine'),
+      clearScreenDown: () => unsupported('clearScreenDown'),
+      cursorTo: () => unsupported('cursorTo'),
+      moveCursor: () => unsupported('moveCursor'),
+    };
+  })();
   function unsupportedDnsError(hostname) {
     const error = new Error(
         `DNS resolution is unavailable in the hosted runtime: ${hostname}`);
@@ -3074,7 +4525,9 @@
   globalThis.__xenonConstants = constantsModule;
   globalThis.__xenonZlib = zlibModule;
   globalThis.__xenonNet = netModule;
+  globalThis.__xenonTls = tlsModule;
   globalThis.__xenonHttp = httpModule;
+  globalThis.__xenonHttp2 = http2Module;
   globalThis.__xenonHttps = httpsModule;
   globalThis.__xenonTty = ttyModule;
   globalThis.__xenonReadline = readlineModule;

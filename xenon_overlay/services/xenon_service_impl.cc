@@ -9,13 +9,15 @@
 #include <utility>
 #include <vector>
 
+#include "base/check_op.h"
 #include "base/environment.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
-#include "base/task/sequenced_task_runner.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -32,6 +34,7 @@ namespace xenon {
 namespace {
 
 constexpr char kDefaultIpcContainerId[] = "default";
+constexpr char kMainNetEndpointId[] = "@main";
 // Native child processes started by hosted applications inherit this value.
 // It lets a native component that derives resources from its host executable
 // resolve the hosted application's private resource root without duplicating
@@ -133,7 +136,10 @@ ipc::mojom::IpcResultPtr MakeNativeInvokeSuccess(base::Value value) {
 
 XenonServiceImpl::XenonServiceImpl(
     mojo::PendingReceiver<mojom::XenonMainService> receiver)
-    : receiver_(this, std::move(receiver)) {}
+    : receiver_(this, std::move(receiver)) {
+  node_addon_host_receivers_.set_disconnect_handler(base::BindRepeating(
+      &XenonServiceImpl::OnNodeAddonHostDisconnected, base::Unretained(this)));
+}
 
 XenonServiceImpl::~XenonServiceImpl() = default;
 
@@ -177,9 +183,24 @@ void XenonServiceImpl::SetNodeAddonObserver(
 
 void XenonServiceImpl::BindNodeAddonHost(
     const std::string& context_id,
+    const std::string& endpoint_id,
     mojo::PendingReceiver<ipc::mojom::NodeAddonHost> receiver) {
-  node_addon_host_receivers_.Add(
-      this, std::move(receiver), NormalizeIpcContainerId(context_id));
+  if (endpoint_id.empty()) {
+    return;
+  }
+  const std::string normalized_id = NormalizeIpcContainerId(context_id);
+  const int32_t client_id =
+      GetOrCreateRendererNodeClient(normalized_id, endpoint_id);
+  const NodeClientKey client_key{normalized_id, client_id};
+  // Rebinding invalidates the previous pipe and its outstanding native work.
+  if (renderer_node_receivers_.contains(client_key)) {
+    ReleaseRendererNodeOwner(client_key);
+    GetOrCreateRendererNodeClient(normalized_id, endpoint_id);
+  }
+  const uint64_t owner = GetNodeInstanceOwner(normalized_id, client_id);
+  renderer_node_receivers_[client_key] = node_addon_host_receivers_.Add(
+      this, std::move(receiver),
+      NodeAddonConnection{normalized_id, client_id, owner});
 }
 
 void XenonServiceImpl::DispatchElectronWindowEvent(
@@ -239,12 +260,29 @@ void XenonServiceImpl::InitializeElectronIpc(
   }
 
   auto container = std::make_unique<ipc::XenonIpcMainContainer>();
+  container->SetNetworkLoaderFactory(url_loader_factory_);
+  container->SetNetPipeSender(
+      base::BindRepeating(&XenonServiceImpl::HandleMainNetPipeMessage,
+                          weak_factory_.GetWeakPtr(), container_id));
   XenonNodeExecutor* executor = EnsureNodeExecutor(container_id);
   executor->SetRuntimeDirectory(hosted_directory);
   ipc::XenonIpcMainContainer::NativeAddonHooks hooks;
   hooks.load =
       base::BindRepeating(&XenonNodeExecutor::LoadAddonFromCurrentThread,
                           base::Unretained(executor));
+  hooks.describe = base::BindRepeating(
+      [](XenonNodeExecutor* executor, const std::string& path,
+         const std::string& export_path, base::Value* description,
+         std::string* error) {
+        mojom::NodeExportInfoPtr info;
+        if (!executor->InspectExportFromCurrentThread(path, export_path, &info,
+                                                      error)) {
+          return false;
+        }
+        *description = NodeExportInfoToValue(info);
+        return true;
+      },
+      base::Unretained(executor));
   hooks.invoke =
       base::BindRepeating(&XenonNodeExecutor::InvokeExportFromCurrentThread,
                           base::Unretained(executor));
@@ -506,6 +544,15 @@ XenonNetPipeBridge* XenonServiceImpl::EnsureNetPipeBridge() {
   return net_pipe_bridge_.get();
 }
 
+void XenonServiceImpl::HandleMainNetPipeMessage(const std::string& container_id,
+                                                const std::string& channel,
+                                                base::Value payload) {
+  base::ListValue arguments;
+  arguments.Append(std::move(payload));
+  HandleNetPipeMessage(container_id, kMainNetEndpointId, channel,
+                       base::Value(std::move(arguments)));
+}
+
 bool XenonServiceImpl::HandleNetPipeMessage(
     const std::string& container_id,
     const std::string& endpoint_id,
@@ -519,6 +566,7 @@ bool XenonServiceImpl::HandleNetPipeMessage(
     return false;
   }
   const base::DictValue& message = arguments.GetList().front().GetDict();
+  const bool from_main = endpoint_id == kMainNetEndpointId;
   if (channel == "__xenon:net:listen") {
     const std::string* server_id = message.FindString("serverId");
     const std::string* path = message.FindString("path");
@@ -542,12 +590,16 @@ bool XenonServiceImpl::HandleNetPipeMessage(
                          base::Value(std::move(payload)));
     return true;
   }
+  if (from_main) {
+    EnsureNetPipeBridge();
+  }
   if (!net_pipe_bridge_) {
     return false;
   }
   if (channel == "__xenon:net:unlisten") {
     const std::string* server_id = message.FindString("serverId");
-    return server_id && net_pipe_bridge_->CloseServer(*server_id);
+    const bool closed = server_id && net_pipe_bridge_->CloseServer(*server_id);
+    return closed || from_main;
   }
   if (channel == "__xenon:net:connect") {
     const std::string* from_id = message.FindString("fromId");
@@ -555,7 +607,7 @@ bool XenonServiceImpl::HandleNetPipeMessage(
     if (!from_id || !path) {
       return true;
     }
-    if (!net_pipe_bridge_->HasListenerForPath(*path)) {
+    if (!from_main && !net_pipe_bridge_->HasListenerForPath(*path)) {
       return false;
     }
     LOG(INFO) << "Named-pipe connect path='" << *path << "' from='" << *from_id
@@ -574,6 +626,18 @@ bool XenonServiceImpl::HandleNetPipeMessage(
   }
   const std::string* socket_id = message.FindString("toId");
   if (!socket_id || !net_pipe_bridge_->HasSocket(*socket_id)) {
+    if (from_main && channel == "__xenon:net:data") {
+      if (const std::string* from_id = message.FindString("fromId")) {
+        base::DictValue payload;
+        payload.Set("toId", *from_id);
+        payload.Set("code", "EPIPE");
+        DispatchNetPipeEvent(container_id, endpoint_id, "__xenon:net:error",
+                             base::Value(std::move(payload)));
+      }
+    }
+    if (from_main) {
+      return true;
+    }
     return false;
   }
   if (channel == "__xenon:net:data") {
@@ -584,7 +648,8 @@ bool XenonServiceImpl::HandleNetPipeMessage(
     }
     if (!error.empty()) {
       base::DictValue payload;
-      payload.Set("toId", *socket_id);
+      const std::string* from_id = message.FindString("fromId");
+      payload.Set("toId", from_id ? *from_id : *socket_id);
       payload.Set("code", error);
       DispatchNetPipeEvent(container_id, endpoint_id, "__xenon:net:error",
                            base::Value(std::move(payload)));
@@ -602,14 +667,33 @@ void XenonServiceImpl::DispatchNetPipeEvent(
     const std::string& endpoint_id,
     const std::string& channel,
     base::Value payload) {
+  base::ListValue arguments;
+  arguments.Append(std::move(payload));
+  if (endpoint_id == kMainNetEndpointId) {
+    // libuv may finish connect/listen while the JS call is still on the stack.
+    // Deliver later, after callers can attach listeners and initialization has
+    // installed the main container in the map.
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&XenonServiceImpl::DispatchMainNetPipeEvent,
+                                  weak_factory_.GetWeakPtr(), container_id,
+                                  channel, base::Value(std::move(arguments))));
+    return;
+  }
   auto container = ipc_main_containers_.find(container_id);
   if (container == ipc_main_containers_.end()) {
     return;
   }
-  base::ListValue arguments;
-  arguments.Append(std::move(payload));
   container->second->DispatchToRenderer(endpoint_id, channel,
                                         base::Value(std::move(arguments)));
+}
+
+void XenonServiceImpl::DispatchMainNetPipeEvent(const std::string& container_id,
+                                                const std::string& channel,
+                                                base::Value arguments) {
+  const auto container = ipc_main_containers_.find(container_id);
+  if (container != ipc_main_containers_.end()) {
+    container->second->Send(kMainNetEndpointId, channel, std::move(arguments));
+  }
 }
 
 void XenonServiceImpl::ElectronIpcInvoke(
@@ -654,14 +738,50 @@ int32_t XenonServiceImpl::GetOrCreateRendererNodeClient(
   const RendererEndpointKey endpoint_key =
       {NormalizeIpcContainerId(context_id), endpoint_id};
   const auto existing = renderer_node_clients_.find(endpoint_key);
+  int32_t client_id;
   if (existing != renderer_node_clients_.end()) {
-    return existing->second;
+    client_id = existing->second;
+  } else {
+    client_id = next_renderer_node_client_id_--;
+    renderer_node_clients_.emplace(endpoint_key, client_id);
+    renderer_node_endpoints_.emplace(
+        NodeClientKey{endpoint_key.first, client_id}, endpoint_id);
   }
-  const int32_t client_id = next_renderer_node_client_id_--;
-  renderer_node_clients_.emplace(endpoint_key, client_id);
-  renderer_node_endpoints_.emplace(
-      NodeClientKey{endpoint_key.first, client_id}, endpoint_id);
+  const NodeClientKey client_key{endpoint_key.first, client_id};
+  if (!renderer_node_owners_.contains(client_key)) {
+    const uint64_t owner = next_node_instance_owner_++;
+    CHECK_NE(owner, 0u);
+    renderer_node_owners_.emplace(client_key, owner);
+    EnsureNodeExecutor(endpoint_key.first)->RegisterInstanceOwner(owner);
+  }
   return client_id;
+}
+
+uint64_t XenonServiceImpl::GetNodeInstanceOwner(const std::string& context_id,
+                                                int32_t client_id) const {
+  const auto owner = renderer_node_owners_.find(
+      {NormalizeIpcContainerId(context_id), client_id});
+  return owner == renderer_node_owners_.end() ? 0 : owner->second;
+}
+
+void XenonServiceImpl::ReleaseRendererNodeOwner(
+    const NodeClientKey& client_key) {
+  const auto receiver = renderer_node_receivers_.find(client_key);
+  if (receiver != renderer_node_receivers_.end()) {
+    node_addon_host_receivers_.Remove(receiver->second);
+    renderer_node_receivers_.erase(receiver);
+  }
+  const auto owner = renderer_node_owners_.find(client_key);
+  if (owner == renderer_node_owners_.end()) {
+    return;
+  }
+  const uint64_t owner_id = owner->second;
+  renderer_node_owners_.erase(owner);
+  pending_node_callbacks_.erase(client_key);
+  if (auto* executor = GetNodeExecutor(client_key.first)) {
+    executor->ReleaseInstanceOwner(owner_id);
+    executor->ReleaseCallbacksForClient(client_key.second);
+  }
 }
 
 void XenonServiceImpl::RemoveRendererNodeClient(
@@ -674,9 +794,13 @@ void XenonServiceImpl::RemoveRendererNodeClient(
     return;
   }
   const NodeClientKey client_key = {endpoint_key.first, client->second};
+  ReleaseRendererNodeOwner(client_key);
   renderer_node_endpoints_.erase(client_key);
   pending_node_callbacks_.erase(client_key);
   renderer_node_clients_.erase(client);
+  if (XenonNodeExecutor* executor = GetNodeExecutor(client_key.first)) {
+    executor->ReleaseCallbacksForClient(client_key.second);
+  }
 }
 
 void XenonServiceImpl::HandleRendererNodeAddonInvoke(
@@ -703,11 +827,14 @@ void XenonServiceImpl::HandleRendererNodeAddonInvoke(
 
   const int32_t client_id =
       GetOrCreateRendererNodeClient(context_id, endpoint_id);
+  XenonNodeExecutor* executor = GetNodeExecutor(context_id);
+  const uint64_t owner = GetNodeInstanceOwner(context_id, client_id);
+  const std::string owner_token = executor->GetInstanceOwnerToken(owner);
   std::vector<mojom::NodeInvokeArgPtr> args =
       ListValueToInvokeArgs(*invoke_arguments);
   if (channel == kNodeAddonInvokeExportChannel) {
     const std::string* function_name = request->FindString("functionName");
-    if (!function_name || function_name->empty()) {
+    if (!function_name) {
       std::move(callback).Run(
           MakeIpcFailure("Native addon function name is required"));
       return;
@@ -731,28 +858,48 @@ void XenonServiceImpl::HandleRendererNodeAddonInvoke(
 
   if (channel == kNodeAddonConstructExportChannel) {
     const std::string* export_path = request->FindString("exportPath");
-    if (!export_path || export_path->empty()) {
+    if (!export_path) {
       std::move(callback).Run(
           MakeIpcFailure("Native addon constructor name is required"));
       return;
     }
-    ConstructExport(
+    const base::Value* prototype_properties =
+        request->Find("prototypeProperties");
+    if (prototype_properties && !prototype_properties->is_dict()) {
+      std::move(callback).Run(
+          MakeIpcFailure("Native prototype properties must be an object"));
+      return;
+    }
+    ConstructExportWithPrototype(
         context_id, client_id, *module_path, *export_path, std::move(args),
+        prototype_properties ? prototype_properties->GetDict().Clone()
+                             : base::DictValue(),
         base::BindOnce(
-            [](ElectronIpcInvokeCallback callback, bool success,
-               int32_t instance_id, const std::string& error) {
+            [](std::string owner_token, ElectronIpcInvokeCallback callback,
+               bool success, int32_t instance_id, const std::string& error) {
+              base::DictValue instance;
+              instance.Set("instance_id", instance_id);
+              instance.Set("owner_token", std::move(owner_token));
               std::move(callback).Run(
                   success
-                      ? MakeNativeInvokeSuccess(base::Value(instance_id))
+                      ? MakeNativeInvokeSuccess(
+                            base::Value(std::move(instance)))
                       : MakeIpcFailure(error.empty()
                                            ? "Native addon construction failed"
                                            : error));
             },
-            std::move(callback)));
+            owner_token, std::move(callback)));
     return;
   }
 
   const std::optional<int> instance_id = request->FindInt("instanceId");
+  const std::string* supplied_token = request->FindString("ownerToken");
+  if (!supplied_token ||
+      !executor->ValidateInstanceOwnerToken(owner, *supplied_token)) {
+    std::move(callback).Run(MakeIpcFailure(
+        "ERR_NATIVE_INSTANCE_INVALIDATED: native instance owner is closed"));
+    return;
+  }
   const std::string* method_name = request->FindString("methodName");
   if (!instance_id || !method_name || method_name->empty()) {
     std::move(callback).Run(
@@ -802,25 +949,64 @@ void XenonServiceImpl::ElectronIpcSendSync(
 void XenonServiceImpl::RequireNodeModuleSync(
     const std::string& module_path,
     RequireNodeModuleSyncCallback callback) {
-  EnsureNodeExecutor(node_addon_host_receivers_.current_context())->LoadAddon(
-      module_path,
-      base::BindOnce(
-          [](RequireNodeModuleSyncCallback callback, bool success,
-             const std::string& error,
-             std::vector<mojom::NodeExportInfoPtr> exports) {
-            if (!success) {
-              std::move(callback).Run(MakeIpcFailure(
-                  error.empty() ? "Native module load failed" : error));
-              return;
-            }
-            base::ListValue values;
-            for (const auto& info : exports) {
-              values.Append(NodeExportInfoToValue(info));
-            }
-            std::move(callback).Run(
-                MakeNativeInvokeSuccess(base::Value(std::move(values))));
-          },
-          std::move(callback)));
+  const std::string context_id =
+      node_addon_host_receivers_.current_context().context_id;
+  EnsureNodeExecutor(context_id)
+      ->LoadAddon(
+          module_path,
+          base::BindOnce(
+              [](base::WeakPtr<XenonServiceImpl> self,
+                 const std::string& context_id, const std::string& module_path,
+                 RequireNodeModuleSyncCallback callback, bool success,
+                 const std::string& error,
+                 std::vector<mojom::NodeExportInfoPtr> /*exports*/) {
+                if (!success) {
+                  std::move(callback).Run(MakeIpcFailure(
+                      error.empty() ? "Native module load failed" : error));
+                  return;
+                }
+                XenonNodeExecutor* executor =
+                    self ? self->GetNodeExecutor(context_id) : nullptr;
+                if (!executor) {
+                  std::move(callback).Run(MakeIpcFailure(
+                      "Node executor was destroyed during load"));
+                  return;
+                }
+                mojom::NodeExportInfoPtr description;
+                std::string inspect_error;
+                if (!executor->InspectExportFromCurrentThread(
+                        module_path, "", &description, &inspect_error)) {
+                  std::move(callback).Run(MakeIpcFailure(inspect_error));
+                  return;
+                }
+                std::move(callback).Run(MakeNativeInvokeSuccess(
+                    NodeExportInfoToValue(description)));
+              },
+              weak_factory_.GetWeakPtr(), context_id, module_path,
+              std::move(callback)),
+          /*include_export_tree=*/false);
+}
+
+void XenonServiceImpl::InspectNodeExportSync(
+    const std::string& module_path,
+    const std::string& export_path,
+    InspectNodeExportSyncCallback callback) {
+  XenonNodeExecutor* executor =
+      GetNodeExecutor(node_addon_host_receivers_.current_context().context_id);
+  if (!executor) {
+    std::move(callback).Run(MakeIpcFailure("No Node addon has been loaded"));
+    return;
+  }
+  mojom::NodeExportInfoPtr description;
+  std::string error;
+  if (!executor->InspectExportFromCurrentThread(module_path, export_path,
+                                                &description, &error)) {
+    std::move(callback).Run(MakeIpcFailure(
+        error.empty() ? "Native export inspection failed" : error));
+    return;
+  }
+  std::move(callback).Run(
+      MakeNativeInvokeSuccess(NodeExportInfoToValue(description)));
 }
 
 void XenonServiceImpl::InvokeNodeExportSync(
@@ -830,56 +1016,80 @@ void XenonServiceImpl::InvokeNodeExportSync(
     InvokeNodeExportSyncCallback callback) {
   if (!arguments.is_list()) {
     std::move(callback).Run(
-        MakeIpcFailure("Native addon arguments must be a list"));
+        MakeIpcFailure("Native addon arguments must be a list"), 0);
     return;
   }
-  EnsureNodeExecutor(node_addon_host_receivers_.current_context())
+  auto callbacks = base::SplitOnceCallback(std::move(callback));
+  EnsureNodeExecutor(node_addon_host_receivers_.current_context().context_id)
       ->InvokeFunction(
-      module_path, function_name, /*client_id=*/0,
-      ListValueToInvokeArgs(arguments),
-      base::BindOnce(
-          [](InvokeNodeExportSyncCallback callback, bool success,
-             base::Value value,
-             std::vector<mojom::NodeCallbackResultPtr> callback_results,
-             const std::string& error) {
-            if (!success) {
-              std::move(callback).Run(MakeIpcFailure(
-                  error.empty() ? "Native addon invocation failed" : error));
-              return;
-            }
-            std::move(callback).Run(
-                MakeNativeInvokeSuccess(std::move(value)));
-          },
-          std::move(callback)),
-      /*allow_pending_promise=*/false);
+          module_path, function_name,
+          node_addon_host_receivers_.current_context().client_id,
+          ListValueToInvokeArgs(arguments),
+          base::BindOnce(
+              [](InvokeNodeExportSyncCallback callback, bool success,
+                 base::Value value,
+                 std::vector<mojom::NodeCallbackResultPtr> callback_results,
+                 const std::string& error) {
+                if (!success) {
+                  std::move(callback).Run(
+                      MakeIpcFailure(error.empty()
+                                         ? "Native addon invocation failed"
+                                         : error),
+                      0);
+                  return;
+                }
+                std::move(callback).Run(
+                    MakeNativeInvokeSuccess(std::move(value)), 0);
+              },
+              std::move(callbacks.first)),
+          /*allow_pending_promise=*/false,
+          base::BindOnce(
+              [](InvokeNodeExportSyncCallback callback, uint64_t promise_id) {
+                std::move(callback).Run(MakeNativeInvokeSuccess(base::Value()),
+                                        promise_id);
+              },
+              std::move(callbacks.second)),
+          node_addon_host_receivers_.current_context().owner);
 }
 
 void XenonServiceImpl::ConstructNodeExportSync(
     const std::string& module_path,
     const std::string& export_path,
     base::Value arguments,
+    base::Value prototype_properties,
     ConstructNodeExportSyncCallback callback) {
   if (!arguments.is_list()) {
     std::move(callback).Run(
         MakeIpcFailure("Native addon arguments must be a list"));
     return;
   }
-  EnsureNodeExecutor(node_addon_host_receivers_.current_context())
-      ->ConstructExport(
-      module_path, export_path, /*client_id=*/0,
+  if (!prototype_properties.is_dict()) {
+    std::move(callback).Run(
+        MakeIpcFailure("Native prototype properties must be an object"));
+    return;
+  }
+  const auto& connection = node_addon_host_receivers_.current_context();
+  XenonNodeExecutor* executor = EnsureNodeExecutor(connection.context_id);
+  executor->ConstructExport(
+      module_path, export_path, connection.client_id,
       ListValueToInvokeArgs(arguments),
       base::BindOnce(
-          [](ConstructNodeExportSyncCallback callback, bool success,
-             int32_t instance_id, const std::string& error) {
+          [](std::string owner_token, ConstructNodeExportSyncCallback callback,
+             bool success, int32_t instance_id, const std::string& error) {
             if (!success) {
               std::move(callback).Run(MakeIpcFailure(
                   error.empty() ? "Native construct failed" : error));
               return;
             }
+            base::DictValue instance;
+            instance.Set("instance_id", instance_id);
+            instance.Set("owner_token", std::move(owner_token));
             std::move(callback).Run(
-                MakeNativeInvokeSuccess(base::Value(instance_id)));
+                MakeNativeInvokeSuccess(base::Value(std::move(instance))));
           },
-          std::move(callback)));
+          executor->GetInstanceOwnerToken(connection.owner),
+          std::move(callback)),
+      connection.owner, std::move(prototype_properties).TakeDict());
 }
 
 void XenonServiceImpl::InvokeNodeInstanceSync(
@@ -887,15 +1097,26 @@ void XenonServiceImpl::InvokeNodeInstanceSync(
     int32_t instance_id,
     const std::string& method_name,
     base::Value arguments,
+    const std::string& owner_token,
     InvokeNodeInstanceSyncCallback callback) {
-  if (!arguments.is_list()) {
+  const auto& connection = node_addon_host_receivers_.current_context();
+  XenonNodeExecutor* executor = GetNodeExecutor(connection.context_id);
+  if (!executor ||
+      !executor->ValidateInstanceOwnerToken(connection.owner, owner_token)) {
     std::move(callback).Run(
-        MakeIpcFailure("Native addon arguments must be a list"));
+        MakeIpcFailure(
+            "ERR_NATIVE_INSTANCE_INVALIDATED: native instance owner is closed"),
+        0);
     return;
   }
-  EnsureNodeExecutor(node_addon_host_receivers_.current_context())
-      ->InvokeInstance(
-      module_path, instance_id, method_name, /*client_id=*/0,
+  if (!arguments.is_list()) {
+    std::move(callback).Run(
+        MakeIpcFailure("Native addon arguments must be a list"), 0);
+    return;
+  }
+  auto callbacks = base::SplitOnceCallback(std::move(callback));
+  executor->InvokeInstance(
+      module_path, instance_id, method_name, connection.client_id,
       ListValueToInvokeArgs(arguments),
       base::BindOnce(
           [](InvokeNodeInstanceSyncCallback callback, bool success,
@@ -903,25 +1124,75 @@ void XenonServiceImpl::InvokeNodeInstanceSync(
              std::vector<mojom::NodeCallbackResultPtr> callback_results,
              const std::string& error) {
             if (!success) {
-              std::move(callback).Run(MakeIpcFailure(
-                  error.empty() ? "Native instance invocation failed"
-                                : error));
+              std::move(callback).Run(
+                  MakeIpcFailure(error.empty()
+                                     ? "Native instance invocation failed"
+                                     : error),
+                  0);
               return;
             }
-            std::move(callback).Run(
-                MakeNativeInvokeSuccess(std::move(value)));
+            std::move(callback).Run(MakeNativeInvokeSuccess(std::move(value)),
+                                    0);
           },
-          std::move(callback)),
-      /*allow_pending_promise=*/false);
+          std::move(callbacks.first)),
+      /*allow_pending_promise=*/false,
+      base::BindOnce(
+          [](InvokeNodeInstanceSyncCallback callback, uint64_t promise_id) {
+            std::move(callback).Run(MakeNativeInvokeSuccess(base::Value()),
+                                    promise_id);
+          },
+          std::move(callbacks.second)),
+      node_addon_host_receivers_.current_context().owner);
+}
+
+void XenonServiceImpl::AwaitNodePromise(uint64_t pending_promise_id,
+                                        AwaitNodePromiseCallback callback) {
+  XenonNodeExecutor* executor =
+      GetNodeExecutor(node_addon_host_receivers_.current_context().context_id);
+  if (!executor) {
+    std::move(callback).Run(
+        MakeIpcFailure("Native Promise context was closed"));
+    return;
+  }
+  executor->AwaitDeferredPromise(
+      pending_promise_id, node_addon_host_receivers_.current_context().owner,
+      base::BindOnce(
+          [](AwaitNodePromiseCallback callback, bool success, base::Value value,
+             std::vector<mojom::NodeCallbackResultPtr> callback_results,
+             const std::string& error) {
+            std::move(callback).Run(
+                success ? MakeNativeInvokeSuccess(std::move(value))
+                        : MakeIpcFailure(error));
+          },
+          std::move(callback)));
+}
+
+void XenonServiceImpl::OnNodeAddonHostDisconnected() {
+  const auto connection = node_addon_host_receivers_.current_context();
+  const NodeClientKey client_key{connection.context_id, connection.client_id};
+  if (GetNodeInstanceOwner(connection.context_id, connection.client_id) ==
+      connection.owner) {
+    // ReceiverSet already removes the disconnected receiver after this hook.
+    renderer_node_receivers_.erase(client_key);
+    ReleaseRendererNodeOwner(client_key);
+  }
 }
 
 void XenonServiceImpl::InspectNodeInstanceMemberSync(
     const std::string& module_path,
     int32_t instance_id,
     const std::string& property_name,
+    const std::string& owner_token,
     InspectNodeInstanceMemberSyncCallback callback) {
-  EnsureNodeExecutor(node_addon_host_receivers_.current_context())
-      ->InspectInstanceMember(
+  const auto& connection = node_addon_host_receivers_.current_context();
+  XenonNodeExecutor* executor = GetNodeExecutor(connection.context_id);
+  if (!executor ||
+      !executor->ValidateInstanceOwnerToken(connection.owner, owner_token)) {
+    std::move(callback).Run(MakeIpcFailure(
+        "ERR_NATIVE_INSTANCE_INVALIDATED: native instance owner is closed"));
+    return;
+  }
+  executor->InspectInstanceMember(
       module_path, instance_id, property_name,
       base::BindOnce(
           [](InspectNodeInstanceMemberSyncCallback callback, bool success,
@@ -935,7 +1206,18 @@ void XenonServiceImpl::InspectNodeInstanceMemberSync(
             std::move(callback).Run(
                 MakeNativeInvokeSuccess(std::move(value)));
           },
-          std::move(callback)));
+          std::move(callback)),
+      connection.owner);
+}
+
+void XenonServiceImpl::ReleaseNodeInstance(const std::string& module_path,
+                                           int32_t instance_id,
+                                           const std::string& owner_token) {
+  const auto& connection = node_addon_host_receivers_.current_context();
+  if (auto* executor = GetNodeExecutor(connection.context_id)) {
+    executor->ReleaseInstance(module_path, instance_id, connection.owner,
+                              owner_token);
+  }
 }
 
 void XenonServiceImpl::BindAssociatedSide(
@@ -1048,19 +1330,22 @@ void XenonServiceImpl::EnsureAddonLoaded(
     return;
   }
   executor->LoadAddon(
-      path, base::BindOnce(
-                [](base::OnceCallback<void(bool, const std::string&)> done,
-                   bool success, const std::string& error,
-                   std::vector<mojom::NodeExportInfoPtr> /*exports*/) {
-                  std::move(done).Run(success, error);
-                },
-                std::move(done)));
+      path,
+      base::BindOnce(
+          [](base::OnceCallback<void(bool, const std::string&)> done,
+             bool success, const std::string& error,
+             std::vector<mojom::NodeExportInfoPtr> /*exports*/) {
+            std::move(done).Run(success, error);
+          },
+          std::move(done)),
+      /*include_export_tree=*/false);
 }
 
 void XenonServiceImpl::OnNodeCallback(const std::string& context_id,
                                       int32_t client_id,
                                       int32_t callback_id,
-                                      std::vector<base::Value> args) {
+                                      std::vector<base::Value> args,
+                                      base::Value receiver) {
   const NodeClientKey key =
       {NormalizeIpcContainerId(context_id), client_id};
   const auto renderer_endpoint = renderer_node_endpoints_.find(key);
@@ -1076,6 +1361,7 @@ void XenonServiceImpl::OnNodeCallback(const std::string& context_id,
     base::ListValue event_args;
     event_args.Append(callback_id);
     event_args.Append(std::move(callback_args));
+    event_args.Append(std::move(receiver));
     container->second->DispatchToRenderer(
         renderer_endpoint->second, kNodeAddonCallbackChannel,
         base::Value(std::move(event_args)));
@@ -1088,10 +1374,12 @@ void XenonServiceImpl::OnNodeCallback(const std::string& context_id,
                  << " client=" << client_id
                  << " cb=" << callback_id
                  << " (NodeAddonObserver not connected yet)";
-    pending_node_callbacks_[key].emplace_back(callback_id, std::move(args));
+    pending_node_callbacks_[key].push_back(
+        {callback_id, std::move(args), std::move(receiver)});
     return;
   }
-  observer->second->OnCallback(callback_id, std::move(args));
+  observer->second->OnCallback(callback_id, std::move(args),
+                               std::move(receiver));
 }
 
 void XenonServiceImpl::FlushPendingNodeCallbacks(
@@ -1114,7 +1402,8 @@ void XenonServiceImpl::FlushPendingNodeCallbacks(
   auto queued = std::move(pending->second);
   pending_node_callbacks_.erase(pending);
   for (auto& item : queued) {
-    observer->second->OnCallback(item.first, std::move(item.second));
+    observer->second->OnCallback(item.callback_id, std::move(item.args),
+                                 std::move(item.receiver));
   }
 }
 
@@ -1151,6 +1440,9 @@ void XenonServiceImpl::OnNodeAddonObserverDisconnected(
       {NormalizeIpcContainerId(context_id), client_id};
   node_addon_observers_.erase(key);
   pending_node_callbacks_.erase(key);
+  if (XenonNodeExecutor* executor = GetNodeExecutor(key.first)) {
+    executor->ReleaseCallbacksForClient(client_id);
+  }
 }
 
 void XenonServiceImpl::LoadAddon(const std::string& context_id,
@@ -1187,13 +1479,30 @@ void XenonServiceImpl::ConstructExport(
     const std::string& export_path,
     std::vector<mojom::NodeInvokeArgPtr> args,
     ConstructExportCallback callback) {
+  ConstructExportWithPrototype(context_id, client_id, module_path, export_path,
+                               std::move(args), {}, std::move(callback));
+}
+
+void XenonServiceImpl::ConstructExportWithPrototype(
+    const std::string& context_id,
+    int32_t client_id,
+    const std::string& module_path,
+    const std::string& export_path,
+    std::vector<mojom::NodeInvokeArgPtr> args,
+    base::DictValue prototype_properties,
+    ConstructExportCallback callback) {
+  const uint64_t owner = GetNodeInstanceOwner(context_id, client_id);
+  if (client_id < 0 && !owner) {
+    std::move(callback).Run(false, 0, "Native instance owner is closed");
+    return;
+  }
   EnsureAddonLoaded(
       context_id, module_path,
       base::BindOnce(
           [](base::WeakPtr<XenonServiceImpl> self, std::string context_id,
-             int32_t client_id,
-             std::string module_path, std::string export_path,
-             std::vector<mojom::NodeInvokeArgPtr> args,
+             int32_t client_id, uint64_t owner, std::string module_path,
+             std::string export_path, std::vector<mojom::NodeInvokeArgPtr> args,
+             base::DictValue prototype_properties,
              ConstructExportCallback callback, bool success,
              const std::string& error) {
             XenonNodeExecutor* executor =
@@ -1212,11 +1521,12 @@ void XenonServiceImpl::ConstructExport(
                 module_path, export_path, client_id, std::move(args),
                 mojo::WrapCallbackWithDefaultInvokeIfNotRun(
                     std::move(callback), false, 0,
-                    "ConstructExport callback dropped before completion"));
+                    "ConstructExport callback dropped before completion"),
+                owner, std::move(prototype_properties));
           },
           weak_factory_.GetWeakPtr(), NormalizeIpcContainerId(context_id),
-          client_id, module_path, export_path, std::move(args),
-          std::move(callback)));
+          client_id, owner, module_path, export_path, std::move(args),
+          std::move(prototype_properties), std::move(callback)));
 }
 
 void XenonServiceImpl::InvokeInstance(const std::string& context_id,
@@ -1226,6 +1536,12 @@ void XenonServiceImpl::InvokeInstance(const std::string& context_id,
                                       const std::string& method_name,
                                       std::vector<mojom::NodeInvokeArgPtr> args,
                                       InvokeInstanceCallback callback) {
+  const uint64_t owner = GetNodeInstanceOwner(context_id, client_id);
+  if (client_id < 0 && !owner) {
+    std::move(callback).Run(false, base::Value(), {},
+                            "Native instance owner is closed");
+    return;
+  }
   XenonNodeExecutor* executor = GetNodeExecutor(context_id);
   if (!executor) {
     std::move(callback).Run(false, base::Value(), {},
@@ -1237,7 +1553,8 @@ void XenonServiceImpl::InvokeInstance(const std::string& context_id,
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
           std::move(callback), false, base::Value(),
           std::vector<mojom::NodeCallbackResultPtr>(),
-          "InvokeInstance callback dropped before completion"));
+          "InvokeInstance callback dropped before completion"),
+      /*allow_pending_promise=*/true, {}, owner);
 }
 
 void XenonServiceImpl::GetInstanceProperty(
@@ -1292,12 +1609,18 @@ void XenonServiceImpl::InvokeFunction(const std::string& context_id,
                                       const std::string& function_name,
                                       std::vector<mojom::NodeInvokeArgPtr> args,
                                       InvokeFunctionCallback callback) {
+  const uint64_t owner = GetNodeInstanceOwner(context_id, client_id);
+  if (client_id < 0 && !owner) {
+    std::move(callback).Run(false, base::Value(), {},
+                            "Native instance owner is closed");
+    return;
+  }
   EnsureAddonLoaded(
       context_id, module_path,
       base::BindOnce(
           [](base::WeakPtr<XenonServiceImpl> self, std::string context_id,
-             int32_t client_id,
-             std::string module_path, std::string function_name,
+             int32_t client_id, uint64_t owner, std::string module_path,
+             std::string function_name,
              std::vector<mojom::NodeInvokeArgPtr> args,
              InvokeFunctionCallback callback, bool success,
              const std::string& error) {
@@ -1319,10 +1642,11 @@ void XenonServiceImpl::InvokeFunction(const std::string& context_id,
                 mojo::WrapCallbackWithDefaultInvokeIfNotRun(
                     std::move(callback), false, base::Value(),
                     std::vector<mojom::NodeCallbackResultPtr>(),
-                    "InvokeFunction callback dropped before completion"));
+                    "InvokeFunction callback dropped before completion"),
+                /*allow_pending_promise=*/true, {}, owner);
           },
           weak_factory_.GetWeakPtr(), NormalizeIpcContainerId(context_id),
-          client_id, module_path, function_name, std::move(args),
+          client_id, owner, module_path, function_name, std::move(args),
           std::move(callback)));
 }
 

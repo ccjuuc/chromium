@@ -37,6 +37,8 @@ class BrowserContext;
 namespace xenon {
 
 FORWARD_DECLARE_TEST(XenonManagerTest, Ping_WhenDisconnected_ReturnsNotRunning);
+FORWARD_DECLARE_TEST(XenonManagerTest,
+                     DisconnectedContainerRejectsRendererTraffic);
 #if BUILDFLAG(ENABLE_XENON_ASSOCIATED_SIDE)
 FORWARD_DECLARE_TEST(XenonManagerTest, PingAssociated_WhenDisconnected_ReturnsError);
 #endif
@@ -108,6 +110,7 @@ class XenonManager {
                                  const std::string& endpoint_id);
   void BindNodeAddonHost(
       const std::string& container_id,
+      const std::string& endpoint_id,
       mojo::PendingReceiver<ipc::mojom::NodeAddonHost> receiver);
   void ElectronIpcSend(const std::string& container_id,
                        const std::string& endpoint_id,
@@ -183,6 +186,8 @@ class XenonManager {
  private:
   friend struct base::DefaultSingletonTraits<XenonManager>;
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest, Ping_WhenDisconnected_ReturnsNotRunning);
+  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
+                           DisconnectedContainerRejectsRendererTraffic);
 #if BUILDFLAG(ENABLE_XENON_ASSOCIATED_SIDE)
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest, PingAssociated_WhenDisconnected_ReturnsError);
 #endif
@@ -207,7 +212,8 @@ class XenonManager {
     ServiceRemote remote;
   };
   ContainerServiceConnection* EnsureContainerServiceStarted(
-      const std::string& container_id);
+      const std::string& container_id,
+      bool explicit_restart = false);
   ContainerServiceConnection* FindContainerService(
       const std::string& container_id);
   void InitializeServiceConnection(ServiceRemote* remote,

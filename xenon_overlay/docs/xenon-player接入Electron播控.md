@@ -27,21 +27,49 @@ runtime_directory xenon_player/main/
 
 ## 2. 源产物与同步
 
-当前源工程：
+当前接入分支为 **7.1.35**，完整应用版本为 **7.1.35.173**，源工程：
 
 ```text
-F:\xl-player\xmp_xdas_2
+F:\xl-player\xmp_7.1.35
+branch  feature/7.1.35
+commit  72e98fd9a46b2338a86831d55557962f184bc9d5
+tag     7.1.35_173-win-channel
 ```
 
-完整同步：
+该 tag 与当前 HEAD 完全一致；应用版本的构建号 `173` 来自 tag，写入同步生成的
+`main/package.json` 与 `xmp.exe` 版本资源。
+
+2026-09-16 构建使用该提交锁定的四个子模块：
+
+| 子模块 | 提交 |
+|---|---|
+| `app/src/player-comp` | `c38075f16fead545eb1c8da72ac6e55737bec3ad` |
+| `cppsrc/native_core` | `58ee6d3f54daf8ae67712c28c1dd74cfcd109351` |
+| `cppsrc/player_comp_native` | `b056f92566b506698f955ad7f31eeec86cef46a7` |
+| `setup/xmp_xdas_pack` | `4adfacefaa308f52df2e034c9877ec025ebbf0b9` |
+
+main、frontend、两类 preload 和 `thunder-pan-plugin` 均从上述分支重新构建。
+原生使用标准 **x64 Release、`XDAS_OPEN_LOG=OFF`**，完成 `dk_addon`、
+`pc_addon`、`player_helper`、`xmp_helper`、`xmp`、`containor` 六个目标。
+addon 必须保留标准 N-API 注册入口；`XL_BROWSER_NATIVE_LOAD` 的纯 C 接口产物
+不适用于当前 Electron 容器接入。本次源工程工作区保持干净，未修改业务源码。
+
+SDK 以锁定的 `setup/xmp_xdas_pack/ProductRelease` 为基础，叠加本次原生和应用
+构建产物，准备到 `out/ple-update-7135-20260916/sdk`。完整同步使用显式路径和版本：
 
 ```bat
 vpython3 xenon_overlay\tools\sync_xenon_player.py ^
-  --src F:\xl-player\xmp_xdas_2\app\build ^
+  --src F:\xl-player\xmp_7.1.35\app\build ^
   --out out\Release_64 ^
-  --player-sdk F:\xl-player\xmp_xdas_2\bin ^
-  --native-dir F:\xl-player\xmp_xdas_2\cppsrc\build\Release
+  --player-sdk out\ple-update-7135-20260916\sdk ^
+  --native-dir F:\xl-player\xmp_7.1.35\cppsrc\build\Release ^
+  --app-version 7.1.35.173
 ```
+
+同步源资源时，将同一命令的 `--out` 改为 `xenon_overlay\resources`。
+`--app-version` 写入生成的 `main/package.json`，必须与本次应用版本一致。
+脚本也复制 SDK 根目录的伴随 DLL、证书、XML、图标、VSR 和明确允许的辅助程序，
+保留 `player/SDK/Res/resources` 目录，再用新构建的 native/player 覆盖对应产物。
 
 `--native-dir` 未指定时，脚本优先使用 `<project>/cppsrc/build/Release`；该目录
 不存在时才回退到 `--player-sdk`。这保证新编译的 addon/player 优先覆盖已发布
@@ -58,9 +86,14 @@ SDK 中的旧产物。
 
 ```bat
 vpython3 xenon_overlay\tools\sync_xenon_player_frontend.py ^
-  --src F:\xl-player\xmp_xdas_2\app\build\main-renderer ^
+  --src F:\xl-player\xmp_7.1.35\app\build\main-renderer ^
   --dst out\Release_64\xenon_player\frontend
 ```
+
+本次完整发布清单位于
+`out/ple-update-7135-20260916/staged/xenon_player/release-manifest.json`，记录源码、
+子模块、构建配置及逐文件 SHA-256。更新源资源和运行目录时必须使用同一份产物，
+不能只替换 frontend 后沿用其他版本的 addon 或 SDK。
 
 ## 3. 目录结构
 
@@ -143,13 +176,13 @@ app_name           = xmp
 `XenonPlayerElectronController` 默认从：
 
 ```text
-<xenon.exe dir>/xenon_player/frontend
+<宿主 exe 目录>/xenon_player/frontend
 ```
 
 读取 renderer。开发时可用：
 
 ```text
---xenon-player-frontend-dir=F:\xl-player\xmp_xdas_2\app\build\main-renderer
+--xenon-player-frontend-dir=F:\xl-player\xmp_7.1.35\app\build\main-renderer
 ```
 
 显式覆盖。资源 filter 的边界：
@@ -176,6 +209,47 @@ BrowserWindow Document 提交后，`xenon_ipc_renderer_bootstrap.js` 在页面�
 renderer 窗口会注册独立 endpoint 和 `window_id`，因此 `ipcMain` 可以用
 `event.sender`、`BrowserWindow.fromWebContents()` 和 `event.reply()` 准确返回发起页。
 
+### preload 构建产物校验
+
+原工程的 `asar/security-asar/lib/crawlfs.js` 会在打包时原地加密 `app/build`
+中的脚本。加密后的 `preload/index.js` 不能直接作为 CommonJS 源码执行；这会在
+renderer 报 `SyntaxError: Invalid or unexpected token`，与 Windows 路径无关。
+
+`sync_xenon_player.py` 现在先校验所有 `preload` / `preload-native` JavaScript。
+遇到编码或语法无效的脚本，使用原工程自带的 ASAR 工具读取匹配归档中的源码，
+并再次校验 UTF-8 和 CommonJS 编译。只有归档中保存的原始字节与源文件完全一致
+才接受提取结果，防止混用另一版本的 preload。缺少归档、工具或源码无效时，
+同步在删除旧运行目录之前失败。工具的密钥和私有格式不进入通用运行时。
+
+默认归档为 `<player-sdk>/resources/app/out.asar`，工具为
+`<src>/../asar/security-asar/lib/asar.js`；可用 `--source-archive` 和
+`--vendor-asar-module` 指定实际位置。这项规范化限于 preload，完整同步仍要求
+main 和 frontend 使用可执行的正常源产物。
+
+历史修复（2026-09-16，升级 7.1.35 之前）：当时两份加密 preload 与下列原工程
+产物的 SHA-256 完全一致：
+`F:/xl-player/xmp_xdas_2_1/xmp_xdas_2/app/build`。若仅修复已安装的 preload，
+保留现有 main/frontend，且仍满足上述原始字节完全匹配条件，可使用当时的命令：
+
+```powershell
+node xenon_overlay/tools/normalize_player_preloads.cjs `
+  out/Release_64/xenon_player/main `
+  F:/xl-player/xmp_xdas_2_1/xmp_xdas_2/bin/resources/app/out.asar `
+  F:/xl-player/xmp_xdas_2_1/xmp_xdas_2/app/asar/security-asar/lib/asar.js `
+  --write-to out/Release_64/xenon_player/main
+```
+
+该命令不运行商业源码，所有文件校验完成后才写入目标；结果列出源文件及输出
+SHA-256。首次修复记录位于 `out/ple-preload-normalization-20260916.json`。
+当前 7.1.35 的 preload 来自本次正常源码构建，不使用这份历史归档替换。
+重新创建 PL-E 页面后才会执行恢复后的 preload。可选真实脚本回归明确使用
+Electron mock，仅验证 preload 导出与 IPC 转发，不代表窗口或播放验证：
+
+```powershell
+$env:XENON_PLAYER_PRELOAD_ROOT = (Resolve-Path out/Release_64/xenon_player/main).Path
+node --test xenon_overlay/tools/normalize_player_preloads_unittest.cjs
+```
+
 ### 6.1 早期 Player 兼容钩子的清理与架构解耦
 
 早期在通用 renderer bootstrap 中遗留的四组兼容技术债：
@@ -200,8 +274,8 @@ PL-E 的 `XenonNodeExecutor` 使用 `xenon_player/main` 作为当前容器运行
 该 addon 的 `LoadLibraryA/W` 和 `LoadLibraryExA/W` 导入做局部重定向：
 
 ```text
-<xenon.exe dir>/SDK/<library>
-  -> <xenon.exe dir>/xenon_player/main/SDK/<library>
+<宿主 exe 目录>/SDK/<library>
+  -> <宿主 exe 目录>/xenon_player/main/SDK/<library>
 ```
 
 只有目标文件存在时才重定向。该规则没有 PL-E/TH 名称或 SDK 文件名特判，
@@ -220,7 +294,7 @@ PL-E 的 `XenonNodeExecutor` 使用 `xenon_player/main` 作为当前容器运行
 --server-id=... --client-id=... --process-id=...
 ```
 
-因为当前宿主是 Xenon，子进程也是 `xenon.exe`，不是 `xmp.exe`。
+子进程使用当前宿主可执行文件，本构建为 `xlb153.exe`，不会启动 `xmp.exe`。
 `chrome_exe_main_win.cc` 在 Chromium 正常启动前识别三个参数；
 `player_container_process_win.cc` 读取继承的 `XENON_HOSTED_APP_DIR`，加载：
 
@@ -244,6 +318,42 @@ player host Widget (video parent)
 
 这一层只处理 HWND 层级、bounds 和可见性，不修改播放 URL、标题、时间、选集或
 Download SDK 业务数据。
+
+### 7.4 菜单窗口背景
+
+7.1.35 的原画、字幕、选集使用独立菜单窗口。此次白底异常来自容器未将
+`BrowserWindow` 声明的背景色完整传到实际页面和视图。修复在通用窗口层将背景色
+传递到 WebContents、页面底色及视图，使透明菜单按应用声明显示。
+
+底层 `RenderWidgetHostView` 的背景色仅接受完全透明或完全不透明；半透明输入
+在这一层归一到支持的透明/不透明值，避免触发 Chromium 的 `CHECK`。
+修复位于 Electron 适配层，未修改 PL-E 业务包。
+
+### 7.5 Windows 窗口拖动（后续修复）
+
+新版 Windows 播放器从 CSS drag 改为经 `WM_MOUSEMOVE` 手动拖动。实际日志出现
+124 次 `Buffer.readInt16LE` 缺失，导致鼠标消息解析中断；main 和 renderer 已补齐
+对应 Buffer 能力。`screen` 原先返回固定光标坐标 0 和屏幕尺寸 1920×1080，现将
+五个查询转发到 Browser UI 线程读取真实屏幕与光标状态。
+
+本轮 **JS 270/270、零跳过**，覆盖有符号 Buffer、64 位窗口消息 hook 和实时
+screen 转发；完整生产构建 **229/229 成功**。最终在 9222 复验 PL-E 7.1.35.173，
+用户明确确认“可以拖动了”。页面观测捕获 `isTrusted: true` 的标题栏按下
+（`buttons: 1`）、多次移动和抬起事件；首次拖动的窗口坐标从 `(740, 472)` 变为
+`(1003, 616)`，随后多轮操作也有坐标变化。**实际拖动验收通过**，依据为用户
+操作与页面观测；本次结论限于当前桌面环境，未覆盖所有 DPI 和多屏组合。
+
+同轮 TH 为 `sdkInitReady: true`、`accountInitState: 2`；播放探针 `passed: true`，
+进度 `229 → 1075 ms`，验证后已暂停。最终日志记录容器启动 2 次；窗口事件、
+`readInt16LE`、screen 查询错误、fatal、断连及 N-API 失败均为 0。
+观测结束后已清理临时监听器和轮询。
+
+记录位于 `out/ple-update-7135-20260916/`：原始错误与构建测试见
+`drag-errors-before.json`、`drag-js-tests.log`、`drag-production-build.log`；
+最终验收见 `drag-revalidation-observation.jsonl`、`drag-revalidation-playback.jsonl`、
+`th-drag-revalidation.json` 和 `chrome-debug-drag-revalidation.log`。
+摘要 `drag-revalidation-result.json` 记录 `passed: true`、80 条鼠标事件及 35 次位置变化。
+此项作为后续拖动回归单独记录，此前菜单背景验收结论保持有效。
 
 ## 8. 本地文件与在线 URL
 
@@ -274,10 +384,42 @@ mini installer 在归档前至少校验：
 
 ## 10. 验证与排查
 
+### 7.1.35 构建与同步验证（2026-09-16）
+
+| 项目 | 结果 | 记录 |
+|---|---|---|
+| frontend/main/preload 与插件 | 从指定分支完成构建 | `out/ple-update-7135-20260916/frontend-build.log`、`plugin-build.log` |
+| 六个原生目标 | 标准 x64 Release 构建完成 | `out/ple-update-7135-20260916/native-build.log` |
+| 原生接口和 PE 导入 | 四个 addon 保留 N-API 注册，未使用纯 C bridge；宿主导入符号缺失数为 0 | `out/ple-update-7135-20260916/native-contract.json` |
+| 源资源与运行目录 | 242 个文件已同步至 `xenon_overlay/resources/xenon_player` 和 `out/Release_64/xenon_player`，SHA-256 全部一致 | `out/ple-update-7135-20260916/staged/xenon_player/release-manifest.json` |
+| preload 回归 | **8/8 通过** | 实际构建产物的 preload 检查 |
+| 实际消费代码回归 | **20/20 通过，零跳过** | `out/ple-update-7135-20260916/consumer-tests-7135.log` |
+| 背景修复后 JS 回归 | **263/263 通过，零跳过**；包含新增 4 项背景色契约测试 | `out/ple-update-7135-20260916/background-js-tests.log` |
+| 背景修复后生产构建 | **228/228 完成**，浏览器重新链接 | `out/ple-update-7135-20260916/background-alpha-build.log` |
+| 9222 实际播放 | **通过**；最终探针 `passed: true`，媒体路径匹配、错误码 0、时长 24109 ms、视频尺寸 320×180，进度 `0 → 227 → 1059 ms` | `out/ple-update-7135-20260916/background-playback-probe.jsonl` |
+| 原画、字幕、选集菜单 | **用户验收通过**，明确反馈“界面正常了”；单张 CDP 截图确认独立画面菜单的白底消失 | `out/ple-update-7135-20260916/menu-quality-background.png`；用户实际交互确认 |
+| TH 初始化复验 | `sdkInitReady: true`、`accountInitState: 2` | `out/ple-update-7135-20260916/th-background-acceptance.json` |
+| 最终运行日志 | 容器启动 2 次，断连 0 次、fatal 0 次、N-API 失败 0 次 | `out/ple-update-7135-20260916/chrome-debug-background.log` |
+
+本次升级、播放及所反馈菜单问题已完成验收。菜单结论来自用户实际交互确认与
+一张独立菜单截图；自动 hover 探针受到播放结束和用户切换界面影响，出现
+`Missing button`，未逐个完成三个菜单的截图，不能将其报告为自动化全部通过。
+独立发布核验和最终验收汇总见
+`out/ple-update-7135-20260916/independent-release-verification-20260916.json`。
+
+播放状态依据源工程 `ui/consts/playerConsts.ts` 的真实契约判断，状态 `4` 和 `2`
+均属于播放态。初版探针仅接受 `4`，原记录因此带有 `passed: false`；检查实际
+状态定义后修正探针接受 `[2, 4]`，保留原记录并单独保存判定，不修改播放器运行时。
+首次记录的进度为 `308 → 1173 → 2239 → 3305 → 4374 → 5446 → 6521 ms`；背景
+修复后再次播放得到上表的成功探针。播放结论覆盖本次测试媒体，不代表全部格式
+和在线来源均已验证。
+
+### 启动与检查
+
 启动：
 
 ```bat
-out\Release_64\xenon.exe --remote-debugging-port=9222 --enable-logging
+out\Release_64\xlb153.exe --remote-debugging-port=9222 --enable-logging
 ```
 
 检查顺序：
