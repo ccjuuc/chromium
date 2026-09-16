@@ -4,7 +4,7 @@
 
 // Compare the production Buffer sections with the local Node Buffer oracle.
 const assert = require('node:assert/strict');
-const {readFileSync} = require('node:fs');
+const {existsSync, readFileSync} = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
@@ -183,3 +183,86 @@ for (const side of ['main', 'renderer']) {
     assert.deepEqual(Array.from(result), context.inputs.map(value => Buffer.byteLength(value)));
   });
 }
+
+test('renderer Buffer.isEncoding matches Node aliases, case and non-string rejection', () => {
+  const context = createBufferContext('renderer');
+  const fixture = `
+    const encodings = ['utf8', 'utf-8', 'utf16le', 'utf-16le', 'ucs2', 'ucs-2',
+      'latin1', 'binary', 'ascii', 'base64', 'base64url', 'hex',
+      '', 'utf16', 'utf-16', 'utf16be', 'base64-url', 'buffer', 'raw',
+      'unicode', 'utf32', ' utf8', 'utf8 ', 'utf8\\n', 'utf8\\0'];
+    let conversions = 0;
+    const nonStrings = [undefined, null, 0, 1, true, false, 1n, Symbol('utf8'),
+      new String('utf8'), [], ['utf8'], {},
+      {toString() { ++conversions; return 'utf8'; },
+       [Symbol.toPrimitive]() { ++conversions; return 'utf8'; }},
+      new Proxy({}, {get() { throw new Error('Do not inspect non-strings'); }})];
+    const borrowed = Buffer.isEncoding;
+    return {encodings: encodings.flatMap(value =>
+      [value, value.toUpperCase(), value.replace(/[a-z]/g, (char, i) =>
+        i % 2 ? char.toUpperCase() : char)]).map(value => Buffer.isEncoding(value)),
+      nonStrings: nonStrings.map(value => Buffer.isEncoding(value)),
+      conversions, borrowed: borrowed.call(null, 'utf8')};
+  `;
+  const actual = vm.runInContext(`(() => {${fixture}})()`, context);
+  const expected = new Function('Buffer', fixture)(Buffer);
+  assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected);
+});
+
+const syncKitBundle = process.env.XENON_TEST_TH_SYNC_KIT ||
+    'F:/thunder_2025/app/node_modules/@xbase/electron_sync_kit/dist/cjs/development/index.js';
+
+test('renderer Buffer supports the actual TH MQTT Writable UTF-8 path',
+    {skip: !existsSync(syncKitBundle)}, () => {
+  const source = readFileSync(syncKitBundle, 'utf8');
+  const entry = source.indexOf('var __webpack_exports__ = {};');
+  assert.ok(entry > 0, 'TH sync kit must expose its webpack module table before the entry');
+  // Define the installed bundle's module table without executing its app
+  // entry. Only the Writable dependency is loaded, with no MQTT connection.
+  const fixture = source.slice(0, entry) +
+      'globalThis.__loadWritableTestModule = __webpack_require__;})();';
+  const BufferImpl = createBufferContext('renderer').Buffer;
+  function loadWritable(BufferOverride) {
+    const allowed = new Set(['assert', 'events', 'stream', 'util']);
+    const context = vm.createContext({
+      Buffer: BufferOverride,
+      process: {nextTick: process.nextTick, version: process.version,
+        versions: process.versions, env: {}},
+      setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask,
+      TextEncoder, TextDecoder, AbortController,
+      require(id) {
+        if (id === 'buffer') return {Buffer: BufferOverride};
+        assert.ok(allowed.has(id), 'Unexpected TH Writable fixture external: ' + id);
+        return require(id);
+      },
+    });
+    context.global = context;
+    vm.runInContext(fixture, context, {filename: syncKitBundle});
+    return context.__loadWritableTestModule(
+      '../../node_modules/.pnpm/readable-stream@4.7.0/node_modules/readable-stream/lib/internal/streams/writable.js');
+  }
+
+  const MissingEncoding = new Proxy(BufferImpl, {get(target, key, receiver) {
+    return key === 'isEncoding' ? undefined : Reflect.get(target, key, receiver);
+  }});
+  const OldWritable = loadWritable(MissingEncoding);
+  const oldStream = new OldWritable({write(_chunk, _encoding, callback) { callback(); }});
+  assert.throws(() => oldStream.write('fixture', 'utf8'), /isEncoding is not a function/);
+
+  const Writable = loadWritable(BufferImpl);
+  const chunks = [];
+  const stream = new Writable({write(chunk, encoding, callback) {
+    assert.ok(BufferImpl.isBuffer(chunk));
+    assert.equal(encoding, 'buffer');
+    chunks.push(Array.from(chunk));
+    callback();
+  }});
+  assert.equal(stream.write('同步客户端 / fixture', 'utf8'), true);
+  assert.equal(stream.setDefaultEncoding('UTF-8'), stream);
+  assert.equal(stream.write('第二段 / continuation'), true);
+  assert.throws(() => stream.setDefaultEncoding('not-an-encoding'),
+      error => error.code === 'ERR_UNKNOWN_ENCODING');
+  assert.deepEqual(chunks, ['同步客户端 / fixture', '第二段 / continuation']
+      .map(value => Array.from(Buffer.from(value, 'utf8'))));
+  stream.end();
+});

@@ -95,7 +95,9 @@ function sqliteRenderer(metadataMode = 'exact') {
     },
     releaseNodeInstance() {},
   };
-  const context = vm.createContext({xenonIpcRenderer: transport, TextEncoder, TextDecoder,
+  const context = vm.createContext({
+    __xenonPaths: {platform: 'win32', arch: 'x64', endianness: 'LE'},
+    xenonIpcRenderer: transport, TextEncoder, TextDecoder,
     URL, URLSearchParams, atob, btoa, queueMicrotask, setTimeout, clearTimeout,
     console: {log() {}, warn() {}, error(...args) { callbackErrors.push(args); }},
     location: {protocol: 'chrome:', hostname: 'xenon-player-electron', search: ''}});

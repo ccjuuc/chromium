@@ -100,12 +100,18 @@ struct napi_env__ {
   void TrimAllocatedValues(size_t new_size);
   bool IsLiveValue(napi_value v) const;
 
-  v8::Local<v8::Context> GetContext() const {
-    return context.Get(isolate);
-  }
+  v8::Local<v8::Context> GetContext() const { return context.Get(isolate); }
 };
 
 namespace v8impl {
+// The JavaScript Buffer brand is narrower than Node-API's historical
+// napi_is_buffer check, which accepts every ArrayBufferView. Keep the brand
+// separate so the native wire can preserve Buffer versus typed-array returns.
+bool IsMarkedBuffer(v8::Local<v8::Context> context,
+                    v8::Local<v8::Value> value);
+bool MarkBuffer(v8::Local<v8::Context> context,
+                v8::Local<v8::Uint8Array> buffer);
+
 inline v8::Local<v8::Value> V8LocalValueFromJsValue(napi_env env,
                                                     napi_value v) {
   if (!env || !env->IsLiveValue(v)) {

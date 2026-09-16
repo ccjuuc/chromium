@@ -10,7 +10,9 @@ const filename = path.join(__dirname, 'xenon_ipc_renderer_bootstrap.js');
 const source = readFileSync(filename, 'utf8');
 
 function renderer(secureSource) {
-  const context = vm.createContext({crypto: secureSource,
+  const context = vm.createContext({
+    __xenonPaths: {platform: 'win32', arch: 'x64', endianness: 'LE'},
+    crypto: secureSource,
     TextEncoder, TextDecoder, URL, URLSearchParams, queueMicrotask, atob, btoa,
     xenonIpcRenderer: {
       getRuntimeConfig: () => ({appPath: 'C:\\fixture', exeDir: 'C:\\fixture',

@@ -58,6 +58,7 @@ function createRenderer(overrides = {}, realFinalization = false) {
     ...overrides,
   };
   const context = vm.createContext({
+    __xenonPaths: {platform: 'win32', arch: 'x64', endianness: 'LE'},
     xenonIpcRenderer: transport,
     FinalizationRegistry: realFinalization ? FinalizationRegistry : TestFinalizationRegistry,
     TextEncoder, TextDecoder, URL, URLSearchParams, queueMicrotask, atob, btoa,

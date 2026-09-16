@@ -119,6 +119,7 @@ source_set("os_bridge") {
   ]
   deps = [
     "//base",
+    "//xenon_overlay/common/ipc:runtime_platform",
     "//xenon_overlay/public/mojom",
     "//xenon_overlay/third_party:libuv",
   ]
@@ -146,6 +147,26 @@ source_set("filesystem_bridge") {
     "//xenon_overlay/common/asar",
     "//xenon_overlay/public/mojom",
   ]
+}
+
+source_set("electron_api_bridge") {
+  sources = [
+    "ipc/xenon_electron_api_bridge.cc",
+    "ipc/xenon_electron_api_bridge.h",
+    "ipc/xenon_electron_shell.h",
+  ]
+  deps = [
+    "//base",
+    "//ui/base/clipboard",
+    "//url",
+    "//xenon_overlay/public/mojom",
+  ]
+  if (is_win) {
+    sources += [ "ipc/xenon_electron_shell_win.cc" ]
+    libs = [ "shell32.lib" ]
+  } else {
+    sources += [ "ipc/xenon_electron_shell_stub.cc" ]
+  }
 }
 
 source_set("zlib_bridge") {
@@ -265,6 +286,7 @@ source_set("browser") {
 
   deps = [
     ":app_runtime",
+    ":electron_api_bridge",
     ":filesystem_bridge",
     ":napi",
     ":network_request_bridge",
@@ -503,16 +525,19 @@ test("ipc_main_container_unittests") {
     "../../services/xenon_service_impl.cc",
     "../../services/xenon_service_impl.h",
     "../../services/xenon_service_impl_unittest.cc",
+    "ipc/xenon_electron_api_bridge_unittest.cc",
     "ipc/xenon_ipc_main_container.cc",
     "ipc/xenon_ipc_main_container.h",
     "ipc/xenon_ipc_main_container_unittest.cc",
     "ipc/xenon_ipc_module_loader_unittest.cc",
     "ipc/xenon_main_network_unittest.cc",
+    "ipc/xenon_os_bridge_unittest.cc",
     "ipc/xenon_sqlite_bridge_unittest.cc",
     "ipc/xenon_zlib_bridge_unittest.cc",
   ]
   deps = [
     ":app_runtime",
+    ":electron_api_bridge",
     ":filesystem_bridge",
     ":napi",
     ":network_request_bridge",
@@ -533,6 +558,7 @@ test("ipc_main_container_unittests") {
     "//services/network/public/cpp",
     "//testing/gtest",
     "//ui/base",
+    "//ui/base/clipboard:clipboard_test_support",
     "//v8",
     "//xenon_overlay/buildflags",
     "//xenon_overlay/common/asar",

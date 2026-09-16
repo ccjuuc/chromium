@@ -2839,35 +2839,45 @@ void RunThreadsafeFunctionCall(napi_threadsafe_function func, void* data) {
   ScheduleThreadsafeFunctionFinalizer(func);
 }
 
-v8::Local<v8::Private> GetBufferPrivateKey(napi_env env) {
-  return v8::Private::ForApi(env->isolate, v8::String::NewFromUtf8Literal(
-                                               env->isolate, "napi::buffer"));
-}
-
-bool IsMarkedBuffer(napi_env env, v8::Local<v8::Value> value) {
-  if (!value->IsObject()) {
-    return false;
-  }
-  v8::Local<v8::Value> marker;
-  return value.As<v8::Object>()
-             ->GetPrivate(env->GetContext(), GetBufferPrivateKey(env))
-             .ToLocal(&marker) &&
-         marker->IsTrue();
+v8::Local<v8::Private> GetBufferPrivateKey(v8::Isolate* isolate) {
+  return v8::Private::ForApi(
+      isolate, v8::String::NewFromUtf8Literal(isolate, "napi::buffer"));
 }
 
 }  // namespace
 
-napi_status napi_create_threadsafe_function(napi_env env,
-                                            napi_value func,
-                                            napi_value resource,
-                                            napi_value resource_name,
-                                            size_t max_queue_size,
-                                            size_t initial_thread_count,
-                                            void* thread_finalize_data,
-                                            napi_finalize thread_finalize_cb,
-                                            void* context,
-                                            napi_threadsafe_function_call_js call_js_cb,
-                                            napi_threadsafe_function* result) {
+bool v8impl::IsMarkedBuffer(v8::Local<v8::Context> context,
+                            v8::Local<v8::Value> value) {
+  if (!value->IsUint8Array()) {
+    return false;
+  }
+  v8::Local<v8::Value> marker;
+  return value.As<v8::Object>()
+             ->GetPrivate(context, GetBufferPrivateKey(v8::Isolate::GetCurrent()))
+             .ToLocal(&marker) &&
+         marker->IsTrue();
+}
+
+bool v8impl::MarkBuffer(v8::Local<v8::Context> context,
+                        v8::Local<v8::Uint8Array> buffer) {
+  auto* isolate = v8::Isolate::GetCurrent();
+  return buffer
+      ->SetPrivate(context, GetBufferPrivateKey(isolate), v8::True(isolate))
+      .FromMaybe(false);
+}
+
+napi_status napi_create_threadsafe_function(
+    napi_env env,
+    napi_value func,
+    napi_value resource,
+    napi_value resource_name,
+    size_t max_queue_size,
+    size_t initial_thread_count,
+    void* thread_finalize_data,
+    napi_finalize thread_finalize_cb,
+    void* context,
+    napi_threadsafe_function_call_js call_js_cb,
+    napi_threadsafe_function* result) {
   if (!env || !result || initial_thread_count == 0 ||
       !base::SingleThreadTaskRunner::HasCurrentDefault()) {
     return napi_invalid_arg;
@@ -2997,10 +3007,7 @@ napi_status napi_create_buffer(napi_env env, size_t length, void** data, napi_va
       v8::ArrayBuffer::New(env->isolate, std::move(backing_store));
   v8::Local<v8::Uint8Array> buffer =
       v8::Uint8Array::New(array_buffer, 0, length);
-  if (!buffer.As<v8::Object>()
-           ->SetPrivate(env->GetContext(), GetBufferPrivateKey(env),
-                        v8::True(env->isolate))
-           .FromMaybe(false)) {
+  if (!v8impl::MarkBuffer(env->GetContext(), buffer)) {
     return napi_generic_failure;
   }
   if (data) {
@@ -3015,7 +3022,9 @@ napi_status napi_create_buffer_copy(napi_env env,
                                     const void* data,
                                     void** result_data,
                                     napi_value* result) {
-  if (!env || !result || (length > 0 && !data)) return napi_invalid_arg;
+  if (!env || !result || (length > 0 && !data)) {
+    return napi_invalid_arg;
+  }
   void* buffer_data = nullptr;
   napi_status status = napi_create_buffer(env, length, &buffer_data, result);
   if (status != napi_ok) {
@@ -3036,16 +3045,16 @@ napi_status napi_create_buffer_copy(napi_env env,
 
 napi_status napi_get_buffer_info(napi_env env, napi_value value, void** data, size_t* length) {
   if (!env || !value) return napi_invalid_arg;
-  if (value->Get()->IsArrayBuffer()) {
-    return napi_get_arraybuffer_info(env, value, data, length);
-  }
   if (value->Get()->IsArrayBufferView()) {
     v8::Local<v8::ArrayBufferView> view =
         v8::Local<v8::ArrayBufferView>::Cast(value->Get());
     std::shared_ptr<v8::BackingStore> backing_store =
         view->Buffer()->GetBackingStore();
     if (data) {
-      *data = static_cast<uint8_t*>(backing_store->Data()) + view->ByteOffset();
+      // Empty backing stores may have a null address. Do not perform even a
+      // zero-offset pointer addition on null.
+      auto* bytes = static_cast<uint8_t*>(backing_store->Data());
+      *data = bytes ? UNSAFE_BUFFERS(bytes + view->ByteOffset()) : nullptr;
     }
     if (length) {
       *length = view->ByteLength();
@@ -3056,12 +3065,17 @@ napi_status napi_get_buffer_info(napi_env env, napi_value value, void** data, si
 }
 
 napi_status napi_is_buffer(napi_env env, napi_value value, bool* result) {
-  if (!env || !value || !result) return napi_invalid_arg;
-  *result = IsMarkedBuffer(env, value->Get());
+  if (!env || !value || !result) {
+    return napi_invalid_arg;
+  }
+  // Node's Buffer::HasInstance used by Node-API accepts all ArrayBufferViews,
+  // including ordinary typed arrays and DataView, but not ArrayBuffer itself.
+  *result = value->Get()->IsArrayBufferView();
   return napi_ok;
 }
 
-napi_status napi_get_node_version(napi_env env, const napi_node_version** version) {
+napi_status napi_get_node_version(napi_env env,
+                                  const napi_node_version** version) {
   if (!env || !version) {
     return napi_invalid_arg;
   }

@@ -51,6 +51,94 @@ const net = require('net');
 const path = require('node:path');
 const os = require('os');
 const fs = require('node:fs');
+const asyncHooks = require('node:async_hooks');
+const ipcContext = new asyncHooks.AsyncLocalStorage();
+ipcMain.handle('test:async-context-enter', () => {
+  ipcContext.enterWith('message');
+  return ipcContext.getStore();
+});
+ipcMain.handle('test:async-context-is-empty', () => ipcContext.getStore() === undefined);
+ipcMain.handle('test:async-context-await', async () => {
+  const storage = new asyncHooks.AsyncLocalStorage();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const first = storage.run('first', async () => {
+    await gate;
+    const before = storage.getStore();
+    const nested = await storage.run('nested', async () => {
+      await Promise.resolve();
+      try { await Promise.reject(new Error('expected')); } catch {}
+      return storage.getStore();
+    });
+    return [before, nested, storage.getStore()].join(',');
+  });
+  const second = storage.run('second', async () => {
+    await Promise.resolve();
+    release();
+    return storage.getStore();
+  });
+  const values = await Promise.all([first, second]);
+  try { storage.run('throw', () => { throw new Error('expected'); }); } catch {}
+  return {first: values[0], second: values[1], restored: storage.getStore() === undefined};
+});
+ipcMain.handle('test:async-context-tasks', async () => {
+  const storage = new asyncHooks.AsyncLocalStorage();
+  return storage.run('tasks', async () => {
+    const timer = await new Promise(resolve => setTimeout(value =>
+        resolve(storage.getStore() + ':' + value), 0, 42));
+    const microtask = await new Promise(resolve =>
+        queueMicrotask(() => resolve(storage.getStore())));
+    const tick = await new Promise(resolve =>
+        process.nextTick(() => resolve(storage.getStore())));
+    return {timer, microtask, tick, after: storage.getStore()};
+  });
+});
+ipcMain.handle('test:async-context-cleanup', async () => {
+  const storage = new asyncHooks.AsyncLocalStorage({defaultValue: 'default'});
+  let release;
+  const pending = storage.run('old', async () => {
+    await new Promise(resolve => { release = resolve; });
+    return storage.getStore();
+  });
+  const stale = storage.run('old', () => asyncHooks.AsyncLocalStorage.snapshot());
+  storage.disable();
+  const reused = storage.run('new', () => storage.getStore());
+  release();
+  const pendingValue = await pending;
+  const snapshot = storage.run('captured', () => asyncHooks.AsyncLocalStorage.snapshot());
+  const later = new asyncHooks.AsyncLocalStorage();
+  const isolated = later.run('later', () => snapshot(() =>
+      storage.getStore() === 'captured' && later.getStore() === undefined));
+  const bound = storage.run('bound', () => asyncHooks.AsyncLocalStorage.bind(function() {
+    return this.name + ':' + storage.getStore();
+  }));
+  return {pendingValue, reused, stale: stale(() => storage.getStore()),
+    isolated, bound: bound.call({name: 'receiver'}), root: storage.getStore()};
+});
+ipcMain.handle('test:async-context-unsupported', () => {
+  const calls = [() => asyncHooks.createHook({}), () => asyncHooks.executionAsyncId(),
+    () => asyncHooks.triggerAsyncId(), () => asyncHooks.executionAsyncResource(),
+    () => new asyncHooks.AsyncResource('fixture').asyncId(),
+    () => new asyncHooks.AsyncResource('fixture').triggerAsyncId(),
+    () => new asyncHooks.AsyncResource('fixture').emitDestroy()];
+  return calls.every(call => {
+    try { call(); return false; } catch (error) { return error.code === 'ERR_NOT_SUPPORTED'; }
+  });
+});
+ipcMain.handle('test:async-context-unavailable', () => {
+  const storage = new asyncHooks.AsyncLocalStorage();
+  storage.disable();
+  let callbacks = 0;
+  const calls = [() => storage.run('value', () => ++callbacks),
+    () => storage.enterWith('value'), () => asyncHooks.AsyncLocalStorage.snapshot(),
+    () => asyncHooks.AsyncLocalStorage.bind(() => ++callbacks),
+    () => new asyncHooks.AsyncResource('fixture')];
+  const errors = calls.map(call => {
+    try { call(); return 'no error'; } catch (error) { return error.code; }
+  });
+  return {errors, callbacks, empty: storage.getStore() === undefined,
+    alias: asyncHooks === require('async_hooks')};
+});
 ipcMain.handle('test:crypto-native', async () => {
   const crypto = require('node:crypto');
   const hashes = Object.fromEntries(['md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512']
@@ -394,6 +482,48 @@ ipcMain.handle('test:electron-runtime', () => ({
   aeroGlass: systemPreferences.isAeroGlassEnabled(),
 }));
 ipcMain.handle('test:network-interfaces', () => os.networkInterfaces());
+ipcMain.handle('test:os-native-contract', (_event, expected) => {
+  const nonempty = value => typeof value === 'string' && value.length > 0;
+  const cpus = os.cpus();
+  const user = os.userInfo();
+  const binaryUser = os.userInfo({encoding: 'buffer'});
+  const free = os.freemem();
+  const total = os.totalmem();
+  const errors = [];
+  for (const call of [() => os.availableParallelism(),
+                      () => os.getPriority(), () => os.setPriority(0)]) {
+    try { call(); errors.push('missing'); }
+    catch (error) { errors.push(error.code); }
+  }
+  // Only booleans and error codes leave this handler; host/user identity is
+  // never included in test output or an assertion's actual/expected values.
+  return {
+    alias: os === require('node:os'),
+    metadata: os.platform() === process.platform && os.arch() === process.arch &&
+        ['LE', 'BE'].includes(os.endianness()),
+    uname: ['type', 'release', 'version', 'machine'].every(
+        method => os[method]() === expected[method]),
+    hostPaths: [os.hostname(), os.homedir(), os.tmpdir()].every(nonempty),
+    cpus: cpus.length === expected.cpuCount && cpus.every(cpu =>
+        nonempty(cpu.model) && Number.isFinite(cpu.speed) && cpu.speed >= 0 &&
+        ['user', 'nice', 'sys', 'idle', 'irq'].every(key =>
+            Number.isFinite(cpu.times[key]) && cpu.times[key] >= 0)),
+    memory: total === expected.totalmem && Number.isFinite(free) &&
+        free >= 0 && free <= total,
+    uptime: Number.isFinite(os.uptime()) && os.uptime() >= 0,
+    load: os.loadavg().length === 3 &&
+        os.loadavg().every(value => Number.isFinite(value) && value >= 0),
+    user: nonempty(user.username) && nonempty(user.homedir) &&
+        Number.isInteger(user.uid) && Number.isInteger(user.gid) &&
+        (user.shell === null || typeof user.shell === 'string'),
+    userBuffers: Buffer.isBuffer(binaryUser.username) &&
+        Buffer.isBuffer(binaryUser.homedir) &&
+        binaryUser.username.toString('utf8') === user.username &&
+        binaryUser.homedir.toString('utf8') === user.homedir &&
+        (binaryUser.shell === null || Buffer.isBuffer(binaryUser.shell)),
+    errors,
+  };
+});
 ipcMain.handle('test:window-bounds', () => {
   const window = BrowserWindow.getAllWindows()[0];
   window.setBounds({x: 25, y: 40, width: 960, height: 540});
@@ -608,6 +738,105 @@ TEST_F(XenonIpcMainContainerTest,
   for (const auto& code : *errors) {
     EXPECT_EQ("ERR_NOT_SUPPORTED", code.GetString());
   }
+}
+
+#if defined(V8_ENABLE_JAVASCRIPT_PROMISE_HOOKS)
+TEST_F(XenonIpcMainContainerTest,
+       AsyncLocalStoragePreservesNativeAwaitNestedAndConcurrentScopes) {
+  // This uses the actual hosted V8 context and its native SetPromiseHooks,
+  // rather than a Node AsyncLocalStorage stand-in or Promise.then patch.
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "test:async-context-await", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& values = result->value.GetDict();
+  ASSERT_TRUE(values.FindString("first"));
+  EXPECT_EQ("first,nested,first", *values.FindString("first"));
+  ASSERT_TRUE(values.FindString("second"));
+  EXPECT_EQ("second", *values.FindString("second"));
+  EXPECT_EQ(true, values.FindBool("restored"));
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       AsyncLocalStoragePropagatesNativeTimersMicrotasksAndNextTick) {
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "test:async-context-tasks", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& values = result->value.GetDict();
+  ASSERT_TRUE(values.FindString("timer"));
+  EXPECT_EQ("tasks:42", *values.FindString("timer"));
+  for (const char* name : {"microtask", "tick", "after"}) {
+    ASSERT_TRUE(values.FindString(name)) << name;
+    EXPECT_EQ("tasks", *values.FindString(name)) << name;
+  }
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       AsyncLocalStorageInvalidatesDisabledStoresAndIsolatesSnapshots) {
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "test:async-context-cleanup", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& values = result->value.GetDict();
+  for (const auto& [name, expected] :
+       {std::pair{"pendingValue", "default"}, std::pair{"reused", "new"},
+        std::pair{"stale", "default"}, std::pair{"bound", "receiver:bound"},
+        std::pair{"root", "default"}}) {
+    ASSERT_TRUE(values.FindString(name)) << name;
+    EXPECT_EQ(expected, *values.FindString(name)) << name;
+  }
+  EXPECT_EQ(true, values.FindBool("isolated"));
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       AsyncLocalStorageDoesNotLeakEnterWithAcrossIncomingIpc) {
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> enter;
+  container_->Invoke("renderer-1", "test:async-context-enter", Arguments({}),
+                     enter.GetCallback());
+  auto result = enter.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ("message", result->value.GetString());
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> next;
+  container_->Invoke("renderer-1", "test:async-context-is-empty", Arguments({}),
+                     next.GetCallback());
+  result = next.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_TRUE(result->value.GetBool());
+}
+
+#else
+TEST_F(XenonIpcMainContainerTest,
+       AsyncLocalStorageUnavailableBuildFailsExplicitlyWithoutCrashing) {
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "test:async-context-unavailable",
+                     Arguments({}), future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& values = result->value.GetDict();
+  const auto* errors = values.FindList("errors");
+  ASSERT_TRUE(errors);
+  ASSERT_EQ(5u, errors->size());
+  for (const auto& error : *errors) {
+    EXPECT_EQ("ERR_NOT_SUPPORTED", error.GetString());
+  }
+  EXPECT_EQ(0, values.FindInt("callbacks"));
+  EXPECT_EQ(true, values.FindBool("empty"));
+  EXPECT_EQ(true, values.FindBool("alias"));
+}
+#endif  // defined(V8_ENABLE_JAVASCRIPT_PROMISE_HOOKS)
+
+TEST_F(XenonIpcMainContainerTest,
+       AsyncHooksUnsupportedLifecycleApisDoNotReturnFakeIds) {
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "test:async-context-unsupported",
+                     Arguments({}), future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_TRUE(result->value.GetBool());
 }
 
 TEST_F(XenonIpcMainContainerTest,
@@ -1553,6 +1782,41 @@ TEST_F(XenonIpcMainContainerTest, NetworkInterfacesComeFromTheOperatingSystem) {
       EXPECT_TRUE(cidr->is_none() || cidr->is_string());
       EXPECT_EQ(*family == "IPv6", entry.contains("scopeid"));
     }
+  }
+}
+
+TEST_F(XenonIpcMainContainerTest, OsModuleUsesNativeQueriesAndPreservesIdentity) {
+  base::DictValue expected;
+  for (const auto* method : {"type", "release", "version", "machine",
+                             "totalmem"}) {
+    auto native =
+        PerformOsCall(base::Value(base::DictValue().Set("method", method)));
+    ASSERT_TRUE(native->success);
+    expected.Set(method, std::move(native->value));
+  }
+  auto cpus =
+      PerformOsCall(base::Value(base::DictValue().Set("method", "cpus")));
+  ASSERT_TRUE(cpus->success);
+  ASSERT_TRUE(cpus->value.is_list());
+  expected.Set("cpuCount", static_cast<int>(cpus->value.GetList().size()));
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke(
+      "renderer-1", "test:os-native-contract",
+      base::Value(base::ListValue().Append(std::move(expected))),
+      future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  ASSERT_TRUE(result->value.is_dict());
+  const auto& values = result->value.GetDict();
+  for (const auto* key : {"alias", "metadata", "uname", "hostPaths", "cpus",
+                          "memory", "uptime", "load", "user", "userBuffers"}) {
+    EXPECT_EQ(true, values.FindBool(key)) << key;
+  }
+  const auto* errors = values.FindList("errors");
+  ASSERT_TRUE(errors);
+  ASSERT_EQ(3u, errors->size());
+  for (const auto& error : *errors) {
+    EXPECT_EQ("ERR_NOT_SUPPORTED", error.GetString());
   }
 }
 

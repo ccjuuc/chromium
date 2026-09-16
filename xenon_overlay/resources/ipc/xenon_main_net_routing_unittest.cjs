@@ -10,6 +10,8 @@ const vm = require('node:vm');
 const source = readFileSync(path.join(__dirname, 'xenon_ipc_main_bootstrap.js'), 'utf8');
 const factory = source.slice(source.indexOf('  const netModule = (() => {'),
     source.indexOf('  function createMainNetwork('));
+const asyncScope = source.slice(source.indexOf('  let currentAsyncContext;'),
+    source.indexOf('  class AsyncLocalStorage'));
 const pipe = '\\\\.\\pipe\\xenon-main-routing-test';
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
@@ -24,7 +26,7 @@ function fixture(onSend = () => {}) {
         context.deliver(event, value)));
     },
   });
-  vm.runInContext('let dispatchXenonNet;\n' + factory +
+  vm.runInContext('let dispatchXenonNet;\n' + asyncScope + factory +
       '\nglobalThis.net = netModule; globalThis.deliver = (channel, payload) => dispatchXenonNet(channel, payload, {endpointId:"@main"});', context);
   return {context, net: context.net, sent};
 }

@@ -19,6 +19,7 @@ function createContext(sourcePath) {
   const context = vm.createContext(vm.constants.DONT_CONTEXTIFY);
   Object.assign(context, {TextEncoder, TextDecoder, URL, URLSearchParams,
     queueMicrotask, atob, btoa, performance,
+    __xenonPaths: {platform: 'win32', arch: 'x64', endianness: 'LE'},
     location: {protocol: 'chrome:', hostname: 'xenon-player-electron', search: ''},
     console: {log() {}, warn() {}, error() {}},
     xenonIpcRenderer: {getRuntimeConfig: () => ({appPath: 'C:\\fixture',

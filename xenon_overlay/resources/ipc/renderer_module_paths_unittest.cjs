@@ -80,6 +80,7 @@ function createPathRenderer(files, aliases = new Map(), appRoot = 'C:\\test-app'
     },
   };
   const context = vm.createContext({
+    __xenonPaths: {platform: 'win32', arch: 'x64', endianness: 'LE'},
     xenonIpcRenderer: transport,
     TextEncoder,
     TextDecoder,
@@ -228,6 +229,48 @@ test('deleting a module cache record rechecks a retargeted symlink against roots
   harness.setAlias(alias, 'C:\\outside\\private.js');
   assert.throws(() => harness.context.require('./alias.js'), {code: 'MODULE_NOT_FOUND'});
   assert.deepEqual(harness.reads, [filename]);
+});
+
+test('cold package resolution reads each canonical package config once', () => {
+  const directory = 'C:\\test-app\\packages\\fixture';
+  const packageFile = directory + '\\package.json';
+  const filename = directory + '\\entry.js';
+  const {context, reads, operations} = createPathRenderer(new Map([
+    [packageFile, JSON.stringify({main: 'entry.js'})],
+    [filename, 'module.exports = {ready: true};'],
+  ]), new Map([['C:\\test-app\\node_modules\\fixture', directory]]));
+  const first = context.require('fixture');
+  assert.equal(first.ready, true);
+  assert.deepEqual(reads, [packageFile, filename]);
+  const coldOperations = operations.length;
+  assert.equal(context.require('fixture'), first);
+  assert.equal(context.require.resolve('fixture'), filename);
+  assert.equal(operations.length, coldOperations);
+});
+
+test('package config is refreshed after cache deletion and failed resolution', () => {
+  const directory = 'C:\\test-app\\node_modules\\fixture';
+  const packageFile = directory + '\\package.json';
+  const firstFile = directory + '\\first.js';
+  const secondFile = directory + '\\second.js';
+  const harness = createPathRenderer(new Map([
+    [packageFile, JSON.stringify({main: 'first.js'})],
+    [firstFile, 'module.exports = 1;'],
+    [secondFile, 'module.exports = 2;'],
+  ]));
+  assert.equal(harness.context.require('fixture'), 1);
+  delete harness.context.require.cache[firstFile];
+  harness.setFile(packageFile, JSON.stringify({main: 'second.js'}));
+  assert.equal(harness.context.require('fixture'), 2);
+  delete harness.context.require.cache[secondFile];
+  harness.setFile(packageFile, '{');
+  assert.throws(() => harness.context.require('fixture'), {code: 'ERR_INVALID_PACKAGE_CONFIG'});
+  harness.setFile(packageFile, JSON.stringify({exports: './second.js'}));
+  assert.throws(() => harness.context.require('fixture'), {code: 'ERR_NOT_SUPPORTED'});
+  harness.setFile(packageFile, JSON.stringify({main: 'missing.js'}));
+  assert.throws(() => harness.context.require('fixture'), {code: 'MODULE_NOT_FOUND'});
+  harness.setFile(packageFile, JSON.stringify({main: 'first.js'}));
+  assert.equal(harness.context.require('fixture'), 1);
 });
 
 test('failed evaluation and resolution retry using the current files', () => {

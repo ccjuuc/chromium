@@ -5,6 +5,7 @@
 #include "napi_loader.h"
 
 #include "base/base_paths.h"
+#include "base/compiler_specific.h"
 #include "base/path_service.h"
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
@@ -868,7 +869,59 @@ TEST_F(NapiLoaderTest, BufferUsesUint8ArraySemantics) {
                                    0, &typed_array),
             napi_ok);
   EXPECT_EQ(napi_is_buffer(env.get(), typed_array, &is_buffer), napi_ok);
+  EXPECT_TRUE(is_buffer);
+  EXPECT_FALSE(v8impl::IsMarkedBuffer(context(), typed_array->Get()));
+  EXPECT_TRUE(v8impl::IsMarkedBuffer(context(), buffer->Get()));
+  EXPECT_EQ(napi_is_buffer(env.get(), array_buffer, &is_buffer), napi_ok);
   EXPECT_FALSE(is_buffer);
+  EXPECT_EQ(
+      napi_get_buffer_info(env.get(), array_buffer, &buffer_data, &length),
+      napi_invalid_arg);
+}
+
+TEST_F(NapiLoaderTest, BufferInfoAcceptsViewsAndUsesTheirActiveByteRange) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  napi_value array_buffer;
+  void* storage = nullptr;
+  ASSERT_EQ(napi_create_arraybuffer(env.get(), 16, &storage, &array_buffer),
+            napi_ok);
+  auto backing = array_buffer->Get().As<v8::ArrayBuffer>();
+  v8::Local<v8::Value> views[] = {
+      v8::Uint8Array::New(backing, 3, 4),
+      v8::Uint8ClampedArray::New(backing, 3, 4),
+      v8::Int8Array::New(backing, 3, 4),
+      v8::Uint16Array::New(backing, 2, 3),
+      v8::Int32Array::New(backing, 4, 2),
+      v8::Float64Array::New(backing, 8, 1),
+      v8::BigUint64Array::New(backing, 8, 1),
+      v8::DataView::New(backing, 3, 5),
+      v8::Uint8Array::New(backing, 5, 0),
+  };
+  for (auto view : views) {
+    napi_value value = env->CreateValue(view);
+    bool is_buffer = false;
+    ASSERT_EQ(napi_is_buffer(env.get(), value, &is_buffer), napi_ok);
+    EXPECT_TRUE(is_buffer);
+    void* data = nullptr;
+    size_t length = 0;
+    ASSERT_EQ(napi_get_buffer_info(env.get(), value, &data, &length), napi_ok);
+    auto array_view = view.As<v8::ArrayBufferView>();
+    EXPECT_EQ(data, UNSAFE_BUFFERS(static_cast<uint8_t*>(storage) +
+                                   array_view->ByteOffset()));
+    EXPECT_EQ(length, array_view->ByteLength());
+    EXPECT_FALSE(v8impl::IsMarkedBuffer(context(), view));
+  }
+
+  napi_value empty;
+  ASSERT_EQ(napi_create_buffer(env.get(), 0, nullptr, &empty), napi_ok);
+  size_t length = 1;
+  void* data = storage;
+  ASSERT_EQ(napi_get_buffer_info(env.get(), empty, &data, &length), napi_ok);
+  EXPECT_EQ(length, 0u);
 }
 
 TEST_F(NapiLoaderTest, ThreadsafeFunctionHonorsQueueAndFinalizes) {

@@ -15,7 +15,7 @@ function createRuntime(onWindowCall = () => null) {
     TextEncoder, TextDecoder, URL, URLSearchParams, queueMicrotask,
     setTimeout, clearTimeout, setInterval, clearInterval, atob, btoa,
     console: {log() {}, warn() {}, error() {}},
-    __xenonPlatform: 'win32', __xenonArch: 'x64', __xenonOsRelease: '10.0',
+    __xenonPlatform: 'win32', __xenonArch: 'x64', __xenonEndianness: 'LE', __xenonOsRelease: '10.0',
     __xenonAppPath: 'C:\\fixture', __xenonRendererBaseUrl: '',
     __xenonRendererUrlMappings: [], __xenonAppName: 'fixture',
     __xenonAppVersion: '1', __xenonUserAgent: '',
@@ -38,6 +38,107 @@ function createRuntime(onWindowCall = () => null) {
   vm.runInContext(readFileSync(filename, 'utf8'), context, {filename});
   return {context, calls, BrowserWindow: context.__xenonElectron.BrowserWindow};
 }
+
+test('BrowserWindow preserves missing properties and resolves as an ordinary object', async () => {
+  const {BrowserWindow} = createRuntime();
+  const window = new BrowserWindow();
+  assert.equal(window.then, undefined);
+  assert.equal(window.setBackgroundMaterial, undefined);
+  assert.equal(window.isUnknownCapability, undefined);
+  assert.equal(window.hasUnknownCapability, undefined);
+  assert.equal(await Promise.resolve(window), window);
+  assert.equal(BrowserWindow.fromWebContents(window.webContents), window);
+  assert.equal(BrowserWindow.fromId(window.id), window);
+});
+
+test('BrowserWindow parenting validates cycles and only commits successful native changes', () => {
+  const {BrowserWindow, calls, context} = createRuntime((id, command, details) => {
+    if (command === 'set-parent-window' && details.parentId === 3) {
+      throw new Error('Parent unavailable');
+    }
+    if (command === 'set-progress-bar') {
+      throw new Error('ERR_NOT_SUPPORTED: BrowserWindow.setProgressBar');
+    }
+    return null;
+  });
+  const first = new BrowserWindow();
+  const child = new BrowserWindow();
+  const unavailable = new BrowserWindow();
+  child.setParentWindow(first);
+  assert.equal(child.getParentWindow(), first);
+  assert.deepEqual(Array.from(first.getChildWindows()), [child]);
+  assert.throws(() => first.setParentWindow(child), /parent cycle/);
+  assert.throws(() => child.setParentWindow(unavailable), /Parent unavailable/);
+  assert.equal(child.getParentWindow(), first);
+  child.setParentWindow(null);
+  assert.equal(child.getParentWindow(), null);
+  child.moveTop();
+  assert.throws(() => child.setProgressBar(0.5, {mode: 'paused'}),
+      {code: 'ERR_NOT_SUPPORTED'});
+  assert.ok(calls.some(call => call.id === child.id && call.command === 'move-top'));
+  assert.deepEqual(calls.at(-1).details, {progress: 0.5, mode: 'paused'});
+  delete context.__xenonBrowserWindowCall;
+  assert.throws(() => child.setParentWindow(first), {code: 'ERR_NOT_SUPPORTED'});
+  assert.equal(child.getParentWindow(), null);
+  delete context.__xenonCreateBrowserWindow;
+  assert.throws(() => new BrowserWindow(), {code: 'ERR_NOT_SUPPORTED'});
+});
+
+test('BrowserWindow focus and always-on-top queries use actual host state', () => {
+  const {BrowserWindow} = createRuntime((id, command) => {
+    if (command === 'is-focused') return id === 1;
+    if (command === 'is-always-on-top') return id === 2;
+    return null;
+  });
+  const first = new BrowserWindow();
+  const second = new BrowserWindow();
+  assert.equal(BrowserWindow.getFocusedWindow(), first);
+  assert.equal(first.isAlwaysOnTop(), false);
+  assert.equal(second.isAlwaysOnTop(), true);
+});
+
+test('unimplemented Electron APIs report errors instead of fabricated success or cancellation', async () => {
+  const {context} = createRuntime();
+  const electron = context.__xenonElectron;
+  const session = electron.session.defaultSession;
+  for (const operation of [
+    () => session.cookies.get({}), () => session.cookies.set({}),
+    () => session.cookies.remove('https://fixture.invalid', 'key'),
+    () => session.cookies.flushStore(), () => session.setProxy({}),
+    () => session.resolveProxy('https://fixture.invalid'), () => session.clearCache(),
+    () => session.clearStorageData(), () => session.getBlobData('missing'),
+    () => electron.dialog.showOpenDialog({}), () => electron.dialog.showSaveDialog({}),
+    () => electron.dialog.showMessageBox({}),
+  ]) await assert.rejects(operation(), {code: 'ERR_NOT_SUPPORTED'});
+  for (const operation of [
+    () => session.webRequest.onBeforeRequest({}, () => {}),
+    () => session.setPermissionRequestHandler(() => {}),
+    () => session.protocol.registerFileProtocol('fixture', () => {}),
+    () => electron.globalShortcut.register('Ctrl+F10', () => {}),
+    () => electron.dialog.showOpenDialogSync({}),
+  ]) assert.throws(operation, {code: 'ERR_NOT_SUPPORTED'});
+  assert.equal(electron.globalShortcut.isRegistered('Ctrl+F10'), false);
+});
+
+test('main clipboard and shell use host results and preserve errors', async () => {
+  const {context, calls} = createRuntime((id, command, details) => {
+    assert.equal(id, 0);
+    assert.equal(command, 'electron-api');
+    if (details.operation === 'clipboard.readText') return 'fixture text';
+    if (details.operation === 'shell.openPath') return 'Path not found';
+    if (details.operation === 'shell.openExternal') throw new Error('ERR_FAILED: fixture failure');
+    return null;
+  });
+  const {clipboard, shell} = context.__xenonElectron;
+  assert.equal(clipboard.readText(), 'fixture text');
+  assert.equal(clipboard.writeText('fixture value'), undefined);
+  assert.equal(await shell.openPath('C:/missing-fixture'), 'Path not found');
+  await assert.rejects(shell.openExternal('https://fixture.invalid'), {code: 'ERR_FAILED'});
+  assert.equal(calls.length, 4);
+  delete context.__xenonBrowserWindowCall;
+  assert.throws(() => clipboard.readText(), {code: 'ERR_NOT_SUPPORTED'});
+  await assert.rejects(shell.openPath('C:/fixture'), {code: 'ERR_NOT_SUPPORTED'});
+});
 
 test('BrowserWindow applies the requested background before loading its page', async () => {
   const {BrowserWindow, calls} = createRuntime();

@@ -57,6 +57,7 @@ class XenonIpcRenderer final : public xenon::ipc::mojom::IpcRenderer,
 
   // JavaScript API.
   void GetRuntimeConfig(gin::Arguments* args);
+  void InstallAsyncContextHooks(gin::Arguments* args);
   void AttachGuest(gin::Arguments* args);
   void Send(gin::Arguments* args);
   void Invoke(gin::Arguments* args);
@@ -111,6 +112,7 @@ class XenonIpcRenderer final : public xenon::ipc::mojom::IpcRenderer,
   v8::Global<v8::Function> dispatch_handler_;
   std::vector<std::pair<std::string, base::Value>> queued_events_;
   uint64_t next_invoke_id_ = 1;
+  bool async_context_hooks_installed_ = false;
   std::map<uint64_t, PendingInvoke> pending_invokes_;
 
   base::WeakPtrFactory<XenonIpcRenderer> weak_factory_{this};

@@ -12,6 +12,7 @@ const source = readFileSync(filename, 'utf8');
 
 function renderer() {
   const context = vm.createContext({
+    __xenonPaths: {platform: 'win32', arch: 'x64', endianness: 'LE'},
     TextEncoder, TextDecoder, URL, URLSearchParams, queueMicrotask, atob, btoa,
     xenonIpcRenderer: {
       getRuntimeConfig: () => ({appPath: 'C:\\fixture', exeDir: 'C:\\fixture',

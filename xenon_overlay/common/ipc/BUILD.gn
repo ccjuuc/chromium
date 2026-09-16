@@ -2,11 +2,17 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+source_set("runtime_platform") {
+  sources = [ "xenon_runtime_platform.h" ]
+}
+
 source_set("value_codec") {
   sources = [
     "xenon_ipc_value_codec.cc",
     "xenon_ipc_value_codec.h",
   ]
+
+  public_deps = [ ":runtime_platform" ]
 
   deps = [
     "//base",

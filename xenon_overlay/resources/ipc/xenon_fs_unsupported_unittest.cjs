@@ -30,6 +30,7 @@ function createRenderer() {
     throw new Error('ENOENT: no such file or directory');
   };
   const context = vm.createContext({
+    __xenonPaths: {platform: 'win32', arch: 'x64', endianness: 'LE'},
     xenonIpcRenderer: {
       getRuntimeConfig: () => ({appPath: 'C:\\test-app',
         exeDir: 'C:\\test-app', execPath: 'C:\\test-app\\host.exe'}),

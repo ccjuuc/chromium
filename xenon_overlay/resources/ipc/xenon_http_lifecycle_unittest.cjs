@@ -16,6 +16,7 @@ function fixture() {
   const timers = new Map();
   let nextTimer = 1;
   const context = vm.createContext({
+    __xenonPaths: {platform: 'win32', arch: 'x64', endianness: 'LE'},
     TextEncoder, TextDecoder, URL, URLSearchParams, queueMicrotask, atob, btoa,
     setTimeout(callback) { const id = nextTimer++; timers.set(id, callback); return id; },
     clearTimeout(id) { timers.delete(id); },
@@ -43,6 +44,46 @@ function fixture() {
 }
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('HTTP delivers a single response to request listeners and its callback', async () => {
+  const runtime = fixture();
+  const events = [];
+  let callbackResponse;
+  const req = runtime.http.request('http://fixture.invalid', incoming => {
+    callbackResponse = incoming;
+    events.push('callback');
+  });
+  req.on('response', incoming => {
+    assert.equal(incoming, callbackResponse);
+    events.push('response');
+    incoming.setEncoding('utf8');
+    incoming.on('data', data => events.push(data));
+    incoming.on('end', () => events.push('end'));
+  });
+  req.end();
+  await settle();
+  runtime.respond();
+  await settle();
+  assert.deepEqual(events, ['callback', 'response', 'abc', 'end']);
+});
+
+test('HTTP supports response event without a request callback', async () => {
+  const runtime = fixture();
+  const events = [];
+  const req = runtime.http.get('http://fixture.invalid');
+  req.on('response', incoming => {
+    events.push(incoming.statusCode);
+    incoming.on('end', () => events.push('end'));
+  });
+  await settle();
+  runtime.respond();
+  await settle();
+  assert.deepEqual(events, [200, 'end']);
+});
+
+test('HTTP unavailable server fails instead of returning an inert emitter', () => {
+  assert.throws(() => fixture().http.createServer(), {code: 'ERR_NOT_SUPPORTED'});
+});
 
 for (const operation of ['abort', 'destroy']) {
   test(`HTTP ${operation} in response callback suppresses queued data and end`, async () => {

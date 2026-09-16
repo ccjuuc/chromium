@@ -175,103 +175,162 @@
   EventEmitter.default = EventEmitter;
   EventEmitter.defaultMaxListeners = 10;
 
-  const asyncLocalStorageInstances = new Set();
+  // Promise hooks are scoped to this V8 context. Blink owns the isolate's
+  // continuation-preserved embedder data, so never overwrite that slot.
+  let currentAsyncContext;
+  let asyncContextHooksInstalled = false;
+  const promiseAsyncContexts = new WeakMap();
+  const asyncContextStack = [];
+  const installAsyncContextHooks = globalThis.__xenonInstallAsyncContextHooks;
+  function unsupportedAsyncHooks(method) {
+    const error = new Error('async_hooks.' + method + ' is not supported');
+    error.code = 'ERR_NOT_SUPPORTED';
+    throw error;
+  }
+  function ensureAsyncContextHooks() {
+    if (asyncContextHooksInstalled) return;
+    if (typeof installAsyncContextHooks !== 'function') {
+      unsupportedAsyncHooks('AsyncLocalStorage (native Promise hooks unavailable)');
+    }
+    installAsyncContextHooks(
+        promise => {
+          if (currentAsyncContext !== undefined) {
+            promiseAsyncContexts.set(promise, currentAsyncContext);
+          }
+        },
+        promise => {
+          asyncContextStack.push(currentAsyncContext);
+          currentAsyncContext = promiseAsyncContexts.get(promise);
+        },
+        () => { currentAsyncContext = asyncContextStack.pop(); });
+    asyncContextHooksInstalled = true;
+  }
+  function runWithAsyncContext(context, callback, thisArg, args) {
+    const previous = currentAsyncContext;
+    currentAsyncContext = context;
+    try {
+      return Reflect.apply(callback, thisArg, args);
+    } finally {
+      currentAsyncContext = previous;
+    }
+  }
+  function captureAsyncCallback(callback) {
+    const context = currentAsyncContext;
+    return function(...args) {
+      return runWithAsyncContext(context, callback, this, args);
+    };
+  }
+  // Browser timers and microtasks are host tasks, not Promise reactions. Keep
+  // their registration context explicitly; ids, cancellation and arguments
+  // continue to come from the real host implementation.
+  for (const name of ['setTimeout', 'setInterval', 'setImmediate', 'queueMicrotask']) {
+    const schedule = globalThis[name];
+    if (typeof schedule !== 'function') continue;
+    globalThis[name] = function(callback, ...args) {
+      const wrapped = typeof callback === 'function' && asyncContextHooksInstalled ?
+          captureAsyncCallback(callback) : callback;
+      return Reflect.apply(schedule, this, [wrapped, ...args]);
+    };
+  }
   class AsyncLocalStorage {
-    constructor() {
-      this.enabled_ = true;
-      this.store_ = undefined;
-      asyncLocalStorageInstances.add(this);
+    constructor(options = {}) {
+      if (options === null || typeof options !== 'object') {
+        const error = new TypeError('The "options" argument must be an object');
+        error.code = 'ERR_INVALID_ARG_TYPE';
+        throw error;
+      }
+      if (options.onPropagate !== undefined) {
+        unsupportedAsyncHooks('AsyncLocalStorage onPropagate');
+      }
+      this.name = options.name === undefined ? '' : String(options.name);
+      this.defaultValue_ = options.defaultValue;
+      this.key_ = undefined;
     }
     disable() {
-      this.enabled_ = false;
-      this.store_ = undefined;
+      if (this.key_ !== undefined && currentAsyncContext?.has(this.key_)) {
+        currentAsyncContext = new Map(currentAsyncContext);
+        currentAsyncContext.delete(this.key_);
+      }
+      // Existing Promise frames may outlive disable(), but can no longer return
+      // this instance's old store. No registry strongly retains ALS instances.
+      this.key_ = undefined;
     }
     enterWith(store) {
-      this.enabled_ = true;
-      this.store_ = store;
+      ensureAsyncContextHooks();
+      this.key_ ??= Symbol();
+      currentAsyncContext = new Map(currentAsyncContext);
+      currentAsyncContext.set(this.key_, store);
     }
     getStore() {
-      return this.enabled_ ? this.store_ : undefined;
+      return this.key_ !== undefined && currentAsyncContext?.has(this.key_) ?
+          currentAsyncContext.get(this.key_) : this.defaultValue_;
     }
     run(store, callback, ...args) {
-      if (typeof callback !== 'function') {
-        throw new TypeError('The "callback" argument must be a function');
-      }
-      const previousEnabled = this.enabled_;
-      const previousStore = this.store_;
-      this.enabled_ = true;
-      this.store_ = store;
-      try {
-        return callback(...args);
-      } finally {
-        this.enabled_ = previousEnabled;
-        this.store_ = previousStore;
-      }
+      validateListener(callback);
+      ensureAsyncContextHooks();
+      this.key_ ??= Symbol();
+      const context = new Map(currentAsyncContext);
+      context.set(this.key_, store);
+      return runWithAsyncContext(context, callback, undefined, args);
     }
     exit(callback, ...args) {
       return this.run(undefined, callback, ...args);
     }
     static snapshot() {
-      const captured = [...asyncLocalStorageInstances].map(storage => ({
-        storage,
-        enabled: storage.enabled_,
-        store: storage.store_,
-      }));
+      ensureAsyncContextHooks();
+      const context = currentAsyncContext;
       return (callback, ...args) => {
-        const previous = captured.map(({storage}) => ({
-          storage,
-          enabled: storage.enabled_,
-          store: storage.store_,
-        }));
-        for (const item of captured) {
-          item.storage.enabled_ = item.enabled;
-          item.storage.store_ = item.store;
-        }
-        try {
-          return callback(...args);
-        } finally {
-          for (const item of previous) {
-            item.storage.enabled_ = item.enabled;
-            item.storage.store_ = item.store;
-          }
-        }
+        validateListener(callback);
+        return runWithAsyncContext(context, callback, undefined, args);
       };
     }
     static bind(callback) {
-      const snapshot = AsyncLocalStorage.snapshot();
-      return function(...args) {
-        return snapshot(() => callback.apply(this, args));
-      };
+      validateListener(callback);
+      ensureAsyncContextHooks();
+      return captureAsyncCallback(callback);
     }
   }
   class AsyncResource {
-    constructor(type) {
-      this.type = String(type || 'AsyncResource');
+    constructor(type, options) {
+      if (typeof type !== 'string') {
+        const error = new TypeError('The "type" argument must be a string');
+        error.code = 'ERR_INVALID_ARG_TYPE';
+        throw error;
+      }
+      if (options !== undefined) {
+        unsupportedAsyncHooks('AsyncResource options');
+      }
+      this.type = type;
       this.snapshot_ = AsyncLocalStorage.snapshot();
     }
     runInAsyncScope(callback, thisArg, ...args) {
-      return this.snapshot_(() => callback.apply(thisArg, args));
+      validateListener(callback);
+      return this.snapshot_(() => Reflect.apply(callback, thisArg, args));
     }
     bind(callback, thisArg) {
-      return (...args) => this.runInAsyncScope(callback, thisArg, ...args);
+      validateListener(callback);
+      const resource = this;
+      const hasThisArg = arguments.length > 1;
+      return function(...args) {
+        return resource.runInAsyncScope(callback, hasThisArg ? thisArg : this, ...args);
+      };
     }
-    emitDestroy() { return this; }
-    asyncId() { return 0; }
-    triggerAsyncId() { return 0; }
-    static bind(callback, type, thisArg) {
-      return new AsyncResource(type).bind(callback, thisArg);
+    emitDestroy() { return unsupportedAsyncHooks('AsyncResource.emitDestroy'); }
+    asyncId() { return unsupportedAsyncHooks('AsyncResource.asyncId'); }
+    triggerAsyncId() { return unsupportedAsyncHooks('AsyncResource.triggerAsyncId'); }
+    static bind(callback, type = 'bound-anonymous-fn', thisArg) {
+      const resource = new AsyncResource(type);
+      return arguments.length > 2 ? resource.bind(callback, thisArg) :
+          resource.bind(callback);
     }
   }
   const asyncHooksModule = {
     AsyncLocalStorage,
     AsyncResource,
-    createHook: () => ({
-      enable() { return this; },
-      disable() { return this; },
-    }),
-    executionAsyncId: () => 0,
-    triggerAsyncId: () => 0,
-    executionAsyncResource: () => null,
+    createHook: () => unsupportedAsyncHooks('createHook'),
+    executionAsyncId: () => unsupportedAsyncHooks('executionAsyncId'),
+    triggerAsyncId: () => unsupportedAsyncHooks('triggerAsyncId'),
+    executionAsyncResource: () => unsupportedAsyncHooks('executionAsyncResource'),
   };
 
   function decodeFormComponent(value) {
@@ -836,17 +895,96 @@
   const isWindows = __xenonPlatform === 'win32';
   const pathModule = isWindows ? win32 : posix;
 
-  const osModule = {
-    networkInterfaces: () => __xenonNetworkInterfaces(),
-    platform: () => __xenonPlatform,
-    arch: () => __xenonArch,
-    release: () => __xenonOsRelease,
-    type: () => isWindows ? 'Windows_NT' : __xenonPlatform,
-    homedir: () => __xenonGetPath('home') || __xenonEnv.USERPROFILE || __xenonEnv.HOME || __xenonAppPath,
-    tmpdir: () => __xenonGetPath('temp') || __xenonEnv.TEMP || __xenonEnv.TMP || __xenonAppPath,
-    hostname: () => __xenonEnv.COMPUTERNAME || '',
-    EOL: isWindows ? '\r\n' : '\n',
+  const osPlatform = __xenonPlatform;
+  const osArch = __xenonArch;
+  const osEndianness = typeof __xenonEndianness === 'string' ? __xenonEndianness : '';
+  const osNativeCall = request => {
+    if (typeof __xenonOsCall !== 'function') {
+      throw Object.assign(new Error('Native OS queries are unavailable'),
+                          {code: 'ERR_NOT_SUPPORTED'});
+    }
+    return __xenonOsCall(request);
   };
+  function osQuery(method) {
+    try {
+      return osNativeCall({method});
+    } catch (error) {
+      // Private IPC preserves the native message; restore its Node error code.
+      const match = /^(ERR_[A-Z_]+|E[A-Z0-9_]+):/.exec(String(error?.message || error));
+      if (match && !error.code) error.code = match[1];
+      throw error;
+    }
+  }
+
+  function osUserInfo(options) {
+    // Node treats absent/unrecognized encodings as UTF-8.
+    const requested = options?.encoding;
+    const encoding = typeof requested === 'string' ? requested.toLowerCase() : 'utf8';
+    const result = osQuery('userInfo');
+    if (!['buffer', 'hex', 'base64', 'base64url', 'ascii', 'latin1', 'binary',
+          'utf16le', 'utf-16le', 'ucs2', 'ucs-2'].includes(encoding)) {
+      return result;
+    }
+    for (const key of ['username', 'homedir', 'shell']) {
+      if (result[key] === null) continue;
+      const bytes = Buffer.from(result[key], 'utf8');
+      if (encoding === 'buffer') {
+        result[key] = bytes;
+      } else if (['hex', 'base64', 'base64url'].includes(encoding)) {
+        result[key] = bytes.toString(encoding);
+      } else if (['ascii', 'latin1', 'binary'].includes(encoding)) {
+        result[key] = Array.from(bytes, byte =>
+            String.fromCharCode(encoding === 'ascii' ? byte & 0x7f : byte)).join('');
+      } else if (['utf16le', 'utf-16le', 'ucs2', 'ucs-2'].includes(encoding)) {
+        // Decode pairs directly to preserve lone UTF-16 code units, as Buffer does.
+        let value = '';
+        for (let i = 0; i + 1 < bytes.length; i += 2) {
+          value += String.fromCharCode(bytes[i] | (bytes[i + 1] << 8));
+        }
+        result[key] = value;
+      }
+    }
+    return result;
+  }
+
+  const osModule = {
+    platform: () => osPlatform,
+    arch: () => osArch,
+    endianness() {
+      if (osEndianness !== 'LE' && osEndianness !== 'BE') {
+        throw Object.assign(new Error('OS byte order metadata is unavailable'),
+                            {code: 'ERR_NOT_SUPPORTED'});
+      }
+      return osEndianness;
+    },
+    homedir() {
+      const value = globalThis.process.env[osPlatform === 'win32' ? 'USERPROFILE' : 'HOME'];
+      return value === undefined ? osQuery('homedir') : String(value);
+    },
+    tmpdir() {
+      const env = globalThis.process.env;
+      const value = osPlatform === 'win32' ? env.TEMP || env.TMP :
+          env.TMPDIR || env.TMP || env.TEMP;
+      const directory = value ? String(value) : osQuery('tmpdir');
+      if (osPlatform === 'win32') {
+        return directory.length > 1 && directory.endsWith('\\') &&
+            !directory.endsWith(':\\') ? directory.slice(0, -1) : directory;
+      }
+      return directory.length > 1 && directory.endsWith('/') ?
+          directory.slice(0, -1) : directory;
+    },
+    userInfo: osUserInfo,
+    EOL: osPlatform === 'win32' ? '\r\n' : '\n',
+    devNull: osPlatform === 'win32' ? '\\\\.\\nul' : '/dev/null',
+  };
+  // Query mutable system state on every call. Requiring os never enumerates
+  // CPUs, users or interfaces, and never adds a synchronous startup round trip.
+  for (const method of ['type', 'release', 'version', 'machine', 'hostname',
+                        'cpus', 'totalmem', 'freemem', 'uptime', 'loadavg',
+                        'networkInterfaces', 'availableParallelism',
+                        'getPriority', 'setPriority']) {
+    osModule[method] = () => osQuery(method);
+  }
 
   let appReady = false;
   let resolveAppReady;
@@ -911,44 +1049,49 @@
     }
   }
 
+  function electronUnsupported(method) {
+    const error = new Error(`Electron ${method} is not supported by this runtime`);
+    error.code = 'ERR_NOT_SUPPORTED';
+    throw error;
+  }
+
+  function callElectronApi(operation, details = {}) {
+    if (typeof __xenonBrowserWindowCall !== 'function') {
+      return electronUnsupported(operation);
+    }
+    try {
+      const request = {operation};
+      for (const [key, value] of Object.entries(details)) {
+        if (value !== undefined) request[key] = value;
+      }
+      return __xenonBrowserWindowCall(0, 'electron-api', request);
+    } catch (error) {
+      const code = /^([A-Z][A-Z_]+):/.exec(String(error.message));
+      if (code && !error.code) error.code = code[1];
+      throw error;
+    }
+  }
+
   class Session extends EventEmitter {
     constructor(partition = '') {
       super();
       this.partition = String(partition || '');
       this._userAgent = '';
       this._downloadPath = '';
-      this.webRequest = {
-        onBeforeRequest: (filter, listener) => {},
-        onBeforeSendHeaders: (filter, listener) => {},
-        onSendHeaders: (filter, listener) => {},
-        onHeadersReceived: (filter, listener) => {},
-        onResponseStarted: (filter, listener) => {},
-        onBeforeRedirect: (filter, listener) => {},
-        onCompleted: (filter, listener) => {},
-        onErrorOccurred: (filter, listener) => {},
-      };
-      this.cookies = {
-        get: (filter) => Promise.resolve([]),
-        set: (details) => Promise.resolve(),
-        remove: (url, name) => Promise.resolve(),
-        flushStore: () => Promise.resolve(),
-      };
-      this.protocol = {
-        registerFileProtocol: (scheme, handler) => true,
-        registerBufferProtocol: (scheme, handler) => true,
-        registerStringProtocol: (scheme, handler) => true,
-        registerHttpProtocol: (scheme, handler) => true,
-        registerStreamProtocol: (scheme, handler) => true,
-        unregisterProtocol: (scheme) => true,
-        isProtocolRegistered: (scheme) => false,
-        interceptFileProtocol: (scheme, handler) => {},
-        interceptStringProtocol: (scheme, handler) => {},
-        interceptBufferProtocol: (scheme, handler) => {},
-        interceptHttpProtocol: (scheme, handler) => {},
-        interceptStreamProtocol: (scheme, handler) => {},
-        uninterceptProtocol: (scheme) => {},
-        isProtocolIntercepted: (scheme) => false,
-      };
+      this.webRequest = Object.fromEntries([
+        'onBeforeRequest', 'onBeforeSendHeaders', 'onSendHeaders',
+        'onHeadersReceived', 'onResponseStarted', 'onBeforeRedirect',
+        'onCompleted', 'onErrorOccurred',
+      ].map(method => [method, () => electronUnsupported(`webRequest.${method}`)]));
+      this.cookies = Object.fromEntries(['get', 'set', 'remove', 'flushStore']
+          .map(method => [method, async () => electronUnsupported(`cookies.${method}`)]));
+      this.protocol = Object.fromEntries([
+        'registerFileProtocol', 'registerBufferProtocol', 'registerStringProtocol',
+        'registerHttpProtocol', 'registerStreamProtocol', 'unregisterProtocol',
+        'isProtocolRegistered', 'interceptFileProtocol', 'interceptStringProtocol',
+        'interceptBufferProtocol', 'interceptHttpProtocol', 'interceptStreamProtocol',
+        'uninterceptProtocol', 'isProtocolIntercepted',
+      ].map(method => [method, () => electronUnsupported(`protocol.${method}`)]));
     }
     getUserAgent() {
       return this._userAgent || String(__xenonUserAgent || '');
@@ -956,20 +1099,20 @@
     setUserAgent(userAgent) {
       this._userAgent = String(userAgent || '');
     }
-    setProxy(config) { return Promise.resolve(); }
-    resolveProxy(url) { return Promise.resolve('DIRECT'); }
-    clearCache() { return Promise.resolve(); }
-    clearStorageData(options) { return Promise.resolve(); }
-    clearAuthCache() { return Promise.resolve(); }
-    clearHostResolverCache() { return Promise.resolve(); }
-    setDownloadPath(p) { this._downloadPath = String(p || ''); }
-    enableNetworkEmulation(options) {}
-    disableNetworkEmulation() {}
-    setCertificateVerifyProc(proc) {}
-    setPermissionRequestHandler(handler) {}
-    setPermissionCheckHandler(handler) {}
-    getBlobData(identifier) { return Promise.resolve(Buffer.alloc(0)); }
-    createInterruptedDownload(options) {}
+    async setProxy(config) { return electronUnsupported('session.setProxy'); }
+    async resolveProxy(url) { return electronUnsupported('session.resolveProxy'); }
+    async clearCache() { return electronUnsupported('session.clearCache'); }
+    async clearStorageData(options) { return electronUnsupported('session.clearStorageData'); }
+    async clearAuthCache() { return electronUnsupported('session.clearAuthCache'); }
+    async clearHostResolverCache() { return electronUnsupported('session.clearHostResolverCache'); }
+    setDownloadPath(p) { return electronUnsupported('session.setDownloadPath'); }
+    enableNetworkEmulation(options) { return electronUnsupported('session.enableNetworkEmulation'); }
+    disableNetworkEmulation() { return electronUnsupported('session.disableNetworkEmulation'); }
+    setCertificateVerifyProc(proc) { return electronUnsupported('session.setCertificateVerifyProc'); }
+    setPermissionRequestHandler(handler) { return electronUnsupported('session.setPermissionRequestHandler'); }
+    setPermissionCheckHandler(handler) { return electronUnsupported('session.setPermissionCheckHandler'); }
+    async getBlobData(identifier) { return electronUnsupported('session.getBlobData'); }
+    createInterruptedDownload(options) { return electronUnsupported('session.createInterruptedDownload'); }
   }
 
   const sessionMap = new Map();
@@ -1279,8 +1422,16 @@
   }
   const browserWindows = [];
   function callBrowserWindow(window, command, details = {}) {
-    if (typeof __xenonBrowserWindowCall !== 'function') return undefined;
-    return __xenonBrowserWindowCall(window.id, command, details);
+    if (typeof __xenonBrowserWindowCall !== 'function') {
+      return electronUnsupported(`BrowserWindow.${command}`);
+    }
+    try {
+      return __xenonBrowserWindowCall(window.id, command, details);
+    } catch (error) {
+      const code = /^([A-Z][A-Z_]+):/.exec(String(error.message));
+      if (code && !error.code) error.code = code[1];
+      throw error;
+    }
   }
   function createBrowserWindowEvent(window, cancellable = false) {
     return {
@@ -1309,9 +1460,11 @@
         throw new TypeError('BrowserWindow preload must be an absolute path');
       }
       const title = options.title === undefined ? 'Electron' : String(options.title);
+      if (typeof __xenonCreateBrowserWindow !== 'function') {
+        return electronUnsupported('BrowserWindow creation');
+      }
       const created =
-          (typeof __xenonCreateBrowserWindow === 'function')
-              ? __xenonCreateBrowserWindow({
+          __xenonCreateBrowserWindow({
                   width: options.width || 800,
                   height: options.height || 600,
                   show: options.show !== false,
@@ -1321,8 +1474,7 @@
                       ? options.parent.id
                       : 0,
                   title,
-                })
-              : {id: browserWindows.length + 1, hwnd: '0'};
+                });
       this.id = created.id;
       this._hwnd = created.hwnd || '0';
       this._parent = options.parent || null;
@@ -1371,24 +1523,10 @@
         const actual = callBrowserWindow(this, 'get-bounds');
         if (actual && typeof actual === 'object') this._bounds = actual;
       }
-      const window = new Proxy(this, {
-        get(target, prop, receiver) {
-          if (typeof prop === 'string' && !(prop in target) &&
-              target[prop] === undefined) {
-            if (prop.startsWith('is') || prop.startsWith('has')) {
-              return () => false;
-            }
-            return () => undefined;
-          }
-          return Reflect.get(target, prop, receiver);
-        },
-      });
-      this.webContents._owner = window;
-      browserWindows.push(window);
-      return window;
+      browserWindows.push(this);
     }
     static getAllWindows() { return browserWindows.filter(item => !item._destroyed); }
-    static getFocusedWindow() { return BrowserWindow.getAllWindows().at(-1) || null; }
+    static getFocusedWindow() { return BrowserWindow.getAllWindows().find(window => window.isFocused()) || null; }
     static fromId(id) { return browserWindows.find(item => item.id === id) || null; }
     static fromWebContents(contents) {
       if (!contents) return null;
@@ -1416,6 +1554,25 @@
       return buf;
     }
     getParentWindow() { return this._parent; }
+    setParentWindow(parent) {
+      if (parent !== null && !(parent instanceof BrowserWindow)) {
+        throw new TypeError('parent must be a BrowserWindow or null');
+      }
+      for (let ancestor = parent; ancestor; ancestor = ancestor._parent) {
+        if (ancestor === this) throw new Error('BrowserWindow parent cycle');
+      }
+      if (this._destroyed || parent?._destroyed) throw new Error('Object has been destroyed');
+      callBrowserWindow(this, 'set-parent-window', {parentId: parent?.id || 0});
+      this._parent = parent;
+    }
+    isModal() { return false; }
+    moveTop() { callBrowserWindow(this, 'move-top'); }
+    setProgressBar(progress, options = {}) {
+      if (typeof progress !== 'number' || !Number.isFinite(progress)) {
+        throw new TypeError('progress must be a finite number');
+      }
+      callBrowserWindow(this, 'set-progress-bar', {progress, mode: options.mode});
+    }
     getChildWindows() {
       return BrowserWindow.getAllWindows().filter(item => item._parent === this);
     }
@@ -1488,6 +1645,7 @@
     setAlwaysOnTop(value) {
       callBrowserWindow(this, 'set-always-on-top', {value: Boolean(value)});
     }
+    isAlwaysOnTop() { return callBrowserWindow(this, 'is-always-on-top'); }
     setSkipTaskbar() {}
     setTitle(title) {
       const value = String(title ?? '');
@@ -1865,21 +2023,30 @@
       fromId: id => allWebContents.get(Number(id)),
       getAllWebContents: () => [...allWebContents.values()],
     },
-    shell: {openExternal: () => Promise.resolve(), showItemInFolder() {},
-            openPath: () => Promise.resolve('')},
+    shell: {
+      openExternal: async (url, options = {}) => {
+        callElectronApi('shell.openExternal', {url, options});
+      },
+      openPath: async path => callElectronApi('shell.openPath', {path}),
+      showItemInFolder: path => { callElectronApi('shell.showItemInFolder', {path}); },
+    },
     dialog: {
       showOpenDialog: async (winOrOpts, maybeOpts) => {
         const opts = (maybeOpts && typeof maybeOpts === 'object') ? maybeOpts : (winOrOpts && typeof winOrOpts === 'object' ? winOrOpts : {});
-        const filePaths = (typeof __xenonShowOpenDialog === 'function') ? __xenonShowOpenDialog(opts) : [];
+        if (typeof __xenonShowOpenDialog !== 'function') return electronUnsupported('dialog.showOpenDialog');
+        const filePaths = __xenonShowOpenDialog(opts);
         return { canceled: filePaths.length === 0, filePaths };
       },
       showOpenDialogSync: (winOrOpts, maybeOpts) => {
         const opts = (maybeOpts && typeof maybeOpts === 'object') ? maybeOpts : (winOrOpts && typeof winOrOpts === 'object' ? winOrOpts : {});
-        const filePaths = (typeof __xenonShowOpenDialog === 'function') ? __xenonShowOpenDialog(opts) : [];
+        if (typeof __xenonShowOpenDialog !== 'function') return electronUnsupported('dialog.showOpenDialogSync');
+        const filePaths = __xenonShowOpenDialog(opts);
         return filePaths.length > 0 ? filePaths : undefined;
       },
-      showSaveDialog: async () => ({ canceled: true }),
-      showMessageBox: async () => ({ response: 0 }),
+      showSaveDialog: async () => electronUnsupported('dialog.showSaveDialog'),
+      showSaveDialogSync: () => electronUnsupported('dialog.showSaveDialogSync'),
+      showMessageBox: async () => electronUnsupported('dialog.showMessageBox'),
+      showMessageBoxSync: () => electronUnsupported('dialog.showMessageBoxSync'),
     },
     Tray,
     Menu,
@@ -1887,9 +2054,20 @@
     systemPreferences: {isAeroGlassEnabled: () => false},
     powerMonitor,
     session,
-    globalShortcut: {register: () => true, unregister() {}, unregisterAll() {}},
+    globalShortcut: {
+      register: () => electronUnsupported('globalShortcut.register'),
+      registerAll: () => electronUnsupported('globalShortcut.registerAll'),
+      // No registration can succeed in this runtime, so cleanup is a valid no-op.
+      unregister() {}, unregisterAll() {}, isRegistered: () => false,
+    },
     nativeImage: {createEmpty: () => ({}), createFromPath: path => ({path})},
-    clipboard: {readText: () => '', writeText() {}, clear() {}},
+    clipboard: {
+      readText: type => callElectronApi('clipboard.readText', {type}),
+      writeText: (text, type) => { callElectronApi('clipboard.writeText', {text, type}); },
+      readHTML: type => callElectronApi('clipboard.readHTML', {type}),
+      writeHTML: (markup, type) => { callElectronApi('clipboard.writeHTML', {markup, type}); },
+      clear: type => { callElectronApi('clipboard.clear', {type}); },
+    },
     screen: (() => {
       const call = (method, options = {}) => {
         if (typeof __xenonBrowserWindowCall !== 'function') {
@@ -3403,6 +3581,15 @@
       error.code = 'ERR_NOT_SUPPORTED';
       throw error;
     }
+    // Socket and server callbacks belong to their connect/listen resource,
+    // even when delivered by a later IPC message or the other local endpoint.
+    function callNetCallback(resource, callback, args = []) {
+      return runWithAsyncContext(resource._asyncContext, callback, resource, args);
+    }
+    function emitNetEvent(resource, event, ...args) {
+      return callNetCallback(resource, resource.emit, [event, ...args]);
+    }
+
     function allocNetSocket(socket) {
       socket._id = 'm-' + (nextNetSocketId++);
       netSockets.set(socket._id, socket);
@@ -3435,13 +3622,13 @@
             '__xenon:net:close', {toId: socket._peerId, fromId: socket._id},
             socket._endpointId);
       }
-      socket.emit('end');
-      socket.emit('close');
+      emitNetEvent(socket, 'end');
+      emitNetEvent(socket, 'close');
     }
     function deliverNetBytes(socket, data) {
       const buf = Buffer.isBuffer(data) || data instanceof Uint8Array ?
           Buffer.from(data) : Buffer.from(String(data));
-      socket.emit('data', buf);
+      emitNetEvent(socket, 'data', buf);
     }
 
     const module = {
@@ -3460,6 +3647,7 @@
           this.destroyed = false;
         }
         connect(...args) {
+          this._asyncContext = currentAsyncContext;
           const cb = typeof args[args.length - 1] === 'function' ?
               args[args.length - 1] : null;
           this._connectCb = cb;
@@ -3469,6 +3657,7 @@
           const server = netServers.get(path);
           if (server && !isNamedPipePath(path)) {
             const incoming = new module.Socket();
+            incoming._asyncContext = server._asyncContext;
             incoming._connected = true;
             incoming._peer = this;
             allocNetSocket(incoming);
@@ -3477,13 +3666,13 @@
             this.connecting = false;
             queueMicrotask(() => {
               if (this._closed || incoming._closed) return;
-              server.emit('connection', incoming);
+              emitNetEvent(server, 'connection', incoming);
               if (this._closed || incoming._closed) return;
-              this.emit('connect');
+              emitNetEvent(this, 'connect');
               if (!this._closed && this._connectCb) {
                 const callback = this._connectCb;
                 this._connectCb = null;
-                callback.call(this);
+                callNetCallback(this, callback);
               }
             });
             return this;
@@ -3533,6 +3722,7 @@
       },
       Server: class extends EventEmitter {
         listen(...args) {
+          this._asyncContext = currentAsyncContext;
           const cb = typeof args[args.length - 1] === 'function' ?
               args[args.length - 1] : null;
           this._path = normalizeNetPath(netPathFromListenOrConnect(args));
@@ -3549,9 +3739,9 @@
             return this;
           }
           queueMicrotask(() => {
-            this.emit('listening');
+            emitNetEvent(this, 'listening');
             if (cb) {
-              cb();
+              callNetCallback(this, cb);
             }
           });
           return this;
@@ -3568,9 +3758,9 @@
             return this;
           }
           if (typeof cb === 'function') {
-            cb();
+            callNetCallback(this, cb);
           }
-          this.emit('close');
+          emitNetEvent(this, 'close');
           return this;
         }
         address() {
@@ -3603,11 +3793,11 @@
       if (channel === '__xenon:net:listening') {
         const server = nativeNetServers.get(msg.serverId);
         if (server && !server._closing) {
-          server.emit('listening');
+          emitNetEvent(server, 'listening');
           if (server._listenCb) {
             const callback = server._listenCb;
             server._listenCb = null;
-            callback.call(server);
+            callNetCallback(server, callback);
           }
         }
         return true;
@@ -3620,11 +3810,12 @@
           return true;
         }
         const incoming = new module.Socket();
+        incoming._asyncContext = server._asyncContext;
         incoming._id = msg.socketId;
         incoming._peerId = msg.socketId;
         incoming._connected = true;
         netSockets.set(incoming._id, incoming);
-        server.emit('connection', incoming);
+        emitNetEvent(server, 'connection', incoming);
         return true;
       }
       if (channel === '__xenon:net:server-closed') {
@@ -3634,8 +3825,8 @@
           server._nativeId = null;
           const callback = server._closeCb;
           server._closeCb = null;
-          if (callback) callback.call(server);
-          server.emit('close');
+          if (callback) callNetCallback(server, callback);
+          emitNetEvent(server, 'close');
         }
         return true;
       }
@@ -3650,13 +3841,14 @@
           return true;
         }
         const incoming = new module.Socket();
+        incoming._asyncContext = server._asyncContext;
         incoming._connected = true;
         incoming._peerId = msg.fromId;
         incoming._endpointId = endpointId;
         allocNetSocket(incoming);
         // A real net.Server exposes the accepted socket before the client can
         // observe connect. node-net-ipc installs its data parser here.
-        server.emit('connection', incoming);
+        emitNetEvent(server, 'connection', incoming);
         sendXenonNet('__xenon:net:connected', {
           toId: msg.fromId,
           peerId: incoming._id,
@@ -3678,11 +3870,11 @@
         socket._endpointId = endpointId;
         socket._connected = true;
         socket.connecting = false;
-        socket.emit('connect');
+        emitNetEvent(socket, 'connect');
         if (!socket._closed && socket._connectCb) {
           const callback = socket._connectCb;
           socket._connectCb = null;
-          callback.call(socket);
+          callNetCallback(socket, callback);
         }
         // net.Socket.write() is allowed while connecting. Flush only after
         // connect listeners have run so protocol clients see normal ordering.
@@ -3712,7 +3904,7 @@
             server._nativeId = null;
             const error = new Error(msg.code || 'net error');
             error.code = msg.code;
-            server.emit('error', error);
+            emitNetEvent(server, 'error', error);
           }
           return true;
         }
@@ -3722,7 +3914,7 @@
           err.code = msg.code;
           socket.connecting = false;
           socket._pendingWrites.length = 0;
-          socket.emit('error', err);
+          emitNetEvent(socket, 'error', err);
           closeNetSocket(socket, false);
         }
         return true;
@@ -4637,4 +4829,13 @@
   globalThis.console = globalThis.console || {
     log() {}, info() {}, warn() {}, error() {}, debug() {}, trace() {},
   };
+  // Incoming IPC/window events begin a new task. enterWith() from one message
+  // must not leak into the next; Promise/timer continuations keep their frame.
+  for (const name of ['__xenonDispatchSend', '__xenonDispatchInvoke',
+    '__xenonDispatchSync', '__xenonDispatchBrowserWindowEvent',
+    '__xenonDispatchRendererEvent', '__xenonDispatchWillDownload']) {
+    const dispatch = globalThis[name];
+    globalThis[name] = (...args) =>
+        runWithAsyncContext(undefined, dispatch, undefined, args);
+  }
 })();

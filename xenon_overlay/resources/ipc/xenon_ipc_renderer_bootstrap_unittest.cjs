@@ -50,6 +50,7 @@ function createRenderer(exportsList = [], overrides = {}, withWindow = false, in
     ...overrides,
   };
   const context = vm.createContext({
+    __xenonPaths: {platform: 'win32', arch: 'x64', endianness: 'LE'},
     xenonIpcRenderer: transport,
     TextEncoder,
     TextDecoder,
@@ -208,12 +209,173 @@ test('guest preload retains Node closures without exposing transport to remote p
       return Buffer.from(files.get(request.path)).toString('base64');
     },
   }, true);
-  for (const key of ['require', 'process', 'xenonIpcRenderer', '__xenonElectronIpc'])
+  for (const key of ['require', 'process', 'electron', 'xenonIpcRenderer', '__xenonElectronIpc'])
     assert.equal(context[key], undefined);
   assert.equal(context.fixtureNative(), 'renderer');
   assert.equal(sent.length, 1);
   assert.deepEqual(sent[0].slice(0, 2), ['__xenon:send-to-host', 'fixture']);
   assert.deepEqual(Array.from(sent[0][2]), [42]);
+});
+
+test('guest without preload cannot reach IPC through automatic Electron aliases', () => {
+  const {context} = createRenderer([], {
+    getRuntimeConfig: () => ({appPath: 'C:\\test-app', isGuest: true}),
+    sendSync: () => ({nodeIntegration: false}),
+  }, true);
+  for (const key of ['require', 'process', 'Buffer', 'electron',
+                    'xenonIpcRenderer', '__xenonElectronRequire', '__xenonElectronIpc']) {
+    assert.equal(context[key], undefined, key);
+  }
+});
+
+test('guest with explicit Node integration retains its Electron convenience alias', () => {
+  const {context} = createRenderer([], {
+    getRuntimeConfig: () => ({appPath: 'C:\\test-app', isGuest: true}),
+    sendSync: () => ({nodeIntegration: true}),
+  }, true);
+  assert.equal(context.electron, context.require('electron'));
+  assert.equal(typeof context.electron.ipcRenderer.send, 'function');
+});
+
+test('guest keeps only APIs explicitly exposed by a trusted preload', () => {
+  const preload = 'C:\\test-app\\preload.js';
+  const files = new Map([[preload,
+    `const {ipcRenderer} = require('electron');
+     globalThis.electron = {sendFixture: () => ipcRenderer.send('fixture')};`]]);
+  const sent = [];
+  const {context} = createRenderer([], {
+    getRuntimeConfig: () => ({appPath: 'C:\\test-app', isGuest: true}),
+    send(...args) { sent.push(args); },
+    sendSync(channel, request) {
+      if (channel === '__xenon:renderer-web-preferences')
+        return {preload, contextIsolation: false, nodeIntegration: false};
+      if (request.operation === 'exists') return files.has(request.path);
+      if (request.operation === 'realpath') return request.path;
+      if (request.operation === 'stat') return {isFile: true, isDirectory: false};
+      return Buffer.from(files.get(request.path)).toString('base64');
+    },
+  }, true);
+  assert.equal(context.electron.ipcRenderer, undefined);
+  context.electron.sendFixture();
+  assert.deepEqual(sent, [['fixture']]);
+  assert.equal(context.xenonIpcRenderer, undefined);
+});
+
+test('renderer process.isMainFrame reflects current document metadata', () => {
+  for (const isMainFrame of [true, false]) {
+    const {context} = createRenderer([], {
+      getRuntimeConfig: () => ({appPath: 'C:\\test-app', isMainFrame}),
+    });
+    assert.equal(context.process.isMainFrame, isMainFrame);
+  }
+});
+
+test('renderer process builtin and node alias have the global process identity', () => {
+  const {context} = createRenderer();
+  assert.equal(context.require('process'), context.process);
+  assert.equal(context.require('node:process'), context.process);
+  assert.equal(context.require.resolve('process'), 'process');
+  assert.equal(context.require.resolve('node:process'), 'node:process');
+});
+
+test('renderer clipboard and shell use the host API and preserve results and failures', async () => {
+  const calls = [];
+  const failure = Object.assign(new Error('host operation failed'), {code: 'EIO'});
+  let fail = false;
+  const reply = request => {
+    calls.push(JSON.parse(JSON.stringify(request)));
+    if (fail) throw failure;
+    switch (request.operation) {
+      case 'clipboard.readText': return 'native clipboard text';
+      case 'clipboard.readHTML': return '<p>native</p>';
+      case 'shell.openPath': return 'File not found';
+    }
+  };
+  const {context} = createRenderer([], {
+    sendSync(channel, request) {
+      assert.equal(channel, '__xenon:electron-api');
+      return reply(request);
+    },
+    async invoke(channel, request) {
+      assert.equal(channel, '__xenon:electron-api');
+      return reply(request);
+    },
+  });
+  const {clipboard, shell} = context.require('electron');
+  assert.equal(clipboard.readText(), 'native clipboard text');
+  clipboard.writeText('fixture');
+  assert.equal(clipboard.readHTML(), '<p>native</p>');
+  clipboard.writeHTML('<b>fixture</b>');
+  clipboard.clear();
+  assert.equal(await shell.openExternal('https://fixture.invalid', {activate: false}), undefined);
+  assert.equal(await shell.openPath('C:\\missing.file'), 'File not found');
+  assert.equal(shell.showItemInFolder('C:\\fixture.mp4'), undefined);
+  assert.deepEqual(calls, [
+    {operation: 'clipboard.readText', type: 'clipboard'},
+    {operation: 'clipboard.writeText', text: 'fixture', type: 'clipboard'},
+    {operation: 'clipboard.readHTML', type: 'clipboard'},
+    {operation: 'clipboard.writeHTML', markup: '<b>fixture</b>', type: 'clipboard'},
+    {operation: 'clipboard.clear', type: 'clipboard'},
+    {operation: 'shell.openExternal', url: 'https://fixture.invalid', options: {activate: false}},
+    {operation: 'shell.openPath', path: 'C:\\missing.file'},
+    {operation: 'shell.showItemInFolder', path: 'C:\\fixture.mp4'},
+  ]);
+  fail = true;
+  assert.throws(() => clipboard.readText(), error => error === failure);
+  assert.throws(() => clipboard.writeText('fixture'), error => error === failure);
+  assert.throws(() => shell.showItemInFolder('C:\\fixture.mp4'), error => error === failure);
+  await assert.rejects(shell.openExternal('https://fixture.invalid'), error => error === failure);
+  await assert.rejects(shell.openPath('C:\\fixture.mp4'), error => error === failure);
+});
+
+test('renderer host APIs reject missing transport and expose native error codes', async () => {
+  const {context} = createRenderer([], {sendSync: undefined, invoke: undefined});
+  const {clipboard, shell} = context.require('electron');
+  assert.throws(() => clipboard.readText(), {code: 'ERR_NOT_SUPPORTED'});
+  await assert.rejects(shell.openExternal('https://fixture.invalid'), {code: 'ERR_NOT_SUPPORTED'});
+  const unsupported = () => { throw new Error('ERR_NOT_SUPPORTED: fixture'); };
+  const native = createRenderer([], {sendSync: unsupported, invoke: unsupported})
+      .context.require('electron');
+  assert.throws(() => native.clipboard.readText(), {code: 'ERR_NOT_SUPPORTED'});
+  await assert.rejects(native.shell.openPath('C:\\fixture'), {code: 'ERR_NOT_SUPPORTED'});
+});
+
+test('renderer unavailable dialogs and window APIs fail explicitly', async () => {
+  const {context} = createRenderer();
+  const electron = context.require('electron');
+  for (const dialog of [electron.dialog, electron.remote.dialog]) {
+    assert.throws(() => dialog.showOpenDialogSync({}), {code: 'ERR_NOT_SUPPORTED'});
+    await assert.rejects(dialog.showSaveDialog({}), {code: 'ERR_NOT_SUPPORTED'});
+    await assert.rejects(dialog.showMessageBox({}), {code: 'ERR_NOT_SUPPORTED'});
+    await assert.rejects(dialog.showOpenDialog({}), {code: 'ERR_NOT_SUPPORTED'});
+  }
+  assert.throws(() => electron.remote.getCurrentWindow(), {code: 'ERR_NOT_SUPPORTED'});
+  for (const method of ['setZoomFactor', 'getZoomFactor', 'setZoomLevel', 'getZoomLevel'])
+    assert.throws(() => electron.webFrame[method](1), {code: 'ERR_NOT_SUPPORTED'});
+});
+
+test('renderer open dialog preserves real cancellation, selection and native failures', async () => {
+  const failure = new Error('picker disconnected');
+  let result = {filePaths: []};
+  const {context} = createRenderer([], {}, false, context => {
+    context.__xenonPageHandler__ = {
+      async openNativeFileDialog() {
+        if (result instanceof Error) throw result;
+        return result;
+      },
+    };
+    context.__xenonPageCallbackRouter__ = {__xenonBootstrapListenersAttached: true};
+  });
+  const dialog = context.require('electron').dialog;
+  assert.equal((await dialog.showOpenDialog({})).canceled, true);
+  result = {filePaths: ['C:\\fixture.mp4']};
+  const selection = await dialog.showOpenDialog({});
+  assert.equal(selection.canceled, false);
+  assert.deepEqual(selection.filePaths, ['C:\\fixture.mp4']);
+  result = failure;
+  await assert.rejects(dialog.showOpenDialog({}), error => error === failure);
+  result = {};
+  await assert.rejects(dialog.showOpenDialog({}), /invalid result/);
 });
 
 test('application and ASAR paths use native fs while chrome resources stay virtual', () => {
@@ -381,8 +543,9 @@ test('executable identity is document-scoped and is not renamed to the app name'
 test('networkInterfaces returns fresh native IPv4 and IPv6 snapshots unchanged', () => {
   let reads = 0;
   const {context} = createRenderer([], {
-    sendSync(channel) {
-      assert.equal(channel, '__xenon:os-network-interfaces');
+    sendSync(channel, request) {
+      assert.equal(channel, '__xenon:os');
+      assert.equal(request.method, 'networkInterfaces');
       ++reads;
       return {'fixture.adapter': [
         {address: '192.0.2.1', netmask: '255.255.255.0', family: 'IPv4',

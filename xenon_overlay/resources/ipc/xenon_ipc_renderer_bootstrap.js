@@ -23,6 +23,13 @@
   } catch (error) {
     console.warn('[xenon-ipc] runtime config unavailable:', error);
   }
+  const runtimePlatform = injectedPaths.platform;
+  const runtimeArch = injectedPaths.arch;
+  if (typeof runtimePlatform !== 'string' || !runtimePlatform ||
+      typeof runtimeArch !== 'string' || !runtimeArch) {
+    throw Object.assign(new Error('Native platform and architecture metadata are unavailable'),
+                        {code: 'ERR_NOT_SUPPORTED'});
+  }
   const rawExecPath =
       String(injectedPaths.execPath || '');
   // Main and renderer receive the same validated executable identity. An app
@@ -226,103 +233,162 @@
   // still need its public context API for libraries such as OpenTelemetry.
   // Preserve the synchronous scope semantics; AsyncResource.bind() lets those
   // libraries carry the captured scope into callbacks they own.
-  const asyncLocalStorageInstances = new Set();
+  // Promise hooks are scoped to this V8 context. Blink owns the isolate's
+  // continuation-preserved embedder data, so never overwrite that slot.
+  let currentAsyncContext;
+  let asyncContextHooksInstalled = false;
+  const promiseAsyncContexts = new WeakMap();
+  const asyncContextStack = [];
+  const installAsyncContextHooks = transport.installAsyncContextHooks?.bind(transport);
+  function unsupportedAsyncHooks(method) {
+    const error = new Error('async_hooks.' + method + ' is not supported');
+    error.code = 'ERR_NOT_SUPPORTED';
+    throw error;
+  }
+  function ensureAsyncContextHooks() {
+    if (asyncContextHooksInstalled) return;
+    if (typeof installAsyncContextHooks !== 'function') {
+      unsupportedAsyncHooks('AsyncLocalStorage (native Promise hooks unavailable)');
+    }
+    installAsyncContextHooks(
+        promise => {
+          if (currentAsyncContext !== undefined) {
+            promiseAsyncContexts.set(promise, currentAsyncContext);
+          }
+        },
+        promise => {
+          asyncContextStack.push(currentAsyncContext);
+          currentAsyncContext = promiseAsyncContexts.get(promise);
+        },
+        () => { currentAsyncContext = asyncContextStack.pop(); });
+    asyncContextHooksInstalled = true;
+  }
+  function runWithAsyncContext(context, callback, thisArg, args) {
+    const previous = currentAsyncContext;
+    currentAsyncContext = context;
+    try {
+      return Reflect.apply(callback, thisArg, args);
+    } finally {
+      currentAsyncContext = previous;
+    }
+  }
+  function captureAsyncCallback(callback) {
+    const context = currentAsyncContext;
+    return function(...args) {
+      return runWithAsyncContext(context, callback, this, args);
+    };
+  }
+  // Browser timers and microtasks are host tasks, not Promise reactions. Keep
+  // their registration context explicitly; ids, cancellation and arguments
+  // continue to come from the real host implementation.
+  for (const name of ['setTimeout', 'setInterval', 'setImmediate', 'queueMicrotask']) {
+    const schedule = globalThis[name];
+    if (typeof schedule !== 'function') continue;
+    globalThis[name] = function(callback, ...args) {
+      const wrapped = typeof callback === 'function' && asyncContextHooksInstalled ?
+          captureAsyncCallback(callback) : callback;
+      return Reflect.apply(schedule, this, [wrapped, ...args]);
+    };
+  }
   class AsyncLocalStorage {
-    constructor() {
-      this.enabled_ = true;
-      this.store_ = undefined;
-      asyncLocalStorageInstances.add(this);
+    constructor(options = {}) {
+      if (options === null || typeof options !== 'object') {
+        const error = new TypeError('The "options" argument must be an object');
+        error.code = 'ERR_INVALID_ARG_TYPE';
+        throw error;
+      }
+      if (options.onPropagate !== undefined) {
+        unsupportedAsyncHooks('AsyncLocalStorage onPropagate');
+      }
+      this.name = options.name === undefined ? '' : String(options.name);
+      this.defaultValue_ = options.defaultValue;
+      this.key_ = undefined;
     }
     disable() {
-      this.enabled_ = false;
-      this.store_ = undefined;
+      if (this.key_ !== undefined && currentAsyncContext?.has(this.key_)) {
+        currentAsyncContext = new Map(currentAsyncContext);
+        currentAsyncContext.delete(this.key_);
+      }
+      // Existing Promise frames may outlive disable(), but can no longer return
+      // this instance's old store. No registry strongly retains ALS instances.
+      this.key_ = undefined;
     }
     enterWith(store) {
-      this.enabled_ = true;
-      this.store_ = store;
+      ensureAsyncContextHooks();
+      this.key_ ??= Symbol();
+      currentAsyncContext = new Map(currentAsyncContext);
+      currentAsyncContext.set(this.key_, store);
     }
     getStore() {
-      return this.enabled_ ? this.store_ : undefined;
+      return this.key_ !== undefined && currentAsyncContext?.has(this.key_) ?
+          currentAsyncContext.get(this.key_) : this.defaultValue_;
     }
     run(store, callback, ...args) {
-      if (typeof callback !== 'function') {
-        throw new TypeError('The "callback" argument must be a function');
-      }
-      const previousEnabled = this.enabled_;
-      const previousStore = this.store_;
-      this.enabled_ = true;
-      this.store_ = store;
-      try {
-        return callback(...args);
-      } finally {
-        this.enabled_ = previousEnabled;
-        this.store_ = previousStore;
-      }
+      validateListener(callback);
+      ensureAsyncContextHooks();
+      this.key_ ??= Symbol();
+      const context = new Map(currentAsyncContext);
+      context.set(this.key_, store);
+      return runWithAsyncContext(context, callback, undefined, args);
     }
     exit(callback, ...args) {
       return this.run(undefined, callback, ...args);
     }
     static snapshot() {
-      const captured = [...asyncLocalStorageInstances].map(storage => ({
-        storage,
-        enabled: storage.enabled_,
-        store: storage.store_,
-      }));
+      ensureAsyncContextHooks();
+      const context = currentAsyncContext;
       return (callback, ...args) => {
-        const previous = captured.map(({storage}) => ({
-          storage,
-          enabled: storage.enabled_,
-          store: storage.store_,
-        }));
-        for (const item of captured) {
-          item.storage.enabled_ = item.enabled;
-          item.storage.store_ = item.store;
-        }
-        try {
-          return callback(...args);
-        } finally {
-          for (const item of previous) {
-            item.storage.enabled_ = item.enabled;
-            item.storage.store_ = item.store;
-          }
-        }
+        validateListener(callback);
+        return runWithAsyncContext(context, callback, undefined, args);
       };
     }
     static bind(callback) {
-      const snapshot = AsyncLocalStorage.snapshot();
-      return function(...args) {
-        return snapshot(() => callback.apply(this, args));
-      };
+      validateListener(callback);
+      ensureAsyncContextHooks();
+      return captureAsyncCallback(callback);
     }
   }
   class AsyncResource {
-    constructor(type) {
-      this.type = String(type || 'AsyncResource');
+    constructor(type, options) {
+      if (typeof type !== 'string') {
+        const error = new TypeError('The "type" argument must be a string');
+        error.code = 'ERR_INVALID_ARG_TYPE';
+        throw error;
+      }
+      if (options !== undefined) {
+        unsupportedAsyncHooks('AsyncResource options');
+      }
+      this.type = type;
       this.snapshot_ = AsyncLocalStorage.snapshot();
     }
     runInAsyncScope(callback, thisArg, ...args) {
-      return this.snapshot_(() => callback.apply(thisArg, args));
+      validateListener(callback);
+      return this.snapshot_(() => Reflect.apply(callback, thisArg, args));
     }
     bind(callback, thisArg) {
-      return (...args) => this.runInAsyncScope(callback, thisArg, ...args);
+      validateListener(callback);
+      const resource = this;
+      const hasThisArg = arguments.length > 1;
+      return function(...args) {
+        return resource.runInAsyncScope(callback, hasThisArg ? thisArg : this, ...args);
+      };
     }
-    emitDestroy() { return this; }
-    asyncId() { return 0; }
-    triggerAsyncId() { return 0; }
-    static bind(callback, type, thisArg) {
-      return new AsyncResource(type).bind(callback, thisArg);
+    emitDestroy() { return unsupportedAsyncHooks('AsyncResource.emitDestroy'); }
+    asyncId() { return unsupportedAsyncHooks('AsyncResource.asyncId'); }
+    triggerAsyncId() { return unsupportedAsyncHooks('AsyncResource.triggerAsyncId'); }
+    static bind(callback, type = 'bound-anonymous-fn', thisArg) {
+      const resource = new AsyncResource(type);
+      return arguments.length > 2 ? resource.bind(callback, thisArg) :
+          resource.bind(callback);
     }
   }
   const asyncHooksModule = {
     AsyncLocalStorage,
     AsyncResource,
-    createHook: () => ({
-      enable() { return this; },
-      disable() { return this; },
-    }),
-    executionAsyncId: () => 0,
-    triggerAsyncId: () => 0,
-    executionAsyncResource: () => null,
+    createHook: () => unsupportedAsyncHooks('createHook'),
+    executionAsyncId: () => unsupportedAsyncHooks('executionAsyncId'),
+    triggerAsyncId: () => unsupportedAsyncHooks('triggerAsyncId'),
+    executionAsyncResource: () => unsupportedAsyncHooks('executionAsyncResource'),
   };
 
   // --- 2. ipcRenderer ---
@@ -347,7 +413,7 @@
     return transport.send('__xenon:send-to-host', channel, args);
   };
 
-  transport.setDispatchHandler((channel, args) => {
+  const dispatchRendererMessage = (channel, args) => {
     const values = Array.isArray(args) ? args : [args];
     if (typeof channel === 'string' && channel.startsWith('__xenon:net:') &&
         dispatchXenonNet && dispatchXenonNet(channel, values[0])) {
@@ -359,7 +425,9 @@
       return;
     }
     ipcRenderer.emit(channel, {sender: ipcRenderer, ports: []}, ...values);
-  });
+  };
+  transport.setDispatchHandler((...args) =>
+      runWithAsyncContext(undefined, dispatchRendererMessage, undefined, args));
 
   function getAppPathByName(name) {
     switch (String(name || '')) {
@@ -398,61 +466,93 @@
     isReady: () => true,
   };
 
+  function unsupportedElectronApi(name) {
+    const error = new Error(`electron.${name} is not supported by this runtime`);
+    error.code = 'ERR_NOT_SUPPORTED';
+    throw error;
+  }
+
+  function throwHostApiError(error) {
+    // IpcResult carries an error string. Recover the native code without
+    // replacing an existing exception or treating a failure as an API result.
+    if (error && !error.code && typeof error.message === 'string') {
+      const code = /^([A-Z][A-Z_]+):/.exec(error.message);
+      if (code) error.code = code[1];
+    }
+    throw error;
+  }
+
+  function callHostElectronApi(operation, args = {}) {
+    if (typeof transport.sendSync !== 'function') {
+      return unsupportedElectronApi(operation);
+    }
+    try {
+      return transport.sendSync('__xenon:electron-api', {operation, ...args});
+    } catch (error) {
+      return throwHostApiError(error);
+    }
+  }
+
+  async function invokeHostElectronApi(operation, args = {}) {
+    if (typeof transport.invoke !== 'function') {
+      return unsupportedElectronApi(operation);
+    }
+    try {
+      return await transport.invoke('__xenon:electron-api', {operation, ...args});
+    } catch (error) {
+      return throwHostApiError(error);
+    }
+  }
+
+  const dialogApi = {
+    showOpenDialog: async (options) => {
+      const filePaths = await showNativeOpenDialog(options);
+      return {canceled: !filePaths.length, filePaths};
+    },
+    showOpenDialogSync: () => unsupportedElectronApi('dialog.showOpenDialogSync'),
+    showSaveDialog: async () => unsupportedElectronApi('dialog.showSaveDialog'),
+    showMessageBox: async () => unsupportedElectronApi('dialog.showMessageBox'),
+  };
+
   const electron = {
     ipcRenderer,
     app: appApi,
-    dialog: {
-      showOpenDialog: async (options) => {
-        const filePaths = await showNativeOpenDialog(options);
-        return {canceled: !filePaths.length, filePaths};
-      },
-      showOpenDialogSync: (options) => {
-        console.warn(
-            '[Xenon Renderer] dialog.showOpenDialogSync is async-only; use showOpenDialog');
-        return [];
-      },
-      showSaveDialog: async () => ({ canceled: true, filePath: '' }),
-      showMessageBox: async () => ({ response: 0 }),
-    },
+    dialog: dialogApi,
     remote: {
-      dialog: {
-        showOpenDialog: async (options) => {
-          const filePaths = await showNativeOpenDialog(options);
-          return {canceled: !filePaths.length, filePaths};
-        },
-        showOpenDialogSync: (options) => [],
-      },
+      dialog: dialogApi,
       app: appApi,
-      getCurrentWindow: () => ({
-        isMaximized: () => false,
-        isMinimized: () => false,
-        isFullScreen: () => false,
-        maximize: () => {},
-        unmaximize: () => {},
-        minimize: () => {},
-        close: () => {},
-        setFullScreen: () => {},
-        webContents: { id: 1, send: () => {} },
-      }),
+      getCurrentWindow: () => unsupportedElectronApi('remote.getCurrentWindow'),
     },
     clipboard: {
-      readText: () => '',
-      writeText: (_text) => {},
+      readText: (type = 'clipboard') => callHostElectronApi('clipboard.readText', {type}),
+      writeText(text, type = 'clipboard') {
+        callHostElectronApi('clipboard.writeText', {text, type});
+      },
+      readHTML: (type = 'clipboard') => callHostElectronApi('clipboard.readHTML', {type}),
+      writeHTML(markup, type = 'clipboard') {
+        callHostElectronApi('clipboard.writeHTML', {markup, type});
+      },
+      clear(type = 'clipboard') { callHostElectronApi('clipboard.clear', {type}); },
     },
     shell: {
-      openExternal: (url) => window.open(url, '_blank'),
-      openPath: (_path) => Promise.resolve(''),
-      showItemInFolder: (_path) => {},
+      openExternal: (url, options = {}) =>
+          invokeHostElectronApi('shell.openExternal', {url, options}),
+      openPath: path => invokeHostElectronApi('shell.openPath', {path}),
+      showItemInFolder(path) {
+        callHostElectronApi('shell.showItemInFolder', {path});
+      },
     },
     webFrame: {
-      setZoomFactor: (_factor) => {},
-      getZoomFactor: () => 1,
-      setZoomLevel: (_level) => {},
-      getZoomLevel: () => 0,
+      setZoomFactor: () => unsupportedElectronApi('webFrame.setZoomFactor'),
+      getZoomFactor: () => unsupportedElectronApi('webFrame.getZoomFactor'),
+      setZoomLevel: () => unsupportedElectronApi('webFrame.setZoomLevel'),
+      getZoomLevel: () => unsupportedElectronApi('webFrame.getZoomLevel'),
     },
   };
   globalThis.__xenonElectronIpc = electron;
-  if (globalThis.electron === undefined) {
+  // Guest preloads can explicitly expose their own API, but a page without
+  // Node integration must never inherit this unrestricted convenience alias.
+  if (!injectedPaths.isGuest && globalThis.electron === undefined) {
     globalThis.electron = electron;
   }
 
@@ -625,31 +725,95 @@
     }
   };
 
-  const pathModule = Object.assign({}, win32, { win32, posix });
+  win32.win32 = posix.win32 = win32;
+  win32.posix = posix.posix = posix;
+  const pathModule = runtimePlatform === 'win32' ? win32 : posix;
 
   // --- 4. OS Module ---
+  const osPlatform = runtimePlatform;
+  const osArch = runtimeArch;
+  const osEndianness = injectedPaths.endianness;
+  const osNativeCall = request => transport.sendSync('__xenon:os', request);
+  function osQuery(method) {
+    try {
+      return osNativeCall({method});
+    } catch (error) {
+      // Private IPC preserves the native message; restore its Node error code.
+      const match = /^(ERR_[A-Z_]+|E[A-Z0-9_]+):/.exec(String(error?.message || error));
+      if (match && !error.code) error.code = match[1];
+      throw error;
+    }
+  }
+
+  function osUserInfo(options) {
+    // Node treats absent/unrecognized encodings as UTF-8.
+    const requested = options?.encoding;
+    const encoding = typeof requested === 'string' ? requested.toLowerCase() : 'utf8';
+    const result = osQuery('userInfo');
+    if (!['buffer', 'hex', 'base64', 'base64url', 'ascii', 'latin1', 'binary',
+          'utf16le', 'utf-16le', 'ucs2', 'ucs-2'].includes(encoding)) {
+      return result;
+    }
+    for (const key of ['username', 'homedir', 'shell']) {
+      if (result[key] === null) continue;
+      const bytes = Buffer.from(result[key], 'utf8');
+      if (encoding === 'buffer') {
+        result[key] = bytes;
+      } else if (['hex', 'base64', 'base64url'].includes(encoding)) {
+        result[key] = bytes.toString(encoding);
+      } else if (['ascii', 'latin1', 'binary'].includes(encoding)) {
+        result[key] = Array.from(bytes, byte =>
+            String.fromCharCode(encoding === 'ascii' ? byte & 0x7f : byte)).join('');
+      } else if (['utf16le', 'utf-16le', 'ucs2', 'ucs-2'].includes(encoding)) {
+        // Decode pairs directly to preserve lone UTF-16 code units, as Buffer does.
+        let value = '';
+        for (let i = 0; i + 1 < bytes.length; i += 2) {
+          value += String.fromCharCode(bytes[i] | (bytes[i + 1] << 8));
+        }
+        result[key] = value;
+      }
+    }
+    return result;
+  }
+
   const osModule = {
-    networkInterfaces: () => transport.sendSync('__xenon:os-network-interfaces'),
-    platform: () => 'win32',
-    arch: () => 'x64',
-    type: () => 'Windows_NT',
-    release: () => '10.0.19045',
-    homedir: () => homeDir,
-    tmpdir: () => tempDir,
-    hostname: () => 'XenonHost',
-    userInfo: () => ({
-      username: 'Administrator',
-      uid: -1,
-      gid: -1,
-      homedir: homeDir,
-      shell: null,
-    }),
-    cpus: () => [{ model: 'Intel(R) Core(TM)', speed: 2800, times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 } }],
-    totalmem: () => 17179869184,
-    freemem: () => 8589934592,
-    endianness: () => 'LE',
-    EOL: '\r\n',
+    platform: () => osPlatform,
+    arch: () => osArch,
+    endianness() {
+      if (osEndianness !== 'LE' && osEndianness !== 'BE') {
+        throw Object.assign(new Error('OS byte order metadata is unavailable'),
+                            {code: 'ERR_NOT_SUPPORTED'});
+      }
+      return osEndianness;
+    },
+    homedir() {
+      const value = globalThis.process.env[osPlatform === 'win32' ? 'USERPROFILE' : 'HOME'];
+      return value === undefined ? osQuery('homedir') : String(value);
+    },
+    tmpdir() {
+      const env = globalThis.process.env;
+      const value = osPlatform === 'win32' ? env.TEMP || env.TMP :
+          env.TMPDIR || env.TMP || env.TEMP;
+      const directory = value ? String(value) : osQuery('tmpdir');
+      if (osPlatform === 'win32') {
+        return directory.length > 1 && directory.endsWith('\\') &&
+            !directory.endsWith(':\\') ? directory.slice(0, -1) : directory;
+      }
+      return directory.length > 1 && directory.endsWith('/') ?
+          directory.slice(0, -1) : directory;
+    },
+    userInfo: osUserInfo,
+    EOL: osPlatform === 'win32' ? '\r\n' : '\n',
+    devNull: osPlatform === 'win32' ? '\\\\.\\nul' : '/dev/null',
   };
+  // Query mutable system state on every call. Requiring os never enumerates
+  // CPUs, users or interfaces, and never adds a synchronous startup round trip.
+  for (const method of ['type', 'release', 'version', 'machine', 'hostname',
+                        'cpus', 'totalmem', 'freemem', 'uptime', 'loadavg',
+                        'networkInterfaces', 'availableParallelism',
+                        'getPriority', 'setPriority']) {
+    osModule[method] = () => osQuery(method);
+  }
 
   // --- 5. Buffer & Util ---
   const textEncoder = new TextEncoder();
@@ -749,6 +913,20 @@
 
     static isBuffer(obj) {
       return obj instanceof Buffer;
+    }
+
+    static isEncoding(encoding) {
+      // Node accepts primitive strings only; do not coerce application objects.
+      if (typeof encoding !== 'string') return false;
+      switch (encoding.toLowerCase()) {
+        case 'utf8': case 'utf-8':
+        case 'utf16le': case 'utf-16le': case 'ucs2': case 'ucs-2':
+        case 'latin1': case 'binary': case 'ascii':
+        case 'base64': case 'base64url': case 'hex':
+          return true;
+        default:
+          return false;
+      }
     }
 
     static byteLength(value, encoding) {
@@ -2056,8 +2234,8 @@
   const processEmitter = new EventEmitter();
   const process = globalThis.process = {
     isMainFrame: injectedPaths.isMainFrame !== false,
-    platform: 'win32',
-    arch: 'x64',
+    platform: runtimePlatform,
+    arch: runtimeArch,
     type: 'renderer',
     versions: {
       electron: '31.0.0',
@@ -2072,8 +2250,7 @@
       LOCALAPPDATA: localAppData,
       TEMP: tempDir,
       APP_BASE_DIR: exeDir,
-      USERPROFILE: homeDir,
-      HOME: homeDir,
+      ...(homeDir ? {USERPROFILE: homeDir, HOME: homeDir} : {}),
     },
     pid: 1,
     execPath,
@@ -2092,7 +2269,6 @@
     contextId: '1',
     contextIsolated: false,
     sandboxed: false,
-    isMainFrame: true,
     _linkedBinding: (name) => {
       if (name === 'electron_common_v8_util' || name === 'v8_util') {
         return {
@@ -2232,7 +2408,7 @@
 
   function callbackWire(callback) {
     const callbackId = nextMojoCallbackId++;
-    mojoCallbacks.set(callbackId, callback);
+    mojoCallbacks.set(callbackId, captureAsyncCallback(callback));
     return {
       __xenon_node_wire_type__: 'callback',
       callback_id: callbackId,
@@ -2283,7 +2459,101 @@
     };
   }
 
-  function wireNativeArgumentSync(value, seen = new Map(), retainedHandles) {
+  const nativeTypedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+  const nativeTypedArrayName = Object.getOwnPropertyDescriptor(
+      nativeTypedArrayPrototype, Symbol.toStringTag).get;
+  const nativeTypedArrayBuffer = Object.getOwnPropertyDescriptor(
+      nativeTypedArrayPrototype, 'buffer').get;
+  const nativeTypedArrayOffset = Object.getOwnPropertyDescriptor(
+      nativeTypedArrayPrototype, 'byteOffset').get;
+  const nativeTypedArrayLength = Object.getOwnPropertyDescriptor(
+      nativeTypedArrayPrototype, 'byteLength').get;
+  const nativeDataViewBuffer = Object.getOwnPropertyDescriptor(
+      DataView.prototype, 'buffer').get;
+  const nativeDataViewOffset = Object.getOwnPropertyDescriptor(
+      DataView.prototype, 'byteOffset').get;
+  const nativeDataViewLength = Object.getOwnPropertyDescriptor(
+      DataView.prototype, 'byteLength').get;
+  const nativeBinaryConstructors = new Map([
+    ['Int8Array', Int8Array], ['Uint8Array', Uint8Array],
+    ['Uint8ClampedArray', Uint8ClampedArray], ['Int16Array', Int16Array],
+    ['Uint16Array', Uint16Array], ['Int32Array', Int32Array],
+    ['Uint32Array', Uint32Array], ['Float32Array', Float32Array],
+    ['Float64Array', Float64Array], ['BigInt64Array', BigInt64Array],
+    ['BigUint64Array', BigUint64Array],
+    ...(typeof Float16Array === 'function' ? [['Float16Array', Float16Array]] : []),
+  ]);
+
+  function nativeBinaryView(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    if (ArrayBuffer.isView(value)) {
+      // Intrinsic getters work across realms and ignore shadowed properties,
+      // constructors and Symbol.toStringTag on application objects.
+      const name = nativeTypedArrayName.call(value);
+      if (name !== undefined) {
+        return {
+          kind: Object.prototype.isPrototypeOf.call(Buffer.prototype, value) ?
+              'Buffer' : name,
+          buffer: nativeTypedArrayBuffer.call(value),
+          offset: nativeTypedArrayOffset.call(value),
+          length: nativeTypedArrayLength.call(value),
+        };
+      }
+      return {kind: 'DataView', buffer: nativeDataViewBuffer.call(value),
+        offset: nativeDataViewOffset.call(value),
+        length: nativeDataViewLength.call(value)};
+    }
+    let length;
+    try { length = arrayBufferByteLength.call(value); } catch (_) { return null; }
+    return {kind: 'ArrayBuffer', buffer: value, offset: 0, length};
+  }
+
+  function copyNativeBinary(view) {
+    // Copy only the active range. No bytes outside a subview cross the bridge,
+    // and later mutation cannot change an already submitted async argument.
+    return new Uint8Array(new Uint8Array(view.buffer, view.offset, view.length));
+  }
+
+  function wireNativeBinary(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const view = nativeBinaryView(value);
+    if (view) {
+      return {__xenon_node_wire_type__: 'binary', kind: view.kind,
+        value: copyNativeBinary(view)};
+    }
+    if (sharedArrayBufferByteLength) {
+      let shared = false;
+      try { sharedArrayBufferByteLength.call(value); shared = true; } catch (_) {}
+      if (shared) throw new TypeError('Native addon arguments do not support SharedArrayBuffer');
+    }
+    return null;
+  }
+
+  function adoptNativeBinary(value) {
+    const kind = value.kind;
+    if (kind !== 'Buffer' && kind !== 'ArrayBuffer' && kind !== 'DataView' &&
+        !nativeBinaryConstructors.has(kind)) {
+      throw new TypeError('Native addon returned an invalid binary kind');
+    }
+    const view = nativeBinaryView(value.value);
+    if (!view || (view.kind !== 'ArrayBuffer' && view.kind !== 'Uint8Array' &&
+                  view.kind !== 'Buffer')) {
+      throw new TypeError('Native addon returned an invalid binary payload');
+    }
+    const Constructor = nativeBinaryConstructors.get(kind);
+    if (Constructor && view.length % Constructor.BYTES_PER_ELEMENT !== 0) {
+      throw new RangeError('Native addon returned an invalid binary byte length');
+    }
+    const bytes = copyNativeBinary(view);
+    if (kind === 'Buffer') return new Buffer(bytes.buffer);
+    if (kind === 'ArrayBuffer') return bytes.buffer;
+    if (kind === 'DataView') return new DataView(bytes.buffer);
+    return new Constructor(bytes.buffer);
+  }
+
+  function wireNativeArgumentSync(value, seen, retainedHandles) {
+    const binary = wireNativeBinary(value);
+    if (binary) return binary;
     const handle = getNativeHandle(value);
     if (handle) {
       if (retainedHandles) retainedHandles.add(handle);
@@ -2305,6 +2575,9 @@
     if (!value || typeof value !== 'object') {
       return value;
     }
+    // Leaf values need no traversal state. Allocate only when descending into
+    // a container, retaining one independent map per top-level argument.
+    seen ||= new Map();
     if (seen.has(value)) {
       return seen.get(value);
     }
@@ -2324,7 +2597,9 @@
     return result;
   }
 
-  async function wireNativeArgumentAsync(value, seen = new Map(), retainedHandles) {
+  async function wireNativeArgumentAsync(value, seen, retainedHandles) {
+    const binary = wireNativeBinary(value);
+    if (binary) return binary;
     const handle = getNativeHandle(value);
     if (handle) {
       if (retainedHandles) retainedHandles.add(handle);
@@ -2346,22 +2621,25 @@
     if (!value || typeof value !== 'object') {
       return value;
     }
+    seen ||= new Map();
     if (seen.has(value)) {
       return seen.get(value);
     }
     if (Array.isArray(value)) {
       const result = [];
       seen.set(value, result);
-      for (const item of value) {
-        result.push(await wireNativeArgumentAsync(item, seen, retainedHandles));
-      }
+      // Visit all branches before awaiting native instance ids: a later
+      // binary field must be snapshotted at call time, too.
+      const pending = value.map(item => wireNativeArgumentAsync(item, seen, retainedHandles));
+      for (const item of await Promise.all(pending)) result.push(item);
       return result;
     }
     const result = {};
     seen.set(value, result);
-    for (const [key, item] of Object.entries(value)) {
+    await Promise.all(Object.entries(value).map(async ([key, item]) => {
+      result[key] = undefined;
       result[key] = await wireNativeArgumentAsync(item, seen, retainedHandles);
-    }
+    }));
     return result;
   }
 
@@ -2381,6 +2659,8 @@
       return { doubleValue: value };
     }
     if (typeof value === 'string') return { stringValue: value };
+    const binary = nativeBinaryView(value);
+    if (binary) return {binaryValue: copyNativeBinary(binary)};
     if (Array.isArray(value)) {
       return { listValue: { storage: value.map(valueToMojo) } };
     }
@@ -2402,6 +2682,15 @@
     if (value.doubleValue !== null && value.doubleValue !== undefined) return value.doubleValue;
     if (value.boolValue !== null && value.boolValue !== undefined) return value.boolValue;
     if (value.nullValue !== null && value.nullValue !== undefined) return null;
+    if (value.binaryValue !== null && value.binaryValue !== undefined) {
+      const binary = nativeBinaryView(value.binaryValue);
+      if (binary) return copyNativeBinary(binary);
+      if (Array.isArray(value.binaryValue) && value.binaryValue.every(byte =>
+          Number.isInteger(byte) && byte >= 0 && byte <= 255)) {
+        return new Uint8Array(value.binaryValue);
+      }
+      throw new TypeError('Native addon returned invalid Mojo binary bytes');
+    }
     if (value.listValue && value.listValue.storage) return value.listValue.storage.map(valueFromMojo);
     if (value.dictionaryValue && value.dictionaryValue.storage) {
       const res = {};
@@ -2417,7 +2706,7 @@
     return args.map(arg => {
       if (typeof arg === 'function') {
         const callbackId = nextMojoCallbackId++;
-        mojoCallbacks.set(callbackId, arg);
+        mojoCallbacks.set(callbackId, captureAsyncCallback(arg));
         return { isCallback: true, callbackId, value: { nullValue: 0 } };
       }
       return {
@@ -2429,25 +2718,22 @@
   }
 
   async function toMojoInvokeArgsAsync(args) {
-    const wired = [];
-    for (const arg of args) {
+    return Promise.all(args.map(async arg => {
       if (typeof arg === 'function') {
         const callbackId = nextMojoCallbackId++;
-        mojoCallbacks.set(callbackId, arg);
-        wired.push({
+        mojoCallbacks.set(callbackId, captureAsyncCallback(arg));
+        return {
           isCallback: true,
           callbackId,
           value: {nullValue: 0},
-        });
-        continue;
+        };
       }
-      wired.push({
+      return {
         isCallback: false,
         callbackId: 0,
         value: valueToMojo(await wireNativeArgumentAsync(arg)),
-      });
-    }
-    return wired;
+      };
+    }));
   }
 
   function attachMojoListeners(router) {
@@ -2466,7 +2752,7 @@
       }
       if (Array.isArray(cbResults)) {
         for (const cb of cbResults) {
-          mojoCallbacks.get(cb.callbackId)?.(valueFromMojo(cb.value));
+          mojoCallbacks.get(cb.callbackId)?.(adoptNativeReturn(valueFromMojo(cb.value)));
         }
       }
       pending.resolve(adoptNativeReturn(valueFromMojo(result)));
@@ -2545,9 +2831,11 @@
         PageHandlerFactory.getRemote().createPageHandler(
             mojoRouter.$.bindNewPipeAndPassRemote(),
             mojoHandler.$.bindNewPipeAndPassReceiver());
-        globalThis.__xenonPageHandler__ = mojoHandler;
-        globalThis.__xenonPageCallbackRouter__ = mojoRouter;
-        globalThis.__xenonPageHandlerBound__ = true;
+        if (!injectedPaths.isGuest) {
+          globalThis.__xenonPageHandler__ = mojoHandler;
+          globalThis.__xenonPageCallbackRouter__ = mojoRouter;
+          globalThis.__xenonPageHandlerBound__ = true;
+        }
         attachMojoListeners(mojoRouter);
         return mojoHandler;
       } catch (err) {
@@ -2604,21 +2892,16 @@
         }
       }
     }
-    try {
-      const handler = await ensureMojoBridge();
-      if (!handler || typeof handler.openNativeFileDialog !== 'function') {
-        console.warn('[Xenon Renderer] openNativeFileDialog is not bound');
-        return [];
-      }
-      const result = await handler.openNativeFileDialog(title, exts, multi);
-      if (Array.isArray(result)) {
-        return result;
-      }
-      return (result && result.filePaths) || [];
-    } catch (error) {
-      console.error('[Xenon Renderer] openNativeFileDialog failed:', error);
-      return [];
+    const handler = await ensureMojoBridge();
+    if (!handler || typeof handler.openNativeFileDialog !== 'function') {
+      return unsupportedElectronApi('dialog.showOpenDialog');
     }
+    const result = await handler.openNativeFileDialog(title, exts, multi);
+    const paths = Array.isArray(result) ? result : result && result.filePaths;
+    if (!Array.isArray(paths)) {
+      throw new Error('Native open dialog returned an invalid result');
+    }
+    return paths;
   }
 
   function wrapCallRemoteClientFunction(orig) {
@@ -2774,6 +3057,7 @@
   }
 
   function adoptNativeReturn(value, fallbackModulePath) {
+    if (nativeBinaryView(value)) return value;
     if (Array.isArray(value)) {
       return value.map(item => adoptNativeReturn(item, fallbackModulePath));
     }
@@ -2781,6 +3065,7 @@
       return value;
     }
     const wireType = value.__xenon_node_wire_type__;
+    if (wireType === 'binary') return adoptNativeBinary(value);
     if (wireType === 'global') return globalThis;
     if (wireType === 'undefined') {
       return undefined;
@@ -2856,23 +3141,24 @@
     const runSync = (instanceId) => adoptNativeCallResult(
         transport.invokeNodeInstanceSync(
             modulePath, nativeInstanceSelector(handle, instanceId), methodName,
-            ...methodArgs.map(arg => wireNativeArgumentSync(arg, new Map(), retainedHandles))),
+            ...methodArgs.map(arg => wireNativeArgumentSync(arg, undefined, retainedHandles))),
         modulePath, retainedHandles);
     if (typeof handle.instanceId === 'number' &&
         typeof transport.invokeNodeInstanceSync === 'function') {
       return runSync(handle.instanceId);
     }
-    return retainNativeHandles(resolvedHandleInstanceId(handle).then((instanceId) => {
-      return Promise.all(methodArgs.map(arg => wireNativeArgumentAsync(arg, new Map(), retainedHandles)))
-          .then(wiredArgs => transport.invoke(
+    const pendingArguments = Promise.all(methodArgs.map(arg =>
+        wireNativeArgumentAsync(arg, undefined, retainedHandles)));
+    return retainNativeHandles(Promise.all([
+      resolvedHandleInstanceId(handle), pendingArguments,
+    ]).then(([instanceId, wiredArgs]) => transport.invoke(
               '__xenon:node-addon:invoke-instance', {
                 modulePath,
                 instanceId,
                 ...(handle.ownerToken ? {ownerToken: handle.ownerToken} : {}),
                 methodName,
                 arguments: wiredArgs,
-              }));
-    }).then(result => adoptNativeReturn(result, handle.modulePath)), retainedHandles);
+              })).then(result => adoptNativeReturn(result, handle.modulePath)), retainedHandles);
   }
 
   function createNativeInstanceProxy(handle, prototypeMembers, proto, fields) {
@@ -3014,12 +3300,12 @@
         const invokeSync = () => adoptNativeCallResult(
             transport.invokeNodeExportSync(
                 modulePath, functionName,
-                ...args.map(arg => wireNativeArgumentSync(arg, new Map(), retainedHandles))),
+                ...args.map(arg => wireNativeArgumentSync(arg, undefined, retainedHandles))),
             modulePath, retainedHandles);
         return invokeSync();
       }
       return retainNativeHandles(Promise.all(args.map(arg =>
-          wireNativeArgumentAsync(arg, new Map(), retainedHandles)))
+          wireNativeArgumentAsync(arg, undefined, retainedHandles)))
           .then(wiredArgs => transport.invoke(
               '__xenon:node-addon:invoke-export', {
                 modulePath,
@@ -3073,13 +3359,13 @@
       const constructSync = hasPrototypeProperties ?
           transport.constructNodeExportWithPrototypeSync : transport.constructNodeExportSync;
       if (typeof constructSync === 'function') {
-        const wiredArgs = args.map(arg => wireNativeArgumentSync(arg, new Map(), retainedHandles));
+        const wiredArgs = args.map(arg => wireNativeArgumentSync(arg, undefined, retainedHandles));
         instanceId = constructSync.call(transport,
             modulePath, className,
             ...(hasPrototypeProperties ? [prototypeProperties, ...wiredArgs] : wiredArgs));
       } else {
         instanceId = retainNativeHandles(Promise.all(
-            args.map(arg => wireNativeArgumentAsync(arg, new Map(), retainedHandles)))
+            args.map(arg => wireNativeArgumentAsync(arg, undefined, retainedHandles)))
             .then(wiredArgs => transport.invoke(
                 '__xenon:node-addon:construct-export', {
                   modulePath,
@@ -3542,6 +3828,15 @@
     }
   }
 
+  // Socket and server callbacks belong to their connect/listen resource,
+  // even when delivered by a later IPC message or the other local endpoint.
+  function callNetCallback(resource, callback, args = []) {
+    return runWithAsyncContext(resource._asyncContext, callback, resource, args);
+  }
+  function emitNetEvent(resource, event, ...args) {
+    return callNetCallback(resource, resource.emit, [event, ...args]);
+  }
+
   function allocNetSocket(socket) {
     socket._id = 'r-' + (nextNetSocketId++);
     netSockets.set(socket._id, socket);
@@ -3574,14 +3869,14 @@
     if (!fromPeer && socket._peerId) {
       sendXenonNet('__xenon:net:close', {toId: socket._peerId, fromId: socket._id});
     }
-    socket.emit('end');
-    socket.emit('close');
+    emitNetEvent(socket, 'end');
+    emitNetEvent(socket, 'close');
   }
 
   function deliverNetBytes(socket, data) {
     const buf = Buffer.isBuffer(data) || data instanceof Uint8Array ?
         Buffer.from(data) : Buffer.from(String(data));
-    socket.emit('data', buf);
+    emitNetEvent(socket, 'data', buf);
   }
 
   const netModule = {
@@ -3601,6 +3896,7 @@
         this.localAddress = '';
       }
       connect(...args) {
+        this._asyncContext = currentAsyncContext;
         const cb = typeof args[args.length - 1] === 'function' ?
             args[args.length - 1] : null;
         this._connectCb = cb;
@@ -3610,6 +3906,7 @@
         const server = netServers.get(path);
         if (server) {
           const incoming = new netModule.Socket();
+          incoming._asyncContext = server._asyncContext;
           incoming._connected = true;
           incoming._peer = this;
           allocNetSocket(incoming);
@@ -3618,15 +3915,15 @@
           this.connecting = false;
           queueMicrotask(() => {
             if (this._closed || incoming._closed) return;
-            server.emit('connection', incoming);
+            emitNetEvent(server, 'connection', incoming);
             // A server or client connection listener can synchronously destroy
             // either endpoint. Do not continue the queued handshake afterward.
             if (this._closed || incoming._closed) return;
-            this.emit('connect');
+            emitNetEvent(this, 'connect');
             if (this._closed || incoming._closed) return;
             const callback = this._connectCb;
             this._connectCb = null;
-            if (callback) callback.call(this);
+            if (callback) callNetCallback(this, callback);
           });
           return this;
         }
@@ -3673,6 +3970,7 @@
     },
     Server: class extends EventEmitter {
       listen(...args) {
+        this._asyncContext = currentAsyncContext;
         const cb = typeof args[args.length - 1] === 'function' ?
             args[args.length - 1] : null;
         this._path = normalizeNetPath(netPathFromListenOrConnect(args));
@@ -3689,9 +3987,9 @@
           return this;
         }
         queueMicrotask(() => {
-          this.emit('listening');
+          emitNetEvent(this, 'listening');
           if (cb) {
-            cb();
+            callNetCallback(this, cb);
           }
         });
         return this;
@@ -3706,9 +4004,9 @@
           return this;
         }
         if (typeof cb === 'function') {
-          cb();
+          callNetCallback(this, cb);
         }
-        this.emit('close');
+        emitNetEvent(this, 'close');
         return this;
       }
       address() {
@@ -3741,9 +4039,9 @@
     if (channel === '__xenon:net:listening') {
       const server = nativeNetServers.get(msg.serverId);
       if (server) {
-        server.emit('listening');
+        emitNetEvent(server, 'listening');
         if (server._listenCb) {
-          server._listenCb();
+          callNetCallback(server, server._listenCb);
           server._listenCb = null;
         }
       }
@@ -3755,11 +4053,12 @@
         return true;
       }
       const incoming = new netModule.Socket();
+      incoming._asyncContext = server._asyncContext;
       incoming._id = msg.socketId;
       incoming._peerId = msg.socketId;
       incoming._connected = true;
       netSockets.set(incoming._id, incoming);
-      server.emit('connection', incoming);
+      emitNetEvent(server, 'connection', incoming);
       return true;
     }
     if (channel === '__xenon:net:server-closed') {
@@ -3768,10 +4067,10 @@
         nativeNetServers.delete(msg.serverId);
         server._nativeId = null;
         if (server._closeCb) {
-          server._closeCb();
+          callNetCallback(server, server._closeCb);
           server._closeCb = null;
         }
-        server.emit('close');
+        emitNetEvent(server, 'close');
       }
       return true;
     }
@@ -3786,12 +4085,13 @@
         return true;
       }
       const incoming = new netModule.Socket();
+      incoming._asyncContext = server._asyncContext;
       incoming._connected = true;
       incoming._peerId = msg.fromId;
       allocNetSocket(incoming);
       // Match net.Server ordering: install connection/data listeners before
       // the peer observes its connect event.
-      server.emit('connection', incoming);
+      emitNetEvent(server, 'connection', incoming);
       sendXenonNet('__xenon:net:connected', {
         toId: msg.fromId,
         peerId: incoming._id,
@@ -3806,9 +4106,9 @@
       socket._peerId = msg.peerId;
       socket._connected = true;
       socket.connecting = false;
-      socket.emit('connect');
+      emitNetEvent(socket, 'connect');
       if (socket._connectCb) {
-        socket._connectCb();
+        callNetCallback(socket, socket._connectCb);
         socket._connectCb = null;
       }
       flushPendingNetWrites(socket);
@@ -3834,7 +4134,7 @@
         if (server) {
           const err = new Error(msg.code || 'net error');
           err.code = msg.code;
-          server.emit('error', err);
+          emitNetEvent(server, 'error', err);
         }
         return true;
       }
@@ -3844,7 +4144,7 @@
         err.code = msg.code;
         socket.connecting = false;
         socket._pendingWrites.length = 0;
-        socket.emit('error', err);
+        emitNetEvent(socket, 'error', err);
       }
       return true;
     }
@@ -4494,7 +4794,7 @@
   const builtinModuleNames = new Set([
     'assert', 'async_hooks', 'buffer', 'child_process', 'constants', 'crypto',
     'dns', 'events', 'fs', 'fs/promises', 'http', 'http2', 'https', 'net', 'os',
-    'path', 'path/posix', 'path/win32', 'querystring', 'readline', 'stream',
+    'path', 'path/posix', 'path/win32', 'process', 'querystring', 'readline', 'stream',
     'string_decoder', 'timers', 'tls', 'tty', 'url', 'util', 'zlib',
   ]);
   // These modules are importable for dependency discovery. TLS operations require
@@ -4999,12 +5299,20 @@
         throw error;
       }
     };
+    // exports and main resolution can inspect the same package. Reuse its
+    // parsed config only for this resolution; a later retry or cache deletion
+    // must observe the current file, including changed main/exports fields.
+    let packageConfigs;
     const packageJson = directory => {
       const entry = inspect(pathModule.join(directory, 'package.json'));
       if (!entry || entry.type !== 'file') return null;
       const filename = entry.filename;
+      packageConfigs ||= new Map();
+      if (packageConfigs.has(filename)) return packageConfigs.get(filename);
       try {
-        return JSON.parse(readHostedCjsSource(filename));
+        const config = JSON.parse(readHostedCjsSource(filename));
+        packageConfigs.set(filename, config);
+        return config;
       } catch (error) {
         if (error instanceof SyntaxError) {
           throw moduleError('ERR_INVALID_PACKAGE_CONFIG',
@@ -5141,6 +5449,8 @@
     if (norm === 'electron' || norm === 'node:electron') {
       return electron;
     }
+
+    if (norm === 'process') return process;
 
     // Path
     if (norm === 'path' || norm === 'node:path') {
@@ -5300,6 +5610,7 @@
 
       const createClientRequest = (opt, cb) => {
         const req = new EventEmitter();
+        if (typeof cb === 'function') req.once('response', cb);
         const bodyChunks = [];
         let finished = false;
         let timeoutId = null;
@@ -5441,9 +5752,7 @@
                 responseEncoding = String(encoding || 'utf8');
                 return incoming;
               };
-              if (typeof cb === 'function') {
-                cb(incoming);
-              }
+              req.emit('response', incoming);
               queueMicrotask(() => {
                 if (aborted) return;
                 if (responseBody.length) {
@@ -5476,7 +5785,10 @@
           req.end();
           return req;
         },
-        createServer: () => new EventEmitter(),
+        createServer: () => {
+          throw moduleError('ERR_NOT_SUPPORTED',
+              `${norm.replace(/^node:/, '')}.createServer is not supported by this runtime`);
+        },
         Agent: class {},
       };
     }
@@ -5783,6 +6095,8 @@
                         '__xenonElectronIpc', '__xenonPaths']) {
         delete globalThis[key];
       }
+    } else if (globalThis.electron === undefined) {
+      globalThis.electron = electron;
     }
   }
 })();

@@ -26,6 +26,8 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
+#include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/path_service.h"
 #include "base/process/process_handle.h"
 #include "base/strings/string_number_conversions.h"
@@ -76,6 +78,7 @@
 #include "xenon_overlay/chrome/browser/ipc/xenon_zlib_bridge.h"
 #include "xenon_overlay/chrome/browser/napi/napi_loader.h"
 #include "xenon_overlay/common/ipc/xenon_ipc_value_codec.h"
+#include "xenon_overlay/common/ipc/xenon_runtime_platform.h"
 #include "xenon_overlay/public/xenon_ipc_switches.h"
 #include "xenon_overlay/resources/grit/xenon_resources.h"
 
@@ -92,7 +95,8 @@ bool ConvertV8ToValue(v8::Isolate* isolate,
                       v8::Local<v8::Value> value,
                       base::Value* output,
                       std::string* error,
-                      int depth) {
+                      int depth,
+                      bool preserve_nested_binary = false) {
   if (depth > kMaxIpcValueDepth) {
     *error = "IPC value is nested too deeply";
     return false;
@@ -151,12 +155,48 @@ bool ConvertV8ToValue(v8::Isolate* isolate,
       }
       base::Value converted;
       if (!ConvertV8ToValue(isolate, context, item, &converted, error,
-                            depth + 1)) {
+                            depth + 1, preserve_nested_binary)) {
         return false;
       }
       list.Append(std::move(converted));
     }
     *output = base::Value(std::move(list));
+    return true;
+  }
+  // Native addon arguments carry typed binary payloads inside wire envelopes.
+  // JSON would turn their nested Uint8Arrays into numeric property objects.
+  // Keep the existing JSON/toJSON behavior for non-native bridge callers.
+  if (preserve_nested_binary && value->IsObject()) {
+    const auto object = value.As<v8::Object>();
+    v8::Local<v8::Array> keys;
+    if (!object->GetOwnPropertyNames(context, v8::ONLY_ENUMERABLE,
+                                     v8::KeyConversionMode::kConvertToString)
+             .ToLocal(&keys)) {
+      *error = "Failed to enumerate native argument properties";
+      return false;
+    }
+    base::DictValue dict;
+    for (uint32_t i = 0; i < keys->Length(); ++i) {
+      v8::Local<v8::Value> key;
+      v8::Local<v8::Value> item;
+      if (!keys->Get(context, i).ToLocal(&key) ||
+          !object->Get(context, key).ToLocal(&item)) {
+        *error = "Failed to read native argument property";
+        return false;
+      }
+      if (item->IsUndefined() || item->IsFunction() || item->IsSymbol()) {
+        continue;
+      }
+      std::string name;
+      base::Value converted;
+      if (!gin::ConvertFromV8(isolate, key, &name) ||
+          !ConvertV8ToValue(isolate, context, item, &converted, error,
+                            depth + 1, true)) {
+        return false;
+      }
+      dict.Set(name, std::move(converted));
+    }
+    *output = base::Value(std::move(dict));
     return true;
   }
   v8::Local<v8::String> json;
@@ -259,28 +299,6 @@ class ScopedV8Context {
   v8::Local<v8::Context> context_;
   v8::Context::Scope context_scope_;
 };
-
-std::string PlatformName() {
-#if BUILDFLAG(IS_WIN)
-  return "win32";
-#elif BUILDFLAG(IS_MAC)
-  return "darwin";
-#else
-  return "linux";
-#endif
-}
-
-std::string ArchitectureName() {
-#if defined(ARCH_CPU_X86_64)
-  return "x64";
-#elif defined(ARCH_CPU_ARM64)
-  return "arm64";
-#elif defined(ARCH_CPU_X86)
-  return "ia32";
-#else
-  return "unknown";
-#endif
-}
 
 // gin::TryCatch::GetStackTrace() appends the full source line, which for
 // webpack bundles can be hundreds of KB. Keep the exception text and a short
@@ -480,6 +498,7 @@ bool XenonIpcMainContainer::InitializeInternal(
       gin::IsolateHolder::kUseLocker,
       gin::IsolateHolder::IsolateType::kUtility);
   isolate_ = isolate_holder_->isolate();
+  async_context_hooks_installed_ = false;
   if (!isolate_) {
     startup_error_ = "Failed to create the main JavaScript isolate";
     return false;
@@ -522,12 +541,18 @@ bool XenonIpcMainContainer::InitializeInternal(
     global
         ->Set(context,
               v8::String::NewFromUtf8Literal(isolate_, "__xenonPlatform"),
-              v8::String::NewFromUtf8(isolate_, PlatformName().c_str())
+              v8::String::NewFromUtf8(isolate_, PlatformName())
                   .ToLocalChecked())
         .Check();
     global
         ->Set(context, v8::String::NewFromUtf8Literal(isolate_, "__xenonArch"),
-              v8::String::NewFromUtf8(isolate_, ArchitectureName().c_str())
+              v8::String::NewFromUtf8(isolate_, ArchitectureName())
+                  .ToLocalChecked())
+        .Check();
+    global
+        ->Set(context,
+              v8::String::NewFromUtf8Literal(isolate_, "__xenonEndianness"),
+              v8::String::NewFromUtf8(isolate_, EndiannessName())
                   .ToLocalChecked())
         .Check();
     global
@@ -610,6 +635,7 @@ bool XenonIpcMainContainer::InitializeInternal(
                              "LOCALAPPDATA",
                              "USERPROFILE",
                              "HOME",
+                             "TMPDIR",
                              "TEMP",
                              "TMP",
                              "COMPUTERNAME",
@@ -654,9 +680,12 @@ bool XenonIpcMainContainer::InitializeInternal(
           .Check();
     };
     bind_func("__xenonLog", &XenonIpcMainContainer::NativeLog);
+    bind_func("__xenonInstallAsyncContextHooks",
+              &XenonIpcMainContainer::NativeInstallAsyncContextHooks);
     bind_func("__xenonGetPath", &XenonIpcMainContainer::NativeGetPath);
     bind_func("__xenonNetworkInterfaces",
               &XenonIpcMainContainer::NativeNetworkInterfaces);
+    bind_func("__xenonOsCall", &XenonIpcMainContainer::NativeOsCall);
     bind_func("__xenonSendToRenderer",
               &XenonIpcMainContainer::NativeSendToRenderer);
     bind_func("__xenonNetSend", &XenonIpcMainContainer::NativeNetSend);
@@ -1522,6 +1551,39 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::RequireModule(
   return {};
 }
 
+void XenonIpcMainContainer::NativeInstallAsyncContextHooks(
+    gin::Arguments* args) {
+  v8::Local<v8::Function> init;
+  v8::Local<v8::Function> before;
+  v8::Local<v8::Function> after;
+  if (async_context_hooks_installed_ || !args->GetNext(&init) ||
+      !args->GetNext(&before) || !args->GetNext(&after)) {
+    args->ThrowTypeError(
+        "Async context hooks require three functions and one installation");
+    return;
+  }
+#if defined(V8_ENABLE_JAVASCRIPT_PROMISE_HOOKS)
+  // Context hooks also observe native await. Do not use isolate-wide hooks or
+  // the continuation-preserved embedder slot, which belong to Blink elsewhere.
+  context_.Get(isolate_)->SetPromiseHooks(init, before, after, {});
+  async_context_hooks_installed_ = true;
+#else
+  // SetPromiseHooks terminates the process when V8 lacks this build feature.
+  // Requiring async_hooks must stay possible, but activating ALS cannot claim
+  // propagation that this runtime cannot provide.
+  v8::Local<v8::Value> error = v8::Exception::Error(
+      gin::StringToV8(isolate_, "Async context requires V8 JavaScript Promise hooks")
+          .As<v8::String>());
+  if (error.As<v8::Object>()
+          ->Set(context_.Get(isolate_), gin::StringToV8(isolate_, "code"),
+                gin::StringToV8(isolate_, "ERR_NOT_SUPPORTED"))
+          .IsNothing()) {
+    return;
+  }
+  isolate_->ThrowException(error);
+#endif
+}
+
 void XenonIpcMainContainer::NativeLog(gin::Arguments* args) {
   std::string message;
   if (!args->GetNext(&message)) {
@@ -1587,6 +1649,27 @@ void XenonIpcMainContainer::NativeNetworkInterfaces(gin::Arguments* args) {
   auto result = GetNetworkInterfaces();
   if (!result->success) {
     args->ThrowTypeError(result->error);
+    return;
+  }
+  v8::Local<v8::Value> value;
+  if (ValueToV8(result->value).ToLocal(&value)) {
+    args->Return(value);
+  }
+}
+
+void XenonIpcMainContainer::NativeOsCall(gin::Arguments* args) {
+  v8::Local<v8::Value> request_value;
+  base::Value request;
+  std::string error;
+  if (args->Length() != 1 || !args->GetNext(&request_value) ||
+      !V8ToValue(request_value, &request, &error) || !request.is_dict()) {
+    args->ThrowTypeError("ERR_INVALID_ARG_TYPE: os call expects a request object");
+    return;
+  }
+  auto result = PerformOsCall(std::move(request));
+  if (!result->success) {
+    isolate_->ThrowException(
+        v8::Exception::Error(gin::StringToV8(isolate_, result->error)));
     return;
   }
   v8::Local<v8::Value> value;
@@ -2156,13 +2239,50 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::ValueToV8(
     }
     return v8::Uint8Array::New(buffer, 0, bytes.size());
   }
-  std::string json;
-  if (!base::JSONWriter::Write(value, &json)) {
-    return {};
+  // Native callbacks can contain nested binary values (for example a SQLite
+  // row containing a BLOB). JSON cannot represent those bytes.
+  const auto context = context_.Get(isolate_);
+  switch (value.type()) {
+    case base::Value::Type::NONE:
+      return v8::Null(isolate_);
+    case base::Value::Type::BOOLEAN:
+      return v8::Boolean::New(isolate_, value.GetBool());
+    case base::Value::Type::INTEGER:
+      return v8::Integer::New(isolate_, value.GetInt());
+    case base::Value::Type::DOUBLE:
+      return v8::Number::New(isolate_, value.GetDouble());
+    case base::Value::Type::STRING:
+      return gin::StringToV8(isolate_, value.GetString());
+    case base::Value::Type::LIST: {
+      auto array = v8::Array::New(
+          isolate_, base::checked_cast<int>(value.GetList().size()));
+      uint32_t index = 0;
+      for (const auto& item : value.GetList()) {
+        v8::Local<v8::Value> converted;
+        if (!ValueToV8(item).ToLocal(&converted) ||
+            !array->CreateDataProperty(context, index++, converted)
+                 .FromMaybe(false)) {
+          return {};
+        }
+      }
+      return array;
+    }
+    case base::Value::Type::DICT: {
+      auto object = v8::Object::New(isolate_);
+      for (const auto [key, item] : value.GetDict()) {
+        v8::Local<v8::Value> converted;
+        if (!ValueToV8(item).ToLocal(&converted) ||
+            !object->CreateDataProperty(context, gin::StringToV8(isolate_, key),
+                                        converted)
+                 .FromMaybe(false)) {
+          return {};
+        }
+      }
+      return object;
+    }
+    case base::Value::Type::BINARY:
+      NOTREACHED();
   }
-  v8::Local<v8::String> json_value =
-      v8::String::NewFromUtf8(isolate_, json.c_str()).ToLocalChecked();
-  return v8::JSON::Parse(context_.Get(isolate_), json_value);
 }
 
 v8::MaybeLocal<v8::Value> XenonIpcMainContainer::IpcPayloadToV8(
@@ -2707,7 +2827,8 @@ void XenonIpcMainContainer::NativeInvokeExport(gin::Arguments* args) {
   std::string error;
   if (args_val.IsEmpty() || args_val->IsUndefined() || args_val->IsNull()) {
     converted = base::Value(base::Value::Type::LIST);
-  } else if (!V8ToValue(args_val, &converted, &error)) {
+  } else if (!ConvertV8ToValue(isolate_, context_.Get(isolate_), args_val,
+                                &converted, &error, 0, true)) {
     args->ThrowTypeError(error.empty() ? "Invalid native arguments" : error);
     return;
   }
@@ -2752,7 +2873,8 @@ void XenonIpcMainContainer::NativeConstructExport(gin::Arguments* args) {
   std::string error;
   if (args_val.IsEmpty() || args_val->IsUndefined() || args_val->IsNull()) {
     converted = base::Value(base::Value::Type::LIST);
-  } else if (!V8ToValue(args_val, &converted, &error)) {
+  } else if (!ConvertV8ToValue(isolate_, context_.Get(isolate_), args_val,
+                                &converted, &error, 0, true)) {
     args->ThrowTypeError(error.empty() ? "Invalid native arguments" : error);
     return;
   }
@@ -2795,7 +2917,8 @@ void XenonIpcMainContainer::NativeInvokeInstance(gin::Arguments* args) {
   std::string error;
   if (args_val.IsEmpty() || args_val->IsUndefined() || args_val->IsNull()) {
     converted = base::Value(base::Value::Type::LIST);
-  } else if (!V8ToValue(args_val, &converted, &error)) {
+  } else if (!ConvertV8ToValue(isolate_, context_.Get(isolate_), args_val,
+                                &converted, &error, 0, true)) {
     args->ThrowTypeError(error.empty() ? "Invalid native arguments" : error);
     return;
   }
@@ -2826,6 +2949,71 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::CreateNativeAddonForwarder(
     const std::string& module_path) {
   v8::Local<v8::Context> context = context_.Get(isolate_);
   static constexpr char kFactorySource[] = R"((function(modulePath) {
+  const typedArrayNames = [
+    'Int8Array', 'Uint8Array', 'Uint8ClampedArray', 'Int16Array', 'Uint16Array',
+    'Int32Array', 'Uint32Array', 'Float16Array', 'Float32Array', 'Float64Array',
+    'BigInt64Array', 'BigUint64Array'
+  ];
+  const typedArrays = new Map(typedArrayNames.filter(name =>
+      typeof globalThis[name] === 'function').map(name => [name, globalThis[name]]));
+  function prepareArgument(value, seen = new Set()) {
+    if (value === undefined) return {__xenon_node_wire_type__: 'undefined'};
+    if (typeof value === 'bigint') {
+      return {__xenon_node_wire_type__: 'bigint', value: String(value)};
+    }
+    if (!value || typeof value !== 'object') return value;
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+      const kind = Buffer.isBuffer(value) ? 'Buffer' :
+          value instanceof ArrayBuffer ? 'ArrayBuffer' :
+          value instanceof DataView ? 'DataView' :
+          Object.prototype.toString.call(value).slice(8, -1);
+      if (!['Buffer', 'ArrayBuffer', 'DataView'].includes(kind) &&
+          !typedArrays.has(kind)) {
+        unsupported('Unsupported native binary kind: ' + kind);
+      }
+      const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) :
+          new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+      return {__xenon_node_wire_type__: 'binary', kind, value: bytes};
+    }
+    if (seen.has(value)) throw new TypeError('Circular native addon argument');
+    seen.add(value);
+    try {
+      if (typeof value.toJSON === 'function') {
+        const json = value.toJSON();
+        if (json !== value) return prepareArgument(json, seen);
+      }
+      if (Array.isArray(value)) return value.map(item => prepareArgument(item, seen));
+      const result = {};
+      for (const key of Object.keys(value)) {
+        Object.defineProperty(result, key, {
+          value: prepareArgument(value[key], seen), enumerable: true,
+          writable: true, configurable: true
+        });
+      }
+      return result;
+    } finally {
+      seen.delete(value);
+    }
+  }
+  function unwrapBinary(value) {
+    const bytes = value.value;
+    if (!ArrayBuffer.isView(bytes)) {
+      throw new TypeError('Invalid native binary payload');
+    }
+    // Only the selected bytes cross the native boundary, so the resulting
+    // view owns an exact-sized buffer independent of the sender's allocation.
+    const buffer = bytes.byteOffset === 0 &&
+        bytes.byteLength === bytes.buffer.byteLength ? bytes.buffer :
+        bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    if (value.kind === 'Buffer') return Buffer.from(buffer);
+    if (value.kind === 'ArrayBuffer') return buffer;
+    if (value.kind === 'DataView') return new DataView(buffer);
+    const TypedArray = typedArrays.get(value.kind);
+    if (!TypedArray || buffer.byteLength % TypedArray.BYTES_PER_ELEMENT) {
+      throw new TypeError('Invalid native binary kind or byte length');
+    }
+    return new TypedArray(buffer);
+  }
   function wrapResult(value) {
     if (Array.isArray(value)) {
       return value.map(wrapResult);
@@ -2833,7 +3021,9 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::CreateNativeAddonForwarder(
     if (!value || typeof value !== 'object') {
       return value;
     }
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return value;
     const wireType = value.__xenon_node_wire_type__;
+    if (wireType === 'binary') return unwrapBinary(value);
     if (wireType === 'undefined') {
       return undefined;
     }
@@ -2848,7 +3038,14 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::CreateNativeAddonForwarder(
       return createInstanceProxy(
           value.instance_id, value.fields, value.prototype);
     }
-    return value;
+    const result = {};
+    for (const key of Object.keys(value)) {
+      Object.defineProperty(result, key, {
+        value: wrapResult(value[key]), enumerable: true,
+        writable: true, configurable: true
+      });
+    }
+    return result;
   }
   function createInstanceProxy(instanceId, fields, prototypeMembers) {
     const data = (fields && typeof fields === 'object') ? fields : {};
@@ -2868,7 +3065,7 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::CreateNativeAddonForwarder(
       Object.defineProperty(instance, member.name, {
         value: function(...args) {
           return wrapResult(__xenonNativeInvokeInstance(
-              modulePath, instanceId, member.name, args));
+              modulePath, instanceId, member.name, prepareArgument(args)));
         },
         enumerable: !!member.enumerable, writable: true, configurable: true
       });
@@ -2903,14 +3100,14 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::CreateNativeAddonForwarder(
       target = function(...args) {
         if (new.target) {
           const instance = wrapResult(__xenonNativeConstructExport(
-              modulePath, exportPath, args));
+              modulePath, exportPath, prepareArgument(args)));
           if (target.prototype && typeof target.prototype === 'object') {
             Object.setPrototypeOf(instance, target.prototype);
           }
           return instance;
         }
         return wrapResult(__xenonNativeInvokeExport(
-            modulePath, exportPath, args));
+            modulePath, exportPath, prepareArgument(args)));
       }.bind(null);
       Object.defineProperty(target, Symbol.hasInstance, {value(instance) {
         const prototype = target.prototype;

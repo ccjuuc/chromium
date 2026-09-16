@@ -1,6 +1,6 @@
 # Electron / Node 适配层：性能优化与模块约定
 
-## 本轮实现
+## 此前优化实现
 
 - 两端 Buffer 优先使用 V8 原生 Uint8Array Base64 API；旧 JS host 回退到有界分块编码，避免逐字节拼接长字符串。支持 Base64URL、padding、子视图和 Node 的宽松输入规则。
 - Main 已实现的文件 callback/Promise API 把 I/O 投递到 MayBlock 工作线程，在原 V8 序列完成。文件字节不再通过 UTF-8 或 Base64 中转；写入提交时复制调用者的数据，避免异步读取可变内存。
@@ -103,11 +103,114 @@ CommonJS 模块在执行前入缓存以支持循环依赖，缓存命中读取�
 - main 真实摘要支持 MD5、SHA-1、SHA-224/256/384/512 与对应 HMAC，按二进制输入计算；字符串/结果编码支持 UTF-8、hex、Base64/Base64URL，其他编码明确拒绝。这不是完整 Node crypto API。摘要仍累积输入后计算，回调随机接口只保证异步回调时序，不承诺工作线程计算。
 - 两端独立 bootstrap 仍有重复代码。先用统一契约用例限制漂移；后续拆公共源码时，应同时规划资源打包和启动成本，不能只移动文件。
 
+## Bootstrap 审查修复（2026-09-16）
+
+本轮针对 `xenon_ipc_main_bootstrap.js` 和 `xenon_ipc_renderer_bootstrap.js` 的行为契约修复，不将此前 TH/PL-E 的业务验收或 275 项 JS 回归视为所有 API 已符合 Electron/Node 规范。
+
+### 页面隔离与模块身份
+
+- Guest 页面在 `nodeIntegration: false` 时，除清理 `require`、`process` 和原生传输入口外，同时撤销自动注入的 `globalThis.electron`，堵住通过 `electron.ipcRenderer` 绕过页面隔离的路径。
+- 可信 preload 可以保留其 Node/IPC 闭包，但页面只取得 preload 明确暴露的 API。显式启用 Node integration 的页面仍保留其配置允许的能力。
+- Renderer 的 `require('process')`、`require('node:process')` 与全局 `process` 使用同一模块对象；模块导入仍按真实名称和身份处理，不因个别方法未实现而替换整个模块。
+
+### BrowserWindow 与能力边界
+
+- 移除 BrowserWindow 为任意未知属性生成函数的 Proxy。不存在的属性保持 `undefined`，包括 `then`；`Promise.resolve(window)` 不再把窗口误认成永不完成的 thenable。
+- TH 依赖的 `setParentWindow`、`moveTop` 和 `isAlwaysOnTop` 使用 Chromium Widget 的跨平台窗口操作或查询，`getFocusedWindow` 根据真实焦点状态查找。父窗口设置先校验对象、销毁状态和循环关系，原生操作成功后才更新 JS 关联；相同父窗口的重复设置保持幂等。普通透明弹窗不会因为设置 owner 就启用播放器覆层的尺寸联动。
+- 新增窗口逻辑不直接操作 HWND。任务栏 `setProgressBar` 没有接入通用平台实现时明确 `ERR_NOT_SUPPORTED`，不伪造成功，也不把 Chrome 下载管理器的全局进度冒充指定窗口进度。
+- Session 的 cookie、代理、缓存清理、权限回调、protocol/webRequest 等尚未实现的方法明确报 `ERR_NOT_SUPPORTED`，不再返回空数据、`DIRECT` 或已完成 Promise 冒充结果。保留 Session 对象和模块可导入性，失败发生在不支持的操作被调用时。
+- 全局快捷键注册、未实现的保存/消息对话框等同样明确失败；未显示对话框时不会再返回 `response: 0`。已有真实打开文件对话框继续传递用户选择、取消和原生错误；缺少宿主能力不再等同于用户取消。
+
+### 剪贴板与 shell 桥
+
+- Main 与 renderer 通过同一 Browser 原生桥调用 `clipboard.readText/writeText/readHTML/writeHTML/clear`，同步 API 保留同步结果和错误语义。
+- `shell.openExternal/openPath/showItemInFolder` 通过统一接口分发到独立平台后端；本轮实现 Windows 后端，其他平台明确 `ERR_NOT_SUPPORTED`，不宣称已完成 macOS/Linux 的 shell 功能。Windows 可能阻塞的 shell 工作投递到 COM STA 工作线程，回复回到 Browser UI 序列。参数校验和平台失败向调用方传递，`openPath` 的失败按 Electron 契约返回非空错误字符串。
+- 自动测试使用内存 `TestClipboard`，不覆盖用户的系统剪贴板。shell 测试覆盖参数拒绝和不存在路径；**成功启动外部程序、浏览器或文件管理器的分支未做自动实际启动验证**。JS 传输测试通过不代表这些系统交互已完成实机验收。
+
+### 异步上下文
+
+**当前生产 V8 未启用 JavaScript Promise hooks，因此本轮明确不支持激活 AsyncLocalStorage 异步上下文。** `require('async_hooks')`、构造 AsyncLocalStorage、`getStore` 和 `disable` 仍可使用；`run`、`enterWith`、snapshot、bind 和 AsyncResource 构造在需要原生能力时抛出 `ERR_NOT_SUPPORTED`，不会返回只在同步代码中有效的假上下文。
+
+V8 在编译时关闭该能力的情况下调用 `SetPromiseHooks` 会直接终止进程。两端原生入口均用 `V8_ENABLE_JAVASCRIPT_PROMISE_HOOKS` 编译条件保护，缺少能力时在进入该 API 前返回明确错误；本轮未修改全局 V8 编译选项，也未替换 Blink 的 isolate hooks。以下传播实现及行为测试为支持该能力的构建保留，不能据此宣称当前生产构建已经支持 ALS：
+
+- AsyncLocalStorage 使用 `v8::Context::SetPromiseHooks` 跟踪 Promise 与原生 `await`，在 reaction 前后恢复对应上下文；不通过覆盖 `Promise.then` 模拟，也不占用 Blink 已用于任务归属的 isolate continuation data。
+- 定时器、`queueMicrotask`、`process.nextTick` 保留注册时的上下文。独立 IPC 消息以新的根作用域执行，防止一次 `enterWith` 污染后续无关消息；通过 IPC 返回的 net socket/server 事件和 NAPI 回调则恢复所属资源或注册时的上下文。应用手工调用 EventEmitter 的 `emit` 仍使用当前调用者的作用域。
+- Promise 上下文保存在 WeakMap 中，实例使用独立键，不再用全局 Set 永久保留 AsyncLocalStorage 实例。`disable` 使旧异步帧中的 store 失效；snapshot、bind、嵌套作用域和异常退出均恢复调用前的状态。
+- AsyncResource 的作用域执行和 bind 使用实际捕获的上下文；尚未实现的 `createHook`、异步资源 ID/生命周期查询和 `emitDestroy` 明确 `ERR_NOT_SUPPORTED`。原生 Promise hooks 缺失或安装失败时，首次需要异步上下文的操作明确失败，不降级成仅同步保存 store 的实现。新 isolate 重建时重新初始化 hooks 安装状态。
+
+### 本轮范围与验证
+
+两个 bootstrap 本轮**未整体拆分为公共源码模块**，仍存在需要后续处理的重复实现。以上是明确问题及关联调用链的修复，不代表完整 Electron runtime、Node runtime 或全部 API 已受支持；其他限制仍以本文“明确的兼容边界”为准。
+
+| 本轮验证项 | 状态与范围 | 记录 |
+|---|---|---|
+| JS 契约回归 | **311/311，零跳过**；包括 Guest 隔离、模块身份、窗口属性、明确失败、原生桥传输；异步上下文用例通过 Node 的真实 V8 hooks 验证支持构建的实现，不代表当前生产 V8 具备该能力 | `out/bootstrap-contract-js.log` |
+| 原生 V8 与桥回归 | **144/144 通过**；包含 ALS 能力不足时安全拒绝、稳定错误码、8 项原生桥用例及 renderer 参数列表封装。await 能力用例只在支持构建编译；排除没有 Browser 窗口的两项商业应用 smoke，用下列实际应用复验覆盖启动 | `out/bootstrap-contract-native-tests.log`、`out/bootstrap-contract-native-results.json` |
+| 完整生产构建 | `ipc_main_container_unittests chrome` 完成，**退出码 0**；最新 DLL/EXE 已重新启动。运行验证限于本机 Windows，macOS/Linux 未在本机编译或运行 | `out/bootstrap-contract-final-build.log` |
+| TH 登录弹窗 | 主界面 SDK ready、账号初始化状态 2；点击登录后原生“迅雷登录”窗口出现、表单加载完成，用户确认“正常了”。此前重复 `setParentWindow(null)` 的失败已消除，本轮不把窗口恢复表述为重新完成扫码认证 | `out/bootstrap-contract-fix-20260916/th-final-acceptance.json`、`th-login-click.jsonl`；用户确认 |
+| PL-E 播放 | 本地受控测试视频播放成功，进度 **0 → 1062 ms**，画面 **320×180**，`errCode: 0`；未覆盖全部格式、网络视频或平台 | `out/bootstrap-contract-fix-20260916/ple-playback.jsonl` |
+| 实际运行契约与日志 | TH/PL-E 的 process 模块身份、ALS 能力不足报错、剪贴板不支持 buffer 报错、shell 缺失路径错误字符串均通过；两应用各启动一次、断连/fatal/N-API 失败均为 0 | `out/bootstrap-contract-fix-20260916/th-runtime-contract.jsonl`、`ple-runtime-contract.jsonl`、`final-log-summary.json` |
+
+实际日志仍有已知兼容诊断（例如未实现的 `webRequest.onBeforeRequest`、`nativeTheme.setCustomColor`、`app.setJumpList`），因此上述结论不是“零 JavaScript 错误”或所有 Electron API 可用。修复过程中另发现 renderer IPC 将请求包装为单元素列表、main 直接传对象的差异；共享桥现在同时校验这两种内部封装，并有原生回归覆盖。
+
+## OS 模块真实数据补齐（2026-09-16）
+
+此前 renderer 的 `os` 写死了 Windows 版本、主机名、用户名、CPU 型号/数量和总/可用内存；main 也存在 hostname 依赖环境变量、目录回退到应用目录和 POSIX type 大小写错误。这些属于适配缺陷，不能用“性能优化”解释为正确行为。
+
+- 两端统一通过 `PerformOsCall` 查询 libuv 系统接口，覆盖系统版本、机器类型、主机名、用户、CPU、内存、运行时间、负载和网卡。CPU 与可用内存等每次调用重新读取，不缓存成固定快照。
+- `os.platform()/arch()/endianness()` 使用共享的编译目标信息；renderer 同时修正 `process.platform/arch` 和默认 path 平台选择。元数据随已有 runtime config 提供，不增加启动同步 IPC，也不在 require 时枚举系统信息。
+- `homedir/tmpdir` 尊重调用侧环境变量；无覆盖时查询系统，移除应用目录兜底。`userInfo` 使用实际用户信息并支持 buffer 和字符串编码，保留原生 null shell。
+- `EOL/devNull` 按目标平台选择约定常量。Windows 的 uid/gid=-1、shell=null、loadavg=[0,0,0] 属于 Node/libuv 的平台约定，不是虚构系统状态。
+- 当前 libuv 1.43 缺少 `uv_available_parallelism`；优先级操作还缺少可信调用进程身份。这三个接口明确抛 `ERR_NOT_SUPPORTED`，不使用 CPU 数量冒充可用并行度，也不对 Browser 进程误操作。`os.constants` 尚未补齐。
+- 新增 OS 契约和原生查询回归。验证记录仅保存身份一致性布尔值，不输出真实用户名、主机名、主目录或网卡地址。
+
+本轮验证：JS **336/336**、常规 Native **152/152** 通过，最终 `chrome` 与测试目标链接成功。9222 实机对照 Node 原生查询，TH/PL-E 均返回真实 **32 个逻辑 CPU、约 63.74 GiB 总内存**，身份、路径与系统信息的相等性检查通过。Windows uptime 按内置 libuv 的整秒精度与新 Node 对照。TH SDK ready、账号初始化状态 2、登录弹窗可打开；PL-E 本地测试视频进度 **225→1064 ms**、320×180、错误码 0。记录位于 `out/os-contract-full-js-tests.log`、`out/os-contract-native-tests.log`、`out/os-contract-final-build.log` 和 `out/os-contract-fix-20260916/`。本轮未执行真实扫码登录，也未在 macOS/Linux 实机验证。
+
+接口语义参考 [Node OS 文档](https://nodejs.org/api/os.html)。`process.env` 当前仍是 JS 环境快照；删除其中的目录变量后，原生查询仍会看到继承的进程环境，尚不等同于修改真实进程环境。此修复不表示其他模块或 `process` 的所有兼容字段均已完成标准化。
+
+## TH 重启自动登录：二进制凭据持久化修复（2026-09-16）
+
+OS 修复后的实机验收暴露了此前未覆盖的“扫码成功后退出、再次启动自动登录”场景。启动日志已进入 autoSignIn，但在本地 `CredentialsManager.getCredentials` 返回 `unauthenticated/16`。OS 修改前的日志有相同错误；TH 设备标识、凭据加密和 Windows profiles 路径均不依赖本次修正的 hostname/release/userInfo。
+
+只读检查发现，当前账号对应的 `credentials2.credentials` 是长度 15 的 TEXT，内容为 `[object Object]`，并非 SDK 所需的加密 BLOB。此前扫码后的内存凭据可以使用，但重启从数据库恢复时无法解密。登录窗口可打开、SDK ready 和单次扫码成功均不足以证明自动登录可用。
+
+根因在通用 addon 二进制契约：
+
+- Renderer 参数包装将 Buffer/TypedArray 当普通对象枚举，丢失类型；返回值包装也有同类问题。
+- Native wire 将二进制统一恢复成 ArrayBuffer，无法保留 Buffer/TypedArray；main 的 JSON 中转不支持嵌套 BLOB。
+- `napi_is_buffer` 原先只认内部 Buffer 标记，和 Node 16/24 的 ArrayBufferView 判断不同。该错误还被旧单测中的错误期望掩盖。
+
+修复采用携带种类与活动范围字节的二进制 wire，覆盖同步、异步、嵌套值和回调；保留 Buffer、ArrayBuffer、DataView、各 TypedArray 的类型与字节内容，子视图不传出范围外字节。N-API 的 buffer 检查与取值按 Node 语义修正。用户数据库中的损坏凭据不自动删除、不切换其他账号；仅存下 `[object Object]` 的记录无法还原，需修复后重新登录生成有效凭据。
+
+回归使用固定公开测试字节，以及 TH 原有 CredentialsTableManager/DatabaseManager 在独立 `out` 测试库中执行 AES 保存、关闭、重开、解密；不复制真实凭据或调用认证接口。修复前两项实机探针均复现 TEXT 写入和重开恢复失败，记录位于 `out/os-contract-fix-20260916/sqlite-binary-before.jsonl`、`credential-persistence-before.jsonl`。
+
+修复后验证：JS **347/347**（零跳过）、常规 Native **158/158**、N-API **25/25** 通过，`chrome` 与两套测试目标构建成功。9222 新进程中，真实 SQLite addon 的 Buffer/TypedArray、子视图、空值均正确保存为 BLOB 并返回 Buffer；TH SDK 独立测试库保存后为 **240 字节 BLOB**，关闭重开后的解密及字段逐项比较全部通过。TH SDK ready、账号初始化状态 2、登录弹窗及 148×148 二维码正常显示；PL-E 测试视频进度 **330→1191 ms**，320×180、错误码 0。实测期间两个 Electron 容器均无断连、原生 fatal 或 N-API 调用失败。
+
+用户重新扫码后，真实账号当前凭据已存为 BLOB。退出浏览器后再次启动，**无需再次扫码即自动登录成功**：20:16:04.307 开始自动登录，20:16:05.280 发出登录成功通知，用时 **973 ms**；`isSignIn=true`、`isAutoLogin=true`、非匿名账号，主界面头像正常，当前账号凭据仍为 BLOB。仅检查类型、长度、状态等元数据，没有导出用户凭据。
+
+用户曾观察到扫码后延迟显示成功。该轮 `SIGNED_IN`（20:12:29.778）到界面成功通知（20:12:29.795）相隔 **17 ms**。延迟在该事件之前；源码显示这段流程包含设备授权轮询、用户信息请求及旧账号会话同步。由于没有采集手机确认时刻与各请求耗时，不能将本次延迟明确归因于网络、轮询或某一接口。
+
+记录：`out/th-autologin-binary-js.log`、`out/th-autologin-binary-native-tests.log`、`out/th-autologin-binary-napi-tests.log`、`out/th-autologin-binary-final-build.log`，以及 `out/th-autologin-binary-20260916/` 中的实机探针与结果。
+
+## Renderer bootstrap 增量优化（2026-09-16）
+
+本轮生产代码范围限定 `xenon_ipc_renderer_bootstrap.js`，保持现有模块身份和原生传输契约。
+
+- **包配置重复读取**：裸包名冷解析先检查 `exports`，后读取 `main`，此前会读取并解析同一份 `package.json` 两次。现在按规范文件路径在单次解析内复用结果；下一次解析、失败重试或删除 `require.cache` 后仍重新读取当前文件。配置缓存按需分配，直接文件加载不增加 Map。
+- **原生参数临时分配**：原始值、二进制、回调和原生句柄不需要遍历对象；现在仅递归数组或普通对象时分配 `seen Map`。保持每个顶层参数独立的遍历状态、二进制提交时快照及句柄保活时序。
+- **Buffer 契约缺口**：补齐 renderer `Buffer.isEncoding` 的 Node 编码别名、大小写和非字符串判断。TH 消息同步组件的真实 Writable 路径曾因此抛错并进入重试；离线加载其实际 bundle 可复现旧错误，并验证修复后的中文 UTF-8 写入。此修复不表示 MQTT 网络连接一定成功，也不表示其他尚缺失的 Buffer API 已补齐。
+
+可复现基准 `tools/benchmark_renderer_bootstrap.cjs` 使用完整 bootstrap 和仪表化传输：100 个独立包冷加载同步文件 IPC **1201→1101**（减少约 8.3%），其中 `package.json` 读取 **200→100**；1000 次重复加载两版均为 **0 额外文件 IPC**且保持同一导出引用。10000 次、每次 3 个原始值参数的同步 addon 调用，遍历 Map 分配 **30000→0**。这些是指定工作负载的调用与分配计数，不外推为 TH/PL-E 整体启动耗时或吞吐提升。
+
+新增回归先在旧实现上验证失败，再验证修复；覆盖包别名、删除缓存后更换入口、失败重试、同步/异步参数图及真实 TH Writable 消费路径。JS **355/355** 通过、零跳过，包含 GC 与真实 file-stream-rotator 回归。记录位于 `out/renderer-bootstrap-opt-20260916/`。
+
+生产资源重新打包成功，常规 Native **158/158** 通过。9222 新进程中 TH 自动登录成功，真实 SDK 独立测试库的保存、关闭、重开、解密及字段比较继续通过；TH/PL-E 的 `buffer`、`node:buffer` 与全局 Buffer 身份一致，`isEncoding` 实际可调用。PL-E 测试视频进度 **232→1061 ms**、320×180、错误码 0，用户也确认播放正常。验收日志中未再出现 `isEncoding is not a function`，两个 Electron 容器无断连、原生 fatal 或 N-API 调用失败；这不代表已修复日志里的其他既有 API 缺口。
+
 ## 验证方式
 
-### 当前结果（2026-09-16）
+### 上一轮结果（2026-09-16，Bootstrap 审查修复前）
 
-本节区分最新 JS/生产构建与此前 Native 专项验证。初次 TH 登录和崩溃恢复的汇总保留在 `out/th-ple-startup-check/th-ple-final-acceptance-20260916.json`；PL-E 7.1.35.173 与后续窗口修复的实际记录见下表。
+本节保留上一轮 JS/生产构建与此前 Native 专项验证，不作为上述 Bootstrap 审查修复后的验证结果。初次 TH 登录和崩溃恢复的汇总保留在 `out/th-ple-startup-check/th-ple-final-acceptance-20260916.json`；PL-E 7.1.35.173 与后续窗口修复的实际记录见下表。
 
 | 验证项 | 结果与范围 | 记录 |
 |---|---|---|

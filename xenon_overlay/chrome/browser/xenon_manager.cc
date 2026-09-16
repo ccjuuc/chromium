@@ -22,6 +22,7 @@
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_app_runtime.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_api_bridge.h"
 #include "xenon_overlay/chrome/browser/napi/napi_switches.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
 #include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
@@ -663,6 +664,17 @@ void XenonManager::ElectronWindowCall(int32_t window_id,
                                       const std::string& command,
                                       base::Value arguments,
                                       ElectronWindowCallCallback callback) {
+  if (window_id == 0 && command == "electron-api") {
+    ipc::CallElectronApi(
+        std::move(arguments),
+        base::BindOnce(
+            [](ElectronWindowCallCallback callback,
+               ipc::mojom::IpcResultPtr reply) {
+              std::move(callback).Run(std::move(reply->value), reply->error);
+            },
+            std::move(callback)));
+    return;
+  }
   base::Value result;
   std::string error;
   XenonElectronWindowHost::GetInstance()->Call(

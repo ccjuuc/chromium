@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -210,6 +211,13 @@ const mojom::NodeExportInfo* FindExportChild(
   return FindExportChild(description.children, name);
 }
 
+base::Value BinaryWire(std::string kind, base::Value::BlobStorage bytes = {}) {
+  return base::Value(base::DictValue()
+                         .Set("__xenon_node_wire_type__", "binary")
+                         .Set("kind", std::move(kind))
+                         .Set("value", base::Value(std::move(bytes))));
+}
+
 class XenonNodePromiseTest : public testing::Test {
  protected:
   void SetUp() override {
@@ -296,6 +304,116 @@ class XenonNodePromiseTest : public testing::Test {
   std::unique_ptr<XenonNodeExecutor> executor_;
   std::string addon_path_;
 };
+
+TEST_F(XenonNodePromiseTest, BinaryWirePreservesEveryViewKindAndEmptyValues) {
+  const char* kinds[] = {
+      "Buffer",       "ArrayBuffer",       "DataView",       "Int8Array",
+      "Uint8Array",   "Uint8ClampedArray", "Int16Array",     "Uint16Array",
+      "Int32Array",   "Uint32Array",       "Float16Array",   "Float32Array",
+      "Float64Array", "BigInt64Array",     "BigUint64Array",
+  };
+  for (const char* kind : kinds) {
+    SCOPED_TRACE(kind);
+    for (bool empty : {false, true}) {
+      const base::Value::BlobStorage bytes =
+          empty ? base::Value::BlobStorage()
+                : base::Value::BlobStorage{0, 1, 2, 3, 128, 129, 254, 255};
+      auto binary = BinaryWire(kind, bytes);
+      base::ListValue args;
+      args.Append(binary.Clone());
+      EXPECT_EQ(binary, CallSync("EchoOwnedHandle", std::move(args)));
+
+      base::ListValue view_args;
+      view_args.Append(binary.Clone());
+      auto result = CallSync("BinaryEcho", std::move(view_args));
+      ASSERT_TRUE(result.is_dict());
+      EXPECT_EQ(result.GetDict().FindInt("byteLength"),
+                static_cast<int>(bytes.size()));
+      EXPECT_EQ(result.GetDict().FindInt("checksum"), empty ? 0 : 772);
+      EXPECT_EQ(result.GetDict().FindBool("isBuffer"),
+                std::string_view(kind) != "ArrayBuffer");
+      const auto* copy = result.GetDict().Find("copy");
+      ASSERT_TRUE(copy);
+      EXPECT_EQ(*copy, BinaryWire("Buffer", bytes));
+    }
+  }
+}
+
+TEST_F(XenonNodePromiseTest, NestedBinaryWireAndLegacyRawBytesRoundTrip) {
+  base::ListValue items;
+  items.Append(BinaryWire("Uint16Array", {0, 128, 254, 255}));
+  items.Append(BinaryWire("Buffer", {0, 1, 255}));
+  items.Append(BinaryWire("DataView"));
+  base::Value nested(base::DictValue().Set("payload", std::move(items)));
+  base::ListValue args;
+  args.Append(nested.Clone());
+  EXPECT_EQ(nested, CallOwned("EchoOwnedHandle", 1, std::move(args)));
+
+  base::ListValue legacy_args;
+  legacy_args.Append(base::Value(base::Value::BlobStorage{1, 2, 255}));
+  EXPECT_EQ(BinaryWire("ArrayBuffer", {1, 2, 255}),
+            CallSync("EchoOwnedHandle", std::move(legacy_args)));
+}
+
+TEST_F(XenonNodePromiseTest,
+       BinarySubviewsKeepActiveBytesInReturnsAndCallbacks) {
+  base::Value expected(
+      base::DictValue()
+          .Set("uint8", BinaryWire("Uint8Array", {2, 3, 4}))
+          .Set("uint16", BinaryWire("Uint16Array", {2, 3, 4, 5}))
+          .Set("dataView", BinaryWire("DataView", {3, 4, 5}))
+          .Set("empty", BinaryWire("Uint8Array"))
+          .Set("buffer", BinaryWire("Buffer", {2, 3, 4})));
+  EXPECT_EQ(expected, CallSync("BinarySubViews"));
+  std::vector<base::Value> callback_args;
+  executor_->SetCallbackHandlers(
+      base::BindRepeating(
+          [](std::vector<base::Value>* output, int32_t client_id,
+             int32_t callback_id, std::vector<base::Value> args, base::Value) {
+            EXPECT_EQ(-11, client_id);
+            EXPECT_EQ(7, callback_id);
+            *output = std::move(args);
+          },
+          &callback_args),
+      {});
+  std::vector<mojom::NodeInvokeArgPtr> args;
+  auto callback = mojom::NodeInvokeArg::New();
+  callback->is_callback = true;
+  callback->callback_id = 7;
+  args.push_back(std::move(callback));
+  InvokeFuture result;
+  executor_->InvokeFunction(addon_path_, "BinarySubViews", -11, std::move(args),
+                            result.GetCallback(), false, {}, 1);
+  ASSERT_TRUE(result.Get<0>()) << result.Get<3>();
+  EXPECT_EQ(expected, result.Get<1>());
+  ASSERT_EQ(1u, callback_args.size());
+  EXPECT_EQ(expected, callback_args[0]);
+}
+
+TEST_F(XenonNodePromiseTest, MalformedBinaryWireFailsBeforeNativeInvocation) {
+  base::ListValue invalid;
+  invalid.Append(BinaryWire("SharedArrayBuffer", {1}));
+  invalid.Append(BinaryWire("UnknownTypedArray", {1}));
+  invalid.Append(BinaryWire("Uint16Array", {1}));
+  invalid.Append(BinaryWire("Float64Array", {1, 2, 3, 4}));
+  invalid.Append(base::DictValue()
+                     .Set("__xenon_node_wire_type__", "binary")
+                     .Set("value", base::Value(base::Value::BlobStorage{1})));
+  invalid.Append(base::DictValue()
+                     .Set("__xenon_node_wire_type__", "binary")
+                     .Set("kind", "Buffer")
+                     .Set("value", base::ListValue().Append(1)));
+  for (auto& value : invalid) {
+    base::ListValue args;
+    args.Append(std::move(value));
+    base::Value result;
+    std::string error;
+    EXPECT_FALSE(executor_->InvokeExportFromCurrentThread(
+        addon_path_, "EchoOwnedHandle", base::Value(std::move(args)), &result,
+        &error));
+    EXPECT_NE(error.find("binary"), std::string::npos) << error;
+  }
+}
 
 TEST_F(XenonNodePromiseTest,
        PendingInvocationExecutesOnceAndPreservesSyncCalls) {

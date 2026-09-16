@@ -246,21 +246,34 @@ napi_value BinaryEcho(napi_env env, napi_callback_info info) {
 
   void* data = nullptr;
   size_t byte_length = 0;
+  bool is_arraybuffer = false;
+  bool is_buffer = false;
+  if (argc > 0) {
+    napi_is_arraybuffer(env, argv[0], &is_arraybuffer);
+    napi_is_buffer(env, argv[0], &is_buffer);
+  }
   if (argc == 0 ||
-      napi_get_buffer_info(env, argv[0], &data, &byte_length) != napi_ok) {
+      (is_arraybuffer
+           ? napi_get_arraybuffer_info(env, argv[0], &data, &byte_length)
+           : napi_get_buffer_info(env, argv[0], &data, &byte_length)) !=
+          napi_ok) {
     napi_throw_type_error(env, "ERR_XENON_BINARY",
                           "BinaryEcho expects an ArrayBuffer or Buffer");
     return nullptr;
   }
 
   uint32_t checksum = 0;
-  for (uint8_t byte : UNSAFE_BUFFERS(base::span(
-           static_cast<const uint8_t*>(data), byte_length))) {
+  for (uint8_t byte : UNSAFE_BUFFERS(
+           base::span(static_cast<const uint8_t*>(data), byte_length))) {
     checksum += byte;
   }
 
   napi_value result;
   napi_create_object(env, &result);
+
+  napi_value js_is_buffer;
+  napi_get_boolean(env, is_buffer, &js_is_buffer);
+  napi_set_named_property(env, result, "isBuffer", js_is_buffer);
 
   napi_value js_byte_length;
   napi_create_uint32(env, static_cast<uint32_t>(byte_length), &js_byte_length);
@@ -274,6 +287,44 @@ napi_value BinaryEcho(napi_env env, napi_callback_info info) {
   napi_create_buffer_copy(env, byte_length, data, nullptr, &copy);
   napi_set_named_property(env, result, "copy", copy);
 
+  return result;
+}
+
+napi_value BinarySubViews(napi_env env, napi_callback_info info) {
+  napi_value backing;
+  void* storage = nullptr;
+  if (napi_create_arraybuffer(env, 10, &storage, &backing) != napi_ok) {
+    return nullptr;
+  }
+  auto bytes = UNSAFE_BUFFERS(base::span(static_cast<uint8_t*>(storage), 10u));
+  for (size_t i = 0; i < bytes.size(); ++i) {
+    bytes[i] = static_cast<uint8_t>(i);
+  }
+  napi_value result;
+  napi_create_object(env, &result);
+  napi_value view;
+  napi_create_typedarray(env, napi_uint8_array, 3, backing, 2, &view);
+  napi_set_named_property(env, result, "uint8", view);
+  napi_create_typedarray(env, napi_uint16_array, 2, backing, 2, &view);
+  napi_set_named_property(env, result, "uint16", view);
+  napi_create_dataview(env, 3, backing, 3, &view);
+  napi_set_named_property(env, result, "dataView", view);
+  napi_create_typedarray(env, napi_uint8_array, 0, backing, 5, &view);
+  napi_set_named_property(env, result, "empty", view);
+  napi_create_buffer_copy(env, 3, bytes.subspan(2u, 3u).data(), nullptr, &view);
+  napi_set_named_property(env, result, "buffer", view);
+
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc == 1) {
+    napi_value undefined;
+    napi_get_undefined(env, &undefined);
+    if (napi_call_function(env, undefined, argv[0], 1, &result, nullptr) !=
+        napi_ok) {
+      return nullptr;
+    }
+  }
   return result;
 }
 
@@ -928,6 +979,8 @@ extern "C" napi_value Init(napi_env env, napi_value exports) {
       {"InspectTypes", nullptr, InspectTypes, nullptr, nullptr, nullptr,
        napi_default, nullptr},
       {"BinaryEcho", nullptr, BinaryEcho, nullptr, nullptr, nullptr,
+       napi_default, nullptr},
+      {"BinarySubViews", nullptr, BinarySubViews, nullptr, nullptr, nullptr,
        napi_default, nullptr},
       {"PromiseValue", nullptr, PromiseValue, nullptr, nullptr, nullptr,
        napi_default, nullptr},

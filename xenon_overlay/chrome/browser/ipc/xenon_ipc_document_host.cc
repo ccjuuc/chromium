@@ -25,6 +25,7 @@
 #include "net/base/filename_util.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "url/origin.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_api_bridge.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_guest.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_file_system_bridge.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_network_request_bridge.h"
@@ -313,6 +314,10 @@ void XenonIpcDocumentHost::Invoke(const std::string& channel,
     std::move(callback).Run(UnavailableResult());
     return;
   }
+  if (channel == "__xenon:electron-api") {
+    CallElectronApi(std::move(arguments), std::move(callback));
+    return;
+  }
   if (channel == "__xenon:fs") {
     base::ThreadPool::PostTaskAndReplyWithResult(
         FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
@@ -363,10 +368,30 @@ void XenonIpcDocumentHost::SendSync(const std::string& channel,
     arguments = base::Value(
         base::ListValue().Append(render_frame_host().IsInPrimaryMainFrame()));
   }
+  if (channel == "__xenon:electron-api") {
+    CallElectronApi(std::move(arguments), std::move(callback));
+    return;
+  }
   if (channel == "__xenon:os-network-interfaces") {
     base::ThreadPool::PostTaskAndReplyWithResult(
         FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
         base::BindOnce(&GetNetworkInterfaces), std::move(callback));
+    return;
+  }
+  if (channel == "__xenon:os") {
+    if (!arguments.is_list() || arguments.GetList().size() != 1 ||
+        !arguments.GetList().front().is_dict()) {
+      auto result = xenon::ipc::mojom::IpcResult::New();
+      result->success = false;
+      result->error =
+          "ERR_INVALID_ARG_TYPE: os call expects one request object";
+      std::move(callback).Run(std::move(result));
+      return;
+    }
+    base::Value request = std::move(arguments.GetList().front());
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+        base::BindOnce(&PerformOsCall, std::move(request)), std::move(callback));
     return;
   }
   if (channel == "__xenon:fs") {

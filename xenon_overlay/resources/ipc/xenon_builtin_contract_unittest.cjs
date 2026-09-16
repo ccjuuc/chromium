@@ -12,6 +12,7 @@ const vm = require('node:vm');
 
 function createRuntime(kind, invoke) {
   const context = vm.createContext({
+    __xenonPaths: {platform: 'win32', arch: 'x64', endianness: 'LE'},
     TextEncoder, TextDecoder, URL, URLSearchParams, queueMicrotask,
     setTimeout, clearTimeout, setInterval, clearInterval, atob, btoa,
     console: {log() {}, warn() {}, error() {}},
@@ -23,7 +24,7 @@ function createRuntime(kind, invoke) {
       sendSync() { throw new Error('Unexpected native call'); },
       invoke,
     },
-    __xenonPlatform: 'win32', __xenonArch: 'x64', __xenonOsRelease: '10.0',
+    __xenonPlatform: 'win32', __xenonArch: 'x64', __xenonEndianness: 'LE', __xenonOsRelease: '10.0',
     __xenonAppPath: 'C:\\fixture', __xenonRendererBaseUrl: '',
     __xenonRendererUrlMappings: [], __xenonAppName: 'fixture',
     __xenonAppVersion: '1', __xenonUserAgent: '',

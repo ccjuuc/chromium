@@ -1217,16 +1217,87 @@ bool XenonElectronWindowHost::Call(int32_t window_id,
     widget->SetOpacity(static_cast<float>(std::clamp(value, 0.0, 1.0)));
     return true;
   }
-#if BUILDFLAG(IS_WIN)
-  HWND hwnd = views::HWNDForWidget(widget);
-  if (command == "set-always-on-top") {
-    const bool value = options && options->FindBool("value").value_or(false);
-    if (hwnd) {
-      ::SetWindowPos(hwnd, value ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  if (command == "set-parent-window") {
+    const std::optional<int> parent_id =
+        options ? options->FindInt("parentId") : std::nullopt;
+    if (!parent_id || *parent_id < 0) {
+      *error = "set-parent-window expects a valid parentId";
+      return false;
     }
+    // Desktop widgets retain their own platform window when reparented. The
+    // non-desktop Aura implementation reparents the view hierarchy instead,
+    // which is not Electron's top-level owner/transient relationship.
+    if (!widget->is_top_level() || !widget->GetIsDesktopWidget()) {
+      *error =
+          "ERR_NOT_SUPPORTED: BrowserWindow parenting requires desktop "
+          "widgets";
+      return false;
+    }
+    views::Widget* parent_widget = nullptr;
+    if (*parent_id > 0) {
+      const auto parent = windows_.find(*parent_id);
+      if (parent == windows_.end() || !parent->second.widget ||
+          parent->second.container_id != entry.container_id) {
+        *error = "BrowserWindow parent is unavailable";
+        return false;
+      }
+      for (int id = *parent_id; id > 0;) {
+        if (id == window_id) {
+          *error = "BrowserWindow parent cycle";
+          return false;
+        }
+        auto ancestor = windows_.find(id);
+        id = ancestor == windows_.end() ? 0 : ancestor->second.parent_id;
+      }
+      parent_widget = parent->second.widget;
+      if (!parent_widget->is_top_level() ||
+          !parent_widget->GetIsDesktopWidget()) {
+        *error =
+            "ERR_NOT_SUPPORTED: BrowserWindow parent must be a desktop "
+            "widget";
+        return false;
+      }
+    }
+    // Reuse-window clients routinely repeat null -> null. Reparent only when
+    // Views' actual owner changes, preserving native ownership and focus state.
+    if (widget->parent() != parent_widget) {
+      widget->Reparent(parent_widget);
+    }
+    // Reparent notifies the widget hierarchy; callbacks can destroy a window.
+    auto updated = windows_.find(window_id);
+    if (updated == windows_.end() || !updated->second.widget) {
+      *error = "BrowserWindow was destroyed while changing its parent";
+      return false;
+    }
+    updated->second.parent_id = *parent_id;
+    // Reparenting a regular transparent popup must not turn it into a player
+    // overlay: its bounds must remain independent of its new owner.
+    updated->second.sync_bounds_with_parent =
+        updated->second.sync_bounds_with_parent && *parent_id > 0;
     return true;
   }
+  if (command == "move-top") {
+    widget->StackAtTop();
+    return true;
+  }
+  if (command == "is-always-on-top") {
+    *result = base::Value(widget->GetZOrderLevel() != ui::ZOrderLevel::kNormal);
+    return true;
+  }
+  if (command == "set-progress-bar") {
+    *error =
+        "ERR_NOT_SUPPORTED: BrowserWindow taskbar progress has no "
+        "cross-platform Widget implementation";
+    return false;
+  }
+  if (command == "set-always-on-top") {
+    const bool value = options && options->FindBool("value").value_or(false);
+    widget->SetZOrderLevel(value ? ui::ZOrderLevel::kFloatingWindow
+                                 : ui::ZOrderLevel::kNormal);
+    return true;
+  }
+#if BUILDFLAG(IS_WIN)
+  HWND hwnd = views::HWNDForWidget(widget);
   if (command == "set-enabled") {
     const bool value = options && options->FindBool("value").value_or(false);
     if (hwnd) {

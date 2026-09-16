@@ -1187,6 +1187,156 @@ base::Value MakeTaggedWireValue(const std::string& type, base::Value value) {
   return base::Value(std::move(dict));
 }
 
+template <typename T>
+v8::Local<v8::Value> CreateBinaryTypedArray(v8::Local<v8::ArrayBuffer> buffer,
+                                            size_t length) {
+  return T::New(buffer, 0, length).template As<v8::Value>();
+}
+
+struct BinaryArrayType {
+  std::string_view name;
+  size_t element_size;
+  v8::Local<v8::Value> (*create)(v8::Local<v8::ArrayBuffer>, size_t);
+};
+
+constexpr BinaryArrayType kBinaryArrayTypes[] = {
+    {"Int8Array", 1, &CreateBinaryTypedArray<v8::Int8Array>},
+    {"Uint8Array", 1, &CreateBinaryTypedArray<v8::Uint8Array>},
+    {"Uint8ClampedArray", 1, &CreateBinaryTypedArray<v8::Uint8ClampedArray>},
+    {"Int16Array", 2, &CreateBinaryTypedArray<v8::Int16Array>},
+    {"Uint16Array", 2, &CreateBinaryTypedArray<v8::Uint16Array>},
+    {"Int32Array", 4, &CreateBinaryTypedArray<v8::Int32Array>},
+    {"Uint32Array", 4, &CreateBinaryTypedArray<v8::Uint32Array>},
+    {"Float16Array", 2, &CreateBinaryTypedArray<v8::Float16Array>},
+    {"Float32Array", 4, &CreateBinaryTypedArray<v8::Float32Array>},
+    {"Float64Array", 8, &CreateBinaryTypedArray<v8::Float64Array>},
+    {"BigInt64Array", 8, &CreateBinaryTypedArray<v8::BigInt64Array>},
+    {"BigUint64Array", 8, &CreateBinaryTypedArray<v8::BigUint64Array>},
+};
+
+std::string BinaryValueKind(v8::Local<v8::Context> context,
+                            v8::Local<v8::Value> value) {
+  if (value->IsArrayBuffer()) {
+    return "ArrayBuffer";
+  }
+  if (v8impl::IsMarkedBuffer(context, value)) {
+    return "Buffer";
+  }
+  if (value->IsDataView()) {
+    return "DataView";
+  }
+  if (value->IsInt8Array()) {
+    return "Int8Array";
+  }
+  if (value->IsUint8Array()) {
+    return "Uint8Array";
+  }
+  if (value->IsUint8ClampedArray()) {
+    return "Uint8ClampedArray";
+  }
+  if (value->IsInt16Array()) {
+    return "Int16Array";
+  }
+  if (value->IsUint16Array()) {
+    return "Uint16Array";
+  }
+  if (value->IsInt32Array()) {
+    return "Int32Array";
+  }
+  if (value->IsUint32Array()) {
+    return "Uint32Array";
+  }
+  if (value->IsFloat16Array()) {
+    return "Float16Array";
+  }
+  if (value->IsFloat32Array()) {
+    return "Float32Array";
+  }
+  if (value->IsFloat64Array()) {
+    return "Float64Array";
+  }
+  if (value->IsBigInt64Array()) {
+    return "BigInt64Array";
+  }
+  if (value->IsBigUint64Array()) {
+    return "BigUint64Array";
+  }
+  return {};
+}
+
+v8::MaybeLocal<v8::ArrayBuffer> BlobToArrayBuffer(
+    v8::Isolate* isolate,
+    const base::Value::BlobStorage& blob,
+    std::string* error_msg) {
+  if (blob.size() > v8::ArrayBuffer::kMaxByteLength) {
+    *error_msg = "Binary argument exceeds the V8 ArrayBuffer size limit";
+    return {};
+  }
+  auto backing_store = v8::ArrayBuffer::NewBackingStore(
+      isolate, blob.size(), v8::BackingStoreInitializationMode::kUninitialized,
+      v8::BackingStoreOnFailureMode::kReturnNull);
+  if (!backing_store) {
+    *error_msg = "Failed to allocate binary argument";
+    return {};
+  }
+  if (!blob.empty()) {
+    // SAFETY: BackingStore size equals blob.size(); Data() is writable for
+    // that many bytes.
+    UNSAFE_BUFFERS(
+        base::span(static_cast<uint8_t*>(backing_store->Data()), blob.size()))
+        .copy_from(base::as_byte_span(blob));
+  }
+  return v8::ArrayBuffer::New(isolate, std::move(backing_store));
+}
+
+v8::MaybeLocal<v8::Value> BinaryWireValueToV8(v8::Isolate* isolate,
+                                              v8::Local<v8::Context> context,
+                                              const base::DictValue& dict,
+                                              const base::Value& payload,
+                                              std::string* error_msg) {
+  const std::string* kind = dict.FindString("kind");
+  if (!kind || !payload.is_blob()) {
+    *error_msg = "Tagged binary argument requires a kind and binary value";
+    return {};
+  }
+  const BinaryArrayType* array_type = nullptr;
+  for (const auto& type : kBinaryArrayTypes) {
+    if (*kind == type.name) {
+      array_type = &type;
+      break;
+    }
+  }
+  if (!array_type && *kind != "ArrayBuffer" && *kind != "DataView" &&
+      *kind != "Buffer") {
+    *error_msg = "Unknown Xenon Node binary kind: " + *kind;
+    return {};
+  }
+  const auto& blob = payload.GetBlob();
+  if (array_type && blob.size() % array_type->element_size != 0) {
+    *error_msg = "Tagged binary argument has a misaligned byte length";
+    return {};
+  }
+  v8::Local<v8::ArrayBuffer> buffer;
+  if (!BlobToArrayBuffer(isolate, blob, error_msg).ToLocal(&buffer)) {
+    return {};
+  }
+  if (*kind == "ArrayBuffer") {
+    return buffer.As<v8::Value>();
+  }
+  if (*kind == "DataView") {
+    return v8::DataView::New(buffer, 0, blob.size()).As<v8::Value>();
+  }
+  if (*kind == "Buffer") {
+    auto view = v8::Uint8Array::New(buffer, 0, blob.size());
+    if (!v8impl::MarkBuffer(context, view)) {
+      *error_msg = "Failed to mark native Buffer argument";
+      return {};
+    }
+    return view.As<v8::Value>();
+  }
+  return array_type->create(buffer, blob.size() / array_type->element_size);
+}
+
 std::optional<base::Value> V8ValueToBaseValue(v8::Isolate* isolate,
                                               v8::Local<v8::Context> context,
                                               v8::Local<v8::Value> value,
@@ -1242,19 +1392,33 @@ std::optional<base::Value> V8ValueToBaseValue(v8::Isolate* isolate,
     v8::String::Utf8Value string(isolate, value);
     return base::Value(std::string(*string ? *string : ""));
   }
-  if (value->IsArrayBuffer()) {
-    v8::Local<v8::ArrayBuffer> array_buffer = value.As<v8::ArrayBuffer>();
-    return V8ArrayBufferToBaseValue(array_buffer, 0,
-                                    array_buffer->ByteLength());
+  if (value->IsArrayBuffer() || value->IsArrayBufferView()) {
+    const std::string kind = BinaryValueKind(context, value);
+    if (kind.empty()) {
+      *error_msg = "Native export returned an unsupported binary view";
+      return std::nullopt;
+    }
+    std::optional<base::Value> bytes;
+    if (value->IsArrayBuffer()) {
+      auto buffer = value.As<v8::ArrayBuffer>();
+      bytes = V8ArrayBufferToBaseValue(buffer, 0, buffer->ByteLength());
+    } else {
+      auto view = value.As<v8::ArrayBufferView>();
+      bytes = V8ArrayBufferToBaseValue(view->Buffer(), view->ByteOffset(),
+                                       view->ByteLength());
+    }
+    auto result = MakeTaggedWireValue("binary", std::move(*bytes));
+    result.GetDict().Set("kind", kind);
+    return result;
   }
-  if (value->IsArrayBufferView()) {
-    v8::Local<v8::ArrayBufferView> view = value.As<v8::ArrayBufferView>();
-    return V8ArrayBufferToBaseValue(view->Buffer(), view->ByteOffset(),
-                                    view->ByteLength());
+  if (value->IsSharedArrayBuffer()) {
+    *error_msg = "SharedArrayBuffer cannot cross the Xenon Node wire";
+    return std::nullopt;
   }
   if (value->IsFunction()) {
-    *error_msg = "Native export returned a function, which cannot cross the "
-                 "Xenon Node wire";
+    *error_msg =
+        "Native export returned a function, which cannot cross the "
+        "Xenon Node wire";
     return std::nullopt;
   }
   if (value->IsArray()) {
@@ -1408,18 +1572,13 @@ v8::MaybeLocal<v8::Value> BaseValueToV8Value(v8::Isolate* isolate,
       return string.As<v8::Value>();
     }
     case base::Value::Type::BINARY: {
-      const base::Value::BlobStorage& blob = value.GetBlob();
-      std::unique_ptr<v8::BackingStore> backing_store =
-          v8::ArrayBuffer::NewBackingStore(isolate, blob.size());
-      if (!blob.empty()) {
-        // SAFETY: BackingStore size equals blob.size(); Data() is writable for
-        // that many bytes.
-        UNSAFE_BUFFERS(base::span(static_cast<uint8_t*>(backing_store->Data()),
-                                  blob.size()))
-            .copy_from(base::as_byte_span(blob));
+      // Legacy raw binary callers retain their ArrayBuffer interpretation.
+      v8::Local<v8::ArrayBuffer> buffer;
+      if (!BlobToArrayBuffer(isolate, value.GetBlob(), error_msg)
+               .ToLocal(&buffer)) {
+        return {};
       }
-      return v8::ArrayBuffer::New(isolate, std::move(backing_store))
-          .As<v8::Value>();
+      return buffer.As<v8::Value>();
     }
     case base::Value::Type::LIST: {
       const base::ListValue& list = value.GetList();
@@ -1456,6 +1615,11 @@ v8::MaybeLocal<v8::Value> BaseValueToV8Value(v8::Isolate* isolate,
         if (!payload) {
           *error_msg = "Tagged argument is missing its value";
           return v8::MaybeLocal<v8::Value>();
+        }
+
+        if (*wire_type == "binary") {
+          return BinaryWireValueToV8(isolate, context, dict, *payload,
+                                     error_msg);
         }
 
         if (*wire_type == "number") {

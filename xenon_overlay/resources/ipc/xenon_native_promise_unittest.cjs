@@ -47,7 +47,9 @@ function renderer(overrides) {
       throw new Error('A native operation must not be invoked a second time');
     },
   };
-  const context = vm.createContext({xenonIpcRenderer: transport,
+  const context = vm.createContext({
+    __xenonPaths: {platform: 'win32', arch: 'x64', endianness: 'LE'},
+    xenonIpcRenderer: transport,
     TextEncoder, TextDecoder, URL, URLSearchParams, queueMicrotask, atob, btoa,
     location: {protocol: 'chrome:', hostname: 'xenon-player-electron', search: ''},
     console: {log() {}, warn() {}, error() {}},

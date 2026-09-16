@@ -505,5 +505,143 @@ TEST_F(XenonIpcModuleLoaderTest, NativeRootFunctionCallsTheActualRoot) {
                std::move(hooks));
 }
 
+TEST_F(XenonIpcModuleLoaderTest, NativeForwarderPreservesNestedBinaryKinds) {
+  WriteModule("binary.node", "loaded by the test hook");
+  int binary_calls = 0;
+  XenonIpcMainContainer::NativeAddonHooks hooks;
+  hooks.load = base::BindRepeating(
+      [](const std::string&, std::string*) { return true; });
+  hooks.describe = base::BindRepeating(
+      [](const std::string&, const std::string&, base::Value* description,
+         std::string*) {
+        *description = base::Value(base::DictValue().Set("kind", "function"));
+        return true;
+      });
+  hooks.invoke = base::BindRepeating(
+      [](int* calls, const std::string&, const std::string&,
+         const base::Value& args, base::Value* result, std::string*) {
+        ++*calls;
+        const auto& row = args.GetList()[0].GetDict();
+        const auto* binary = row.FindDict("data");
+        EXPECT_NE(binary, nullptr);
+        if (!binary) {
+          return false;
+        }
+        EXPECT_EQ(*binary->FindString("__xenon_node_wire_type__"), "binary");
+        EXPECT_EQ(*binary->FindString("kind"), *row.FindString("kind"));
+        const auto* bytes = binary->Find("value");
+        EXPECT_TRUE(bytes && bytes->is_blob());
+        if (!bytes || !bytes->is_blob()) {
+          return false;
+        }
+        EXPECT_EQ(bytes->GetBlob().size(),
+                  static_cast<size_t>(*row.FindInt("byteLength")));
+        EXPECT_EQ(row.FindList("nested")->front().GetDict().Find("data")
+                      ->GetDict().Find("value")->GetBlob(),
+                  bytes->GetBlob());
+        *result = args.GetList()[0].Clone();
+        return true;
+      },
+      &binary_calls);
+  ExpectScript(R"JS(
+    const echo = require('./binary.node');
+    const names = ['Int8Array', 'Uint8Array', 'Uint8ClampedArray',
+      'Int16Array', 'Uint16Array', 'Int32Array', 'Uint32Array',
+      'Float16Array', 'Float32Array', 'Float64Array', 'BigInt64Array', 'BigUint64Array'];
+    const samples = [
+      ['Buffer', Buffer.from([91, 11, 22, 92]).subarray(1, 3)],
+      ['Buffer', Buffer.alloc(0)],
+      ['ArrayBuffer', new Uint8Array([11, 22]).buffer],
+      ['ArrayBuffer', new ArrayBuffer(0)],
+      ['DataView', new DataView(new Uint8Array([91, 11, 22, 92]).buffer, 1, 2)],
+      ['DataView', new DataView(new ArrayBuffer(0))],
+    ];
+    for (const name of names) {
+      const Type = globalThis[name];
+      if (typeof Type !== 'function') continue;
+      const source = new Type(4);
+      source[1] = name.startsWith('Big') ? 11n : 11;
+      source[2] = name.startsWith('Big') ? 22n : 22;
+      samples.push([name, source.subarray(1, 3)], [name, new Type(0)]);
+    }
+    const bytes = value => value instanceof ArrayBuffer ? new Uint8Array(value) :
+        new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    for (const [kind, data] of samples) {
+      const row = echo({kind, byteLength: data.byteLength, data, nested: [{data}]});
+      for (const actual of [row.data, row.nested[0].data]) {
+        if (kind === 'Buffer' ? !Buffer.isBuffer(actual) :
+            !(actual instanceof globalThis[kind]) || Buffer.isBuffer(actual)) return false;
+        if (actual.byteLength !== data.byteLength ||
+            actual === data || actual.buffer === data.buffer && !(data instanceof ArrayBuffer)) return false;
+        if (bytes(actual).some((byte, index) => byte !== bytes(data)[index])) return false;
+        const backing = actual instanceof ArrayBuffer ? actual : actual.buffer;
+        if (backing.byteLength !== actual.byteLength) return false;
+      }
+    }
+    return true;
+  )JS",
+               std::move(hooks));
+  EXPECT_GE(binary_calls, 28);
+}
+
+TEST_F(XenonIpcModuleLoaderTest,
+       NativeForwarderPreservesConstructorAndInstanceBinary) {
+  WriteModule("binary-class.node", "loaded by the test hook");
+  XenonIpcMainContainer::NativeAddonHooks hooks;
+  hooks.load = base::BindRepeating(
+      [](const std::string&, std::string*) { return true; });
+  hooks.describe = base::BindRepeating(
+      [](const std::string&, const std::string&, base::Value* description,
+         std::string*) {
+        *description = base::Value(base::DictValue().Set("kind", "class"));
+        return true;
+      });
+  hooks.construct = base::BindRepeating(
+      [](const std::string&, const std::string&, const base::Value& args,
+         base::Value* instance, std::string*) {
+        const auto& payload = args.GetList()[0];
+        EXPECT_TRUE(payload.GetDict().Find("value")->is_blob());
+        *instance = base::Value(
+            base::DictValue()
+                .Set("__xenon_node_wire_type__", "native_instance")
+                .Set("instance_id", 23)
+                .Set("fields", base::DictValue().Set("payload", payload.Clone()))
+                .Set("prototype",
+                     base::ListValue().Append(base::DictValue()
+                                                  .Set("name", "echo")
+                                                  .Set("kind", "function"))));
+        return true;
+      });
+  hooks.invoke_instance = base::BindRepeating(
+      [](const std::string&, int32_t id, const std::string& method,
+         const base::Value& args, base::Value* result, std::string*) {
+        EXPECT_EQ(id, 23);
+        EXPECT_EQ(method, "echo");
+        const auto& row = args.GetList()[0].GetDict();
+        EXPECT_TRUE(row.FindDict("__proto__")->FindDict("data")
+                        ->Find("value")->is_blob());
+        *result = args.GetList()[0].Clone();
+        return true;
+      });
+  ExpectScript(R"JS(
+    const Binary = require('./binary-class.node');
+    const instance = new Binary(Buffer.from([91, 11, 22, 92]).subarray(1, 3));
+    if (!Buffer.isBuffer(instance.payload) ||
+        instance.payload.toString('hex') !== '0b16') return false;
+    const row = JSON.parse('{"__proto__":{"polluted":true}}');
+    row.__proto__.data = instance.payload;
+    row.nested = [{data: instance.payload}];
+    const actual = instance.echo(row);
+    return Object.getPrototypeOf(actual) === Object.prototype &&
+        Object.hasOwn(actual, '__proto__') && actual.__proto__.polluted === true &&
+        actual.polluted === undefined && ({}).polluted === undefined &&
+        Buffer.isBuffer(actual.__proto__.data) &&
+        Buffer.isBuffer(actual.nested[0].data) &&
+        actual.__proto__.data.toString('hex') === '0b16' &&
+        actual.nested[0].data.toString('hex') === '0b16';
+  )JS",
+               std::move(hooks));
+}
+
 }  // namespace
 }  // namespace xenon::ipc

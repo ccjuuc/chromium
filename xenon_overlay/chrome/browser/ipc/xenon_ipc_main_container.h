@@ -229,8 +229,10 @@ class XenonIpcMainContainer {
   void DispatchRendererEvent(const std::string& endpoint_id, bool attached);
 
   void NativeLog(gin::Arguments* args);
+  void NativeInstallAsyncContextHooks(gin::Arguments* args);
   void NativeGetPath(gin::Arguments* args);
   void NativeNetworkInterfaces(gin::Arguments* args);
+  void NativeOsCall(gin::Arguments* args);
   void NativeSendToRenderer(gin::Arguments* args);
   void NativeNetSend(gin::Arguments* args);
   bool ReadFileSystemArguments(gin::Arguments* args, base::Value* arguments);
@@ -336,6 +338,7 @@ class XenonIpcMainContainer {
   std::string renderer_base_url_;
   uint64_t next_endpoint_id_ = 1;
   bool initialized_ = false;
+  bool async_context_hooks_installed_ = false;
   bool shutting_down_ = false;
   std::string startup_error_;
 

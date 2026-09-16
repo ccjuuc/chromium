@@ -31,6 +31,7 @@
 #include "v8/include/v8-promise.h"
 #include "v8/include/v8-script.h"
 #include "xenon_overlay/common/ipc/xenon_ipc_value_codec.h"
+#include "xenon_overlay/common/ipc/xenon_runtime_platform.h"
 #include "xenon_overlay/resources/grit/xenon_resources.h"
 
 namespace xenon::ipc {
@@ -176,6 +177,8 @@ void XenonIpcRenderer::Install(content::RenderFrame* render_frame,
     }
   };
   set_method("getRuntimeConfig", &XenonIpcRenderer::GetRuntimeConfig);
+  set_method("installAsyncContextHooks",
+             &XenonIpcRenderer::InstallAsyncContextHooks);
   set_method("attachGuest", &XenonIpcRenderer::AttachGuest);
   set_method("send", &XenonIpcRenderer::Send);
   VLOG(1) << "XenonIpcRenderer Install set send";
@@ -304,6 +307,37 @@ bool XenonIpcRenderer::EnsureConnected() {
   return true;
 }
 
+void XenonIpcRenderer::InstallAsyncContextHooks(gin::Arguments* args) {
+  v8::Local<v8::Function> init;
+  v8::Local<v8::Function> before;
+  v8::Local<v8::Function> after;
+  if (context_.IsEmpty() || async_context_hooks_installed_ ||
+      !args->GetNext(&init) || !args->GetNext(&before) ||
+      !args->GetNext(&after)) {
+    args->ThrowTypeError(
+        "Async context hooks require three functions and one installation");
+    return;
+  }
+#if defined(V8_ENABLE_JAVASCRIPT_PROMISE_HOOKS)
+  // Blink owns the isolate's task-attribution hook and continuation data.
+  // Per-context Promise hooks are independent and include native await jobs.
+  context_.Get(isolate_)->SetPromiseHooks(init, before, after, {});
+  async_context_hooks_installed_ = true;
+#else
+  // The V8 API aborts instead of throwing if the build feature is absent.
+  v8::Local<v8::Value> error = v8::Exception::Error(
+      gin::StringToV8(isolate_, "Async context requires V8 JavaScript Promise hooks")
+          .As<v8::String>());
+  if (error.As<v8::Object>()
+          ->Set(context_.Get(isolate_), gin::StringToV8(isolate_, "code"),
+                gin::StringToV8(isolate_, "ERR_NOT_SUPPORTED"))
+          .IsNothing()) {
+    return;
+  }
+  isolate_->ThrowException(error);
+#endif
+}
+
 void XenonIpcRenderer::GetRuntimeConfig(gin::Arguments* args) {
   if (!EnsureRuntimeConfig()) {
     args->ThrowTypeError("Browser runtime config is unavailable");
@@ -320,6 +354,9 @@ void XenonIpcRenderer::GetRuntimeConfig(gin::Arguments* args) {
         .Check();
   };
   set_string("appName", runtime_config_->app_name);
+  set_string("platform", PlatformName());
+  set_string("arch", ArchitectureName());
+  set_string("endianness", EndiannessName());
   set_string("documentPath", runtime_config_->document_path);
   v8::Local<v8::Array> mappings = v8::Array::New(
       isolate, static_cast<int>(runtime_config_->renderer_url_mappings.size()));
