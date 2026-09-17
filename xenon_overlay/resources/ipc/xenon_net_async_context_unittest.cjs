@@ -8,9 +8,19 @@ const test = require('node:test');
 const {promiseHooks} = require('node:v8');
 const vm = require('node:vm');
 
-function fixture(kind, t) {
+function fixture(kind, t, autoListen = false) {
   let dispatch, realmPromise, stop;
   const sent = [];
+  const send = (channel, value) => {
+    sent.push({channel, value});
+    if (autoListen && channel === '__xenon:net:listen') {
+      queueMicrotask(() => deliver('__xenon:net:listening', {serverId: value.serverId}));
+    }
+  };
+  const deliver = (channel, value) => {
+    if (kind === 'main') context.__xenonDispatchSend({endpointId: '@main'}, channel, [value]);
+    else dispatch(channel, [value]);
+  };
   const install = (init, before, after) => {
     const owned = new WeakSet();
     stop = promiseHooks.createHook({
@@ -35,13 +45,15 @@ function fixture(kind, t) {
     __xenonExecPath: 'C:\\fixture\\host.exe', __xenonPid: 1, __xenonEnv: {},
     __xenonChromeVersion: '142', __xenonV8Version: '', __xenonGetPath: () => '',
     __xenonInstallAsyncContextHooks: install,
-    __xenonNetSend: (channel, value) => sent.push({channel, value}),
+    __xenonNetSend: send,
+    pipePath: String.raw`\\.\pipe\async-context-fixture`,
+    localPath: kind === 'main' ? 'local-fixture' : String.raw`\\.\pipe\local-context-fixture`,
     location: {protocol: 'chrome:', hostname: 'xenon-player-electron', search: ''},
     xenonIpcRenderer: {
       getRuntimeConfig: () => ({appPath: 'C:\\fixture', execPath: 'C:\\fixture\\host.exe'}),
       installAsyncContextHooks: install,
       setDispatchHandler(callback) { dispatch = callback; },
-      send: (channel, value) => sent.push({channel, value}),
+      send,
     },
   });
   realmPromise = vm.runInContext('Promise', context);
@@ -53,10 +65,7 @@ function fixture(kind, t) {
   return {
     sent,
     evaluate: source => vm.runInContext(source, context),
-    deliver(channel, value) {
-      if (kind === 'main') context.__xenonDispatchSend({endpointId: '@main'}, channel, [value]);
-      else dispatch(channel, [value]);
-    },
+    deliver,
   };
 }
 
@@ -71,7 +80,7 @@ for (const kind of ['main', 'renderer']) {
         socket.on(event, () => values.push([event, storage.getStore()]));
       }
       socket.on('manual', () => values.push(['manual', storage.getStore()]));
-      storage.run('client', () => socket.connect('remote-fixture', function() {
+      storage.run('client', () => socket.connect(pipePath, function() {
         values.push(['callback', storage.getStore(), this === socket]);
       }));`);
     const id = runtime.sent[0].value.fromId;
@@ -113,7 +122,7 @@ for (const kind of ['main', 'renderer']) {
   });
 
   test(`${kind} local paired sockets isolate client and server contexts`, async t => {
-    const runtime = fixture(kind, t);
+    const runtime = fixture(kind, t, true);
     await runtime.evaluate(`(async () => {
       globalThis.values = [];
       globalThis.storage = new hooks.AsyncLocalStorage();
@@ -123,9 +132,10 @@ for (const kind of ['main', 'renderer']) {
           values.push(['server-data', storage.getStore()]);
           socket.write(bytes);
         });
-      }).listen('local-fixture'));
+      }).listen(localPath));
+      await Promise.resolve();
       await new Promise(resolve => {
-        const socket = storage.run('client', () => net.connect('local-fixture', () => {
+        const socket = storage.run('client', () => net.connect(localPath, () => {
           values.push(['connect', storage.getStore()]);
           socket.write('fixture');
         }));

@@ -23,6 +23,10 @@ function createRenderer(exportsList = [], overrides = {}, withWindow = false, in
       appPath: 'C:\\test-app',
       exeDir: 'C:\\test-app',
       execPath: 'C:\\test-app\\host.exe',
+      cwd: 'C:\\test-app',
+      contextIsolated: false,
+      sandboxed: true,
+      isPackaged: true,
     }),
     setDispatchHandler(handler) { dispatchHandler = handler; },
     sendSync(channel, options) {
@@ -83,6 +87,74 @@ function createRenderer(exportsList = [], overrides = {}, withWindow = false, in
     load: () => context.require(addonPath),
   };
 }
+
+test('renderer process and app identity use native document metadata', () => {
+  const config = {
+    appPath: '/fixture/app', execPath: '/fixture/host', cwd: '/fixture/work',
+    platform: 'linux', arch: 'arm64', pid: 4817, contextId: 'fixture-document-2',
+    versions: {chrome: '142.0.fixture', v8: '14.2.fixture',
+      node: '0.0.0-compat', electron: '0.0.0-compat'},
+    contextIsolated: false, sandboxed: true, isMainFrame: false, isPackaged: false,
+  };
+  const {context} = createRenderer([], {getRuntimeConfig: () => config});
+  const process = context.require('process');
+  for (const key of ['platform', 'arch', 'pid', 'contextId',
+                     'contextIsolated', 'sandboxed', 'isMainFrame']) {
+    assert.equal(process[key], config[key], key);
+  }
+  assert.deepEqual({...process.versions}, config.versions);
+  assert.equal(process.version, 'v0.0.0-compat');
+  assert.equal(process.cwd(), config.cwd);
+  assert.equal(context.require('electron').app.isPackaged, false);
+  assert.equal(context.__filename, '/fixture/app/index.js');
+  assert.equal(context.__dirname, '/fixture/app');
+});
+
+test('missing runtime metadata never invents a Node version, PID or working directory', () => {
+  const {context} = createRenderer([], {
+    getRuntimeConfig: () => ({appPath: 'C:\\fixture'}),
+  });
+  assert.deepEqual({...context.process.versions}, {});
+  for (const key of ['version', 'pid', 'contextId', 'contextIsolated', 'sandboxed'])
+    assert.equal(context.process[key], undefined, key);
+  assert.throws(() => context.process.cwd(), {code: 'ERR_NOT_SUPPORTED'});
+});
+
+test('bootstrap preserves global descriptors and application RPC method identity', () => {
+  const {context} = createRenderer([], {}, false, context => {
+    vm.runInContext('globalThis.originalDefineProperty = Object.defineProperty', context);
+  });
+  assert.equal(vm.runInContext('Object.defineProperty === originalDefineProperty', context), true);
+  assert.equal(vm.runInContext("Object.hasOwn(Object.prototype, 'callRemoteClientFunction')", context), false);
+  vm.runInContext(`
+    globalThis.rpcCalls = [];
+    globalThis.originalRpc = function(...args) {
+      rpcCalls.push({receiver: this, args});
+      return args;
+    };
+    globalThis.assignedRpc = {callRemoteClientFunction: originalRpc};
+    globalThis.descriptorRpc = {};
+    globalThis.rpcGetter = () => originalRpc;
+    Object.defineProperty(descriptorRpc, 'callRemoteClientFunction', {
+      get: rpcGetter, enumerable: true, configurable: false,
+    });
+    for (const receiver of [assignedRpc, descriptorRpc]) {
+      for (const name of ['openElectronSelectFileDialog', 'showOpenDialog', 'unrelated']) {
+        const args = ['fixture-main', name, {title: 'fixture'}];
+        const result = receiver.callRemoteClientFunction(...args);
+        if (result[2] !== args[2]) throw new Error('RPC return value changed');
+      }
+    }
+  `, context);
+  assert.equal(context.assignedRpc.callRemoteClientFunction, context.originalRpc);
+  assert.equal(context.descriptorRpc.callRemoteClientFunction, context.originalRpc);
+  assert.equal(Object.getOwnPropertyDescriptor(context.descriptorRpc,
+      'callRemoteClientFunction').get, context.rpcGetter);
+  assert.equal(context.rpcCalls.length, 6);
+  for (let index = 0; index < 6; ++index)
+    assert.equal(context.rpcCalls[index].receiver,
+        index < 3 ? context.assignedRpc : context.descriptorRpc);
+});
 
 function createPreloadRenderer(preload, files, extraPreferences = {}) {
   const sent = [];

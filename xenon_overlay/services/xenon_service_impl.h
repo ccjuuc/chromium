@@ -65,6 +65,9 @@ class XenonServiceImpl : public mojom::XenonMainService,
   void DispatchElectronWindowEvent(int32_t window_id,
                                    const std::string& event_name,
                                    base::Value arguments) override;
+  void DispatchElectronAppEvent(const std::string& container_id,
+                                const std::string& event_name,
+                                base::Value arguments) override;
   void InitializeElectronIpc(
       ipc::mojom::IpcMainConfigPtr config,
       InitializeElectronIpcCallback callback) override;

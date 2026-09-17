@@ -206,6 +206,40 @@ OS 修复后的实机验收暴露了此前未覆盖的“扫码成功后退出�
 
 生产资源重新打包成功，常规 Native **158/158** 通过。9222 新进程中 TH 自动登录成功，真实 SDK 独立测试库的保存、关闭、重开、解密及字段比较继续通过；TH/PL-E 的 `buffer`、`node:buffer` 与全局 Buffer 身份一致，`isEncoding` 实际可调用。PL-E 测试视频进度 **232→1061 ms**、320×180、错误码 0，用户也确认播放正常。验收日志中未再出现 `isEncoding is not a function`，两个 Electron 容器无断连、原生 fatal 或 N-API 调用失败；这不代表已修复日志里的其他既有 API 缺口。
 
+## Bootstrap 剩余硬编码修正（2026-09-16）
+
+本轮修正审查发现的 renderer 行为硬编码，并移除 main 中单实例锁、协议注册的无条件成功返回：
+
+- **业务 RPC**：删除按 `openElectronSelectFileDialog` / `showOpenDialog` 方法名截获调用的逻辑，不再修改 `Object.prototype.callRemoteClientFunction` 或全局 `Object.defineProperty`。应用方法保持原始身份、描述符、接收者、参数和返回值，文件选择经应用原有 IPC handler 调用标准 `dialog`。主进程原生 picker 缺少 hook 或 Browser 调用失败时分别抛出 `ERR_NOT_SUPPORTED` / `ERR_FAILED`；只有成功回复的空路径列表才表示取消。
+- **运行时信息**：PID、Chrome/V8 版本取当前原生进程；contextId 随文档 binding 创建，隔离与沙箱状态反映当前 binding/进程。显式排除 `--no-sandbox`，因为 Chromium 的断言辅助 API 在该参数下仍返回 true。Node/Electron 继续以 `0.0.0-compat` 表示适配器身份，不伪称嵌入了某个发行版。托管状态与 main 的容器配置保持一致。
+- **工作目录与路径**：Browser 启动早期只捕获一次工作目录，文档配置只复制快照；查询失败不伪造根目录、不在 UI 请求阶段重试阻塞读取。这是 brokered 文件 API 使用的逻辑工作目录，并非 Linux sandbox 改变根目录后的物理 cwd。Win32 盘符相对路径、UNC 与 POSIX 路径分别处理；POSIX 文件名保留反斜杠和大小写，CJS 缓存与允许目录检查遵循宿主平台。
+- **URL**：相对 URL 不再凭空补 localhost；file URL 正确处理 `#`、`?`、`%`、空格、Unicode 和 UNC，解析后的磁盘路径仍经过模块目录边界检查。
+- **Buffer**：编码别名、大小写、Latin-1、ASCII、UTF-16LE 与 UTF-8 BOM 的行为按 Node 对照修正；未知编码报错，字符串 fill 按编码字节重复，write 不截断多字节字符。原生 base64 快速路径和二进制子视图范围保留。
+- **renderer net**：IP 校验按完整格式判断；Windows named pipe 只有收到原生 bind 成功通知才进入 listening 状态，address 与关闭状态一致。空闲超时随连接、读写活动更新。尚无原生后端的 TCP/Unix 操作异步报告 `ERR_NOT_SUPPORTED`，不生成虚假监听成功。pipe 上的 TCP 参数 setter 保持 Node 的可链式无操作语义。
+- **main app**：没有后端实现的单实例锁、协议注册/移除明确抛出 `ERR_NOT_SUPPORTED`，不再返回 true 声称已取得锁或完成系统注册。
+
+JavaScript 全量回归 **388/388，零跳过**，包含真实 TH/PL-E 依赖。原生构建、实机验收记录集中在 `out/ipc-hardcode-fix-20260916/`。这些修改不表示所有 Node/Electron API 已完整实现；main net 的其他兼容缺口、TCP/Unix 后端及 stream 半关闭/背压不在本轮实现范围内。
+
+使用上一提交与本轮源码运行既有 bootstrap 基准，调用/分配计数一致：100 个包冷加载文件 IPC **1101**、package.json 读取 **100**；1000 次热加载 IPC **0**；10000 次原生基础参数调用遍历 Map 分配 **0**。结果见同目录 `renderer-bootstrap-benchmark.json`，仅证明这些计数未退化，不等同于 CPU 耗时或整体启动性能无变化。
+
+### 关闭后再次打开的生命周期缺口
+
+用户补充实测发现 TH/PL-E 关闭后不能再次打开。现场两个 Utility 容器仍存活、无断连或 fatal，而主页面已消失；TH 仍有辅助播放器窗口。源码核对确认这些关闭/激活分支在上述硬编码修正前已存在：已绑定容器的再次启动只返回成功，不通知应用 `activate`；原生/DOM 关闭绕过主进程可取消的 `close`；`closed` 不发出 `window-all-closed`。只重新执行初始化也无效，因为 Service 对已初始化容器直接返回。
+
+实际 TH 主窗的原生 close handler 默认 `hide()` 并 `preventDefault()`，右上角 X 同样绑定隐藏；菜单“退出”及 DOM beforeunload 的退出分支会先执行退出业务、清理 SDK，再调用 `app.quit()`；旧适配只发 `before-quit`，留下已清理但仍存活的容器。TH 的 activate 仅在所有 BrowserWindow 都消失后才重建，因此残留辅助窗进一步阻碍恢复。PL-E 的 activate 按主窗引用重建或置前，直接退出时已有原生清理；托盘关闭的 `hidePlayer()` 默认也会关闭当前媒体。修复不能将所有关闭统一改成隐藏，也不能按业务名称绕过原有清理逻辑。
+
+显式激活现在按容器派发 `app.activate(event, hasVisibleWindows)`，ready 前请求在 ready/whenReady 回调后交付，不广播到其他应用或为未知容器启动服务。原生与 DOM 关闭先发 `close-requested`，主进程执行可取消的 `BrowserWindow.close()`；获得销毁许可后走跨平台 Widget 隐藏/立即关闭。DOM 请求在进入 WebDialogView 的关闭状态机前拦截，避免一次 veto 后原生窗口下次无法取消。容器故障及浏览器退出仍强制清理。
+
+`closed` 与 `window-all-closed` 统一处理，覆盖成对/嵌套销毁及回调中新建窗口。激活入口只选择已显示过的内容窗，隐藏主窗可恢复，从未显示的辅助窗不会被强行拉起。托管 BrowserWindow 不采用 WebDialog 默认 Escape 关闭行为，由应用页面处理该按键。
+
+2026-09-17 继续补齐 `app.quit` 的可取消 `before-quit → close → will-quit → quit` 通路，以及 `app.exit/process.exit` 的强制退出通路。退出 owner 能力在清理前检查；原生通知延后到 V8 调用栈返回后。Browser 校验容器/observer/代次，断开所有共享服务连接副本并清理窗口，保留配置供下一次显式启动；旧页面消息和旧代次回调不能自动重启或误关闭新实例。退出期间不交付 activate，正常退出与崩溃分开记录。
+
+另发现 PL-E 的 UA 更新竞态：新页面导航期间 `setUserAgent` 可能触发 Chromium 重载旧的已提交 `about:blank`，现场导航历史确认 `index.html → about:blank (reload)`。Host 暂存导航期间的 UA 更新，等待导航完全停止加载后安全应用，并在窗口销毁时取消待执行任务。已发出的请求仍使用原 UA，不通过重载补发；更新后的 UA 用于后续请求。
+
+JavaScript 回归现为 **411/411，零跳过**，包括退出取消、隐藏辅助窗、重复/重入退出、缺失 owner 和停止后的激活。新增原生退出回归、manager 隔离用例和 NavigationSimulator 用例；后两类所属完整 `unit_tests` 测试宿主尚未执行，不能以对象编译代替执行结果。`BrowserWindow.close()` 尚未实现主进程到 renderer 的完整 `beforeunload/unload` 握手；TH 菜单退出及 PL-E 播放窗关闭先执行业务清理，但 AI 转高清等依赖页面退出保存的扩展窗口仍需单独补齐与验证。
+
+本轮最终生产构建 `build-reopen-final3.log` 成功；原生 IPC 回归 **170/170**（不含独立商业 addon smoke）。UI delegate/manager/8 个 UA 导航用例的测试对象均已编译，未执行完整浏览器单测宿主。实机 `chrome-reopen-final.log` 已确认 PL-E 首页稳定停留在 `index.html`，两次测试视频播放通过（320×180、进度推进、错误码 0）；播放界面关闭后媒体对象归空。TH SDK ready、自动登录及头像加载通过。TH 普通 Hide 后保持原页面且 visibility 为 hidden；TH、PL-E 关闭后重新打开由用户实际验证通过（用户反馈“重开我已验证”），不记为自动化完成的验收。后续检测到 PL-E 正播放非测试媒体，自动关闭探针按保护规则未执行。结果文件集中在 `out/ipc-hardcode-fix-20260916/` 的 `ple-final-*`、`th-final-*` 和 `reopen-final-summary.json`。
+
 ## 验证方式
 
 ### 上一轮结果（2026-09-16，Bootstrap 审查修复前）

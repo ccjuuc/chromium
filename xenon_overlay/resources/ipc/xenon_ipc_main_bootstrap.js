@@ -990,6 +990,123 @@
   let resolveAppReady;
   const appReadyPromise = new Promise(resolve => { resolveAppReady = resolve; });
   const app = new EventEmitter();
+  let appExitState = 'running';
+  let appQuitPhase = '';
+  let appQuitAdvancing = false;
+  let beforeQuitEmitted = false;
+  let willQuitEmitted = false;
+  let quitEmitted = false;
+
+  function requireAppExitHost() {
+    if (typeof globalThis.__xenonExitApp !== 'function' ||
+        (typeof globalThis.__xenonCanExitApp === 'function' &&
+         !globalThis.__xenonCanExitApp())) {
+      return electronUnsupported('app exit');
+    }
+    return globalThis.__xenonExitApp;
+  }
+
+  function stopAppEvents() {
+    appEventsStopped = true;
+    pendingAppEvents.length = 0;
+  }
+
+  function cancelAppQuit() {
+    if (appExitState !== 'quitting') return;
+    appExitState = 'running';
+    appQuitPhase = '';
+    beforeQuitEmitted = false;
+    willQuitEmitted = false;
+    appEventsStopped = false;
+  }
+
+  function finishAppExit(code, exitHost) {
+    if (quitEmitted) return;
+    quitEmitted = true;
+    appExitState = 'stopped';
+    stopAppEvents();
+    try {
+      app.emit('quit', createBrowserWindowEvent(app), code);
+    } finally {
+      try {
+        processEmitter.emit('exit', code);
+      } finally {
+        if (exitHost) exitHost(code);
+      }
+    }
+  }
+
+  function destroyAllAppWindows() {
+    let firstError;
+    for (const window of BrowserWindow.getAllWindows()) {
+      try {
+        window.destroy();
+      } catch (error) {
+        firstError ||= error;
+      }
+    }
+    if (firstError) throw firstError;
+  }
+
+  function forceAppExit(code, exitHost, notifyShutdown) {
+    if (appExitState === 'stopped' || appExitState === 'exiting') return;
+    appExitState = 'exiting';
+    stopAppEvents();
+    try {
+      if (notifyShutdown && !beforeQuitEmitted) {
+        beforeQuitEmitted = true;
+        app.emit('before-quit', createBrowserWindowEvent(app, true));
+      }
+    } finally {
+      try {
+        destroyAllAppWindows();
+      } finally {
+        try {
+          if (notifyShutdown && !willQuitEmitted) {
+            willQuitEmitted = true;
+            app.emit('will-quit', createBrowserWindowEvent(app, true));
+          }
+        } finally {
+          finishAppExit(code, exitHost);
+        }
+      }
+    }
+  }
+
+  function continueAppQuit() {
+    if (appExitState !== 'quitting' || appQuitPhase !== 'closing' ||
+        appQuitAdvancing) return;
+    appQuitAdvancing = true;
+    try {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (appExitState !== 'quitting') return;
+        // app.quit() can be called inside this window's close listener. Let
+        // that original request finish before inspecting whether it was vetoed.
+        if (window._closeRequested) return;
+        window.close();
+        if (appExitState !== 'quitting') return;
+        if (!window.isDestroyed()) {
+          cancelAppQuit();
+          return;
+        }
+      }
+      appQuitPhase = 'will-quit';
+      willQuitEmitted = true;
+      const event = createBrowserWindowEvent(app, true);
+      app.emit('will-quit', event);
+      if (appExitState !== 'quitting') return;
+      if (event.defaultPrevented) {
+        cancelAppQuit();
+        return;
+      }
+      finishAppExit(0, requireAppExitHost());
+    } catch (error) {
+      cancelAppQuit();
+      throw error;
+    } finally {
+      appQuitAdvancing = false;
+    }
+  }
   app.isPackaged = Boolean(__xenonRendererBaseUrl) ||
       (Array.isArray(globalThis.__xenonRendererUrlMappings) &&
        globalThis.__xenonRendererUrlMappings.length > 0);
@@ -1000,16 +1117,50 @@
   app.whenReady = () => appReadyPromise;
   app.isReady = () => appReady;
   app.disableHardwareAcceleration = () => {};
-  app.requestSingleInstanceLock = () => true;
-  app.releaseSingleInstanceLock = () => {};
+  app.requestSingleInstanceLock = () => electronUnsupported('app.requestSingleInstanceLock');
+  app.releaseSingleInstanceLock = () => electronUnsupported('app.releaseSingleInstanceLock');
   app.setAppUserModelId = () => {};
-  app.setAsDefaultProtocolClient = () => true;
-  app.removeAsDefaultProtocolClient = () => true;
+  app.setAsDefaultProtocolClient = () => electronUnsupported('app.setAsDefaultProtocolClient');
+  app.removeAsDefaultProtocolClient = () => electronUnsupported('app.removeAsDefaultProtocolClient');
   app.addRecentDocument = () => {};
   app.clearRecentDocuments = () => {};
   app.focus = () => {};
-  app.quit = () => app.emit('before-quit', {});
-  app.exit = () => app.emit('quit', {}, 0);
+  app.quit = () => {
+    if (appExitState !== 'running') return;
+    // Check capability before any cleanup, so an unavailable host cannot leave
+    // a live container whose SDK and windows have already been shut down.
+    requireAppExitHost();
+    appExitState = 'quitting';
+    appQuitPhase = 'before-quit';
+    stopAppEvents();
+    beforeQuitEmitted = true;
+    try {
+      const event = createBrowserWindowEvent(app, true);
+      app.emit('before-quit', event);
+      if (appExitState !== 'quitting') return;
+      if (event.defaultPrevented) {
+        cancelAppQuit();
+        return;
+      }
+      appQuitPhase = 'closing';
+      continueAppQuit();
+    } catch (error) {
+      cancelAppQuit();
+      throw error;
+    }
+  };
+  app.exit = (code = 0) => {
+    if (appExitState === 'stopped' || appExitState === 'exiting') return;
+    if (typeof code !== 'number' || !Number.isInteger(code)) {
+      throw Object.assign(new TypeError('Exit code must be an integer'),
+                          {code: 'ERR_INVALID_ARG_TYPE'});
+    }
+    if (code < -2147483648 || code > 2147483647) {
+      throw Object.assign(new RangeError('Exit code must fit a signed 32-bit integer'),
+                          {code: 'ERR_OUT_OF_RANGE'});
+    }
+    forceAppExit(code, requireAppExitHost(), false);
+  };
   app.commandLine = {appendSwitch() {}, appendArgument() {}, hasSwitch() { return false; }};
 
   class DownloadItem extends EventEmitter {
@@ -1421,6 +1572,38 @@
     return url;
   }
   const browserWindows = [];
+  let browserWindowCloseDepth = 0;
+  let allBrowserWindowsClosed = true;
+
+  function finishBrowserWindowClose(window, closeNative) {
+    if (window._destroyed) return;
+    window._destroyed = true;
+    window._visible = false;
+    ++browserWindowCloseDepth;
+    try {
+      try {
+        destroyWebContents(window.webContents);
+      } finally {
+        if (closeNative && typeof __xenonCloseBrowserWindow === 'function') {
+          __xenonCloseBrowserWindow(window.id);
+        }
+      }
+    } finally {
+      try {
+        window.emit('closed');
+      } finally {
+        --browserWindowCloseDepth;
+        // A closed listener can destroy a paired window or create its
+        // replacement. Inspect the final live set after that cascade finishes.
+        if (browserWindowCloseDepth === 0 && !allBrowserWindowsClosed &&
+            !browserWindows.some(item => !item._destroyed)) {
+          allBrowserWindowsClosed = true;
+          if (appExitState === 'running') app.emit('window-all-closed');
+        }
+      }
+    }
+  }
+
   function callBrowserWindow(window, command, details = {}) {
     if (typeof __xenonBrowserWindowCall !== 'function') {
       return electronUnsupported(`BrowserWindow.${command}`);
@@ -1449,6 +1632,10 @@
   class BrowserWindow extends EventEmitter {
     constructor(options = {}) {
       super();
+      if (appExitState !== 'running') {
+        throw Object.assign(new Error('Cannot create a BrowserWindow while the application exits'),
+                            {code: 'ERR_APP_QUITTING'});
+      }
       this._webPreferences = Object.freeze({
         contextIsolation: true,
         nodeIntegration: false,
@@ -1524,6 +1711,7 @@
         if (actual && typeof actual === 'object') this._bounds = actual;
       }
       browserWindows.push(this);
+      allBrowserWindowsClosed = false;
     }
     static getAllWindows() { return browserWindows.filter(item => !item._destroyed); }
     static getFocusedWindow() { return BrowserWindow.getAllWindows().find(window => window.isFocused()) || null; }
@@ -1759,18 +1947,24 @@
     setThumbnailClip() {}
     setThumbnailToolTip() {}
     close() {
+      if (this._destroyed || this._closeRequested) return;
+      this._closeRequested = true;
       const event = createBrowserWindowEvent(this, true);
-      this.emit('close', event);
-      if (!event.defaultPrevented) this.destroy();
+      try {
+        this.emit('close', event);
+        // Renderer beforeunload/unload is not yet part of this host close path.
+        if (!event.defaultPrevented) this.destroy();
+      } catch (error) {
+        cancelAppQuit();
+        throw error;
+      } finally {
+        this._closeRequested = false;
+        if (!this._destroyed && event.defaultPrevented) cancelAppQuit();
+        continueAppQuit();
+      }
     }
     destroy() {
-      if (this._destroyed) return;
-      this._destroyed = true;
-      destroyWebContents(this.webContents);
-      if (typeof __xenonCloseBrowserWindow === 'function') {
-        __xenonCloseBrowserWindow(this.id);
-      }
-      this.emit('closed');
+      finishBrowserWindowClose(this, true);
     }
     isDestroyed() { return this._destroyed; }
     isWindowMessageHooked(message) {
@@ -1823,6 +2017,10 @@
     }
     const win = BrowserWindow.fromId(Number(windowId));
     if (!win) return;
+    if (eventName === 'close-requested') {
+      win.close();
+      return;
+    }
     if (eventName === 'native-menu-command') {
       const click = nativeMenuClicks.get(Number(details && details.commandId));
       if (typeof click === 'function') {
@@ -1922,11 +2120,7 @@
       return;
     }
     if (eventName === 'closed') {
-      if (!win._destroyed) {
-        win._destroyed = true;
-        destroyWebContents(win.webContents);
-        win.emit('closed');
-      }
+      finishBrowserWindowClose(win, false);
       return;
     }
     win.emit(eventName, createBrowserWindowEvent(win), details);
@@ -4729,16 +4923,50 @@
   globalThis.__xenonPerfHooks = perfHooksModule;
   globalThis.performance = performanceModule;
 
+  const pendingAppEvents = [];
+  let appEventsReady = false;
+  let appEventsStopped = false;
+  let dispatchingAppEvents = false;
+  function dispatchPendingAppEvents() {
+    if (!appEventsReady || appEventsStopped || dispatchingAppEvents) return;
+    dispatchingAppEvents = true;
+    try {
+      while (!appEventsStopped && pendingAppEvents.length > 0) {
+        const [eventName, args] = pendingAppEvents.shift();
+        app.emit(eventName, createBrowserWindowEvent(app), ...args);
+      }
+    } finally {
+      dispatchingAppEvents = false;
+    }
+  }
+  globalThis.__xenonDispatchAppEvent = (eventName, args = []) => {
+    if (appEventsStopped) return;
+    if (typeof eventName !== 'string' || !Array.isArray(args)) {
+      throw new TypeError('Application events require a name and argument array');
+    }
+    pendingAppEvents.push([eventName, args.slice()]);
+    dispatchPendingAppEvents();
+  };
   globalThis.__xenonMarkAppReady = () => {
-    if (appReady) return;
+    if (appReady || appExitState !== 'running') return;
     appReady = true;
     resolveAppReady();
-    app.emit('ready', {}, {});
+    try {
+      app.emit('ready', {}, {});
+    } finally {
+      // Applications commonly install their activate listener in whenReady().
+      // Let those promise callbacks run before delivering an early activation.
+      queueMicrotask(() => {
+        if (appEventsStopped) return;
+        appEventsReady = true;
+        dispatchPendingAppEvents();
+      });
+    }
   };
   globalThis.__xenonShutdownApp = () => {
-    app.emit('before-quit', {});
-    app.emit('will-quit', {});
-    app.emit('quit', {}, 0);
+    // Native teardown already owns container termination. Notify and clean up
+    // once without recursively requesting another native exit.
+    forceAppExit(0, null, true);
   };
   const hostedExecPath = String(__xenonExecPath || '');
   const processEmitter = new EventEmitter();
@@ -4756,9 +4984,9 @@
     stderr: { fd: 2, isTTY: false, write(data) { return true; }, on() { return this; } },
     versions: {
       electron: '0.0.0-compat',
-      chrome: __xenonChromeVersion || '142',
+      chrome: __xenonChromeVersion,
       node: '0.0.0-compat',
-      v8: __xenonV8Version || '13.0',
+      v8: __xenonV8Version,
     },
     version: 'v0.0.0-compat',
     cwd: () => __xenonAppPath,
@@ -4804,7 +5032,7 @@
     emit: (evt, ...args) => processEmitter.emit(evt, ...args),
     removeListener: (evt, fn) => processEmitter.removeListener(evt, fn),
     off: (evt, fn) => processEmitter.off(evt, fn),
-    exit: (code = 0) => globalThis.__xenonShutdownApp(),
+    exit: (code = 0) => app.exit(code),
   };
   process.on('unhandledRejection', err => {
     const message = (err && err.stack) || String(err);

@@ -213,6 +213,19 @@ void XenonServiceImpl::DispatchElectronWindowEvent(
   }
 }
 
+void XenonServiceImpl::DispatchElectronAppEvent(
+    const std::string& container_id,
+    const std::string& event_name,
+    base::Value arguments) {
+  // Activation belongs to one already running application. In particular,
+  // never initialize a missing container or broadcast to unrelated apps.
+  const auto container =
+      ipc_main_containers_.find(NormalizeIpcContainerId(container_id));
+  if (container != ipc_main_containers_.end()) {
+    container->second->DispatchAppEvent(event_name, std::move(arguments));
+  }
+}
+
 void XenonServiceImpl::InitializeElectronIpc(
     ipc::mojom::IpcMainConfigPtr config,
     InitializeElectronIpcCallback callback) {
@@ -264,6 +277,18 @@ void XenonServiceImpl::InitializeElectronIpc(
   container->SetNetPipeSender(
       base::BindRepeating(&XenonServiceImpl::HandleMainNetPipeMessage,
                           weak_factory_.GetWeakPtr(), container_id));
+#if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
+  if (browser_observer_.is_bound()) {
+    container->SetAppExitHandler(base::BindRepeating(
+        [](base::WeakPtr<XenonServiceImpl> self, const std::string& id,
+           int exit_code) {
+          if (self && self->browser_observer_.is_bound()) {
+            self->browser_observer_->OnElectronAppExit(id, exit_code);
+          }
+        },
+        weak_factory_.GetWeakPtr(), container_id));
+  }
+#endif
   XenonNodeExecutor* executor = EnsureNodeExecutor(container_id);
   executor->SetRuntimeDirectory(hosted_directory);
   ipc::XenonIpcMainContainer::NativeAddonHooks hooks;

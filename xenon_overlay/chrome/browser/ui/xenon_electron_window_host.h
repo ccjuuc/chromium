@@ -108,6 +108,8 @@ class XenonElectronWindowHost : public views::WidgetObserver {
 
  private:
   friend class base::NoDestructor<XenonElectronWindowHost>;
+  friend class XenonHostedWindowCloseTest;
+  friend class XenonHostedWindowUserAgentTest;
   XenonElectronWindowHost();
   ~XenonElectronWindowHost() override;
 
@@ -115,10 +117,16 @@ class XenonElectronWindowHost : public views::WidgetObserver {
   class PopupMenuSession;
 
   struct Entry {
+    Entry();
+    ~Entry();
     raw_ptr<views::Widget> widget = nullptr;
     uint64_t hwnd = 0;
     // False while the initial about:blank surface is hidden.
     bool has_loaded_url = false;
+    // A show:false helper must not become the application's sidebar entry.
+    bool ever_shown = false;
+    // ipcMain already emitted cancellable close and authorized destruction.
+    bool close_authorized = false;
     bool ready_to_show_emitted = false;
     bool frameless = false;
     bool transparent = false;
@@ -126,6 +134,7 @@ class XenonElectronWindowHost : public views::WidgetObserver {
     std::string container_id;
     std::string url;
     std::string user_agent;
+    bool user_agent_update_pending = false;
     // A transparent owned window is an overlay surface. In Electron the
     // in-process native helper can keep it aligned with its parent; Xenon's
     // addon isolate is out of process, so the Browser-owned Widgets maintain
@@ -143,9 +152,14 @@ class XenonElectronWindowHost : public views::WidgetObserver {
   };
 
   views::Widget* FindWidget(int32_t window_id) const;
-  int32_t FindEntryWindowForContainer(
-      const std::string& container_id) const;
+  int32_t FindEntryWindowForContainer(const std::string& container_id) const;
   bool ActivateEntryWindow(int32_t window_id);
+  bool RequestClose(int32_t window_id);
+  void ObserveWebContents(int32_t window_id, content::WebContents* contents);
+  void UpdateUserAgent(int32_t window_id,
+                       content::WebContents* contents,
+                       const std::string& user_agent);
+  void ApplyPendingUserAgent(int32_t window_id, content::WebContents* contents);
   std::map<int32_t, Entry>::iterator FindEntry(views::Widget* widget);
   void NotifyEvent(int32_t window_id,
                    const std::string& event_name,

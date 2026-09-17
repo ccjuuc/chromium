@@ -10,13 +10,24 @@ const filename = path.join(__dirname, 'xenon_ipc_renderer_bootstrap.js');
 const source = readFileSync(filename, 'utf8');
 
 function fixture() {
+  let dispatch;
   const context = vm.createContext({
     __xenonPaths: {platform: 'win32', arch: 'x64', endianness: 'LE'},
     TextEncoder, TextDecoder, URL, URLSearchParams, queueMicrotask, atob, btoa,
     xenonIpcRenderer: {
       getRuntimeConfig: () => ({appPath: 'C:\\fixture', exeDir: 'C:\\fixture',
-        execPath: 'C:\\fixture\\host.exe'}), setDispatchHandler() {},
-      send() { assert.fail('A local connection must not use native transport'); },
+        execPath: 'C:\\fixture\\host.exe'}),
+      setDispatchHandler(callback) { dispatch = callback; },
+      send(channel, value) {
+        // Only a native bind acknowledgement permits the local pipe shortcut.
+        if (channel === '__xenon:net:listen') {
+          dispatch('__xenon:net:listening', [{serverId: value.serverId}]);
+        } else if (channel === '__xenon:net:unlisten') {
+          dispatch('__xenon:net:server-closed', [{serverId: value.serverId}]);
+        } else {
+          assert.fail('A locally paired pipe must not send socket IPC');
+        }
+      },
     },
     location: {protocol: 'chrome:', hostname: 'xenon-player-electron', search: ''},
     console: {log() {}, info() {}, warn() {}, error() {}},
@@ -26,12 +37,13 @@ function fixture() {
 }
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
+const pipePath = String.raw`\\.\pipe\local-fixture`;
 
 test('local net destruction before queued connection delivery cancels all connect callbacks', async () => {
   const {net} = fixture();
   const events = [];
-  const server = net.createServer(() => events.push('server-connection')).listen('local-fixture');
-  const socket = net.connect('local-fixture', () => events.push('connect-callback'));
+  const server = net.createServer(() => events.push('server-connection')).listen(pipePath);
+  const socket = net.connect(pipePath, () => events.push('connect-callback'));
   socket.on('connect', () => events.push('client-connect'));
   socket.on('close', () => events.push('client-close'));
   socket.destroy();
@@ -49,8 +61,8 @@ test('local net server connection callback can destroy before client connect del
   const server = net.createServer(incoming => {
     events.push('server-connection');
     incoming.destroy();
-  }).listen('local-fixture');
-  const socket = net.connect('local-fixture', () => events.push('connect-callback'));
+  }).listen(pipePath);
+  const socket = net.connect(pipePath, () => events.push('connect-callback'));
   socket.on('connect', () => events.push('client-connect'));
   socket.on('close', () => events.push('client-close'));
   await settle();
@@ -62,8 +74,8 @@ test('local net server connection callback can destroy before client connect del
 test('local net connect listener destruction cancels the deferred connect callback', async () => {
   const {net} = fixture();
   const events = [];
-  const server = net.createServer(() => events.push('server-connection')).listen('local-fixture');
-  const socket = net.connect('local-fixture', () => events.push('connect-callback'));
+  const server = net.createServer(() => events.push('server-connection')).listen(pipePath);
+  const socket = net.connect(pipePath, () => events.push('connect-callback'));
   socket.on('connect', () => { events.push('client-connect'); socket.destroy(); });
   socket.on('close', () => events.push('client-close'));
   await settle();
@@ -78,8 +90,8 @@ test('local net connect callback can destroy both endpoints exactly once', async
   let callbacks = 0;
   const server = net.createServer(incoming => {
     incoming.on('close', () => ++incomingCloses);
-  }).listen('local-fixture');
-  const socket = net.connect('local-fixture', function() {
+  }).listen(pipePath);
+  const socket = net.connect(pipePath, function() {
     assert.equal(this, socket);
     ++callbacks;
     this.destroy();
@@ -100,8 +112,8 @@ test('local net successful connection preserves asynchronous ordering and bidire
   const server = net.createServer(incoming => {
     events.push('server-connection');
     incoming.on('data', bytes => incoming.write(bytes));
-  }).listen('local-fixture');
-  const socket = net.connect('local-fixture', function() {
+  }).listen(pipePath);
+  const socket = net.connect(pipePath, function() {
     assert.equal(this, socket);
     events.push('connect-callback');
     assert.equal(socket.write(context.Buffer.from([0, 255, 128, 65])), true);

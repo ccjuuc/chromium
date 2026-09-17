@@ -389,6 +389,129 @@ TEST_F(XenonServiceOwnerTest, ObserverQueuePreservesCallbackReceiver) {
   EXPECT_EQ("connected", *observer.receivers[1].GetDict().FindString("label"));
 }
 
+constexpr char kMainAppEventSource[] = R"JS(
+const {app, ipcMain} = require('electron');
+const state = {readyCount: 0, whenReadyCount: 0, calls: [], microtasks: 0};
+app.on('ready', () => ++state.readyCount);
+app.whenReady().then(() => {
+  ++state.whenReadyCount;
+  app.on('activate', (_event, ...args) => {
+    state.calls.push(args);
+    queueMicrotask(() => ++state.microtasks);
+  });
+});
+ipcMain.handle('app:event-state', () => state);
+)JS";
+
+class XenonServiceAppEventTest : public XenonServiceOwnerTest {
+ protected:
+  void SetUp() override {
+    XenonServiceOwnerTest::SetUp();
+    ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+    ASSERT_TRUE(base::NormalizeFilePath(temp_dir_.GetPath(), &app_path_));
+  }
+
+  void InitializeMain(const std::string& container_id) {
+    auto config = ipc::mojom::IpcMainConfig::New();
+    config->container_id = container_id;
+    config->embedded_main_source = kMainAppEventSource;
+    config->virtual_main_path =
+        app_path_.AppendASCII(container_id + ".js").AsUTF8Unsafe();
+    config->app_path = app_path_.AsUTF8Unsafe();
+    config->app_name = container_id;
+    base::test::TestFuture<bool, const std::string&> initialized;
+    browser_->InitializeElectronIpc(std::move(config), initialized.GetCallback());
+    ASSERT_TRUE(initialized.Wait());
+    ASSERT_TRUE(initialized.Get<0>()) << initialized.Get<1>();
+    task_environment_.RunUntilIdle();
+  }
+
+  ipc::mojom::IpcResultPtr ReadState(const std::string& container_id) {
+    ResultFuture result;
+    browser_->ElectronIpcInvoke(
+        container_id, "test-driver", "app:event-state",
+        base::Value(base::ListValue()), result.GetCallback());
+    if (!result.Wait()) {
+      ADD_FAILURE() << "App event state query did not complete";
+      return nullptr;
+    }
+    return result.Take();
+  }
+
+  base::test::ScopedRunLoopTimeout timeout_{FROM_HERE, base::Seconds(5)};
+  base::ScopedTempDir temp_dir_;
+  base::FilePath app_path_;
+};
+
+TEST_F(XenonServiceAppEventTest,
+       RepeatedActivateTargetsOnlyTheRequestedRunningContainer) {
+  ASSERT_NO_FATAL_FAILURE(InitializeMain("app-a"));
+  ASSERT_NO_FATAL_FAILURE(InitializeMain("app-b"));
+  browser_->DispatchElectronAppEvent(
+      "app-a", "activate",
+      base::Value(base::ListValue().Append(false).Append("first")));
+  browser_->DispatchElectronAppEvent(
+      "app-a", "activate",
+      base::Value(base::ListValue().Append(true).Append("second")));
+  browser_.FlushForTesting();
+
+  const auto selected = ReadState("app-a");
+  ASSERT_TRUE(selected);
+  ASSERT_TRUE(selected->success) << selected->error;
+  const auto& state = selected->value.GetDict();
+  EXPECT_EQ(1, state.FindInt("readyCount"));
+  EXPECT_EQ(1, state.FindInt("whenReadyCount"));
+  EXPECT_EQ(2, state.FindInt("microtasks"));
+  const auto* calls = state.FindList("calls");
+  ASSERT_TRUE(calls);
+  ASSERT_EQ(2u, calls->size());
+  EXPECT_EQ((base::ListValue().Append(false).Append("first")),
+            (*calls)[0].GetList());
+  EXPECT_EQ((base::ListValue().Append(true).Append("second")),
+            (*calls)[1].GetList());
+
+  const auto unrelated = ReadState("app-b");
+  ASSERT_TRUE(unrelated);
+  ASSERT_TRUE(unrelated->success) << unrelated->error;
+  const auto& other_state = unrelated->value.GetDict();
+  EXPECT_EQ(1, other_state.FindInt("readyCount"));
+  EXPECT_EQ(1, other_state.FindInt("whenReadyCount"));
+  EXPECT_EQ(0, other_state.FindInt("microtasks"));
+  ASSERT_TRUE(other_state.FindList("calls"));
+  EXPECT_TRUE(other_state.FindList("calls")->empty());
+}
+
+TEST_F(XenonServiceAppEventTest,
+       UnknownActivateNeitherStartsAContainerNorBroadcastsOrReplays) {
+  ASSERT_NO_FATAL_FAILURE(InitializeMain("app-a"));
+  browser_->DispatchElectronAppEvent(
+      "missing-app", "activate", base::Value(base::ListValue().Append(false)));
+  browser_->DispatchElectronAppEvent(
+      "", "activate", base::Value(base::ListValue().Append(false)));
+  browser_.FlushForTesting();
+  for (const char* container_id : {"missing-app", ""}) {
+    SCOPED_TRACE(container_id);
+    const auto missing = ReadState(container_id);
+    ASSERT_TRUE(missing);
+    EXPECT_FALSE(missing->success);
+    EXPECT_EQ("Utility ipcMain container is unavailable", missing->error);
+  }
+  const auto existing = ReadState("app-a");
+  ASSERT_TRUE(existing);
+  ASSERT_TRUE(existing->success) << existing->error;
+  ASSERT_TRUE(existing->value.GetDict().FindList("calls"));
+  EXPECT_TRUE(existing->value.GetDict().FindList("calls")->empty());
+  EXPECT_EQ(1, existing->value.GetDict().FindInt("readyCount"));
+
+  ASSERT_NO_FATAL_FAILURE(InitializeMain("missing-app"));
+  const auto created_later = ReadState("missing-app");
+  ASSERT_TRUE(created_later);
+  ASSERT_TRUE(created_later->success) << created_later->error;
+  ASSERT_TRUE(created_later->value.GetDict().FindList("calls"));
+  EXPECT_TRUE(created_later->value.GetDict().FindList("calls")->empty());
+  EXPECT_EQ(1, created_later->value.GetDict().FindInt("readyCount"));
+}
+
 // These tests use the production main bootstrap and OS pipe bridge. The fake
 // renderer implements only the Mojo endpoint, so it can detect accidental
 // broadcast fallback without sharing the bootstrap's routing implementation.

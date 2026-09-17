@@ -18,10 +18,12 @@ source_set("renderer") {
 
   deps = [
     "//base",
+    "//components/version_info",
     "//content/public/common",
     "//content/public/renderer",
     "//gin",
     "//mojo/public/cpp/bindings",
+    "//sandbox/policy",
     "//third_party/blink/public:blink",
     "//third_party/blink/public/common",
     "//third_party/blink/renderer/core:core",

@@ -7,6 +7,7 @@
 #include "base/base_paths.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/path_service.h"
@@ -91,6 +92,19 @@ XenonManager::XenonManager() = default;
 
 XenonManager::~XenonManager() = default;
 
+void XenonManager::InitializeRuntimeMetadata() {
+  if (runtime_metadata_initialized_) {
+    return;
+  }
+  runtime_metadata_initialized_ = true;
+  base::FilePath working_directory;
+  if (base::GetCurrentDirectory(&working_directory)) {
+    startup_working_directory_ = working_directory.AsUTF8Unsafe();
+  }
+  // Leave failures unavailable. Retrying from a renderer request would block
+  // the Browser UI thread and would no longer describe the startup directory.
+}
+
 void XenonManager::SetBrowserContext(content::BrowserContext* context) {
   if (context) {
     last_browser_context_ = context;
@@ -154,9 +168,9 @@ XenonManager::FindContainerService(const std::string& container_id) {
 }
 
 void XenonManager::InitializeServiceConnection(
-    ServiceRemote* remote,
+    ContainerServiceConnection* connection,
     const std::string& service_id) {
-  if (!remote || !remote->is_bound()) {
+  if (!connection || !connection->remote.is_bound()) {
     return;
   }
   if (last_browser_context_) {
@@ -164,10 +178,11 @@ void XenonManager::InitializeServiceConnection(
     last_browser_context_->GetDefaultStoragePartition()
         ->GetURLLoaderFactoryForBrowserProcess()
         ->Clone(factory_remote.InitWithNewPipeAndPassReceiver());
-    (*remote)->Initialize(std::move(factory_remote));
+    connection->remote->Initialize(std::move(factory_remote));
   }
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
-  SetupBrowserObserver(remote, service_id);
+  connection->observer_receiver_id =
+      SetupBrowserObserver(&connection->remote, service_id);
 #endif
 }
 
@@ -201,24 +216,25 @@ XenonManager::EnsureContainerServiceStarted(const std::string& container_id,
               .Pass());
 
   auto connection = std::make_unique<ContainerServiceConnection>();
+  const uint64_t generation = ++container_service_generations_[normalized_id];
+  connection->generation = generation;
 #if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
   mojo::PendingRemote<mojom::XenonMainService> pending = launched.Unbind();
   connection->remote.Bind(std::move(pending), GetUiTaskRunner());
   connection->remote.set_disconnect_handler(
       base::BindOnce(&XenonManager::OnContainerServiceDisconnected,
-                     base::Unretained(this), normalized_id),
+                     base::Unretained(this), normalized_id, generation),
       GetUiTaskRunner());
 #else
   connection->remote = std::move(launched);
-  connection->remote.set_disconnect_handler(base::BindOnce(
-      &XenonManager::OnContainerServiceDisconnected, base::Unretained(this),
-      normalized_id));
+  connection->remote.set_disconnect_handler(
+      base::BindOnce(&XenonManager::OnContainerServiceDisconnected,
+                     base::Unretained(this), normalized_id, generation));
 #endif
 
   ContainerServiceConnection* result = connection.get();
   container_services_.insert_or_assign(normalized_id, std::move(connection));
-  ++container_service_generations_[normalized_id];
-  InitializeServiceConnection(&result->remote, normalized_id);
+  InitializeServiceConnection(result, normalized_id);
 
   const auto config = last_ipc_configs_.find(normalized_id);
   if (config != last_ipc_configs_.end() && config->second) {
@@ -307,6 +323,18 @@ bool XenonManager::EnsureElectronIpcStarted(const std::string& container_id) {
   return EnsureContainerServiceStarted(normalized_id, true) != nullptr;
 }
 
+void XenonManager::ActivateElectronIpc(const std::string& container_id,
+                                       bool has_visible_windows) {
+  ContainerServiceConnection* connection = FindContainerService(container_id);
+  if (!connection || !connection->remote.is_bound()) {
+    return;
+  }
+  base::ListValue arguments;
+  arguments.Append(has_visible_windows);
+  connection->remote->DispatchElectronAppEvent(
+      container_id, "activate", base::Value(std::move(arguments)));
+}
+
 void XenonManager::InitializeElectronIpc(ipc::mojom::IpcMainConfigPtr config) {
   if (!config) {
     LOG(ERROR) << "Cannot initialize an empty Electron IPC config";
@@ -384,6 +412,10 @@ XenonManager::GetElectronIpcRendererConfigForContainer(
   renderer_config->app_version = config_it->second->app_version;
   renderer_config->app_path = config_it->second->app_path;
   renderer_config->executable_path = config_it->second->executable_path;
+  renderer_config->is_packaged =
+      !config_it->second->renderer_base_url.empty() ||
+      !config_it->second->renderer_url_mappings.empty();
+  renderer_config->working_directory = startup_working_directory_;
   for (const auto& mapping : config_it->second->renderer_url_mappings) {
     renderer_config->renderer_url_mappings.push_back(mapping.Clone());
   }
@@ -529,22 +561,24 @@ void XenonManager::SetupAssociatedSide() {
 #endif
 
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
-void XenonManager::SetupBrowserObserver(ServiceRemote* remote,
-                                        const std::string& service_id) {
+mojo::ReceiverId XenonManager::SetupBrowserObserver(
+    ServiceRemote* remote,
+    const std::string& service_id) {
   if (!remote || !remote->is_bound()) {
-    return;
+    return 0;
   }
   mojo::PendingRemote<mojom::XenonBrowserObserver> pending_remote;
   mojo::PendingReceiver<mojom::XenonBrowserObserver> pending_receiver =
       pending_remote.InitWithNewPipeAndPassReceiver();
 #if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
-  browser_observer_receivers_.Add(this, std::move(pending_receiver),
-                                  service_id, GetUiTaskRunner());
+  const mojo::ReceiverId receiver_id = browser_observer_receivers_.Add(
+      this, std::move(pending_receiver), service_id, GetUiTaskRunner());
 #else
-  browser_observer_receivers_.Add(this, std::move(pending_receiver),
-                                  service_id);
+  const mojo::ReceiverId receiver_id = browser_observer_receivers_.Add(
+      this, std::move(pending_receiver), service_id);
 #endif
   (*remote)->SetBrowserObserver(std::move(pending_remote));
+  return receiver_id;
 }
 
 void XenonManager::CaptureNextObserverEventForTest(
@@ -557,6 +591,25 @@ void XenonManager::OnServiceEvent(const std::string& message) {
   if (observer_event_test_callback_) {
     std::move(observer_event_test_callback_).Run(message);
   }
+}
+
+void XenonManager::OnElectronAppExit(const std::string& container_id,
+                                     int32_t exit_code) {
+  const std::string normalized_id =
+      container_id.empty() ? "default" : container_id;
+  // The caller's pipe identifies its authority. A main module cannot stop a
+  // different container, the shared core service, or a newer launch of itself.
+  ContainerServiceConnection* connection = FindContainerService(normalized_id);
+  if (!connection ||
+      browser_observer_receivers_.current_context() != normalized_id ||
+      browser_observer_receivers_.current_receiver() !=
+          connection->observer_receiver_id ||
+      connection->generation != service_generation(normalized_id)) {
+    return;
+  }
+  LOG(INFO) << "Electron container exited: " << normalized_id
+            << " code=" << exit_code;
+  CloseContainerService(normalized_id);
 }
 #endif
 
@@ -578,10 +631,40 @@ void XenonManager::OnDisconnected() {
 }
 
 void XenonManager::OnContainerServiceDisconnected(
-    const std::string& container_id) {
+    const std::string& container_id,
+    uint64_t generation) {
+  ContainerServiceConnection* connection = FindContainerService(container_id);
+  if (!connection || connection->generation != generation) {
+    return;
+  }
   LOG(ERROR) << "Electron container service disconnected / crashed: "
              << container_id << "; waiting for an explicit restart";
-  container_services_.erase(container_id);
+  CloseContainerService(container_id);
+}
+
+void XenonManager::CloseContainerService(const std::string& container_id) {
+  auto it = container_services_.find(container_id);
+  if (it == container_services_.end()) {
+    return;
+  }
+  auto connection = std::move(it->second);
+  container_services_.erase(it);
+  // Keep configuration and generation: old documents cannot implicitly start
+  // the app while their windows are being torn down. The next explicit open
+  // creates a fresh service with the saved configuration.
+#if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
+  browser_observer_receivers_.Remove(connection->observer_receiver_id);
+#endif
+  if (connection->remote.is_bound()) {
+#if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
+    // reset() only releases this reference; native controllers may retain
+    // copies. Disconnect the underlying pipe so ServiceFactory tears down the
+    // Utility and its native addons even while those copies remain alive.
+    connection->remote.Disconnect();
+#else
+    connection->remote.reset();
+#endif
+  }
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
   XenonElectronWindowHost::GetInstance()->CloseForContainer(container_id);
 #endif

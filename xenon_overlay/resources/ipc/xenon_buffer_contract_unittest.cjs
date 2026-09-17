@@ -11,7 +11,8 @@ const vm = require('node:vm');
 
 function createBufferContext(side, nativeDecode = false) {
   const source = readFileSync(path.join(__dirname, `xenon_ipc_${side}_bootstrap.js`), 'utf8');
-  const start = source.indexOf('  const nativeToBase64 =');
+  const start = source.indexOf(side === 'main' ?
+      '  const nativeToBase64 =' : '  const textEncoder =');
   const end = source.indexOf(side === 'main' ?
       '  globalThis.Buffer = Buffer;' : '  const utilModule =', start);
   assert.ok(start >= 0 && end > start);
@@ -24,8 +25,7 @@ function createBufferContext(side, nativeDecode = false) {
       return bytes;
     };
   `, context);
-  vm.runInContext('const textEncoder = new TextEncoder();\n' +
-      'const textDecoder = new TextDecoder();\n' + source.slice(start, end) +
+  vm.runInContext(source.slice(start, end) +
       '\nglobalThis.Buffer = Buffer;', context);
   return context;
 }
@@ -208,6 +208,138 @@ test('renderer Buffer.isEncoding matches Node aliases, case and non-string rejec
   const expected = new Function('Buffer', fixture)(Buffer);
   assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected);
 });
+
+const rendererEncodingCases = {
+  'from encodes every advertised alias and case with Node bytes': `
+    const strings = ['', 'plain', 'éÿ€中文💩', '\\0\\ufeff\\ud800x\\udfff',
+      '\\ud800\\ud800\\udfff', '0123456789abcdefABCDEF', '1a7', '1g',
+      '1a 2b', '0x12', '\\u0131f', '1\\u0161', '\\u0141\\u0142',
+      'YWJj', 'YW!Jj', 'Y W\\nJj', 'Y-W_', 'YWJj====', 'YWJj=AAAA',
+      'a', 'ab', 'abc', 'abcd', 'ab=x', 'abcd====', '\\u0141A',
+      'éAA', 'YW\\ud800Jj', '\\u013dAAAA'];
+    return strings.map(value => aliases.map(encoding =>
+      Array.from(Buffer.from(value, encoding))));
+  `,
+  'from defaults non-string encodings without coercing them': `
+    let conversions = 0;
+    const encodings = [undefined, null, false, true, 0, 1, NaN, 0n, 1n,
+      Symbol('hex'), {}, [], ['hex'], new String('hex'),
+      {toString() { ++conversions; return 'hex'; }},
+      new Proxy({}, {get() { throw new Error('encoding was inspected'); }}),
+      '', 'utf8', 'utf-8', 'hex', 'utf16le', 'made-up', 'raw', 'utf16be'];
+    return {values: ['', 'é', 'ab'].map(value => encodings.map(encoding =>
+      attempt(() => Array.from(Buffer.from(value, encoding))))), conversions};
+  `,
+  'toString handles UTF-8 BOM malformed bytes ASCII Latin-1 and raw UTF-16': `
+    const inputs = [[], [0, 65, 127, 128, 159, 233, 255], [239, 187, 191, 65],
+      [192, 128], [224, 128, 175], [237, 160, 128], [240, 159, 146, 169],
+      [244, 144, 128, 128], [226, 130], [226, 65, 130], [255, 254, 65, 0],
+      [0, 216], [0, 220], [0, 216, 0, 220], [65, 0, 66],
+      Array.from({length: 256}, (_, i) => i)];
+    return inputs.map(bytes => aliases.map(encoding =>
+      Buffer.from(bytes).toString(encoding)));
+  `,
+  'toString clamps ranges within active views before validating encoding': `
+    const buffer = Buffer.from([9, 0xef, 0xbb, 0xbf, 0x41, 0xc3, 0xa9, 9])
+      .subarray(1, 7);
+    const ranges = [[undefined, undefined], [-3, undefined], [0, -1],
+      [1, 4], [2.9, 5.9], [0, 99], [99, 100], [3, 1], [NaN, NaN],
+      [null, undefined], ['1', '5'], [-Infinity, Infinity], [1n, 3]];
+    return ranges.map(([start, end]) => [...aliases, '', null, 'bad']
+      .map(encoding => attempt(() => buffer.toString(encoding, start, end))));
+  `,
+  'toString write and byteLength apply their encoding coercion rules': `
+    let conversions = 0;
+    const encodings = [undefined, null, false, true, 0, 1, NaN, 0n, 1n,
+      Symbol('hex'), {}, [], ['hex'], new String('hex'), new String('utf16le'),
+      {toString() { ++conversions; return 'latin1'; }},
+      {[Symbol.toPrimitive]() { ++conversions; return 'utf16le'; }},
+      '', 'bad', 'utf-8', 'UCS-2'];
+    const output = encodings.map(encoding => [
+      attempt(() => Buffer.from([233, 0]).toString(encoding)),
+      attempt(() => { const buffer = Buffer.alloc(6, 33);
+        const count = buffer.write('é', 0, 6, encoding);
+        return [count, Array.from(buffer)]; }),
+      attempt(() => Buffer.byteLength('é', encoding)),
+      attempt(() => Buffer.byteLength('', encoding))]);
+    return {output, conversions};
+  `,
+  'write respects encoded character boundaries and leaves adjacent view bytes intact': `
+    const values = ['é中文💩', '\\ufeff\\ud800x\\udfff', '61f', '1a7', 'ab=x', 'Y-W_'];
+    return values.map(value => aliases.map(encoding =>
+      Array.from({length: 10}, (_, length) => {
+        const backing = Buffer.alloc(13, 33);
+        const view = backing.subarray(2, 11);
+        const count = view.write(value, 1, Math.min(length, 8), encoding);
+        return [count, Array.from(backing)];
+      })));
+  `,
+  'write validates overloads offsets lengths values and unknown codecs': `
+    const args = [['é'], ['é', 'latin1'], ['é', 1, 'utf16le'],
+      ['é', undefined, 0, 'latin1'], ['é', 'latin1', 2],
+      ['é', 0, 0, 'bad'], ['', 0, 0, 'bad'], [1], [null], [new String('é')],
+      ['é', null], ['é', -1], ['é', 1.5], ['é', NaN], ['é', Infinity],
+      ['é', 7], ['é', 6], ['é', 0, -1], ['é', 0, 7], ['é', 0, null],
+      ['é', 0, 1.5], ['é', 0, NaN], ['é', 5, 6, 'utf8']];
+    return args.map(args => attempt(() => {
+      const buffer = Buffer.alloc(6, 33);
+      return [buffer.write(...args), Array.from(buffer)];
+    }));
+  `,
+  'fill and alloc repeat encoded bytes for every alias': `
+    return ['', 'é', '中文💩', 'ab', 'abcd', 'YWJj', '\\ud800'].map(value =>
+      aliases.map(encoding => [
+        attempt(() => Array.from(Buffer.alloc(9, value, encoding))),
+        attempt(() => { const backing = Buffer.alloc(13, 33);
+          const view = backing.subarray(2, 11);
+          const result = view.fill(value, 1, 8, encoding);
+          return [result === view, Array.from(backing)]; }),
+        attempt(() => Array.from(Buffer.alloc(9).fill(value, encoding))),
+        attempt(() => Array.from(Buffer.alloc(9).fill(value, 1, encoding)))]));
+  `,
+  'fill validates encodings and ranges and rejects nonempty undecodable patterns': `
+    const args = [['a', 0, 6, 'bad'], ['', 0, 6, 'bad'],
+      ['a', 6, 6, 'bad'], ['a', 0, 6, false], ['a', 0, 6, 0],
+      ['a', 0, 6, null], ['a', 0, 6, Symbol('utf8')],
+      ['a', 0, 6, {}], ['ab', 0, 6, ''], ['ab', 0, 6, 'hex'],
+      ['g', 0, 6, 'hex'], ['a', 0, 6, 'base64'], ['a', 0, 0, 'base64'],
+      ['é', undefined, 2, 'latin1'], ['é', null], ['a', -1],
+      ['a', 1.5], ['a', NaN], ['a', Infinity], ['a', 7],
+      ['a', 0, 7], ['a', 0, null], ['a', 0, -1], ['a', 4, 2],
+      [17, 0, 6, 'bad']];
+    return args.map(args => attempt(() => Array.from(Buffer.alloc(6, 33).fill(...args))));
+  `,
+  'fill uses raw view bytes and safely repeats overlapping patterns': `
+    const inputs = [Buffer.from([2, 3]), new Uint8Array([5, 6, 7]),
+      new Uint16Array([0x1234, 0x5678]), new DataView(new Uint8Array([2, 4, 6]).buffer),
+      new Uint8Array(), {}, undefined, null, true];
+    const output = inputs.map(value => attempt(() => Array.from(Buffer.alloc(7).fill(value))));
+    const overlap = [0, 1, 2, 3].map(start => {
+      const buffer = Buffer.from([1, 2, 3, 4, 5, 6, 7]);
+      buffer.fill(buffer.subarray(1, 4), start, 7);
+      return Array.from(buffer);
+    });
+    return {output, overlap};
+  `,
+};
+
+for (const [name, source] of Object.entries(rendererEncodingCases)) {
+  test(`renderer Buffer ${name}`, () => {
+    const fixture = `
+      const aliases = ['utf8', 'utf-8', 'latin1', 'binary', 'ascii', 'utf16le',
+        'utf-16le', 'ucs2', 'ucs-2', 'hex', 'base64', 'base64url']
+        .flatMap(name => [name, name.toUpperCase()]);
+      function attempt(callback) {
+        try { return callback(); }
+        catch (error) { return [error.name, error.code || null]; }
+      }
+      ${source}
+    `;
+    const actual = vm.runInContext(`(() => {${fixture}})()`, createBufferContext('renderer'));
+    const expected = new Function('Buffer', fixture)(Buffer);
+    assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected);
+  });
+}
 
 const syncKitBundle = process.env.XENON_TEST_TH_SYNC_KIT ||
     'F:/thunder_2025/app/node_modules/@xbase/electron_sync_kit/dist/cjs/development/index.js';

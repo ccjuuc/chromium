@@ -6,8 +6,10 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include "base/base64.h"
 #include "base/base_paths.h"
@@ -53,6 +55,26 @@ const os = require('os');
 const fs = require('node:fs');
 const asyncHooks = require('node:async_hooks');
 const ipcContext = new asyncHooks.AsyncLocalStorage();
+ipcMain.on('test:native-app-exit', (event, code) => {
+  try {
+    __xenonExitApp(code);
+    event.returnValue = 'requested';
+  } catch (error) {
+    event.returnValue = error.code || error.name;
+  }
+});
+ipcMain.on('test:unsupported-app-exit', event => {
+  const window = new BrowserWindow({show: false});
+  let events = 0;
+  for (const name of ['before-quit', 'will-quit', 'quit']) {
+    app.on(name, () => ++events);
+  }
+  const codes = [];
+  for (const method of ['quit', 'exit']) {
+    try { app[method](); } catch (error) { codes.push(error.code); }
+  }
+  event.returnValue = {codes, events, alive: !window.isDestroyed()};
+});
 ipcMain.handle('test:async-context-enter', () => {
   ipcContext.enterWith('message');
   return ipcContext.getStore();
@@ -404,6 +426,21 @@ ipcMain.on('test:get-sync', event => {
   event.returnValue = persistentCounter;
 });
 ipcMain.handle('test:is-ready', () => app.isReady());
+const appEventState = {readyCount: 0, activations: [], microtasks: 0, order: []};
+app.on('ready', () => {
+  ++appEventState.readyCount;
+  appEventState.order.push('ready');
+});
+app.whenReady().then(() => {
+  appEventState.order.push('when-ready');
+  app.on('activate', function(event, ...args) {
+    appEventState.order.push('activate');
+    appEventState.activations.push({args, ready: app.isReady(),
+      receiverIsApp: this === app, hasEvent: typeof event.preventDefault === 'function'});
+    queueMicrotask(() => ++appEventState.microtasks);
+  });
+});
+ipcMain.on('test:app-event-state', event => { event.returnValue = appEventState; });
 ipcMain.handle('test:sender', event => ({
   processId: event.processId,
   frameId: event.frameId,
@@ -575,6 +612,20 @@ ipcMain.handle('test:menu-popup', () => {
   return true;
 });
 ipcMain.handle('test:menu-state', () => ({menuClosed, menuClicked}));
+ipcMain.handle('test:open-dialog-contract', async (_event, mode) => {
+  const options = {title: 'Native picker fixture',
+    properties: ['openDirectory', 'multiSelections'],
+    filters: [{name: 'Fixture', extensions: ['.mp4', 'mkv']}]};
+  const dialog = require('electron').dialog;
+  try {
+    const value = mode === 'sync' ? dialog.showOpenDialogSync(options) :
+        await dialog.showOpenDialog(options);
+    return {failed: false, value: value === undefined ? null : value,
+      isUndefined: value === undefined};
+  } catch (error) {
+    return {failed: true, code: error.code, name: error.name};
+  }
+});
 )JS";
 
 base::Value Arguments(std::initializer_list<base::Value> values) {
@@ -718,6 +769,126 @@ class XenonIpcMainContainerTest : public gin::V8Test {
   base::Value last_window_arguments_;
   std::unique_ptr<XenonIpcMainContainer> container_;
 };
+
+TEST_F(XenonIpcMainContainerTest, OpenDialogMissingHostReportsUnsupported) {
+  for (const char* mode : {"sync", "async"}) {
+    SCOPED_TRACE(mode);
+    base::test::TestFuture<mojom::IpcResultPtr> future;
+    container_->Invoke("renderer-1", "test:open-dialog-contract",
+                       Arguments({base::Value(mode)}), future.GetCallback());
+    const auto result = future.Take();
+    ASSERT_TRUE(result->success) << result->error;
+    const auto& value = result->value.GetDict();
+    EXPECT_EQ(true, value.FindBool("failed"));
+    ASSERT_TRUE(value.FindString("code"));
+    EXPECT_EQ("ERR_NOT_SUPPORTED", *value.FindString("code"));
+    ASSERT_TRUE(value.FindString("name"));
+    EXPECT_EQ("Error", *value.FindString("name"));
+    EXPECT_FALSE(value.contains("value"));
+  }
+}
+
+TEST_F(XenonIpcMainContainerTest, OpenDialogBrowserFailureNeverLooksCancelled) {
+  int calls = 0;
+  XenonIpcMainContainer::WindowHooks hooks;
+  hooks.show_open_dialog = base::BindRepeating(
+      [](int* calls, const std::string& title, bool directory, bool allow_multi,
+         const std::vector<std::string>& extensions,
+         std::vector<std::string>* paths) {
+        ++*calls;
+        // A partial reply must not become a successful selection either.
+        paths->push_back("C:\\partial\\fixture.mp4");
+        return false;
+      },
+      &calls);
+  container_->SetWindowHooks(std::move(hooks));
+  for (const char* mode : {"sync", "async"}) {
+    SCOPED_TRACE(mode);
+    base::test::TestFuture<mojom::IpcResultPtr> future;
+    container_->Invoke("renderer-1", "test:open-dialog-contract",
+                       Arguments({base::Value(mode)}), future.GetCallback());
+    const auto result = future.Take();
+    ASSERT_TRUE(result->success) << result->error;
+    const auto& value = result->value.GetDict();
+    EXPECT_EQ(true, value.FindBool("failed"));
+    ASSERT_TRUE(value.FindString("code"));
+    EXPECT_EQ("ERR_FAILED", *value.FindString("code"));
+    EXPECT_FALSE(value.contains("value"));
+  }
+  EXPECT_EQ(2, calls);
+}
+
+TEST_F(XenonIpcMainContainerTest, OpenDialogPreservesRealCancellation) {
+  XenonIpcMainContainer::WindowHooks hooks;
+  hooks.show_open_dialog = base::BindRepeating(
+      [](const std::string& title, bool directory, bool allow_multi,
+         const std::vector<std::string>& extensions,
+         std::vector<std::string>* paths) { return true; });
+  container_->SetWindowHooks(std::move(hooks));
+  for (const char* mode : {"sync", "async"}) {
+    SCOPED_TRACE(mode);
+    base::test::TestFuture<mojom::IpcResultPtr> future;
+    container_->Invoke("renderer-1", "test:open-dialog-contract",
+                       Arguments({base::Value(mode)}), future.GetCallback());
+    const auto result = future.Take();
+    ASSERT_TRUE(result->success) << result->error;
+    const auto& value = result->value.GetDict();
+    EXPECT_EQ(false, value.FindBool("failed"));
+    if (std::string_view(mode) == "sync") {
+      EXPECT_EQ(true, value.FindBool("isUndefined"));
+      ASSERT_TRUE(value.Find("value"));
+      EXPECT_TRUE(value.Find("value")->is_none());
+    } else {
+      EXPECT_EQ(false, value.FindBool("isUndefined"));
+      const auto* reply = value.FindDict("value");
+      ASSERT_TRUE(reply);
+      EXPECT_EQ(true, reply->FindBool("canceled"));
+      const auto* paths = reply->FindList("filePaths");
+      ASSERT_TRUE(paths);
+      EXPECT_TRUE(paths->empty());
+    }
+  }
+}
+
+TEST_F(XenonIpcMainContainerTest, OpenDialogPreservesSelectionAndOptions) {
+  XenonIpcMainContainer::WindowHooks hooks;
+  hooks.show_open_dialog = base::BindRepeating(
+      [](const std::string& title, bool directory, bool allow_multi,
+         const std::vector<std::string>& extensions,
+         std::vector<std::string>* paths) {
+        EXPECT_EQ("Native picker fixture", title);
+        EXPECT_TRUE(directory);
+        EXPECT_TRUE(allow_multi);
+        EXPECT_EQ((std::vector<std::string>{"mp4", "mkv"}), extensions);
+        *paths = {"C:\\media\\first.mp4", "C:\\media\\second.mkv"};
+        return true;
+      });
+  container_->SetWindowHooks(std::move(hooks));
+  for (const char* mode : {"sync", "async"}) {
+    SCOPED_TRACE(mode);
+    base::test::TestFuture<mojom::IpcResultPtr> future;
+    container_->Invoke("renderer-1", "test:open-dialog-contract",
+                       Arguments({base::Value(mode)}), future.GetCallback());
+    const auto result = future.Take();
+    ASSERT_TRUE(result->success) << result->error;
+    const auto& value = result->value.GetDict();
+    EXPECT_EQ(false, value.FindBool("failed"));
+    EXPECT_EQ(false, value.FindBool("isUndefined"));
+    const base::ListValue* paths;
+    if (std::string_view(mode) == "sync") {
+      paths = value.FindList("value");
+    } else {
+      const auto* reply = value.FindDict("value");
+      ASSERT_TRUE(reply);
+      EXPECT_EQ(false, reply->FindBool("canceled"));
+      paths = reply->FindList("filePaths");
+    }
+    ASSERT_TRUE(paths);
+    ASSERT_EQ(2u, paths->size());
+    EXPECT_EQ("C:\\media\\first.mp4", (*paths)[0].GetString());
+    EXPECT_EQ("C:\\media\\second.mkv", (*paths)[1].GetString());
+  }
+}
 
 TEST_F(XenonIpcMainContainerTest,
        MainBuiltinCapabilitiesNeverDiscardDataAsSuccess) {
@@ -1533,6 +1704,111 @@ TEST_F(XenonIpcMainContainerTest, AppReadyFollowsBrowserLifecycle) {
   ASSERT_TRUE(after->success) << after->error;
   ASSERT_TRUE(after->value.is_bool());
   EXPECT_TRUE(after->value.GetBool());
+}
+
+TEST_F(XenonIpcMainContainerTest, AppExitWithoutOwnerFailsExplicitly) {
+  const auto result = container_->SendSync("renderer-1", "test:native-app-exit",
+                                           Arguments({base::Value(0)}));
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ("ERR_NOT_SUPPORTED", result->value.GetString());
+}
+
+TEST_F(XenonIpcMainContainerTest, UnsupportedAppExitDoesNotStartCleanup) {
+  const auto result = container_->SendSync(
+      "renderer-1", "test:unsupported-app-exit", Arguments({}));
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& state = result->value.GetDict();
+  EXPECT_EQ(state.FindInt("events"), 0);
+  EXPECT_EQ(state.FindBool("alive"), true);
+  ASSERT_TRUE(state.FindList("codes"));
+  EXPECT_EQ((base::ListValue()
+                 .Append("ERR_NOT_SUPPORTED")
+                 .Append("ERR_NOT_SUPPORTED")),
+            *state.FindList("codes"));
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       AppExitNotifiesOwnerOnceAfterJavaScriptReturns) {
+  std::vector<int> exit_codes;
+  container_->SetAppExitHandler(base::BindRepeating(
+      [](std::vector<int>* codes, int code) { codes->push_back(code); },
+      &exit_codes));
+  for (int code : {23, 42}) {
+    const auto result = container_->SendSync(
+        "renderer-1", "test:native-app-exit", Arguments({base::Value(code)}));
+    ASSERT_TRUE(result->success) << result->error;
+    EXPECT_EQ("requested", result->value.GetString());
+  }
+  EXPECT_TRUE(exit_codes.empty());
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ((std::vector<int>{23}), exit_codes);
+}
+
+TEST_F(XenonIpcMainContainerTest, AppExitNotificationDoesNotOutliveContainer) {
+  bool notified = false;
+  container_->SetAppExitHandler(
+      base::BindRepeating([](bool* value, int) { *value = true; }, &notified));
+  const auto result = container_->SendSync("renderer-1", "test:native-app-exit",
+                                           Arguments({base::Value(0)}));
+  ASSERT_TRUE(result->success) << result->error;
+  container_.reset();
+  task_environment_.RunUntilIdle();
+  EXPECT_FALSE(notified);
+}
+
+TEST_F(XenonIpcMainContainerTest, AppActivateWaitsForReadyAndDrainsMicrotasks) {
+  container_->DispatchAppEvent(
+      "activate", Arguments({base::Value(false), base::Value("before-ready")}));
+  const auto before = container_->SendSync(
+      "renderer-1", "test:app-event-state", Arguments({}));
+  ASSERT_TRUE(before->success) << before->error;
+  EXPECT_EQ(0, before->value.GetDict().FindInt("readyCount"));
+  ASSERT_TRUE(before->value.GetDict().FindList("activations"));
+  EXPECT_TRUE(before->value.GetDict().FindList("activations")->empty());
+
+  container_->MarkAppReady();
+  const auto after = container_->SendSync(
+      "renderer-1", "test:app-event-state", Arguments({}));
+  ASSERT_TRUE(after->success) << after->error;
+  const auto& state = after->value.GetDict();
+  EXPECT_EQ(1, state.FindInt("readyCount"));
+  EXPECT_EQ(1, state.FindInt("microtasks"));
+  ASSERT_TRUE(state.FindList("order"));
+  EXPECT_EQ((base::ListValue().Append("ready").Append("when-ready").Append("activate")),
+            *state.FindList("order"));
+  const auto* activations = state.FindList("activations");
+  ASSERT_TRUE(activations);
+  ASSERT_EQ(1u, activations->size());
+  const auto& activation = (*activations)[0].GetDict();
+  EXPECT_EQ(true, activation.FindBool("ready"));
+  EXPECT_EQ(true, activation.FindBool("receiverIsApp"));
+  EXPECT_EQ(true, activation.FindBool("hasEvent"));
+  ASSERT_TRUE(activation.FindList("args"));
+  EXPECT_EQ((base::ListValue().Append(false).Append("before-ready")),
+            *activation.FindList("args"));
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       RepeatedAppActivateDoesNotRepeatReadyOrLoseArguments) {
+  container_->MarkAppReady();
+  container_->DispatchAppEvent("activate", Arguments({base::Value(false)}));
+  container_->MarkAppReady();
+  container_->DispatchAppEvent("activate", Arguments({base::Value(true)}));
+  const auto result = container_->SendSync(
+      "renderer-1", "test:app-event-state", Arguments({}));
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& state = result->value.GetDict();
+  EXPECT_EQ(1, state.FindInt("readyCount"));
+  EXPECT_EQ(2, state.FindInt("microtasks"));
+  const auto* activations = state.FindList("activations");
+  ASSERT_TRUE(activations);
+  ASSERT_EQ(2u, activations->size());
+  for (size_t i = 0; i < activations->size(); ++i) {
+    const auto& activation = (*activations)[i].GetDict();
+    EXPECT_EQ(true, activation.FindBool("ready"));
+    ASSERT_TRUE(activation.FindList("args"));
+    EXPECT_EQ((base::ListValue().Append(i == 1)), *activation.FindList("args"));
+  }
 }
 
 TEST_F(XenonIpcMainContainerTest, StandardElectronMainBootstrapRunsUnchanged) {

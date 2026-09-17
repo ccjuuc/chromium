@@ -105,6 +105,7 @@ class XenonIpcRenderer final : public xenon::ipc::mojom::IpcRenderer,
   // before its context/frame disappears; wrappers cannot reconnect afterward.
   const raw_ptr<v8::Isolate> isolate_;
   v8::Global<v8::Context> context_;
+  const std::string context_id_;
   mojo::Remote<xenon::ipc::mojom::IpcHost> host_;
   xenon::ipc::mojom::IpcRendererConfigPtr runtime_config_;
   mojo::Remote<xenon::ipc::mojom::NodeAddonHost> node_addon_host_;

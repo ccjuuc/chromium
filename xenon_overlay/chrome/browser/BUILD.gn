@@ -363,11 +363,16 @@ source_set("browser") {
 if (enable_xenon_service) {
   source_set("unit_tests") {
     testonly = true
-    sources = [ "xenon_manager_unittest.cc" ]
+    sources = [
+      "ui/xenon_web_dialog_unittest.cc",
+      "xenon_manager_unittest.cc",
+    ]
     deps = [
       ":browser",
       "//base/test:test_support",
+      "//content/test:test_support",
       "//testing/gtest",
+      "//ui/views",
     ]
   }
 }

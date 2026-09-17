@@ -47,8 +47,10 @@
   const homeDir = injectedPaths.home || '';
   const tempDir = injectedPaths.temp || '';
 
-  globalThis.__filename = injectedPaths.documentPath || appPath + '\\index.js';
-  globalThis.__dirname = globalThis.__filename.replace(/[\\/][^\\/]*$/, '');
+  const runtimeSeparator = runtimePlatform === 'win32' ? '\\' : '/';
+  globalThis.__filename = injectedPaths.documentPath || appPath + runtimeSeparator + 'index.js';
+  globalThis.__dirname = globalThis.__filename.replace(
+      runtimePlatform === 'win32' ? /[\\/][^\\/]*$/ : /\/[^/]*$/, '');
   if (typeof window !== 'undefined') {
     window.global = window;
     window.__filename = globalThis.__filename;
@@ -461,7 +463,7 @@
     getName: () => hostedAppName,
     getAppPath: () => appPath,
     getPath: (name) => getAppPathByName(name),
-    isPackaged: true,
+    isPackaged: injectedPaths.isPackaged,
     whenReady: () => Promise.resolve(appApi),
     isReady: () => true,
   };
@@ -557,174 +559,206 @@
   }
 
   // --- 3. Path Module (Win32 & POSIX) ---
-  const win32 = {
-    sep: '\\',
-    delimiter: ';',
-    isAbsolute(path) {
-      return typeof path === 'string' &&
-          (/^[a-zA-Z]:[\\/]/.test(path) || /^\\\\[^\\]+/.test(path));
-    },
-    normalize(path) {
-      path = String(path || '.');
-      if (!path) return '.';
-      const isUnc = /^\\\\[^\\]+/.test(path);
-      const driveMatch = path.match(/^([a-zA-Z]:)[\\/]?/);
-      const prefix = driveMatch ? driveMatch[1] + '\\' : (isUnc ? '\\\\' : (path.startsWith('\\') ? '\\' : ''));
-      let rest = driveMatch ? path.slice(driveMatch[0].length) : (isUnc ? path.slice(2) : path);
-      rest = rest.replace(/\//g, '\\');
-      const parts = [];
-      for (const segment of rest.split('\\')) {
-        if (!segment || segment === '.') continue;
-        if (segment === '..') {
-          if (parts.length && parts[parts.length - 1] !== '..') {
-            parts.pop();
-          } else if (!prefix) {
-            parts.push('..');
-          }
-        } else {
-          parts.push(segment);
-        }
-      }
-      let result = prefix + parts.join('\\');
-      return result || (prefix ? prefix : '.');
-    },
-    join(...paths) {
-      const valid = paths.filter(p => typeof p === 'string' && p.length > 0);
-      if (!valid.length) return '.';
-      return win32.normalize(valid.join('\\'));
-    },
-    resolve(...paths) {
-      let resolved = '';
-      for (let i = paths.length - 1; i >= 0; i--) {
-        const p = paths[i];
-        if (typeof p !== 'string' || !p) continue;
-        resolved = p + (resolved ? '\\' + resolved : '');
-        if (win32.isAbsolute(resolved)) break;
-      }
-      if (!win32.isAbsolute(resolved)) {
-        resolved = 'C:\\' + (resolved ? resolved : '');
-      }
-      return win32.normalize(resolved);
-    },
-    dirname(path) {
-      path = win32.normalize(path);
-      const idx = path.lastIndexOf('\\');
-      if (idx === -1) return '.';
-      if (idx === 2 && path[1] === ':') return path.slice(0, 3);
-      if (idx === 0) return '\\';
-      return path.slice(0, idx);
-    },
-    basename(path, ext) {
-      path = String(path || '');
-      const idx = Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/'));
-      let base = idx >= 0 ? path.slice(idx + 1) : path;
-      if (ext && base.endsWith(ext)) base = base.slice(0, -ext.length);
-      return base;
-    },
-    extname(path) {
-      const base = win32.basename(path);
-      const dot = base.lastIndexOf('.');
-      if (dot <= 0) return '';
-      return base.slice(dot);
-    },
-    parse(path) {
-      path = String(path || '');
-      const root = win32.isAbsolute(path) ? path.slice(0, 3) : '';
-      const dir = win32.dirname(path);
-      const base = win32.basename(path);
-      const ext = win32.extname(path);
-      const name = ext ? base.slice(0, -ext.length) : base;
-      return { root, dir, base, ext, name };
-    },
-    format(obj) {
-      const dir = obj.dir || obj.root || '';
-      const base = obj.base || ((obj.name || '') + (obj.ext || ''));
-      if (!dir) return base;
-      if (dir.endsWith('\\')) return dir + base;
-      return dir + '\\' + base;
+  function validatePath(path, name = 'path') {
+    if (typeof path !== 'string') {
+      throw Object.assign(new TypeError(`${name} must be a string`),
+                          {code: 'ERR_INVALID_ARG_TYPE'});
     }
-  };
+    return path;
+  }
 
-  const posix = {
-    sep: '/',
-    delimiter: ':',
-    isAbsolute(path) {
-      return typeof path === 'string' && path.startsWith('/');
-    },
-    normalize(path) {
-      path = String(path || '.');
-      if (!path) return '.';
-      const isAbs = path.startsWith('/');
-      const parts = [];
-      for (const segment of path.split('/')) {
-        if (!segment || segment === '.') continue;
-        if (segment === '..') {
-          if (parts.length && parts[parts.length - 1] !== '..') {
-            parts.pop();
-          } else if (!isAbs) {
-            parts.push('..');
-          }
-        } else {
-          parts.push(segment);
-        }
-      }
-      let result = (isAbs ? '/' : '') + parts.join('/');
-      return result || (isAbs ? '/' : '.');
-    },
-    join(...paths) {
-      const valid = paths.filter(p => typeof p === 'string' && p.length > 0);
-      if (!valid.length) return '.';
-      return posix.normalize(valid.join('/'));
-    },
-    resolve(...paths) {
-      let resolved = '';
-      for (let i = paths.length - 1; i >= 0; i--) {
-        const p = paths[i];
-        if (typeof p !== 'string' || !p) continue;
-        resolved = p + (resolved ? '/' + resolved : '');
-        if (posix.isAbsolute(resolved)) break;
-      }
-      if (!posix.isAbsolute(resolved)) resolved = '/' + resolved;
-      return posix.normalize(resolved);
-    },
-    dirname(path) {
-      path = posix.normalize(path);
-      const idx = path.lastIndexOf('/');
-      if (idx === -1) return '.';
-      if (idx === 0) return '/';
-      return path.slice(0, idx);
-    },
-    basename(path, ext) {
-      path = String(path || '');
-      const idx = path.lastIndexOf('/');
-      let base = idx >= 0 ? path.slice(idx + 1) : path;
-      if (ext && base.endsWith(ext)) base = base.slice(0, -ext.length);
-      return base;
-    },
-    extname(path) {
-      const base = posix.basename(path);
-      const dot = base.lastIndexOf('.');
-      if (dot <= 0) return '';
-      return base.slice(dot);
-    },
-    parse(path) {
-      path = String(path || '');
-      const root = path.startsWith('/') ? '/' : '';
-      const dir = posix.dirname(path);
-      const base = posix.basename(path);
-      const ext = posix.extname(path);
-      const name = ext ? base.slice(0, -ext.length) : base;
-      return { root, dir, base, ext, name };
-    },
-    format(obj) {
-      const dir = obj.dir || obj.root || '';
-      const base = obj.base || ((obj.name || '') + (obj.ext || ''));
-      if (!dir) return base;
-      if (dir.endsWith('/')) return dir + base;
-      return dir + '/' + base;
+  function pathRoot(path, windows) {
+    if (!windows) return {end: path.startsWith('/') ? 1 : 0, device: '',
+      absolute: path.startsWith('/')};
+    const drive = /^[a-zA-Z]:/.exec(path);
+    if (drive) {
+      const absolute = /^[\\/]/.test(path.slice(2));
+      return {end: absolute ? 3 : 2, device: drive[0], absolute};
     }
-  };
+    const unc = /^[\\/]{2}([^\\/]+)[\\/]+([^\\/]+)/.exec(path);
+    if (unc) return {end: unc[0].length, device: `\\\\${unc[1]}\\${unc[2]}`,
+      absolute: true};
+    const absolute = /^[\\/]/.test(path);
+    return {end: absolute ? 1 : 0, device: '', absolute};
+  }
 
+  function normalizedPathTail(path, absolute, windows) {
+    const parts = [];
+    for (const part of path.split(windows ? /[\\/]/ : '/')) {
+      if (!part || part === '.') continue;
+      if (part === '..' && parts.length && parts[parts.length - 1] !== '..') {
+        parts.pop();
+      } else if (part !== '..' || !absolute) {
+        parts.push(part);
+      }
+    }
+    return parts.join(windows ? '\\' : '/');
+  }
+
+  function createPathModule(windows) {
+    const sep = windows ? '\\' : '/';
+    const isSep = value => value === '/' || (windows && value === '\\');
+    const module = {
+      sep,
+      delimiter: windows ? ';' : ':',
+      isAbsolute(path) {
+        return pathRoot(validatePath(path), windows).absolute;
+      },
+      normalize(path) {
+        validatePath(path);
+        if (!path) return '.';
+        const root = pathRoot(path, windows);
+        if (windows && /^\\\\[?.]\\/.test(root.device)) {
+          root.device = root.device.slice(0, 3);
+          root.end = 4;
+        }
+        let tail = normalizedPathTail(path.slice(root.end), root.absolute, windows);
+        if (!tail && !root.absolute) tail = '.';
+        if (tail && isSep(path[path.length - 1])) tail += sep;
+        // Normalization must not turn a relative component into a drive path.
+        if (windows && !root.device && !root.absolute && path.includes(':') &&
+            (/^[a-zA-Z]:/.test(tail) || /:(?:[\\/]|$)/.test(path))) return '.\\' + tail;
+        return root.device + (root.absolute ? sep : '') + tail;
+      },
+      join(...paths) {
+        for (const path of paths) validatePath(path);
+        const nonempty = paths.filter(Boolean);
+        if (!nonempty.length) return '.';
+        let joined = nonempty.join(sep);
+        // Only an intentional server component in the first argument starts
+        // a UNC path. Joining separators must not manufacture a server name.
+        if (windows && !/^[\\/]{2}[^\\/]/.test(nonempty[0])) {
+          joined = joined.replace(/^[\\/]{2,}/, '\\');
+        }
+        return module.normalize(joined);
+      },
+      resolve(...paths) {
+        let device = '', tail = '', absolute = false;
+        for (let i = paths.length - 1; i >= -1; --i) {
+          let path;
+          if (i >= 0) {
+            path = validatePath(paths[i], `paths[${i}]`);
+            if (!path) continue;
+          } else {
+            path = process.cwd();
+            if (windows && device) {
+              path = process.env[`=${device}`] || path;
+              const cwdRoot = pathRoot(path, true);
+              if (cwdRoot.device && cwdRoot.device.toLowerCase() !== device.toLowerCase()) {
+                path = device + '\\';
+              }
+            } else if (!windows && runtimePlatform === 'win32') {
+              path = path.replace(/\\/g, '/');
+              path = path.slice(path.indexOf('/'));
+            }
+          }
+          const root = pathRoot(path, windows);
+          if (windows && /^\\\\[?.]\\/.test(root.device)) {
+            root.device = root.device.slice(0, 3);
+            root.end = 4;
+          }
+          if (root.device) {
+            if (device && root.device.toLowerCase() !== device.toLowerCase()) continue;
+            device = root.device;
+          }
+          if (!absolute) {
+            tail = path.slice(root.end) + sep + tail;
+            absolute = root.absolute;
+          }
+          if (absolute && (!windows || device)) break;
+        }
+        tail = normalizedPathTail(tail, absolute, windows);
+        return device + (absolute ? sep : '') + tail || '.';
+      },
+      dirname(path) {
+        validatePath(path);
+        if (!path) return '.';
+        const root = pathRoot(path, windows);
+        let rootEnd = root.end;
+        if (windows && root.device.startsWith('\\\\') && isSep(path[rootEnd])) ++rootEnd;
+        let end = path.length - 1;
+        while (end >= rootEnd && isSep(path[end])) --end;
+        while (end >= rootEnd && !isSep(path[end])) --end;
+        if (end < rootEnd) return path.slice(0, rootEnd) || '.';
+        if (!windows && end === 1 && path.startsWith('/')) return '//';
+        return path.slice(0, end);
+      },
+      basename(path, suffix) {
+        validatePath(path);
+        if (suffix !== undefined) validatePath(suffix, 'suffix');
+        const start = windows && /^[a-zA-Z]:/.test(path) ? 2 : 0;
+        let end = path.length;
+        while (end > start && isSep(path[end - 1])) --end;
+        let begin = end;
+        while (begin > start && !isSep(path[begin - 1])) --begin;
+        let base = path.slice(begin, end);
+        if (suffix && base.endsWith(suffix) && (base !== suffix || path === suffix)) {
+          base = base.slice(0, -suffix.length);
+        }
+        return base;
+      },
+      extname(path) {
+        const base = module.basename(path);
+        const dot = base.lastIndexOf('.');
+        return dot <= 0 || base === '..' ? '' : base.slice(dot);
+      },
+      parse(path) {
+        validatePath(path);
+        const parsedRoot = pathRoot(path, windows);
+        let rootEnd = parsedRoot.end;
+        if (windows && parsedRoot.device.startsWith('\\\\') && isSep(path[rootEnd])) ++rootEnd;
+        const root = path.slice(0, rootEnd);
+        let end = path.length;
+        while (end > rootEnd && isSep(path[end - 1])) --end;
+        let begin = end;
+        while (begin > rootEnd && !isSep(path[begin - 1])) --begin;
+        const base = path.slice(begin, end);
+        const dot = base.lastIndexOf('.');
+        const ext = dot <= 0 || (base === '..' && (windows || begin !== 1)) ? '' : base.slice(dot);
+        return {root, dir: begin > rootEnd ? path.slice(0, begin - 1) : root,
+          base, ext, name: ext ? base.slice(0, -ext.length) : base};
+      },
+      format(obj) {
+        if (obj === null || typeof obj !== 'object') {
+          throw Object.assign(new TypeError('pathObject must be an object'),
+                              {code: 'ERR_INVALID_ARG_TYPE'});
+        }
+        const dir = obj.dir || obj.root;
+        const ext = obj.ext && !obj.ext.startsWith('.') ? '.' + obj.ext : (obj.ext || '');
+        const base = obj.base || (obj.name || '') + ext;
+        return !dir ? base : dir === obj.root ? dir + base : dir + sep + base;
+      },
+      relative(from, to) {
+        validatePath(from, 'from');
+        validatePath(to, 'to');
+        if (from === to) return '';
+        from = module.resolve(from);
+        to = module.resolve(to);
+        const compare = value => windows ? value.toLowerCase() : value;
+        const fromRoot = pathRoot(from, windows), toRoot = pathRoot(to, windows);
+        if (compare(fromRoot.device) !== compare(toRoot.device)) return to;
+        const source = from.slice(fromRoot.end).split(sep).filter(Boolean);
+        const target = to.slice(toRoot.end).split(sep).filter(Boolean);
+        let common = 0;
+        while (common < source.length && common < target.length &&
+               compare(source[common]) === compare(target[common])) ++common;
+        return [...source.slice(common).map(() => '..'), ...target.slice(common)].join(sep);
+      },
+      toNamespacedPath(path) {
+        if (!windows || typeof path !== 'string' || !path) return path;
+        const resolved = module.resolve(path);
+        if (resolved.startsWith('\\\\') && !/^[?.]$/.test(resolved[2])) {
+          return '\\\\?\\UNC\\' + resolved.slice(2);
+        }
+        return /^[a-zA-Z]:\\/.test(resolved) ? '\\\\?\\' + resolved : path;
+      },
+    };
+    module._makeLong = module.toNamespacedPath;
+    return module;
+  }
+
+  const win32 = createPathModule(true);
+  const posix = createPathModule(false);
   win32.win32 = posix.win32 = win32;
   win32.posix = posix.posix = posix;
   const pathModule = runtimePlatform === 'win32' ? win32 : posix;
@@ -817,7 +851,8 @@
 
   // --- 5. Buffer & Util ---
   const textEncoder = new TextEncoder();
-  const textDecoder = new TextDecoder();
+  // Buffer treats a UTF-8 BOM as content, unlike TextDecoder's default.
+  const textDecoder = new TextDecoder('utf-8', {ignoreBOM: true});
   const nativeToBase64 = Uint8Array.prototype.toBase64;
   const nativeFromBase64 = Uint8Array.fromBase64;
   // Some older JS hosts expose an experimental API that ignores byteOffset.
@@ -838,7 +873,9 @@
     }
     // Node Buffer accepts both alphabets, ignores non-alphabet characters and
     // stops at padding. Keep canonical input on V8's allocation-efficient path.
-    let normalized = value.split('=', 1)[0].replace(/-/g, '+')
+    let normalized = value.replace(/[^\x00-\xff]/g,
+        char => String.fromCharCode(char.charCodeAt(0) & 0xff))
+        .split('=', 1)[0].replace(/-/g, '+')
         .replace(/_/g, '/').replace(/[^A-Za-z0-9+/]/g, '');
     if (normalized.length % 4 === 1) normalized = normalized.slice(0, -1);
     if (nativeFromBase64) return nativeFromBase64(normalized);
@@ -867,18 +904,101 @@
         .replace(/=+$/, '') : encoded;
   }
 
+  function bufferEncodingName(encoding) {
+    switch (encoding.toLowerCase()) {
+      case 'utf8': case 'utf-8': return 'utf8';
+      case 'utf16le': case 'utf-16le': case 'ucs2': case 'ucs-2': return 'utf16le';
+      case 'latin1': case 'binary': return 'latin1';
+      case 'ascii': case 'base64': case 'base64url': case 'hex':
+        return encoding.toLowerCase();
+    }
+  }
+
+  function resolveBufferEncoding(encoding) {
+    // toString/write coerce encodings; from(string) deliberately does not.
+    const name = bufferEncodingName(encoding + '');
+    if (name !== undefined) return name;
+    const error = new TypeError('Unknown encoding: ' + encoding);
+    error.code = 'ERR_UNKNOWN_ENCODING';
+    throw error;
+  }
+
+  function validateBufferOffset(value, name, maximum) {
+    if (typeof value !== 'number') {
+      const error = new TypeError(name + ' must be a number');
+      error.code = 'ERR_INVALID_ARG_TYPE';
+      throw error;
+    }
+    if (!Number.isInteger(value) || value < 0 || value > maximum) {
+      const error = new RangeError(name + ' is outside the bounds of the Buffer');
+      error.code = 'ERR_OUT_OF_RANGE';
+      throw error;
+    }
+  }
+
+  function encodeBufferString(value, encoding) {
+    if (encoding === 'utf8') return textEncoder.encode(value);
+    if (encoding === 'base64' || encoding === 'base64url') return decodeBase64(value);
+    if (encoding === 'hex') {
+      const bytes = new Uint8Array(Math.floor(value.length / 2));
+      let length = 0;
+      for (; length < bytes.length; ++length) {
+        const high = bufferHexDigit(value.charCodeAt(length * 2));
+        const low = bufferHexDigit(value.charCodeAt(length * 2 + 1));
+        if (high < 0 || low < 0) break;
+        bytes[length] = high * 16 + low;
+      }
+      // Incomplete pairs and the first invalid character terminate decoding.
+      return bytes.subarray(0, length);
+    }
+    const wide = encoding === 'utf16le';
+    const bytes = new Uint8Array(value.length * (wide ? 2 : 1));
+    for (let i = 0; i < value.length; ++i) {
+      const code = value.charCodeAt(i);
+      bytes[wide ? i * 2 : i] = code;
+      if (wide) bytes[i * 2 + 1] = code >>> 8;
+    }
+    return bytes;
+  }
+
+  function bufferHexDigit(code) {
+    code &= 0xff;
+    if (code >= 48 && code <= 57) return code - 48;
+    code |= 32;
+    return code >= 97 && code <= 102 ? code - 87 : -1;
+  }
+
+  function decodeBufferString(bytes, encoding) {
+    if (encoding === 'utf8') return textDecoder.decode(bytes);
+    if (encoding === 'base64' || encoding === 'base64url') {
+      return encodeBase64(bytes, encoding === 'base64url');
+    }
+    if (encoding === 'hex') {
+      return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+    }
+    const wide = encoding === 'utf16le';
+    const length = wide ? Math.floor(bytes.length / 2) : bytes.length;
+    const chunks = [];
+    for (let start = 0; start < length; start += 8192) {
+      const codes = [];
+      for (let i = start; i < Math.min(length, start + 8192); ++i) {
+        codes.push(wide ? bytes[i * 2] | bytes[i * 2 + 1] << 8 :
+            bytes[i] & (encoding === 'ascii' ? 0x7f : 0xff));
+      }
+      // UTF-16LE must preserve lone surrogates and discard an odd final byte.
+      // Latin-1 maps bytes directly (TextDecoder's latin1 means Windows-1252).
+      chunks.push(String.fromCharCode.apply(null, codes));
+    }
+    return chunks.join('');
+  }
+
   class Buffer extends Uint8Array {
     static from(value, encoding, length) {
       if (typeof value === 'string') {
-        if (encoding === 'hex') {
-          const match = value.match(/.{1,2}/g) || [];
-          return new Buffer(match.map(byte => parseInt(byte, 16)));
-        }
-        if (encoding === 'base64' || encoding === 'base64url') {
-          const bytes = decodeBase64(value);
-          return new Buffer(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-        }
-        return new Buffer(textEncoder.encode(value).buffer);
+        const name = typeof encoding !== 'string' || encoding === '' ?
+            'utf8' : resolveBufferEncoding(encoding);
+        const bytes = encodeBufferString(value, name);
+        return new Buffer(bytes.buffer, bytes.byteOffset, bytes.byteLength);
       }
       if (ArrayBuffer.isView(value)) {
         // Typed arrays contribute elements, not their underlying byte layout.
@@ -905,9 +1025,9 @@
       return new Buffer(0);
     }
 
-    static alloc(size, fill = 0) {
+    static alloc(size, fill = 0, encoding) {
       const buf = new Buffer(size);
-      if (fill !== 0) buf.fill(fill);
+      if (fill !== 0 && size > 0) buf.fill(fill, 0, buf.length, encoding);
       return buf;
     }
 
@@ -917,16 +1037,7 @@
 
     static isEncoding(encoding) {
       // Node accepts primitive strings only; do not coerce application objects.
-      if (typeof encoding !== 'string') return false;
-      switch (encoding.toLowerCase()) {
-        case 'utf8': case 'utf-8':
-        case 'utf16le': case 'utf-16le': case 'ucs2': case 'ucs-2':
-        case 'latin1': case 'binary': case 'ascii':
-        case 'base64': case 'base64url': case 'hex':
-          return true;
-        default:
-          return false;
-      }
+      return typeof encoding === 'string' && bufferEncodingName(encoding) !== undefined;
     }
 
     static byteLength(value, encoding) {
@@ -942,9 +1053,10 @@
         throw error;
       }
       const length = value.length;
-      switch (typeof encoding === 'string' ? encoding.toLowerCase() : '') {
-        case 'ascii': case 'latin1': case 'binary': return length;
-        case 'utf16le': case 'utf-16le': case 'ucs2': case 'ucs-2':
+      if (length === 0) return 0;
+      switch (!encoding ? 'utf8' : bufferEncodingName(encoding + '')) {
+        case 'ascii': case 'latin1': return length;
+        case 'utf16le':
           return length * 2;
         case 'hex': return Math.floor(length / 2);
         case 'base64': case 'base64url': {
@@ -994,15 +1106,15 @@
       return new Buffer(size);
     }
 
-    toString(encoding = 'utf8', start = 0, end = this.length) {
-      const view = this.subarray(start, end === undefined ? this.length : end);
-      if (encoding === 'hex') {
-        return Array.from(view).map(b => b.toString(16).padStart(2, '0')).join('');
-      }
-      if (encoding === 'base64' || encoding === 'base64url') {
-        return encodeBase64(view, encoding === 'base64url');
-      }
-      return textDecoder.decode(view);
+    toString(encoding, start, end) {
+      if (start <= 0) start = 0;
+      else if (start >= this.length) return '';
+      else start = Math.trunc(start) || 0;
+      if (end === undefined || end > this.length) end = this.length;
+      else end = Math.trunc(end) || 0;
+      if (end <= start) return '';
+      const name = encoding === undefined ? 'utf8' : resolveBufferEncoding(encoding);
+      return decodeBufferString(this.subarray(start, end), name);
     }
 
     slice(start, end) {
@@ -1019,23 +1131,43 @@
       return j - (sourceStart >>> 0);
     }
 
-    write(string, offset = 0, length, encoding) {
-      if (typeof offset === 'string') {
+    write(string, offset, length, encoding) {
+      if (offset === undefined) {
+        offset = 0;
+        length = this.length;
+        encoding = 'utf8';
+      } else if (length === undefined && typeof offset === 'string') {
         encoding = offset;
         offset = 0;
-        length = undefined;
-      } else if (typeof length === 'string') {
-        encoding = length;
-        length = undefined;
+        length = this.length;
+      } else {
+        validateBufferOffset(offset, 'offset', this.length);
+        if (typeof length === 'string') {
+          encoding = length;
+          length = this.length - offset;
+        } else if (length === undefined) {
+          length = this.length - offset;
+        } else {
+          validateBufferOffset(length, 'length', this.length);
+          length = Math.min(length, this.length - offset);
+        }
       }
-      const data = Buffer.from(String(string), encoding || 'utf8');
-      const max = Math.min(
-          data.length, length === undefined ? data.length : length,
-          Math.max(0, this.length - offset));
-      for (let i = 0; i < max; i++) {
-        this[offset + i] = data[i];
+      const name = !encoding ? 'utf8' : resolveBufferEncoding(encoding);
+      if (typeof string !== 'string') {
+        const error = new TypeError('string must be a string');
+        error.code = 'ERR_INVALID_ARG_TYPE';
+        throw error;
       }
-      return max;
+      if (name === 'utf8') {
+        // encodeInto writes only complete characters, including replacement
+        // characters for lone surrogates, when the destination is too short.
+        return textEncoder.encodeInto(string, this.subarray(offset, offset + length)).written;
+      }
+      const data = encodeBufferString(string, name);
+      const maximum = Math.min(data.length,
+          name === 'utf16le' ? length - length % 2 : length);
+      this.set(data.subarray(0, maximum), offset);
+      return maximum;
     }
 
     writeUInt8(value, offset = 0) {
@@ -1153,8 +1285,50 @@
     readFloatLE(offset = 0) {
       return new DataView(this.buffer, this.byteOffset + offset, 4).getFloat32(0, true);
     }
-    fill(value, start = 0, end = this.length) {
-      Uint8Array.prototype.fill.call(this, value, start, end);
+    fill(value, start, end, encoding) {
+      let name;
+      if (typeof value === 'string') {
+        if (start === undefined || typeof start === 'string') {
+          encoding = start;
+          start = 0;
+          end = this.length;
+        } else if (typeof end === 'string') {
+          encoding = end;
+          end = this.length;
+        }
+        if (encoding == null || encoding === '') name = 'utf8';
+        else if (typeof encoding === 'string') name = resolveBufferEncoding(encoding);
+        else {
+          const error = new TypeError('encoding must be a string');
+          error.code = 'ERR_INVALID_ARG_TYPE';
+          throw error;
+        }
+        if (value === '') value = 0;
+      }
+      if (start === undefined) {
+        start = 0;
+        end = this.length;
+      } else {
+        validateBufferOffset(start, 'offset', Number.MAX_SAFE_INTEGER);
+        if (end === undefined) end = this.length;
+        else validateBufferOffset(end, 'end', this.length);
+        if (start >= end) return this;
+      }
+      if (typeof value === 'string' || ArrayBuffer.isView(value)) {
+        const bytes = typeof value === 'string' ? encodeBufferString(value, name) :
+            new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+        if (bytes.length === 0) {
+          const error = new TypeError('value must encode at least one byte');
+          error.code = 'ERR_INVALID_ARG_VALUE';
+          throw error;
+        }
+        const count = Math.min(bytes.length, end - start);
+        // set snapshots an overlapping input; repeat from the copied prefix.
+        this.set(bytes.subarray(0, count), start);
+        for (let i = start + count; i < end; ++i) this[i] = this[start + (i - start) % count];
+      } else {
+        Uint8Array.prototype.fill.call(this, value, start, end);
+      }
       return this;
     }
     equals(other) {
@@ -1223,14 +1397,22 @@
 
   // --- 6. In-memory FS (do not claim every path exists) ---
   function normalizeFsPath(p) {
-    let s = String(p || '').replace(/\//g, '\\');
-    if (s.length > 3 && s.endsWith('\\')) {
-      s = s.slice(0, -1);
+    if (p instanceof URL) p = urlModule.fileURLToPath(p);
+    let s = String(p || '');
+    // chrome:// resources have a separate synthetic namespace. A native
+    // POSIX filename may legally contain backslashes, including at its end.
+    if (/^chrome:[\\/]+/i.test(s)) {
+      s = s.replace(/^chrome:[\\/]+/i, 'chrome:\\').replace(/\//g, '\\');
+      return s.replace(/\\+$/, '');
     }
-    return s;
+    return runtimePlatform === 'win32' ? s.replace(/\//g, '\\') : s;
   }
 
   function fsParentPath(p) {
+    if (!fsUsesVirtualMount(p)) {
+      const parent = pathModule.dirname(p);
+      return parent === '.' || parent === p ? '' : parent;
+    }
     const i = p.lastIndexOf('\\');
     if (i <= 0) {
       return '';
@@ -1289,7 +1471,7 @@
   const fsConstants = {F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1};
 
   // Electron's node-integrated renderer exposes Node's real `fs` module. This
-  // renderer remains Chromium-sandboxed, so Windows paths are brokered to the
+  // renderer remains Chromium-sandboxed, so native paths are brokered to the
   // Browser process (whose filesystem bridge also understands ASAR archives).
   // Only chrome:// resources use the synthetic mount. In particular, an
   // extracted application's appPath is a real filesystem root: treating it as
@@ -2237,13 +2419,8 @@
     platform: runtimePlatform,
     arch: runtimeArch,
     type: 'renderer',
-    versions: {
-      electron: '31.0.0',
-      chrome: '142.0.0.0',
-      node: '20.0.0',
-      v8: '13.0.0.0',
-    },
-    version: 'v20.0.0',
+    versions: Object.assign({}, injectedPaths.versions),
+    version: injectedPaths.versions?.node ? 'v' + injectedPaths.versions.node : undefined,
     env: {
       NODE_ENV: 'production',
       APPDATA: appData,
@@ -2252,10 +2429,13 @@
       APP_BASE_DIR: exeDir,
       ...(homeDir ? {USERPROFILE: homeDir, HOME: homeDir} : {}),
     },
-    pid: 1,
+    pid: injectedPaths.pid,
     execPath,
     argv: [execPath],
-    cwd: () => userData,
+    cwd() {
+      if (typeof injectedPaths.cwd === 'string' && injectedPaths.cwd) return injectedPaths.cwd;
+      throw Object.assign(new Error('Host working directory is unavailable'), {code: 'ERR_NOT_SUPPORTED'});
+    },
     // Electron process.getSystemVersion() — OS release string.
     getSystemVersion: () => osModule.release(),
     nextTick(callback, ...args) {
@@ -2266,9 +2446,9 @@
       }
       queueMicrotask(() => callback(...args));
     },
-    contextId: '1',
-    contextIsolated: false,
-    sandboxed: false,
+    contextId: injectedPaths.contextId,
+    contextIsolated: injectedPaths.contextIsolated,
+    sandboxed: injectedPaths.sandboxed,
     _linkedBinding: (name) => {
       if (name === 'electron_common_v8_util' || name === 'v8_util') {
         return {
@@ -2869,11 +3049,8 @@
     return args.some(visit);
   }
 
-  // Packaged Vue calls
-  //   client.callRemoteClientFunction(main, 'openElectronSelectFileDialog', opts)
-  // which tunnels through Utility ipcMain. After a Utility crash that pipe is
-  // dead (`__xenon:net:data ready=0`), so the picker never appears. Host the
-  // dialog on the Browser UI thread via PageHandler instead.
+  // The standard renderer dialog API delegates to the Browser's picker.
+  // Application RPC methods continue through their original IPC handlers.
   async function showNativeOpenDialog(options) {
     const opts = options && typeof options === 'object' ? options : {};
     const title = String(opts.title || '选择文件');
@@ -2904,74 +3081,6 @@
     return paths;
   }
 
-  function wrapCallRemoteClientFunction(orig) {
-    if (typeof orig !== 'function' || orig.__xenonSelectFileWrapped) {
-      return orig;
-    }
-    const wrapped = function(...args) {
-      // node-net-ipc: (context, fnName, ...fnArgs). context is 'main-process'.
-      const fnName = typeof args[1] === 'string' ? args[1] :
-          (typeof args[0] === 'string' ? args[0] : '');
-      if (fnName === 'openElectronSelectFileDialog' ||
-          fnName === 'showOpenDialog') {
-        const options = typeof args[1] === 'string' ? args[2] : args[1];
-        console.info(
-            '[Xenon Renderer] openElectronSelectFileDialog -> native picker');
-        return showNativeOpenDialog(options || {}).then(paths => [paths]);
-      }
-      return orig.apply(this, args);
-    };
-    wrapped.__xenonSelectFileWrapped = true;
-    return wrapped;
-  }
-
-  function installSelectFileDialogHook() {
-    if (installSelectFileDialogHook.installed) {
-      return;
-    }
-    installSelectFileDialogHook.installed = true;
-    try {
-      Object.defineProperty(Object.prototype, 'callRemoteClientFunction', {
-        configurable: true,
-        enumerable: false,
-        set(fn) {
-          Object.defineProperty(this, 'callRemoteClientFunction', {
-            configurable: true,
-            enumerable: true,
-            writable: true,
-            value: wrapCallRemoteClientFunction(fn),
-          });
-        },
-        get() {
-          return undefined;
-        },
-      });
-    } catch (error) {
-      console.warn(
-          '[Xenon Renderer] failed to hook callRemoteClientFunction setter:',
-          error);
-    }
-    const nativeDefineProperty = Object.defineProperty;
-    Object.defineProperty = function(obj, prop, desc) {
-      if (String(prop) === 'callRemoteClientFunction' && desc) {
-        if (typeof desc.value === 'function') {
-          desc = Object.assign({}, desc, {
-            value: wrapCallRemoteClientFunction(desc.value),
-          });
-        } else if (typeof desc.get === 'function') {
-          const origGet = desc.get;
-          desc = Object.assign({}, desc, {
-            get() {
-              return wrapCallRemoteClientFunction(origGet.call(this));
-            },
-          });
-        }
-      }
-      return nativeDefineProperty.call(this, obj, prop, desc);
-    };
-
-  }
-  installSelectFileDialogHook();
 
   function isNativeInstanceWire(value) {
     if (!value || typeof value !== 'object' ||
@@ -3757,9 +3866,9 @@
     return target;
   }
 
-  // Node `net` named-pipe / socket pairing. Same-isolate listen+connect is
-  // paired locally; cross-process (Utility ipcMain ↔ renderer) is tunneled
-  // over reserved Electron IPC channels `__xenon:net:*`.
+  // Node `net` Windows named pipes. Local pairing is available only after a
+  // successful native bind; other endpoints use the reserved IPC channels.
+  // TCP and Unix sockets have no renderer backend and must not appear bound.
   function normalizeNetPath(value) {
     let path = String(value || '');
     path = path.replace(/\//g, '\\');
@@ -3769,22 +3878,82 @@
     return path;
   }
 
-  function netPathFromListenOrConnect(args) {
-    const copy = args.slice();
-    if (typeof copy[copy.length - 1] === 'function') {
-      copy.pop();
+  function netError(code, message, ErrorType = Error) {
+    return Object.assign(new ErrorType(message), {code});
+  }
+
+  function netEndpoint(args, operation) {
+    const first = args[0];
+    if (operation === 'connect' && first === null) {
+      throw netError('ERR_INVALID_ARG_TYPE', 'The first argument must be options, a port or a path', TypeError);
     }
-    const first = copy[0];
-    if (first && typeof first === 'object') {
-      return first.path || first.handle || '';
+    const options = first && typeof first === 'object' ? first :
+        typeof first === 'string' && !(Number(first) >= 0) ? {path: first} :
+        {port: operation === 'listen' && typeof first === 'function' ? 0 : first,
+          host: typeof args[1] === 'string' ? args[1] : undefined};
+    if (options.path !== undefined && !(operation === 'listen' && 'port' in options)) {
+      if (typeof options.path !== 'string') {
+        throw netError('ERR_INVALID_ARG_TYPE', 'The "path" argument must be a string', TypeError);
+      }
+      if (options.path.includes('\0')) {
+        throw netError('ERR_INVALID_ARG_VALUE', 'The "path" argument must not contain null bytes', TypeError);
+      }
+      if (!options.path && operation === 'listen') {
+        throw netError('ERR_INVALID_ARG_VALUE', 'The "path" argument must not be empty', TypeError);
+      }
+      return {path: options.path};
     }
-    if (typeof first === 'string') {
-      return first;
+    if (options.fd !== undefined || options.handle !== undefined) return {};
+    let port = options.port;
+    if (port === undefined || port === null) {
+      if (operation === 'listen' && (first == null || typeof first === 'function' || 'port' in options)) {
+        port = 0;
+      } else {
+        throw netError(operation === 'connect' ? 'ERR_MISSING_ARGS' : 'ERR_INVALID_ARG_VALUE',
+            'A port or path is required', TypeError);
+      }
     }
-    if (typeof first === 'number') {
-      return `tcp:${copy[1] || '127.0.0.1'}:${first}`;
+    if ((typeof port !== 'number' && typeof port !== 'string')) {
+      throw netError('ERR_INVALID_ARG_TYPE', 'The "port" argument must be a number or string', TypeError);
     }
-    return '';
+    if ((typeof port === 'string' && !port.trim()) ||
+        !Number.isInteger(Number(port)) || Number(port) < 0 || Number(port) > 65535) {
+      throw netError('ERR_SOCKET_BAD_PORT', 'Port must be >= 0 and < 65536', RangeError);
+    }
+    if (options.host !== undefined && typeof options.host !== 'string') {
+      throw netError('ERR_INVALID_ARG_TYPE', 'The "host" argument must be a string', TypeError);
+    }
+    return {port: Number(port), host: options.host};
+  }
+
+  function unsupportedNetEndpoint(operation, endpoint) {
+    const error = netError('ERR_NOT_SUPPORTED',
+        `net.${operation} supports only Windows named pipes in this runtime`);
+    error.syscall = operation;
+    if (endpoint.path !== undefined) error.path = endpoint.path;
+    if (endpoint.port !== undefined) error.port = endpoint.port;
+    if (endpoint.host !== undefined) error.address = endpoint.host;
+    return error;
+  }
+
+  function netIsIPv4(input) {
+    return /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$/.test(input);
+  }
+
+  function netIsIPv6(input) {
+    const match = /^([0-9a-f:.]+)(?:%[0-9a-z.:-]+)?$/i.exec(input);
+    if (!match) return false;
+    let address = match[1];
+    if (address.includes('.')) {
+      const colon = address.lastIndexOf(':');
+      if (colon < 0 || !netIsIPv4(address.slice(colon + 1))) return false;
+      address = address.slice(0, colon + 1) + '0:0';
+    }
+    const halves = address.split('::');
+    if (halves.length > 2) return false;
+    const groups = halves.flatMap(half => half ? half.split(':') : []);
+    if (!groups.every(group => /^[0-9a-f]{1,4}$/i.test(group))) return false;
+    return halves.length === 2 ? groups.length < 8 : groups.length === 8;
   }
 
   function bytesToNetWire(data) {
@@ -3817,15 +3986,24 @@
   let nextNetServerId = 1;
 
   function isNamedPipePath(path) {
-    return /^\\\\\.\\pipe\\/i.test(String(path || ''));
+    return process.platform === 'win32' && /^\\\\\.\\pipe\\.+/i.test(String(path || ''));
   }
 
   function sendXenonNet(channel, payload) {
     try {
       transport.send(channel, payload);
     } catch (error) {
-      console.warn('[xenon-net] send failed', channel, error);
+      // Submission failures must release pending resources just like native
+      // bind/connect errors; otherwise callers wait forever for a reply.
+      queueMicrotask(() => dispatchXenonNet('__xenon:net:error', {
+        serverId: payload.serverId,
+        toId: payload.fromId,
+        code: error.code || 'ERR_NOT_SUPPORTED',
+        path: payload.path,
+      }));
+      return false;
     }
+    return true;
   }
 
   // Socket and server callbacks belong to their connect/listen resource,
@@ -3850,15 +4028,31 @@
     }
   }
 
+  function refreshNetTimeout(socket) {
+    if (socket._timeoutTimer !== null) clearTimeout(socket._timeoutTimer);
+    socket._timeoutTimer = null;
+    if (!socket.timeout || socket._closed) return;
+    socket._timeoutTimer = setTimeout(() => {
+      socket._timeoutTimer = null;
+      if (!socket._closed) emitNetEvent(socket, 'timeout');
+    }, socket.timeout);
+    // Node's socket inactivity timer does not keep the process alive.
+    socket._timeoutTimer?.unref?.();
+  }
+
   function closeNetSocket(socket, fromPeer) {
     if (!socket || socket._closed) {
       return;
     }
+    const wasConnected = socket._connected;
     socket._closed = true;
+    socket.destroyed = true;
     socket._connected = false;
     socket.connecting = false;
     socket._connectCb = null;
     socket._pendingWrites.length = 0;
+    if (socket._timeoutTimer !== null) clearTimeout(socket._timeoutTimer);
+    socket._timeoutTimer = null;
     if (socket._id) {
       netSockets.delete(socket._id);
     }
@@ -3869,13 +4063,16 @@
     if (!fromPeer && socket._peerId) {
       sendXenonNet('__xenon:net:close', {toId: socket._peerId, fromId: socket._id});
     }
-    emitNetEvent(socket, 'end');
-    emitNetEvent(socket, 'close');
+    socket._peerId = null;
+    if (wasConnected) emitNetEvent(socket, 'end');
+    emitNetEvent(socket, 'close', !!socket._hadError);
   }
 
   function deliverNetBytes(socket, data) {
+    if (socket._closed) return;
     const buf = Buffer.isBuffer(data) || data instanceof Uint8Array ?
         Buffer.from(data) : Buffer.from(String(data));
+    if (buf.length) refreshNetTimeout(socket);
     emitNetEvent(socket, 'data', buf);
   }
 
@@ -3890,19 +4087,38 @@
         this._id = null;
         this._connectCb = null;
         this._pendingWrites = [];
+        this.timeout = 0;
+        this._timeoutTimer = null;
         this.connecting = false;
         this.destroyed = false;
         this.remoteAddress = '';
         this.localAddress = '';
       }
       connect(...args) {
+        const endpoint = netEndpoint(args, 'connect');
         this._asyncContext = currentAsyncContext;
         const cb = typeof args[args.length - 1] === 'function' ?
             args[args.length - 1] : null;
         this._connectCb = cb;
+        this._closed = false;
+        this.destroyed = false;
+        this._hadError = false;
         this.connecting = true;
-        const path = normalizeNetPath(netPathFromListenOrConnect(args));
+        const path = endpoint.path === undefined ? undefined : normalizeNetPath(endpoint.path);
+        if (!isNamedPipePath(path)) {
+          queueMicrotask(() => {
+            if (this._closed) return;
+            this._hadError = true;
+            try {
+              emitNetEvent(this, 'error', unsupportedNetEndpoint('connect', endpoint));
+            } finally {
+              closeNetSocket(this, true);
+            }
+          });
+          return this;
+        }
         allocNetSocket(this);
+        refreshNetTimeout(this);
         const server = netServers.get(path);
         if (server) {
           const incoming = new netModule.Socket();
@@ -3924,6 +4140,7 @@
             const callback = this._connectCb;
             this._connectCb = null;
             if (callback) callNetCallback(this, callback);
+            if (!this._closed) flushPendingNetWrites(this);
           });
           return this;
         }
@@ -3931,17 +4148,19 @@
         return this;
       }
       write(data) {
+        if (this._closed) return false;
         if (this._peer) {
+          refreshNetTimeout(this);
           deliverNetBytes(this._peer, data);
           return true;
         }
         if (this._peerId) {
-          sendXenonNet('__xenon:net:data', {
+          refreshNetTimeout(this);
+          return sendXenonNet('__xenon:net:data', {
             toId: this._peerId,
             fromId: this._id,
             wire: bytesToNetWire(data),
           });
-          return true;
         }
         if (this.connecting && !this._closed) {
           this._pendingWrites.push(
@@ -3961,21 +4180,56 @@
       destroy() {
         this.destroyed = true;
         closeNetSocket(this, false);
+        return this;
       }
-      setTimeout() {}
-      setNoDelay() {}
-      setKeepAlive() {}
+      setTimeout(msecs, callback) {
+        if (typeof msecs !== 'number') {
+          throw netError('ERR_INVALID_ARG_TYPE', 'The "msecs" argument must be a number', TypeError);
+        }
+        if (!Number.isFinite(msecs) || msecs < 0) {
+          throw netError('ERR_OUT_OF_RANGE', 'The "msecs" argument must be a non-negative finite number', RangeError);
+        }
+        if (callback !== undefined && typeof callback !== 'function') {
+          throw netError('ERR_INVALID_ARG_TYPE', 'The "callback" argument must be a function', TypeError);
+        }
+        this.timeout = msecs;
+        if (callback) {
+          if (msecs === 0) this.removeListener('timeout', callback);
+          else this.once('timeout', callback);
+        }
+        refreshNetTimeout(this);
+        return this;
+      }
+      // These TCP options are chainable no-ops for pipe handles in Node.
+      // TCP connect itself reports ERR_NOT_SUPPORTED above.
+      setNoDelay() { return this; }
+      setKeepAlive() { return this; }
       ref() { return this; }
       unref() { return this; }
     },
     Server: class extends EventEmitter {
+      constructor(options, connectionListener) {
+        super();
+        this.listening = false;
+        this._listeningPending = false;
+        this._closing = false;
+        this._path = null;
+        this._address = null;
+        const listener = typeof options === 'function' ? options : connectionListener;
+        if (listener !== undefined) this.on('connection', listener);
+      }
       listen(...args) {
+        if (this.listening || this._listeningPending || this._nativeId) {
+          throw netError('ERR_SERVER_ALREADY_LISTEN', 'Listen method has been called more than once without closing');
+        }
+        const endpoint = netEndpoint(args, 'listen');
         this._asyncContext = currentAsyncContext;
         const cb = typeof args[args.length - 1] === 'function' ?
             args[args.length - 1] : null;
-        this._path = normalizeNetPath(netPathFromListenOrConnect(args));
-        netServers.set(this._path, this);
-        console.info('[xenon-net] listen', this._path);
+        this._path = endpoint.path ? normalizeNetPath(endpoint.path) : null;
+        this._address = endpoint.path || null;
+        this._listeningPending = true;
+        this._closing = false;
         if (isNamedPipePath(this._path)) {
           this._nativeId = 'server-r-' + (nextNetServerId++);
           this._listenCb = cb;
@@ -3987,50 +4241,50 @@
           return this;
         }
         queueMicrotask(() => {
-          emitNetEvent(this, 'listening');
-          if (cb) {
-            callNetCallback(this, cb);
-          }
+          this._listeningPending = false;
+          this._path = null;
+          emitNetEvent(this, 'error', unsupportedNetEndpoint('listen', endpoint));
         });
         return this;
       }
       close(cb) {
-        if (this._path) {
+        if (netServers.get(this._path) === this) {
           netServers.delete(this._path);
         }
+        this.listening = false;
+        this._listeningPending = false;
+        this._closing = true;
+        this._listenCb = null;
         if (this._nativeId) {
           this._closeCb = typeof cb === 'function' ? cb : null;
           sendXenonNet('__xenon:net:unlisten', {serverId: this._nativeId});
           return this;
         }
-        if (typeof cb === 'function') {
-          callNetCallback(this, cb);
-        }
-        emitNetEvent(this, 'close');
+        this._path = null;
+        queueMicrotask(() => {
+          emitNetEvent(this, 'close');
+          if (typeof cb === 'function') {
+            callNetCallback(this, cb, [netError('ERR_SERVER_NOT_RUNNING', 'Server is not running')]);
+          }
+        });
         return this;
       }
       address() {
-        return this._path || {port: 0, address: '127.0.0.1', family: 'IPv4'};
+        return this.listening ? this._address : null;
       }
       ref() { return this; }
       unref() { return this; }
     },
-    createServer: (...args) => {
-      const server = new netModule.Server();
-      if (typeof args[0] === 'function') {
-        server.on('connection', args[0]);
-      }
-      return server;
-    },
+    createServer: (...args) => new netModule.Server(...args),
     connect: (...args) => {
       const socket = new netModule.Socket();
       socket.connect(...args);
       return socket;
     },
     createConnection: (...args) => netModule.connect(...args),
-    isIP: (input) => (input && input.includes(':') ? 6 : (input && input.includes('.') ? 4 : 0)),
-    isIPv4: (input) => /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(input),
-    isIPv6: (input) => !!(input && input.includes(':')),
+    isIP: (input) => netIsIPv4(input) ? 4 : netIsIPv6(input) ? 6 : 0,
+    isIPv4: netIsIPv4,
+    isIPv6: netIsIPv6,
   };
   netModule.default = netModule;
 
@@ -4038,18 +4292,21 @@
     const msg = payload || {};
     if (channel === '__xenon:net:listening') {
       const server = nativeNetServers.get(msg.serverId);
-      if (server) {
+      if (server && server._listeningPending && !server._closing) {
+        server._listeningPending = false;
+        server.listening = true;
+        netServers.set(server._path, server);
+        const callback = server._listenCb;
+        server._listenCb = null;
         emitNetEvent(server, 'listening');
-        if (server._listenCb) {
-          callNetCallback(server, server._listenCb);
-          server._listenCb = null;
-        }
+        if (callback && server.listening) callNetCallback(server, callback);
       }
       return true;
     }
     if (channel === '__xenon:net:connection') {
       const server = nativeNetServers.get(msg.serverId);
-      if (!server || !msg.socketId) {
+      if (!server || !server.listening || !msg.socketId) {
+        if (msg.socketId) sendXenonNet('__xenon:net:close', {toId: msg.socketId});
         return true;
       }
       const incoming = new netModule.Socket();
@@ -4066,6 +4323,11 @@
       if (server) {
         nativeNetServers.delete(msg.serverId);
         server._nativeId = null;
+        if (netServers.get(server._path) === server) netServers.delete(server._path);
+        server._path = null;
+        server.listening = false;
+        server._listeningPending = false;
+        server._listenCb = null;
         if (server._closeCb) {
           callNetCallback(server, server._closeCb);
           server._closeCb = null;
@@ -4106,7 +4368,9 @@
       socket._peerId = msg.peerId;
       socket._connected = true;
       socket.connecting = false;
+      refreshNetTimeout(socket);
       emitNetEvent(socket, 'connect');
+      if (socket._closed) return true;
       if (socket._connectCb) {
         callNetCallback(socket, socket._connectCb);
         socket._connectCb = null;
@@ -4134,6 +4398,15 @@
         if (server) {
           const err = new Error(msg.code || 'net error');
           err.code = msg.code;
+          err.syscall = 'listen';
+          err.path = server._path;
+          nativeNetServers.delete(msg.serverId);
+          if (netServers.get(server._path) === server) netServers.delete(server._path);
+          server._nativeId = null;
+          server._listenCb = null;
+          server._path = null;
+          server.listening = false;
+          server._listeningPending = false;
           emitNetEvent(server, 'error', err);
         }
         return true;
@@ -4142,9 +4415,15 @@
       if (socket) {
         const err = new Error(msg.code || 'net error');
         err.code = msg.code;
+        if (msg.path !== undefined) err.path = msg.path;
         socket.connecting = false;
         socket._pendingWrites.length = 0;
-        emitNetEvent(socket, 'error', err);
+        socket._hadError = true;
+        try {
+          emitNetEvent(socket, 'error', err);
+        } finally {
+          closeNetSocket(socket, true);
+        }
       }
       return true;
     }
@@ -4654,29 +4933,266 @@
   };
   cryptoModule.default = cryptoModule;
 
+  function urlError(code, message) {
+    return Object.assign(new TypeError(message), {code});
+  }
+
+  function fileUrlWindows(options) {
+    if (options && options.windows !== undefined && options.windows !== null) {
+      if (typeof options.windows !== 'boolean') {
+        throw urlError('ERR_INVALID_ARG_TYPE', 'options.windows must be a boolean');
+      }
+      return options.windows;
+    }
+    return runtimePlatform === 'win32';
+  }
+
+  // WHATWG URL validates and ASCII-encodes hostnames. Node fileURLToPath
+  // decodes IDN labels back to Unicode when forming a Windows UNC path.
+  function fileUrlUnicodeHost(hostname) {
+    return hostname.split('.').map(label => {
+      if (!label.startsWith('xn--')) return label;
+      const input = label.slice(4);
+      const delimiter = input.lastIndexOf('-');
+      const output = delimiter < 0 ? [] : Array.from(input.slice(0, delimiter), c => c.codePointAt(0));
+      let cursor = delimiter < 0 ? 0 : delimiter + 1;
+      let n = 128, index = 0, bias = 72;
+      while (cursor < input.length) {
+        const oldIndex = index;
+        let weight = 1;
+        for (let k = 36;; k += 36) {
+          const code = input.charCodeAt(cursor++);
+          const digit = code >= 48 && code <= 57 ? code - 22 :
+              code >= 65 && code <= 90 ? code - 65 : code - 97;
+          index += digit * weight;
+          const threshold = k <= bias ? 1 : k >= bias + 26 ? 26 : k - bias;
+          if (digit < threshold) break;
+          weight *= 36 - threshold;
+        }
+        const size = output.length + 1;
+        let delta = Math.floor((index - oldIndex) / (oldIndex === 0 ? 700 : 2));
+        delta += Math.floor(delta / size);
+        let k = 0;
+        while (delta > 455) { delta = Math.floor(delta / 35); k += 36; }
+        bias = k + Math.floor(36 * delta / (delta + 38));
+        n += Math.floor(index / size);
+        index %= size;
+        output.splice(index++, 0, n);
+      }
+      return String.fromCodePoint(...output);
+    }).join('.');
+  }
+
+  const slashedUrlProtocol = /^(?:https?|ftp|gopher|file|wss?):$/;
+  function escapeLegacyUrl(value) {
+    return value.replace(/[<>"` \r\n\t{}|\\^']/g, character =>
+        '%' + character.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
+  }
+  function queryStringObject(query) {
+    const result = Object.create(null);
+    for (const [key, value] of new URLSearchParams(query)) {
+      if (!(key in result)) result[key] = value;
+      else if (Array.isArray(result[key])) result[key].push(value);
+      else result[key] = [result[key], value];
+    }
+    return result;
+  }
+  function formatUrlQuery(query) {
+    return Object.entries(query || {}).flatMap(([key, values]) =>
+      (Array.isArray(values) ? values : [values]).map(value =>
+        encodeURIComponent(key) + '=' + encodeURIComponent(
+            typeof value === 'string' || typeof value === 'boolean' ||
+            (typeof value === 'number' && Number.isFinite(value)) ? value : ''))).join('&');
+  }
+  class LegacyUrl {
+    constructor() {
+      for (const key of ['protocol', 'slashes', 'auth', 'host', 'port', 'hostname',
+          'hash', 'search', 'query', 'pathname', 'path', 'href']) this[key] = null;
+    }
+    parse(input, parseQueryString = false, slashesDenoteHost = false) {
+      validatePath(input, 'url');
+      let rest = input.trim();
+      // Legacy URL syntax treats backslashes as slashes only before the query
+      // and fragment. Its relative paths do not acquire an origin or host.
+      const ending = rest.search(/[?#]/);
+      rest = ending < 0 ? rest.replace(/\\/g, '/') :
+          rest.slice(0, ending).replace(/\\/g, '/') + rest.slice(ending);
+      const protocol = /^([a-z][a-z0-9+.-]*:)/i.exec(rest);
+      if (protocol) {
+        this.protocol = protocol[1].toLowerCase();
+        rest = rest.slice(protocol[0].length);
+      }
+      const hostless = this.protocol === 'javascript:';
+      if (!hostless && rest.startsWith('//') &&
+          (this.protocol || slashesDenoteHost || /^\/\/[^/]*@[^/]+/.test(rest))) {
+        this.slashes = true;
+        rest = rest.slice(2);
+      }
+      if (!hostless && (this.slashes || (this.protocol && !slashedUrlProtocol.test(this.protocol)))) {
+        const hostEnd = rest.search(/[/?#]/);
+        let authority = hostEnd < 0 ? rest : rest.slice(0, hostEnd);
+        rest = hostEnd < 0 ? '' : rest.slice(hostEnd);
+        const at = authority.lastIndexOf('@');
+        if (at >= 0) {
+          this.auth = decodeURIComponent(authority.slice(0, at));
+          authority = authority.slice(at + 1);
+        }
+        const port = /:([0-9]*)$/.exec(authority);
+        if (port) {
+          if (port[1]) this.port = port[1];
+          authority = authority.slice(0, -port[0].length);
+        }
+        this.hostname = authority.toLowerCase();
+        if (this.hostname.startsWith('[')) {
+          if (!this.hostname.endsWith(']')) throw urlError('ERR_INVALID_URL', 'Invalid URL');
+          this.hostname = this.hostname.slice(1, -1);
+          this.host = '[' + this.hostname + ']';
+        } else {
+          if (this.hostname && /[^\x00-\x7f]/.test(this.hostname)) {
+            this.hostname = new URL('http://' + this.hostname).hostname;
+          }
+          this.host = this.hostname;
+        }
+        if (this.port) this.host += ':' + this.port;
+      }
+      if (!hostless) rest = escapeLegacyUrl(rest);
+      const hash = rest.indexOf('#');
+      if (hash >= 0) { this.hash = rest.slice(hash); rest = rest.slice(0, hash); }
+      const query = rest.indexOf('?');
+      if (query >= 0) {
+        this.search = rest.slice(query);
+        this.query = rest.slice(query + 1);
+        rest = rest.slice(0, query);
+      }
+      if (parseQueryString) {
+        this.query = queryStringObject(this.query || '');
+      }
+      this.pathname = rest || (slashedUrlProtocol.test(this.protocol) && this.hostname ? '/' : null);
+      this.path = this.pathname !== null || this.search !== null ?
+          (this.pathname || '') + (this.search || '') : null;
+      this.href = this.format();
+      return this;
+    }
+    format() {
+      let protocol = this.protocol || '';
+      if (protocol && !protocol.endsWith(':')) protocol += ':';
+      let host = this.host;
+      if (!host && this.hostname) {
+        host = this.hostname.includes(':') ? '[' + this.hostname + ']' : this.hostname;
+        if (this.port) host += ':' + this.port;
+      }
+      if (this.auth && host !== null && host !== undefined) {
+        host = encodeURIComponent(this.auth).replace(/%3A/gi, ':') + '@' + host;
+      }
+      let pathname = (this.pathname || '').replace(/[?#]/g, char => char === '?' ? '%3F' : '%23');
+      if (this.slashes || ((!protocol || slashedUrlProtocol.test(protocol)) && host != null)) {
+        host = '//' + (host || '');
+        if (pathname && !pathname.startsWith('/')) pathname = '/' + pathname;
+      } else host ||= '';
+      let search = this.search || (this.query && typeof this.query === 'object' ?
+          formatUrlQuery(this.query) : '');
+      if (search && !search.startsWith('?')) search = '?' + search;
+      let hash = this.hash || '';
+      if (hash && !hash.startsWith('#')) hash = '#' + hash;
+      return protocol + host + pathname + search.replace(/#/g, '%23') + hash;
+    }
+    resolve(to) { return this.resolveObject(to).format(); }
+    resolveObject(to) {
+      const target = typeof to === 'string' ? new LegacyUrl().parse(to, false, true) : to;
+      if (target.protocol && target.protocol !== this.protocol) return target;
+      const result = Object.assign(new LegacyUrl(), this);
+      result.hash = target.hash;
+      if (target.slashes || target.host !== null) {
+        for (const key of ['slashes', 'auth', 'host', 'hostname', 'port', 'pathname', 'search', 'query']) {
+          result[key] = target[key];
+        }
+      } else if (target.pathname) {
+        let pathname = target.pathname.startsWith('/') ? target.pathname :
+            (result.pathname || '').replace(/[^/]*$/, '') + target.pathname;
+        if (result.host !== null && !pathname.startsWith('/')) pathname = '/' + pathname;
+        const trailing = /(?:\/|\/\.{1,2})$/.test(pathname);
+        result.pathname = posix.normalize(pathname);
+        if (result.pathname === '.') result.pathname = '';
+        if (trailing && result.pathname && !result.pathname.endsWith('/')) result.pathname += '/';
+        result.search = target.search;
+        result.query = target.query;
+      } else if (target.search !== null) {
+        result.search = target.search;
+        result.query = target.query;
+      }
+      result.path = (result.pathname || '') + (result.search || '') || null;
+      result.href = result.format();
+      return result;
+    }
+  }
+
   const urlModule = {
-    parse: (urlString) => {
-      try {
-        return new URL(urlString, 'http://localhost');
-      } catch {
-        return {};
-      }
+    Url: LegacyUrl,
+    parse: (input, parseQueryString, slashesDenoteHost) => input instanceof LegacyUrl ? input :
+        new LegacyUrl().parse(input, parseQueryString, slashesDenoteHost),
+    format: input => {
+      if (input instanceof URL) return input.href;
+      if (typeof input === 'string') return new LegacyUrl().parse(input).format();
+      if (!input || typeof input !== 'object') throw urlError('ERR_INVALID_ARG_TYPE', 'url must be an object or string');
+      return LegacyUrl.prototype.format.call(input);
     },
-    format: (urlObj) => urlObj.toString(),
-    resolve: (from, to) => {
-      try {
-        return new URL(to, from).toString();
-      } catch {
-        return to;
+    resolve: (from, to) => new LegacyUrl().parse(from, false, true).resolve(to),
+    resolveObject: (from, to) => new LegacyUrl().parse(from, false, true).resolveObject(to),
+    fileURLToPath: (input, options) => {
+      if (typeof input !== 'string' && !(input instanceof URL)) {
+        throw urlError('ERR_INVALID_ARG_TYPE', 'path must be a string or URL');
       }
-    },
-    fileURLToPath: (url) => {
-      if (typeof url === 'string') {
-        return decodeURIComponent(url.replace(/^file:\/\/\/?/, ''));
+      let url;
+      try { url = typeof input === 'string' ? new URL(input) : input; }
+      catch (_error) { throw urlError('ERR_INVALID_URL', 'Invalid URL'); }
+      if (url.protocol !== 'file:') throw urlError('ERR_INVALID_URL_SCHEME', 'URL must be of scheme file');
+      const windows = fileUrlWindows(options);
+      if ((windows ? /%(?:2f|5c)/i : /%2f/i).test(url.pathname)) {
+        throw urlError('ERR_INVALID_FILE_URL_PATH', 'File URL must not include encoded path separators');
       }
-      return decodeURIComponent(url.pathname.replace(/^\/([a-zA-Z]:)/, '$1'));
+      let pathname = decodeURIComponent(url.pathname);
+      if (!windows) {
+        if (url.hostname) throw urlError('ERR_INVALID_FILE_URL_HOST', 'File URL host must be empty or localhost');
+        return pathname;
+      }
+      pathname = pathname.replace(/\//g, '\\');
+      if (url.hostname) return '\\\\' + fileUrlUnicodeHost(url.hostname) + pathname;
+      if (!/^\\[a-zA-Z]:/.test(pathname)) {
+        throw urlError('ERR_INVALID_FILE_URL_PATH', 'File URL path must be absolute');
+      }
+      return pathname.slice(1);
     },
-    pathToFileURL: (path) => new URL('file:///' + path.replace(/\\/g, '/')),
+    pathToFileURL: (path, options) => {
+      validatePath(path);
+      const windows = fileUrlWindows(options);
+      const implementation = windows ? win32 : posix;
+      let resolved = windows && path.startsWith('\\\\') ? path : implementation.resolve(path);
+      if (path.endsWith('/') || (windows && path.endsWith('\\'))) {
+        if (!resolved.endsWith(implementation.sep)) resolved += implementation.sep;
+      }
+      let url = new URL('file:///');
+      if (windows && resolved.startsWith('\\\\?\\UNC\\')) {
+        resolved = '\\\\' + resolved.slice(8);
+      } else if (windows && /^\\\\\?\\[a-zA-Z]:\\/.test(resolved)) {
+        resolved = resolved.slice(4);
+      }
+      if (windows && resolved.startsWith('\\\\')) {
+        const serverEnd = resolved.indexOf('\\', 2);
+        if (serverEnd < 0 || serverEnd === 2) {
+          throw urlError('ERR_INVALID_ARG_VALUE', 'Missing UNC server or resource path');
+        }
+        const host = resolved.slice(2, serverEnd);
+        try { url = new URL('file://' + host + '/'); }
+        catch (_error) { throw urlError('ERR_INVALID_URL', 'Invalid UNC server'); }
+        resolved = resolved.slice(serverEnd);
+      }
+      if (windows) resolved = resolved.replace(/\\/g, '/');
+      // Assign encoded pathname separately: # and ? are filename characters,
+      // never a URL fragment/query, and a literal % must survive decoding.
+      url.pathname = resolved.replace(/[%#?\\\x00-\x20]/g, character =>
+          '%' + character.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
+      return url;
+    },
     URL: globalThis.URL,
     URLSearchParams: globalThis.URLSearchParams,
   };
@@ -5098,6 +5614,24 @@
     return Object.assign(new Error(message), {code});
   }
 
+  function modulePathKey(filename) {
+    let normalized = pathModule.normalize(filename);
+    const rootLength = pathModule.parse(normalized).root.length;
+    while (normalized.length > rootLength && normalized.endsWith(pathModule.sep)) {
+      normalized = normalized.slice(0, -1);
+    }
+    return runtimePlatform === 'win32' ? normalized.toLowerCase() : normalized;
+  }
+
+  function modulePathWithin(filename, root) {
+    const candidate = modulePathKey(filename);
+    let prefix = modulePathKey(root);
+    // Keep the separator on filesystem roots, including / and UNC shares.
+    // Prefix matching otherwise needs a component boundary (app != app-old).
+    if (!prefix.endsWith(pathModule.sep)) prefix += pathModule.sep;
+    return candidate === modulePathKey(root) || candidate.startsWith(prefix);
+  }
+
   function builtinModuleId(request) {
     if (typeof request !== 'string') {
       throw Object.assign(new TypeError('Module name must be a string'),
@@ -5123,6 +5657,7 @@
     if (typeof filename !== 'string' || !filename) return filename;
     let sourceUrl;
     try { sourceUrl = new URL(filename); } catch (_error) { return filename; }
+    if (sourceUrl.protocol === 'file:') return urlModule.fileURLToPath(sourceUrl);
     const configuredMappings = injectedPaths.rendererUrlMappings;
     const mappings = Array.isArray(configuredMappings) ? configuredMappings : [];
     const candidates = mappings.map(mapping => {
@@ -5144,7 +5679,7 @@
         // Preserve the corresponding relative filename instead of assigning a
         // script in another origin to this application's module directory.
         for (const part of documentParts.slice().reverse()) {
-          if (pathModule.basename(root).toLowerCase() !== part.toLowerCase()) {
+          if (modulePathKey(pathModule.basename(root)) !== modulePathKey(part)) {
             root = '';
             break;
           }
@@ -5169,8 +5704,7 @@
           relative.split('/').some(part => part === '..' || part.includes(':'))) return filename;
       const root = pathModule.normalize(mapping.root);
       const resolved = pathModule.resolve(root, relative || '.');
-      const lower = resolved.toLowerCase();
-      if (lower === root.toLowerCase() || lower.startsWith(root.replace(/[\\/]+$/, '').toLowerCase() + '\\')) {
+      if (modulePathWithin(resolved, root)) {
         return resolved;
       }
     }
@@ -5258,11 +5792,7 @@
       }
     }
     const within = (filename, roots) => {
-      const lower = pathModule.normalize(filename).toLowerCase();
-      return roots.some(root => {
-        const normalized = root.replace(/[\\/]+$/, '').toLowerCase();
-        return lower === normalized || lower.startsWith(normalized + '\\');
-      });
+      return roots.some(root => modulePathWithin(filename, root));
     };
     const realRoots = canonicalModuleRoots.map(root => root.canonical);
     const permittedPaths = canonicalModuleRoots.flatMap(
@@ -5354,14 +5884,16 @@
       return '';
     };
     let resolved = '';
-    if (pathModule.isAbsolute(request) || /^\.\.?([\\/]|$)/.test(request)) {
+    const relativeRequest = runtimePlatform === 'win32' ?
+        /^\.\.?([\\/]|$)/.test(request) : /^\.\.?(\/|$)/.test(request);
+    if (pathModule.isAbsolute(request) || relativeRequest) {
       resolved = asPath(pathModule.resolve(pathModule.dirname(parentFile), request));
     } else {
-      const parts = request.replace(/\\/g, '/').split('/');
+      const parts = (runtimePlatform === 'win32' ? request.replace(/\\/g, '/') : request).split('/');
       const packageName = parts[0].startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
       let directory = pathModule.dirname(parentFile);
       while (inRoot(directory)) {
-        if (pathModule.basename(directory).toLowerCase() !== 'node_modules') {
+        if (modulePathKey(pathModule.basename(directory)) !== 'node_modules') {
           const modules = pathModule.join(directory, 'node_modules');
           const pkg = packageJson(pathModule.join(modules, packageName));
           if (pkg && Object.prototype.hasOwnProperty.call(pkg, 'exports')) {

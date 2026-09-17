@@ -72,6 +72,10 @@ struct IpcRendererConfig {
   string local_app_data_path;
   string home_path;
   string temp_path;
+  // Browser startup directory used by brokered renderer file APIs. Capture it
+  // before UI thread restrictions; never query it in a sandboxed renderer.
+  string working_directory;
+  bool is_packaged;
 };
 
 // Browser-to-renderer half of an IPC endpoint. One endpoint is bound to one

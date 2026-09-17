@@ -138,6 +138,7 @@ class XenonIpcMainContainer {
   bool Initialize(EmbeddedMainModule main_module);
   void SetNativeAddonHooks(NativeAddonHooks hooks);
   void SetWindowHooks(WindowHooks hooks);
+  void SetAppExitHandler(base::RepeatingCallback<void(int)> handler);
   void SetNetPipeSender(
       base::RepeatingCallback<void(const std::string&, base::Value)> sender);
   void SetNetworkLoaderFactory(
@@ -165,6 +166,7 @@ class XenonIpcMainContainer {
   void DispatchWindowEvent(int32_t window_id,
                            const std::string& event_name,
                            base::Value arguments);
+  void DispatchAppEvent(const std::string& event_name, base::Value arguments);
 
   void Send(const std::string& endpoint_id,
             const std::string& channel,
@@ -256,6 +258,9 @@ class XenonIpcMainContainer {
   void NativeSetBrowserWindowVisible(gin::Arguments* args);
   void NativeBrowserWindowCall(gin::Arguments* args);
   void NativeCloseBrowserWindow(gin::Arguments* args);
+  void NativeExitApp(gin::Arguments* args);
+  void NativeCanExitApp(gin::Arguments* args);
+  void NotifyAppExit(int exit_code);
   void NativeInvokeExport(gin::Arguments* args);
   void NativeDescribeExport(gin::Arguments* args);
   void NativeConstructExport(gin::Arguments* args);
@@ -294,6 +299,7 @@ class XenonIpcMainContainer {
   v8::Global<v8::Function> dispatch_invoke_;
   v8::Global<v8::Function> dispatch_sync_;
   v8::Global<v8::Function> dispatch_window_event_;
+  v8::Global<v8::Function> dispatch_app_event_;
   v8::Global<v8::Function> dispatch_renderer_event_;
   v8::Global<v8::Function> mark_app_ready_;
   v8::Global<v8::Function> shutdown_app_;
@@ -329,6 +335,7 @@ class XenonIpcMainContainer {
   std::optional<std::string> embedded_main_source_;
   NativeAddonHooks native_addon_hooks_;
   WindowHooks window_hooks_;
+  base::RepeatingCallback<void(int)> app_exit_handler_;
   base::RepeatingCallback<void(const std::string&, base::Value)>
       net_pipe_sender_;
   std::string app_name_ = "Application";
@@ -340,6 +347,7 @@ class XenonIpcMainContainer {
   bool initialized_ = false;
   bool async_context_hooks_installed_ = false;
   bool shutting_down_ = false;
+  bool app_exit_requested_ = false;
   std::string startup_error_;
 
   SEQUENCE_CHECKER(sequence_checker_);

@@ -17,8 +17,10 @@
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/memory/weak_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "components/embedder_support/user_agent_utils.h"
@@ -421,7 +423,12 @@ class XenonElectronWindowHost::HostedWebContentsObserver
         web_contents()->SetWebPreferences(prefs);
       }
     }
+    if (navigation_handle && navigation_handle->IsInPrimaryMainFrame()) {
+      SchedulePendingUserAgent();
+    }
   }
+
+  void DidStopLoading() override { SchedulePendingUserAgent(); }
 
   void DOMContentLoaded(content::RenderFrameHost* render_frame_host) override {
     if (!IsLoadedPrimaryMainFrame(render_frame_host)) {
@@ -493,6 +500,27 @@ class XenonElectronWindowHost::HostedWebContentsObserver
   }
 
  private:
+  void SchedulePendingUserAgent() {
+    auto entry = owner_->windows_.find(window_id_);
+    if (entry == owner_->windows_.end() ||
+        !entry->second.user_agent_update_pending) {
+      return;
+    }
+    // NavigationController clears failed/pending entries after observer
+    // notification. Recheck on a fresh task, including whether another
+    // navigation started before it ran.
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&HostedWebContentsObserver::ApplyPendingUserAgent,
+                       weak_factory_.GetWeakPtr()));
+  }
+
+  void ApplyPendingUserAgent() {
+    if (web_contents()) {
+      owner_->ApplyPendingUserAgent(window_id_, web_contents());
+    }
+  }
+
   bool IsLoadedPrimaryMainFrame(
       content::RenderFrameHost* render_frame_host) const {
     if (!render_frame_host || !web_contents() ||
@@ -508,6 +536,7 @@ class XenonElectronWindowHost::HostedWebContentsObserver
 
   raw_ptr<XenonElectronWindowHost> owner_;
   const int32_t window_id_;
+  base::WeakPtrFactory<HostedWebContentsObserver> weak_factory_{this};
 };
 
 class XenonElectronWindowHost::PopupMenuSession
@@ -628,6 +657,9 @@ XenonElectronWindowHost* XenonElectronWindowHost::GetInstance() {
 
 XenonElectronWindowHost::XenonElectronWindowHost() = default;
 
+XenonElectronWindowHost::Entry::Entry() = default;
+XenonElectronWindowHost::Entry::~Entry() = default;
+
 XenonElectronWindowHost::~XenonElectronWindowHost() {
   popup_menu_.reset();
   for (auto& [id, entry] : windows_) {
@@ -637,6 +669,51 @@ XenonElectronWindowHost::~XenonElectronWindowHost() {
   }
 }
 
+void XenonElectronWindowHost::ObserveWebContents(
+    int32_t window_id,
+    content::WebContents* contents) {
+  windows_.at(window_id).web_contents_observer =
+      std::make_unique<HostedWebContentsObserver>(this, window_id, contents);
+}
+
+void XenonElectronWindowHost::UpdateUserAgent(int32_t window_id,
+                                              content::WebContents* contents,
+                                              const std::string& user_agent) {
+  Entry& entry = windows_.at(window_id);
+  entry.user_agent = user_agent;
+  entry.user_agent_update_pending = true;
+  ApplyPendingUserAgent(window_id, contents);
+}
+
+void XenonElectronWindowHost::ApplyPendingUserAgent(
+    int32_t window_id,
+    content::WebContents* contents) {
+  auto it = windows_.find(window_id);
+  if (it == windows_.end() || !it->second.user_agent_update_pending) {
+    return;
+  }
+  auto& controller = contents->GetController();
+  if (it->second.has_loaded_url &&
+      (contents->IsLoading() || controller.GetPendingEntry())) {
+    // SetUserAgentOverride can reload an in-flight navigation. For an existing
+    // document Chromium discards the pending entry before reloading the last
+    // committed one, so an initial about:blank can replace loadURL's real page.
+    // A committed document can also still be loading; reloading it would run
+    // initialization and beforeunload handlers again. Wait until loading stops.
+    return;
+  }
+  // Before the first loadURL, only the native host's initial blank document
+  // exists. Apply its default UA now so the first application request uses it.
+  Entry& entry = it->second;
+  blink::UserAgentOverride override;
+  override.ua_string_override = entry.user_agent;
+  if (!entry.user_agent.empty()) {
+    override.ua_metadata_override = embedder_support::GetUserAgentMetadata();
+  }
+  entry.user_agent_update_pending = false;
+  contents->SetUserAgentOverride(override, false);
+}
+
 views::Widget* XenonElectronWindowHost::FindWidget(int32_t window_id) const {
   auto it = windows_.find(window_id);
   return it == windows_.end() ? nullptr : it->second.widget.get();
@@ -644,13 +721,22 @@ views::Widget* XenonElectronWindowHost::FindWidget(int32_t window_id) const {
 
 int32_t XenonElectronWindowHost::FindEntryWindowForContainer(
     const std::string& container_id) const {
+  int32_t owned_entry = 0;
   for (const auto& [id, entry] : windows_) {
-    if (entry.widget && entry.has_loaded_url &&
-        entry.container_id == container_id) {
+    if (!entry.widget || !entry.has_loaded_url || !entry.ever_shown ||
+        entry.close_authorized || entry.container_id != container_id) {
+      continue;
+    }
+    // Prefer a shown top-level content window. A loaded owned surface is only
+    // a fallback for apps whose top-level native host never navigates.
+    if (entry.parent_id == 0 && !entry.sync_bounds_with_parent) {
       return id;
     }
+    if (owned_entry == 0) {
+      owned_entry = id;
+    }
   }
-  return 0;
+  return owned_entry;
 }
 
 bool XenonElectronWindowHost::ActivateEntryWindow(int32_t window_id) {
@@ -672,32 +758,39 @@ bool XenonElectronWindowHost::ActivateEntryWindow(int32_t window_id) {
   // owner chain are activated; unrelated show:false windows in the same
   // container retain normal Electron visibility semantics.
   for (auto it = window_chain.rbegin(); it != window_chain.rend(); ++it) {
-    windows_.at(*it).widget->Show();
+    if (auto* widget = FindWidget(*it); widget && widget->IsMinimized()) {
+      widget->Restore();
+    }
+    // Native addons can hide a platform window without updating Views' cached
+    // visibility. Reuse BrowserWindow.show's platform synchronization too.
+    SetVisible(*it, true);
   }
-  windows_.at(window_chain.back()).widget->Activate();
+  if (auto* owner = FindWidget(window_chain.back())) {
+    owner->Activate();
+  }
   return true;
 }
 
 std::map<int32_t, XenonElectronWindowHost::Entry>::iterator
 XenonElectronWindowHost::FindEntry(views::Widget* widget) {
-  return std::find_if(windows_.begin(), windows_.end(),
-                      [widget](const auto& item) {
-                        return item.second.widget == widget;
-                      });
+  return std::find_if(
+      windows_.begin(), windows_.end(),
+      [widget](const auto& item) { return item.second.widget == widget; });
 }
 
-bool XenonElectronWindowHost::CreateHostedWindow(content::BrowserContext* context,
-                                           int width,
-                                           int height,
-                                           bool show,
-                                           bool frame,
-                                           bool transparent,
-                                           int32_t parent_id,
-                                           const std::string& title,
-                                           const std::string& container_id,
-                                           int32_t* window_id,
-                                           uint64_t* hwnd,
-                                           std::string* error) {
+bool XenonElectronWindowHost::CreateHostedWindow(
+    content::BrowserContext* context,
+    int width,
+    int height,
+    bool show,
+    bool frame,
+    bool transparent,
+    int32_t parent_id,
+    const std::string& title,
+    const std::string& container_id,
+    int32_t* window_id,
+    uint64_t* hwnd,
+    std::string* error) {
   if (shutting_down_) {
     *error = "Electron window host is shutting down";
     return false;
@@ -720,6 +813,7 @@ bool XenonElectronWindowHost::CreateHostedWindow(content::BrowserContext* contex
   entry.transparent = transparent;
   entry.parent_id = parent_id;
   entry.container_id = container_id;
+  entry.ever_shown = show;
   entry.sync_bounds_with_parent = transparent && parent_id > 0;
 
   base::DictValue options;
@@ -760,8 +854,10 @@ bool XenonElectronWindowHost::CreateHostedWindow(content::BrowserContext* contex
     *error = "Failed to create Electron BrowserWindow WebContents";
     return false;
   }
-  entry.web_contents_observer = std::make_unique<HostedWebContentsObserver>(
-      this, id, dialog_view->web_contents());
+  XenonWebDialog::SetHostedCloseRequestHandler(
+      entry.widget, base::BindRepeating(&XenonElectronWindowHost::RequestClose,
+                                        base::Unretained(this), id));
+  ObserveWebContents(id, dialog_view->web_contents());
   blink::web_pref::WebPreferences prefs =
       dialog_view->web_contents()->GetOrCreateWebPreferences();
   prefs.allow_scripts_to_close_windows = true;
@@ -769,11 +865,7 @@ bool XenonElectronWindowHost::CreateHostedWindow(content::BrowserContext* contex
   const std::string default_ua =
       xenon::XenonManager::GetInstance()->GetDefaultUserAgent(container_id);
   if (!default_ua.empty()) {
-    entry.user_agent = default_ua;
-    blink::UserAgentOverride override;
-    override.ua_string_override = default_ua;
-    override.ua_metadata_override = embedder_support::GetUserAgentMetadata();
-    dialog_view->web_contents()->SetUserAgentOverride(override, false);
+    UpdateUserAgent(id, dialog_view->web_contents(), default_ua);
   }
   XenonWebDialog::SetHostedContentVisible(entry.widget, false);
   if (show) {
@@ -883,10 +975,7 @@ void XenonElectronWindowHost::LoadURL(int32_t window_id,
     web_contents->SetWebPreferences(prefs);
   }
   if (!entry.user_agent.empty()) {
-    blink::UserAgentOverride override;
-    override.ua_string_override = entry.user_agent;
-    override.ua_metadata_override = embedder_support::GetUserAgentMetadata();
-    web_contents->SetUserAgentOverride(override, false);
+    UpdateUserAgent(window_id, web_contents, entry.user_agent);
   }
   LOG(INFO) << "Electron BrowserWindow loadURL id=" << window_id
             << " url=" << url;
@@ -907,8 +996,9 @@ void XenonElectronWindowHost::LoadURL(int32_t window_id,
   }
   web_contents->GetController().LoadURLWithParams(params);
 
-  if (pending_activate_ ||
-      pending_activate_containers_.contains(entry.container_id)) {
+  if (entry.ever_shown &&
+      (pending_activate_ ||
+       pending_activate_containers_.contains(entry.container_id))) {
     pending_activate_ = false;
     pending_activate_containers_.erase(entry.container_id);
     ActivateEntryWindow(window_id);
@@ -986,26 +1076,22 @@ bool XenonElectronWindowHost::Call(int32_t window_id,
       return false;
     }
     if (command == "set-user-agent") {
-      const std::string* value = options ? options->FindString("value") : nullptr;
+      const std::string* value =
+          options ? options->FindString("value") : nullptr;
       if (!value) {
         *error = "set-user-agent expects a string value";
         return false;
       }
-      entry.user_agent = *value;
-      blink::UserAgentOverride override;
-      override.ua_string_override = *value;
-      if (!value->empty()) {
-        override.ua_metadata_override =
-            embedder_support::GetUserAgentMetadata();
-      }
-      web_contents->SetUserAgentOverride(override, false);
+      UpdateUserAgent(window_id, web_contents, *value);
       return true;
     }
-    entry.user_agent =
-        web_contents->GetUserAgentOverride().ua_string_override;
-    *result = base::Value(entry.user_agent.empty()
-                              ? embedder_support::GetUserAgent()
-                              : entry.user_agent);
+    if (!entry.user_agent_update_pending) {
+      entry.user_agent =
+          web_contents->GetUserAgentOverride().ua_string_override;
+    }
+    *result =
+        base::Value(entry.user_agent.empty() ? embedder_support::GetUserAgent()
+                                             : entry.user_agent);
     return true;
   }
 
@@ -1025,7 +1111,11 @@ bool XenonElectronWindowHost::Call(int32_t window_id,
     return true;
   }
 
-  if (command == "close" || command == "destroy") {
+  if (command == "close") {
+    RequestClose(window_id);
+    return true;
+  }
+  if (command == "destroy") {
     Close(window_id);
     return true;
   }
@@ -1473,13 +1563,21 @@ void XenonElectronWindowHost::Close(int32_t window_id) {
   if (!widget) {
     return;
   }
-#if BUILDFLAG(IS_WIN)
-  // Hide first so a slow Close() animation does not leave a black host up.
-  if (HWND hwnd = views::HWNDForWidget(widget)) {
-    ::ShowWindow(hwnd, SW_HIDE);
+  windows_.at(window_id).close_authorized = true;
+  widget->Hide();
+  // ipcMain has already completed its cancellable close decision and marked
+  // BrowserWindow destroyed. Do not ask it again or run a second DOM veto.
+  widget->CloseNow();
+}
+
+bool XenonElectronWindowHost::RequestClose(int32_t window_id) {
+  const auto it = windows_.find(window_id);
+  if (it == windows_.end() || it->second.close_authorized || shutting_down_ ||
+      closing_containers_.contains(it->second.container_id)) {
+    return true;
   }
-#endif
-  widget->Close();
+  NotifyEvent(window_id, "close-requested", base::Value());
+  return false;
 }
 
 void XenonElectronWindowHost::CloseForContainer(
@@ -1729,7 +1827,17 @@ void XenonElectronWindowHost::OnWidgetVisibilityChanged(views::Widget* widget,
                                                          bool visible) {
   auto it = FindEntry(widget);
   if (it != windows_.end()) {
+    if (visible) {
+      it->second.ever_shown = true;
+    }
     NotifyEvent(it->first, visible ? "show" : "hide", base::Value());
+    if (visible && it->second.has_loaded_url &&
+        (pending_activate_ ||
+         pending_activate_containers_.contains(it->second.container_id))) {
+      pending_activate_ = false;
+      pending_activate_containers_.erase(it->second.container_id);
+      ActivateEntryWindow(it->first);
+    }
   }
 }
 
@@ -1829,12 +1937,21 @@ bool XenonElectronWindowHost::ActivateForContainer(
   if (container_id.empty()) {
     return ActivateAll();
   }
+  const bool has_visible_windows =
+      std::any_of(windows_.begin(), windows_.end(),
+                  [&container_id](const auto& item) {
+                    const Entry& entry = item.second;
+                    return entry.container_id == container_id && entry.widget &&
+                           !entry.close_authorized && entry.widget->IsVisible();
+                  });
+  XenonManager::GetInstance()->ActivateElectronIpc(container_id,
+                                                 has_visible_windows);
   const int32_t entry_window_id =
       FindEntryWindowForContainer(container_id);
   if (entry_window_id <= 0) {
     pending_activate_containers_.insert(container_id);
     LOG(WARNING) << "Electron entry window for container '" << container_id
-                 << "' not loaded yet; will show on its first loadURL/loadFile";
+                 << "' not shown yet; waiting for the application's window";
     return false;
   }
   pending_activate_containers_.erase(container_id);

@@ -120,6 +120,13 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   static bool SetHostedContentTitle(views::Widget* widget,
                                     const std::u16string& title);
   static void SetHostedContentVisible(views::Widget* widget, bool visible);
+  // Hosted Electron windows delegate cancellable close requests to ipcMain.
+  // Other WebDialogs retain their ordinary native/DOM close behavior.
+  static void SetHostedCloseRequestHandler(
+      views::Widget* widget,
+      base::RepeatingCallback<bool()> handler);
+  void SetCloseRequestHandler(base::RepeatingCallback<bool()> handler);
+  bool RequestClose();
   static bool SetHostedContentBackgroundColor(views::Widget* widget,
                                              SkColor color);
   void SetContentBackgroundColor(SkColor color) { background_color_ = color; }
@@ -131,6 +138,7 @@ class XenonWebDialog : public ui::WebDialogDelegate {
 #endif
 
  private:
+  friend class XenonHostedWindowCloseTest;
   XenonWebDialog(const GURL& url,
                  int width,
                  int height,
@@ -174,9 +182,11 @@ class XenonWebDialog : public ui::WebDialogDelegate {
       std::vector<content::WebUIMessageHandler*>* handlers) override;
   void GetDialogSize(gfx::Size* size) const override;
   std::string GetDialogArgs() const override;
+  bool OnDialogCloseRequested() override;
   void OnDialogClosed(const std::string& json_retval) override;
   void OnCloseContents(content::WebContents* source,
                        bool* out_close_dialog) override;
+  bool ShouldCloseDialogOnEscape() const override;
   bool ShouldShowDialogTitle() const override;
   bool ShouldShowCloseButton() const override;
   FrameKind GetWebDialogFrameKind() const override;
@@ -187,6 +197,7 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   std::u16string title_;
   ui::mojom::ModalType modal_type_ = ui::mojom::ModalType::kNone;
   base::OnceClosure on_dialog_closed_;
+  base::RepeatingCallback<bool()> close_request_handler_;
   bool show_close_button_ = false;
   bool frame_ = false;
   bool dwm_ = kDefaultUseDwm;

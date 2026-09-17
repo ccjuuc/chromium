@@ -9,8 +9,12 @@
 #include <string>
 #include <utility>
 
+#include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/process/process_handle.h"
+#include "base/unguessable_token.h"
+#include "components/version_info/version_info.h"
 #include "content/public/common/isolated_world_ids.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/v8_value_converter.h"
@@ -18,6 +22,8 @@
 #include "gin/function_template.h"
 #include "gin/try_catch.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
+#include "sandbox/policy/sandbox.h"
+#include "sandbox/policy/switches.h"
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/web/web_element.h"
 #include "third_party/blink/public/web/web_local_frame.h"
@@ -26,6 +32,7 @@
 #include "v8/include/v8-context.h"
 #include "v8/include/v8-exception.h"
 #include "v8/include/v8-function.h"
+#include "v8/include/v8-initialization.h"
 #include "v8/include/v8-microtask-queue.h"
 #include "v8/include/v8-object.h"
 #include "v8/include/v8-promise.h"
@@ -231,7 +238,8 @@ XenonIpcRenderer::XenonIpcRenderer(content::RenderFrame* render_frame,
                                    v8::Local<v8::Context> context)
     : content::RenderFrameObserver(render_frame),
       isolate_(v8::Isolate::GetCurrent()),
-      context_(isolate_, context) {}
+      context_(isolate_, context),
+      context_id_(base::UnguessableToken::Create().ToString()) {}
 
 XenonIpcRenderer::~XenonIpcRenderer() {
   Shutdown();
@@ -326,7 +334,8 @@ void XenonIpcRenderer::InstallAsyncContextHooks(gin::Arguments* args) {
 #else
   // The V8 API aborts instead of throwing if the build feature is absent.
   v8::Local<v8::Value> error = v8::Exception::Error(
-      gin::StringToV8(isolate_, "Async context requires V8 JavaScript Promise hooks")
+      gin::StringToV8(isolate_,
+                      "Async context requires V8 JavaScript Promise hooks")
           .As<v8::String>());
   if (error.As<v8::Object>()
           ->Set(context_.Get(isolate_), gin::StringToV8(isolate_, "code"),
@@ -358,6 +367,45 @@ void XenonIpcRenderer::GetRuntimeConfig(gin::Arguments* args) {
   set_string("arch", ArchitectureName());
   set_string("endianness", EndiannessName());
   set_string("documentPath", runtime_config_->document_path);
+  set_string("cwd", runtime_config_->working_directory);
+  set_string("contextId", context_id_);
+  v8::Local<v8::Object> versions = v8::Object::New(isolate);
+  versions
+      ->Set(context, gin::StringToV8(isolate, "chrome"),
+            gin::StringToV8(isolate, version_info::GetVersionNumber()))
+      .Check();
+  versions
+      ->Set(context, gin::StringToV8(isolate, "v8"),
+            gin::StringToV8(isolate, v8::V8::GetVersion()))
+      .Check();
+  // These are adapters, not embedded Node/Electron releases. Match the main
+  // process's explicit compatibility identity instead of claiming a release.
+  for (const char* name : {"node", "electron"}) {
+    versions
+        ->Set(context, gin::StringToV8(isolate, name),
+              gin::StringToV8(isolate, "0.0.0-compat"))
+        .Check();
+  }
+  value->Set(context, gin::StringToV8(isolate, "versions"), versions).Check();
+  value
+      ->Set(context, gin::StringToV8(isolate, "pid"),
+            v8::Integer::NewFromUnsigned(isolate, base::GetCurrentProcId()))
+      .Check();
+  value
+      ->Set(context, gin::StringToV8(isolate, "contextIsolated"),
+            v8::Boolean::New(isolate, false))
+      .Check();  // This binding is installed only in the document's main world.
+  value
+      ->Set(context, gin::StringToV8(isolate, "sandboxed"),
+            v8::Boolean::New(
+                isolate, !base::CommandLine::ForCurrentProcess()->HasSwitch(
+                             sandbox::policy::switches::kNoSandbox) &&
+                             sandbox::policy::Sandbox::IsProcessSandboxed()))
+      .Check();
+  value
+      ->Set(context, gin::StringToV8(isolate, "isPackaged"),
+            v8::Boolean::New(isolate, runtime_config_->is_packaged))
+      .Check();
   v8::Local<v8::Array> mappings = v8::Array::New(
       isolate, static_cast<int>(runtime_config_->renderer_url_mappings.size()));
   for (size_t i = 0; i < runtime_config_->renderer_url_mappings.size(); ++i) {

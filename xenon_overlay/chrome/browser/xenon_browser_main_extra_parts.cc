@@ -107,6 +107,7 @@ XenonBrowserMainExtraParts::~XenonBrowserMainExtraParts() {
 }
 
 void XenonBrowserMainExtraParts::PostEarlyInitialization() {
+  xenon::XenonManager::GetInstance()->InitializeRuntimeMetadata();
   xenon_fonts::RegisterXunleiFonts();
 }
 

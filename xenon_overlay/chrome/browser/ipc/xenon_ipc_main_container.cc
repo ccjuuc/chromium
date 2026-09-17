@@ -33,6 +33,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
@@ -420,6 +421,12 @@ void XenonIpcMainContainer::SetWindowHooks(WindowHooks hooks) {
   window_hooks_ = std::move(hooks);
 }
 
+void XenonIpcMainContainer::SetAppExitHandler(
+    base::RepeatingCallback<void(int)> handler) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  app_exit_handler_ = std::move(handler);
+}
+
 void XenonIpcMainContainer::SetNetPipeSender(
     base::RepeatingCallback<void(const std::string&, base::Value)> sender) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -712,6 +719,8 @@ bool XenonIpcMainContainer::InitializeInternal(
               &XenonIpcMainContainer::NativeBrowserWindowCall);
     bind_func("__xenonCloseBrowserWindow",
               &XenonIpcMainContainer::NativeCloseBrowserWindow);
+    bind_func("__xenonExitApp", &XenonIpcMainContainer::NativeExitApp);
+    bind_func("__xenonCanExitApp", &XenonIpcMainContainer::NativeCanExitApp);
     bind_func("__xenonNativeInvokeExport",
               &XenonIpcMainContainer::NativeInvokeExport);
     bind_func("__xenonNativeDescribeExport",
@@ -815,6 +824,7 @@ void XenonIpcMainContainer::Shutdown() {
   dispatch_invoke_.Reset();
   dispatch_sync_.Reset();
   dispatch_window_event_.Reset();
+  dispatch_app_event_.Reset();
   dispatch_renderer_event_.Reset();
   mark_app_ready_.Reset();
   shutdown_app_.Reset();
@@ -869,6 +879,7 @@ bool XenonIpcMainContainer::RunBootstrap() {
          capture_function("__xenonDispatchSync", &dispatch_sync_) &&
          capture_function("__xenonDispatchBrowserWindowEvent",
                           &dispatch_window_event_) &&
+         capture_function("__xenonDispatchAppEvent", &dispatch_app_event_) &&
          capture_function("__xenonDispatchRendererEvent",
                           &dispatch_renderer_event_) &&
          capture_function("__xenonMarkAppReady", &mark_app_ready_) &&
@@ -2225,6 +2236,32 @@ void XenonIpcMainContainer::DispatchWindowEvent(
   isolate_->PerformMicrotaskCheckpoint();
 }
 
+void XenonIpcMainContainer::DispatchAppEvent(
+    const std::string& event_name,
+    base::Value arguments) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!initialized_ || shutting_down_ || dispatch_app_event_.IsEmpty()) {
+    return;
+  }
+  ScopedV8Context scope(isolate_, context_);
+  gin::TryCatch try_catch(isolate_);
+  v8::Local<v8::Value> converted_arguments;
+  if (!ValueToV8(arguments).ToLocal(&converted_arguments)) {
+    LOG(ERROR) << "Electron app event arguments could not be converted: "
+               << try_catch.GetStackTrace();
+    return;
+  }
+  v8::Local<v8::Value> argv[] = {
+      gin::StringToV8(isolate_, event_name), converted_arguments};
+  if (dispatch_app_event_.Get(isolate_)
+          ->Call(scope.context(), scope.context()->Global(), std::size(argv),
+                 argv)
+          .IsEmpty()) {
+    LOG(ERROR) << "Electron app event failed: " << try_catch.GetStackTrace();
+  }
+  isolate_->PerformMicrotaskCheckpoint();
+}
+
 v8::MaybeLocal<v8::Value> XenonIpcMainContainer::ValueToV8(
     const base::Value& value) {
   if (value.is_blob()) {
@@ -2633,21 +2670,35 @@ void XenonIpcMainContainer::NativeShowOpenDialog(gin::Arguments* args) {
   }
 
   std::vector<std::string> results;
+  auto throw_dialog_error = [&](const char* code, const char* message) {
+    v8::Local<v8::Value> error = v8::Exception::Error(
+        gin::StringToV8(isolate, message).As<v8::String>());
+    if (error.As<v8::Object>()
+            ->Set(context, gin::StringToV8(isolate, "code"),
+                  gin::StringToV8(isolate, code))
+            .IsNothing()) {
+      return;
+    }
+    isolate->ThrowException(error);
+  };
   if (!window_hooks_.show_open_dialog) {
-    LOG(ERROR) << "showOpenDialog hook is not bound";
-    args->Return(results);
+    throw_dialog_error("ERR_NOT_SUPPORTED", "Native open dialog is unavailable");
     return;
   }
   LOG(INFO) << "showOpenDialog hop title=" << title
             << " directory=" << directory << " multi=" << allow_multi
             << " filters=" << extensions.size();
+  bool succeeded;
   {
     v8::Unlocker unlocker(isolate_);
-    if (!window_hooks_.show_open_dialog.Run(title, directory, allow_multi,
-                                            extensions, &results)) {
-      LOG(ERROR) << "showOpenDialog hop to Browser failed";
-      results.clear();
-    }
+    succeeded = window_hooks_.show_open_dialog.Run(
+        title, directory, allow_multi, extensions, &results);
+  }
+  // V8 must be locked again before constructing or throwing the JS error.
+  // Only a successful Browser reply with no paths means user cancellation.
+  if (!succeeded) {
+    throw_dialog_error("ERR_FAILED", "Native open dialog request failed");
+    return;
   }
   LOG(INFO) << "showOpenDialog hop returned " << results.size() << " path(s)";
   args->Return(results);
@@ -2777,6 +2828,48 @@ void XenonIpcMainContainer::NativeCloseBrowserWindow(gin::Arguments* args) {
   if (window_hooks_.close) {
     v8::Unlocker unlocker(isolate_);
     window_hooks_.close.Run(window_id);
+  }
+}
+
+void XenonIpcMainContainer::NativeCanExitApp(gin::Arguments* args) {
+  args->Return(static_cast<bool>(app_exit_handler_));
+}
+
+void XenonIpcMainContainer::NativeExitApp(gin::Arguments* args) {
+  int exit_code = 0;
+  if (!args->GetNext(&exit_code)) {
+    args->ThrowTypeError("exit expects an integer exit code");
+    return;
+  }
+  if (app_exit_requested_ || shutting_down_) {
+    return;
+  }
+  if (!app_exit_handler_) {
+    v8::Local<v8::Object> error =
+        v8::Exception::Error(
+            gin::StringToV8(isolate_, "Native application exit is unavailable")
+                .As<v8::String>())
+            .As<v8::Object>();
+    if (error
+            ->Set(isolate_->GetCurrentContext(),
+                  gin::StringToV8(isolate_, "code"),
+                  gin::StringToV8(isolate_, "ERR_NOT_SUPPORTED"))
+            .IsJust()) {
+      isolate_->ThrowException(error);
+    }
+    return;
+  }
+  app_exit_requested_ = true;
+  // The owner may disconnect the Utility and destroy this isolate. Never
+  // perform that teardown from inside a running JavaScript/IPC stack.
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&XenonIpcMainContainer::NotifyAppExit,
+                                weak_factory_.GetWeakPtr(), exit_code));
+}
+
+void XenonIpcMainContainer::NotifyAppExit(int exit_code) {
+  if (!shutting_down_ && app_exit_handler_) {
+    app_exit_handler_.Run(exit_code);
   }
 }
 

@@ -454,6 +454,20 @@ class XenonWebDialogView : public views::WebDialogView,
     }
   }
 
+  void SetCloseRequestHandler(base::RepeatingCallback<bool()> handler) {
+    xenon_delegate_->SetCloseRequestHandler(std::move(handler));
+  }
+
+  void CloseContents(content::WebContents* source) override {
+    // WebDialogView sets close_contents_called_ before consulting its delegate.
+    // A veto at that point would make the next native close ignore the veto.
+    // Ask the same delegate before entering the base close state machine.
+    if (!xenon_delegate_->RequestClose()) {
+      return;
+    }
+    views::WebDialogView::CloseContents(source);
+  }
+
   bool SetHostedContentTitle(const std::u16string& title) {
     if (!xenon_delegate_ || !GetWidget()) {
       return false;
@@ -939,6 +953,27 @@ void XenonWebDialog::SetContentTitle(const std::u16string& title) {
   // Notify WebDialogView's accessibility callback as well as maintaining the
   // title returned by this delegate's GetDialogTitle override.
   set_dialog_title(title);
+}
+
+void XenonWebDialog::SetHostedCloseRequestHandler(
+    views::Widget* widget,
+    base::RepeatingCallback<bool()> handler) {
+  if (!widget) {
+    return;
+  }
+  auto* view = static_cast<XenonWebDialogView*>(widget->widget_delegate());
+  if (view) {
+    view->SetCloseRequestHandler(std::move(handler));
+  }
+}
+
+void XenonWebDialog::SetCloseRequestHandler(
+    base::RepeatingCallback<bool()> handler) {
+  close_request_handler_ = std::move(handler);
+}
+
+bool XenonWebDialog::RequestClose() {
+  return close_request_handler_.is_null() || close_request_handler_.Run();
 }
 
 bool XenonWebDialog::SetHostedContentTitle(views::Widget* widget,
@@ -1475,8 +1510,20 @@ void XenonWebDialog::OnDialogClosed(const std::string& json_retval) {
   delete this;
 }
 
+bool XenonWebDialog::OnDialogCloseRequested() {
+  return close_request_handler_.is_null()
+             ? ui::WebDialogDelegate::OnDialogCloseRequested()
+             : RequestClose();
+}
+
 void XenonWebDialog::OnCloseContents(content::WebContents* source,
                                      bool* out_close_dialog) {
+  if (!RequestClose()) {
+    if (out_close_dialog) {
+      *out_close_dialog = false;
+    }
+    return;
+  }
   if (out_close_dialog) {
     *out_close_dialog = true;
   }
@@ -1486,6 +1533,13 @@ void XenonWebDialog::OnCloseContents(content::WebContents* source,
       widget->Hide();
     }
   }
+}
+
+bool XenonWebDialog::ShouldCloseDialogOnEscape() const {
+  // BrowserWindow leaves Escape to the application. WebDialogView's default
+  // Escape handler would instead issue both DOM and native close requests.
+  return close_request_handler_.is_null() &&
+         ui::WebDialogDelegate::ShouldCloseDialogOnEscape();
 }
 
 bool XenonWebDialog::ShouldShowDialogTitle() const {

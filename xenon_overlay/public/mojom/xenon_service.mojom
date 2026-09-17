@@ -46,6 +46,10 @@ interface XenonBrowserObserver {
 
   CloseElectronWindow(int32 window_id);
 
+  // A hosted application completed its quit/exit sequence. The browser drops
+  // only this application's service connection and cleans up its windows.
+  OnElectronAppExit(string container_id, int32 exit_code);
+
   // Electron `dialog.showOpenDialog`. Must run on the Browser UI thread with
   // a real owner HWND. Calling GetOpenFileName from Utility never shows a
   // picker (no UI pump / no owner).
@@ -142,8 +146,14 @@ interface XenonMainService {
   // main isolate. Window ids are process-global and containers without the id
   // simply ignore the event.
   DispatchElectronWindowEvent(int32 window_id,
-                              string event_name,
-                              mojo_base.mojom.Value arguments);
+                             string event_name,
+                             mojo_base.mojom.Value arguments);
+
+  // Application lifecycle events are scoped to the explicitly activated
+  // container, including when it currently has no BrowserWindow.
+  DispatchElectronAppEvent(string container_id,
+                           string event_name,
+                           mojo_base.mojom.Value arguments);
 
   // Electron-compatible main JavaScript container. It runs in this unsandboxed
   // Utility process because the Browser process forbids executable JIT pages.

@@ -39,6 +39,18 @@ namespace xenon {
 FORWARD_DECLARE_TEST(XenonManagerTest, Ping_WhenDisconnected_ReturnsNotRunning);
 FORWARD_DECLARE_TEST(XenonManagerTest,
                      DisconnectedContainerRejectsRendererTraffic);
+FORWARD_DECLARE_TEST(XenonManagerTest,
+                     StaleDisconnectPreservesRestartedContainer);
+#if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
+FORWARD_DECLARE_TEST(XenonManagerTest,
+                     AppExitDisconnectsAllCopiesAndPreservesConfiguration);
+FORWARD_DECLARE_TEST(XenonManagerTest, AppExitRejectsOtherAndStaleObservers);
+#endif
+FORWARD_DECLARE_TEST(XenonManagerTest,
+                     RuntimeMetadataIsCapturedOnceBeforeRendererRequests);
+FORWARD_DECLARE_TEST(
+    XenonManagerTest,
+    RendererMetadataDoesNotReadWorkingDirectoryBeforeInitialization);
 #if BUILDFLAG(ENABLE_XENON_ASSOCIATED_SIDE)
 FORWARD_DECLARE_TEST(XenonManagerTest, PingAssociated_WhenDisconnected_ReturnsError);
 #endif
@@ -65,6 +77,10 @@ class XenonManager {
  public:
   static XenonManager* GetInstance();
 
+  // Called during early browser startup while blocking is still allowed.
+  // Renderer configuration requests only copy the captured host metadata.
+  void InitializeRuntimeMetadata();
+
   // Remembers the BrowserContext used by lazily launched services without
   // starting a Utility process.
   void SetBrowserContext(content::BrowserContext* context);
@@ -87,6 +103,10 @@ class XenonManager {
   bool RegisterElectronIpc(ipc::mojom::IpcMainConfigPtr config);
   // Starts a previously registered container. Repeated calls are idempotent.
   bool EnsureElectronIpcStarted(const std::string& container_id);
+  // Delivers an explicit host activation to the already started application.
+  // A hidden or absent BrowserWindow does not imply the main module must rerun.
+  void ActivateElectronIpc(const std::string& container_id,
+                           bool has_visible_windows);
   // Registers and immediately starts (or reinitializes) a container.
   void InitializeElectronIpc(ipc::mojom::IpcMainConfigPtr config);
   std::string GetDefaultUserAgent(const std::string& container_id) const;
@@ -152,6 +172,8 @@ class XenonManager {
       base::OnceCallback<void(const std::string& message)>;
 
   void OnServiceEvent(const std::string& message) override;
+  void OnElectronAppExit(const std::string& container_id,
+                         int32_t exit_code) override;
   void OnThreadCallback(const std::string& message) override;
   void CreateElectronWindow(int32_t width,
                             int32_t height,
@@ -188,6 +210,20 @@ class XenonManager {
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest, Ping_WhenDisconnected_ReturnsNotRunning);
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
                            DisconnectedContainerRejectsRendererTraffic);
+  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
+                           StaleDisconnectPreservesRestartedContainer);
+#if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
+  FRIEND_TEST_ALL_PREFIXES(
+      XenonManagerTest,
+      AppExitDisconnectsAllCopiesAndPreservesConfiguration);
+  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
+                           AppExitRejectsOtherAndStaleObservers);
+#endif
+  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
+                           RuntimeMetadataIsCapturedOnceBeforeRendererRequests);
+  FRIEND_TEST_ALL_PREFIXES(
+      XenonManagerTest,
+      RendererMetadataDoesNotReadWorkingDirectoryBeforeInitialization);
 #if BUILDFLAG(ENABLE_XENON_ASSOCIATED_SIDE)
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest, PingAssociated_WhenDisconnected_ReturnsError);
 #endif
@@ -200,7 +236,9 @@ class XenonManager {
 #endif
 
   void OnDisconnected();
-  void OnContainerServiceDisconnected(const std::string& container_id);
+  void OnContainerServiceDisconnected(const std::string& container_id,
+                                      uint64_t generation);
+  void CloseContainerService(const std::string& container_id);
   void ResetServiceConnection();
 
 #if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
@@ -210,20 +248,24 @@ class XenonManager {
 #endif
   struct ContainerServiceConnection {
     ServiceRemote remote;
+    uint64_t generation = 0;
+#if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
+    mojo::ReceiverId observer_receiver_id = 0;
+#endif
   };
   ContainerServiceConnection* EnsureContainerServiceStarted(
       const std::string& container_id,
       bool explicit_restart = false);
   ContainerServiceConnection* FindContainerService(
       const std::string& container_id);
-  void InitializeServiceConnection(ServiceRemote* remote,
+  void InitializeServiceConnection(ContainerServiceConnection* connection,
                                    const std::string& service_id);
 #if BUILDFLAG(ENABLE_XENON_ASSOCIATED_SIDE)
   void SetupAssociatedSide();
 #endif
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
-  void SetupBrowserObserver(ServiceRemote* remote,
-                            const std::string& service_id);
+  mojo::ReceiverId SetupBrowserObserver(ServiceRemote* remote,
+                                        const std::string& service_id);
 #endif
 
 #if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
@@ -242,6 +284,8 @@ class XenonManager {
 #endif
   raw_ptr<XenonNodeObserver> node_observer_ = nullptr;
   raw_ptr<content::BrowserContext> last_browser_context_ = nullptr;
+  bool runtime_metadata_initialized_ = false;
+  std::string startup_working_directory_;
   std::map<std::string, ipc::mojom::IpcMainConfigPtr> last_ipc_configs_;
   std::map<std::string, std::string> electron_ipc_origin_containers_;
   std::map<std::string, std::unique_ptr<ContainerServiceConnection>>
