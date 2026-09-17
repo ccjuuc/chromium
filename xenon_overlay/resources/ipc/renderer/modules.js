@@ -45,6 +45,9 @@
 
   function moduleFilenameFromSource(filename) {
     if (typeof filename !== 'string' || !filename) return filename;
+    // CommonJS parents are already native filenames. Skip URL parsing (and
+    // its exception for POSIX paths) without changing file: or hosted URLs.
+    if (pathModule.isAbsolute(filename)) return filename;
     let sourceUrl;
     try { sourceUrl = new URL(filename); } catch (_error) { return filename; }
     if (sourceUrl.protocol === 'file:') return urlModule.fileURLToPath(sourceUrl);
@@ -148,8 +151,9 @@
   // required, so install the filename mapping for the document itself.
   installBindingsFileNameShim();
 
-  function resolveHostedCjs(request, parentFile = globalThis.__filename) {
-    parentFile = moduleFilenameFromSource(parentFile);
+  // Callers convert source URLs before resolving so the successful-load cache
+  // uses the same parent filename for both lookup and insertion.
+  function resolveHostedCjs(request, parentFile) {
     const builtin = builtinModuleId(request);
     if (builtin) return request.startsWith('node:') ? request : builtin;
     if (request.startsWith('#')) {
@@ -354,7 +358,7 @@
     // hide on-disk scripts behind the renderer's synthetic filesystem mount.
     return memFiles.has(normalizeFsPath(filename)) ?
         String(fsModule.readFileSync(filename, 'utf8')) :
-        fsReadResult(fsNativeSync('read_file', filename), 'utf8');
+        fsReadResult(fsNativeSync('read_file', filename, {returnBytes: true}), 'utf8');
   }
 
   function loadBuiltinModule(request) {
@@ -769,6 +773,7 @@
       }
       return builtinModuleCache.get(builtin);
     }
+    parentFile = moduleFilenameFromSource(parentFile);
     const resolved = resolveHostedCjs(request, parentFile);
     const exports = loadHostedCjsModule(resolved);
     moduleResolutionCache.set(`${parentFile}\0${request}`, resolved);
@@ -776,7 +781,8 @@
   };
 
   globalThis.Buffer = Buffer;
-  globalThis.require.resolve = request => resolveHostedCjs(request);
+  globalThis.require.resolve = request => resolveHostedCjs(
+      request, moduleFilenameFromSource(globalThis.__filename));
   globalThis.require.cache = hostedCjsCache;
   globalThis.require.main = undefined;
   globalThis.require.extensions = { '.js': () => {}, '.json': () => {}, '.node': () => {} };

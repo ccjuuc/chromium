@@ -30,7 +30,8 @@ function runtime(kind, contents = '第一行\r\nsecond\n最后一行', options =
       invoke: async (channel, request) => {
         assert.equal(channel, '__xenon:fs');
         assert.equal(request.operation, 'read_file');
-        const result = read(request.path).toString('base64');
+        assert.equal(request.returnBytes, true);
+        const result = Uint8Array.from(read(request.path)).buffer;
         if (options.readGate) await options.readGate;
         return result;
       },

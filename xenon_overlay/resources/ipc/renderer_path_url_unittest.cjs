@@ -51,7 +51,10 @@ function renderer(platform, options = {}) {
         if (request.operation === 'realpath') return found.filename;
         if (request.operation === 'stat') return found;
         if (request.operation === 'access') return undefined;
-        if (request.operation === 'read_file') return Buffer.from(found.contents).toString('base64');
+        if (request.operation === 'read_file') {
+          const bytes = Buffer.from(found.contents);
+          return options.readFileResult ? options.readFileResult(request, bytes) : bytes.toString('base64');
+        }
         throw new Error('Unexpected fixture fs operation: ' + request.operation);
       },
     },
@@ -269,5 +272,182 @@ test('POSIX mapped source names load from declared roots and filesystem root rem
     assert.equal(context.require('./entry.js', 'chrome://fixture/renderer.js'), 42);
     assert.equal(context.require('./entry.js', nodeUrl.pathToFileURL(
         path.posix.join(root, 'renderer#?.js'), {windows: false}).href), 42);
+  }
+});
+
+test('native CommonJS filenames load without consulting the URL parser', () => {
+  for (const [platform, root, name] of [
+    ['win32', 'D:\\fixture\\App', 'Entry.js'],
+    ['win32', '\\\\server\\share\\App', 'Entry.js'],
+    ['linux', '/srv/fixture/App', 'Entry\\name.js'],
+  ]) {
+    const nativePath = platform === 'win32' ? path.win32 : path.posix;
+    const filename = nativePath.join(root, name);
+    const {context, calls, files} = renderer(platform, {root, files: [
+      [filename, 'module.exports = {version: 1};'],
+    ]});
+    // Native module loading must not invoke a page's replacement URL parser.
+    let urlCalls = 0;
+    context.URL = class {
+      constructor() {
+        ++urlCalls;
+        throw new Error('URL parser consulted for a native filename');
+      }
+    };
+    const request = './' + name;
+    const first = context.require(request);
+    assert.equal(first.version, 1);
+    const coldCalls = calls.length;
+    assert.equal(context.require(request), first);
+    assert.equal(context.require.resolve(request), filename);
+    assert.equal(calls.length, coldCalls, 'cached native loads need no filesystem IPC');
+    delete context.require.cache[filename];
+    files.set(filename, 'module.exports = {version: 2};');
+    const second = context.require(request);
+    assert.notEqual(second, first);
+    assert.equal(second.version, 2, 'cache deletion still reloads the current file');
+    assert.equal(urlCalls, 0, 'native filenames have no URL conversion side effects');
+  }
+});
+
+test('drive-relative parents and URL sources preserve their module directory', () => {
+  const root = 'D:\\fixture\\App';
+  const filename = root + '\\entry.js';
+  const {context} = renderer('win32', {root, cwd: root, files: [
+    [filename, 'module.exports = {};'],
+  ], config: {rendererUrlMappings: [
+    {sourcePathPrefix: root, targetBaseUrl: 'chrome://fixture/'},
+  ]}});
+  const first = context.require('./entry.js', 'D:renderer.js');
+  assert.equal(context.require('./entry.js', 'chrome://fixture/renderer.js'), first);
+  assert.equal(context.require('./entry.js', 'file:///D:/fixture/App/renderer%23%3F.js'), first);
+  assert.equal(context.require('./entry.js', root + '\\renderer.js'), first);
+});
+
+test('URL and native parents share a cached resolution immediately after loading', () => {
+  for (const platform of ['win32', 'linux']) {
+    const nativePath = platform === 'win32' ? path.win32 : path.posix;
+    const root = platform === 'win32' ? 'D:\\fixture\\App' : '/srv/fixture/App';
+    const filename = nativePath.join(root, 'entry.js');
+    const nativeParent = nativePath.join(root, 'renderer.js');
+    const parents = ['chrome://fixture/renderer.js',
+      nodeUrl.pathToFileURL(nativeParent, {windows: platform === 'win32'}).href, nativeParent];
+    for (const firstParent of parents.slice(0, 2)) {
+      const {context, calls} = renderer(platform, {root, files: [
+        [filename, 'module.exports = {};'],
+      ], config: {rendererUrlMappings: [
+        {sourcePathPrefix: root, targetBaseUrl: 'chrome://fixture/'},
+      ]}});
+      const first = context.require('./entry.js', firstParent);
+      const coldCalls = calls.length;
+      for (const parent of [firstParent, ...parents]) {
+        assert.equal(context.require('./entry.js', parent), first);
+        context.__filename = parent;
+        assert.equal(context.require.resolve('./entry.js'), filename);
+        assert.equal(calls.length, coldCalls, 'equivalent parents need no repeated filesystem IPC');
+      }
+    }
+  }
+});
+
+test('URL-parent cache deletion reloads package entry and rechecks canonical roots', () => {
+  for (const platform of ['win32', 'linux']) {
+    const nativePath = platform === 'win32' ? path.win32 : path.posix;
+    const root = platform === 'win32' ? 'D:\\fixture\\App' : '/srv/fixture/App';
+    const packageFile = nativePath.join(root, 'node_modules', 'fixture', 'package.json');
+    const firstFile = nativePath.join(root, 'node_modules', 'fixture', 'first.js');
+    const secondFile = nativePath.join(root, 'node_modules', 'fixture', 'second.js');
+    const outside = nativePath.join(root + '-other', 'private.js');
+    const parents = ['chrome://fixture/renderer.js', nodeUrl.pathToFileURL(
+      nativePath.join(root, 'renderer.js'), {windows: platform === 'win32'}).href];
+    for (const parent of parents) {
+      const {context, files, aliases, calls} = renderer(platform, {root, files: [
+        [packageFile, '{"main":"first.js"}'],
+        [firstFile, 'module.exports = {version: 1};'],
+        [secondFile, 'module.exports = {version: 2};'],
+        [outside, 'throw new Error("must not read");'],
+      ], config: {rendererUrlMappings: [
+        {sourcePathPrefix: root, targetBaseUrl: 'chrome://fixture/'},
+      ]}});
+      const first = context.require('fixture', parent);
+      assert.equal(first.version, 1);
+      delete context.require.cache[firstFile];
+      files.set(packageFile, '{"main":"second.js"}');
+      const second = context.require('fixture', parent);
+      assert.notEqual(second, first);
+      assert.equal(second.version, 2);
+      delete context.require.cache[secondFile];
+      aliases.set(secondFile, outside);
+      assert.throws(() => context.require('fixture', parent), {code: 'MODULE_NOT_FOUND'});
+      assert.ok(!calls.some(call => call.operation === 'read_file' && call.path === outside));
+    }
+  }
+});
+
+test('URL-parent failed evaluation retries current module candidates', () => {
+  for (const platform of ['win32', 'linux']) {
+    const nativePath = platform === 'win32' ? path.win32 : path.posix;
+    const root = platform === 'win32' ? 'D:\\fixture\\App' : '/srv/fixture/App';
+    const filename = nativePath.join(root, 'retry.js');
+    const parents = ['chrome://fixture/renderer.js', nodeUrl.pathToFileURL(
+      nativePath.join(root, 'renderer.js'), {windows: platform === 'win32'}).href];
+    for (const parent of parents) {
+      const {context, files} = renderer(platform, {root, files: [
+        [filename, 'throw new Error("first load failed");'],
+      ], config: {rendererUrlMappings: [
+        {sourcePathPrefix: root, targetBaseUrl: 'chrome://fixture/'},
+      ]}});
+      assert.throws(() => context.require('./retry', parent), /first load failed/);
+      assert.equal(context.require.cache[filename], undefined);
+      files.delete(filename);
+      files.set(nativePath.join(root, 'retry.json'), '{"ready":true}');
+      assert.equal(context.require('./retry', parent).ready, true);
+    }
+  }
+});
+
+test('URL-parent lookup observes current source mappings while earlier modules stay loaded', () => {
+  const root = '/srv/fixture/App';
+  const mapping = {sourcePathPrefix: root + '/first', targetBaseUrl: 'chrome://fixture/'};
+  const {context} = renderer('linux', {root, files: [
+    [root + '/first/entry.js', 'module.exports = {version: 1};'],
+    [root + '/second/entry.js', 'module.exports = {version: 2};'],
+  ], config: {rendererUrlMappings: [mapping]}});
+  const first = context.require('./entry.js', 'chrome://fixture/renderer.js');
+  mapping.sourcePathPrefix = root + '/second';
+  const second = context.require('./entry.js', 'chrome://fixture/renderer.js');
+  assert.equal(first.version, 1);
+  assert.equal(second.version, 2);
+  assert.notEqual(second, first);
+  assert.equal(context.require.cache[root + '/first/entry.js'].exports, first);
+});
+
+test('CommonJS package metadata, JavaScript and JSON decode native ArrayBuffer replies', () => {
+  for (const platform of ['win32', 'linux']) {
+    const nativePath = platform === 'win32' ? path.win32 : path.posix;
+    const root = platform === 'win32' ? 'D:\\fixture\\App' : '/srv/fixture/App';
+    const packageRoot = nativePath.join(root, 'node_modules', 'fixture');
+    const packageFile = nativePath.join(packageRoot, 'package.json');
+    const entryFile = nativePath.join(packageRoot, '入口.js');
+    const dataFile = nativePath.join(packageRoot, 'data.json');
+    const replies = [];
+    const {context, calls} = renderer(platform, {root, files: [
+      [packageFile, '{"main":"入口.js"}'],
+      [entryFile, '\uFEFF#!/usr/bin/env node\nmodule.exports = {text: "中文 🚀", data: require("./data.json")};'],
+      [dataFile, '\uFEFF{"text":"配置 é","nul":"\\u0000"}'],
+    ], readFileResult(request, bytes) {
+      assert.equal(request.returnBytes, true, 'module reads request the binary transport');
+      const result = Uint8Array.from(bytes).buffer;
+      assert.ok(result instanceof ArrayBuffer);
+      replies.push({path: request.path, result});
+      return result;
+    }});
+    const first = context.require('fixture');
+    assert.deepEqual(plain(first), {text: '中文 🚀', data: {text: '配置 é', nul: '\0'}});
+    assert.deepEqual(replies.map(reply => reply.path), [packageFile, entryFile, dataFile]);
+    const coldCalls = calls.length;
+    assert.equal(context.require('fixture'), first);
+    assert.equal(calls.length, coldCalls, 'cached modules do not read their source again');
+    assert.equal(replies.length, 3);
   }
 });

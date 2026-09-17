@@ -194,6 +194,13 @@ class XenonServiceImpl : public mojom::XenonMainService,
 #endif
 
  private:
+  friend class XenonServiceImplTestPeer;
+
+  // Consumes service-owned arguments; the renderer already snapshotted them
+  // before Mojo dispatch. Moving preserves nested BLOB storage.
+  static std::vector<mojom::NodeInvokeArgPtr> TakeNodeInvokeArgs(
+      base::Value arguments);
+
   void ConstructExportWithPrototype(const std::string& context_id,
                                     int32_t client_id,
                                     const std::string& module_path,

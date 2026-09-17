@@ -21,7 +21,7 @@ function createRenderer() {
     calls.push({kind, ...request});
     if (request.operation === 'exists') return files.has(request.path);
     if (request.operation === 'write_file') {
-      files.set(request.path, Buffer.from(request.dataBase64, 'base64'));
+      files.set(request.path, Buffer.from(request.data));
       return undefined;
     }
     if (request.operation === 'read_file' && files.has(request.path)) {

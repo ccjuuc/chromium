@@ -39,7 +39,7 @@ function runtime(t, kind, options = {}) {
       setDispatchHandler() {},
       invoke: (channel, request) => {
         assert.equal(channel, '__xenon:fs');
-        return perform(request, Buffer.from(request.dataBase64, 'base64'));
+        return perform(request, Buffer.from(request.data));
       },
     },
     __xenonFsCallAsync: (request, bytes) => perform(request, Buffer.from(bytes)),

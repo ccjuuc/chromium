@@ -978,37 +978,27 @@
     return proxy;
   }
 
-  function createMojoExportFunction(modulePath, functionName) {
-    return function(...args) {
-      if (new.target) {
-        const Constructor = createMojoClassExport(modulePath, functionName);
-        // Native functions may be constructors even when their initial shape
-        // has no instance members. Preserve the consumer's prototype before
-        // entering native code so inherited JS methods are included as well.
-        return Reflect.construct(Constructor, args, new.target);
-      }
-      // Native calls return synchronously or continue the original Promise.
-      // Callback values use the same observer ids without changing the native
-      // function's immediate return value into a Promise.
-      const retainedHandles = new Set();
-      if (typeof transport.invokeNodeExportSync === 'function') {
-        const invokeSync = () => adoptNativeCallResult(
-            transport.invokeNodeExportSync(
-                modulePath, functionName,
-                ...args.map(arg => wireNativeArgumentSync(arg, undefined, retainedHandles))),
-            modulePath, retainedHandles);
-        return invokeSync();
-      }
-      return retainNativeHandles(Promise.all(args.map(arg =>
-          wireNativeArgumentAsync(arg, undefined, retainedHandles)))
-          .then(wiredArgs => transport.invoke(
-              '__xenon:node-addon:invoke-export', {
-                modulePath,
-                functionName,
-                arguments: wiredArgs,
-              }))
-          .then(result => adoptNativeReturn(result, modulePath)), retainedHandles);
-    };
+  function invokeNativeExport(modulePath, functionName, args) {
+    // Reuse the public wrapper's argument array. Native calls return
+    // synchronously or continue the original Promise; callback arguments
+    // must not change the native function's immediate return type.
+    const retainedHandles = new Set();
+    if (typeof transport.invokeNodeExportSync === 'function') {
+      return adoptNativeCallResult(
+          transport.invokeNodeExportSync(
+              modulePath, functionName,
+              ...args.map(arg => wireNativeArgumentSync(arg, undefined, retainedHandles))),
+          modulePath, retainedHandles);
+    }
+    return retainNativeHandles(Promise.all(args.map(arg =>
+        wireNativeArgumentAsync(arg, undefined, retainedHandles)))
+        .then(wiredArgs => transport.invoke(
+            '__xenon:node-addon:invoke-export', {
+              modulePath,
+              functionName,
+              arguments: wiredArgs,
+            }))
+        .then(result => adoptNativeReturn(result, modulePath)), retainedHandles);
   }
 
   function buildExportFromMojoInfo(modulePath, item, parentPath = '') {
@@ -1030,7 +1020,7 @@
     const nativeMethodNames = new Set((info.prototype || []).filter(member =>
         member.kind === 'function' || member.kind === 'class').map(member => member.name));
     function ConstructorProxy(...args) {
-      if (!new.target) return createMojoExportFunction(modulePath, className)(...args);
+      if (!new.target) return invokeNativeExport(modulePath, className, args);
       let instanceId;
       const retainedHandles = new Set();
       const prototypeProperties = Object.create(null);

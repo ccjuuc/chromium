@@ -182,8 +182,11 @@
     };
   }
 
-  function fsReadResult(encoded, options) {
-    const buffer = Buffer.from(String(encoded || ''), 'base64');
+  function fsReadResult(bytes, options) {
+    // Internal IPC converts native BLOB results to ArrayBuffer. Keep accepting
+    // the existing encoded result for older transports and test fixtures.
+    const buffer = typeof bytes === 'string' ? Buffer.from(bytes, 'base64') :
+        Buffer.from(new Uint8Array(bytes));
     const encoding = fsEncodingOf(options);
     return encoding ? buffer.toString(encoding) : buffer;
   }
@@ -243,7 +246,7 @@
     lstatSync: (path) => fsModule.statSync(path),
     readFileSync: (path, encoding) => {
       if (!fsUsesVirtualMount(path)) {
-        return fsReadResult(fsNativeSync('read_file', path), encoding);
+        return fsReadResult(fsNativeSync('read_file', path, {returnBytes: true}), encoding);
       }
       const entry = fsGetVirtualEntry(normalizeFsPath(path));
       if (!entry) {
@@ -258,7 +261,7 @@
     },
     writeFileSync: (path, data, _options) => {
       if (!fsUsesVirtualMount(path)) {
-        fsNativeSync('write_file', path, {dataBase64: fsBytes(data).toString('base64')});
+        fsNativeSync('write_file', path, {data: fsBytes(data)});
         return;
       }
       const p = normalizeFsPath(path);
@@ -356,7 +359,7 @@
     appendFileSync: (path, data) => {
       if (!fsUsesVirtualMount(path)) {
         return fsNativeSync('append_file', path, {
-          dataBase64: fsBytes(data).toString('base64'),
+          data: fsBytes(data),
         });
       }
       let prev = Buffer.alloc(0);
@@ -410,7 +413,7 @@
       options = undefined;
     }
     fsCallback(() => fsAsyncOperation(
-        path, 'read_file', {}, () => fsModule.readFileSync(path, options),
+        path, 'read_file', {returnBytes: true}, () => fsModule.readFileSync(path, options),
         encoded => fsUsesVirtualMount(path) ? encoded : fsReadResult(encoded, options)),
         callback, true);
   };
@@ -419,7 +422,7 @@
       callback = options;
       options = undefined;
     }
-    const extra = {dataBase64: fsBytes(data).toString('base64')};
+    const extra = {data: fsBytes(data)};
     fsCallback(() => fsAsyncOperation(
         path, 'write_file', extra,
         () => fsModule.writeFileSync(path, data, options)), callback);
@@ -485,7 +488,7 @@
       callback = options;
       options = undefined;
     }
-    const extra = {dataBase64: fsBytes(data).toString('base64')};
+    const extra = {data: fsBytes(data)};
     fsCallback(() => fsAsyncOperation(
         path, 'append_file', extra,
         () => fsModule.appendFileSync(path, data, options)), callback);
@@ -530,10 +533,10 @@
         path, 'lstat', {}, () => fsModule.lstatSync(path),
         stat => fsUsesVirtualMount(path) ? stat : fsNativeStats(stat)),
     readFile: (path, options) => fsAsyncOperation(
-        path, 'read_file', {}, () => fsModule.readFileSync(path, options),
+        path, 'read_file', {returnBytes: true}, () => fsModule.readFileSync(path, options),
         encoded => fsUsesVirtualMount(path) ? encoded : fsReadResult(encoded, options)),
     writeFile: (path, data, options) => fsAsyncOperation(
-        path, 'write_file', {dataBase64: fsBytes(data).toString('base64')},
+        path, 'write_file', {data: fsBytes(data)},
         () => fsModule.writeFileSync(path, data, options)),
     mkdir: (path, options) => fsAsyncOperation(
         path, 'mkdir', {recursive: Boolean(options && options.recursive)},
@@ -553,7 +556,7 @@
     access: (path, mode) => fsAsyncOperation(
         path, 'access', {}, () => fsModule.accessSync(path, mode)),
     appendFile: (path, data, options) => fsAsyncOperation(
-        path, 'append_file', {dataBase64: fsBytes(data).toString('base64')},
+        path, 'append_file', {data: fsBytes(data)},
         () => fsModule.appendFileSync(path, data, options)),
     rename: (oldPath, newPath) => fsUsesVirtualMount(oldPath) ?
         Promise.resolve().then(() => fsModule.renameSync(oldPath, newPath)) :

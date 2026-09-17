@@ -1237,7 +1237,7 @@ test('CommonJS bindings formatter restoration keeps default Error.stack a string
       if (request.operation === 'exists') return files.has(request.path);
       if (request.operation === 'write_file') {
         files.set(request.path,
-            Buffer.from(request.dataBase64, 'base64').toString('utf8'));
+            Buffer.from(request.data).toString('utf8'));
         return true;
       }
       if (request.operation === 'realpath') return request.path;

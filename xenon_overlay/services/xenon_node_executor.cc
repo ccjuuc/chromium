@@ -2166,9 +2166,9 @@ void XenonNodeExecutor::OnNativeCallback(int32_t client_id,
       !IsInstanceOwnerActive(owner)) {
     return;
   }
-  LOG(INFO) << "OnNativeCallback client=" << client_id
-            << " cb=" << callback_id << " args=" << converted_args.size()
-            << " native_instances=" << adopted_count;
+  VLOG(1) << "OnNativeCallback client=" << client_id
+          << " cb=" << callback_id << " args=" << converted_args.size()
+          << " native_instances=" << adopted_count;
   if (callback_handler_) {
     callback_handler_.Run(client_id, callback_id, std::move(converted_args),
                           std::move(*converted_receiver));
@@ -3375,8 +3375,8 @@ void XenonNodeExecutor::ConstructExport(
     std::move(callback).Run(false, 0, "Native instance owner was closed");
     return;
   }
-  LOG(INFO) << "[XenonNodeExecutor] ConstructExport " << module_path << " "
-            << export_path;
+  VLOG(1) << "[XenonNodeExecutor] ConstructExport " << module_path << " "
+          << export_path;
   if (!addon_isolate_ || addon_context_.IsEmpty()) {
     std::move(callback).Run(false, 0, "No Node addon has been loaded");
     return;
@@ -3589,8 +3589,8 @@ void XenonNodeExecutor::InvokeInstance(
                             "Too many pending native Promises");
     return;
   }
-  LOG(INFO) << "[XenonNodeExecutor] InvokeInstance id=" << instance_id << " "
-            << method_name;
+  VLOG(1) << "[XenonNodeExecutor] InvokeInstance id=" << instance_id << " "
+          << method_name;
   if (!addon_isolate_ || addon_context_.IsEmpty()) {
     std::move(callback).Run(false, base::Value(), {},
                             "No Node addon has been loaded");
@@ -3958,8 +3958,8 @@ void XenonNodeExecutor::InvokeFunction(
                             "Too many pending native Promises");
     return;
   }
-  LOG(INFO) << "[XenonNodeExecutor] InvokeFunction " << module_path << " "
-            << function_name;
+  VLOG(1) << "[XenonNodeExecutor] InvokeFunction " << module_path << " "
+          << function_name;
   if (!addon_isolate_ || addon_context_.IsEmpty()) {
     std::move(callback).Run(false, base::Value(), {},
                             "No Node addon has been loaded");

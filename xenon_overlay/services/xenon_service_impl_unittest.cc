@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "base/base64.h"
 #include "base/base_paths.h"
@@ -27,6 +28,15 @@
 #include "v8/include/v8.h"
 
 namespace xenon {
+
+class XenonServiceImplTestPeer {
+ public:
+  static std::vector<mojom::NodeInvokeArgPtr> TakeNodeInvokeArgs(
+      base::Value arguments) {
+    return XenonServiceImpl::TakeNodeInvokeArgs(std::move(arguments));
+  }
+};
+
 namespace {
 
 using NodeRemote = mojo::Remote<ipc::mojom::NodeAddonHost>;
@@ -34,6 +44,106 @@ using ResultFuture = base::test::TestFuture<ipc::mojom::IpcResultPtr>;
 constexpr char kContext[] = "owner-lifecycle-test";
 constexpr char kConstructChannel[] = "__xenon:node-addon:construct-export";
 constexpr char kInvokeChannel[] = "__xenon:node-addon:invoke-instance";
+constexpr char kExportChannel[] = "__xenon:node-addon:invoke-export";
+
+base::Value BinaryWire(std::string kind, base::Value::BlobStorage bytes = {}) {
+  return base::Value(base::DictValue()
+                         .Set("__xenon_node_wire_type__", "binary")
+                         .Set("kind", std::move(kind))
+                         .Set("value", base::Value(std::move(bytes))));
+}
+
+base::Value CallbackWire(int callback_id) {
+  return base::Value(base::DictValue()
+                         .Set("__xenon_node_wire_type__", "callback")
+                         .Set("callback_id", callback_id));
+}
+
+TEST(XenonServiceArgumentTest, OwnedArgumentsKeepNestedBlobStorage) {
+  base::Value::BlobStorage bytes(1024 * 1024, 0xa5);
+  const auto* original_storage = bytes.data();
+  base::ListValue arguments;
+  arguments.Append(42);
+  arguments.Append(base::DictValue().Set(
+      "payload",
+      base::ListValue().Append(BinaryWire("Buffer", std::move(bytes)))));
+  arguments.Append(BinaryWire("DataView"));
+  arguments.Append(CallbackWire(9));
+  const auto expected = arguments.Clone();
+
+  auto converted = XenonServiceImplTestPeer::TakeNodeInvokeArgs(
+      base::Value(std::move(arguments)));
+  ASSERT_EQ(expected.size(), converted.size());
+  for (size_t i = 0; i < converted.size(); ++i) {
+    ASSERT_TRUE(converted[i]);
+    EXPECT_FALSE(converted[i]->is_callback);
+    EXPECT_EQ(0, converted[i]->callback_id);
+    EXPECT_EQ(expected[i], converted[i]->value);
+  }
+  const auto* payload = converted[1]->value.GetDict().FindList("payload");
+  ASSERT_TRUE(payload);
+  ASSERT_EQ(1u, payload->size());
+  const auto* moved_blob = (*payload)[0].GetDict().FindBlob("value");
+  ASSERT_TRUE(moved_blob);
+  EXPECT_EQ(1024u * 1024u, moved_blob->size());
+  // This guards the allocation/copy reduction directly, without a timing
+  // threshold that depends on the machine or the addon workload.
+  EXPECT_EQ(original_storage, moved_blob->data());
+}
+
+TEST(XenonServiceArgumentTest,
+     TakingNestedArgumentsKeepsBorrowedMetadataValid) {
+  base::Value::BlobStorage bytes(1024 * 1024, 0x5a);
+  const auto* original_storage = bytes.data();
+  base::DictValue request;
+  request.Set("modulePath", std::string(200, 'm'));
+  request.Set("functionName", "EchoOwnedHandle");
+  request.Set("ownerToken", std::string(100, 'o'));
+  request.Set("arguments", base::ListValue().Append(
+                               BinaryWire("Uint8Array", std::move(bytes))));
+  const auto* module_path = request.FindString("modulePath");
+  const auto* function_name = request.FindString("functionName");
+  const auto* owner_token = request.FindString("ownerToken");
+  ASSERT_TRUE(module_path && function_name && owner_token);
+
+  auto converted = XenonServiceImplTestPeer::TakeNodeInvokeArgs(
+      std::move(*request.Find("arguments")));
+  ASSERT_EQ(1u, converted.size());
+  EXPECT_EQ(module_path, request.FindString("modulePath"));
+  EXPECT_EQ(function_name, request.FindString("functionName"));
+  EXPECT_EQ(owner_token, request.FindString("ownerToken"));
+  EXPECT_EQ(std::string(200, 'm'), *module_path);
+  EXPECT_EQ("EchoOwnedHandle", *function_name);
+  EXPECT_EQ(std::string(100, 'o'), *owner_token);
+  const auto* moved_blob = converted[0]->value.GetDict().FindBlob("value");
+  ASSERT_TRUE(moved_blob);
+  EXPECT_EQ(original_storage, moved_blob->data());
+}
+
+class NodeCallbackRecorder : public ipc::mojom::IpcRenderer {
+ public:
+  struct Call {
+    int32_t id;
+    std::vector<base::Value> arguments;
+    base::Value receiver;
+  };
+  void Dispatch(const std::string& channel, base::Value arguments) override {
+    if (channel != "__xenon:node-addon:callback") {
+      return;
+    }
+    ASSERT_TRUE(arguments.is_list());
+    auto& event = arguments.GetList();
+    ASSERT_EQ(3u, event.size());
+    ASSERT_TRUE(event[0].is_int());
+    ASSERT_TRUE(event[1].is_list());
+    std::vector<base::Value> args;
+    for (auto& argument : event[1].GetList()) {
+      args.push_back(std::move(argument));
+    }
+    calls.push_back({event[0].GetInt(), std::move(args), std::move(event[2])});
+  }
+  std::vector<Call> calls;
+};
 
 struct InstanceHandle {
   int32_t id = 0;
@@ -136,11 +246,12 @@ class XenonServiceOwnerTest : public testing::Test {
 
   ipc::mojom::IpcResultPtr Read(NodeRemote& node,
                                 const InstanceHandle& handle,
-                                const std::string& method = "read") {
+                                const std::string& method = "read",
+                                base::ListValue arguments = base::ListValue()) {
     base::test::TestFuture<ipc::mojom::IpcResultPtr, uint64_t> invoked;
     node->InvokeNodeInstanceSync(addon_path_, handle.id, method,
-                                 base::Value(base::ListValue()), handle.token,
-                                 invoked.GetCallback());
+                                 base::Value(std::move(arguments)),
+                                 handle.token, invoked.GetCallback());
     task_environment_.RunUntilIdle();
     EXPECT_TRUE(invoked.IsReady());
     if (!invoked.IsReady()) {
@@ -149,6 +260,23 @@ class XenonServiceOwnerTest : public testing::Test {
     auto [result, promise_id] = invoked.Take();
     EXPECT_EQ(0u, promise_id);
     return std::move(result);
+  }
+
+  std::pair<ipc::mojom::IpcResultPtr, uint64_t> CallExport(
+      NodeRemote& node,
+      const std::string& name,
+      base::ListValue arguments = base::ListValue()) {
+    base::test::TestFuture<ipc::mojom::IpcResultPtr, uint64_t> invoked;
+    node->InvokeNodeExportSync(addon_path_, name,
+                               base::Value(std::move(arguments)),
+                               invoked.GetCallback());
+    task_environment_.RunUntilIdle();
+    EXPECT_TRUE(invoked.IsReady());
+    if (!invoked.IsReady()) {
+      return {};
+    }
+    auto [result, promise_id] = invoked.Take();
+    return {std::move(result), promise_id};
   }
 
   ipc::mojom::IpcResultPtr ReadViaBrowser(const std::string& endpoint,
@@ -189,6 +317,162 @@ class XenonServiceOwnerTest : public testing::Test {
   std::unique_ptr<XenonServiceImpl> service_;
   std::string addon_path_;
 };
+
+TEST_F(XenonServiceOwnerTest,
+       DirectAndBrowserExportsKeepBinaryAndArgumentOrder) {
+  NodeRemote node = Bind("binary-page");
+  Load(node);
+  base::ListValue payload;
+  payload.Append(BinaryWire("Buffer", {0, 255, 128, 1}));
+  payload.Append(BinaryWire("Uint16Array", {0, 128, 254, 255}));
+  payload.Append(BinaryWire("DataView"));
+  base::Value nested(base::DictValue().Set("payload", std::move(payload)));
+  for (bool direct : {true, false}) {
+    SCOPED_TRACE(direct);
+    base::ListValue arguments;
+    arguments.Append(nested.Clone());
+    ipc::mojom::IpcResultPtr result;
+    if (direct) {
+      auto [reply, promise_id] =
+          CallExport(node, "EchoOwnedHandle", std::move(arguments));
+      EXPECT_EQ(0u, promise_id);
+      result = std::move(reply);
+    } else {
+      base::DictValue request;
+      request.Set("modulePath", addon_path_);
+      request.Set("functionName", "EchoOwnedHandle");
+      request.Set("arguments", std::move(arguments));
+      ResultFuture invoked;
+      browser_->ElectronIpcInvoke(
+          kContext, "binary-page", kExportChannel,
+          base::Value(base::ListValue().Append(std::move(request))),
+          invoked.GetCallback());
+      result = Finish(invoked);
+    }
+    ASSERT_TRUE(result);
+    ASSERT_TRUE(result->success) << result->error;
+    EXPECT_EQ(nested, result->value);
+  }
+  auto [sum, promise_id] =
+      CallExport(node, "Add", base::ListValue().Append(19).Append(23));
+  ASSERT_TRUE(sum);
+  ASSERT_TRUE(sum->success) << sum->error;
+  EXPECT_EQ(0u, promise_id);
+  EXPECT_EQ(42.0, sum->value.GetDouble());
+}
+
+TEST_F(XenonServiceOwnerTest,
+       MovedArgumentsKeepCallbacksAndConstructorReceivers) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  base::FilePath app_path;
+  ASSERT_TRUE(base::NormalizeFilePath(temp_dir.GetPath(), &app_path));
+  auto config = ipc::mojom::IpcMainConfig::New();
+  config->container_id = kContext;
+  config->embedded_main_source = "module.exports = {};";
+  config->virtual_main_path = app_path.AppendASCII("main.js").AsUTF8Unsafe();
+  config->app_path = app_path.AsUTF8Unsafe();
+  config->app_name = "Native callback argument test";
+  base::test::TestFuture<bool, const std::string&> initialized;
+  browser_->InitializeElectronIpc(std::move(config), initialized.GetCallback());
+  ASSERT_TRUE(initialized.Wait());
+  ASSERT_TRUE(initialized.Get<0>()) << initialized.Get<1>();
+  NodeCallbackRecorder observer;
+  mojo::Receiver<ipc::mojom::IpcRenderer> receiver(&observer);
+  browser_->RegisterElectronIpcRenderer(
+      kContext, "callback-page", receiver.BindNewPipeAndPassRemote(), 1, 1, 1);
+  browser_.FlushForTesting();
+  NodeRemote node = Bind("callback-page");
+  Load(node);
+  base::Value payload(
+      base::DictValue().Set("bytes", BinaryWire("Buffer", {0, 255, 128})));
+  auto [result, promise_id] = CallExport(
+      node, "InvokeCallbackWithReceiver",
+      base::ListValue().Append(CallbackWire(81)).Append(payload.Clone()));
+  ASSERT_TRUE(result);
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ(0u, promise_id);
+  EXPECT_EQ(payload, result->value);
+  ASSERT_EQ(1u, observer.calls.size());
+  EXPECT_EQ(81, observer.calls[0].id);
+  EXPECT_EQ(payload, observer.calls[0].receiver);
+  ASSERT_EQ(1u, observer.calls[0].arguments.size());
+  EXPECT_EQ(payload, observer.calls[0].arguments[0]);
+
+  ResultFuture constructed;
+  node->ConstructNodeExportSync(
+      addon_path_, "OwnedHandle",
+      base::Value(base::ListValue().Append(CallbackWire(82))),
+      base::Value(base::DictValue()), constructed.GetCallback());
+  const auto handle = ParseHandle(Finish(constructed));
+  ASSERT_GT(handle.id, 0);
+  ASSERT_EQ(2u, observer.calls.size());
+  EXPECT_EQ(82, observer.calls[1].id);
+  ASSERT_TRUE(observer.calls[1].receiver.is_dict());
+  const auto& callback_receiver = observer.calls[1].receiver.GetDict();
+  EXPECT_EQ(handle.id, callback_receiver.FindInt("instance_id"));
+  ASSERT_TRUE(callback_receiver.FindString("owner_token"));
+  EXPECT_EQ(handle.token, *callback_receiver.FindString("owner_token"));
+  ASSERT_EQ(1u, observer.calls[1].arguments.size());
+  EXPECT_EQ(observer.calls[1].receiver, observer.calls[1].arguments[0]);
+  ExpectReadable(Read(node, handle));
+}
+
+TEST_F(XenonServiceOwnerTest,
+       MovedInstanceArgumentsPreserveNativeFunctionCalls) {
+  NodeRemote node = Bind("function-page");
+  Load(node);
+  auto [returned, promise_id] = CallExport(node, "MakeOwnedReturns");
+  ASSERT_TRUE(returned);
+  ASSERT_TRUE(returned->success) << returned->error;
+  EXPECT_EQ(0u, promise_id);
+  ASSERT_TRUE(returned->value.is_list());
+  ASSERT_EQ(2u, returned->value.GetList().size());
+  const auto& function = returned->value.GetList()[1].GetDict();
+  ASSERT_TRUE(function.FindInt("instance_id"));
+  ASSERT_TRUE(function.FindString("owner_token"));
+  InstanceHandle handle{*function.FindInt("instance_id"),
+                        *function.FindString("owner_token")};
+  auto result = Read(node, handle, "call",
+                     base::ListValue()
+                         .Append(base::DictValue().Set(
+                             "__xenon_node_wire_type__", "undefined"))
+                         .Append(41));
+  ASSERT_TRUE(result);
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ(42, result->value.GetInt());
+}
+
+TEST_F(XenonServiceOwnerTest,
+       MovedArgumentsKeepPendingPromisesWithoutReinvoking) {
+  NodeRemote node = Bind("promise-page");
+  Load(node);
+  auto [started, promise_id] = CallExport(node, "BeginControlledPromise");
+  ASSERT_TRUE(started);
+  ASSERT_TRUE(started->success) << started->error;
+  ASSERT_NE(0u, promise_id);
+  ResultFuture settled;
+  node->AwaitNodePromise(promise_id, settled.GetCallback());
+  node.FlushForTesting();
+  EXPECT_FALSE(settled.IsReady());
+  auto [completed, immediate_id] =
+      CallExport(node, "SettleControlledPromise",
+                 base::ListValue().Append(1).Append(false));
+  ASSERT_TRUE(completed);
+  ASSERT_TRUE(completed->success) << completed->error;
+  EXPECT_EQ(0u, immediate_id);
+  EXPECT_EQ(1, completed->value.GetInt());
+  auto result = Finish(settled);
+  ASSERT_TRUE(result);
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ(1, result->value.GetInt());
+  auto [count, count_promise_id] =
+      CallExport(node, "ControlledPromiseCallCount");
+  ASSERT_TRUE(count);
+  ASSERT_TRUE(count->success) << count->error;
+  EXPECT_EQ(0u, count_promise_id);
+  EXPECT_EQ(1, count->value.GetInt());
+}
 
 TEST_F(XenonServiceOwnerTest, FirstDirectBindingKeepsCallbackPathOwner) {
   const auto callback_handle = ConstructViaBrowser("page-a");

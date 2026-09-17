@@ -169,6 +169,35 @@ test('sync native errors preserve the original error and never retry based on it
   assert.equal(renderer.calls.filter(call => call[0] === 'load').length, 1);
 });
 
+test('cached native exports observe transport changes and preserve immediate return types', async () => {
+  const renderer = createRenderer();
+  const read = renderer.load().read;
+  const calls = [];
+  renderer.transport.invokeNodeExportSync = function(...args) {
+    assert.equal(this, renderer.transport);
+    calls.push(args);
+    return 17;
+  };
+  assert.equal(read(1), 17);
+  assert.deepEqual(calls, [[modulePath, 'read', 1]]);
+
+  renderer.transport.invokeNodeExportSync = function() { return Promise.resolve(18); };
+  const pending = read(2);
+  assert.equal(typeof pending.then, 'function');
+  assert.equal(await pending, 18);
+
+  renderer.transport.invokeNodeExportSync = undefined;
+  assert.equal(await read(3), 43);
+  const request = renderer.calls.at(-1);
+  assert.equal(request[1], '__xenon:node-addon:invoke-export');
+  assert.equal(request[2].functionName, 'read');
+  assert.deepEqual(Array.from(request[2].arguments), [3]);
+
+  renderer.transport.invokeNodeExportSync = function() { return 19; };
+  assert.equal(read(4), 19);
+  assert.equal(renderer.load().read, read);
+});
+
 test('async errors propagate once and explicit release never reconstructs an instance', async () => {
   const error = Object.assign(new Error('Unknown instance id'), {code: 'ERR_NATIVE_INSTANCE_INVALIDATED'});
   let released = false, invokes = 0;

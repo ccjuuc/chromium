@@ -108,23 +108,6 @@ base::Value NodeExportInfoToValue(const mojom::NodeExportInfoPtr& info) {
   return base::Value(std::move(value));
 }
 
-std::vector<mojom::NodeInvokeArgPtr> ListValueToInvokeArgs(
-    const base::Value& arguments) {
-  std::vector<mojom::NodeInvokeArgPtr> invoke_args;
-  if (!arguments.is_list()) {
-    return invoke_args;
-  }
-  invoke_args.reserve(arguments.GetList().size());
-  for (const base::Value& argument : arguments.GetList()) {
-    auto invoke_arg = mojom::NodeInvokeArg::New();
-    invoke_arg->is_callback = false;
-    invoke_arg->callback_id = 0;
-    invoke_arg->value = argument.Clone();
-    invoke_args.push_back(std::move(invoke_arg));
-  }
-  return invoke_args;
-}
-
 ipc::mojom::IpcResultPtr MakeNativeInvokeSuccess(base::Value value) {
   auto result = ipc::mojom::IpcResult::New();
   result->success = true;
@@ -133,6 +116,23 @@ ipc::mojom::IpcResultPtr MakeNativeInvokeSuccess(base::Value value) {
 }
 
 }  // namespace
+
+std::vector<mojom::NodeInvokeArgPtr> XenonServiceImpl::TakeNodeInvokeArgs(
+    base::Value arguments) {
+  std::vector<mojom::NodeInvokeArgPtr> invoke_args;
+  if (!arguments.is_list()) {
+    return invoke_args;
+  }
+  invoke_args.reserve(arguments.GetList().size());
+  for (base::Value& argument : arguments.GetList()) {
+    auto invoke_arg = mojom::NodeInvokeArg::New();
+    invoke_arg->is_callback = false;
+    invoke_arg->callback_id = 0;
+    invoke_arg->value = std::move(argument);
+    invoke_args.push_back(std::move(invoke_arg));
+  }
+  return invoke_args;
+}
 
 XenonServiceImpl::XenonServiceImpl(
     mojo::PendingReceiver<mojom::XenonMainService> receiver)
@@ -834,14 +834,14 @@ void XenonServiceImpl::HandleRendererNodeAddonInvoke(
     const std::string& channel,
     base::Value arguments,
     ElectronIpcInvokeCallback callback) {
-  const base::DictValue* request = nullptr;
+  base::DictValue* request = nullptr;
   if (arguments.is_list() && !arguments.GetList().empty() &&
       arguments.GetList().front().is_dict()) {
     request = &arguments.GetList().front().GetDict();
   }
   const std::string* module_path =
       request ? request->FindString("modulePath") : nullptr;
-  const base::Value* invoke_arguments =
+  base::Value* invoke_arguments =
       request ? request->Find("arguments") : nullptr;
   if (!request || !module_path || module_path->empty() ||
       !invoke_arguments || !invoke_arguments->is_list()) {
@@ -855,8 +855,10 @@ void XenonServiceImpl::HandleRendererNodeAddonInvoke(
   XenonNodeExecutor* executor = GetNodeExecutor(context_id);
   const uint64_t owner = GetNodeInstanceOwner(context_id, client_id);
   const std::string owner_token = executor->GetInstanceOwnerToken(owner);
+  // Move only the arguments value. Do not remove a dictionary entry or move
+  // the request: module_path and the other borrowed metadata must stay valid.
   std::vector<mojom::NodeInvokeArgPtr> args =
-      ListValueToInvokeArgs(*invoke_arguments);
+      TakeNodeInvokeArgs(std::move(*invoke_arguments));
   if (channel == kNodeAddonInvokeExportChannel) {
     const std::string* function_name = request->FindString("functionName");
     if (!function_name) {
@@ -1049,7 +1051,7 @@ void XenonServiceImpl::InvokeNodeExportSync(
       ->InvokeFunction(
           module_path, function_name,
           node_addon_host_receivers_.current_context().client_id,
-          ListValueToInvokeArgs(arguments),
+          TakeNodeInvokeArgs(std::move(arguments)),
           base::BindOnce(
               [](InvokeNodeExportSyncCallback callback, bool success,
                  base::Value value,
@@ -1097,7 +1099,7 @@ void XenonServiceImpl::ConstructNodeExportSync(
   XenonNodeExecutor* executor = EnsureNodeExecutor(connection.context_id);
   executor->ConstructExport(
       module_path, export_path, connection.client_id,
-      ListValueToInvokeArgs(arguments),
+      TakeNodeInvokeArgs(std::move(arguments)),
       base::BindOnce(
           [](std::string owner_token, ConstructNodeExportSyncCallback callback,
              bool success, int32_t instance_id, const std::string& error) {
@@ -1142,7 +1144,7 @@ void XenonServiceImpl::InvokeNodeInstanceSync(
   auto callbacks = base::SplitOnceCallback(std::move(callback));
   executor->InvokeInstance(
       module_path, instance_id, method_name, connection.client_id,
-      ListValueToInvokeArgs(arguments),
+      TakeNodeInvokeArgs(std::move(arguments)),
       base::BindOnce(
           [](InvokeNodeInstanceSyncCallback callback, bool success,
              base::Value value,
