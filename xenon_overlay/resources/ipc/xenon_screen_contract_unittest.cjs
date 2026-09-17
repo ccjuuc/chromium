@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+const {readBootstrap} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
-const {readFileSync} = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
@@ -22,7 +22,7 @@ function createRuntime(host) {
   });
   if (host) context.__xenonBrowserWindowCall = host;
   const filename = path.join(__dirname, 'xenon_ipc_main_bootstrap.js');
-  vm.runInContext(readFileSync(filename, 'utf8'), context, {filename});
+  vm.runInContext(readBootstrap(filename), context, {filename});
   return context.__xenonElectron.screen;
 }
 

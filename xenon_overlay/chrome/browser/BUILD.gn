@@ -572,8 +572,11 @@ test("ipc_main_container_unittests") {
     "//xenon_overlay/resources:resources_grit",
   ]
   data_deps = [ ":test_addon" ]
+  data = [
+    "$root_gen_dir/xenon_overlay/resources/ipc/xenon_ipc_main_bootstrap.js",
+  ]
   if (is_win) {
-    data = [
+    data += [
       "//base/test/data/file_version_info_unittest/FileVersionInfoTest1.dll",
     ]
   }

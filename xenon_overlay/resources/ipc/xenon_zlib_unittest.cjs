@@ -1,8 +1,8 @@
 // Copyright 2026 The Xenon Overlay Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+const {readBootstrap, readBootstrapPart} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
-const {readFileSync} = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
@@ -31,14 +31,12 @@ function renderer() {
     location: {protocol: 'chrome:', hostname: 'xenon-player-electron', search: ''},
     console: {log() {}, warn() {}, error() {}},
   });
-  vm.runInContext(readFileSync(path.join(__dirname, 'xenon_ipc_renderer_bootstrap.js'), 'utf8'), context);
+  vm.runInContext(readBootstrap(path.join(__dirname, 'xenon_ipc_renderer_bootstrap.js')), context);
   return {context, zlib: context.require('zlib')};
 }
 
 function main() {
-  const source = readFileSync(path.join(__dirname, 'xenon_ipc_main_bootstrap.js'), 'utf8');
-  const factory = source.slice(source.indexOf('  function createZlibModule(call) {'),
-      source.indexOf('  const zlibModule = createZlibModule('));
+  const factory = readBootstrapPart('common/zlib.js');
   const context = vm.createContext({Buffer, queueMicrotask,
     call(operation, input, options, asynchronous) {
       if (!asynchronous) return native[operation + 'Sync'](input, options);

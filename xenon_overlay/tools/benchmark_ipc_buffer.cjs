@@ -10,6 +10,7 @@ const vm = require('node:vm');
 const os = require('node:os');
 const assert = require('node:assert/strict');
 const {performance} = require('node:perf_hooks');
+const {readBootstrap} = require('../resources/ipc/bootstrap_test_support.cjs');
 
 const currentPath = path.resolve(__dirname, '../resources/ipc/xenon_ipc_renderer_bootstrap.js');
 const baselinePath = process.argv[2];
@@ -25,7 +26,7 @@ function createContext(sourcePath) {
     xenonIpcRenderer: {getRuntimeConfig: () => ({appPath: 'C:\\fixture',
       exeDir: 'C:\\fixture', execPath: 'C:\\fixture\\host.exe'}), setDispatchHandler() {}},
   });
-  vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, {filename: sourcePath});
+  vm.runInContext(readBootstrap(sourcePath), context, {filename: sourcePath});
   vm.runInContext(`
     globalThis.setup = size => {
       globalThis.bytes = Buffer.alloc(size);

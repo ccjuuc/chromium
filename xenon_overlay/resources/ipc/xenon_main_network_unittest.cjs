@@ -1,17 +1,19 @@
 // Copyright 2026 The Xenon Overlay Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+const {readBootstrapPart} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
 const {EventEmitter} = require('node:events');
-const {readFileSync} = require('node:fs');
 const http = require('node:http');
-const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const zlib = require('node:zlib');
-const source = readFileSync(path.join(__dirname, 'xenon_ipc_main_bootstrap.js'), 'utf8');
-const factory = source.slice(source.indexOf('  function createMainNetwork('),
-    source.indexOf('  const mainNetwork = createMainNetwork('));
+const source = readBootstrapPart('main/http.js');
+// Test the transport factory with this fixture's real HTTP bridge, without
+// installing the production native-host instance in the test VM.
+const factoryEnd = source.indexOf('  const mainNetwork = createMainNetwork(');
+assert.ok(factoryEnd > 0, 'The native-host installation boundary must exist');
+const factory = source.slice(0, factoryEnd);
 
 async function fixture(t) {
   let pendingId = 1, cancellations = 0;

@@ -1,13 +1,13 @@
 // Copyright 2026 The Xenon Overlay Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+const {readBootstrap} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
-const {readFileSync} = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const filename = path.join(__dirname, 'xenon_ipc_renderer_bootstrap.js');
-const source = readFileSync(filename, 'utf8');
+const source = readBootstrap(filename);
 
 function renderer(secureSource) {
   const context = vm.createContext({

@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 'use strict';
+const {readBootstrap} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
 const realFs = require('node:fs');
 const os = require('node:os');
@@ -48,8 +49,8 @@ function runtime(t, kind, options = {}) {
     __xenonExecPath: 'C:\\fixture\\host.exe', __xenonPid: 1, __xenonEnv: {},
     __xenonChromeVersion: '142', __xenonV8Version: '', __xenonGetPath: () => '',
   });
-  vm.runInContext(realFs.readFileSync(path.join(__dirname,
-      `xenon_ipc_${kind}_bootstrap.js`), 'utf8'), context);
+  vm.runInContext(readBootstrap(path.join(__dirname,
+      `xenon_ipc_${kind}_bootstrap.js`)), context);
   return {directory, calls, maxActive: () => maxActive,
     fs: kind === 'main' ? context.__xenonFs : context.require('fs')};
 }

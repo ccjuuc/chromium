@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+const {readBootstrap} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
 const {existsSync, readFileSync} = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const source = readFileSync(path.join(__dirname, 'xenon_ipc_renderer_bootstrap.js'), 'utf8');
+const source = readBootstrap(path.join(__dirname, 'xenon_ipc_renderer_bootstrap.js'));
 const playerRoot = path.resolve(__dirname, '../../../out/Release_64/xenon_player');
 const bundlePath = path.join(playerRoot, 'frontend/static/js/58.js');
 const hasPlayerRuntime = existsSync(path.join(playerRoot, 'main/package.json')) &&

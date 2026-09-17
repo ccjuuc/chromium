@@ -101,7 +101,7 @@ CommonJS 模块在执行前入缓存以支持循环依赖，缓存命中读取�
 - 通用 stream 队列、流式 HTTP/DataPipe、公共 IPC 大包共享内存尚未完成。原生实例桥会按 owner 和模块复用同一 V8 对象的实例身份；普通数据对象仍按值转换，不承诺共享引用或循环图。不会主动替 addon 调用析构方法或业务 `dispose`；释放的是桥保存的 V8 引用，实际资源回收遵循 addon 自身实现。main/旧 WebUI 使用的 owner 0 不随 renderer 断开释放。
 - 断开清理释放的是执行器回调缓存，并阻止后续无效序列化。gin 的 FunctionTemplate 绑定函数仍可能保持到 context 销毁，不能把该改动表述为所有 V8 函数立即回收。GC 回归在可回收的临时 context 中验证真实 weak callback 与销毁/ID 重用交错。
 - main 真实摘要支持 MD5、SHA-1、SHA-224/256/384/512 与对应 HMAC，按二进制输入计算；字符串/结果编码支持 UTF-8、hex、Base64/Base64URL，其他编码明确拒绝。这不是完整 Node crypto API。摘要仍累积输入后计算，回调随机接口只保证异步回调时序，不承诺工作线程计算。
-- 两端独立 bootstrap 仍有重复代码。先用统一契约用例限制漂移；后续拆公共源码时，应同时规划资源打包和启动成本，不能只移动文件。
+- 两端 bootstrap 已按职责拆成构建时组合的源码片段，zlib/readline 共用实现；GRIT 和测试统一消费生成结果。仍共享各自入口闭包，Buffer/path/URL 等有差异的实现没有机械合并。后续收敛行为或引入独立工厂时，仍需用两端契约用例限制漂移，保留初始化次序和模块身份。组织方式见 `resources/ipc/README.md`。
 
 ## Bootstrap 审查修复（2026-09-16）
 
@@ -322,3 +322,34 @@ node --js-base-64 xenon_overlay/tools/benchmark_ipc_buffer.cjs baseline.js resul
 | Base64 解码 | 1 MiB | 1.742 ms | 0.4584 ms | 3.80× |
 
 这是转换函数的测量，不能表述成整个应用提高了相同比例。Native 测试另行验证了 Chromium 实际 V8 中的 Base64/子视图行为。
+
+## Bootstrap 源码组织（2026-09-17）
+
+- main 入口从 5,069 行缩至 60 行，renderer 从 6,634 行缩至 53 行。按职责维护
+  main 14 个文件、renderer 15 个文件及 2 个公共文件；文件系统、窗口及原生桥接
+  保留完整功能边界，避免拆成大量只有几行代码的文件。
+- 入口是唯一的源码登记位置。GN 自动收集输入，构建器展开为原有两份资源；
+  没有增加运行时文件读取、IPC、模块包装或加载层。源码仍共享各自入口闭包。
+- zlib/readline 两份相同实现合并维护。JS 回归与基准调用同一构建器，部分独立
+  契约测试直接读取命名片段；原生测试的回退路径改为读取生成文件。
+- 两份生成脚本与提交 `365ce67bbc03f` 中的原脚本逐字一致（LF 换行），pak 资源
+  解压后也与生成文件一致。renderer 基准的冷加载文件 IPC 为 1,101、热缓存
+  1,000 次 require 为 0 IPC、10,000 次原生调用的基础参数 map 分配为 0，前后相同。
+- 验证：422 项 JS 测试及 170 项原生回归通过（不含 `XenonRealAppSmokeTest.*`）；
+  资源与原生测试目标构建成功。随后完成正式 chrome 构建，核对最终 `resources.pak`
+  与生成脚本一致，并使用原用户配置、9222 重启实测。
+- 实际应用：TH SDK 就绪、自动登录成功、头像加载正常；PLE 两次播放仓库测试视频，
+  画面 320×180、进度持续增长、媒体错误码为 0。原画、字幕、选集弹窗的 DOM 和截图
+  均已核对；关闭测试视频后媒体清空，重开窗口无残留播放。
+- 用户明确确认“拖动和关闭后重开都正常”。桌面自动化工具仍遇窗口归属错误，
+  真实拖动与侧栏重开的结论来自本次用户验收，不将 CDP 前置窗口当作侧栏点击验证。
+  本轮不宣称启动提速，也不将既有兼容性报错表述为全部消除。
+- 日志对照：未见 native FATAL、容器断连、app/window 事件失败；TH 启动阶段的
+  `nativeTheme.setCustomColor`、`crypto.createPublicKey`、`app.setJumpList`、
+  `isOnline`、`Failed to fetch` 报错在旧版也出现。TH 的
+  `napi_get_named_property(links)` 状态 10 告警在新旧日志中各有 1 条，签名一致。
+  该状态为 `napi_pending_exception`。另记录到一条 `index.js` 的 `Network Error`，
+  本次旧日志对照中没有同脚本签名，原因尚未定位；不能将所有报错归为既有问题。
+
+维护方式见 `resources/ipc/README.md`。本机验证记录位于
+`out/ipc-bootstrap-split-20260917/`。

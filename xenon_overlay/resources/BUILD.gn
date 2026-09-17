@@ -1,5 +1,30 @@
+import("//third_party/node/node.gni")
 import("//tools/grit/grit_rule.gni")
 import("//xenon_overlay/buildflags/features.gni")
+import("ipc/bootstrap_sources.gni")
+
+node("ipc_bootstrap") {
+  script = "//third_party/node/node.py"
+  inputs = ipc_bootstrap_sources +
+           [ "//xenon_overlay/tools/bundle_ipc_bootstrap.cjs" ]
+  outputs = [
+    "$target_gen_dir/ipc/xenon_ipc_main_bootstrap.js",
+    "$target_gen_dir/ipc/xenon_ipc_renderer_bootstrap.js",
+  ]
+  depfile = "$target_gen_dir/ipc/bootstrap.d"
+  args = [
+    rebase_path("//xenon_overlay/tools/bundle_ipc_bootstrap.cjs",
+                root_build_dir),
+    "--entry",
+    rebase_path("ipc/xenon_ipc_main_bootstrap.js", root_build_dir),
+    "--entry",
+    rebase_path("ipc/xenon_ipc_renderer_bootstrap.js", root_build_dir),
+    "--output-dir",
+    rebase_path("$target_gen_dir/ipc", root_build_dir),
+    "--depfile",
+    rebase_path(depfile, root_build_dir),
+  ]
+}
 
 grit("resources_grit") {
   source = "xenon_resources.grd"
@@ -7,7 +32,10 @@ grit("resources_grit") {
     "grit/xenon_resources.h",
     "xenon_resources.pak",
   ]
-  deps = [ "webui:resources" ]
+  deps = [
+    ":ipc_bootstrap",
+    "webui:resources",
+  ]
 }
 
 copy("copy_extension") {
@@ -21,8 +49,7 @@ copy("copy_extension") {
       "extension/main.js",
       "extension/manifest.json",
     ]
-    outputs =
-        [ "$root_out_dir/resources/xenon_extension/{{source_file_part}}" ]
+    outputs = [ "$root_out_dir/resources/xenon_extension/{{source_file_part}}" ]
   }
 }
 
@@ -36,8 +63,9 @@ video_controls_extension_files = [
 
 copy("copy_video_controls_extension") {
   sources = video_controls_extension_files
-  outputs =
-      [ "$root_out_dir/resources/video_controls_extension/{{source_file_part}}" ]
+  outputs = [
+    "$root_out_dir/resources/video_controls_extension/{{source_file_part}}",
+  ]
 }
 
 if (is_mac) {
@@ -57,9 +85,7 @@ if (is_mac) {
         "extension/main.js",
         "extension/manifest.json",
       ]
-      outputs = [
-        "{{bundle_resources_dir}}/resources/xenon_extension/{{source_file_part}}",
-      ]
+      outputs = [ "{{bundle_resources_dir}}/resources/xenon_extension/{{source_file_part}}" ]
     }
   }
 }
@@ -108,9 +134,9 @@ if (is_win) {
 
 group("resources") {
   public_deps = [
-    ":resources_grit",
     ":copy_extension",
     ":copy_video_controls_extension",
+    ":resources_grit",
   ]
 
   if (is_win) {

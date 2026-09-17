@@ -2,15 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+const {readBootstrap} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
-const {readFileSync} = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
 const modulePath = 'C:\\test-app\\binary.node';
-const source = readFileSync(process.env.XENON_TEST_BOOTSTRAP ||
-    path.join(__dirname, 'xenon_ipc_renderer_bootstrap.js'), 'utf8');
+const source = readBootstrap(process.env.XENON_TEST_BOOTSTRAP ||
+    path.join(__dirname, 'xenon_ipc_renderer_bootstrap.js'));
 const binaryTag = (kind, value) => ({__xenon_node_wire_type__: 'binary', kind, value});
 const bytes = value => Array.from(new Uint8Array(
     ArrayBuffer.isView(value) ? value.buffer : value,

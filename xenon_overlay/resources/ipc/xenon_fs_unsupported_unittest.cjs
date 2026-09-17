@@ -3,14 +3,14 @@
 // found in the LICENSE file.
 
 // Run with: node --test xenon_overlay/resources/ipc/xenon_fs_unsupported_unittest.cjs
+const {readBootstrap} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
-const {readFileSync} = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
 const bootstrapPath = path.join(__dirname, 'xenon_ipc_renderer_bootstrap.js');
-const bootstrapSource = readFileSync(bootstrapPath, 'utf8');
+const bootstrapSource = readBootstrap(bootstrapPath);
 
 // Load the production module; only the native filesystem boundary is replaced.
 function createRenderer() {

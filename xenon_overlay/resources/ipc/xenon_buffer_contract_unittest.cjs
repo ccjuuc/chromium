@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 // Compare the production Buffer sections with the local Node Buffer oracle.
+const {readBootstrapPart} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
 const {existsSync, readFileSync} = require('node:fs');
 const path = require('node:path');
@@ -10,12 +11,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 function createBufferContext(side, nativeDecode = false) {
-  const source = readFileSync(path.join(__dirname, `xenon_ipc_${side}_bootstrap.js`), 'utf8');
-  const start = source.indexOf(side === 'main' ?
-      '  const nativeToBase64 =' : '  const textEncoder =');
-  const end = source.indexOf(side === 'main' ?
-      '  globalThis.Buffer = Buffer;' : '  const utilModule =', start);
-  assert.ok(start >= 0 && end > start);
+  const source = readBootstrapPart(`${side}/buffer.js`);
   const context = vm.createContext({TextEncoder, TextDecoder, atob, btoa});
   if (nativeDecode) vm.runInContext(`
     Uint8Array.fromBase64 = value => {
@@ -25,7 +21,7 @@ function createBufferContext(side, nativeDecode = false) {
       return bytes;
     };
   `, context);
-  vm.runInContext(source.slice(start, end) +
+  vm.runInContext(source +
       '\nglobalThis.Buffer = Buffer;', context);
   return context;
 }

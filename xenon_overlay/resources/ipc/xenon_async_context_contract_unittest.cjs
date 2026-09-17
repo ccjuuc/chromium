@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+const {readBootstrap} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
-const {readFileSync} = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const {promiseHooks} = require('node:v8');
@@ -54,7 +54,7 @@ function createRuntime(kind, t, withHooks = true) {
   });
   realmPromise = vm.runInContext('Promise', context);
   const filename = path.join(__dirname, `xenon_ipc_${kind}_bootstrap.js`);
-  vm.runInContext(readFileSync(filename, 'utf8'), context, {filename});
+  vm.runInContext(readBootstrap(filename), context, {filename});
   context.hooks = kind === 'main' ? context.__xenonAsyncHooks :
       context.require('node:async_hooks');
   context.events = kind === 'main' ? context.__xenonElectron.ipcMain :

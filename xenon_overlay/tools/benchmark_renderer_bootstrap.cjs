@@ -7,16 +7,18 @@
 // This is not a Chromium startup or native addon throughput benchmark.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const {createRequire} = require('node:module');
 const path = require('node:path');
 const vm = require('node:vm');
 
 const ipcDirectory = path.resolve(__dirname, '../resources/ipc');
 function fixture(filename, boundary, exportedName) {
-  const source = fs.readFileSync(path.join(ipcDirectory, filename), 'utf8');
+  const fixturePath = path.join(ipcDirectory, filename);
+  const source = fs.readFileSync(fixturePath, 'utf8');
   const end = source.indexOf(boundary);
   assert.ok(end > 0, 'Test fixture boundary must exist');
   return new Function('require', '__dirname', source.slice(0, end) +
-    '\nreturn ' + exportedName + ';')(require, ipcDirectory);
+    '\nreturn ' + exportedName + ';')(createRequire(fixturePath), ipcDirectory);
 }
 
 const results = [];

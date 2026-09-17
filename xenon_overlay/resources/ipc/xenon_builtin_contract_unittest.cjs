@@ -4,8 +4,8 @@
 
 // One behavior table for both production bootstraps. The shims provide stream
 // constructor/inheritance infrastructure; they do not implement a stream queue.
+const {readBootstrap} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
-const {readFileSync} = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
@@ -32,7 +32,7 @@ function createRuntime(kind, invoke) {
     __xenonChromeVersion: '142', __xenonV8Version: '', __xenonGetPath: () => '',
   });
   const filename = path.join(__dirname, `xenon_ipc_${kind}_bootstrap.js`);
-  vm.runInContext(readFileSync(filename, 'utf8'), context, {filename});
+  vm.runInContext(readBootstrap(filename), context, {filename});
   const modules = kind === 'main' ? {
     stream: context.__xenonStream, events: context.__xenonEvents,
     fs: context.__xenonFs,

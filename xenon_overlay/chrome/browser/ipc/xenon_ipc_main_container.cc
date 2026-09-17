@@ -222,7 +222,8 @@ bool ConvertV8ToValue(v8::Isolate* isolate,
 
 std::string GetMainBootstrapSource() {
   // Production and local builds must execute the same packed resource. The
-  // source-tree fallback is only for targets that do not initialize a bundle.
+  // Generated-file fallback is for tests that do not initialize a bundle.
+  // Never execute the source entry: its includes are expanded at build time.
   if (ui::ResourceBundle::HasSharedInstance()) {
     std::string resource =
         ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
@@ -232,8 +233,9 @@ std::string GetMainBootstrapSource() {
     }
   }
   base::FilePath root;
-  if (base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &root)) {
-    base::FilePath file = root.AppendASCII("xenon_overlay")
+  if (base::PathService::Get(base::DIR_EXE, &root)) {
+    base::FilePath file = root.AppendASCII("gen")
+                              .AppendASCII("xenon_overlay")
                               .AppendASCII("resources")
                               .AppendASCII("ipc")
                               .AppendASCII("xenon_ipc_main_bootstrap.js");

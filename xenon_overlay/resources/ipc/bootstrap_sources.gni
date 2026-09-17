@@ -1,0 +1,27 @@
+# Copyright 2026 The Xenon Overlay Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Entries are the single source of truth for composition and GN inputs.
+# read_file also makes GN regenerate its graph when an entry changes.
+# The bundler rejects includes outside the entry, so this is the complete graph.
+_ipc_root = "//xenon_overlay/resources/ipc"
+ipc_bootstrap_entries = [
+  "$_ipc_root/xenon_ipc_main_bootstrap.js",
+  "$_ipc_root/xenon_ipc_renderer_bootstrap.js",
+]
+ipc_bootstrap_sources = ipc_bootstrap_entries
+foreach(_entry, ipc_bootstrap_entries) {
+  foreach(_line, read_file(_entry, "list lines")) {
+    # Include paths cannot contain whitespace. Normalize directive indentation.
+    _part = string_replace(string_replace(_line, " ", ""), "$0x09", "")
+    if (filter_include([ _part ], [ "//@include\"*.js\"" ]) != []) {
+      _part = string_replace(_part, "//@include\"", "")
+      _part = string_replace(_part, "\"", "")
+      _source = "$_ipc_root/$_part"
+      if (filter_include(ipc_bootstrap_sources, [ _source ]) == []) {
+        ipc_bootstrap_sources += [ _source ]
+      }
+    }
+  }
+}

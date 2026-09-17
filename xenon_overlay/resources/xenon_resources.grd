@@ -50,8 +50,8 @@
       <include name="IDR_XENON_AI_MOJOM_WEBUI_JS" file="${root_gen_dir}/xenon_overlay/resources/webui/tsc/xenon/xenon_ai.mojom-webui.js" use_base_dir="false" type="BINDATA" />
 
       <!-- Electron IPC Container Bootstrap -->
-      <include name="IDR_XENON_IPC_MAIN_BOOTSTRAP_JS" file="ipc/xenon_ipc_main_bootstrap.js" type="BINDATA" />
-      <include name="IDR_XENON_IPC_RENDERER_BOOTSTRAP_JS" file="ipc/xenon_ipc_renderer_bootstrap.js" type="BINDATA" />
+      <include name="IDR_XENON_IPC_MAIN_BOOTSTRAP_JS" file="${root_gen_dir}/xenon_overlay/resources/ipc/xenon_ipc_main_bootstrap.js" use_base_dir="false" type="BINDATA" />
+      <include name="IDR_XENON_IPC_RENDERER_BOOTSTRAP_JS" file="${root_gen_dir}/xenon_overlay/resources/ipc/xenon_ipc_renderer_bootstrap.js" use_base_dir="false" type="BINDATA" />
       <include name="IDR_XENON_IPC_TEST_MAIN_JS" file="ipc/xenon_ipc_test_main.js" type="BINDATA" />
 
       <!-- Generic Electron container test page (sidebar XPE). -->

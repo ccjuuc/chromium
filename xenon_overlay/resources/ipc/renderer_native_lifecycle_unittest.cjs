@@ -4,14 +4,14 @@
 
 // Run directly with node --expose-gc to include the real GC lifetime checks.
 
+const {readBootstrap} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
-const {readFileSync} = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
 const modulePath = 'C:\\test-app\\fixture.node';
-const source = readFileSync(path.join(__dirname, 'xenon_ipc_renderer_bootstrap.js'), 'utf8');
+const source = readBootstrap(path.join(__dirname, 'xenon_ipc_renderer_bootstrap.js'));
 const members = ['run', 'waitLoadFinish'].map(name => ({name, kind: 'function'}));
 
 function createRenderer(overrides = {}, realFinalization = false) {

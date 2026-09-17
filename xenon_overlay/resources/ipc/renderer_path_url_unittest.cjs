@@ -3,13 +3,13 @@
 // found in the LICENSE file.
 
 // Run with: node --test xenon_overlay/resources/ipc/renderer_path_url_unittest.cjs
+const {readBootstrap} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
-const {readFileSync} = require('node:fs');
 const path = require('node:path');
 const nodeUrl = require('node:url');
 const test = require('node:test');
 const vm = require('node:vm');
-const source = readFileSync(path.join(__dirname, 'xenon_ipc_renderer_bootstrap.js'), 'utf8');
+const source = readBootstrap(path.join(__dirname, 'xenon_ipc_renderer_bootstrap.js'));
 
 function renderer(platform, options = {}) {
   const windows = platform === 'win32';

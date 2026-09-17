@@ -2,30 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+const {readBootstrapPart} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
 const {EventEmitter} = require('node:events');
-const {readFileSync} = require('node:fs');
-const path = require('node:path');
 const nativeReadline = require('node:readline');
 const {Readable} = require('node:stream');
 const test = require('node:test');
 const vm = require('node:vm');
 
 function loadModules(side) {
-  const source = readFileSync(path.join(__dirname,
-      `xenon_ipc_${side}_bootstrap.js`), 'utf8');
-  const emitterStart = source.indexOf('  function EventEmitter()');
-  const emitterEndText = '  EventEmitter.defaultMaxListeners = 10;';
-  const emitterEnd = source.indexOf(emitterEndText, emitterStart) + emitterEndText.length;
-  const start = source.indexOf('  const tlsModule =');
-  const readlineStart = source.indexOf('  const readlineModule =', start);
-  const end = source.indexOf('\n  })();', readlineStart) + '\n  })();'.length;
-  assert.ok(emitterStart >= 0 && start >= 0 && end > readlineStart);
+  const source = [readBootstrapPart(`${side}/events.js`),
+    readBootstrapPart(`${side}/tls.js`), readBootstrapPart('common/readline.js')].join('\n');
   // The main isolate has no native incremental TextDecoder. Exercise the
   // production decoder without giving this VM the host's decoder as a crutch.
   const context = vm.createContext({queueMicrotask});
-  vm.runInContext(source.slice(emitterStart, emitterEnd) + '\n' +
-      source.slice(start, end) + '\nglobalThis.modules = {tlsModule, readlineModule};', context);
+  vm.runInContext(source + '\nglobalThis.modules = {tlsModule, readlineModule};', context);
   return context.modules;
 }
 

@@ -2,29 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+const {readBootstrapPart} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
-const {readFileSync} = require('node:fs');
 const nativeHttp2 = require('node:http2');
 const nativeChildProcess = require('node:child_process');
-const path = require('node:path');
 const test = require('node:test');
 const {promisify} = require('node:util');
 const vm = require('node:vm');
 
 function loadModules(side) {
-  const source = readFileSync(path.join(__dirname,
-      `xenon_ipc_${side}_bootstrap.js`), 'utf8');
-  const emitterStart = source.indexOf('  function EventEmitter()');
-  const emitterEndText = '  EventEmitter.defaultMaxListeners = 10;';
-  const emitterEnd = source.indexOf(emitterEndText, emitterStart) + emitterEndText.length;
-  const blocks = ['childProcessModule', 'http2Module'].map(name => {
-    const start = source.indexOf(`  const ${name} = (() => {`);
-    const end = source.indexOf('\n  })();', start) + '\n  })();'.length;
-    assert.ok(start >= 0 && end > start);
-    return source.slice(start, end);
-  });
+  const source = ['events', 'child_process', 'http2']
+      .map(name => readBootstrapPart(`${side}/${name}.js`)).join('\n');
   const context = vm.createContext({queueMicrotask});
-  vm.runInContext(source.slice(emitterStart, emitterEnd) + '\n' + blocks.join('\n') +
+  vm.runInContext(source +
       '\nglobalThis.modules = {childProcessModule, http2Module};', context);
   return context.modules;
 }

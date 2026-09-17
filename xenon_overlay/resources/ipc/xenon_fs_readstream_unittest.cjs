@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+const {readBootstrap} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
-const {readFileSync} = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
@@ -49,8 +49,8 @@ function runtime(kind, contents = '第一行\r\nsecond\n最后一行', options =
     __xenonChromeVersion: '142', __xenonV8Version: '', __xenonGetPath: () => '',
   });
   if (options.nativeDecoder === false) delete context.TextDecoder;
-  vm.runInContext(readFileSync(path.join(__dirname,
-      `xenon_ipc_${kind}_bootstrap.js`), 'utf8'), context);
+  vm.runInContext(readBootstrap(path.join(__dirname,
+      `xenon_ipc_${kind}_bootstrap.js`)), context);
   return {file, bytes, reads, fs: kind === 'main' ? context.__xenonFs : context.require('fs'),
     readline: kind === 'main' ? context.__xenonReadline : context.require('readline')};
 }

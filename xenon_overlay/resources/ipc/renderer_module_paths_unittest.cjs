@@ -3,14 +3,15 @@
 // found in the LICENSE file.
 
 // Run with: node --test xenon_overlay/resources/ipc/renderer_module_paths_unittest.cjs
+const {readBootstrap} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
 const {existsSync, readFileSync} = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const bootstrapSource = readFileSync(process.env.XENON_TEST_BOOTSTRAP ||
-    path.join(__dirname, 'xenon_ipc_renderer_bootstrap.js'), 'utf8');
+const bootstrapSource = readBootstrap(process.env.XENON_TEST_BOOTSTRAP ||
+    path.join(__dirname, 'xenon_ipc_renderer_bootstrap.js'));
 
 function createPathRenderer(files, aliases = new Map(), appRoot = 'C:\\test-app', runtime = {}) {
   const reads = [];

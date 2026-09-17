@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+const {readBootstrap} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
-const {readFileSync} = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
@@ -63,7 +63,7 @@ function createRuntime(kind, options = {}) {
     ...options.globals,
   });
   const filename = path.join(__dirname, `xenon_ipc_${kind}_bootstrap.js`);
-  vm.runInContext(readFileSync(filename, 'utf8'), context, {filename});
+  vm.runInContext(readBootstrap(filename), context, {filename});
   const os = kind === 'main' ? context.__xenonOs : context.require('os');
   const pathModule = kind === 'main' ? context.__xenonPath : context.require('path');
   return {context, os, pathModule, calls};
