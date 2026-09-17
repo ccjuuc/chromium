@@ -531,6 +531,7 @@ test("ipc_main_container_unittests") {
     "../../services/xenon_service_impl.h",
     "../../services/xenon_service_impl_unittest.cc",
     "ipc/xenon_electron_api_bridge_unittest.cc",
+    "ipc/xenon_file_system_bridge_unittest.cc",
     "ipc/xenon_ipc_main_container.cc",
     "ipc/xenon_ipc_main_container.h",
     "ipc/xenon_ipc_main_container_unittest.cc",

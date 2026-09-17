@@ -56,7 +56,7 @@ CommonJS 模块在执行前入缓存以支持循环依赖，缓存命中读取�
 - `readline` 支持非 TTY 输入流的 UTF-8/CRLF 行读取、结束清理、暂停/恢复和基本 question；TTY 编辑仍明确不支持。
 - Main HTTP/fetch 为缓冲实现，单次响应上限 5 MiB、上传上限 32 MiB；HTTP server 与流式上传仍未实现。fetch 支持跟随或拒绝重定向；Node HTTP 遇到重定向明确失败。Chromium 已解压的 HTTP 响应去掉原压缩编码和长度头，避免调用方二次解压；fetch 保留浏览器 fetch 的原响应头语义。取消会终止 main 对应的真实 loader。
 - 尚未实现 package `exports/imports` 和完整 ESM 加载。这些路径明确拒绝，避免绕过包的导出限制。
-- `fs.createReadStream` 已支持真实文件内容、分块交付、范围、UTF-8、暂停/恢复和取消；当前通过整文件工作线程接口读入后分块，内存并非仅占 highWaterMark。`fs.createWriteStream` 支持日志所需的 `w/a`、编码、排队写入、背压及 finish/error/close 时序；每笔按路径异步写入，不持有 Node 文件描述符。两者均不伪造 fd 或 open 事件；写入流的 fd/start/custom fs/特殊 mode，以及 watch、chmod/chown 等未实现能力仍明确失败。整文件/目录接口也尚未覆盖 Node 的全部 flags、符号链接和 OS errno 细节。
+- `fs.createReadStream` 已支持真实文件内容、分块交付、范围、UTF-8、暂停/恢复和停止交付；工作线程按 start/end 读取普通文件及 ASAR，仅将选中范围返回 JS，再按 highWaterMark 交付。仍缓存整个范围；无 end 时读到 EOF，destroy 不取消已提交的原生读取。`fs.createWriteStream` 支持日志所需的 `w/a`、编码、排队写入、背压及 finish/error/close 时序；每笔按路径异步写入，不持有 Node 文件描述符。两者均不伪造 fd 或 open 事件；写入流的 fd/start/custom fs/特殊 mode，以及 watch、chmod/chown 等未实现能力仍明确失败。整文件/目录接口也尚未覆盖 Node 的全部 flags、符号链接和 OS errno 细节。
 - 其他内建模块仍属于按需实现的子集；本轮的模块身份与解析改进不等于所有 Node API 已完整实现。
 - 原生导出仍经过跨 isolate 包装：普通数据属性是快照，尚不保留完整属性描述符、共享/循环对象身份和原生异常对象身份。原型包装也不等于原生对象本身；Symbol、external、原生 accessor 写入和需要通过点号路径寻址的特殊属性名仍有协议限制。无法正确寻址的复合属性明确报错。Getter 返回对象或函数暂报 `ERR_NOT_SUPPORTED`，避免后续调用通过路径重新执行 getter、产生重复副作用；返回标量的 getter 可正常使用。
 - 构造时桥接的是 JS 新增原型函数；原生已有方法保留在 Utility，renderer 的包装方法可以继续调用保存的原生方法。原型后续变更不会自动同步到已构造实例。跨进程 callback 以异步事件交付，尚不支持原生代码同步取得 renderer JS 回调的返回值。
@@ -371,5 +371,11 @@ node --js-base-64 xenon_overlay/tools/benchmark_ipc_buffer.cjs baseline.js resul
 多余文件 IPC，补齐 CommonJS 源码读取的 BLOB 请求；服务端自有 addon 参数
 改用移动转换，去除额外深拷贝，四类高频调用日志改为可开启的 VLOG(1)。
 第二轮 **436 项 JS、176 项原生回归**及正式构建通过；TH 自动登录、大 BLOB
-SQLite、两侧实际模块缓存与 PLE 播放/关闭后重开通过。ReadStream 范围读的
-256 倍返回放大和 renderer 网络请求取消缺口已记录，尚未修改其传输协议。
+SQLite、两侧实际模块缓存与 PLE 播放/关闭后重开通过。该轮发现 ReadStream
+范围读有 256 倍返回放大，随后增加原生 start/end 范围协议修复，详见架构评估
+第 8 节。renderer 网络请求取消缺口仍未处理。
+
+ReadStream 修复后，**447 项 JS、183 项 Windows 原生回归**及正式构建通过。
+实机 TH/PLE 各 26 项普通文件和 ASAR 范围验证通过，64 KiB 请求的返回和
+JS backing 均由 16 MiB 降至 64 KiB；TH 自动登录、PLE 播放及测试媒体关闭后
+重开正常。仍缓存所选范围，尚未实现原生到 JS 的流式交付和已提交 I/O 的取消。

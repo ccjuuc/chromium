@@ -12,10 +12,19 @@ function runtime(kind, contents = '第一行\r\nsecond\n最后一行', options =
   const file = 'C:\\fixture\\config.txt';
   const bytes = Buffer.from(contents);
   const reads = [];
-  const read = requested => {
-    reads.push(requested);
-    if (requested !== file) throw Object.assign(new Error('ENOENT: missing file'), {code: 'ENOENT'});
-    return bytes;
+  const returnedSizes = [];
+  const read = request => {
+    reads.push({...request});
+    assert.equal(request.operation, 'read_file');
+    assert.equal(request.returnBytes, true);
+    if (request.path !== file) throw Object.assign(new Error('ENOENT: missing file'), {code: 'ENOENT'});
+    const start = request.start === undefined ? 0 : request.start;
+    const end = request.end === undefined ? bytes.length : Math.min(bytes.length, request.end + 1);
+    // Model native range reads with independent result storage. Native disk and
+    // ASAR behavior is covered separately by the filesystem bridge tests.
+    const result = Uint8Array.from(bytes.subarray(start, end));
+    returnedSizes.push(result.byteLength);
+    return result;
   };
   const context = vm.createContext({
     __xenonPaths: {platform: 'win32', arch: 'x64', endianness: 'LE'},
@@ -27,18 +36,20 @@ function runtime(kind, contents = '第一行\r\nsecond\n最后一行', options =
       getRuntimeConfig: () => ({appPath: 'C:\\fixture', exeDir: 'C:\\fixture',
         execPath: 'C:\\fixture\\host.exe'}),
       setDispatchHandler() {},
+      sendSync: (channel, request) => {
+        assert.equal(channel, '__xenon:fs');
+        return read(request).buffer;
+      },
       invoke: async (channel, request) => {
         assert.equal(channel, '__xenon:fs');
-        assert.equal(request.operation, 'read_file');
-        assert.equal(request.returnBytes, true);
-        const result = Uint8Array.from(read(request.path)).buffer;
+        const result = read(request).buffer;
         if (options.readGate) await options.readGate;
         return result;
       },
     },
+    __xenonFsCall: read,
     __xenonFsCallAsync: async request => {
-      assert.equal(request.operation, 'read_file');
-      const result = read(request.path);
+      const result = read(request);
       if (options.readGate) await options.readGate;
       return result;
     },
@@ -52,13 +63,14 @@ function runtime(kind, contents = '第一行\r\nsecond\n最后一行', options =
   if (options.nativeDecoder === false) delete context.TextDecoder;
   vm.runInContext(readBootstrap(path.join(__dirname,
       `xenon_ipc_${kind}_bootstrap.js`)), context);
-  return {file, bytes, reads, fs: kind === 'main' ? context.__xenonFs : context.require('fs'),
+  return {file, bytes, reads, returnedSizes,
+    fs: kind === 'main' ? context.__xenonFs : context.require('fs'),
     readline: kind === 'main' ? context.__xenonReadline : context.require('readline')};
 }
 
 for (const kind of ['main', 'renderer']) {
   test(`${kind}: read stream delivers exact byte range and one end/close`, async () => {
-    const {fs, file, bytes} = runtime(kind);
+    const {fs, file, bytes, reads, returnedSizes} = runtime(kind);
     const stream = fs.createReadStream(file, {start: 1, end: 12, highWaterMark: 2});
     const chunks = [];
     let ends = 0, opens = 0;
@@ -72,6 +84,101 @@ for (const kind of ['main', 'renderer']) {
     assert.equal(opens, 0); // The bridge does not invent a file descriptor.
     assert.equal(stream.destroyed, true);
     assert.equal(stream.closed, true);
+    assert.deepEqual(reads, [{operation: 'read_file', path: file,
+      returnBytes: true, start: 1, end: 12}]);
+    assert.deepEqual(returnedSizes, [12]);
+  });
+
+  test(`${kind}: read stream ranges preserve inclusive end, EOF and safe-integer offsets`, async () => {
+    for (const {contents, options, expected} of [
+      {contents: '0123456789', options: {}, expected: '0123456789'},
+      {contents: '0123456789', options: {end: 0}, expected: '0'},
+      {contents: '0123456789', options: {start: 4, end: 4}, expected: '4'},
+      {contents: '0123456789', options: {start: 7}, expected: '789'},
+      {contents: '0123456789', options: {start: 7, end: 100}, expected: '789'},
+      {contents: '0123456789', options: {start: 7, end: Infinity}, expected: '789'},
+      {contents: '0123456789', options: {start: 7, end: Number.MAX_SAFE_INTEGER}, expected: '789'},
+      {contents: '0123456789', options: {start: 10}, expected: ''},
+      {contents: '0123456789', options: {start: 11, end: 11}, expected: ''},
+      {contents: '0123456789', options: {start: Number.MAX_SAFE_INTEGER}, expected: ''},
+      {contents: '0123456789', options: {start: Number.MAX_SAFE_INTEGER,
+        end: Number.MAX_SAFE_INTEGER}, expected: ''},
+      {contents: '', options: {start: 0, end: 0}, expected: ''},
+    ]) {
+      const {fs, file, reads, returnedSizes} = runtime(kind, contents);
+      const stream = fs.createReadStream(file, options), chunks = [], events = [];
+      for (const event of ['ready', 'end', 'close']) stream.on(event, () => events.push(event));
+      await new Promise((resolve, reject) => stream.on('data', bytes => chunks.push(Buffer.from(bytes)))
+          .on('error', reject).on('close', resolve));
+      assert.equal(Buffer.concat(chunks).toString(), expected);
+      assert.deepEqual(events, ['ready', 'end', 'close']);
+      assert.equal(stream.bytesRead, Buffer.byteLength(expected));
+      assert.equal(reads.length, 1);
+      assert.equal(reads[0].start, options.start === undefined ? 0 : options.start);
+      if (options.end !== undefined && options.end !== Infinity) assert.equal(reads[0].end, options.end);
+      else assert.equal(Object.hasOwn(reads[0], 'end'), false);
+      assert.deepEqual(returnedSizes, [Buffer.byteLength(expected)]);
+    }
+  });
+
+  test(`${kind}: a 64 KiB range of a 16 MiB file receives and retains only the requested range`, async () => {
+    const fixture = Buffer.alloc(16 * 1024 * 1024);
+    for (let i = 0; i < fixture.length; ++i) fixture[i] = (i * 73 + 19) & 255;
+    const start = 8 * 1024 * 1024 + 17, size = 64 * 1024;
+    const {fs, file, reads, returnedSizes} = runtime(kind, fixture);
+    const stream = fs.createReadStream(file, {start, end: start + size - 1, highWaterMark: 16384});
+    const chunks = [], backingBuffers = new Set();
+    await new Promise((resolve, reject) => stream.on('data', chunk => {
+      assert.equal(chunk.buffer.byteLength, size);
+      backingBuffers.add(chunk.buffer);
+      chunks.push(Buffer.from(chunk));
+    }).on('error', reject).on('close', resolve));
+    assert.deepEqual(Buffer.concat(chunks), fixture.subarray(start, start + size));
+    assert.equal(chunks.length, 4);
+    assert.equal(backingBuffers.size, 1);
+    assert.equal(reads.length, 1);
+    assert.deepEqual(returnedSizes, [size]);
+    assert.equal(stream.bytesRead, size);
+  });
+
+  test(`${kind}: ordinary readFile APIs keep the full-file request contract`, async () => {
+    const {fs, file, bytes, reads} = runtime(kind, 'whole file');
+    assert.deepEqual(Buffer.from(fs.readFileSync(file)), bytes);
+    assert.deepEqual(Buffer.from(await fs.promises.readFile(file)), bytes);
+    const result = await new Promise((resolve, reject) => fs.readFile(file,
+        (error, value) => error ? reject(error) : resolve(value)));
+    assert.deepEqual(Buffer.from(result), bytes);
+    assert.equal(reads.length, 3);
+    for (const request of reads) {
+      assert.equal(Object.hasOwn(request, 'start'), false);
+      assert.equal(Object.hasOwn(request, 'end'), false);
+    }
+  });
+
+  test(`${kind}: range UTF-8 boundaries decode the selected bytes without reading adjacent characters`, async () => {
+    const bytes = Buffer.from('前中文😀后');
+    const {fs, file} = runtime(kind, bytes, {nativeDecoder: kind !== 'main'});
+    for (const [start, end] of [[1, 4], [3, 8], [8, 10]]) {
+      const chunks = [];
+      const stream = fs.createReadStream(file, {start, end, encoding: 'utf8', highWaterMark: 1});
+      await new Promise((resolve, reject) => stream.on('data', chunk => chunks.push(chunk))
+          .on('error', reject).on('close', resolve));
+      assert.equal(chunks.join(''), bytes.subarray(start, end + 1).toString('utf8'));
+      assert.equal(stream.bytesRead, end - start + 1);
+    }
+  });
+
+  test(`${kind}: invalid ranges fail before native submission`, async () => {
+    const {fs, file, reads} = runtime(kind);
+    for (const options of [
+      {start: -1}, {start: 0.5}, {start: Infinity}, {start: Number.MAX_SAFE_INTEGER + 1},
+      {end: -1}, {end: 0.5}, {end: NaN}, {end: Number.MAX_SAFE_INTEGER + 1},
+      {start: 2, end: 1}, {start: '1'}, {end: '2'},
+    ]) {
+      assert.throws(() => fs.createReadStream(file, options), {code: 'ERR_OUT_OF_RANGE'});
+    }
+    await Promise.resolve();
+    assert.deepEqual(reads, []);
   });
 
   test(`${kind}: UTF-8 chunks preserve characters and pause/resume delivery`, async () => {
@@ -222,3 +329,31 @@ for (const kind of ['main', 'renderer']) {
     assert.deepEqual(reads, []);
   });
 }
+
+test('renderer: range streams keep synthetic filesystem data and errors inside the virtual mount', async () => {
+  const {fs, reads} = runtime('renderer');
+  const filename = 'chrome://fixture/data.bin';
+  fs.writeFileSync(filename, new Uint8Array([0, 255, 128, 65, 9]));
+  const chunks = [];
+  const stream = fs.createReadStream(filename, {start: 1, end: 2, highWaterMark: 1});
+  await new Promise((resolve, reject) => stream.on('data', chunk => {
+    assert.equal(chunk.buffer.byteLength, 2);
+    chunks.push(Buffer.from(chunk));
+  }).on('error', reject).on('close', resolve));
+  assert.deepEqual(Buffer.concat(chunks), Buffer.from([255, 128]));
+  assert.equal(stream.bytesRead, 2);
+  assert.deepEqual(Buffer.from(fs.readFileSync(filename)), Buffer.from([0, 255, 128, 65, 9]));
+  assert.deepEqual(Buffer.from(await fs.promises.readFile(filename)), Buffer.from([0, 255, 128, 65, 9]));
+  fs.mkdirSync('chrome://fixture/directory');
+  for (const [path, code] of [
+    ['chrome://fixture/missing', 'ENOENT'], ['chrome://fixture/directory', 'EISDIR'],
+  ]) {
+    const events = [];
+    const failed = fs.createReadStream(path, {start: 1, end: 2});
+    for (const name of ['ready', 'data', 'end']) failed.on(name, () => events.push(name));
+    await new Promise(resolve => failed.on('error', error => events.push(error.code))
+        .on('close', () => { events.push('close'); resolve(); }));
+    assert.deepEqual(events, [code, 'close']);
+  }
+  assert.deepEqual(reads, []);
+});

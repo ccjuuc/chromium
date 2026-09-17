@@ -129,6 +129,13 @@
     return null;
   }
 
+  function fsVirtualFileBytes(path) {
+    const entry = fsGetVirtualEntry(normalizeFsPath(path));
+    if (!entry) throw fsErrno('ENOENT', 'open', path);
+    if (entry.type !== 'file') throw fsErrno('EISDIR', 'read', path);
+    return entry.data || new Uint8Array(0);
+  }
+
   function fsNodeError(error, syscall, path) {
     const message = String(error && error.message || error || 'EIO: fs error');
     const match = /^([A-Z][A-Z0-9_]+):/.exec(message);
@@ -248,15 +255,9 @@
       if (!fsUsesVirtualMount(path)) {
         return fsReadResult(fsNativeSync('read_file', path, {returnBytes: true}), encoding);
       }
-      const entry = fsGetVirtualEntry(normalizeFsPath(path));
-      if (!entry) {
-        throw fsErrno('ENOENT', 'open', path);
-      }
-      if (entry.type !== 'file') {
-        throw fsErrno('EISDIR', 'read', path);
-      }
+      const bytes = fsVirtualFileBytes(path);
       const enc = fsEncodingOf(encoding);
-      const buf = Buffer.from(entry.data || new Uint8Array(0));
+      const buf = Buffer.from(bytes);
       return enc ? buf.toString(enc) : buf;
     },
     writeFileSync: (path, data, _options) => {
@@ -582,8 +583,20 @@
   for (const method of ['chmod', 'chown', 'open']) {
     fsModule.promises[method] = async () => fsUnsupported('promises.' + method);
   }
-  // ReadStream currently reads through the existing whole-file worker bridge,
-  // then delivers bounded chunks. No OS descriptor or fake open event is exposed.
+  function fsReadStreamRange(path, start, end) {
+    const range = {returnBytes: true, start};
+    if (end !== Infinity) range.end = end;
+    return fsAsyncOperation(path, 'read_file', range, () => {
+      // Synthetic chrome:// files keep their existing filesystem validation.
+      // Copy the selected bytes so a short stream does not retain the full file.
+      const bytes = fsVirtualFileBytes(path);
+      return Buffer.from(bytes.subarray(start,
+          end === Infinity ? bytes.length : Math.min(bytes.length, end + 1)));
+    }, bytes => fsUsesVirtualMount(path) ? bytes : fsReadResult(bytes));
+  }
+
+  // Read the requested range through the worker bridge, then deliver bounded
+  // chunks. No OS descriptor or fake open event is exposed.
   class FileReadStream extends Readable {
     constructor(path, options = {}) {
       super();
@@ -628,12 +641,11 @@
         if (this._signal.aborted) queueMicrotask(this._abort);
         else this._signal.addEventListener('abort', this._abort, {once: true});
       }
-      Promise.resolve().then(() => this.destroyed ? null : fsModule.promises.readFile(path))
+      Promise.resolve().then(() => this.destroyed ? null : fsReadStreamRange(path, start, end))
           .then(bytes => {
             if (this.destroyed) return;
             this.pending = false;
-            this._bytes = (Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)).subarray(start,
-                end === Infinity ? bytes.length : Math.min(bytes.length, end + 1));
+            this._bytes = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
             this.emit('ready');
             this._schedule();
           }, error => this.destroy(error));
