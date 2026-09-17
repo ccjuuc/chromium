@@ -47,7 +47,7 @@ function fixture(kind, t, autoListen = false) {
     __xenonInstallAsyncContextHooks: install,
     __xenonNetSend: send,
     pipePath: String.raw`\\.\pipe\async-context-fixture`,
-    localPath: kind === 'main' ? 'local-fixture' : String.raw`\\.\pipe\local-context-fixture`,
+    localPath: String.raw`\\.\pipe\local-context-fixture`,
     location: {protocol: 'chrome:', hostname: 'xenon-player-electron', search: ''},
     xenonIpcRenderer: {
       getRuntimeConfig: () => ({appPath: 'C:\\fixture', execPath: 'C:\\fixture\\host.exe'}),

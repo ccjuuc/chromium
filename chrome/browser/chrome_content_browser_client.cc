@@ -420,6 +420,7 @@
 #include "services/network/public/cpp/web_sandbox_flags.h"
 #include "services/network/public/mojom/cert_verifier_service.mojom.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
+#include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/public/mojom/web_transport.mojom.h"
@@ -455,6 +456,7 @@
 
 #if BUILDFLAG(ENABLE_XENON_SERVICE)
 #include "xenon_overlay/chrome/browser/asar/xenon_asar_url_loader_factory.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_guest.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
 #include "xenon_overlay/public/mojom/xenon_service.mojom.h"
 #endif
@@ -1500,6 +1502,50 @@ bool IsDefaultSearchEngine(Profile* profile, const GURL& url) {
   return false;
 }
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+const base::DictValue* GetHostedElectronWebPreferences(
+    WebContents* web_contents) {
+  if (auto* guest =
+          xenon::ipc::XenonElectronGuest::FromWebContents(web_contents)) {
+    return &guest->preferences();
+  }
+  return xenon::XenonElectronWindowHost::GetInstance()
+      ->GetWebPreferencesForWebContents(web_contents);
+}
+
+bool ApplyHostedElectronWebPreferences(WebContents* web_contents,
+                                       WebPreferences* web_prefs) {
+  const auto* preferences = GetHostedElectronWebPreferences(web_contents);
+  if (!preferences) {
+    return false;
+  }
+
+  // Electron grants these privileges to file origins. Blink and the network
+  // factory both check the requesting origin, so a hosted remote page keeps
+  // normal web security. Set the preferences before navigation as well: the
+  // first file document's factory is created before it commits.
+  bool changed = !web_prefs->allow_universal_access_from_file_urls ||
+                 !web_prefs->allow_file_access_from_file_urls;
+  web_prefs->allow_universal_access_from_file_urls = true;
+  web_prefs->allow_file_access_from_file_urls = true;
+  if (const auto web_security = preferences->FindBool("webSecurity")) {
+    changed |= web_prefs->web_security_enabled != *web_security;
+    web_prefs->web_security_enabled = *web_security;
+  }
+  // Electron defaults mixed-content permission to !webSecurity, while still
+  // honoring an explicit allowRunningInsecureContent preference.
+  if (preferences->contains("webSecurity") ||
+      preferences->contains("allowRunningInsecureContent")) {
+    const bool allow_insecure =
+        preferences->FindBool("allowRunningInsecureContent")
+            .value_or(!preferences->FindBool("webSecurity").value_or(true));
+    changed |= web_prefs->allow_running_insecure_content != allow_insecure;
+    web_prefs->allow_running_insecure_content = allow_insecure;
+  }
+  return changed;
+}
+#endif  // BUILDFLAG(ENABLE_XENON_SERVICE)
+
 #if !BUILDFLAG(IS_ANDROID)
 bool IsActorActingOnWebContents(WebContents* web_contents) {
   auto* actor_service =
@@ -2220,6 +2266,26 @@ void ChromeContentBrowserClient::OverrideURLLoaderFactoryParams(
     bool is_for_isolated_world,
     bool is_for_service_worker,
     network::mojom::URLLoaderFactoryParams* factory_params) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (factory_params->top_frame_id &&
+      !factory_params->process_id.is_browser()) {
+    auto* frame = content::RenderFrameHost::FromFrameToken(
+        content::GlobalRenderFrameHostToken(
+            factory_params->process_id.renderer_process_id().value(),
+            blink::LocalFrameToken(*factory_params->top_frame_id)));
+    const auto* preferences = frame
+                                  ? GetHostedElectronWebPreferences(
+                                        WebContents::FromRenderFrameHost(frame))
+                                  : nullptr;
+    // Match Electron's explicit webSecurity preference in both Blink and the
+    // network service. File-origin defaults are already handled by content's
+    // URLLoaderFactoryParamsHelper using allow_universal_access_from_file_urls.
+    if (preferences && !preferences->FindBool("webSecurity").value_or(true)) {
+      factory_params->is_orb_enabled = false;
+      factory_params->disable_web_security = true;
+    }
+  }
+#endif  // BUILDFLAG(ENABLE_XENON_SERVICE)
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   if (ChromeContentBrowserClientExtensionsPart::AreExtensionsDisabledForProfile(
           browser_context)) {
@@ -4939,6 +5005,10 @@ void ChromeContentBrowserClient::OverrideWebPreferences(
   web_prefs->is_indigo_onboarding =
       indigo::IndigoOnboardingDialog::IsOnboardingWebContents(web_contents);
 #endif
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  ApplyHostedElectronWebPreferences(web_contents, web_prefs);
+#endif
 }
 
 bool ChromeContentBrowserClientParts::OverrideWebPreferencesAfterNavigation(
@@ -4953,6 +5023,10 @@ bool ChromeContentBrowserClient::OverrideWebPreferencesAfterNavigation(
     content::SiteInstance& main_frame_site,
     WebPreferences* web_prefs) {
   bool prefs_changed = false;
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  prefs_changed |= ApplyHostedElectronWebPreferences(web_contents, web_prefs);
+#endif
 
   const auto autoplay_policy = GetAutoplayPolicyForWebContents(web_contents);
   prefs_changed |= (web_prefs->autoplay_policy != autoplay_policy);

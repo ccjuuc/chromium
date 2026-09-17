@@ -31,6 +31,7 @@
 namespace xenon {
 
 class XenonNodeExecutor;
+class XenonChildProcessBridge;
 class XenonNetPipeBridge;
 namespace ipc {
 class XenonIpcMainContainer;
@@ -280,6 +281,16 @@ class XenonServiceImpl : public mojom::XenonMainService,
                             const std::string& channel,
                             base::Value payload);
 
+  base::Value CallChildProcess(const std::string& container_id,
+                               const std::string& endpoint_id,
+                               const base::DictValue& request);
+  void DispatchChildProcessEvent(const std::string& container_id,
+                                  const std::string& endpoint_id,
+                                  base::Value event);
+  void DeliverChildProcessEvent(const std::string& container_id,
+                                 const std::string& endpoint_id,
+                                 base::Value event);
+
   mojo::Receiver<mojom::XenonMainService> receiver_;
   mojo::ReceiverSet<ipc::mojom::NodeAddonHost, NodeAddonConnection>
       node_addon_host_receivers_;
@@ -296,6 +307,7 @@ class XenonServiceImpl : public mojom::XenonMainService,
   // destroyed last (containers may still hold Unlocker callbacks during
   // teardown).
   std::map<std::string, std::unique_ptr<XenonNodeExecutor>> node_executors_;
+  std::unique_ptr<XenonChildProcessBridge> child_process_bridge_;
   std::unique_ptr<XenonNetPipeBridge> net_pipe_bridge_;
   std::map<std::string, std::unique_ptr<ipc::XenonIpcMainContainer>>
       ipc_main_containers_;

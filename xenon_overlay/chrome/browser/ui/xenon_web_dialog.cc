@@ -488,6 +488,11 @@ class XenonWebDialogView : public views::WebDialogView,
     }
   }
 
+  void SetHostedMinimumSize(const gfx::Size& minimum_size) {
+    xenon_delegate_->set_minimum_dialog_size(minimum_size);
+    GetWidget()->OnSizeConstraintsChanged();
+  }
+
   bool SetHostedContentBackgroundColor(SkColor color) {
     if (!web_contents()) {
       return false;
@@ -720,13 +725,13 @@ class XenonWebDialogView : public views::WebDialogView,
   gfx::Size GetManualResizeMinimumSize() const {
     gfx::Size minimum_size =
         GetWidget() ? GetWidget()->GetMinimumSize() : gfx::Size();
-    minimum_size.SetToMax(gfx::Size(64, 64));
-    if (UseFramelessCompositorShadow(
-            xenon_delegate_->UseDwm(),
-            xenon_delegate_->ShouldShowShadow())) {
-      const int margin = FramelessCompositorShadowMargin();
-      minimum_size.Enlarge(2 * margin, 2 * margin);
-    }
+    // Widget constraints already include the dialog's shadow insets. Enlarge
+    // only the fallback content size, not the declared window minimum again.
+    gfx::Size fallback_minimum(64, 64);
+    EnlargeForFramelessCompositorShadow(
+        &fallback_minimum, xenon_delegate_->UseNativeFrame(),
+        xenon_delegate_->UseDwm(), xenon_delegate_->ShouldShowShadow());
+    minimum_size.SetToMax(fallback_minimum);
     return minimum_size;
   }
 
@@ -905,6 +910,15 @@ class XenonWebDialogView : public views::WebDialogView,
    public:
     gfx::Rect GetBoundsForClientView() const override { return bounds(); }
 
+    gfx::Size GetMinimumSize() const override {
+      // Widget and native edge resizing query the frame, not the dialog view.
+      // Preserve the delegate's constraints just as NativeFrameView does.
+      const views::Widget* widget = GetWidget();
+      return widget && widget->client_view()
+                 ? widget->client_view()->GetMinimumSize()
+                 : gfx::Size();
+    }
+
     gfx::Rect GetWindowBoundsForClientBounds(
         const gfx::Rect& client_bounds) const override {
       return client_bounds;
@@ -996,8 +1010,18 @@ void XenonWebDialog::SetHostedContentVisible(views::Widget* widget,
   }
 }
 
+bool XenonWebDialog::SetHostedMinimumSize(views::Widget* widget,
+                                          const gfx::Size& minimum_size) {
+  if (!widget || !widget->widget_delegate()) {
+    return false;
+  }
+  auto* view = static_cast<XenonWebDialogView*>(widget->widget_delegate());
+  view->SetHostedMinimumSize(minimum_size);
+  return true;
+}
+
 bool XenonWebDialog::SetHostedContentBackgroundColor(views::Widget* widget,
-                                                   SkColor color) {
+                                                     SkColor color) {
   if (!widget) {
     return false;
   }

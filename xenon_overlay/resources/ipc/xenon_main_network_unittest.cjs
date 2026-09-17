@@ -5,6 +5,7 @@ const {readBootstrapPart} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
 const {EventEmitter} = require('node:events');
 const http = require('node:http');
+const netModule = require('node:net');
 const test = require('node:test');
 const vm = require('node:vm');
 const zlib = require('node:zlib');
@@ -13,7 +14,7 @@ const source = readBootstrapPart('main/http.js');
 // installing the production native-host instance in the test VM.
 const factoryEnd = source.indexOf('  const mainNetwork = createMainNetwork(');
 assert.ok(factoryEnd > 0, 'The native-host installation boundary must exist');
-const factory = source.slice(0, factoryEnd);
+const factory = readBootstrapPart('common/http_server.js') + source.slice(0, factoryEnd);
 
 async function fixture(t) {
   let pendingId = 1, cancellations = 0;
@@ -37,7 +38,7 @@ async function fixture(t) {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
-  const context = vm.createContext({Buffer, URL, URLSearchParams, EventEmitter,
+  const context = vm.createContext({Buffer, URL, URLSearchParams, EventEmitter, netModule,
     queueMicrotask, setTimeout, clearTimeout,
     nativeRequest(request) {
       const id = pendingId++;

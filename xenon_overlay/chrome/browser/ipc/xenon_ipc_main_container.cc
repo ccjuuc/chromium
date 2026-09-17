@@ -429,6 +429,12 @@ void XenonIpcMainContainer::SetAppExitHandler(
   app_exit_handler_ = std::move(handler);
 }
 
+void XenonIpcMainContainer::SetChildProcessCaller(
+    base::RepeatingCallback<base::Value(const base::DictValue&)> caller) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  child_process_caller_ = std::move(caller);
+}
+
 void XenonIpcMainContainer::SetNetPipeSender(
     base::RepeatingCallback<void(const std::string&, base::Value)> sender) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -698,6 +704,8 @@ bool XenonIpcMainContainer::InitializeInternal(
     bind_func("__xenonSendToRenderer",
               &XenonIpcMainContainer::NativeSendToRenderer);
     bind_func("__xenonNetSend", &XenonIpcMainContainer::NativeNetSend);
+    bind_func("__xenonChildProcessCall",
+              &XenonIpcMainContainer::NativeChildProcessCall);
     bind_func("__xenonFsCall", &XenonIpcMainContainer::NativeFsCall);
     bind_func("__xenonFsCallAsync", &XenonIpcMainContainer::NativeFsCallAsync);
     bind_func("__xenonCryptoCipher",
@@ -2562,6 +2570,25 @@ void XenonIpcMainContainer::NativeNetSend(gin::Arguments* args) {
     return;
   }
   net_pipe_sender_.Run(channel, std::move(payload));
+}
+
+void XenonIpcMainContainer::NativeChildProcessCall(gin::Arguments* args) {
+  base::Value request;
+  std::string error;
+  v8::Local<v8::Value> value = args->PeekNext();
+  if (value.IsEmpty() || !V8ToValue(value, &request, &error) ||
+      !request.is_dict()) {
+    args->ThrowTypeError("childProcessCall expects a request object");
+    return;
+  }
+  if (!child_process_caller_) {
+    args->ThrowTypeError("Native child process transport is unavailable");
+    return;
+  }
+  v8::Local<v8::Value> result;
+  if (ValueToV8(child_process_caller_.Run(request.GetDict())).ToLocal(&result)) {
+    args->Return(result);
+  }
 }
 
 void XenonIpcMainContainer::NativeSendToRenderer(gin::Arguments* args) {

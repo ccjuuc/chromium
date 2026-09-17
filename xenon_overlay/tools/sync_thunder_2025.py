@@ -8,7 +8,8 @@ Example:
   python xenon_overlay/tools/sync_thunder_2025.py \\
       --src F:/thunder_2025/app/dist \\
       --out out/Release_64 \\
-      --player-sdk F:/thunder_2025/bin/Release
+      --player-sdk F:/thunder_2025/bin/Release \\
+      --plugins-dir F:/thunder_2025/Submodule/thunder_2025_bin/ProductRelease/resources/app/plugins
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 
 def copy_tree(src: Path, dst: Path, *, include_maps: bool) -> tuple[int, int]:
@@ -55,6 +56,50 @@ def find_packaged_native(root: Path, name: str) -> Path | None:
     return None
 
 
+def select_plugins_dir(src: Path, player_sdk: Path | None,
+                       explicit: Path | None) -> Path:
+    """Select one complete plugin release; never combine different versions."""
+    if explicit is not None:
+        return explicit.resolve()
+    candidates = []
+    if player_sdk is not None:
+        candidates.append(player_sdk / 'resources' / 'app' / 'plugins')
+    candidates.extend(src.parent.parent / 'bin' / variant / 'resources' /
+                      'app' / 'plugins' for variant in ('Release', 'release'))
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate.resolve()
+    raise ValueError('plugin directory not found; specify --plugins-dir')
+
+
+def validate_plugins_dir(plugins_dir: Path) -> None:
+    """Check the Windows PluginLoader entry paths before replacing a runtime.
+
+    Plugin names, rather than their version metadata, determine the entry:
+    <name>/index.js first, then <name without .asar>.asar/index.js. Archive
+    existence is checked here; archive parsing happens during normalization.
+    """
+    config_path = plugins_dir / 'config.json'
+    try:
+        config = json.loads(config_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError) as error:
+        raise ValueError(f'cannot read plugin config {config_path}: {error}') from error
+    if not isinstance(config, dict):
+        raise ValueError(f'plugin config must be an object: {config_path}')
+    missing = []
+    for name in config:
+        relative = Path(name.replace('\\', '/'))
+        if (not name or PureWindowsPath(name).drive or relative.is_absolute() or
+                '..' in relative.parts):
+            raise ValueError(f'invalid plugin entry {name!r} in {config_path}')
+        entry = plugins_dir / relative / 'index.js'
+        archive = plugins_dir / (name.replace('\\', '/').replace('.asar', '', 1) + '.asar')
+        if not entry.is_file() and not archive.is_file():
+            missing.append(f'{name}: expected {entry} or {archive}')
+    if missing:
+        raise ValueError('plugin release is incomplete:\n  ' + '\n  '.join(missing))
+
+
 def normalize_plugin_asars(plugins_dir: Path, app_root: Path) -> int:
     """Convert vendor ASAR variants to the standard Electron ASAR format.
 
@@ -79,11 +124,22 @@ def normalize_plugin_asars(plugins_dir: Path, app_root: Path) -> int:
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const {loadAsar} = require(process.argv[1]);
 const archives = JSON.parse(process.argv[2]);
-const standard = loadAsar('standard');
-let security;
+const report = console.log.bind(console);
+const reportError = console.error.bind(console);
+// Vendor readers log encryption details while loading and decoding. This is
+// a dedicated build subprocess: emit only our conversion result or failure.
+for (const method of ['log', 'info', 'debug', 'warn', 'error']) console[method] = () => {};
+const patternFor = names => {
+  // ASAR's unpack option is a glob; quote literal path metacharacters.
+  const patterns = names.map(name => name.split(path.sep).join('/')
+      .replace(/[?*\[\]{}()!+@,]/g, char => `[${char}]`));
+  return patterns.length > 1 ? `{${patterns.join(',')}}` : patterns[0];
+};
 (async () => {
+  const {loadAsar} = require(process.argv[1]);
+  const standard = loadAsar('standard');
+  let security;
   for (const archive of archives) {
     try {
       standard.listPackage(archive);
@@ -95,22 +151,37 @@ let security;
       const extracted = path.join(temp, 'extracted');
       const repacked = path.join(temp, 'standard.asar');
       fs.mkdirSync(extracted);
-      const originalLog = console.log;
-      console.log = () => {};
-      try {
-        security.extractAll(archive, extracted);
-      } finally {
-        console.log = originalLog;
+      const entries = security.listPackage(archive).map(name => {
+        const relative = name.slice(1);
+        return {relative, info: security.statFile(archive, relative, false)};
+      });
+      security.extractAll(archive, extracted);
+      const unpacked = entries.filter(entry => entry.info.unpacked);
+      await standard.createPackageWithOptions(extracted, repacked, {
+        unpack: patternFor(unpacked.filter(entry => !entry.info.files)
+            .map(entry => path.join(extracted, entry.relative))),
+        unpackDir: patternFor(unpacked.filter(entry => entry.info.files)
+            .map(entry => entry.relative)),
+      });
+      for (const {relative, info} of entries) {
+        const actual = standard.statFile(repacked, relative, false);
+        if (Boolean(actual.unpacked) !== Boolean(info.unpacked)) {
+          throw new Error(`ASAR unpacked state changed: ${archive}/${relative}`);
+        }
       }
-      await standard.createPackage(extracted, repacked);
+      // Merge, never replace: some releases also ship companion files that
+      // are absent from the archive header (for example a helper executable).
+      if (fs.existsSync(`${repacked}.unpacked`)) {
+        fs.cpSync(`${repacked}.unpacked`, `${archive}.unpacked`, {recursive: true});
+      }
       fs.copyFileSync(repacked, archive);
-      originalLog(`plugin ASAR normalized: ${archive}`);
+      report(`plugin ASAR normalized: ${archive}`);
     } finally {
       fs.rmSync(temp, {recursive: true, force: true});
     }
   }
 })().catch(error => {
-  console.error(error && error.stack || error);
+  reportError(error && error.stack || error);
   process.exitCode = 1;
 });
 """
@@ -143,6 +214,11 @@ def main() -> int:
         '--player-sdk',
         type=Path,
         help='player SDK directory for Thunder (e.g. F:/thunder_2025/bin/Release)')
+    parser.add_argument(
+        '--plugins-dir',
+        type=Path,
+        help='complete plugin release directory containing config.json; '
+             'overrides the player SDK plugin directory')
     args = parser.parse_args()
     args.src = args.src.resolve()
     args.out = args.out.resolve()
@@ -171,6 +247,19 @@ def main() -> int:
     runtime_dst = args.out / 'thunder_2025'
     app_dst = runtime_dst / 'resources' / 'app'
     main_dst = app_dst / 'out'
+
+    # Reject missing plugin payloads before deleting even legacy outputs.
+    # An explicit source must also survive the subsequent runtime replacement.
+    try:
+        plugins_src = select_plugins_dir(args.src, args.player_sdk, args.plugins_dir)
+        validate_plugins_dir(plugins_src)
+        for removed in (runtime_dst, args.out / 'thunder_2025_main',
+                        args.out / 'thunder_2025_frontend'):
+            if plugins_src.is_relative_to(removed):
+                raise ValueError(f'plugin source would be removed by sync: {plugins_src}')
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
 
     # The old layout mirrored the same payload into main, frontend and ASAR
     # trees. Remove only those legacy sync outputs; other build artifacts in
@@ -302,33 +391,12 @@ def main() -> int:
         json.dumps(package, ensure_ascii=False, separators=(',', ':')) + '\n',
         encoding='utf-8')
 
-    # Copy built plugins (e.g. player-plugin.asar, thunder-pan-plugin.asar)
-    plugin_src_dirs = []
-    if args.player_sdk:
-        plugin_src_dirs.append(
-            args.player_sdk / 'resources' / 'app' / 'plugins')
-    plugin_src_dirs.extend([
-        args.src.parent.parent / 'bin' / 'Release' / 'resources' / 'app' /
-        'plugins',
-        args.src.parent.parent / 'bin' / 'release' / 'resources' / 'app' /
-        'plugins',
-    ])
-    for p_dir in plugin_src_dirs:
-        if p_dir.is_dir():
-            plugins_dst = app_dst / 'plugins'
-            plugins_dst.mkdir(parents=True, exist_ok=True)
-            for item in p_dir.iterdir():
-                if item.is_file():
-                    shutil.copy2(item, plugins_dst / item.name)
-                elif item.is_dir():
-                    copy_tree(
-                        item,
-                        plugins_dst / item.name,
-                        include_maps=args.include_maps)
-            print(f'plugins: copied from {p_dir} to {plugins_dst}')
-            if normalize_plugin_asars(plugins_dst, args.src.parent) < 0:
-                return 1
-            break
+    # Copy the complete release selected and checked before runtime deletion.
+    plugins_dst = app_dst / 'plugins'
+    copy_tree(plugins_src, plugins_dst, include_maps=args.include_maps)
+    print(f'plugins: copied from {plugins_src} to {plugins_dst}')
+    if normalize_plugin_asars(plugins_dst, args.src.parent) < 0:
+        return 1
 
     if not args.skip_asar:
         node = shutil.which('node')

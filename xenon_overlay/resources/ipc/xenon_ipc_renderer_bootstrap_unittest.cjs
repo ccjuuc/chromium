@@ -565,6 +565,7 @@ test('ipcRenderer forwards async, sync, invoke and postMessage values unchanged'
 test('ipcRenderer events expose Electron event shape and EventEmitter semantics', () => {
   const {context, dispatch} = createRenderer();
   const ipcRenderer = context.require('electron').ipcRenderer;
+  const initialEventNames = Array.from(ipcRenderer.eventNames());
   const order = [];
   function repeated() { order.push('repeated'); }
   function once() { order.push('once'); }
@@ -595,7 +596,7 @@ test('ipcRenderer events expose Electron event shape and EventEmitter semantics'
       /unhandled/);
   ipcRenderer.setMaxListeners(0);
   assert.equal(ipcRenderer.getMaxListeners(), 0);
-  assert.deepEqual(Array.from(ipcRenderer.eventNames()), ['fixture']);
+  assert.deepEqual(Array.from(ipcRenderer.eventNames()), [...initialEventNames, 'fixture']);
 });
 
 test('executable identity is document-scoped and is not renamed to the app name', () => {
@@ -1300,7 +1301,7 @@ test('builtins use exact names and stable identities without substituting unsupp
   assert.notEqual(context.require('http2'), context.require('http'));
   assert.throws(() => context.require('http2').connect('https://localhost'),
                 {code: 'ERR_NOT_SUPPORTED'});
-  assert.throws(() => context.require('child_process').spawn('unavailable.exe'),
+  assert.throws(() => context.require('child_process').spawnSync('unavailable.exe'),
                 {code: 'ERR_NOT_SUPPORTED'});
   assert.throws(() => context.require('FS'), {code: 'MODULE_NOT_FOUND'});
   assert.notEqual(context.require('tls'), context.require('net'));

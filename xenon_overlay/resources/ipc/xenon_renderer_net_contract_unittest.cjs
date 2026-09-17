@@ -91,10 +91,9 @@ test('renderer IP classifiers match Node for full, compressed, mapped, zoned and
   }
 });
 
-test('TCP and Unix endpoints report asynchronous unsupported errors without synthetic binds or connects', async () => {
+test('Unix endpoints report asynchronous unsupported errors without synthetic binds or connects', async () => {
   for (const platform of ['win32', 'linux']) {
-    for (const endpoint of [0, '8000', {port: null}, {port: undefined},
-      {port: 8000, host: 'localhost'}, {port: 80, path: pipePath}, '/tmp/net-fixture.sock',
+    for (const endpoint of ['/tmp/net-fixture.sock',
       {path: '/tmp/net-fixture.sock'}, ...(platform === 'linux' ? [pipePath] : [])]) {
       const {net, sent} = fixture(platform);
       const events = [];
@@ -143,22 +142,18 @@ test('invalid endpoints throw before allocating native resources', () => {
   assert.deepEqual(sent, []);
 });
 
-test('listen without an endpoint or with only a callback reports unsupported ephemeral TCP', async () => {
-  const {net, sent} = fixture();
-  let errors = 0;
-  for (const args of [[], [null], [() => assert.fail('unsupported listen callback')]]) {
-    const server = net.createServer();
-    server.on('error', error => {
-      assert.equal(error.code, 'ERR_NOT_SUPPORTED');
-      assert.equal(error.port, 0);
-      ++errors;
-    });
-    server.listen(...args);
-  }
-  assert.equal(errors, 0);
-  await settle();
-  assert.equal(errors, 3);
-  assert.deepEqual(sent, []);
+test('ephemeral TCP listen waits for a native bind and publishes its real address', () => {
+  const {net, sent, deliver} = fixture();
+  const server = net.createServer().unref().listen();
+  assert.equal(sent[0].channel, '__xenon:net:listen');
+  assert.equal(sent[0].value.port, 0);
+  assert.equal(server.listening, false);
+  assert.equal(server.address(), null);
+  const address = {address: '0.0.0.0', port: 41234, family: 'IPv4'};
+  deliver('listening', {serverId: sent[0].value.serverId, address});
+  assert.equal(server.listening, true);
+  assert.deepEqual(server.address(), address);
+  server.close();
 });
 
 test('native binding owns listening/address state and failed duplicate binds preserve the first server', () => {

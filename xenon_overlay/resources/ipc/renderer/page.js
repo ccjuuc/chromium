@@ -1,46 +1,3 @@
-  // Locale identifiers used by application i18n commonly contain underscores
-  // (for example zh_CN), while HTTP Accept-Language requires BCP 47 language
-  // tags (zh-CN). An underscore makes this otherwise CORS-safelisted header
-  // require preflight. Normalize only this standard header at the transport
-  // boundary; request bodies and application response state remain untouched.
-  const normalizeAcceptLanguage = (value) =>
-      String(value == null ? '' : value).replace(/_/g, '-');
-
-  if (typeof globalThis.fetch === 'function' &&
-      typeof Headers === 'function') {
-    const originalFetch = globalThis.fetch.bind(globalThis);
-    const normalizeHeaders = (headers) => {
-      const normalized = new Headers(headers || {});
-      if (normalized.has('accept-language')) {
-        normalized.set(
-            'accept-language',
-            normalizeAcceptLanguage(normalized.get('accept-language')));
-      }
-      return normalized;
-    };
-    globalThis.fetch = (input, init) => {
-      const nextInit = init ? Object.assign({}, init) : {};
-      if (nextInit.headers) {
-        nextInit.headers = normalizeHeaders(nextInit.headers);
-      } else if (typeof Request === 'function' && input instanceof Request) {
-        input = new Request(input, {headers: normalizeHeaders(input.headers)});
-      }
-      return originalFetch(input, nextInit);
-    };
-  }
-
-  if (typeof XMLHttpRequest === 'function' && XMLHttpRequest.prototype &&
-      typeof XMLHttpRequest.prototype.setRequestHeader === 'function') {
-    const originalSetRequestHeader =
-        XMLHttpRequest.prototype.setRequestHeader;
-    XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
-      if (String(name).toLowerCase() === 'accept-language') {
-        value = normalizeAcceptLanguage(value);
-      }
-      return originalSetRequestHeader.call(this, name, value);
-    };
-  }
-
   if (typeof window !== 'undefined') {
     window.Buffer = Buffer;
     window.process = globalThis.process;
@@ -98,7 +55,10 @@
         el.dispatchEvent(event);
       };
       const preferences = () => {
-        const prefs = {contextIsolation: true, sandbox: true};
+        // Explicit webpreferences override the attribute's default, matching
+        // Electron's guest-view preference merge order.
+        const prefs = {contextIsolation: true, sandbox: true,
+          webSecurity: !el.hasAttribute('disablewebsecurity')};
         for (const item of (el.getAttribute('webpreferences') || '').split(',')) {
           const [key, raw] = item.trim().split('=');
           if (!key) continue;
@@ -146,6 +106,22 @@
         set: value => el.setAttribute('src', String(value || '')),
         configurable: true,
       });
+      // Electron exposes webview attributes as reflected DOM properties too.
+      // Programmatic consumers set these before attaching the element.
+      for (const name of ['webpreferences', 'preload', 'useragent', 'partition']) {
+        Object.defineProperty(el, name, {
+          get: () => el.getAttribute(name) || '',
+          set: value => el.setAttribute(name, String(value ?? '')),
+          configurable: true,
+        });
+      }
+      for (const name of ['nodeintegration', 'nodeintegrationinsubframes', 'allowpopups', 'disablewebsecurity']) {
+        Object.defineProperty(el, name, {
+          get: () => el.hasAttribute(name),
+          set: value => { if (value) el.setAttribute(name, ''); else el.removeAttribute(name); },
+          configurable: true,
+        });
+      }
       const observer = new MutationObserver(mutations => {
         for (const mutation of mutations) {
           if (el._guestId && mutation.attributeName === 'src') {

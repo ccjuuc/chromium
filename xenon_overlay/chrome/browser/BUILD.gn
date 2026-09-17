@@ -521,8 +521,12 @@ test("ipc_main_container_unittests") {
   testonly = true
   configs += [ "//v8:external_startup_data" ]
   sources = [
+    "../../services/xenon_child_process_bridge.cc",
+    "../../services/xenon_child_process_bridge.h",
+    "../../services/xenon_child_process_bridge_unittest.cc",
     "../../services/xenon_net_pipe_bridge.cc",
     "../../services/xenon_net_pipe_bridge.h",
+    "../../services/xenon_net_pipe_bridge_unittest.cc",
     "../../services/xenon_node_executor.cc",
     "../../services/xenon_node_executor.h",
     "../../services/xenon_node_executor_unittest.cc",

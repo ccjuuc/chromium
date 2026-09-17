@@ -120,6 +120,9 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   static bool SetHostedContentTitle(views::Widget* widget,
                                     const std::u16string& title);
   static void SetHostedContentVisible(views::Widget* widget, bool visible);
+  // Native client-size constraints, in DIP. The host converts window bounds.
+  static bool SetHostedMinimumSize(views::Widget* widget,
+                                  const gfx::Size& minimum_size);
   // Hosted Electron windows delegate cancellable close requests to ipcMain.
   // Other WebDialogs retain their ordinary native/DOM close behavior.
   static void SetHostedCloseRequestHandler(

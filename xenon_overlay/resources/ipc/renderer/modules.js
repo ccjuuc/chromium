@@ -1,4 +1,5 @@
   let hostedCjsLoadingFile = '';
+  let rendererHttpServerModule;
 
   function moduleError(code, message) {
     return Object.assign(new Error(message), {code});
@@ -518,6 +519,7 @@
     // https.request hangs forever.
     if (norm === 'http' || norm === 'node:http' || norm === 'https' ||
         norm === 'node:https') {
+      const serverModule = rendererHttpServerModule ||= createHttpServerModule(netModule);
       const buildRequestUrl = (opt) => {
         if (typeof opt === 'string') {
           return opt;
@@ -546,6 +548,7 @@
         const cancelPendingRequest = () => {
           aborted = true;
           bodyChunks.length = 0;
+          if (req.res) req.res._abort();
           if (timeoutId !== null) {
             clearTimeout(timeoutId);
             timeoutId = null;
@@ -667,26 +670,30 @@
               }
               const responseBody = Buffer.from(
                   String(response && response.bodyBase64 || ''), 'base64');
-              const incoming = new EventEmitter();
+              const incoming = new serverModule.IncomingMessage();
+              // Preserve the buffered client's existing automatic delivery;
+              // an explicit pause in the response handler still takes effect.
+              incoming._flow = true;
               incoming.statusCode = Number(response && response.statusCode) || 0;
               incoming.statusMessage =
                   String(response && response.statusMessage || '');
               incoming.headers = Object.assign({}, response && response.headers);
               incoming.url = String(response && response.finalUrl || '');
-              let responseEncoding = null;
               incoming.setEncoding = (encoding) => {
-                responseEncoding = String(encoding || 'utf8');
+                // Client responses arrive as one complete native buffer, so
+                // they do not need the server request's streaming decoder.
+                incoming._encoding = String(encoding || 'utf8');
                 return incoming;
               };
+              req.res = incoming;
               req.emit('response', incoming);
               queueMicrotask(() => {
-                if (aborted) return;
+                if (aborted || incoming.destroyed) return;
                 if (responseBody.length) {
-                  incoming.emit('data', responseEncoding ?
-                      responseBody.toString(responseEncoding) : responseBody);
+                  incoming._push(responseBody);
                 }
-                if (aborted) return;
-                incoming.emit('end');
+                if (aborted || incoming.destroyed) return;
+                incoming._finish();
               });
             } catch (error) {
               if (timeoutId) {
@@ -705,16 +712,16 @@
       };
 
       return {
+        ...(norm.replace(/^node:/, '') === 'http' ? serverModule : {}),
         request: (opt, cb) => createClientRequest(opt, cb),
         get: (url, cb) => {
           const req = createClientRequest(url, cb);
           req.end();
           return req;
         },
-        createServer: () => {
-          throw moduleError('ERR_NOT_SUPPORTED',
-              `${norm.replace(/^node:/, '')}.createServer is not supported by this runtime`);
-        },
+        ...(norm.replace(/^node:/, '') === 'https' ? {createServer: () => {
+          throw moduleError('ERR_NOT_SUPPORTED', 'https.createServer is not supported by this runtime');
+        }} : {}),
         Agent: class {},
       };
     }

@@ -251,7 +251,7 @@ test('renderer HTTP uses its working native boundary independently of stream bas
       [0, 255, 128, 65]);
 });
 
-test('main HTTP and HTTPS propagate native failures and reject unavailable servers', async () => {
+test('main HTTP and HTTPS propagate native failures; TLS servers stay unsupported', async () => {
   const {context} = createRuntime('main');
   context.__xenonHttpRequest = () => ({id: 1, promise: Promise.reject(
       Object.assign(new Error('native connection failed'), {code: 'ECONNREFUSED'}))});
@@ -259,7 +259,8 @@ test('main HTTP and HTTPS propagate native failures and reject unavailable serve
   let callbacks = 0;
   for (const [http, protocol] of [[context.__xenonHttp, 'http:'], [context.__xenonHttps, 'https:']]) {
     assert.equal(typeof http.Agent, 'function');
-    assert.throws(() => http.createServer(), {code: 'ERR_NOT_SUPPORTED'});
+    if (protocol === 'https:') assert.throws(() => http.createServer(), {code: 'ERR_NOT_SUPPORTED'});
+    else assert.equal(http.createServer().listening, false);
     for (const method of ['request', 'get']) {
       await new Promise(resolve => {
         const request = http[method](protocol + '//fixture.invalid', () => ++callbacks);

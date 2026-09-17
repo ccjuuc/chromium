@@ -11,9 +11,13 @@ const {promisify} = require('node:util');
 const vm = require('node:vm');
 
 function loadModules(side) {
-  const source = ['events', 'child_process', 'http2']
-      .map(name => readBootstrapPart(`${side}/${name}.js`)).join('\n');
-  const context = vm.createContext({queueMicrotask});
+  const source = [readBootstrapPart(`${side}/events.js`),
+    readBootstrapPart('common/child_process.js'),
+    readBootstrapPart(`${side}/child_process.js`),
+    readBootstrapPart(`${side}/http2.js`)].join('\n');
+  const context = vm.createContext({queueMicrotask, Buffer,
+    streamModule: require('node:stream'), currentAsyncContext: undefined,
+    transport: {sendSync() {}}, ipcMain: {on() {}}, ipcRenderer: {on() {}}});
   vm.runInContext(source +
       '\nglobalThis.modules = {childProcessModule, http2Module};', context);
   return context.modules;
@@ -28,8 +32,9 @@ for (const side of ['main', 'renderer']) {
                           'execFileSync', 'fork', '_forkChild']) {
       assert.equal(typeof cp[method], 'function');
       assert.throws(() => cp[method]('unavailable.exe'), {code: 'ERR_NOT_SUPPORTED'});
-      assert.throws(() => cp[method]('unavailable.exe', () => ++callbacks),
-                    {code: 'ERR_NOT_SUPPORTED'});
+      if (method !== 'spawn')
+        assert.throws(() => cp[method]('unavailable.exe', () => ++callbacks),
+                      {code: 'ERR_NOT_SUPPORTED'});
     }
     assert.throws(() => new cp.ChildProcess(), {code: 'ERR_NOT_SUPPORTED'});
     await Promise.resolve();

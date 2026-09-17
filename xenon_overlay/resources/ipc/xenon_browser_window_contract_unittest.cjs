@@ -57,6 +57,34 @@ test('BrowserWindow preserves missing properties and resolves as an ordinary obj
   assert.equal(BrowserWindow.fromId(window.id), window);
 });
 
+test('WebContents queries the OS process through its native owner', () => {
+  const {BrowserWindow, calls} = createRuntime((id, command) =>
+      command === 'get-os-process-id' ? 4000 + id : null);
+  const window = new BrowserWindow();
+  assert.equal(window.webContents.getOSProcessId(), 4000 + window.id);
+  assert.equal(calls.at(-1).id, window.id);
+  assert.equal(calls.at(-1).command, 'get-os-process-id');
+});
+
+test('failed BrowserWindow initialization releases native and JS resources', () => {
+  for (const failedCommand of ['set-web-preferences', 'set-minimum-size']) {
+    const failure = new Error('native initialization failed');
+    const {BrowserWindow, calls, context} = createRuntime((id, command) => {
+      if (command === failedCommand) throw failure;
+      return null;
+    });
+    let allClosed = 0;
+    context.__xenonElectron.app.on('window-all-closed', () => ++allClosed);
+    assert.throws(() => new BrowserWindow({minWidth: 300, minHeight: 200}),
+      error => error === failure);
+    const created = calls.find(call => call.command === 'create');
+    assert.equal(calls.filter(call => call.command === 'close' && call.id === created.id).length, 1);
+    assert.equal(BrowserWindow.getAllWindows().length, 0);
+    assert.equal(context.__xenonElectron.webContents.getAllWebContents().length, 0);
+    assert.equal(allClosed, 0);
+  }
+});
+
 test('BrowserWindow parenting validates cycles and only commits successful native changes', () => {
   const {BrowserWindow, calls, context} = createRuntime((id, command, details) => {
     if (command === 'set-parent-window' && details.parentId === 3) {
@@ -161,6 +189,96 @@ test('BrowserWindow applies the requested background before loading its page', a
   assert.equal(relevant.every(call => call.id === window.id), true);
   assert.deepEqual(relevant[1].details, {color: '#202020'});
   assert.equal(window.getBackgroundColor(), '#202020');
+});
+
+test('BrowserWindow applies web preferences to its native owner before navigation', async () => {
+  const {BrowserWindow, calls} = createRuntime();
+  const window = new BrowserWindow({webPreferences: {webSecurity: false}});
+  await window.loadURL('https://fixture.invalid/');
+  const relevant = calls.filter(call =>
+    ['create', 'set-web-preferences', 'load-url'].includes(call.command));
+  assert.deepEqual(relevant.map(call => call.command),
+      ['create', 'set-web-preferences', 'load-url']);
+  assert.equal(relevant.every(call => call.id === window.id), true);
+  assert.deepEqual(relevant[1].details,
+      {contextIsolation: true, nodeIntegration: false, webSecurity: false});
+
+  const defaultWindow = new BrowserWindow();
+  const defaults = calls.find(call =>
+    call.id === defaultWindow.id && call.command === 'set-web-preferences');
+  assert.equal(defaults.details.webSecurity, undefined);
+});
+
+test('BrowserWindow establishes constructor minimum dimensions before navigation', async () => {
+  const {BrowserWindow, calls} = createRuntime();
+  const window = new BrowserWindow({width: 320, height: 200,
+    minWidth: 480, minHeight: 300, show: false});
+  await window.loadURL('https://fixture.invalid/');
+  const relevant = calls.filter(call =>
+    ['create', 'set-minimum-size', 'load-url'].includes(call.command));
+  assert.deepEqual(relevant.map(call => call.command),
+      ['create', 'set-minimum-size', 'load-url']);
+  assert.deepEqual(relevant[1].details, {width: 480, height: 300});
+  // Installing a constraint does not itself resize an existing window.
+  assert.deepEqual(Array.from(window.getSize()), [320, 200]);
+  assert.deepEqual(Array.from(window.getMinimumSize()), [480, 300]);
+
+  const oneAxis = new BrowserWindow({minHeight: 240});
+  assert.deepEqual(Array.from(oneAxis.getMinimumSize()), [0, 240]);
+  const invalid = new BrowserWindow({minWidth: '480', minHeight: 20.5});
+  assert.deepEqual(Array.from(invalid.getMinimumSize()), [0, 0]);
+});
+
+test('BrowserWindow minimum size queries and programmatic resize use native results', () => {
+  let minimum = {width: 0, height: 0};
+  let bounds = {x: 10, y: 20, width: 640, height: 480};
+  const {BrowserWindow} = createRuntime((id, command, details) => {
+    if (command === 'get-bounds') return {...bounds};
+    if (command === 'set-minimum-size') {
+      if (details.width || details.height) minimum = {...details};
+      return {...minimum};
+    }
+    if (command === 'get-minimum-size') return {...minimum};
+    if (command === 'set-bounds') {
+      bounds = {...bounds, ...details};
+      bounds.width = Math.max(bounds.width, minimum.width);
+      bounds.height = Math.max(bounds.height, minimum.height);
+      return {...bounds};
+    }
+    return null;
+  });
+  const window = new BrowserWindow({minWidth: 480, minHeight: 320});
+  window.setSize(100, 100);
+  assert.deepEqual(Array.from(window.getSize()), [480, 320]);
+  window.setMinimumSize(700, 500);
+  assert.deepEqual(Array.from(window.getSize()), [480, 320]);
+  window.setBounds({width: 200, height: 150});
+  assert.deepEqual(Array.from(window.getSize()), [700, 500]);
+  window.setMinimumSize(0, 0);
+  assert.deepEqual(Array.from(window.getMinimumSize()), [700, 500]);
+  minimum = {width: 200, height: 100};
+  assert.deepEqual(Array.from(window.getMinimumSize()), [200, 100]);
+  window.setMinimumSize(-1, 80);
+  assert.deepEqual(Array.from(window.getMinimumSize()), [0, 80]);
+});
+
+test('BrowserWindow rejects invalid minimum sizes before IPC and retains state on native failure', () => {
+  let fail = false;
+  const {BrowserWindow, calls} = createRuntime((id, command) => {
+    if (fail && command === 'set-minimum-size') throw new Error('native failure');
+    return null;
+  });
+  const window = new BrowserWindow({minWidth: 300, minHeight: 200});
+  const before = calls.length;
+  for (const value of [undefined, null, '500', 1.5, NaN, Infinity,
+                       2147483648, -2147483649]) {
+    assert.throws(() => window.setMinimumSize(value, 200), /32-bit integers/);
+    assert.throws(() => window.setMinimumSize(300, value), /32-bit integers/);
+  }
+  assert.equal(calls.length, before);
+  fail = true;
+  assert.throws(() => window.setMinimumSize(500, 400), /native failure/);
+  assert.deepEqual(Array.from(window.getMinimumSize()), [300, 200]);
 });
 
 test('BrowserWindow preserves default and transparent creation without an explicit color', () => {
@@ -551,6 +669,32 @@ test('native closed completion never sends another close and duplicate requests 
   }
   assert.deepEqual(events, ['closed', 'window-all-closed']);
   assert.equal(calls.some(call => call.command === 'close'), false);
+});
+
+test('destroyed windows ignore queued native events while live windows still receive them', () => {
+  const {BrowserWindow, context, calls} = createRuntime();
+  const window = new BrowserWindow();
+  const live = new BrowserWindow();
+  const events = [];
+  for (const name of ['hide', 'blur', 'resize', 'focus', 'page-title-updated']) {
+    window.on(name, () => {
+      events.push(name);
+      window.focus();
+    });
+  }
+  live.on('blur', () => events.push('live-blur'));
+  window.destroy();
+  const nativeCalls = calls.length;
+  for (const name of ['hide', 'blur', 'focus', 'close-requested', 'closed'])
+    context.__xenonDispatchBrowserWindowEvent(window.id, name);
+  context.__xenonDispatchBrowserWindowEvent(window.id, 'bounds-changed',
+      {x: 0, y: 0, width: 320, height: 240});
+  context.__xenonDispatchBrowserWindowEvent(window.id, 'web-contents-page-title-updated',
+      {title: 'late title', explicitSet: true});
+  assert.deepEqual(events, []);
+  assert.equal(calls.length, nativeCalls);
+  context.__xenonDispatchBrowserWindowEvent(live.id, 'blur');
+  assert.deepEqual(events, ['live-blur']);
 });
 
 test('application activation waits for ready listeners and whenReady then preserves late events', async () => {

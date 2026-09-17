@@ -5,6 +5,8 @@ source_set("xenon_service") {
   sources = [
     "../chrome/browser/ipc/xenon_ipc_main_container.cc",
     "../chrome/browser/ipc/xenon_ipc_main_container.h",
+    "xenon_child_process_bridge.cc",
+    "xenon_child_process_bridge.h",
     "xenon_net_pipe_bridge.cc",
     "xenon_net_pipe_bridge.h",
     "xenon_node_executor.cc",

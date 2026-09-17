@@ -168,6 +168,12 @@
     get processId() { return getMainEndpoint(this)?.processId || 0; }
     get frameId() { return getMainEndpoint(this)?.frameId || 0; }
     getProcessId() { return this.processId; }
+    getOSProcessId() {
+      if (this.isDestroyed()) throw new Error('Object has been destroyed');
+      const id = this._guest?.nativeId ?? this._owner?.id;
+      if (id === undefined) throw new Error('WebContents has no native owner');
+      return callBrowserWindow({id}, 'get-os-process-id');
+    }
     getOwnerBrowserWindow() { return this._owner; }
     getLastWebPreferences() {
       return this._guest ? {...this._guest.preferences} :
@@ -438,52 +444,76 @@
                   title,
                 });
       this.id = created.id;
-      this._hwnd = created.hwnd || '0';
-      this._parent = options.parent || null;
-      this.webContents = new WebContents(this);
-      this._visible = options.show !== false;
-      this._minimized = false;
-      this._maximized = false;
-      this._fullscreen = false;
-      this._destroyed = false;
-      this._resizable = options.resizable !== false;
-      this._movable = options.movable !== false;
-      this._maximizable = options.maximizable !== false;
-      this._minimizable = options.minimizable !== false;
-      this._closable = options.closable !== false;
-      this._focusable = options.focusable !== false;
-      this._enabled = true;
-      this._opacity = 1;
-      this._hasShadow = options.hasShadow !== false;
-      this._bounds = {
-        x: options.x != null ? Number(options.x) : 0,
-        y: options.y != null ? Number(options.y) : 0,
-        width: Number(options.width) || 800,
-        height: Number(options.height) || 600,
-      };
-      this._minSize = {width: 0, height: 0};
-      this._maxSize = {width: 0, height: 0};
-      this._title = title;
-      this._backgroundColor = '#000000';
-      if (options.backgroundColor !== undefined) {
-        this.setBackgroundColor(options.backgroundColor);
-      }
-      this._windowMessageHooks = new Map();
-      if (options.alwaysOnTop) {
-        this.setAlwaysOnTop(true);
-      }
-      // Electron: omit x/y → center; `center: true` also centers. Child windows
-      // with a parent keep the host-synced parent bounds unless positioned.
-      if (options.x != null || options.y != null) {
-        const actual = callBrowserWindow(this, 'set-bounds', this._bounds);
-        if (actual && typeof actual === 'object') this._bounds = actual;
-      } else if (options.center === true || !this._parent) {
-        callBrowserWindow(this, 'center');
-        const actual = callBrowserWindow(this, 'get-bounds');
-        if (actual && typeof actual === 'object') this._bounds = actual;
-      } else {
-        const actual = callBrowserWindow(this, 'get-bounds');
-        if (actual && typeof actual === 'object') this._bounds = actual;
+      try {
+        callBrowserWindow(this, 'set-web-preferences', this._webPreferences);
+        this._hwnd = created.hwnd || '0';
+        this._parent = options.parent || null;
+        this.webContents = new WebContents(this);
+        this._visible = options.show !== false;
+        this._minimized = false;
+        this._maximized = false;
+        this._fullscreen = false;
+        this._destroyed = false;
+        this._resizable = options.resizable !== false;
+        this._movable = options.movable !== false;
+        this._maximizable = options.maximizable !== false;
+        this._minimizable = options.minimizable !== false;
+        this._closable = options.closable !== false;
+        this._focusable = options.focusable !== false;
+        this._enabled = true;
+        this._opacity = 1;
+        this._hasShadow = options.hasShadow !== false;
+        this._bounds = {
+          x: options.x != null ? Number(options.x) : 0,
+          y: options.y != null ? Number(options.y) : 0,
+          width: Number(options.width) || 800,
+          height: Number(options.height) || 600,
+        };
+        this._minSize = {width: 0, height: 0};
+        this._maxSize = {width: 0, height: 0};
+        // Electron's constructor ignores values that cannot be converted to int.
+        const minimumDimension = value => Number.isInteger(value) &&
+            value >= -2147483648 && value <= 2147483647 ? Math.max(0, value) : 0;
+        const minWidth = minimumDimension(options.minWidth);
+        const minHeight = minimumDimension(options.minHeight);
+        if (minWidth || minHeight) this.setMinimumSize(minWidth, minHeight);
+        this._title = title;
+        this._backgroundColor = '#000000';
+        if (options.backgroundColor !== undefined) {
+          this.setBackgroundColor(options.backgroundColor);
+        }
+        this._windowMessageHooks = new Map();
+        if (options.alwaysOnTop) {
+          this.setAlwaysOnTop(true);
+        }
+        // Electron: omit x/y → center; `center: true` also centers. Child windows
+        // with a parent keep the host-synced parent bounds unless positioned.
+        if (options.x != null || options.y != null) {
+          const actual = callBrowserWindow(this, 'set-bounds', this._bounds);
+          if (actual && typeof actual === 'object') this._bounds = actual;
+        } else if (options.center === true || !this._parent) {
+          callBrowserWindow(this, 'center');
+          const actual = callBrowserWindow(this, 'get-bounds');
+          if (actual && typeof actual === 'object') this._bounds = actual;
+        } else {
+          const actual = callBrowserWindow(this, 'get-bounds');
+          if (actual && typeof actual === 'object') this._bounds = actual;
+        }
+      } catch (error) {
+        // A failed constructor never enters browserWindows, so ordinary app
+        // lifecycle cleanup cannot find this partially initialized window.
+        this._destroyed = true;
+        try {
+          try {
+            if (this.webContents) destroyWebContents(this.webContents);
+          } finally {
+            if (typeof __xenonCloseBrowserWindow === 'function')
+              __xenonCloseBrowserWindow(this.id);
+          }
+        } catch (cleanupError) {
+          console.error('[xenon-ipc] Failed to release an uninitialized BrowserWindow:', cleanupError);
+        }
+        throw error;
       }
       browserWindows.push(this);
       allBrowserWindowsClosed = false;
@@ -645,9 +675,22 @@
     getPosition() { return [this._bounds.x, this._bounds.y]; }
     center() { callBrowserWindow(this, 'center'); }
     setMinimumSize(width, height) {
-      this._minSize = {width: Number(width) || 0, height: Number(height) || 0};
+      for (const value of [width, height]) {
+        if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647)
+          throw new TypeError('Minimum size dimensions must be 32-bit integers');
+      }
+      const actual = callBrowserWindow(this, 'set-minimum-size', {
+        width: Math.max(0, width), height: Math.max(0, height),
+      });
+      if (actual && typeof actual === 'object') this._minSize = actual;
+      else if (width > 0 || height > 0)
+        this._minSize = {width: Math.max(0, width), height: Math.max(0, height)};
     }
-    getMinimumSize() { return [this._minSize.width, this._minSize.height]; }
+    getMinimumSize() {
+      const actual = callBrowserWindow(this, 'get-minimum-size');
+      if (actual && typeof actual === 'object') this._minSize = actual;
+      return [this._minSize.width, this._minSize.height];
+    }
     setMaximumSize(width, height) {
       this._maxSize = {width: Number(width) || 0, height: Number(height) || 0};
     }
@@ -791,7 +834,9 @@
       return;
     }
     const win = BrowserWindow.fromId(Number(windowId));
-    if (!win) return;
+    // Native notifications already queued before destroy can arrive after the
+    // backing Widget is gone. No application listener may reuse that window.
+    if (!win || win.isDestroyed()) return;
     if (eventName === 'close-requested') {
       win.close();
       return;

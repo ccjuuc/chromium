@@ -105,7 +105,9 @@ TEST_F(XenonIpcModuleLoaderTest, BuiltinObjectsRejectUnavailableOperations) {
     const http2 = require('http2');
     return http2 !== require('http') && http2 !== require('https') &&
         childProcess !== require('net') &&
-        ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork'].every(method =>
+        typeof childProcess.spawn === 'function' &&
+        errorCode(() => childProcess.spawn('fixture', [], {shell: true})) === 'ERR_NOT_SUPPORTED' &&
+        ['spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork'].every(method =>
             typeof childProcess[method] === 'function' &&
             errorCode(() => childProcess[method]('fixture')) === 'ERR_NOT_SUPPORTED') &&
         ['connect', 'createServer', 'createSecureServer'].every(method =>

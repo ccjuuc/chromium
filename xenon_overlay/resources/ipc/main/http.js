@@ -1,4 +1,5 @@
   function createMainNetwork(nativeRequest, nativeAbort) {
+    const serverModule = createHttpServerModule(netModule);
     function error(code, message, name = 'Error') {
       const result = new Error(message); result.code = code; result.name = name; return result;
     }
@@ -210,7 +211,7 @@
         } catch (failure) { fail(networkError(failure)); }
       });
     }
-    class IncomingMessage extends EventEmitter {
+    class IncomingMessage extends serverModule.IncomingMessage {
       constructor(response) {
         super();
         this.statusCode = response.statusCode;
@@ -236,6 +237,7 @@
         return this;
       }
       addListener(name, listener) { return this.on(name, listener); }
+      once(name, listener) { return EventEmitter.prototype.once.call(this, name, listener); }
       setEncoding(encoding) { this._encoding = encoding || 'utf8'; return this; }
       pause() { this._paused = true; this._flowing = false; return this; }
       resume() { this._paused = false; this._flowing = true; this._pump(); return this; }
@@ -384,10 +386,12 @@
         }
         destroy() {}
       }
-      const result = {ClientRequest, IncomingMessage, Agent, globalAgent: new Agent(),
+      const result = {ClientRequest, IncomingMessage: serverModule.IncomingMessage,
+        Agent, globalAgent: new Agent(),
         request: (input, options, callback) => new ClientRequest(input, options, callback),
         get(input, options, callback) { const request = new ClientRequest(input, options, callback); request.end(); return request; },
         createServer: () => unsupported('HTTP createServer')};
+      if (protocol === 'http:') Object.assign(result, serverModule);
       return result;
     }
     return {http: httpModuleFor('http:'), https: httpModuleFor('https:'),

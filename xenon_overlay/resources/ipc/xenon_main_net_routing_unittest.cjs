@@ -107,6 +107,7 @@ test('main named-pipe accepted sockets preserve binary bytes and native errors c
     socket.on('data', bytes => socket.write(bytes));
   }).listen(pipe);
   const id = sent[0].payload.serverId;
+  context.deliver('__xenon:net:listening', {serverId: id});
   context.deliver('__xenon:net:connection', {serverId: id, socketId: 'native-peer'});
   context.deliver('__xenon:net:data', {toId: 'native-peer', wire: {t: 'b64', d: 'AP+A'}});
   assert.equal(sent.at(-1).payload.wire.t, 'b64');

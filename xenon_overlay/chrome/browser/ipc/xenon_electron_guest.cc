@@ -15,6 +15,7 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "ui/base/page_transition_types.h"
@@ -46,6 +47,9 @@ int XenonElectronGuest::Attach(content::RenderFrameHost* frame,
   const int id = guest->id();
   contents->SetDelegate(guest.get());
   contents->SetUserData(kGuestKey, std::move(guest));
+  // Recompute after attaching the identity, before creating the first document
+  // and its network factory.
+  contents->OnWebPreferencesChanged();
   owner->AttachInnerWebContents(std::move(contents), frame, false);
   return id;
 }
@@ -99,7 +103,10 @@ bool XenonElectronGuest::Call(const std::string& command,
   }
   const auto* options = arguments.GetIfDict();
   *result = base::Value();
-  if (command == "get-user-agent") {
+  if (command == "get-os-process-id") {
+    const auto& process = contents->GetPrimaryMainFrame()->GetProcess()->GetProcess();
+    *result = base::Value(process.IsValid() ? static_cast<int>(process.Pid()) : 0);
+  } else if (command == "get-user-agent") {
     auto ua = contents->GetUserAgentOverride().ua_string_override;
     *result = base::Value(ua.empty() ? embedder_support::GetUserAgent() : ua);
   } else if (command == "set-user-agent" && options &&

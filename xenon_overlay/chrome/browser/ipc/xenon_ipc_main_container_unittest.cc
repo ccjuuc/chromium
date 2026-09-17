@@ -461,7 +461,7 @@ ipcMain.on('test:reply', (event, value) => {
   event.reply('test:reply-result', value + 1);
 });
 ipcMain.on('test:net-write-before-connect', () => {
-  pendingNetSocket = net.connect('xenon-pending-write-test');
+  pendingNetSocket = net.connect({host: '127.0.0.1', port: 12345});
   pendingNetSocket.write('queued-before-connect');
 });
 app.whenReady().then(() => {
@@ -700,6 +700,14 @@ class XenonIpcMainContainerTest : public gin::V8Test {
             *error = "unknown test window";
             return false;
           }
+          if (command == "set-web-preferences") {
+            if (!arguments.is_dict()) {
+              *error = "test web preferences must be a dictionary";
+              return false;
+            }
+            self->window_preferences_ = arguments.GetDict().Clone();
+            return true;
+          }
           if (command == "set-bounds") {
             self->window_bounds_ = arguments.GetDict().Clone();
             *result = base::Value(self->window_bounds_.Clone());
@@ -764,6 +772,7 @@ class XenonIpcMainContainerTest : public gin::V8Test {
   base::ScopedTempDir temp_dir_;
   base::FilePath main_script_;
   base::DictValue window_bounds_;
+  base::DictValue window_preferences_;
   std::string user_agent_ = "DefaultAgent/1.0";
   std::string last_window_command_;
   base::Value last_window_arguments_;
@@ -2170,6 +2179,10 @@ TEST_F(XenonIpcMainContainerTest, PreloadPreferencesBelongToSenderWindow) {
                    result->value.GetDict().FindString("preload")->c_str());
   EXPECT_EQ(false, result->value.GetDict().FindBool("contextIsolation"));
   EXPECT_EQ(true, result->value.GetDict().FindBool("nodeIntegration"));
+  // Constructor preferences must reach the native owner as well as the
+  // renderer-preload query, without silently introducing webSecurity: false.
+  EXPECT_EQ(result->value.GetDict(), window_preferences_);
+  EXPECT_FALSE(window_preferences_.contains("webSecurity"));
 
   result = container_->SendSync(endpoint, "test:mutate-web-preferences",
                                 Arguments({}));
@@ -2321,6 +2334,8 @@ TEST_F(XenonIpcMainContainerTest, WebContentsSendsOnlyToItsRegisteredRenderer) {
   // No incoming IPC from the destination is needed to establish routing.
   container_->Send(unrelated_endpoint, "test:contents-send",
                    Arguments({base::Value(42)}));
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(renderer.dispatch_future().IsReady());
   auto [channel, arguments] = renderer.dispatch_future().Take();
   EXPECT_EQ("test:contents-result", channel);
   ExpectSerializedIntegerArguments(arguments, 42);
@@ -2355,12 +2370,19 @@ TEST_F(XenonIpcMainContainerTest, NetSocketBuffersWritesUntilConnected) {
   container_->SetNetPipeSender(native_send.GetRepeatingCallback());
 
   container_->Send(endpoint, "test:net-write-before-connect", Arguments({}));
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(native_send.IsReady());
   auto [connect_channel, connect_arguments] = native_send.Take();
   ASSERT_EQ("__xenon:net:connect", connect_channel);
   ASSERT_TRUE(connect_arguments.is_dict());
   const base::DictValue& connect = connect_arguments.GetDict();
+  EXPECT_EQ(12345, connect.FindInt("port"));
+  ASSERT_TRUE(connect.FindString("host"));
+  EXPECT_EQ("127.0.0.1", *connect.FindString("host"));
   const std::string* from_id = connect.FindString("fromId");
   ASSERT_TRUE(from_id);
+  // Only the connect request is submitted until the native acknowledgement.
+  EXPECT_FALSE(native_send.IsReady());
 
   base::DictValue connected;
   connected.Set("toId", *from_id);
@@ -2368,6 +2390,7 @@ TEST_F(XenonIpcMainContainerTest, NetSocketBuffersWritesUntilConnected) {
   container_->Send("@main", "__xenon:net:connected",
                    Arguments({base::Value(std::move(connected))}));
 
+  ASSERT_TRUE(native_send.IsReady());
   auto [data_channel, data_arguments] = native_send.Take();
   ASSERT_EQ("__xenon:net:data", data_channel);
   ASSERT_TRUE(data_arguments.is_dict());
@@ -2377,7 +2400,7 @@ TEST_F(XenonIpcMainContainerTest, NetSocketBuffersWritesUntilConnected) {
   ASSERT_TRUE(wire);
   const std::string* encoded = wire->FindString("d");
   ASSERT_TRUE(encoded);
-  EXPECT_FALSE(encoded->empty());
+  EXPECT_EQ("queued-before-connect", *encoded);
   base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(renderer.dispatch_future().IsReady());
   container_->SetNetPipeSender({});

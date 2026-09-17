@@ -139,6 +139,8 @@ class XenonIpcMainContainer {
   void SetNativeAddonHooks(NativeAddonHooks hooks);
   void SetWindowHooks(WindowHooks hooks);
   void SetAppExitHandler(base::RepeatingCallback<void(int)> handler);
+  void SetChildProcessCaller(
+      base::RepeatingCallback<base::Value(const base::DictValue&)> caller);
   void SetNetPipeSender(
       base::RepeatingCallback<void(const std::string&, base::Value)> sender);
   void SetNetworkLoaderFactory(
@@ -237,6 +239,7 @@ class XenonIpcMainContainer {
   void NativeOsCall(gin::Arguments* args);
   void NativeSendToRenderer(gin::Arguments* args);
   void NativeNetSend(gin::Arguments* args);
+  void NativeChildProcessCall(gin::Arguments* args);
   bool ReadFileSystemArguments(gin::Arguments* args, base::Value* arguments);
   void NativeFsCall(gin::Arguments* args);
   void NativeFsCallAsync(gin::Arguments* args);
@@ -338,6 +341,8 @@ class XenonIpcMainContainer {
   base::RepeatingCallback<void(int)> app_exit_handler_;
   base::RepeatingCallback<void(const std::string&, base::Value)>
       net_pipe_sender_;
+  base::RepeatingCallback<base::Value(const base::DictValue&)>
+      child_process_caller_;
   std::string app_name_ = "Application";
   std::string app_version_ = "0.0.0";
   std::string default_user_agent_;

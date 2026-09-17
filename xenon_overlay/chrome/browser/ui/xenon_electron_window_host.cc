@@ -18,6 +18,7 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
+#include "base/numerics/clamped_math.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
@@ -29,6 +30,7 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/color_parser.h"
@@ -857,6 +859,8 @@ bool XenonElectronWindowHost::CreateHostedWindow(
   XenonWebDialog::SetHostedCloseRequestHandler(
       entry.widget, base::BindRepeating(&XenonElectronWindowHost::RequestClose,
                                         base::Unretained(this), id));
+  // WebDialog's default is its initial size; Electron defaults to no minimum.
+  XenonWebDialog::SetHostedMinimumSize(entry.widget, gfx::Size());
   ObserveWebContents(id, dialog_view->web_contents());
   blink::web_pref::WebPreferences prefs =
       dialog_view->web_contents()->GetOrCreateWebPreferences();
@@ -968,6 +972,8 @@ void XenonElectronWindowHost::LoadURL(int32_t window_id,
   XenonWebDialog::SetHostedContentVisible(widget, true);
   const GURL destination(url);
   XenonWebDialog::SetHostedContentURL(widget, destination);
+  // Initial preferences can be cached before the native host is registered.
+  web_contents->OnWebPreferencesChanged();
   blink::web_pref::WebPreferences prefs =
       web_contents->GetOrCreateWebPreferences();
   if (!prefs.allow_scripts_to_close_windows) {
@@ -1066,7 +1072,8 @@ bool XenonElectronWindowHost::Call(int32_t window_id,
   *result = base::Value();
   error->clear();
 
-  if (command == "set-user-agent" || command == "get-user-agent") {
+  if (command == "set-user-agent" || command == "get-user-agent" ||
+      command == "get-os-process-id" || command == "set-web-preferences") {
     auto* dialog_view =
         static_cast<views::WebDialogView*>(widget->widget_delegate());
     content::WebContents* web_contents =
@@ -1074,6 +1081,29 @@ bool XenonElectronWindowHost::Call(int32_t window_id,
     if (!web_contents) {
       *error = "BrowserWindow WebContents is unavailable";
       return false;
+    }
+    if (command == "set-web-preferences") {
+      if (!options) {
+        *error = "set-web-preferences expects an object";
+        return false;
+      }
+      for (const char* key : {"webSecurity", "allowRunningInsecureContent"}) {
+        if (const base::Value* value = options->Find(key);
+            value && !value->is_bool()) {
+          *error = std::string("set-web-preferences expects a boolean ") + key;
+          return false;
+        }
+      }
+      entry.web_preferences = options->Clone();
+      web_contents->OnWebPreferencesChanged();
+      return true;
+    }
+    if (command == "get-os-process-id") {
+      const auto& process =
+          web_contents->GetPrimaryMainFrame()->GetProcess()->GetProcess();
+      *result =
+          base::Value(process.IsValid() ? static_cast<int>(process.Pid()) : 0);
+      return true;
     }
     if (command == "set-user-agent") {
       const std::string* value =
@@ -1119,6 +1149,57 @@ bool XenonElectronWindowHost::Call(int32_t window_id,
     Close(window_id);
     return true;
   }
+  if (command == "set-minimum-size" || command == "get-minimum-size") {
+    if (command == "set-minimum-size") {
+      const auto read_dimension =
+          [options](const char* key) -> std::optional<int> {
+        if (!options) {
+          return std::nullopt;
+        }
+        const base::Value* value = options->Find(key);
+        if (!value || !value->is_int()) {
+          return std::nullopt;
+        }
+        return std::max(0, value->GetInt());
+      };
+      const auto width = read_dimension("width");
+      const auto height = read_dimension("height");
+      if (!width || !height) {
+        *error = "set-minimum-size expects integer width and height";
+        return false;
+      }
+      // Electron treats (0, 0) as an unspecified constraint, not a reset.
+      if (*width || *height) {
+        const gfx::Size minimum_size(*width, *height);
+        const gfx::Rect visible_bounds = GetVisibleWindowBoundsInScreen(widget);
+        const gfx::Rect constraint_bounds =
+            widget->ShouldUseNativeFrame()
+                ? widget->GetClientAreaBoundsInScreen()
+                : widget->GetWindowBoundsInScreen();
+        // Account for native frame insets using the existing DIP geometry.
+        // Views converts client constraints for native frames on each platform.
+        const gfx::Size client_minimum(
+            *width ? std::max(0, static_cast<int>(base::ClampSub(
+                                     *width, visible_bounds.width() -
+                                                 constraint_bounds.width())))
+                   : 0,
+            *height ? std::max(0, static_cast<int>(base::ClampSub(
+                                      *height, visible_bounds.height() -
+                                                   constraint_bounds.height())))
+                    : 0);
+        if (!XenonWebDialog::SetHostedMinimumSize(widget, client_minimum)) {
+          *error = "BrowserWindow size constraints are unavailable";
+          return false;
+        }
+        entry.minimum_size = minimum_size;
+      }
+    }
+    base::DictValue size;
+    size.Set("width", entry.minimum_size.width());
+    size.Set("height", entry.minimum_size.height());
+    *result = base::Value(std::move(size));
+    return true;
+  }
   if (command == "set-bounds") {
     if (!options) {
       *error = "set-bounds expects an object";
@@ -1137,6 +1218,9 @@ bool XenonElectronWindowHost::Call(int32_t window_id,
     if (std::optional<int> value = FindInteger(*options, "height")) {
       bounds.set_height(std::max(1, *value));
     }
+    gfx::Size size = bounds.size();
+    size.SetToMax(entry.minimum_size);
+    bounds.set_size(size);
     SetVisibleWindowBounds(widget, bounds);
     *result = BoundsToValue(GetVisibleWindowBoundsInScreen(widget));
     return true;
@@ -1554,6 +1638,12 @@ std::string XenonElectronWindowHost::GetContainerIdForWebContents(
   const int32_t window_id = FindWindowIdForWebContents(web_contents);
   const auto it = windows_.find(window_id);
   return it == windows_.end() ? std::string() : it->second.container_id;
+}
+
+const base::DictValue* XenonElectronWindowHost::GetWebPreferencesForWebContents(
+    content::WebContents* web_contents) const {
+  const auto it = windows_.find(FindWindowIdForWebContents(web_contents));
+  return it == windows_.end() ? nullptr : &it->second.web_preferences;
 }
 
 void XenonElectronWindowHost::Close(int32_t window_id) {

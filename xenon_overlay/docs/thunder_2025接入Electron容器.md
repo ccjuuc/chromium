@@ -3,7 +3,8 @@
 ## 1. 接入目标
 
 侧边栏 `TH` 运行 Thunder 2025 已编译的 Electron main、renderer 和原生 SDK，
-容器标识为 `thunder-2025`，主 renderer origin 为 `chrome://thunder-2025/`。
+容器标识为 `thunder-2025`。发行版窗口保留 `file://` 页面来源；
+`chrome://thunder-2025/` 用于启动入口和未打 ASAR 时的开发资源入口。
 
 接入原则：
 
@@ -24,6 +25,7 @@
 |---|---|
 | main 与 renderer 编译产物 | `F:\thunder_2025\app\dist` |
 | Thunder 原生运行时与 player SDK | `F:\thunder_2025\bin\Release` |
+| 片库插件发布产物 | `F:\thunder_2025\Submodule\thunder_2025_bin\ProductRelease\resources\app\plugins\XLLite` |
 | 同步脚本 | `xenon_overlay/tools/sync_thunder_2025.py` |
 
 同步命令：
@@ -32,16 +34,28 @@
 vpython3 xenon_overlay\tools\sync_thunder_2025.py ^
   --src F:\thunder_2025\app\dist ^
   --out out\Release_64 ^
-  --player-sdk F:\thunder_2025\bin\Release
+  --player-sdk F:\thunder_2025\bin\Release ^
+  --plugins-dir xenon_overlay\resources\thunder_2025\resources\app\plugins
 ```
 
 默认过滤 source map。只在需要调试 renderer 时使用 `--include-maps`。
 `--skip-asar` 仅用于调试同步流程；正式打包必须生成 `renderer.asar`。
 
+`--plugins-dir` 必须指向完整插件目录，包含根 `config.json` 及其声明的所有
+入口。当前打包目录保留已有播放器、网盘和游戏插件，并补入完整的
+`XLLite/3.23.11.asar`、`3.23.11.asar.unpacked/` 与版本配置。上游
+`ProductRelease` 插件根目录并不包含全部已声明插件，不能直接作为完整同步源。
+同步到仓库默认资源目录时，应先将完整插件目录复制到独立 staging 目录，
+再把该路径传给 `--plugins-dir`，避免同步源位于即将重建的目标内。
+
+供应商 ASAR 在构建时转换为标准 ASAR；外置文件标记和 companion 目录保留。
+运行时无需识别供应商加密格式。
+
 脚本会校验：
 
 - `dist/main.js` 和 `dist/main-renderer/` 存在；
 - `thunder.exe` 存在；
+- 插件配置中的入口齐全（此项在清理旧运行目录前检查）；
 - `dk_addon.node`、`pc_addon.node`、`player_helper.node`、`thunder_helper.node`、
   `lkhb.node` 齐全；
 - `player/` 和 `SDK/` 两个原生运行目录齐全。
@@ -76,6 +90,14 @@ thunder_2025/
       plugins/
         player-plugin.asar
         thunder-pan-plugin.asar
+        config.json
+        XLLite/
+          config.json
+          3.23.11.asar
+          3.23.11.asar.unpacked/
+            xllite.exe
+            version
+            version_code
       renderer.asar
         main-renderer/
         modal-renderer/
@@ -123,17 +145,17 @@ Thunder production main 按以下语义构造 URL：
 <main __dirname>/suspension-renderer/index.html
 ```
 
-容器配置两条有序映射：
+发行版容器将 `out` 下的 renderer 路径映射到 ASAR 中的真实文件：
 
 | 顺序 | 原路径前缀 | 目标 |
 |---|---|---|
-| 1 | `resources/app/out/main-renderer` | `chrome://thunder-2025/` |
-| 2 | `resources/app/out` | `file:///.../resources/app/renderer.asar/` |
+| 1 | `resources/app/out` | `file:///.../resources/app/renderer.asar/` |
 
-第一条更具体，必须先匹配：主窗口使用受信 WebUI origin，从
-`renderer.asar/main-renderer` 读资源。第二条作为其余 renderer 的 catch-all，保留
-modal、suspension 和 IM 的原 file URL 语义。query/fragment（包括 `boxId`、`ph`、
-`ch`）在映射后保留。
+主窗口、modal、suspension 和 IM 都保留 Electron 的本地文件 URL 语义。
+`query/fragment`（包括 `boxId`、`ph`、`ch`）在映射后保留。
+将本地片库宿主改成 WebUI origin 会改变 XHR/CORS 行为：健康接口可成功，
+但无 CORS 响应头的服务首页会被拦截，导致插件一直重试而不创建 webview。
+本地文件访问规则只应用于已托管的 Electron 窗口和 guest，普通浏览器页面不受影响。
 
 `XenonThunder2025Config` 复用 `XenonPlayerElectronController` 的通用磁盘/ASAR 资源
 filter，默认 frontend 根为：
@@ -237,8 +259,8 @@ out\Release_64\xlb153.exe --remote-debugging-port=9222 --enable-logging
 
 1. 日志是否出现 `Electron container service initialized: thunder-2025`。
 2. main 是否读取 `resources/app/out/main.js`。
-3. 主窗口 URL 是否映射到 `chrome://thunder-2025/`，其余弹窗是否映射到
-   `renderer.asar`。
+3. 主窗口及文件弹窗是否保留 `renderer.asar` 下的真实 `file://` 来源；
+   `chrome://thunder-2025/` 用于启动接入，不能代替运行页面的文件来源。
 4. renderer endpoint 的 `window_id` 是否大于 0，否则 `BrowserWindow.fromWebContents()`
    无法反查所属窗口。
 5. addon 路径是否位于 `thunder_2025`，是否意外加载了 `xenon_player` 或 Xenon 根

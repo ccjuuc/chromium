@@ -81,8 +81,13 @@ test('HTTP supports response event without a request callback', async () => {
   assert.deepEqual(events, [200, 'end']);
 });
 
-test('HTTP unavailable server fails instead of returning an inert emitter', () => {
-  assert.throws(() => fixture().http.createServer(), {code: 'ERR_NOT_SUPPORTED'});
+test('HTTP server exposes the real net-backed server contract', () => {
+  const http = fixture().http;
+  const server = http.createServer();
+  assert.ok(server instanceof http.Server);
+  assert.equal(server.listening, false);
+  assert.equal(server.address(), null);
+  assert.throws(() => http.createServer({insecureHTTPParser: true}), {code: 'ERR_NOT_SUPPORTED'});
 });
 
 for (const operation of ['abort', 'destroy']) {

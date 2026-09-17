@@ -62,6 +62,8 @@ class XenonElectronWindowHost : public views::WidgetObserver {
       content::WebContents* web_contents) const;
   std::string GetContainerIdForWebContents(
       content::WebContents* web_contents) const;
+  const base::DictValue* GetWebPreferencesForWebContents(
+      content::WebContents* web_contents) const;
   void Close(int32_t window_id);
   // Synchronously destroys the windows of a disconnected ipcMain container.
   // Their events cannot be delivered to the old process or a later restart.
@@ -132,6 +134,7 @@ class XenonElectronWindowHost : public views::WidgetObserver {
     bool transparent = false;
     int32_t parent_id = 0;
     std::string container_id;
+    base::DictValue web_preferences;
     std::string url;
     std::string user_agent;
     bool user_agent_update_pending = false;
@@ -142,6 +145,7 @@ class XenonElectronWindowHost : public views::WidgetObserver {
     bool sync_bounds_with_parent = false;
     gfx::Rect bounds;
     gfx::Rect normal_bounds;
+    gfx::Size minimum_size;
     bool minimized = false;
     bool maximized = false;
     bool fullscreen = false;

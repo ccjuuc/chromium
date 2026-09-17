@@ -26,6 +26,7 @@
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_ipc_main_container.h"
+#include "xenon_overlay/services/xenon_child_process_bridge.h"
 #include "xenon_overlay/services/xenon_net_pipe_bridge.h"
 #include "xenon_overlay/services/xenon_node_executor.h"
 
@@ -34,6 +35,9 @@ namespace xenon {
 namespace {
 
 constexpr char kDefaultIpcContainerId[] = "default";
+constexpr char kMainChildProcessEndpointId[] = "@main";
+constexpr char kChildProcessCallChannel[] = "__xenon:child-process:call";
+constexpr char kChildProcessEventChannel[] = "__xenon:child-process:event";
 constexpr char kMainNetEndpointId[] = "@main";
 // Native child processes started by hosted applications inherit this value.
 // It lets a native component that derives resources from its host executable
@@ -274,6 +278,17 @@ void XenonServiceImpl::InitializeElectronIpc(
 
   auto container = std::make_unique<ipc::XenonIpcMainContainer>();
   container->SetNetworkLoaderFactory(url_loader_factory_);
+  container->SetChildProcessCaller(
+      base::BindRepeating(
+          [](base::WeakPtr<XenonServiceImpl> self, const std::string& id,
+             const base::DictValue& request) {
+            return self ? self->CallChildProcess(id, kMainChildProcessEndpointId,
+                                                 request)
+                        : base::Value(base::DictValue()
+                                          .Set("ok", false)
+                                          .Set("code", "ERR_NOT_SUPPORTED")
+                                          .Set("message", "Child process service is unavailable"));
+          }, weak_factory_.GetWeakPtr(), container_id));
   container->SetNetPipeSender(
       base::BindRepeating(&XenonServiceImpl::HandleMainNetPipeMessage,
                           weak_factory_.GetWeakPtr(), container_id));
@@ -494,6 +509,9 @@ void XenonServiceImpl::RemoveElectronIpcRenderer(
     const std::string& endpoint_id) {
   const std::string normalized_id = NormalizeIpcContainerId(container_id);
   RemoveRendererNodeClient(normalized_id, endpoint_id);
+  if (child_process_bridge_) {
+    child_process_bridge_->RemoveEndpoint(normalized_id, endpoint_id);
+  }
   if (net_pipe_bridge_) {
     net_pipe_bridge_->RemoveEndpoint(normalized_id, endpoint_id);
   }
@@ -595,12 +613,23 @@ bool XenonServiceImpl::HandleNetPipeMessage(
   if (channel == "__xenon:net:listen") {
     const std::string* server_id = message.FindString("serverId");
     const std::string* path = message.FindString("path");
-    if (!server_id || !path) {
-      return true;
-    }
+    const auto port = message.FindInt("port");
+    const std::string* host = message.FindString("host");
+    if (!server_id || (!path && !port)) return true;
     std::string error;
-    if (!EnsureNetPipeBridge()->Listen(container_id, endpoint_id, *server_id,
-                                       *path, &error)) {
+    auto* bridge = EnsureNetPipeBridge();
+    int pipe_permission_flags = 0;
+    if (message.FindBool("readableAll").value_or(false)) {
+      pipe_permission_flags |= UV_READABLE;
+    }
+    if (message.FindBool("writableAll").value_or(false)) {
+      pipe_permission_flags |= UV_WRITABLE;
+    }
+    const bool listening = path ? bridge->Listen(container_id, endpoint_id, *server_id, *path, &error,
+                                                pipe_permission_flags)
+        : bridge->ListenTcp(container_id, endpoint_id, *server_id,
+                            host ? *host : "", *port, &error);
+    if (!listening) {
       base::DictValue payload;
       payload.Set("serverId", *server_id);
       payload.Set("code", error.empty() ? "EADDRINUSE" : error);
@@ -610,12 +639,13 @@ bool XenonServiceImpl::HandleNetPipeMessage(
     }
     base::DictValue payload;
     payload.Set("serverId", *server_id);
+    payload.Set("address", bridge->ServerAddress(*server_id, container_id, endpoint_id));
     DispatchNetPipeEvent(container_id, endpoint_id,
                          "__xenon:net:listening",
                          base::Value(std::move(payload)));
     return true;
   }
-  if (from_main) {
+  if (from_main || message.FindInt("port")) {
     EnsureNetPipeBridge();
   }
   if (!net_pipe_bridge_) {
@@ -623,27 +653,27 @@ bool XenonServiceImpl::HandleNetPipeMessage(
   }
   if (channel == "__xenon:net:unlisten") {
     const std::string* server_id = message.FindString("serverId");
-    const bool closed = server_id && net_pipe_bridge_->CloseServer(*server_id);
+    const bool closed = server_id && net_pipe_bridge_->CloseServer(*server_id, container_id, endpoint_id);
     return closed || from_main;
   }
   if (channel == "__xenon:net:connect") {
     const std::string* from_id = message.FindString("fromId");
     const std::string* path = message.FindString("path");
-    if (!from_id || !path) {
-      return true;
-    }
-    if (!from_main && !net_pipe_bridge_->HasListenerForPath(*path)) {
+    const auto port = message.FindInt("port");
+    const std::string* host = message.FindString("host");
+    if (!from_id || (!path && !port)) return true;
+    if (path && !from_main && !net_pipe_bridge_->HasListenerForPath(*path)) {
       return false;
     }
-    LOG(INFO) << "Named-pipe connect path='" << *path << "' from='" << *from_id
-              << "' endpoint='" << endpoint_id << "'";
     std::string error;
-    if (!net_pipe_bridge_->Connect(container_id, endpoint_id, *from_id, *path,
-                                   &error)) {
+    const bool connected = path ? net_pipe_bridge_->Connect(container_id, endpoint_id, *from_id, *path, &error)
+        : net_pipe_bridge_->ConnectTcp(container_id, endpoint_id, *from_id,
+                                       host ? *host : "", *port, &error);
+    if (!connected) {
       base::DictValue payload;
       payload.Set("toId", *from_id);
       payload.Set("code", error.empty() ? "ECONNREFUSED" : error);
-      payload.Set("path", *path);
+      if (path) payload.Set("path", *path);
       DispatchNetPipeEvent(container_id, endpoint_id, "__xenon:net:error",
                            base::Value(std::move(payload)));
     }
@@ -665,10 +695,15 @@ bool XenonServiceImpl::HandleNetPipeMessage(
     }
     return false;
   }
+  if (!net_pipe_bridge_->OwnsSocket(*socket_id, container_id, endpoint_id)) {
+    // A native id is not a capability: another renderer must not close or
+    // write a socket belonging to a different endpoint or container.
+    return true;
+  }
   if (channel == "__xenon:net:data") {
     const base::DictValue* wire = message.FindDict("wire");
     std::string error;
-    if (!wire || !net_pipe_bridge_->Write(*socket_id, *wire, &error)) {
+    if (!wire || !net_pipe_bridge_->Write(*socket_id, *wire, &error, message.FindInt("writeId").value_or(0))) {
       return false;
     }
     if (!error.empty()) {
@@ -680,6 +715,13 @@ bool XenonServiceImpl::HandleNetPipeMessage(
                            base::Value(std::move(payload)));
     }
     return true;
+  }
+  if (channel == "__xenon:net:end") {
+    return net_pipe_bridge_->EndSocket(*socket_id);
+  }
+  if (channel == "__xenon:net:pause" || channel == "__xenon:net:resume") {
+    return net_pipe_bridge_->SetSocketReadPaused(
+        *socket_id, channel == "__xenon:net:pause");
   }
   if (channel == "__xenon:net:close") {
     return net_pipe_bridge_->CloseSocket(*socket_id);
@@ -958,6 +1000,20 @@ void XenonServiceImpl::ElectronIpcSendSync(
     base::Value arguments,
     ElectronIpcSendSyncCallback callback) {
   const std::string normalized_id = NormalizeIpcContainerId(container_id);
+  if (channel == kChildProcessCallChannel) {
+    if (!arguments.is_list() || arguments.GetList().size() != 1 ||
+        !arguments.GetList()[0].is_dict()) {
+      std::move(callback).Run(MakeIpcFailure("Invalid child process request"));
+      return;
+    }
+    if (!ipc_main_containers_.contains(normalized_id)) {
+      std::move(callback).Run(MakeIpcFailure("Child process container is unavailable"));
+      return;
+    }
+    std::move(callback).Run(MakeNativeInvokeSuccess(CallChildProcess(
+        normalized_id, endpoint_id, arguments.GetList()[0].GetDict())));
+    return;
+  }
   auto it = ipc_main_containers_.find(normalized_id);
   if (it == ipc_main_containers_.end()) {
     std::move(callback).Run(
@@ -971,6 +1027,49 @@ void XenonServiceImpl::ElectronIpcSendSync(
   }
   std::move(callback).Run(it->second->SendSync(
       endpoint_id, channel, std::move(arguments)));
+}
+
+base::Value XenonServiceImpl::CallChildProcess(
+    const std::string& container_id,
+    const std::string& endpoint_id,
+    const base::DictValue& request) {
+  if (!child_process_bridge_) {
+    child_process_bridge_ = std::make_unique<XenonChildProcessBridge>(
+        base::BindRepeating(&XenonServiceImpl::DispatchChildProcessEvent,
+                            weak_factory_.GetWeakPtr()));
+  }
+  return base::Value(child_process_bridge_->Call(container_id, endpoint_id, request));
+}
+
+void XenonServiceImpl::DispatchChildProcessEvent(
+    const std::string& container_id,
+    const std::string& endpoint_id,
+    base::Value event) {
+  // Never run JS inside libuv callbacks. Apart from ordering spawn before data,
+  // this prevents a listener from mutating handles during their close callback.
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&XenonServiceImpl::DeliverChildProcessEvent,
+                                weak_factory_.GetWeakPtr(), container_id,
+                                endpoint_id, std::move(event)));
+}
+
+void XenonServiceImpl::DeliverChildProcessEvent(
+    const std::string& container_id,
+    const std::string& endpoint_id,
+    base::Value event) {
+  const auto container = ipc_main_containers_.find(container_id);
+  if (container == ipc_main_containers_.end()) {
+    return;
+  }
+  base::ListValue arguments;
+  arguments.Append(std::move(event));
+  if (endpoint_id == kMainChildProcessEndpointId) {
+    container->second->Send(endpoint_id, kChildProcessEventChannel,
+                            base::Value(std::move(arguments)));
+  } else {
+    container->second->DispatchToRenderer(endpoint_id, kChildProcessEventChannel,
+                                          base::Value(std::move(arguments)));
+  }
 }
 
 void XenonServiceImpl::RequireNodeModuleSync(

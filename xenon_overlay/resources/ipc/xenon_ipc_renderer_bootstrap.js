@@ -45,8 +45,10 @@
   // Non-terminal readline consumes real stream data and preserves UTF-8 and
   // CRLF boundaries across chunks. Interactive terminal editing is separate.
   // @include "common/readline.js"
+  // @include "common/child_process.js"
   // @include "renderer/child_process.js"
   // @include "renderer/http2.js"
+  // @include "common/http_server.js"
   // @include "renderer/modules.js"
 
   // @include "renderer/page.js"

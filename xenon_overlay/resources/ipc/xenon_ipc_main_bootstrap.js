@@ -22,6 +22,7 @@
 
   // @include "main/builtins.js"
 
+  // @include "common/child_process.js"
   // @include "main/child_process.js"
 
   function assert(condition, message) {
@@ -48,6 +49,7 @@
     return Buffer.from(result).toString('base64');
   });
   // @include "main/net.js"
+  // @include "common/http_server.js"
   // @include "main/http.js"
   // @include "main/http2.js"
   const ttyModule = { isatty: () => false };

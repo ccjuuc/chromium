@@ -209,15 +209,11 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
             thunder_app_version.c_str(),
             embedder_support::GetUserAgent().c_str());
       }
-      auto renderer_mapping = xenon::ipc::mojom::IpcRendererUrlMapping::New();
-      renderer_mapping->source_path_prefix =
-          thunder_main_dir.AppendASCII("main-renderer").AsUTF8Unsafe();
-      renderer_mapping->target_base_url = "chrome://thunder-2025/";
-      thunder_config->renderer_url_mappings.push_back(
-          std::move(renderer_mapping));
       const base::FilePath thunder_renderer_archive =
           thunder_app_dir.AppendASCII("renderer.asar");
       if (base::PathExists(thunder_renderer_archive)) {
+        // Preserve Electron's local-file origin. Rewriting this window to a
+        // WebUI origin changes XHR/CORS semantics for its local services.
         auto archive_mapping =
             xenon::ipc::mojom::IpcRendererUrlMapping::New();
         archive_mapping->source_path_prefix = thunder_main_dir.AsUTF8Unsafe();
@@ -225,6 +221,13 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
             net::FilePathToFileURL(thunder_renderer_archive).spec() + "/";
         thunder_config->renderer_url_mappings.push_back(
             std::move(archive_mapping));
+      } else {
+        auto renderer_mapping = xenon::ipc::mojom::IpcRendererUrlMapping::New();
+        renderer_mapping->source_path_prefix =
+            thunder_main_dir.AppendASCII("main-renderer").AsUTF8Unsafe();
+        renderer_mapping->target_base_url = "chrome://thunder-2025/";
+        thunder_config->renderer_url_mappings.push_back(
+            std::move(renderer_mapping));
       }
       if (manager->RegisterElectronIpc(std::move(thunder_config))) {
         manager->SetElectronIpcContainerForOrigin(kThunder2025Origin,

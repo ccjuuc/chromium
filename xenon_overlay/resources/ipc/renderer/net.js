@@ -1,6 +1,6 @@
   // Node `net` Windows named pipes. Local pairing is available only after a
   // successful native bind; other endpoints use the reserved IPC channels.
-  // TCP and Unix sockets have no renderer backend and must not appear bound.
+  // TCP endpoints always use the native OS transport.
   function normalizeNetPath(value) {
     let path = String(value || '');
     path = path.replace(/\//g, '\\');
@@ -14,6 +14,44 @@
     return Object.assign(new ErrorType(message), {code});
   }
 
+  function unsupportedNetOption(operation, name) {
+    throw netError('ERR_NOT_SUPPORTED', `net.${operation} does not support the "${name}" option`);
+  }
+
+  function checkNetOptions(options, operation) {
+    if (!options || typeof options !== 'object') return;
+    // Keep Node's default-valued options and application metadata harmless,
+    // but never silently discard a requested transport/stream configuration.
+    const disabled = operation === 'listen' ?
+      ['ipv6Only', 'reusePort', 'exclusive'] :
+      ['noDelay', 'keepAlive', 'pauseOnConnect'];
+    for (const name of disabled) {
+      if (options[name] != null && options[name] !== false) unsupportedNetOption(operation, name);
+    }
+    const absent = operation === 'listen' ? ['signal'] :
+      ['signal', 'onread', 'highWaterMark', 'readableHighWaterMark', 'writableHighWaterMark'];
+    for (const name of absent) {
+      if (options[name] != null) unsupportedNetOption(operation, name);
+    }
+    if (operation !== 'listen') {
+      for (const name of ['timeout', 'keepAliveInitialDelay']) {
+        if (options[name] != null && options[name] !== 0) unsupportedNetOption(operation, name);
+      }
+    }
+    if (operation === 'connect') {
+      for (const name of ['localPort', 'family', 'hints']) {
+        if (options[name] != null && options[name] !== 0) unsupportedNetOption(operation, name);
+      }
+      if (options.localAddress != null && options.localAddress !== '') unsupportedNetOption(operation, 'localAddress');
+      for (const name of ['lookup', 'autoSelectFamilyAttemptTimeout']) {
+        if (options[name] != null) unsupportedNetOption(operation, name);
+      }
+      if (options.autoSelectFamily != null && options.autoSelectFamily !== false) {
+        unsupportedNetOption(operation, 'autoSelectFamily');
+      }
+    }
+  }
+
   function netEndpoint(args, operation) {
     const first = args[0];
     if (operation === 'connect' && first === null) {
@@ -23,6 +61,13 @@
         typeof first === 'string' && !(Number(first) >= 0) ? {path: first} :
         {port: operation === 'listen' && typeof first === 'function' ? 0 : first,
           host: typeof args[1] === 'string' ? args[1] : undefined};
+    checkNetOptions(options, operation);
+    if (operation === 'listen') {
+      // Node accepts backlog in options or after either port/path or host.
+      // The native bridge currently chooses its own backlog.
+      const backlog = options.backlog || Number(args[1]) || Number(args[2]);
+      if (backlog) unsupportedNetOption(operation, 'backlog');
+    }
     if (options.path !== undefined && !(operation === 'listen' && 'port' in options)) {
       if (typeof options.path !== 'string') {
         throw netError('ERR_INVALID_ARG_TYPE', 'The "path" argument must be a string', TypeError);
@@ -33,7 +78,15 @@
       if (!options.path && operation === 'listen') {
         throw netError('ERR_INVALID_ARG_VALUE', 'The "path" argument must not be empty', TypeError);
       }
-      return {path: options.path};
+      const endpoint = {path: options.path};
+      if (operation === 'listen') {
+        // Node applies these permissions only to pipe listeners and only for
+        // the boolean true. TCP listeners ignore the pipe-specific options.
+        for (const name of ['readableAll', 'writableAll']) {
+          if (options[name] !== undefined) endpoint[name] = options[name] === true;
+        }
+      }
+      return endpoint;
     }
     if (options.fd !== undefined || options.handle !== undefined) return {};
     let port = options.port;
@@ -60,7 +113,7 @@
 
   function unsupportedNetEndpoint(operation, endpoint) {
     const error = netError('ERR_NOT_SUPPORTED',
-        `net.${operation} supports only Windows named pipes in this runtime`);
+        `net.${operation} does not support this endpoint type`);
     error.syscall = operation;
     if (endpoint.path !== undefined) error.path = endpoint.path;
     if (endpoint.port !== undefined) error.port = endpoint.port;
@@ -155,8 +208,12 @@
 
   function flushPendingNetWrites(socket) {
     const pending = socket._pendingWrites.splice(0);
-    for (const data of pending) {
-      socket.write(data);
+    socket._flushing = true;
+    try { for (const entry of pending) socket.write(entry.data, entry.callback); }
+    finally { socket._flushing = false; }
+    if (socket.writableEnded && socket._peerId && !socket._shutdownSent) {
+      socket._shutdownSent = true;
+      sendXenonNet('__xenon:net:end', {toId: socket._peerId, fromId: socket._id});
     }
   }
 
@@ -182,36 +239,104 @@
     socket._connected = false;
     socket.connecting = false;
     socket._connectCb = null;
-    socket._pendingWrites.length = 0;
+    socket._readQueue.length = 0;
+    socket.readableLength = 0;
+    socket._readEndPending = false;
+    socket._readClosePending = false;
+    for (const entry of socket._pendingWrites.splice(0)) {
+      if (entry.callback) queueMicrotask(() => callNetCallback(socket, entry.callback,
+        [netError('ERR_STREAM_DESTROYED', 'Socket closed before write completed')]));
+    }
     if (socket._timeoutTimer !== null) clearTimeout(socket._timeoutTimer);
     socket._timeoutTimer = null;
     if (socket._id) {
       netSockets.delete(socket._id);
     }
     if (socket._peer && !fromPeer) {
-      closeNetSocket(socket._peer, true);
+      receiveNetClose(socket._peer);
     }
     socket._peer = null;
     if (!fromPeer && socket._peerId) {
       sendXenonNet('__xenon:net:close', {toId: socket._peerId, fromId: socket._id});
     }
     socket._peerId = null;
-    if (wasConnected) emitNetEvent(socket, 'end');
+    if (wasConnected && !socket._tcp && !socket.readableEnded) {
+      socket.readableEnded = true;
+      emitNetEvent(socket, 'end');
+    }
+    for (const callback of socket._writeCallbacks.values()) {
+      queueMicrotask(() => callNetCallback(socket, callback, [netError('ERR_STREAM_DESTROYED', 'Socket closed before write completed')]));
+    }
+    socket._writeCallbacks.clear();
     emitNetEvent(socket, 'close', !!socket._hadError);
   }
 
   function deliverNetBytes(socket, data) {
-    if (socket._closed) return;
+    if (socket._closed || socket.readableEnded || socket._readEndPending) return;
     const buf = Buffer.isBuffer(data) || data instanceof Uint8Array ?
         Buffer.from(data) : Buffer.from(String(data));
     if (buf.length) refreshNetTimeout(socket);
-    emitNetEvent(socket, 'data', buf);
+    socket._readQueue.push(buf);
+    socket.readableLength += buf.length;
+    drainNetReads(socket);
+  }
+
+  function drainNetReads(socket) {
+    if (socket._readDraining || socket._readPaused || socket._closed) return;
+    socket._readDraining = true;
+    try {
+      while (!socket._closed && !socket._readPaused && socket._readQueue.length) {
+        const bytes = socket._readQueue.shift();
+        socket.readableLength -= bytes.length;
+        emitNetEvent(socket, 'data', bytes);
+      }
+      if (socket._closed || socket._readPaused) return;
+      if (socket._readEndPending && !socket.readableEnded) {
+        socket._readEndPending = false;
+        socket.readableEnded = true;
+        const endedId = socket._id;
+        emitNetEvent(socket, 'end');
+        if (!socket.allowHalfOpen) queueMicrotask(() => {
+          if (!socket._closed && socket._id === endedId) socket.end();
+        });
+      }
+      if (!socket._closed && socket._readClosePending) closeNetSocket(socket, true);
+    } finally {
+      socket._readDraining = false;
+    }
+  }
+
+  function receiveNetEnd(socket) {
+    if (socket._closed || socket.readableEnded) return;
+    socket._readEndPending = true;
+    drainNetReads(socket);
+  }
+
+  function receiveNetClose(socket) {
+    if (socket._closed) return;
+    socket._readClosePending = true;
+    // Local pipe pairing historically closes both directions together.
+    // Let an already delivered read queue drain before its implicit EOF.
+    if (!socket._tcp && socket._connected && !socket.readableEnded) socket._readEndPending = true;
+    drainNetReads(socket);
+  }
+
+  function applySocketAddress(socket, message) {
+    for (const prefix of ['local', 'remote']) {
+      const address = message[prefix];
+      if (address) {
+        socket[prefix + 'Address'] = address.address;
+        socket[prefix + 'Port'] = address.port;
+        socket[prefix + 'Family'] = address.family;
+      }
+    }
   }
 
   const netModule = {
     Socket: class extends EventEmitter {
-      constructor() {
+      constructor(options = {}) {
         super();
+        checkNetOptions(options, 'Socket');
         this._connected = false;
         this._closed = false;
         this._peer = null;
@@ -225,9 +350,34 @@
         this.destroyed = false;
         this.remoteAddress = '';
         this.localAddress = '';
+        this._tcp = false;
+        this.writableEnded = false;
+        this.writableFinished = false;
+        this.readableEnded = false;
+        this.readableFlowing = true;
+        this.readableLength = 0;
+        this._readPaused = false;
+        this._readQueue = [];
+        this._readDraining = false;
+        this._readEndPending = false;
+        this._readClosePending = false;
+        this._readResumeScheduled = false;
+        this._writeCallbacks = new Map();
+        this._nextWriteId = 1;
+        this.allowHalfOpen = Boolean(options.allowHalfOpen);
       }
       connect(...args) {
         const endpoint = netEndpoint(args, 'connect');
+        if (this._closed) {
+          // A Socket can be connected again after its previous close. Preserve
+          // pause-before-first-connect, but discard the ended stream state.
+          this.writableEnded = false;
+          this.writableFinished = false;
+          this.readableEnded = false;
+          this._shutdownSent = false;
+          this._readPaused = false;
+          this.readableFlowing = true;
+        }
         this._asyncContext = currentAsyncContext;
         const cb = typeof args[args.length - 1] === 'function' ?
             args[args.length - 1] : null;
@@ -237,7 +387,8 @@
         this._hadError = false;
         this.connecting = true;
         const path = endpoint.path === undefined ? undefined : normalizeNetPath(endpoint.path);
-        if (!isNamedPipePath(path)) {
+        this._tcp = endpoint.port !== undefined;
+        if (!this._tcp && !isNamedPipePath(path)) {
           queueMicrotask(() => {
             if (this._closed) return;
             this._hadError = true;
@@ -251,9 +402,9 @@
         }
         allocNetSocket(this);
         refreshNetTimeout(this);
-        const server = netServers.get(path);
+        const server = !this._tcp && netServers.get(path);
         if (server) {
-          const incoming = new netModule.Socket();
+          const incoming = new netModule.Socket({allowHalfOpen: server._allowHalfOpen});
           incoming._asyncContext = server._asyncContext;
           incoming._connected = true;
           incoming._peer = this;
@@ -276,37 +427,55 @@
           });
           return this;
         }
-        sendXenonNet('__xenon:net:connect', {path, fromId: this._id});
+        sendXenonNet('__xenon:net:connect', {...endpoint, path, fromId: this._id});
         return this;
       }
-      write(data) {
-        if (this._closed) return false;
+      write(data, encoding, callback) {
+        if (typeof encoding === 'function') { callback = encoding; encoding = undefined; }
+        if (callback !== undefined && typeof callback !== 'function') throw new TypeError('callback must be a function');
+        if (this._closed || (this.writableEnded && !this._flushing)) {
+          if (callback) queueMicrotask(() => callNetCallback(this, callback,
+            [netError('ERR_STREAM_WRITE_AFTER_END', 'write after end')]));
+          return false;
+        }
+        if (typeof data === 'string' && encoding) data = Buffer.from(data, encoding);
         if (this._peer) {
           refreshNetTimeout(this);
           deliverNetBytes(this._peer, data);
+          if (callback) queueMicrotask(() => callNetCallback(this, callback));
           return true;
         }
         if (this._peerId) {
           refreshNetTimeout(this);
+          const writeId = callback ? this._nextWriteId++ : 0;
+          if (callback) this._writeCallbacks.set(writeId, callback);
           return sendXenonNet('__xenon:net:data', {
-            toId: this._peerId,
-            fromId: this._id,
+            toId: this._peerId, fromId: this._id, writeId,
             wire: bytesToNetWire(data),
           });
         }
-        if (this.connecting && !this._closed) {
-          this._pendingWrites.push(
-              Buffer.isBuffer(data) || data instanceof Uint8Array ?
-                  Buffer.from(data) : data);
+        if (this.connecting) {
+          this._pendingWrites.push({data: Buffer.isBuffer(data) || data instanceof Uint8Array ?
+              Buffer.from(data) : data, callback});
           return true;
         }
         return false;
       }
-      end(data) {
-        if (data !== undefined) {
-          this.write(data);
+      end(data, encoding, callback) {
+        if (typeof data === 'function') { callback = data; data = undefined; }
+        if (typeof encoding === 'function') { callback = encoding; encoding = undefined; }
+        if (callback) this.once('finish', callback);
+        if (this.writableEnded || this._closed) return this;
+        if (data !== undefined) this.write(data, encoding);
+        this.writableEnded = true;
+        if (this._peer) {
+          this.writableFinished = true;
+          emitNetEvent(this, 'finish');
+          closeNetSocket(this, false);
+        } else if (this._peerId) {
+          this._shutdownSent = true;
+          sendXenonNet('__xenon:net:end', {toId: this._peerId, fromId: this._id});
         }
-        closeNetSocket(this, false);
         return this;
       }
       destroy() {
@@ -314,6 +483,32 @@
         closeNetSocket(this, false);
         return this;
       }
+      pause() {
+        if (this._readPaused || this._closed) return this;
+        this._readPaused = true;
+        this.readableFlowing = false;
+        if (this._peerId) sendXenonNet('__xenon:net:pause', {toId: this._peerId, fromId: this._id});
+        return this;
+      }
+      resume() {
+        if (this._closed) return this;
+        this._readPaused = false;
+        this.readableFlowing = true;
+        if (!this._readResumeScheduled) {
+          this._readResumeScheduled = true;
+          queueMicrotask(() => {
+            this._readResumeScheduled = false;
+            drainNetReads(this);
+            // A data listener may pause again while draining. Only restart
+            // native reads after every already delivered chunk was consumed.
+            if (!this._closed && !this._readPaused && !this.readableEnded && this._peerId) {
+              sendXenonNet('__xenon:net:resume', {toId: this._peerId, fromId: this._id});
+            }
+          });
+        }
+        return this;
+      }
+      isPaused() { return this._readPaused; }
       setTimeout(msecs, callback) {
         if (typeof msecs !== 'number') {
           throw netError('ERR_INVALID_ARG_TYPE', 'The "msecs" argument must be a number', TypeError);
@@ -333,20 +528,32 @@
         return this;
       }
       // These TCP options are chainable no-ops for pipe handles in Node.
-      // TCP connect itself reports ERR_NOT_SUPPORTED above.
-      setNoDelay() { return this; }
-      setKeepAlive() { return this; }
+      // TCP option configuration is not exposed by the transport yet.
+      setNoDelay() {
+        if (this._tcp) throw netError('ERR_NOT_SUPPORTED', 'TCP no-delay configuration is not supported');
+        return this;
+      }
+      setKeepAlive() {
+        if (this._tcp) throw netError('ERR_NOT_SUPPORTED', 'TCP keep-alive configuration is not supported');
+        return this;
+      }
+      address() {
+        return this.localPort === undefined ? {} :
+          {address: this.localAddress, port: this.localPort, family: this.localFamily};
+      }
       ref() { return this; }
       unref() { return this; }
     },
     Server: class extends EventEmitter {
       constructor(options, connectionListener) {
         super();
+        checkNetOptions(options, 'createServer');
         this.listening = false;
         this._listeningPending = false;
         this._closing = false;
         this._path = null;
         this._address = null;
+        this._allowHalfOpen = Boolean(options?.allowHalfOpen);
         const listener = typeof options === 'function' ? options : connectionListener;
         if (listener !== undefined) this.on('connection', listener);
       }
@@ -360,15 +567,16 @@
             args[args.length - 1] : null;
         this._path = endpoint.path ? normalizeNetPath(endpoint.path) : null;
         this._address = endpoint.path || null;
+        this._tcp = endpoint.port !== undefined;
         this._listeningPending = true;
         this._closing = false;
-        if (isNamedPipePath(this._path)) {
+        if (this._tcp || isNamedPipePath(this._path)) {
           this._nativeId = 'server-r-' + (nextNetServerId++);
           this._listenCb = cb;
           nativeNetServers.set(this._nativeId, this);
           sendXenonNet('__xenon:net:listen', {
-            serverId: this._nativeId,
-            path: this._path,
+            ...endpoint, serverId: this._nativeId,
+            ...(this._tcp ? {} : {path: this._path}),
           });
           return this;
         }
@@ -409,7 +617,7 @@
     },
     createServer: (...args) => new netModule.Server(...args),
     connect: (...args) => {
-      const socket = new netModule.Socket();
+      const socket = new netModule.Socket(args[0] && typeof args[0] === 'object' ? args[0] : undefined);
       socket.connect(...args);
       return socket;
     },
@@ -427,7 +635,8 @@
       if (server && server._listeningPending && !server._closing) {
         server._listeningPending = false;
         server.listening = true;
-        netServers.set(server._path, server);
+        if (msg.address !== undefined) server._address = msg.address;
+        if (!server._tcp) netServers.set(server._path, server);
         const callback = server._listenCb;
         server._listenCb = null;
         emitNetEvent(server, 'listening');
@@ -441,11 +650,13 @@
         if (msg.socketId) sendXenonNet('__xenon:net:close', {toId: msg.socketId});
         return true;
       }
-      const incoming = new netModule.Socket();
+      const incoming = new netModule.Socket({allowHalfOpen: server._allowHalfOpen});
       incoming._asyncContext = server._asyncContext;
       incoming._id = msg.socketId;
       incoming._peerId = msg.socketId;
       incoming._connected = true;
+      incoming._tcp = server._tcp;
+      applySocketAddress(incoming, msg);
       netSockets.set(incoming._id, incoming);
       emitNetEvent(server, 'connection', incoming);
       return true;
@@ -478,7 +689,7 @@
         });
         return true;
       }
-      const incoming = new netModule.Socket();
+      const incoming = new netModule.Socket({allowHalfOpen: server._allowHalfOpen});
       incoming._asyncContext = server._asyncContext;
       incoming._connected = true;
       incoming._peerId = msg.fromId;
@@ -495,12 +706,16 @@
     if (channel === '__xenon:net:connected') {
       const socket = netSockets.get(msg.toId);
       if (!socket) {
+        if (msg.peerId) sendXenonNet('__xenon:net:close', {toId: msg.peerId});
         return true;
       }
+      if (socket._connected) return true;
+      applySocketAddress(socket, msg);
       socket._peerId = msg.peerId;
       socket._connected = true;
       socket.connecting = false;
       refreshNetTimeout(socket);
+      if (socket._readPaused) sendXenonNet('__xenon:net:pause', {toId: socket._peerId, fromId: socket._id});
       emitNetEvent(socket, 'connect');
       if (socket._closed) return true;
       if (socket._connectCb) {
@@ -517,10 +732,32 @@
       }
       return true;
     }
+    if (channel === '__xenon:net:written') {
+      const socket = netSockets.get(msg.toId);
+      const callback = socket?._writeCallbacks.get(msg.writeId);
+      if (callback) {
+        socket._writeCallbacks.delete(msg.writeId);
+        callNetCallback(socket, callback, msg.code ? [netError(msg.code, msg.code)] : []);
+      }
+      return true;
+    }
+    if (channel === '__xenon:net:finish') {
+      const socket = netSockets.get(msg.toId);
+      if (socket && !socket.writableFinished) {
+        socket.writableFinished = true;
+        emitNetEvent(socket, 'finish');
+      }
+      return true;
+    }
+    if (channel === '__xenon:net:end') {
+      const socket = netSockets.get(msg.toId);
+      if (socket) receiveNetEnd(socket);
+      return true;
+    }
     if (channel === '__xenon:net:close') {
       const socket = netSockets.get(msg.toId);
       if (socket) {
-        closeNetSocket(socket, true);
+        receiveNetClose(socket);
       }
       return true;
     }
@@ -549,7 +786,6 @@
         err.code = msg.code;
         if (msg.path !== undefined) err.path = msg.path;
         socket.connecting = false;
-        socket._pendingWrites.length = 0;
         socket._hadError = true;
         try {
           emitNetEvent(socket, 'error', err);

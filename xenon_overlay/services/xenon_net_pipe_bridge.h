@@ -18,17 +18,17 @@
 
 namespace xenon {
 
-// Hosts real operating-system named pipes for the renderer's Node-compatible
-// `net` module. JavaScript owns the familiar Server/Socket objects; this class
-// owns the OS handles and transports only lifecycle events and byte streams.
-// No application protocol is interpreted here.
+// Hosts real operating-system named pipes and TCP sockets for the renderer's
+// Node-compatible `net` module. JavaScript owns the familiar Server/Socket
+// objects; this class owns the OS handles and transports only lifecycle events
+// and byte streams. No application protocol is interpreted here.
 class XenonNetPipeBridge {
  public:
-  using EventCallback = base::RepeatingCallback<void(
-      const std::string& container_id,
-      const std::string& endpoint_id,
-      const std::string& channel,
-      base::Value payload)>;
+  using EventCallback =
+      base::RepeatingCallback<void(const std::string& container_id,
+                                   const std::string& endpoint_id,
+                                   const std::string& channel,
+                                   base::Value payload)>;
 
   explicit XenonNetPipeBridge(EventCallback event_callback);
   ~XenonNetPipeBridge();
@@ -40,17 +40,41 @@ class XenonNetPipeBridge {
               const std::string& endpoint_id,
               const std::string& server_id,
               const std::string& path,
-              std::string* error);
+              std::string* error,
+              int permission_flags = 0);
   bool Connect(const std::string& container_id,
                const std::string& endpoint_id,
                const std::string& client_socket_id,
                const std::string& path,
                std::string* error);
+  bool ListenTcp(const std::string& container_id,
+                 const std::string& endpoint_id,
+                 const std::string& server_id,
+                 const std::string& host,
+                 int port,
+                 std::string* error);
+  bool ConnectTcp(const std::string& container_id,
+                  const std::string& endpoint_id,
+                  const std::string& client_socket_id,
+                  const std::string& host,
+                  int port,
+                  std::string* error);
+  base::Value ServerAddress(const std::string& server_id,
+                            const std::string& container_id = "",
+                            const std::string& endpoint_id = "") const;
+  bool OwnsSocket(const std::string& socket_id,
+                  const std::string& container_id,
+                  const std::string& endpoint_id) const;
+  bool EndSocket(const std::string& socket_id);
+  bool SetSocketReadPaused(const std::string& socket_id, bool paused);
   bool Write(const std::string& socket_id,
              const base::DictValue& wire,
-             std::string* error);
+             std::string* error,
+             int write_id = 0);
   bool CloseSocket(const std::string& socket_id);
-  bool CloseServer(const std::string& server_id);
+  bool CloseServer(const std::string& server_id,
+                   const std::string& container_id = "",
+                   const std::string& endpoint_id = "");
   bool HasSocket(const std::string& socket_id) const;
   bool HasServer(const std::string& server_id) const;
   bool HasListenerForPath(const std::string& path) const;
@@ -61,6 +85,12 @@ class XenonNetPipeBridge {
   struct PipeServer;
   struct PipeSocket;
 
+  PipeServer* FindServer(const std::string& server_id,
+                         const std::string& container_id,
+                         const std::string& endpoint_id) const;
+  static void OnSocketWrite(uv_write_t* request, int status);
+  static void OnSocketShutdown(uv_shutdown_t* request, int status);
+  void CompleteServerClose(PipeServer* server);
   static void DeleteServerHandle(uv_handle_t* handle);
   static void DeleteSocketHandle(uv_handle_t* handle);
   static void AllocateReadBuffer(uv_handle_t* handle,

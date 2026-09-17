@@ -1,5 +1,93 @@
 # Electron / Node 适配层：性能优化与模块约定
 
+## 2026-09-18 通用性复查
+
+复查范围为本轮网络、子进程、窗口约束和 TH 片库接入的未提交修改。
+底层能力按模块与窗口配置实现，没有增加 TH/PLE 名称、业务接口或固定端口
+分支。TH 的资源同步、插件版本和 renderer 路径属于应用接入配置；厂商归档
+转换留在构建阶段，不进入通用模块加载器。窗口尺寸使用 Views 的 DIP 约束，
+子进程使用 libuv，OS 进程号使用 Chromium 的平台抽象。
+
+审查并修复了应用正常流程没有覆盖的契约缺口：
+
+- TCP 连接失败交付排队写回调；异步写失败发出 error/close；Socket 重连重置
+  旧连接状态，旧 EOF 的微任务不能结束新连接。
+- HTTP 校验原始头值后仅裁剪 SP/HTAB；对端断开会清理完整但未消费的请求。
+  客户端响应与服务端请求沿真实原型链共享公开的 `http.IncomingMessage`，
+  main/renderer 均覆盖 `instanceof` 和应用扩展公开原型的情况。
+- 子进程输出在 EOF 唤醒 readable 消费者，保留不足 read(size) 的尾块；UTF-8
+  跨块解码后按 UTF-16 单位计量。无子进程及待关闭句柄时停止 5 ms 轮询，
+  后续 spawn 重新启动轮询，不改变真实退出和管道清理流程。
+- BrowserWindow 构造失败释放已分配窗口及 WebContents，并保留原始错误。
+  webview 显式 `webpreferences` 中的 webSecurity 覆盖属性默认值，遵循
+  [Electron 22 的合并顺序](https://github.com/electron/electron/blob/v22.3.27/lib/browser/guest-view-manager.ts#L22-L40)。
+
+验证：JS **573/573**（包含实际 file-stream-rotator，零跳过），Windows
+原生回归 **205/205**（不含 `XenonRealAppSmokeTest.*`），资源同步 Python
+测试 **7/7**。生产 chrome 构建成功，pak 中两份 bootstrap 与生成脚本一致。
+9222 实测 TH 自动登录、片库加载和服务调用正常；PLE 受控视频画面为
+320×180，进度增长且错误码为 0。独立跨域来源矩阵、两类窗口的动态最小尺寸
+与三种 windowsHide 参数实测通过。TH QuitApp 后退出码为 0，用户确认可重新
+拉起，复核新容器已登录且片库正常。测试脚本仅打开 require.js，不能替代侧栏
+显式启动入口；不据此修改普通 IPC 禁止隐式重启旧容器的约束。
+启动/退出日志仍有未实现 API、业务网络及销毁后窗口调用诊断，本次未见
+native FATAL、异常容器退出或窗口事件派发失败，不宣称零报错。
+本机记录位于 `out/ipc-generic-review-20260918/` 和
+`out/th-library-blank-20260917/runtime-evidence.jsonl`。
+跨平台抽象的使用不等同于 macOS/Linux 已通过编译与实机验证；本轮仍只验证
+Windows，也不承诺完整 Node/Electron API 兼容。
+
+## 2026-09-18 无边框窗口鼠标缩放约束
+
+- 修复自定义 FrameView 未转发 `client_view()->GetMinimumSize()` 的断点。
+  `Widget → NonClientView → FrameView → WebDialogView → WebDialogDelegate`
+  现在传递真实最小尺寸，原生窗口管理器和 Views 手动缩放读取同一约束。
+  实现使用通用 Views API，无应用名称或平台消息特判。
+- 手动缩放只给 64 DIP 兜底内容尺寸加阴影边距，再与 Widget 最小尺寸取最大值，
+  避免普通对话框已包含的阴影边距重复计算。
+- 此前 `setSize/setBounds` 验证只覆盖 host 的尺寸截断，不能证明鼠标缩放受约束；
+  本次窗口 JS 回归 44/44 通过，生产构建并重启成功；有边框、无边框窗口的构造
+  最小尺寸、动态更新、单轴约束实机 API 验证通过。用户已确认 TH 鼠标拖边缩放
+  的最小尺寸限制生效，本轮验收完成。
+
+## 2026-09-18 Windows 子进程控制台
+
+- Electron 22 创建 Node 环境时默认启用 `kHideConsoleWindows`，对应 libuv 的
+  `UV_PROCESS_WINDOWS_HIDE_CONSOLE`。通用 `child_process.spawn` 桥现在保留这个
+  默认行为；默认管道 stdio 下，省略 `windowsHide` 或显式传 `false` 均不会
+  额外创建控制台。
+- 显式 `windowsHide: true` 仍使用 `UV_PROCESS_WINDOWS_HIDE`，同时隐藏子程序
+  的初始 GUI 窗口。默认行为仅抑制控制台，保留 GUI 的正常显示以及 libuv
+  对继承 stdio 的处理；非 Windows 平台由 libuv 忽略该标志。
+- 此前适配只处理了显式 `windowsHide: true`，原有测试也总是设置该选项，
+  因而遗漏缺省路径。修复适用于所有托管应用，不按程序名设置启动参数。
+- 依据：[Electron 22.3.27 Node 环境设置](https://github.com/electron/electron/blob/v22.3.27/shell/common/node_bindings.cc#L499-L502)、
+  [Node 16.17.1 spawn 标志](https://github.com/nodejs/node/blob/v16.17.1/src/process_wrap.cc#L213-L223)。
+- 本次生产构建和测试目标构建成功，子进程 JS 回归 18/18、原生回归 9/9
+  （含新增的 3 项真实窗口状态测试）通过。9222 中用实际适配执行同一子进程夹具，
+  三种参数均无控制台，默认/false 的 GUI 启动状态为 `SW_SHOWDEFAULT`，true 为
+  `SW_HIDE`；片库加载完成，桌面窗口列表及用户均确认黑窗消失。
+
+## 2026-09-17 通用网络、子进程和窗口能力验证
+
+- JS 契约回归 **533/533**；原生回归 **200/200**（排除需要商业应用 Browser
+  窗口的 smoke，使用实际应用验证补充）；生产 `chrome` 和测试目标构建成功。
+- 发布包中的 main/renderer bootstrap 与本次生成产物逐字节一致。
+- 独立跨域服务未返回 CORS 响应头：托管 file 页面成功，普通浏览器 file 页面
+  和默认安全的托管 HTTP 页面失败，显式 `webSecurity: false` 的托管 HTTP
+  页面成功。请求头保留原值，未使用业务域名、端口或接口白名单。
+- 真实隐藏窗口的最小尺寸为 480×320，`setSize(100,100)` 返回 480×320；
+  提高最小尺寸为 700×500 不立即缩放，随后 `setBounds` 正确约束为 700×500。
+- TH 自动登录成功；片库 guest 已加载，实际显示本地片库分类和配置提示。
+  真正销毁宿主窗口后，片库子进程退出；另通过应用自带 QuitApp 流程确认
+  容器退出码为 0，全部 TH 页面和片库子进程关闭。用户通过侧栏重开确认片库正常，
+  CDP 复核新一代容器自动登录成功、片库 guest 完成加载。PL-E 本地受控视频播放进度超过
+  1 秒，画面 320×180，错误码 0。
+
+本轮实机范围为 Windows。已有 `fs.watchFile`、`child_process.exec` 及部分
+Electron API 未实现诊断仍可能出现，不将上述结果表述为完整 API 支持或零报错。
+验证产物位于 `out/th-library-blank-20260917/`，不包含在提交中。
+
 ## 此前优化实现
 
 - 两端 Buffer 优先使用 V8 原生 Uint8Array Base64 API；旧 JS host 回退到有界分块编码，避免逐字节拼接长字符串。支持 Base64URL、padding、子视图和 Node 的宽松输入规则。
@@ -51,10 +139,12 @@ CommonJS 模块在执行前入缓存以支持循环依赖，缓存命中读取�
 
 这仍是基于 Chromium/V8 的兼容层，没有接入完整 Node runtime。
 
-- `tls`、`http2`、`child_process` 可正常导入各自独立模块对象。TLS 连接/服务器/证书、HTTP/2 会话/服务器、子进程启动等尚未实现的操作在调用时明确 `ERR_NOT_SUPPORTED`；不能使用 net 冒充 TLS、HTTP/1 冒充 HTTP/2，也不能返回假进程或假成功退出码。
+- `tls`、`http2`、`child_process` 可正常导入各自独立模块对象。TLS 连接/服务器/证书、HTTP/2 会话/服务器、`exec/fork/spawnSync` 等尚未实现的操作在调用时明确 `ERR_NOT_SUPPORTED`；不能使用 net 冒充 TLS、HTTP/1 冒充 HTTP/2，也不能返回假进程或假成功退出码。`child_process.spawn` 已通过 libuv 创建真实进程，支持 cwd/env、pipe/ignore/inherit 标准流、退出事件及生命周期清理；不支持的选项明确拒绝。
 - `zlib` 支持 gzip/gunzip、deflate/inflate、raw 和 unzip 的一次性同步/回调接口，回调版本在工作线程计算；默认及最大输出上限为 64 MiB。压缩流、dictionary、partial flush 等未实现能力在调用时报错。
 - `readline` 支持非 TTY 输入流的 UTF-8/CRLF 行读取、结束清理、暂停/恢复和基本 question；TTY 编辑仍明确不支持。
-- Main HTTP/fetch 为缓冲实现，单次响应上限 5 MiB、上传上限 32 MiB；HTTP server 与流式上传仍未实现。fetch 支持跟随或拒绝重定向；Node HTTP 遇到重定向明确失败。Chromium 已解压的 HTTP 响应去掉原压缩编码和长度头，避免调用方二次解压；fetch 保留浏览器 fetch 的原响应头语义。取消会终止 main 对应的真实 loader。
+- Main HTTP/fetch 客户端为缓冲实现，单次响应上限 5 MiB、上传上限 32 MiB；客户端流式上传仍未实现。fetch 支持跟随或拒绝重定向；Node HTTP 遇到重定向明确失败。Chromium 已解压的 HTTP 响应去掉原压缩编码和长度头，避免调用方二次解压；fetch 保留浏览器 fetch 的原响应头语义。取消会终止 main 对应的真实 loader。
+- 两端 `net` 支持真实命名管道、数字 IPv4/IPv6 TCP 监听和连接、实际绑定地址、写入完成、半关闭与读取暂停/恢复。HTTP server 共用一个解析实现，支持 Content-Length、chunked、顺序 keep-alive/pipeline 及请求正文背压。HTTPS server、DNS 解析、未接入的 TCP 选项仍不支持。`net.ref/unref` 尚未接入 Node 的事件循环存活语义；显式关闭窗口、endpoint 或容器仍会清理原生句柄，不能将方法存在等同于完整 Node 支持。
+- HTTP server 请求流解码支持 UTF-8、ASCII、Latin-1/binary 和 hex；UTF-16/ucs2、Base64/Base64URL 的有状态流解码尚未实现，调用时明确 `ERR_NOT_SUPPORTED`，避免接受参数后静默损坏跨块数据。
 - 尚未实现 package `exports/imports` 和完整 ESM 加载。这些路径明确拒绝，避免绕过包的导出限制。
 - `fs.createReadStream` 已支持真实文件内容、分块交付、范围、UTF-8、暂停/恢复和停止交付；工作线程按 start/end 读取普通文件及 ASAR，仅将选中范围返回 JS，再按 highWaterMark 交付。仍缓存整个范围；无 end 时读到 EOF，destroy 不取消已提交的原生读取。`fs.createWriteStream` 支持日志所需的 `w/a`、编码、排队写入、背压及 finish/error/close 时序；每笔按路径异步写入，不持有 Node 文件描述符。两者均不伪造 fd 或 open 事件；写入流的 fd/start/custom fs/特殊 mode，以及 watch、chmod/chown 等未实现能力仍明确失败。整文件/目录接口也尚未覆盖 Node 的全部 flags、符号链接和 OS errno 细节。
 - 其他内建模块仍属于按需实现的子集；本轮的模块身份与解析改进不等于所有 Node API 已完整实现。
@@ -64,6 +154,25 @@ CommonJS 模块在执行前入缓存以支持循环依赖，缓存命中读取�
 - libuv 10 ms 轮询、流式 HTTP/DataPipe 和公共 IPC 大包共享内存仍需后续专项优化。Renderer HTTP 当前只能取消 JS 交付，尚未把取消传到 Browser 网络请求。
 
 ## 整体审查与维护规范
+
+### 窗口来源和尺寸约束
+
+托管的 BrowserWindow 和 webview 按 Electron 的窗口配置应用 WebPreferences，
+不根据应用名称、业务接口或固定端口放宽网络规则。`file://` 页面保留真实文件
+来源，并使用 Electron 的 `allow_universal_access_from_file_urls` 和
+`allow_file_access_from_file_urls` 默认行为；普通浏览器标签页不应用这些偏好。
+显式 `webSecurity: false` 同时传入 Blink 与能够确认窗口归属的网络工厂。
+跨进程子框架/worker 的工厂若无法确定归属，继续保留 Chromium 原策略。
+适配层不改写应用传入的 `Accept-Language` 等请求头。
+
+窗口销毁后，晚到的原生窗口事件不再进入应用监听器。`BrowserWindow.destroy()`
+只销毁该窗口，不等于 `app.quit()`；应用可能仍持有其他隐藏窗口和后台任务。
+容器不根据“只剩隐藏窗口”推断应用已失效并强制重启。退出和重新启动验证应
+分别覆盖应用定义的 close/activate 与 quit 流程。
+
+`BrowserWindow` 的 `minWidth/minHeight`、`setMinimumSize/getMinimumSize`
+通过同一原生窗口路径维护，以 DIP 表示；窗口管理器缩放和后续 `setSize/setBounds`
+都会遵守约束。设置最小尺寸本身不立即改变当前窗口尺寸。
 
 整体结构已经按 Browser 编排、Utility 执行和 Renderer 接入分工。主要改进空间在跨层的行为契约、重复工作和资源回收；本轮沿现有架构修复，不引入另一套运行时。
 
