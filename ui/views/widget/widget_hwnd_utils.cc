@@ -18,6 +18,10 @@
 
 namespace views {
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+DEFINE_UI_CLASS_PROPERTY_KEY(bool, kRetainRedirectionBitmapKey, false)
+#endif
+
 namespace {
 
 struct WindowStyles {

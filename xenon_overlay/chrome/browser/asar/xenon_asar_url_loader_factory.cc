@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "base/byte_size.h"
+#include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/memory/self_deleting.h"
@@ -22,8 +23,11 @@
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/file_url_loader.h"
+#include "content/public/browser/shared_cors_origin_access_list.h"
+#include "content/public/common/content_switches.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "mojo/public/cpp/bindings/shared_remote.h"
 #include "mojo/public/cpp/system/data_pipe_producer.h"
 #include "mojo/public/cpp/system/file_data_source.h"
 #include "net/base/filename_util.h"
@@ -33,7 +37,10 @@
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
+#include "services/network/public/cpp/cors/cors.h"
+#include "services/network/public/cpp/cors/cors_error_status.h"
 #include "services/network/public/cpp/loading_params.h"
+#include "services/network/public/cpp/request_mode.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/self_deleting_url_loader_factory.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
@@ -72,10 +79,16 @@ class AsarURLLoader : public network::mojom::URLLoader {
  public:
   static void CreateAndStart(
       const network::ResourceRequest& request,
+      int32_t request_id,
+      uint32_t options,
+      const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
+      mojo::SharedRemote<network::mojom::URLLoaderFactory> file_factory,
       mojo::PendingReceiver<network::mojom::URLLoader> loader,
       mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
     auto* asar_url_loader = new AsarURLLoader;
-    asar_url_loader->Start(request, std::move(loader), std::move(client));
+    asar_url_loader->Start(request, request_id, options, traffic_annotation,
+                           std::move(file_factory), std::move(loader),
+                           std::move(client));
     ANALYZER_SKIP_THIS_PATH();
   }
 
@@ -93,6 +106,10 @@ class AsarURLLoader : public network::mojom::URLLoader {
   ~AsarURLLoader() override = default;
 
   void Start(const network::ResourceRequest& request,
+             int32_t request_id,
+             uint32_t options,
+             const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
+             mojo::SharedRemote<network::mojom::URLLoaderFactory> file_factory,
              mojo::PendingReceiver<network::mojom::URLLoader> loader,
              mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
     base::FilePath path;
@@ -106,9 +123,36 @@ class AsarURLLoader : public network::mojom::URLLoader {
     base::FilePath archive_path;
     base::FilePath relative_path;
     if (!asar::GetAsarArchivePath(path, &archive_path, &relative_path)) {
-      content::CreateFileURLLoaderBypassingSecurityChecks(
-          request, std::move(loader), std::move(client), /*observer=*/nullptr,
-          /*allow_directory_listing=*/false);
+      file_factory->CreateLoaderAndStart(std::move(loader), request_id, options,
+                                         request, std::move(client),
+                                         traffic_annotation);
+      delete this;
+      return;
+    }
+
+    // ASAR entries have the same origin and CORS rules as ordinary file URLs.
+    // A grant to display local subresources must not also make their bytes
+    // readable through XHR or an untainted canvas.
+    if (network::cors::IsCorsEnabledRequestMode(request.mode) &&
+        !request.request_initiator) {
+      mojo::Remote<network::mojom::URLLoaderClient>(std::move(client))
+          ->OnComplete(
+              network::URLLoaderCompletionStatus(net::ERR_INVALID_ARGUMENT));
+      delete this;
+      return;
+    }
+    const bool is_same_origin =
+        base::CommandLine::ForCurrentProcess()->HasSwitch(
+            switches::kDisableWebSecurity) ||
+        (request.request_initiator &&
+         request.request_initiator->IsSameOriginWith(request.url));
+    const auto response_type =
+        network::cors::CalculateResponseType(request.mode, is_same_origin);
+    if (response_type == network::mojom::FetchResponseType::kCors) {
+      mojo::Remote<network::mojom::URLLoaderClient>(std::move(client))
+          ->OnComplete(
+              network::URLLoaderCompletionStatus(network::CorsErrorStatus(
+                  network::mojom::CorsError::kCorsDisabledScheme)));
       delete this;
       return;
     }
@@ -133,9 +177,9 @@ class AsarURLLoader : public network::mojom::URLLoader {
         OnClientComplete(net::ERR_FILE_NOT_FOUND);
         return;
       }
-      file = base::File(unpacked_path,
-                        base::File::FLAG_OPEN | base::File::FLAG_READ |
-                            base::File::FLAG_WIN_SHARE_DELETE);
+      file = base::File(unpacked_path, base::File::FLAG_OPEN |
+                                           base::File::FLAG_READ |
+                                           base::File::FLAG_WIN_SHARE_DELETE);
       info.offset = 0;
     } else {
       file = archive->DuplicateFile();
@@ -188,11 +232,12 @@ class AsarURLLoader : public network::mojom::URLLoader {
 
     total_bytes_written_ = total_bytes_to_send;
     auto head = network::mojom::URLResponseHead::New();
+    head->response_type = response_type;
     head->request_start = base::TimeTicks::Now();
     head->response_start = base::TimeTicks::Now();
     head->content_length = base::saturated_cast<int64_t>(total_bytes_to_send);
-    head->headers = base::MakeRefCounted<net::HttpResponseHeaders>(
-        "HTTP/1.1 200 OK");
+    head->headers =
+        base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 200 OK");
 
     if (first_byte_to_send < read_result.bytes_read) {
       const size_t write_size = std::min<uint64_t>(
@@ -233,9 +278,9 @@ class AsarURLLoader : public network::mojom::URLLoader {
       return;
     }
 
-    file_data_source->SetRange(info.offset + first_byte_to_send,
-                               info.offset + first_byte_to_send +
-                                   total_bytes_to_send);
+    file_data_source->SetRange(
+        info.offset + first_byte_to_send,
+        info.offset + first_byte_to_send + total_bytes_to_send);
     data_producer_ =
         std::make_unique<mojo::DataPipeProducer>(std::move(producer_handle));
     data_producer_->Write(
@@ -285,22 +330,30 @@ class AsarURLLoader : public network::mojom::URLLoader {
 
 void CreateAsarURLLoader(
     const network::ResourceRequest& request,
+    int32_t request_id,
+    uint32_t options,
+    const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
+    mojo::SharedRemote<network::mojom::URLLoaderFactory> file_factory,
     mojo::PendingReceiver<network::mojom::URLLoader> loader,
     mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
   base::ThreadPool::CreateSequencedTaskRunner(
       {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
        base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN})
-      ->PostTask(FROM_HERE,
-                 base::BindOnce(&AsarURLLoader::CreateAndStart, request,
-                                std::move(loader), std::move(client)));
+      ->PostTask(
+          FROM_HERE,
+          base::BindOnce(&AsarURLLoader::CreateAndStart, request, request_id,
+                         options, traffic_annotation, std::move(file_factory),
+                         std::move(loader), std::move(client)));
 }
 
 class AsarURLLoaderFactory : public network::SelfDeletingURLLoaderFactory {
  public:
   AsarURLLoaderFactory(
       mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver,
+      mojo::PendingRemote<network::mojom::URLLoaderFactory> file_factory,
       base::SelfDeletingPassKey key)
-      : network::SelfDeletingURLLoaderFactory(std::move(receiver), key) {}
+      : network::SelfDeletingURLLoaderFactory(std::move(receiver), key),
+        file_factory_(std::move(file_factory)) {}
 
  private:
   ~AsarURLLoaderFactory() override = default;
@@ -313,24 +366,35 @@ class AsarURLLoaderFactory : public network::SelfDeletingURLLoaderFactory {
       mojo::PendingRemote<network::mojom::URLLoaderClient> client,
       const net::MutableNetworkTrafficAnnotationTag& traffic_annotation)
       override {
-    CreateAsarURLLoader(request, std::move(loader), std::move(client));
+    CreateAsarURLLoader(request, request_id, options, traffic_annotation,
+                        file_factory_, std::move(loader), std::move(client));
   }
+
+  mojo::SharedRemote<network::mojom::URLLoaderFactory> file_factory_;
 };
 
 void BindFactoryOnIOThread(
-    mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver) {
-  base::MakeSelfDeleting<AsarURLLoaderFactory>(std::move(receiver));
+    mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver,
+    mojo::PendingRemote<network::mojom::URLLoaderFactory> file_factory) {
+  base::MakeSelfDeleting<AsarURLLoaderFactory>(std::move(receiver),
+                                               std::move(file_factory));
 }
 
 }  // namespace
 
 mojo::PendingRemote<network::mojom::URLLoaderFactory>
 CreateAsarURLLoaderFactory() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  // A non-null empty access list retains Chromium's default file CORS policy.
+  // Keep the standard factory on UI; the ASAR filesystem work stays on its
+  // blocking task runner and forwards ordinary files through a SharedRemote.
+  auto file_factory = content::CreateFileURLLoaderFactory(
+      base::FilePath(), content::SharedCorsOriginAccessList::Create());
   mojo::PendingRemote<network::mojom::URLLoaderFactory> remote;
   content::GetIOThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(&BindFactoryOnIOThread,
-                     remote.InitWithNewPipeAndPassReceiver()));
+      FROM_HERE, base::BindOnce(&BindFactoryOnIOThread,
+                                remote.InitWithNewPipeAndPassReceiver(),
+                                std::move(file_factory)));
   return remote;
 }
 

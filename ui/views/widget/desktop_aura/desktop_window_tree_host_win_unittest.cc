@@ -21,11 +21,40 @@
 #include "ui/views/views_features.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/win/hwnd_message_handler.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "components/viz/common/features.h"
+#include "ui/views/widget/widget_hwnd_utils.h"
+#endif
 
 namespace views {
 namespace test {
 
 using DesktopWindowTreeHostWinTest = DesktopWidgetTest;
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+TEST_F(DesktopWindowTreeHostWinTest, RetainRedirectionBitmapForNativeChildren) {
+  base::test::ScopedFeatureList features;
+  features.InitAndEnableFeature(::features::kRemoveRedirectionBitmap);
+  for (bool retain_bitmap : {false, true}) {
+    SCOPED_TRACE(retain_bitmap);
+    Widget widget;
+    Widget::InitParams params =
+        CreateParams(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                     Widget::InitParams::TYPE_WINDOW);
+    params.init_properties_container.SetProperty(kRetainRedirectionBitmapKey,
+                                                 retain_bitmap);
+    widget.Init(std::move(params));
+    auto* host = static_cast<DesktopWindowTreeHostWin*>(
+        widget.GetNativeWindow()->GetHost());
+    const LONG_PTR ex_style = ::GetWindowLongPtr(
+        DesktopWindowTreeHostWinTestApi(host).GetHWND(), GWL_EXSTYLE);
+    EXPECT_EQ(::features::ShouldRemoveRedirectionBitmap() && !retain_bitmap,
+              !!(ex_style & WS_EX_NOREDIRECTIONBITMAP));
+  }
+}
+#endif
 
 TEST_F(DesktopWindowTreeHostWinTest, DebuggingId) {
   Widget widget;

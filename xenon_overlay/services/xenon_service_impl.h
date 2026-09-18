@@ -62,7 +62,11 @@ class XenonServiceImpl : public mojom::XenonMainService,
   void BindNodeAddonHost(
       const std::string& context_id,
       const std::string& endpoint_id,
-      mojo::PendingReceiver<ipc::mojom::NodeAddonHost> receiver) override;
+      mojo::PendingReceiver<ipc::mojom::NodeAddonHost> receiver,
+      mojo::PendingRemote<ipc::mojom::IpcRenderer> callback_renderer) override;
+  void InitializeNodeAddonRuntime(
+      const std::string& context_id,
+      const std::string& runtime_directory) override;
   void DispatchElectronWindowEvent(int32_t window_id,
                                    const std::string& event_name,
                                    base::Value arguments) override;
@@ -236,6 +240,8 @@ class XenonServiceImpl : public mojom::XenonMainService,
   XenonNodeExecutor* EnsureNodeExecutor(const std::string& context_id);
   XenonNodeExecutor* GetNodeExecutor(const std::string& context_id);
   void OnNodeAddonHostDisconnected();
+  void OnNodeCallbackRendererDisconnected(const NodeClientKey& client_key,
+                                          uint64_t owner);
   void EnsureAddonLoaded(
       const std::string& context_id,
       const std::string& path,
@@ -328,6 +334,8 @@ class XenonServiceImpl : public mojom::XenonMainService,
   std::map<NodeClientKey, std::string> renderer_node_endpoints_;
   std::map<NodeClientKey, uint64_t> renderer_node_owners_;
   std::map<NodeClientKey, mojo::ReceiverId> renderer_node_receivers_;
+  std::map<NodeClientKey, mojo::Remote<ipc::mojom::IpcRenderer>>
+      node_callback_renderers_;
   uint64_t next_node_instance_owner_ = 1;
   int32_t next_renderer_node_client_id_ = -1;
 

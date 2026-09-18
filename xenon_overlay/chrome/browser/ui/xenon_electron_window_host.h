@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -110,7 +111,9 @@ class XenonElectronWindowHost : public views::WidgetObserver {
 
  private:
   friend class base::NoDestructor<XenonElectronWindowHost>;
+  friend class XenonHostedWindowBoundsTest;
   friend class XenonHostedWindowCloseTest;
+  friend class XenonHostedWindowPairingTest;
   friend class XenonHostedWindowUserAgentTest;
   XenonElectronWindowHost();
   ~XenonElectronWindowHost() override;
@@ -132,16 +135,21 @@ class XenonElectronWindowHost : public views::WidgetObserver {
     bool ready_to_show_emitted = false;
     bool frameless = false;
     bool transparent = false;
+    // Construction establishes the geometry baseline before JS can subscribe.
+    bool initializing_bounds = false;
+    uint64_t bounds_revision = 0;
     int32_t parent_id = 0;
     std::string container_id;
     base::DictValue web_preferences;
-    std::string url;
+    // Pairing follows the live document, never a pending/aborted navigation.
+    std::string committed_url;
     std::string user_agent;
     bool user_agent_update_pending = false;
-    // A transparent owned window is an overlay surface. In Electron the
-    // in-process native helper can keep it aligned with its parent; Xenon's
-    // addon isolate is out of process, so the Browser-owned Widgets maintain
-    // this native relationship directly.
+    // Preserve the existing transparent-overlay behavior independently of the
+    // embedder's explicit document pairing configuration.
+    bool legacy_parent_pairing = false;
+    // Effective pairing requires a live parent in the same container. Explicit
+    // document declarations also support opaque control surfaces.
     bool sync_bounds_with_parent = false;
     gfx::Rect bounds;
     gfx::Rect normal_bounds;
@@ -156,6 +164,24 @@ class XenonElectronWindowHost : public views::WidgetObserver {
   };
 
   views::Widget* FindWidget(int32_t window_id) const;
+  struct BoundsChange {
+    int32_t window_id;
+    uint64_t revision;
+    gfx::Rect before;
+    gfx::Rect after;
+  };
+  bool CallImpl(int32_t window_id,
+                const std::string& command,
+                const base::Value& arguments,
+                base::Value* result,
+                std::string* error);
+  void RecordBoundsChange(int32_t window_id, const gfx::Rect& bounds);
+  static base::DictValue BoundsChangeMetadata(const BoundsChange& change);
+  void DispatchBoundsChange(const BoundsChange& change);
+  base::Value MakeWindowCallReply(
+      int32_t window_id,
+      base::Value value,
+      const std::vector<BoundsChange>& changes) const;
   int32_t FindEntryWindowForContainer(const std::string& container_id) const;
   bool ActivateEntryWindow(int32_t window_id);
   bool RequestClose(int32_t window_id);
@@ -170,6 +196,8 @@ class XenonElectronWindowHost : public views::WidgetObserver {
                    base::Value arguments);
   void SynchronizeOverlayBounds(int32_t source_id,
                                 const gfx::Rect& bounds);
+  void UpdateWindowPairing(int32_t window_id);
+  std::vector<int32_t> GetPairedWindowIds(int32_t source_id) const;
   void SynchronizeOverlayShowState(int32_t source_id);
   void ShowPopupMenu(int32_t window_id,
                      base::ListValue items,
@@ -183,6 +211,10 @@ class XenonElectronWindowHost : public views::WidgetObserver {
   std::set<std::string> pending_activate_containers_;
   bool synchronizing_overlay_bounds_ = false;
   bool synchronizing_overlay_show_state_ = false;
+  // Synchronous Widget changes belong in their call's reply, not in a later
+  // event delivered to listeners registered after that call has returned.
+  raw_ptr<std::vector<BoundsChange>> bounds_transaction_ = nullptr;
+  std::optional<std::string> bounds_transaction_container_;
   std::map<int32_t, Entry> windows_;
   std::unique_ptr<PopupMenuSession> popup_menu_;
 };

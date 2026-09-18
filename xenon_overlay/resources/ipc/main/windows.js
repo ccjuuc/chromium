@@ -284,19 +284,16 @@
     else pending.reject(new Error(String(value)));
   });
   function mapRendererUrl(url) {
-    const base = String(__xenonRendererBaseUrl || '');
     const mappings = Array.isArray(__xenonRendererUrlMappings) ?
         __xenonRendererUrlMappings : [];
     const raw = String(url || '');
     const normalized = raw.replace(/\\/g, '/');
     let protocol = '';
-    let hostname = '';
     let search = '';
     let hash = '';
     try {
       const parsed = new URL(normalized);
       protocol = parsed.protocol;
-      hostname = parsed.hostname;
       search = parsed.search;
       hash = parsed.hash;
     } catch (e) {
@@ -343,13 +340,7 @@
         return mapped.toString();
       }
     }
-    if (base && (normalized.startsWith('file:') || protocol === 'file:' ||
-                 hostname === 'localhost')) {
-      const mapped = new URL(base.endsWith('/') ? base + 'index.html' : base);
-      mapped.search = search;
-      mapped.hash = hash;
-      return mapped.toString();
-    }
+    // URLs outside declared renderer roots retain their original destination.
     return url;
   }
   const browserWindows = [];
@@ -385,17 +376,58 @@
     }
   }
 
-  function callBrowserWindow(window, command, details = {}) {
+  function callBrowserWindow(window, command, details = {}, commitState) {
     if (typeof __xenonBrowserWindowCall !== 'function') {
       return electronUnsupported(`BrowserWindow.${command}`);
     }
     try {
-      return __xenonBrowserWindowCall(window.id, command, details);
+      const reply = __xenonBrowserWindowCall(window.id, command, details);
+      const transactional = reply?.__xenonWindowCall === true;
+      const value = transactional ? reply.value : reply;
+      // Successful command state must be visible to its geometry listeners.
+      // Commit before callbacks so reentrant setters cannot be overwritten.
+      if (commitState) commitState(value);
+      if ((command === 'get-bounds' || command === 'set-bounds') &&
+          value && typeof value === 'object') {
+        cacheWindowBounds(window, value,
+            transactional ? reply.boundsRevision : undefined);
+      }
+      if (transactional) {
+        // Commit every affected window before emitting: a listener can query a
+        // paired window, resize it again, or destroy it during this callback.
+        const changes = (reply.boundsChanges || []).map(change => ({
+          ...change,
+          window: change.windowId === window.id ? window :
+              browserWindows.find(item => item.id === change.windowId),
+        })).filter(change => change.window && !change.window._destroyed);
+        for (const change of changes)
+          cacheWindowBounds(change.window, change.bounds, change.revision, true);
+        for (const change of changes) {
+          if (browserWindows.includes(change.window))
+            emitWindowBoundsChange(change.window, change.moved, change.resized);
+        }
+      }
+      return value;
     } catch (error) {
       const code = /^([A-Z][A-Z_]+):/.exec(String(error.message));
       if (code && !error.code) error.code = code[1];
       throw error;
     }
+  }
+  function cacheWindowBounds(window, bounds, revision, notified = false) {
+    if (Number.isSafeInteger(revision)) {
+      if (revision < (window._boundsRevision || 0)) return;
+      window._boundsRevision = revision;
+    }
+    window._bounds = {x: bounds.x, y: bounds.y,
+      width: bounds.width, height: bounds.height};
+    if (notified) window._lastNotifiedBounds = {...window._bounds};
+  }
+  function emitWindowBoundsChange(window, moved, resized) {
+    if (window._destroyed) return;
+    if (moved) window.emit('move', createBrowserWindowEvent(window));
+    if (resized && !window._destroyed)
+      window.emit('resize', createBrowserWindowEvent(window));
   }
   function createBrowserWindowEvent(window, cancellable = false) {
     return {
@@ -499,6 +531,7 @@
           const actual = callBrowserWindow(this, 'get-bounds');
           if (actual && typeof actual === 'object') this._bounds = actual;
         }
+        this._lastNotifiedBounds = {...this._bounds};
       } catch (error) {
         // A failed constructor never enters browserWindows, so ordinary app
         // lifecycle cleanup cannot find this partially initialized window.
@@ -555,8 +588,8 @@
         if (ancestor === this) throw new Error('BrowserWindow parent cycle');
       }
       if (this._destroyed || parent?._destroyed) throw new Error('Object has been destroyed');
-      callBrowserWindow(this, 'set-parent-window', {parentId: parent?.id || 0});
-      this._parent = parent;
+      callBrowserWindow(this, 'set-parent-window', {parentId: parent?.id || 0},
+          () => { this._parent = parent; });
     }
     isModal() { return false; }
     moveTop() { callBrowserWindow(this, 'move-top'); }
@@ -649,7 +682,9 @@
     setBounds(bounds) {
       if (!bounds || typeof bounds !== 'object') return;
       const actual = callBrowserWindow(this, 'set-bounds', bounds);
-      this._bounds = actual && typeof actual === 'object' ? actual : {
+      // The call commits the returned geometry before notifying listeners.
+      // Do not overwrite a newer value set by a reentrant resize listener.
+      if (!actual || typeof actual !== 'object') this._bounds = {
           x: bounds.x == null ? this._bounds.x : Number(bounds.x),
           y: bounds.y == null ? this._bounds.y : Number(bounds.y),
           width: bounds.width == null ? this._bounds.width : Number(bounds.width),
@@ -657,8 +692,7 @@
         };
     }
     getBounds() {
-      const actual = callBrowserWindow(this, 'get-bounds');
-      if (actual && typeof actual === 'object') this._bounds = actual;
+      callBrowserWindow(this, 'get-bounds');
       return {...this._bounds};
     }
     getContentBounds() { return this.getBounds(); }
@@ -667,24 +701,25 @@
       const actual = callBrowserWindow(this, 'get-normal-bounds');
       return actual && typeof actual === 'object' ? {...actual} : this.getBounds();
     }
-    setSize(width, height) { this.setBounds({...this._bounds, width, height}); }
-    getSize() { return [this._bounds.width, this._bounds.height]; }
+    setSize(width, height) { this.setBounds({width, height}); }
+    getSize() { const bounds = this.getBounds(); return [bounds.width, bounds.height]; }
     setContentSize(width, height) { this.setSize(width, height); }
     getContentSize() { return this.getSize(); }
-    setPosition(x, y) { this.setBounds({...this._bounds, x, y}); }
-    getPosition() { return [this._bounds.x, this._bounds.y]; }
+    setPosition(x, y) { this.setBounds({x, y}); }
+    getPosition() { const bounds = this.getBounds(); return [bounds.x, bounds.y]; }
     center() { callBrowserWindow(this, 'center'); }
     setMinimumSize(width, height) {
       for (const value of [width, height]) {
         if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647)
           throw new TypeError('Minimum size dimensions must be 32-bit integers');
       }
-      const actual = callBrowserWindow(this, 'set-minimum-size', {
+      callBrowserWindow(this, 'set-minimum-size', {
         width: Math.max(0, width), height: Math.max(0, height),
+      }, actual => {
+        if (actual && typeof actual === 'object') this._minSize = actual;
+        else if (width > 0 || height > 0)
+          this._minSize = {width: Math.max(0, width), height: Math.max(0, height)};
       });
-      if (actual && typeof actual === 'object') this._minSize = actual;
-      else if (width > 0 || height > 0)
-        this._minSize = {width: Math.max(0, width), height: Math.max(0, height)};
     }
     getMinimumSize() {
       const actual = callBrowserWindow(this, 'get-minimum-size');
@@ -885,13 +920,25 @@
       return;
     }
     if (eventName === 'bounds-changed' && details) {
-      const old = win._bounds;
+      if (Number.isSafeInteger(details.revision)) {
+        if (details.revision <= (win._lastAsyncBoundsRevision || 0)) return;
+        win._lastAsyncBoundsRevision = details.revision;
+        // An earlier native drag may arrive after a synchronous setter. Keep
+        // its notification, but never roll the current geometry back to it.
+        cacheWindowBounds(win, details, details.revision, true);
+        emitWindowBoundsChange(win, details.moved, details.resized);
+        return;
+      }
+      // A synchronous setBounds/getBounds can refresh the value cache before
+      // the native event arrives. Compare notifications independently so that
+      // querying geometry cannot suppress the corresponding move/resize event.
+      const old = win._lastNotifiedBounds;
       const moved = old.x !== details.x || old.y !== details.y;
       const resized = old.width !== details.width ||
           old.height !== details.height;
       win._bounds = {...details};
-      if (moved) win.emit('move', createBrowserWindowEvent(win));
-      if (resized) win.emit('resize', createBrowserWindowEvent(win));
+      win._lastNotifiedBounds = {...details};
+      emitWindowBoundsChange(win, moved, resized);
       return;
     }
     if (eventName === 'state-changed' && details) {
@@ -1091,7 +1138,7 @@
         }
         // Screen queries have no BrowserWindow. The host reserves id 0 for
         // these application-wide reads on its UI thread.
-        return __xenonBrowserWindowCall(0, 'screen', {method, ...options});
+        return callBrowserWindow({id: 0}, 'screen', {method, ...options});
       };
       return Object.assign(new EventEmitter(), {
         getPrimaryDisplay: () => call('getPrimaryDisplay'),

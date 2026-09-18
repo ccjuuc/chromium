@@ -364,6 +364,7 @@ if (enable_xenon_service) {
   source_set("unit_tests") {
     testonly = true
     sources = [
+      "asar/xenon_asar_url_loader_factory_unittest.cc",
       "ui/xenon_web_dialog_unittest.cc",
       "xenon_manager_unittest.cc",
     ]
@@ -371,6 +372,7 @@ if (enable_xenon_service) {
       ":browser",
       "//base/test:test_support",
       "//content/test:test_support",
+      "//services/network:test_support",
       "//testing/gtest",
       "//ui/views",
     ]

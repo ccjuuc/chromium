@@ -175,7 +175,8 @@ class XenonWebDialog : public ui::WebDialogDelegate {
                            bool skip_taskbar,
                            bool show,
                            bool show_shadow,
-                           bool use_custom_modal = false);
+                           bool use_custom_modal = false,
+                           bool preserve_native_child_content = false);
 
   // ui::WebDialogDelegate:
   ui::mojom::ModalType GetDialogModalType() const override;

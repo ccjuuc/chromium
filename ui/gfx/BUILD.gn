@@ -9,6 +9,7 @@ import("//device/vr/buildflags/buildflags.gni")
 import("//gpu/vulkan/features.gni")
 import("//testing/libfuzzer/fuzzer_test.gni")
 import("//testing/test.gni")
+import("//xenon_overlay/buildflags/features.gni")
 
 if (is_ios) {
   import("//build/config/apple/mobile_config.gni")
@@ -182,6 +183,7 @@ component("gfx") {
     "//ui/gfx/geometry",
     "//ui/gfx/geometry:geometry_skia",
     "//ui/gfx/range",
+    "//xenon_overlay/buildflags",
   ]
   deps = [
     "//base",
@@ -795,6 +797,9 @@ test("gfx_unittests") {
       "win/get_elevation_icon_unittest.cc",
       "win/hwnd_util_unittest.cc",
     ]
+    if (enable_xenon_service) {
+      sources += [ "win/rendering_window_manager_unittest.cc" ]
+    }
   }
   if (is_ios) {
     sources += [

@@ -67,6 +67,17 @@ std::string NormalizeIpcContainerId(const std::string& container_id) {
   return container_id.empty() ? kDefaultIpcContainerId : container_id;
 }
 
+void SetHostedAppDirectory(const base::FilePath& hosted_directory) {
+  std::unique_ptr<base::Environment> environment = base::Environment::Create();
+  if (hosted_directory.empty()) {
+    environment->UnSetVar(kHostedAppDirectoryEnvironmentVariable);
+  } else if (!environment->SetVar(kHostedAppDirectoryEnvironmentVariable,
+                                  hosted_directory.AsUTF8Unsafe())) {
+    LOG(WARNING) << "Failed to propagate hosted application directory: "
+                 << hosted_directory.AsUTF8Unsafe();
+  }
+}
+
 std::vector<mojom::NodeInvokeCallResultPtr> MakeInvokeFailures(
     size_t count,
     const std::string& error_msg) {
@@ -188,7 +199,8 @@ void XenonServiceImpl::SetNodeAddonObserver(
 void XenonServiceImpl::BindNodeAddonHost(
     const std::string& context_id,
     const std::string& endpoint_id,
-    mojo::PendingReceiver<ipc::mojom::NodeAddonHost> receiver) {
+    mojo::PendingReceiver<ipc::mojom::NodeAddonHost> receiver,
+    mojo::PendingRemote<ipc::mojom::IpcRenderer> callback_renderer) {
   if (endpoint_id.empty()) {
     return;
   }
@@ -205,6 +217,22 @@ void XenonServiceImpl::BindNodeAddonHost(
   renderer_node_receivers_[client_key] = node_addon_host_receivers_.Add(
       this, std::move(receiver),
       NodeAddonConnection{normalized_id, client_id, owner});
+  if (callback_renderer) {
+    auto& remote = node_callback_renderers_[client_key];
+    remote.Bind(std::move(callback_renderer));
+    remote.set_disconnect_handler(
+        base::BindOnce(&XenonServiceImpl::OnNodeCallbackRendererDisconnected,
+                       weak_factory_.GetWeakPtr(), client_key, owner));
+  }
+}
+
+void XenonServiceImpl::InitializeNodeAddonRuntime(
+    const std::string& context_id,
+    const std::string& runtime_directory) {
+  const base::FilePath hosted_directory =
+      base::FilePath::FromUTF8Unsafe(runtime_directory);
+  SetHostedAppDirectory(hosted_directory);
+  EnsureNodeExecutor(context_id)->SetRuntimeDirectory(hosted_directory);
 }
 
 void XenonServiceImpl::DispatchElectronWindowEvent(
@@ -262,19 +290,7 @@ void XenonServiceImpl::InitializeElectronIpc(
   } else if (config && !config->app_path.empty()) {
     hosted_directory = base::FilePath::FromUTF8Unsafe(config->app_path);
   }
-  {
-    std::unique_ptr<base::Environment> environment =
-        base::Environment::Create();
-    if (!hosted_directory.empty()) {
-      if (!environment->SetVar(kHostedAppDirectoryEnvironmentVariable,
-                               hosted_directory.AsUTF8Unsafe())) {
-        LOG(WARNING) << "Failed to propagate hosted application directory: "
-                     << hosted_directory.AsUTF8Unsafe();
-      }
-    } else {
-      environment->UnSetVar(kHostedAppDirectoryEnvironmentVariable);
-    }
-  }
+  SetHostedAppDirectory(hosted_directory);
 
   auto container = std::make_unique<ipc::XenonIpcMainContainer>();
   container->SetNetworkLoaderFactory(url_loader_factory_);
@@ -833,6 +849,8 @@ uint64_t XenonServiceImpl::GetNodeInstanceOwner(const std::string& context_id,
 
 void XenonServiceImpl::ReleaseRendererNodeOwner(
     const NodeClientKey& client_key) {
+  node_callback_renderers_.erase(client_key);
+  pending_node_callbacks_.erase(client_key);
   const auto receiver = renderer_node_receivers_.find(client_key);
   if (receiver != renderer_node_receivers_.end()) {
     node_addon_host_receivers_.Remove(receiver->second);
@@ -844,7 +862,6 @@ void XenonServiceImpl::ReleaseRendererNodeOwner(
   }
   const uint64_t owner_id = owner->second;
   renderer_node_owners_.erase(owner);
-  pending_node_callbacks_.erase(client_key);
   if (auto* executor = GetNodeExecutor(client_key.first)) {
     executor->ReleaseInstanceOwner(owner_id);
     executor->ReleaseCallbacksForClient(client_key.second);
@@ -1304,6 +1321,14 @@ void XenonServiceImpl::OnNodeAddonHostDisconnected() {
   }
 }
 
+void XenonServiceImpl::OnNodeCallbackRendererDisconnected(
+    const NodeClientKey& client_key,
+    uint64_t owner) {
+  if (GetNodeInstanceOwner(client_key.first, client_key.second) == owner) {
+    ReleaseRendererNodeOwner(client_key);
+  }
+}
+
 void XenonServiceImpl::InspectNodeInstanceMemberSync(
     const std::string& module_path,
     int32_t instance_id,
@@ -1476,10 +1501,6 @@ void XenonServiceImpl::OnNodeCallback(const std::string& context_id,
       {NormalizeIpcContainerId(context_id), client_id};
   const auto renderer_endpoint = renderer_node_endpoints_.find(key);
   if (renderer_endpoint != renderer_node_endpoints_.end()) {
-    const auto container = ipc_main_containers_.find(key.first);
-    if (container == ipc_main_containers_.end()) {
-      return;
-    }
     base::ListValue callback_args;
     for (base::Value& arg : args) {
       callback_args.Append(std::move(arg));
@@ -1488,6 +1509,17 @@ void XenonServiceImpl::OnNodeCallback(const std::string& context_id,
     event_args.Append(callback_id);
     event_args.Append(std::move(callback_args));
     event_args.Append(std::move(receiver));
+    const auto direct = node_callback_renderers_.find(key);
+    if (direct != node_callback_renderers_.end() &&
+        direct->second.is_connected()) {
+      direct->second->Dispatch(kNodeAddonCallbackChannel,
+                               base::Value(std::move(event_args)));
+      return;
+    }
+    const auto container = ipc_main_containers_.find(key.first);
+    if (container == ipc_main_containers_.end()) {
+      return;
+    }
     container->second->DispatchToRenderer(
         renderer_endpoint->second, kNodeAddonCallbackChannel,
         base::Value(std::move(event_args)));
@@ -1540,12 +1572,19 @@ void XenonServiceImpl::OnNodeCallbackReleased(const std::string& context_id,
       {NormalizeIpcContainerId(context_id), client_id};
   const auto renderer_endpoint = renderer_node_endpoints_.find(key);
   if (renderer_endpoint != renderer_node_endpoints_.end()) {
+    base::ListValue event_args;
+    event_args.Append(callback_id);
+    const auto direct = node_callback_renderers_.find(key);
+    if (direct != node_callback_renderers_.end() &&
+        direct->second.is_connected()) {
+      direct->second->Dispatch(kNodeAddonCallbackReleasedChannel,
+                               base::Value(std::move(event_args)));
+      return;
+    }
     const auto container = ipc_main_containers_.find(key.first);
     if (container == ipc_main_containers_.end()) {
       return;
     }
-    base::ListValue event_args;
-    event_args.Append(callback_id);
     container->second->DispatchToRenderer(
         renderer_endpoint->second, kNodeAddonCallbackReleasedChannel,
         base::Value(std::move(event_args)));

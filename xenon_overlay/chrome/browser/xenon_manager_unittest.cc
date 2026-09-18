@@ -15,6 +15,8 @@
 #include "build/buildflag.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
+#include "url/origin.h"
 #include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
 
@@ -32,6 +34,136 @@ TEST(XenonManagerTest, RegisterElectronIpcDoesNotStartService) {
   ASSERT_TRUE(manager->RegisterElectronIpc(std::move(config)));
   EXPECT_EQ(0u, manager->service_generation(kContainerId));
   EXPECT_TRUE(manager->GetElectronIpcRendererConfigForContainer(kContainerId));
+}
+
+TEST(XenonManagerTest, FileRendererPermissionRequiresDeclaredMapping) {
+  base::test::TaskEnvironment task_environment;
+  XenonManager manager;
+  base::FilePath absolute_root;
+  ASSERT_TRUE(base::GetCurrentDirectory(&absolute_root));
+  const auto register_mapping = [&manager](const std::string& container,
+                                           const std::string& source,
+                                           const std::string& target) {
+    auto config = ipc::mojom::IpcMainConfig::New();
+    config->container_id = container;
+    auto mapping = ipc::mojom::IpcRendererUrlMapping::New();
+    mapping->source_path_prefix = source;
+    mapping->target_base_url = target;
+    config->renderer_url_mappings.push_back(std::move(mapping));
+    ASSERT_TRUE(manager.RegisterElectronIpc(std::move(config)));
+  };
+  register_mapping("mapped", absolute_root.AsUTF8Unsafe(),
+                   "chrome://hosted-fixture/tools/");
+  for (const char* url :
+       {"chrome://hosted-fixture/tools/",
+        "chrome://hosted-fixture/tools/clipper.html",
+        "chrome://HOSTED-FIXTURE/tools/sub/page.html?q=1#x"}) {
+    EXPECT_TRUE(manager.IsDeclaredFileRendererURL("mapped", GURL(url))) << url;
+  }
+  for (const char* url :
+       {"chrome://hosted-fixture/tools",
+        "chrome://hosted-fixture/tools-other/page.html",
+        "chrome://hosted-fixture/Tools/page.html",
+        "chrome://hosted-fixture/other/page.html",
+        "chrome://hosted-fixture/tools/../other/page.html",
+        "chrome://hosted-fixture/tools/%2e%2e/other.html",
+        "chrome://hosted-fixture/tools/..%2fother.html",
+        "chrome://hosted-fixture/tools/%5Cother.html",
+        "chrome://other-host/tools/page.html",
+        "https://hosted-fixture/tools/page.html",
+        "chrome-untrusted://hosted-fixture/tools/page.html", "about:blank"}) {
+    EXPECT_FALSE(manager.IsDeclaredFileRendererURL("mapped", GURL(url))) << url;
+  }
+  const GURL page("chrome://hosted-fixture/tools/page.html");
+  EXPECT_FALSE(manager.IsDeclaredFileRendererURL("other-app", page));
+  EXPECT_TRUE(manager.IsDeclaredFileRendererOrigin("mapped",
+                                                   url::Origin::Create(page)));
+  EXPECT_FALSE(manager.IsDeclaredFileRendererOrigin("other-app",
+                                                    url::Origin::Create(page)));
+  EXPECT_FALSE(manager.IsDeclaredFileRendererOrigin(
+      "mapped", url::Origin::Create(GURL("https://hosted-fixture/"))));
+  EXPECT_FALSE(manager.IsDeclaredFileRendererOrigin("mapped", url::Origin()));
+
+  for (const std::string& source :
+       {std::string("relative/source"), absolute_root.AppendASCII("..")
+                                            .AppendASCII("outside")
+                                            .AsUTF8Unsafe()}) {
+    register_mapping("invalid-source", source,
+                     "chrome://hosted-fixture/tools/");
+    EXPECT_FALSE(manager.IsDeclaredFileRendererURL("invalid-source", page));
+    EXPECT_FALSE(manager.IsDeclaredFileRendererOrigin(
+        "invalid-source", url::Origin::Create(page)));
+  }
+  for (const char* target : {"https://hosted-fixture/tools/",
+                             "chrome-untrusted://hosted-fixture/tools/",
+                             "chrome://hosted-fixture/tools/?q=1",
+                             "chrome://hosted-fixture/tools/#fragment"}) {
+    register_mapping("invalid-target", absolute_root.AsUTF8Unsafe(), target);
+    EXPECT_FALSE(manager.IsDeclaredFileRendererURL("invalid-target", page));
+  }
+  EXPECT_EQ(manager.service_generation("mapped"), 0u);
+}
+
+TEST(XenonManagerTest, ParentWindowPairingRequiresExactDeclaredURL) {
+  base::test::TaskEnvironment task_environment;
+  XenonManager manager;
+  auto config = ipc::mojom::IpcMainConfig::New();
+  EXPECT_TRUE(config->parent_window_pairing_urls.empty());
+  config->container_id = "paired";
+  config->parent_window_pairing_urls = {
+      "https://APP.test:443/tools/overlay.html?declared=1#declared",
+      "chrome://hosted-fixture/control.html",
+      "file:///opt/example/control.html",
+      "",
+      "relative.html",
+      "https://"};
+  ASSERT_TRUE(manager.RegisterElectronIpc(std::move(config)));
+
+  for (const char* url :
+       {"https://app.test/tools/overlay.html",
+        "https://app.test/tools/overlay.html?runtime=2#runtime",
+        "https://app.test/tools/sub/../overlay.html",
+        "chrome://hosted-fixture/control.html?parent=1#preview",
+        "file:///opt/example/control.html?mode=1#preview"}) {
+    EXPECT_TRUE(manager.ShouldPairElectronWindowWithParent("paired", GURL(url)))
+        << url;
+  }
+  for (const char* url :
+       {"https://app.test/tools/", "https://app.test/tools/overlay.html/child",
+        "https://app.test/tools/overlay.html-other",
+        "https://app.test/tools/Overlay.html",
+        "https://other.test/tools/overlay.html",
+        "http://app.test/tools/overlay.html",
+        "https://app.test:8443/tools/overlay.html",
+        "chrome://hosted-fixture/other.html",
+        "chrome-untrusted://hosted-fixture/control.html",
+        "file:///opt/example/control.html/child", "about:blank", "",
+        "relative.html", "https://"}) {
+    EXPECT_FALSE(
+        manager.ShouldPairElectronWindowWithParent("paired", GURL(url)))
+        << url;
+  }
+
+  const GURL page("https://app.test/tools/overlay.html");
+  EXPECT_FALSE(
+      manager.ShouldPairElectronWindowWithParent("unregistered", page));
+  auto independent = ipc::mojom::IpcMainConfig::New();
+  independent->container_id = "independent";
+  ASSERT_TRUE(manager.RegisterElectronIpc(std::move(independent)));
+  EXPECT_FALSE(manager.ShouldPairElectronWindowWithParent("independent", page));
+  EXPECT_FALSE(manager.ShouldPairElectronWindowWithParent("", page));
+
+  auto legacy = ipc::mojom::IpcMainConfig::New();
+  legacy->parent_window_pairing_urls = {page.spec()};
+  ASSERT_TRUE(manager.RegisterElectronIpc(std::move(legacy)));
+  EXPECT_TRUE(manager.ShouldPairElectronWindowWithParent("", page));
+  EXPECT_TRUE(manager.ShouldPairElectronWindowWithParent("default", page));
+
+  auto replacement = ipc::mojom::IpcMainConfig::New();
+  replacement->container_id = "paired";
+  ASSERT_TRUE(manager.RegisterElectronIpc(std::move(replacement)));
+  EXPECT_FALSE(manager.ShouldPairElectronWindowWithParent("paired", page));
+  EXPECT_EQ(manager.service_generation("paired"), 0u);
 }
 
 TEST(XenonManagerTest, RuntimeMetadataIsCapturedOnceBeforeRendererRequests) {
@@ -137,8 +269,11 @@ TEST(XenonManagerTest, DisconnectedContainerRejectsRendererTraffic) {
                                       std::move(renderer), 1, 1, 1);
   mojo::Remote<ipc::mojom::NodeAddonHost> addon_host;
   bool addon_disconnected = false;
+  mojo::PendingRemote<ipc::mojom::IpcRenderer> callbacks;
+  auto callbacks_receiver = callbacks.InitWithNewPipeAndPassReceiver();
   manager.BindNodeAddonHost(kContainerId, "old-page",
-                            addon_host.BindNewPipeAndPassReceiver());
+                            addon_host.BindNewPipeAndPassReceiver(),
+                            std::move(callbacks));
   addon_host.set_disconnect_handler(base::BindOnce(
       [](bool* disconnected) { *disconnected = true; }, &addon_disconnected));
 #if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
@@ -176,6 +311,158 @@ TEST(XenonManagerTest, StaleDisconnectPreservesRestartedContainer) {
   EXPECT_TRUE(service_pipe->QuerySignalsState().peer_closed());
   EXPECT_EQ(manager.service_generation(kContainerId), 2u);
   manager.OnContainerServiceDisconnected(kContainerId, 2);
+}
+
+TEST(XenonManagerTest, RendererAddonDisconnectDoesNotRestartOrCloseApp) {
+  base::test::TaskEnvironment task_environment;
+  XenonManager manager;
+  constexpr char kContainerId[] = "addon-owner";
+  const XenonManager::RendererAddonKey key{kContainerId, "document-a"};
+  auto app = std::make_unique<XenonManager::ContainerServiceConnection>();
+  app->generation = 7;
+  auto app_pipe = app->remote.BindNewPipeAndPassReceiver().PassPipe();
+  manager.container_services_[kContainerId] = std::move(app);
+  auto addon = std::make_unique<XenonManager::RendererAddonServiceConnection>();
+  addon->container_generation = 7;
+  addon->generation = 10;
+  auto addon_pipe = addon->remote.BindNewPipeAndPassReceiver().PassPipe();
+  auto* existing = addon.get();
+  manager.renderer_addon_services_[key] = std::move(addon);
+
+  EXPECT_EQ(manager.EnsureRendererAddonServiceStarted(key), existing);
+  manager.OnRendererAddonServiceDisconnected(key, 9);
+  task_environment.RunUntilIdle();
+  EXPECT_FALSE(addon_pipe->QuerySignalsState().peer_closed());
+
+  manager.OnRendererAddonServiceDisconnected(key, 10);
+  task_environment.RunUntilIdle();
+  EXPECT_TRUE(addon_pipe->QuerySignalsState().peer_closed());
+  EXPECT_FALSE(app_pipe->QuerySignalsState().peer_closed());
+  EXPECT_EQ(manager.EnsureRendererAddonServiceStarted(key), nullptr);
+  EXPECT_EQ(manager.renderer_addon_services_.at(key)->generation, 10u);
+
+  // Registering the same endpoint cannot erase its failed-process marker.
+  mojo::PendingRemote<ipc::mojom::IpcRenderer> renderer;
+  auto renderer_receiver = renderer.InitWithNewPipeAndPassReceiver();
+  manager.RegisterElectronIpcRenderer(kContainerId, key.second,
+                                      std::move(renderer), 1, 1, 1);
+  EXPECT_EQ(manager.EnsureRendererAddonServiceStarted(key), nullptr);
+  for (const char* channel : {"__xenon:node-addon:invoke-export",
+                              "__xenon:node-addon:construct-export",
+                              "__xenon:node-addon:invoke-instance"}) {
+    bool completed = false;
+    manager.ElectronIpcInvoke(
+        kContainerId, key.second, channel, base::Value(),
+        base::BindOnce(
+            [](bool* completed, ipc::mojom::IpcResultPtr result) {
+              *completed = true;
+              EXPECT_FALSE(result->success);
+              EXPECT_EQ(result->error, "Renderer addon service is unavailable");
+            },
+            &completed));
+    EXPECT_TRUE(completed);
+  }
+}
+
+TEST(XenonManagerTest, NativeInvokesUseDocumentServiceWhileAppIpcStaysInMain) {
+  base::test::TaskEnvironment task_environment;
+  for (const char* channel :
+       {"__xenon:node-addon:invoke-export",
+        "__xenon:node-addon:construct-export",
+        "__xenon:node-addon:invoke-instance", "application-channel"}) {
+    XenonManager manager;
+    auto app = std::make_unique<XenonManager::ContainerServiceConnection>();
+    app->generation = 1;
+    auto app_pipe = app->remote.BindNewPipeAndPassReceiver().PassPipe();
+    manager.container_services_["app"] = std::move(app);
+    auto addon =
+        std::make_unique<XenonManager::RendererAddonServiceConnection>();
+    addon->container_generation = 1;
+    addon->generation = 1;
+    auto addon_pipe = addon->remote.BindNewPipeAndPassReceiver().PassPipe();
+    manager.renderer_addon_services_[{"app", "page"}] = std::move(addon);
+
+    manager.ElectronIpcInvoke("app", "page", channel, base::Value(),
+                              base::BindOnce([](ipc::mojom::IpcResultPtr) {}));
+    task_environment.RunUntilIdle();
+    const bool native_call = std::string(channel) != "application-channel";
+    EXPECT_EQ(addon_pipe->QuerySignalsState().readable(), native_call);
+    EXPECT_EQ(app_pipe->QuerySignalsState().readable(), !native_call);
+  }
+}
+
+TEST(XenonManagerTest, RendererAddonRemovalAndAppExitCloseOnlyOwnedServices) {
+  base::test::TaskEnvironment task_environment;
+  XenonManager manager;
+  const auto add_app = [&manager](const std::string& container_id) {
+    auto app = std::make_unique<XenonManager::ContainerServiceConnection>();
+    app->generation = 1;
+    auto pipe = app->remote.BindNewPipeAndPassReceiver().PassPipe();
+    manager.container_services_[container_id] = std::move(app);
+    return pipe;
+  };
+  const auto add_document = [&manager](const std::string& container_id,
+                                       const std::string& endpoint) {
+    auto addon =
+        std::make_unique<XenonManager::RendererAddonServiceConnection>();
+    addon->container_generation = 1;
+    addon->generation = ++manager.renderer_addon_service_generation_;
+    auto pipe = addon->remote.BindNewPipeAndPassReceiver().PassPipe();
+    manager.renderer_addon_services_[{container_id, endpoint}] =
+        std::move(addon);
+    return pipe;
+  };
+  auto app_a = add_app("app-a");
+  auto app_b = add_app("app-b");
+  auto page_a = add_document("app-a", "page-a");
+  auto page_b = add_document("app-a", "page-b");
+  auto other_page = add_document("app-b", "page-a");
+#if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
+  auto retained =
+      manager.renderer_addon_services_.at({"app-a", "page-b"})->remote;
+#endif
+
+  manager.RemoveElectronIpcRenderer("app-a", "page-a");
+  task_environment.RunUntilIdle();
+  EXPECT_TRUE(page_a->QuerySignalsState().peer_closed());
+  EXPECT_FALSE(page_b->QuerySignalsState().peer_closed());
+  EXPECT_FALSE(other_page->QuerySignalsState().peer_closed());
+  EXPECT_EQ(manager.EnsureRendererAddonServiceStarted({"app-a", "page-a"}),
+            nullptr);
+
+  manager.CloseContainerService("app-a");
+  task_environment.RunUntilIdle();
+  EXPECT_TRUE(app_a->QuerySignalsState().peer_closed());
+  EXPECT_TRUE(page_b->QuerySignalsState().peer_closed());
+  EXPECT_FALSE(app_b->QuerySignalsState().peer_closed());
+  EXPECT_FALSE(other_page->QuerySignalsState().peer_closed());
+  EXPECT_EQ(manager.renderer_addon_services_.size(), 1u);
+#if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
+  EXPECT_TRUE(retained.is_bound());
+#endif
+}
+
+TEST(XenonManagerTest,
+     ResetClosesRendererAddonServicesWithoutRevivingDocuments) {
+  base::test::TaskEnvironment task_environment;
+  XenonManager manager;
+  auto app = std::make_unique<XenonManager::ContainerServiceConnection>();
+  app->generation = 1;
+  auto app_pipe = app->remote.BindNewPipeAndPassReceiver().PassPipe();
+  manager.container_services_["app"] = std::move(app);
+  auto addon = std::make_unique<XenonManager::RendererAddonServiceConnection>();
+  addon->container_generation = 1;
+  addon->generation = 1;
+  auto addon_pipe = addon->remote.BindNewPipeAndPassReceiver().PassPipe();
+  manager.renderer_addon_services_[{"app", "document"}] = std::move(addon);
+
+  manager.ResetServiceConnection();
+  task_environment.RunUntilIdle();
+  EXPECT_TRUE(addon_pipe->QuerySignalsState().peer_closed());
+  EXPECT_FALSE(app_pipe->QuerySignalsState().peer_closed());
+  EXPECT_TRUE(manager.renderer_addon_services_.empty());
+  EXPECT_EQ(manager.EnsureRendererAddonServiceStarted({"app", "document"}),
+            nullptr);
 }
 
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)

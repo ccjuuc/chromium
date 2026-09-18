@@ -442,6 +442,7 @@ source_set("blink_headers") {
     "//ui/base/ime/mojom",
     "//ui/base/prediction",
     "//url",
+    "//xenon_overlay/buildflags",
   ]
 
   if (is_mac) {

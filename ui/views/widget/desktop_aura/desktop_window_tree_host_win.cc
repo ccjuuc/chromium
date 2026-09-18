@@ -73,6 +73,7 @@
 #include "ui/wm/core/compound_event_filter.h"
 #include "ui/wm/core/window_animations.h"
 #include "ui/wm/public/scoped_tooltip_disabler.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 DEFINE_UI_CLASS_PROPERTY_TYPE(views::DesktopWindowTreeHostWin*)
 
@@ -201,6 +202,14 @@ void DesktopWindowTreeHostWin::Init(const Widget::InitParams& params) {
   ConfigureWindowStyles(message_handler_.get(), params,
                         GetWidget()->widget_delegate(),
                         native_widget_delegate_.get());
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (content_window()->GetProperty(kRetainRedirectionBitmapKey)) {
+    // Keep both the cached style and CreateWindowEx's initial style consistent.
+    message_handler_->set_window_ex_style(
+        message_handler_->window_ex_style() &
+        ~static_cast<DWORD>(WS_EX_NOREDIRECTIONBITMAP));
+  }
+#endif
 
   HWND parent_hwnd = nullptr;
   if (params.parent && params.parent->GetHost()) {

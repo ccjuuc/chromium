@@ -41,6 +41,7 @@
 #include "base/base_paths.h"
 #include "base/files/file_util.h"
 #include "base/path_service.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
 #include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
@@ -62,6 +63,7 @@
 
 #include "base/win/windows_version.h"
 #include "ui/display/win/screen_win.h"
+#include "ui/views/widget/widget_hwnd_utils.h"
 #include "ui/views/win/hwnd_util.h"
 #include "ui/aura/window.h"
 #include "ui/events/event.h"
@@ -1101,7 +1103,8 @@ void XenonWebDialog::ShowWithOptions(content::BrowserContext* context,
       options.FindBool("skipTaskbar").value_or(false),
       options.FindBool("show").value_or(true),
       options.FindBool("shadow").value_or(true),
-      use_custom_modal);
+      use_custom_modal,
+      options.FindBool("preserveNativeChildContent").value_or(false));
 }
 
 void XenonWebDialog::ShowInternal(content::BrowserContext* context,
@@ -1124,7 +1127,8 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
                                   bool skip_taskbar,
                                   bool show,
                                   bool show_shadow,
-                                  bool use_custom_modal) {
+                                  bool use_custom_modal,
+                                  bool preserve_native_child_content) {
   content::WebContents* web_contents = nullptr;
   if (modal_type == ui::mojom::ModalType::kChild && parent) {
     GlobalBrowserCollection* browsers = GlobalBrowserCollection::GetInstance();
@@ -1178,6 +1182,10 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
     params.remove_standard_frame = !frame;
 #if BUILDFLAG(IS_WIN)
     params.dont_show_in_taskbar = skip_taskbar;
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    params.init_properties_container.SetProperty(
+        views::kRetainRedirectionBitmapKey, preserve_native_child_content);
+#endif
 #endif
     params.type = views::Widget::InitParams::TYPE_WINDOW;
     params.parent = parent;
@@ -1418,9 +1426,24 @@ void XenonWebDialog::ShowXenonPlayerElectron(Profile* profile) {
                 .AppendASCII("main-renderer")
                 .AsUTF8Unsafe();
         renderer_mapping->target_base_url = "chrome://xenon-player-electron/";
+        // The embedded main entry is beside the runtime executable and builds
+        // sibling renderer URLs from that location. Declare this source alias
+        // explicitly, keeping the packaged source first for reverse CommonJS
+        // path resolution in renderer documents.
+        auto main_renderer_mapping = renderer_mapping.Clone();
+        main_renderer_mapping->source_path_prefix =
+            player_dir.AppendASCII("main-renderer").AsUTF8Unsafe();
         player_config->renderer_url_mappings.push_back(
             std::move(renderer_mapping));
+        player_config->renderer_url_mappings.push_back(
+            std::move(main_renderer_mapping));
         player_config->renderer_base_url = "chrome://xenon-player-electron/";
+        // These tool pages are control surfaces for their native parent. Keep
+        // the declaration in application configuration; the window host uses
+        // the same pairing contract for any explicitly configured document.
+        player_config->parent_window_pairing_urls = {
+            "chrome://xenon-player-electron/clipper.html",
+            "chrome://xenon-player-electron/gifClipper.html"};
         manager->SetElectronIpcContainerForOrigin(
             "chrome://xenon-player-electron", "xenon-player-test");
         manager->InitializeElectronIpc(std::move(player_config));

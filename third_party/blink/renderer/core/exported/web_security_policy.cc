@@ -41,7 +41,26 @@
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "third_party/blink/public/web/web_document.h"
+#include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#endif
+
 namespace blink {
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+void WebSecurityPolicy::GrantLoadLocalResources(const WebDocument& document) {
+  Document* core_document = document;
+  if (!core_document) {
+    return;
+  }
+  ExecutionContext* context = core_document->GetExecutionContext();
+  if (context) {
+    context->GetMutableSecurityOrigin()->GrantLoadLocalResources();
+  }
+}
+#endif
 
 void WebSecurityPolicy::RegisterURLSchemeAsDisplayIsolated(
     const WebString& scheme) {

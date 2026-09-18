@@ -24,17 +24,23 @@ Browser Process
           |                    ^
           | Mojo               | Window / WebContents
           v                    |
-Utility Process                |
+App Main Utility Process       |
   XenonServiceImpl             |
   XenonIpcMainContainer -------+
   XenonNodeExecutor
           ^
-          | IPC / NodeAddonHost
+          | App IPC
           |
 Renderer Process
   XenonIpcRenderer
   Renderer Bootstrap
   Hosted Renderer / Preload
+          |
+          | NodeAddonHost / native callbacks
+          v
+Document Addon Utility Process
+  XenonServiceImpl
+  XenonNodeExecutor
 ```
 
 ## 3. 分层职责
@@ -57,11 +63,12 @@ Renderer Process
 
 `container_id` 对应：
 
-- 一个 Utility service；
+- 一个运行应用 main 的 Utility service；
 - 一个 main V8 context；
 - 一套 CommonJS 缓存；
 - 一组 renderer endpoints；
-- 一套 addon 与运行目录。
+- main 的 addon 缓存与运行目录配置；
+- 按需创建的 Document addon Utility，每个页面拥有独立原生状态。
 
 正式架构保持一个 Utility service 只承载一个 `container_id`。
 
@@ -81,7 +88,9 @@ main 路径、应用身份和原生运行目录相互独立。
 ### 4.3 Renderer Endpoint
 
 每个 Document 建立独立 endpoint，关联容器、frame 和 window/guest。Document 销毁时
-endpoint 注销，main 容器继续存活。
+endpoint 注销，其 addon Utility 连接关闭，main 容器继续存活。仅注册 endpoint
+不会启动 addon 进程；首次绑定 NodeAddonHost 时才创建。同一页面重复加载相同路径
+的原生模块复用缓存，不同页面不共享 DLL 的静态变量。
 
 ### 4.4 Window Identity
 
@@ -143,11 +152,23 @@ Hosted renderer
 ### 5.5 原生模块
 
 ```text
-require(.node)
+Renderer require(.node)
   -> NodeAddonHost
-  -> Container NodeExecutor
+  -> Document Addon Utility / NodeExecutor
   -> addon / DLL / SDK
 ```
+
+同步调用、异步 native 调用、Promise 续接和回调使用同一 Document 的 Utility。
+回调通过单独的 IpcRenderer 管道直接返回原页面；普通 ipcRenderer 消息仍进入应用
+main。该 Utility 只初始化运行目录和 native executor，不执行应用 main，也不接管
+BrowserWindow API。main 自身加载的 addon 仍属于 main Utility。
+
+应用退出关闭所属文档的 addon 连接；addon 进程崩溃后旧 endpoint 保持失效，不能通过
+下一次调用隐式启动新进程并复用旧句柄。新 Document 可创建自己的新进程。
+
+这一边界按 Document 实现，不等同于完整复刻 Electron 的 renderer 进程复用策略。
+代价是每个实际加载 native 模块的文档增加一个 Utility 进程；仅增加 V8 context
+不能隔离第三方 DLL 的静态状态，因此不能用共享进程缓存替代。
 
 ## 6. 资源架构
 

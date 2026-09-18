@@ -191,6 +191,75 @@ test('BrowserWindow applies the requested background before loading its page', a
   assert.equal(window.getBackgroundColor(), '#202020');
 });
 
+test('declared renderer mappings retain non-home pages, query and hash with Windows path casing', async () => {
+  const {BrowserWindow, calls, context} = createRuntime();
+  context.__xenonRendererBaseUrl = 'chrome://fixture-host/';
+  context.__xenonRendererUrlMappings = [{
+    sourcePathPrefix: 'C:\\Fixture\\main-renderer',
+    targetBaseUrl: 'chrome://fixture-host/',
+  }];
+  const window = new BrowserWindow();
+  for (const [input, expected] of [
+    ['file:///C:/Fixture/main-renderer/clipper.html?windowType=clipper#preview',
+      'chrome://fixture-host/clipper.html?windowType=clipper#preview'],
+    ['file:///c:/FIXTURE/MAIN-RENDERER/tools/ClipEditor.html?value=a%20b#selection',
+      'chrome://fixture-host/tools/ClipEditor.html?value=a%20b#selection'],
+  ]) {
+    await window.loadURL(input);
+    assert.equal(calls.at(-1).url, expected);
+    assert.equal(window.webContents.getURL(), expected);
+  }
+});
+
+test('unmapped file pages remain unchanged even when a renderer base URL exists', async () => {
+  const {BrowserWindow, calls, context} = createRuntime();
+  context.__xenonRendererBaseUrl = 'chrome://fixture-host/';
+  context.__xenonRendererUrlMappings = [{
+    sourcePathPrefix: 'C:/Fixture/main-renderer',
+    targetBaseUrl: 'chrome://fixture-host/',
+  }];
+  const window = new BrowserWindow();
+  for (const input of [
+    'file:///C:/Other/clipper.html?windowType=clipper#preview',
+    'file:///C:/Fixture/main-renderer-backup/clipper.html?value=a%20b#selection',
+  ]) {
+    await window.loadURL(input);
+    assert.equal(calls.at(-1).url, input);
+    assert.equal(window.webContents.getURL(), input);
+  }
+});
+
+test('localhost renderer pages remain unchanged instead of loading the configured home page', async () => {
+  const {BrowserWindow, calls, context} = createRuntime();
+  context.__xenonRendererBaseUrl = 'chrome://fixture-host/index.html';
+  const window = new BrowserWindow();
+  for (const input of [
+    'http://localhost:9527/clipper?windowType=clipper#preview',
+    'https://localhost:9528/tools/editor.html?value=a%20b#selection',
+  ]) {
+    await window.loadURL(input);
+    assert.equal(calls.at(-1).url, input);
+    assert.equal(window.webContents.getURL(), input);
+  }
+});
+
+test('renderer file mapping respects POSIX path case and preserves unmatched URLs', async () => {
+  const {BrowserWindow, calls, context} = createRuntime();
+  context.__xenonPlatform = 'linux';
+  context.__xenonRendererBaseUrl = 'chrome://fixture-host/';
+  context.__xenonRendererUrlMappings = [{
+    sourcePathPrefix: '/opt/Fixture/main-renderer',
+    targetBaseUrl: 'chrome://fixture-host/',
+  }];
+  const window = new BrowserWindow();
+  await window.loadURL('file:///opt/Fixture/main-renderer/clipper.html?mode=edit#preview');
+  assert.equal(calls.at(-1).url, 'chrome://fixture-host/clipper.html?mode=edit#preview');
+  const unmatched = 'file:///opt/fixture/main-renderer/clipper.html?mode=edit#preview';
+  await window.loadURL(unmatched);
+  assert.equal(calls.at(-1).url, unmatched);
+  assert.equal(window.webContents.getURL(), unmatched);
+});
+
 test('BrowserWindow applies web preferences to its native owner before navigation', async () => {
   const {BrowserWindow, calls} = createRuntime();
   const window = new BrowserWindow({webPreferences: {webSecurity: false}});
@@ -669,6 +738,205 @@ test('native closed completion never sends another close and duplicate requests 
   }
   assert.deepEqual(events, ['closed', 'window-all-closed']);
   assert.equal(calls.some(call => call.command === 'close'), false);
+});
+
+test('bounds queries and setters do not consume queued move and resize events', () => {
+  let actual = {x: 10, y: 20, width: 300, height: 200};
+  const {BrowserWindow, context} = createRuntime((_id, command, details) => {
+    if (command === 'set-bounds') actual = {...actual, ...details};
+    if (command === 'get-bounds' || command === 'set-bounds') return {...actual};
+    return null;
+  });
+  const window = new BrowserWindow();
+  const events = [];
+  window.on('move', () => events.push('move'));
+  window.on('resize', () => events.push('resize'));
+  window.setBounds({x: 40, width: 500});
+  window.getBounds();
+  context.__xenonDispatchBrowserWindowEvent(window.id, 'bounds-changed', {...actual});
+  assert.deepEqual(events, ['move', 'resize']);
+  context.__xenonDispatchBrowserWindowEvent(window.id, 'bounds-changed', {...actual});
+  assert.deepEqual(events, ['move', 'resize']);
+  actual = {...actual, y: 80};
+  window.getBounds();
+  context.__xenonDispatchBrowserWindowEvent(window.id, 'bounds-changed', {...actual});
+  assert.deepEqual(events, ['move', 'resize', 'move']);
+});
+
+function createTransactionalWindowRuntime() {
+  const states = new Map();
+  const state = id => {
+    if (!states.has(id)) states.set(id, {
+      bounds: {x: 0, y: 0, width: 800, height: 600}, revision: 0,
+    });
+    return states.get(id);
+  };
+  const change = (id, patch) => {
+    const current = state(id);
+    const before = current.bounds;
+    current.bounds = {...before, ...patch};
+    const moved = before.x !== current.bounds.x || before.y !== current.bounds.y;
+    const resized = before.width !== current.bounds.width ||
+        before.height !== current.bounds.height;
+    return {windowId: id, revision: ++current.revision,
+      bounds: {...current.bounds}, moved, resized};
+  };
+  let additionalChange;
+  const runtime = createRuntime((id, command, details) => {
+    const current = state(id);
+    const changes = [];
+    let value = null;
+    if (command === 'set-bounds') changes.push(change(id, details));
+    if (command === 'center') changes.push(change(id, {x: 40, y: 30}));
+    if (command === 'set-minimum-size') {
+      changes.push(change(id, {
+        width: Math.max(current.bounds.width, details.width),
+        height: Math.max(current.bounds.height, details.height),
+      }));
+      value = {width: details.width, height: details.height};
+    }
+    if (command === 'get-bounds' || command === 'set-bounds')
+      value = {...current.bounds};
+    if (command === 'screen') value = {id: 1, bounds: {...current.bounds}};
+    if (additionalChange) changes.push(...additionalChange(id, command));
+    return {__xenonWindowCall: true, value,
+      boundsRevision: current.revision, boundsChanges: changes};
+  });
+  return {...runtime, state, change,
+    setAdditionalChange(callback) { additionalChange = callback; },
+    dispatch(change) {
+      runtime.context.__xenonDispatchBrowserWindowEvent(
+          change.windowId, 'bounds-changed', {
+            ...change.bounds, revision: change.revision,
+            moved: change.moved, resized: change.resized,
+          });
+    },
+  };
+}
+
+test('programmatic bounds events complete before a later show listener is installed', () => {
+  const {BrowserWindow} = createTransactionalWindowRuntime();
+  const window = new BrowserWindow({show: false});
+  const events = [];
+  window.on('move', () => events.push('move'));
+  window.on('resize', () => events.push('resize'));
+  window.setMinimumSize(1180, 500);
+  assert.deepEqual(events, ['resize']);
+  window.setBounds({width: 1200, height: 700});
+  window.setSize(1200, 700);
+  assert.deepEqual(events, ['resize', 'resize']);
+  const saved = window.getBounds();
+  window.setPosition(-20000, -20000);
+  assert.deepEqual(events, ['resize', 'resize', 'move']);
+  let resizedDuringShow = false;
+  window.on('resize', () => { resizedDuringShow = true; });
+  window.show();
+  assert.equal(resizedDuringShow, false);
+  window.setBounds(saved);
+  assert.deepEqual({...window.getBounds()}, {...saved});
+  assert.deepEqual(Object.keys(window.getBounds()).sort(), ['height', 'width', 'x', 'y']);
+});
+
+test('earlier native bounds events remain observable without reverting newer geometry', () => {
+  const {BrowserWindow, change, dispatch} = createTransactionalWindowRuntime();
+  const window = new BrowserWindow();
+  const events = [];
+  window.on('move', () => events.push('move'));
+  window.on('resize', () => events.push('resize'));
+  const drag = change(window.id, {x: 90});
+  window.getBounds();
+  window.setSize(900, 700);
+  const latest = window.getBounds();
+  assert.deepEqual(events, ['resize']);
+  dispatch(drag);
+  assert.deepEqual(events, ['resize', 'move']);
+  assert.deepEqual({...window._bounds}, {...latest});
+  dispatch(drag);
+  assert.deepEqual(events, ['resize', 'move']);
+  const next = change(window.id, {height: 720});
+  window.getBounds();
+  dispatch(next);
+  assert.deepEqual(events, ['resize', 'move', 'resize']);
+});
+
+test('synchronous resize listeners can resize again or destroy their window', () => {
+  const {BrowserWindow} = createTransactionalWindowRuntime();
+  const window = new BrowserWindow();
+  window.once('resize', () => window.setSize(1000, 800));
+  window.setSize(900, 700);
+  assert.equal(window._bounds.width, 1000);
+  assert.equal(window._bounds.height, 800);
+  const events = [];
+  window.on('move', () => { events.push('move'); window.destroy(); });
+  window.on('resize', () => events.push('resize'));
+  window.setBounds({x: 100, width: 1100});
+  assert.deepEqual(events, ['move']);
+  assert.equal(window.isDestroyed(), true);
+});
+
+test('command state is committed before geometry listeners and survives reentrant setters', () => {
+  const {BrowserWindow, change, setAdditionalChange} = createTransactionalWindowRuntime();
+  const first = new BrowserWindow();
+  const second = new BrowserWindow();
+  const child = new BrowserWindow();
+  setAdditionalChange((id, command) => command === 'set-parent-window' ?
+    [change(id, {x: 100})] : []);
+  child.once('move', () => {
+    assert.equal(child.getParentWindow(), first);
+    child.setParentWindow(second);
+  });
+  child.setParentWindow(first);
+  assert.equal(child.getParentWindow(), second);
+  child.once('resize', () => {
+    assert.equal(child._minSize.width, 900);
+    child.setMinimumSize(1000, 800);
+  });
+  child.setMinimumSize(900, 700);
+  assert.deepEqual({...child._minSize}, {width: 1000, height: 800});
+});
+
+test('paired bounds replies commit all windows before invoking reentrant listeners', () => {
+  const {BrowserWindow, change, setAdditionalChange} = createTransactionalWindowRuntime();
+  const parent = new BrowserWindow();
+  const child = new BrowserWindow();
+  setAdditionalChange((id, command) => id === parent.id && command === 'set-bounds' ?
+    [change(child.id, {x: 80})] : []);
+  parent.once('move', () => {
+    assert.equal(child._bounds.x, 80);
+    child.setPosition(120, 130);
+  });
+  parent.setPosition(80, 90);
+  assert.equal(child._bounds.x, 120);
+  assert.equal(child._bounds.y, 130);
+});
+
+test('partial setters retain native geometry and size and position getters query it', () => {
+  const {BrowserWindow, change, calls} = createTransactionalWindowRuntime();
+  const window = new BrowserWindow();
+  change(window.id, {x: 250, y: 160});
+  window.setSize(900, 700);
+  assert.deepEqual({...calls.at(-1).details}, {width: 900, height: 700});
+  assert.deepEqual([...window.getPosition()], [250, 160]);
+  change(window.id, {width: 1000, height: 800});
+  window.setPosition(80, 70);
+  assert.deepEqual({...calls.at(-1).details}, {x: 80, y: 70});
+  assert.deepEqual([...window.getSize()], [1000, 800]);
+});
+
+test('real show-time geometry changes still emit resize and screen replies are unwrapped', () => {
+  const {BrowserWindow, context, change, setAdditionalChange} =
+      createTransactionalWindowRuntime();
+  const window = new BrowserWindow({show: false});
+  setAdditionalChange((id, command) => command === 'show' ?
+    [change(id, {width: 950})] : []);
+  let resized = 0;
+  window.on('resize', () => ++resized);
+  window.show();
+  assert.equal(resized, 1);
+  assert.equal(window._bounds.width, 950);
+  const display = context.__xenonElectron.screen.getPrimaryDisplay();
+  assert.equal(display.id, 1);
+  assert.equal(display.__xenonWindowCall, undefined);
 });
 
 test('destroyed windows ignore queued native events while live windows still receive them', () => {

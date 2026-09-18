@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "base/auto_reset.h"
+#include "base/check_op.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -53,6 +54,7 @@
 #include "ui/views/controls/webview/web_dialog_view.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_guest.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_menu_runner.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
@@ -68,6 +70,7 @@
 
 #include "base/win/windows_version.h"
 #include "ui/display/win/screen_win.h"
+#include "ui/gfx/win/rendering_window_manager.h"
 #include "ui/views/win/hwnd_util.h"
 #endif
 
@@ -427,6 +430,16 @@ class XenonElectronWindowHost::HostedWebContentsObserver
     }
     if (navigation_handle && navigation_handle->IsInPrimaryMainFrame()) {
       SchedulePendingUserAgent();
+      if (navigation_handle->HasCommitted()) {
+        auto entry = owner_->windows_.find(window_id_);
+        if (entry != owner_->windows_.end() && entry->second.has_loaded_url) {
+          entry->second.committed_url =
+              navigation_handle->IsErrorPage()
+                  ? std::string()
+                  : navigation_handle->GetURL().spec();
+          owner_->UpdateWindowPairing(window_id_);
+        }
+      }
     }
   }
 
@@ -811,12 +824,14 @@ bool XenonElectronWindowHost::CreateHostedWindow(
 
   const int32_t id = next_id_++;
   Entry& entry = windows_[id];
+  entry.initializing_bounds = true;
   entry.frameless = !frame;
   entry.transparent = transparent;
   entry.parent_id = parent_id;
   entry.container_id = container_id;
   entry.ever_shown = show;
-  entry.sync_bounds_with_parent = transparent && parent_id > 0;
+  entry.legacy_parent_pairing = transparent && parent_id > 0;
+  entry.sync_bounds_with_parent = entry.legacy_parent_pairing;
 
   base::DictValue options;
   options.Set("title", title);
@@ -839,6 +854,9 @@ bool XenonElectronWindowHost::CreateHostedWindow(
   // and avoids replacing a live Views client tree during loadURL/loadFile.
   options.Set("show", false);
   options.Set("skipTaskbar", transparent || parent_id > 0);
+  // Native addons can attach opaque child windows and use GDI rendering.
+  // Retain their backing bitmap while the web surface stays GPU accelerated.
+  options.Set("preserveNativeChildContent", true);
 
   XenonWebDialog::ShowWithOptions(context, GURL("about:blank"), options,
                                   &entry.widget, parent_view,
@@ -880,6 +898,12 @@ bool XenonElectronWindowHost::CreateHostedWindow(
 #if BUILDFLAG(IS_WIN)
   HWND native = views::HWNDForWidget(entry.widget);
   entry.hwnd = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(native));
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (native && !gfx::RenderingWindowManager::GetInstance()
+                     ->SetNativeChildClippingEnabled(native, true)) {
+    LOG(WARNING) << "Failed to enable native child clipping for window id=" << id;
+  }
+#endif
   if (native &&
       !::SetWindowSubclass(native, ElectronWindowSubclassProc,
                            kElectronWindowSubclassId, 0)) {
@@ -897,7 +921,8 @@ bool XenonElectronWindowHost::CreateHostedWindow(
     }
   }
   if (entry.frameless) {
-    ConfigureFramelessDwmWindow(native, entry.sync_bounds_with_parent);
+    ConfigureFramelessDwmWindow(
+        native, entry.transparent && entry.sync_bounds_with_parent);
   }
   if (native && entry.frameless && !entry.has_loaded_url) {
     // Keep WS_THICKFRAME for resize semantics and the DWM shadow, but force a
@@ -936,6 +961,7 @@ bool XenonElectronWindowHost::CreateHostedWindow(
   }
   entry.bounds = GetVisibleWindowBoundsInScreen(entry.widget);
   entry.normal_bounds = entry.bounds;
+  entry.initializing_bounds = false;
 
   *window_id = id;
   *hwnd = entry.hwnd;
@@ -957,7 +983,6 @@ void XenonElectronWindowHost::LoadURL(int32_t window_id,
     return;
   }
   Entry& entry = it->second;
-  entry.url = url;
   views::Widget* widget = entry.widget;
   auto* dialog_view =
       static_cast<views::WebDialogView*>(widget->widget_delegate());
@@ -1045,6 +1070,36 @@ bool XenonElectronWindowHost::Call(int32_t window_id,
                                    const base::Value& arguments,
                                    base::Value* result,
                                    std::string* error) {
+  std::vector<BoundsChange> changes;
+  bool success;
+  {
+    const auto source = windows_.find(window_id);
+    base::AutoReset<std::optional<std::string>> collecting_container(
+        &bounds_transaction_container_,
+        source == windows_.end()
+            ? std::nullopt
+            : std::make_optional(source->second.container_id));
+    base::AutoReset<raw_ptr<std::vector<BoundsChange>>> collecting(
+        &bounds_transaction_, &changes);
+    success = CallImpl(window_id, command, arguments, result, error);
+  }
+  if (success) {
+    *result = MakeWindowCallReply(window_id, std::move(*result), changes);
+  } else {
+    // A failed command can still have changed a native window. There is no
+    // successful reply to carry these notifications, so use the event route.
+    for (const auto& change : changes) {
+      DispatchBoundsChange(change);
+    }
+  }
+  return success;
+}
+
+bool XenonElectronWindowHost::CallImpl(int32_t window_id,
+                                       const std::string& command,
+                                       const base::Value& arguments,
+                                       base::Value* result,
+                                       std::string* error) {
   // Screen queries have no BrowserWindow owner; reserve id zero only for this
   // internal command and leave all ordinary window routing unchanged.
   if (window_id == 0 && command == "screen") {
@@ -1443,11 +1498,15 @@ bool XenonElectronWindowHost::Call(int32_t window_id,
       *error = "BrowserWindow was destroyed while changing its parent";
       return false;
     }
+    if (updated->second.parent_id != *parent_id) {
+      updated->second.sync_bounds_with_parent = false;
+    }
     updated->second.parent_id = *parent_id;
-    // Reparenting a regular transparent popup must not turn it into a player
-    // overlay: its bounds must remain independent of its new owner.
-    updated->second.sync_bounds_with_parent =
-        updated->second.sync_bounds_with_parent && *parent_id > 0;
+    // Ordinary owner changes do not opt into pairing. Explicit declarations
+    // are re-evaluated against the current document and the new parent.
+    updated->second.legacy_parent_pairing =
+        updated->second.legacy_parent_pairing && *parent_id > 0;
+    UpdateWindowPairing(window_id);
     return true;
   }
   if (command == "move-top") {
@@ -1736,6 +1795,72 @@ void XenonElectronWindowHost::NotifyEvent(int32_t window_id,
       window_id, event_name, std::move(arguments));
 }
 
+void XenonElectronWindowHost::UpdateWindowPairing(int32_t window_id) {
+  auto entry = windows_.find(window_id);
+  if (entry == windows_.end() || !entry->second.widget) {
+    return;
+  }
+  const int32_t parent_id = entry->second.parent_id;
+  const auto parent = windows_.find(parent_id);
+  const bool valid_parent =
+      parent_id != window_id && parent != windows_.end() &&
+      parent->second.widget &&
+      parent->second.container_id == entry->second.container_id;
+  const bool enabled =
+      valid_parent &&
+      (entry->second.legacy_parent_pairing ||
+       XenonManager::GetInstance()->ShouldPairElectronWindowWithParent(
+           entry->second.container_id, GURL(entry->second.committed_url)));
+  const bool was_enabled = entry->second.sync_bounds_with_parent;
+  entry->second.sync_bounds_with_parent = enabled;
+  if (enabled && !was_enabled) {
+    // The parent establishes the initial state and geometry. Reacquire both
+    // entries because state changes can synchronously notify window observers.
+    SynchronizeOverlayShowState(parent_id);
+    entry = windows_.find(window_id);
+    const auto live_parent = windows_.find(parent_id);
+    if (entry != windows_.end() && entry->second.sync_bounds_with_parent &&
+        entry->second.parent_id == parent_id && live_parent != windows_.end() &&
+        live_parent->second.widget) {
+      SynchronizeOverlayBounds(parent_id, GetVisibleWindowBoundsInScreen(
+                                              live_parent->second.widget));
+    }
+  }
+}
+
+std::vector<int32_t> XenonElectronWindowHost::GetPairedWindowIds(
+    int32_t source_id) const {
+  const auto source = windows_.find(source_id);
+  if (source == windows_.end() || !source->second.widget) {
+    return {};
+  }
+  std::set<int32_t> visited{source_id};
+  std::vector<int32_t> group{source_id};
+  const auto add_window = [&](int32_t id) {
+    const auto candidate = windows_.find(id);
+    if (candidate != windows_.end() && candidate->second.widget &&
+        candidate->second.container_id == source->second.container_id &&
+        visited.insert(id).second) {
+      group.push_back(id);
+    }
+  };
+  for (size_t index = 0; index < group.size(); ++index) {
+    const int32_t current_id = group[index];
+    const auto current = windows_.find(current_id);
+    if (current->second.sync_bounds_with_parent) {
+      add_window(current->second.parent_id);
+    }
+    for (const auto& [id, candidate] : windows_) {
+      if (candidate.sync_bounds_with_parent &&
+          candidate.parent_id == current_id) {
+        add_window(id);
+      }
+    }
+  }
+  group.erase(group.begin());
+  return group;
+}
+
 void XenonElectronWindowHost::SynchronizeOverlayBounds(
     int32_t source_id,
     const gfx::Rect& bounds) {
@@ -1761,24 +1886,14 @@ void XenonElectronWindowHost::SynchronizeOverlayBounds(
       visible_bounds.IsEmpty() ? bounds : visible_bounds;
 
   base::AutoReset<bool> synchronizing(&synchronizing_overlay_bounds_, true);
-  if (source->second.sync_bounds_with_parent) {
-    views::Widget* parent = FindWidget(source->second.parent_id);
-    if (parent && !parent->IsMinimized() && !parent->IsMaximized() &&
-        !parent->IsFullscreen() &&
-        GetVisibleWindowBoundsInScreen(parent) != synchronized_bounds) {
-      SetVisibleWindowBounds(parent, synchronized_bounds);
-    }
-    return;
-  }
-
-  for (auto& [id, entry] : windows_) {
-    if (!entry.sync_bounds_with_parent || entry.parent_id != source_id ||
-        !entry.widget || entry.widget->IsMinimized() ||
-        entry.widget->IsMaximized() || entry.widget->IsFullscreen() ||
-        GetVisibleWindowBoundsInScreen(entry.widget) == synchronized_bounds) {
+  for (int32_t id : GetPairedWindowIds(source_id)) {
+    views::Widget* target = FindWidget(id);
+    if (!target || target->IsMinimized() || target->IsMaximized() ||
+        target->IsFullscreen() ||
+        GetVisibleWindowBoundsInScreen(target) == synchronized_bounds) {
       continue;
     }
-    SetVisibleWindowBounds(entry.widget, synchronized_bounds);
+    SetVisibleWindowBounds(target, synchronized_bounds);
   }
 }
 
@@ -1814,19 +1929,7 @@ void XenonElectronWindowHost::SynchronizeOverlayShowState(int32_t source_id) {
     return;
   }
 
-  std::vector<views::Widget*> targets;
-  if (source->second.sync_bounds_with_parent) {
-    if (views::Widget* parent = FindWidget(source->second.parent_id)) {
-      targets.push_back(parent);
-    }
-  } else {
-    for (auto& [id, entry] : windows_) {
-      if (entry.sync_bounds_with_parent && entry.parent_id == source_id &&
-          entry.widget) {
-        targets.push_back(entry.widget);
-      }
-    }
-  }
+  const std::vector<int32_t> targets = GetPairedWindowIds(source_id);
   if (targets.empty()) {
     return;
   }
@@ -1835,14 +1938,19 @@ void XenonElectronWindowHost::SynchronizeOverlayShowState(int32_t source_id) {
   // Windows automatically hides owned overlays with a minimized owner. Do
   // not independently minimize the layered child: it must retain its HWND
   // and become visible again when the owner restores.
-  if (source_widget->IsMinimized() &&
-      !source->second.sync_bounds_with_parent) {
+  if (source_widget->IsMinimized() && !source->second.sync_bounds_with_parent) {
     return;
   }
-  base::AutoReset<bool> synchronizing(&synchronizing_overlay_show_state_,
-                                      true);
-  for (views::Widget* target : targets) {
-    if (source_widget->IsFullscreen()) {
+  base::AutoReset<bool> synchronizing(&synchronizing_overlay_show_state_, true);
+  const bool fullscreen = source_widget->IsFullscreen();
+  const bool minimized = source_widget->IsMinimized();
+  const bool maximized = source_widget->IsMaximized();
+  for (int32_t id : targets) {
+    views::Widget* target = FindWidget(id);
+    if (!target) {
+      continue;
+    }
+    if (fullscreen) {
       if (!target->IsFullscreen()) {
         target->SetFullscreen(true);
       }
@@ -1850,11 +1958,15 @@ void XenonElectronWindowHost::SynchronizeOverlayShowState(int32_t source_id) {
       target->SetFullscreen(false);
     }
 
-    if (source_widget->IsMinimized()) {
+    target = FindWidget(id);
+    if (!target) {
+      continue;
+    }
+    if (minimized) {
       if (!target->IsMinimized()) {
         target->Minimize();
       }
-    } else if (source_widget->IsMaximized()) {
+    } else if (maximized) {
       if (!target->IsMaximized()) {
         target->Maximize();
       }
@@ -1870,6 +1982,90 @@ void XenonElectronWindowHost::OnWidgetActivationChanged(views::Widget* widget,
   if (it != windows_.end()) {
     NotifyEvent(it->first, active ? "focus" : "blur", base::Value());
   }
+}
+
+// static
+base::DictValue XenonElectronWindowHost::BoundsChangeMetadata(
+    const BoundsChange& change) {
+  return base::DictValue()
+      .Set("revision", static_cast<double>(change.revision))
+      .Set("moved", change.before.origin() != change.after.origin())
+      .Set("resized", change.before.size() != change.after.size());
+}
+
+void XenonElectronWindowHost::RecordBoundsChange(int32_t window_id,
+                                                 const gfx::Rect& bounds) {
+  auto it = windows_.find(window_id);
+  if (it == windows_.end() || it->second.bounds == bounds) {
+    return;
+  }
+  Entry& entry = it->second;
+  // Revisions travel as JavaScript numbers. Never silently lose ordering if
+  // an exceptionally long-lived window exhausts the safe integer range.
+  CHECK_LT(entry.bounds_revision, uint64_t{9007199254740991});
+  BoundsChange change{window_id, ++entry.bounds_revision, entry.bounds, bounds};
+  entry.bounds = bounds;
+  if (entry.initializing_bounds) {
+    return;
+  }
+  // A call reply is delivered only to its originating application's ipcMain.
+  // Native reentrancy can also move another application's window; preserve
+  // that window's ordinary asynchronous event route instead of capturing it.
+  if (bounds_transaction_ && bounds_transaction_container_ &&
+      entry.container_id == *bounds_transaction_container_) {
+    auto previous =
+        std::find_if(bounds_transaction_->begin(), bounds_transaction_->end(),
+                     [window_id](const BoundsChange& pending) {
+                       return pending.window_id == window_id;
+                     });
+    if (previous == bounds_transaction_->end()) {
+      bounds_transaction_->push_back(std::move(change));
+    } else {
+      // DWM/DPI corrections may temporarily change the same window more than
+      // once. Report the completed call's geometry, preserving its first
+      // bounds.
+      previous->after = change.after;
+      previous->revision = change.revision;
+    }
+    return;
+  }
+  DispatchBoundsChange(change);
+}
+
+void XenonElectronWindowHost::DispatchBoundsChange(const BoundsChange& change) {
+  if (!FindWidget(change.window_id)) {
+    return;
+  }
+  auto details = BoundsToValue(change.after).TakeDict();
+  details.Merge(BoundsChangeMetadata(change));
+  NotifyEvent(change.window_id, "bounds-changed",
+              base::Value(std::move(details)));
+}
+
+base::Value XenonElectronWindowHost::MakeWindowCallReply(
+    int32_t window_id,
+    base::Value value,
+    const std::vector<BoundsChange>& changes) const {
+  base::ListValue notifications;
+  for (const auto& change : changes) {
+    if (!FindWidget(change.window_id)) {
+      continue;
+    }
+    auto notification = BoundsChangeMetadata(change);
+    notification.Set("windowId", change.window_id);
+    notification.Set("bounds", BoundsToValue(change.after));
+    notifications.Append(std::move(notification));
+  }
+  auto reply = base::DictValue()
+                   .Set("__xenonWindowCall", true)
+                   .Set("value", std::move(value))
+                   .Set("boundsChanges", std::move(notifications));
+  const auto source = windows_.find(window_id);
+  if (source != windows_.end()) {
+    reply.Set("boundsRevision",
+              static_cast<double>(source->second.bounds_revision));
+  }
+  return base::Value(std::move(reply));
 }
 
 void XenonElectronWindowHost::OnWidgetBoundsChanged(
@@ -1888,12 +2084,11 @@ void XenonElectronWindowHost::OnWidgetBoundsChanged(
   if (it->second.bounds == visible_bounds) {
     return;
   }
-  it->second.bounds = visible_bounds;
   if (!widget->IsMinimized() && !widget->IsMaximized() &&
       !widget->IsFullscreen()) {
     it->second.normal_bounds = visible_bounds;
   }
-  NotifyEvent(it->first, "bounds-changed", BoundsToValue(visible_bounds));
+  RecordBoundsChange(it->first, visible_bounds);
   SynchronizeOverlayBounds(it->first, visible_bounds);
 }
 
@@ -1943,7 +2138,7 @@ void XenonElectronWindowHost::OnNativeWindowMessage(uint64_t hwnd,
     if (entry.frameless && CanResetDwmAppearance(message)) {
       ConfigureFramelessDwmWindow(
           reinterpret_cast<HWND>(static_cast<uintptr_t>(hwnd)),
-          entry.sync_bounds_with_parent);
+          entry.transparent && entry.sync_bounds_with_parent);
     }
 #endif
     if (!entry.hooked_messages.contains(message)) {
@@ -2154,6 +2349,10 @@ void XenonElectronWindowHost::OnWidgetDestroying(views::Widget* widget) {
     if (it->second.widget == widget) {
 #if BUILDFLAG(IS_WIN)
       if (HWND hwnd = views::HWNDForWidget(widget)) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+        gfx::RenderingWindowManager::GetInstance()
+            ->SetNativeChildClippingEnabled(hwnd, false);
+#endif
         ::RemoveWindowSubclass(hwnd, ElectronWindowSubclassProc,
                                kElectronWindowSubclassId);
       }

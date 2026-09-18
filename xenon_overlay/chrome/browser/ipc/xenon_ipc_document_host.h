@@ -53,7 +53,8 @@ class XenonIpcDocumentHost final
   void BindRenderer(
       mojo::PendingRemote<xenon::ipc::mojom::IpcRenderer> renderer) override;
   void BindNodeAddonHost(
-      mojo::PendingReceiver<xenon::ipc::mojom::NodeAddonHost> receiver)
+      mojo::PendingReceiver<xenon::ipc::mojom::NodeAddonHost> receiver,
+      mojo::PendingRemote<xenon::ipc::mojom::IpcRenderer> callback_renderer)
       override;
   void Send(const std::string& channel, base::Value arguments) override;
   void Invoke(const std::string& channel,

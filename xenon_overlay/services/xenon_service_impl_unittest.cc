@@ -11,10 +11,12 @@
 
 #include "base/base64.h"
 #include "base/base_paths.h"
+#include "base/environment.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
+#include "base/scoped_environment_variable_override.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/task_environment.h"
@@ -34,6 +36,25 @@ class XenonServiceImplTestPeer {
   static std::vector<mojom::NodeInvokeArgPtr> TakeNodeInvokeArgs(
       base::Value arguments) {
     return XenonServiceImpl::TakeNodeInvokeArgs(std::move(arguments));
+  }
+
+  static bool HasMainContainer(const XenonServiceImpl& service) {
+    return !service.ipc_main_containers_.empty();
+  }
+
+  static bool HasNodeExecutor(XenonServiceImpl& service,
+                              const std::string& context_id) {
+    return service.GetNodeExecutor(context_id) != nullptr;
+  }
+
+  static void ReleaseCallback(XenonServiceImpl& service,
+                              const std::string& context_id,
+                              const std::string& endpoint_id,
+                              int32_t callback_id) {
+    const auto client =
+        service.renderer_node_clients_.find({context_id, endpoint_id});
+    ASSERT_NE(service.renderer_node_clients_.end(), client);
+    service.OnNodeCallbackReleased(context_id, client->second, callback_id);
   }
 };
 
@@ -128,6 +149,13 @@ class NodeCallbackRecorder : public ipc::mojom::IpcRenderer {
     base::Value receiver;
   };
   void Dispatch(const std::string& channel, base::Value arguments) override {
+    if (channel == "__xenon:node-addon:callback-released") {
+      ASSERT_TRUE(arguments.is_list());
+      ASSERT_EQ(1u, arguments.GetList().size());
+      ASSERT_TRUE(arguments.GetList()[0].is_int());
+      released.push_back(arguments.GetList()[0].GetInt());
+      return;
+    }
     if (channel != "__xenon:node-addon:callback") {
       return;
     }
@@ -143,6 +171,7 @@ class NodeCallbackRecorder : public ipc::mojom::IpcRenderer {
     calls.push_back({event[0].GetInt(), std::move(args), std::move(event[2])});
   }
   std::vector<Call> calls;
+  std::vector<int32_t> released;
 };
 
 struct InstanceHandle {
@@ -178,10 +207,13 @@ class XenonServiceOwnerTest : public testing::Test {
         browser_.BindNewPipeAndPassReceiver());
   }
 
-  NodeRemote Bind(const std::string& endpoint) {
+  NodeRemote Bind(
+      const std::string& endpoint,
+      mojo::PendingRemote<ipc::mojom::IpcRenderer> callback_renderer = {}) {
     NodeRemote node;
     browser_->BindNodeAddonHost(kContext, endpoint,
-                                node.BindNewPipeAndPassReceiver());
+                                node.BindNewPipeAndPassReceiver(),
+                                std::move(callback_renderer));
     browser_.FlushForTesting();
     return node;
   }
@@ -317,6 +349,230 @@ class XenonServiceOwnerTest : public testing::Test {
   std::unique_ptr<XenonServiceImpl> service_;
   std::string addon_path_;
 };
+
+TEST_F(XenonServiceOwnerTest, AddonRuntimeDoesNotInitializeElectronMain) {
+  base::ScopedEnvironmentVariableOverride hosted_directory(
+      "XENON_HOSTED_APP_DIR", "previous-runtime");
+  base::ScopedTempDir runtime;
+  ASSERT_TRUE(runtime.CreateUniqueTempDir());
+  ASSERT_TRUE(base::WriteFile(runtime.GetPath().AppendASCII("package.json"),
+                              R"({"main":"main.js"})"));
+  ASSERT_TRUE(base::WriteFile(
+      runtime.GetPath().AppendASCII("main.js"),
+      "require('fs').writeFileSync(__dirname + '/main-executed', 'yes');"));
+
+  browser_->InitializeNodeAddonRuntime(kContext,
+                                       runtime.GetPath().AsUTF8Unsafe());
+  browser_.FlushForTesting();
+  EXPECT_EQ(runtime.GetPath().AsUTF8Unsafe(),
+            base::Environment::Create()->GetVar("XENON_HOSTED_APP_DIR"));
+  EXPECT_TRUE(XenonServiceImplTestPeer::HasNodeExecutor(*service_, kContext));
+  EXPECT_FALSE(XenonServiceImplTestPeer::HasMainContainer(*service_));
+  EXPECT_FALSE(
+      base::PathExists(runtime.GetPath().AppendASCII("main-executed")));
+
+  ResultFuture main_call;
+  browser_->ElectronIpcInvoke(kContext, "page", "ordinary-ipc-channel",
+                              base::Value(base::ListValue()),
+                              main_call.GetCallback());
+  auto result = Finish(main_call);
+  ASSERT_TRUE(result);
+  EXPECT_FALSE(result->success);
+  EXPECT_NE(std::string::npos, result->error.find("ipcMain"));
+
+  NodeRemote node = Bind("page");
+  Load(node);
+  ExpectReadable(Read(node, Construct(node)));
+  EXPECT_FALSE(XenonServiceImplTestPeer::HasMainContainer(*service_));
+  browser_->InitializeNodeAddonRuntime(kContext, "");
+  browser_.FlushForTesting();
+  EXPECT_FALSE(base::Environment::Create()->GetVar("XENON_HOSTED_APP_DIR"));
+}
+
+TEST_F(XenonServiceOwnerTest, DirectCallbacksWorkWithoutMainAndKeepOwner) {
+  NodeCallbackRecorder first;
+  NodeCallbackRecorder second;
+  mojo::Receiver<ipc::mojom::IpcRenderer> first_receiver(&first);
+  mojo::Receiver<ipc::mojom::IpcRenderer> second_receiver(&second);
+  NodeRemote first_node =
+      Bind("first", first_receiver.BindNewPipeAndPassRemote());
+  NodeRemote second_node =
+      Bind("second", second_receiver.BindNewPipeAndPassRemote());
+  Load(first_node);
+  EXPECT_FALSE(XenonServiceImplTestPeer::HasMainContainer(*service_));
+
+  base::Value payload(base::DictValue().Set("label", "first-page"));
+  for (bool direct : {true, false}) {
+    SCOPED_TRACE(direct);
+    base::ListValue args;
+    args.Append(CallbackWire(81));
+    args.Append(payload.Clone());
+    ipc::mojom::IpcResultPtr result;
+    if (direct) {
+      auto [reply, promise_id] =
+          CallExport(first_node, "InvokeCallbackWithReceiver", std::move(args));
+      EXPECT_EQ(0u, promise_id);
+      result = std::move(reply);
+    } else {
+      base::DictValue request;
+      request.Set("modulePath", addon_path_);
+      request.Set("functionName", "InvokeCallbackWithReceiver");
+      request.Set("arguments", std::move(args));
+      ResultFuture invoked;
+      browser_->ElectronIpcInvoke(
+          kContext, "first", kExportChannel,
+          base::Value(base::ListValue().Append(std::move(request))),
+          invoked.GetCallback());
+      result = Finish(invoked);
+    }
+    ASSERT_TRUE(result);
+    ASSERT_TRUE(result->success) << result->error;
+    EXPECT_EQ(payload, result->value);
+  }
+  ASSERT_EQ(2u, first.calls.size());
+  for (const auto& call : first.calls) {
+    EXPECT_EQ(81, call.id);
+    ASSERT_EQ(1u, call.arguments.size());
+    EXPECT_EQ(payload, call.arguments[0]);
+    EXPECT_EQ(payload, call.receiver);
+  }
+  EXPECT_TRUE(second.calls.empty());
+
+  auto [second_result, promise_id] =
+      CallExport(second_node, "InvokeCallbackWithReceiver",
+                 base::ListValue()
+                     .Append(CallbackWire(81))
+                     .Append(base::DictValue().Set("label", "second-page")));
+  ASSERT_TRUE(second_result);
+  ASSERT_TRUE(second_result->success) << second_result->error;
+  EXPECT_EQ(0u, promise_id);
+  ASSERT_EQ(1u, second.calls.size());
+  ASSERT_TRUE(second.calls[0].receiver.is_dict());
+  EXPECT_EQ("second-page",
+            *second.calls[0].receiver.GetDict().FindString("label"));
+  EXPECT_EQ(2u, first.calls.size());
+
+  const auto direct_handle = Construct(first_node);
+  const auto async_handle = ConstructViaBrowser("first");
+  EXPECT_EQ(direct_handle.token, async_handle.token);
+  ExpectReadable(Read(first_node, async_handle));
+  ExpectReadable(ReadViaBrowser("first", direct_handle));
+  ExpectInvalidOwner(Read(second_node, direct_handle));
+
+  // Exercise the service's GC notification endpoint over the same real Mojo
+  // pipe without making this routing test depend on V8's collection timing.
+  XenonServiceImplTestPeer::ReleaseCallback(*service_, kContext, "first", 81);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ((std::vector<int32_t>{81}), first.released);
+  EXPECT_TRUE(second.released.empty());
+}
+
+TEST_F(XenonServiceOwnerTest, RebindingDisconnectsOldCallbackPipe) {
+  NodeCallbackRecorder old_callbacks;
+  NodeCallbackRecorder new_callbacks;
+  mojo::Receiver<ipc::mojom::IpcRenderer> old_receiver(&old_callbacks);
+  mojo::Receiver<ipc::mojom::IpcRenderer> new_receiver(&new_callbacks);
+  NodeRemote old_node = Bind("page", old_receiver.BindNewPipeAndPassRemote());
+  Load(old_node);
+  const auto old_handle = Construct(old_node);
+  auto [retained, promise_id] =
+      CallExport(old_node, "RetainCallback",
+                 base::ListValue().Append(1).Append(CallbackWire(7)));
+  ASSERT_TRUE(retained);
+  ASSERT_TRUE(retained->success) << retained->error;
+  EXPECT_EQ(0u, promise_id);
+
+  base::test::TestFuture<void> old_disconnected;
+  old_receiver.set_disconnect_handler(old_disconnected.GetCallback());
+  NodeRemote new_node = Bind("page", new_receiver.BindNewPipeAndPassRemote());
+  task_environment_.RunUntilIdle();
+  EXPECT_FALSE(old_node.is_connected());
+  EXPECT_TRUE(old_disconnected.IsReady());
+  ExpectInvalidOwner(Read(new_node, old_handle));
+
+  auto [called, call_promise_id] =
+      CallExport(new_node, "CallRetainedCallback", base::ListValue().Append(1));
+  ASSERT_TRUE(called);
+  ASSERT_TRUE(called->success) << called->error;
+  EXPECT_EQ(0u, call_promise_id);
+  EXPECT_EQ(0, called->value.GetInt());
+  EXPECT_TRUE(old_callbacks.calls.empty());
+  EXPECT_TRUE(new_callbacks.calls.empty());
+
+  auto [new_result, new_promise_id] =
+      CallExport(new_node, "InvokeCallbackWithReceiver",
+                 base::ListValue()
+                     .Append(CallbackWire(7))
+                     .Append(base::DictValue().Set("label", "replacement")));
+  ASSERT_TRUE(new_result);
+  ASSERT_TRUE(new_result->success) << new_result->error;
+  EXPECT_EQ(0u, new_promise_id);
+  ASSERT_EQ(1u, new_callbacks.calls.size());
+  ASSERT_TRUE(new_callbacks.calls[0].receiver.is_dict());
+  EXPECT_EQ("replacement",
+            *new_callbacks.calls[0].receiver.GetDict().FindString("label"));
+  EXPECT_TRUE(old_callbacks.calls.empty());
+  const auto new_handle = Construct(new_node);
+  EXPECT_NE(old_handle.token, new_handle.token);
+  ExpectReadable(ReadViaBrowser("page", new_handle));
+}
+
+TEST_F(XenonServiceOwnerTest, EitherPipeOrEndpointRemovalReleasesCallbacks) {
+  for (const std::string close_path : {"native", "callback", "remove"}) {
+    SCOPED_TRACE(close_path);
+    const std::string endpoint = "page-" + close_path;
+    NodeCallbackRecorder callbacks;
+    NodeCallbackRecorder sibling_callbacks;
+    mojo::Receiver<ipc::mojom::IpcRenderer> callback_receiver(&callbacks);
+    mojo::Receiver<ipc::mojom::IpcRenderer> sibling_receiver(
+        &sibling_callbacks);
+    NodeRemote node =
+        Bind(endpoint, callback_receiver.BindNewPipeAndPassRemote());
+    NodeRemote sibling =
+        Bind("sibling", sibling_receiver.BindNewPipeAndPassRemote());
+    Load(node);
+    const auto handle = Construct(node);
+    const auto sibling_handle = Construct(sibling);
+    for (int slot : {1, 2}) {
+      auto [result, promise_id] =
+          CallExport(slot == 1 ? node : sibling, "RetainCallback",
+                     base::ListValue().Append(slot).Append(CallbackWire(7)));
+      ASSERT_TRUE(result);
+      ASSERT_TRUE(result->success) << result->error;
+      EXPECT_EQ(0u, promise_id);
+    }
+    base::test::TestFuture<void> callbacks_disconnected;
+    callback_receiver.set_disconnect_handler(
+        callbacks_disconnected.GetCallback());
+    if (close_path == "native") {
+      node.reset();
+    } else if (close_path == "callback") {
+      callback_receiver.reset();
+    } else {
+      browser_->RemoveElectronIpcRenderer(kContext, endpoint);
+      browser_.FlushForTesting();
+    }
+    task_environment_.RunUntilIdle();
+    if (close_path != "native") {
+      EXPECT_FALSE(node.is_connected());
+    }
+    if (close_path != "callback") {
+      EXPECT_TRUE(callbacks_disconnected.IsReady());
+    }
+    for (int slot : {1, 2}) {
+      auto [result, promise_id] = CallExport(sibling, "CallRetainedCallback",
+                                             base::ListValue().Append(slot));
+      ASSERT_TRUE(result);
+      ASSERT_TRUE(result->success) << result->error;
+      EXPECT_EQ(0u, promise_id);
+    }
+    EXPECT_TRUE(callbacks.calls.empty());
+    ASSERT_EQ(1u, sibling_callbacks.calls.size());
+    ExpectReadable(Read(sibling, sibling_handle));
+    NodeRemote replacement = Bind(endpoint);
+    ExpectInvalidOwner(Read(replacement, handle));
+  }
+}
 
 TEST_F(XenonServiceOwnerTest,
        DirectAndBrowserExportsKeepBinaryAndArgumentOrder) {

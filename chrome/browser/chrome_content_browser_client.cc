@@ -458,6 +458,7 @@
 #include "xenon_overlay/chrome/browser/asar/xenon_asar_url_loader_factory.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_guest.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
+#include "xenon_overlay/chrome/browser/xenon_manager.h"
 #include "xenon_overlay/public/mojom/xenon_service.mojom.h"
 #endif
 
@@ -6655,11 +6656,24 @@ void ChromeContentBrowserClient::
         // !BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(ENABLE_XENON_SERVICE)
-  if (web_contents &&
-      xenon::XenonElectronWindowHost::GetInstance()
-              ->FindWindowIdForWebContents(web_contents) != 0) {
-    factories->insert_or_assign(url::kFileScheme,
-                                xenon::CreateAsarURLLoaderFactory());
+  if (web_contents && request_initiator_origin) {
+    auto* window_host = xenon::XenonElectronWindowHost::GetInstance();
+    auto* guest = xenon::ipc::XenonElectronGuest::FromWebContents(web_contents);
+    const bool hosted = guest ||
+        window_host->FindWindowIdForWebContents(web_contents) != 0;
+    const std::string container_id =
+        guest ? guest->container_id()
+              : window_host->GetContainerIdForWebContents(web_contents);
+    // An existing hosted window can navigate to a remote page. Its old window
+    // identity alone must not give that new origin a file loader. Blink also
+    // checks the final mapped document path before granting local display.
+    if (hosted &&
+        (request_initiator_origin->scheme() == url::kFileScheme ||
+         xenon::XenonManager::GetInstance()->IsDeclaredFileRendererOrigin(
+             container_id, *request_initiator_origin))) {
+      factories->insert_or_assign(url::kFileScheme,
+                                  xenon::CreateAsarURLLoaderFactory());
+    }
   }
 #endif
 

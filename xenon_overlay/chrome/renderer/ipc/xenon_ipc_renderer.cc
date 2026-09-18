@@ -25,8 +25,10 @@
 #include "sandbox/policy/sandbox.h"
 #include "sandbox/policy/switches.h"
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_element.h"
 #include "third_party/blink/public/web/web_local_frame.h"
+#include "third_party/blink/public/web/web_security_policy.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "v8/include/v8-container.h"
 #include "v8/include/v8-context.h"
@@ -37,6 +39,7 @@
 #include "v8/include/v8-object.h"
 #include "v8/include/v8-promise.h"
 #include "v8/include/v8-script.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/common/ipc/xenon_ipc_value_codec.h"
 #include "xenon_overlay/common/ipc/xenon_runtime_platform.h"
 #include "xenon_overlay/resources/grit/xenon_resources.h"
@@ -255,6 +258,7 @@ void XenonIpcRenderer::Shutdown() {
   queued_events_.clear();
   pending_invokes_.clear();
   receiver_.reset();
+  node_addon_receiver_.reset();
   node_addon_host_.reset();
   host_.reset();
   runtime_config_.reset();
@@ -299,6 +303,12 @@ bool XenonIpcRenderer::EnsureRuntimeConfig() {
   if (!host_->GetRuntimeConfig(&config) || !config || !render_frame()) {
     return false;
   }
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (config->can_load_mapped_file_resources) {
+    blink::WebSecurityPolicy::GrantLoadLocalResources(
+        render_frame()->GetWebFrame()->GetDocument());
+  }
+#endif
   runtime_config_ = std::move(config);
   return true;
 }
@@ -449,11 +459,16 @@ bool XenonIpcRenderer::EnsureNodeAddonConnected() {
   if (!EnsureConnected()) {
     return false;
   }
-  host_->BindNodeAddonHost(node_addon_host_.BindNewPipeAndPassReceiver());
+  // Native callbacks come from this document's addon process. Keep app IPC
+  // on its original pipe so native state is never shared across documents.
+  host_->BindNodeAddonHost(
+      node_addon_host_.BindNewPipeAndPassReceiver(),
+      node_addon_receiver_.BindNewPipeAndPassRemote());
   node_addon_host_.set_disconnect_handler(base::BindOnce(
       [](base::WeakPtr<XenonIpcRenderer> self) {
         if (self) {
           self->node_addon_host_.reset();
+          self->node_addon_receiver_.reset();
         }
       },
       weak_factory_.GetWeakPtr()));
@@ -571,6 +586,22 @@ void XenonIpcRenderer::Invoke(gin::Arguments* args) {
                      gin::StringToV8(
                          isolate, "Browser ipcMain connection is unavailable")
                          .As<v8::String>()))
+        .Check();
+    args->Return(resolver->GetPromise());
+    return;
+  }
+
+  // Bind on the same IpcHost pipe before forwarding asynchronous native calls;
+  // FIFO ordering installs their callback endpoint before the invocation.
+  if ((channel == "__xenon:node-addon:invoke-export" ||
+       channel == "__xenon:node-addon:construct-export" ||
+       channel == "__xenon:node-addon:invoke-instance") &&
+      !EnsureNodeAddonConnected()) {
+    resolver
+        ->Reject(context, v8::Exception::Error(
+                              gin::StringToV8(isolate,
+                                              "Native addon connection is unavailable")
+                                  .As<v8::String>()))
         .Check();
     args->Return(resolver->GetPromise());
     return;

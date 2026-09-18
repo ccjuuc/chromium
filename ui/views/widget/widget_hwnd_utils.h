@@ -8,11 +8,25 @@
 #include <windows.h>
 
 #include "ui/views/widget/widget.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "ui/base/class_property.h"
+#include "ui/views/views_export.h"
+#endif
 
 // Functions shared by hwnd_message_handler.cc and
 // desktop_window_tree_host_win.cc:
 
 namespace views {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+// Set in Widget::InitParams::init_properties_container before initialization
+// when the HWND hosts native children that draw into its redirection bitmap.
+// DesktopNativeWidgetAura transfers this property to its content window.
+VIEWS_EXPORT extern const ui::ClassProperty<bool>* const
+    kRetainRedirectionBitmapKey;
+#endif
+
 class HWNDMessageHandler;
 class WidgetDelegate;
 namespace internal {

@@ -110,6 +110,7 @@ class XenonIpcRenderer final : public xenon::ipc::mojom::IpcRenderer,
   xenon::ipc::mojom::IpcRendererConfigPtr runtime_config_;
   mojo::Remote<xenon::ipc::mojom::NodeAddonHost> node_addon_host_;
   mojo::Receiver<xenon::ipc::mojom::IpcRenderer> receiver_{this};
+  mojo::Receiver<xenon::ipc::mojom::IpcRenderer> node_addon_receiver_{this};
   v8::Global<v8::Function> dispatch_handler_;
   std::vector<std::pair<std::string, base::Value>> queued_events_;
   uint64_t next_invoke_id_ = 1;

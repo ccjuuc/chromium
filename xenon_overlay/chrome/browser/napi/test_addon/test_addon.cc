@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <iterator>
@@ -20,6 +21,18 @@
 #if defined(XENON_TEST_UV_COMPAT)
 #include "uv.h"
 #endif
+
+// Deliberately process-wide, not napi_env instance data: independent renderer
+// owners in the same native process must observe one monotonic counter.
+napi_value NextProcessCounter(napi_env env, napi_callback_info) {
+  static std::atomic<uint32_t> counter{0};
+  const uint32_t value = counter.fetch_add(1, std::memory_order_relaxed) + 1;
+  napi_value result;
+  if (napi_create_uint32(env, value, &result) != napi_ok) {
+    return nullptr;
+  }
+  return result;
+}
 
 // 1. Synchronous Add
 napi_value Add(napi_env env, napi_callback_info info) {
@@ -967,6 +980,8 @@ extern "C" napi_value Init(napi_env env, napi_value exports) {
   napi_set_instance_data(env, new ControlledPromiseState(),
                          FinalizeControlledPromises, nullptr);
   napi_property_descriptor desc[] = {
+      {"nextProcessCounter", nullptr, NextProcessCounter, nullptr, nullptr,
+       nullptr, napi_default, nullptr},
       {"Add", nullptr, Add, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"AsyncAdd", nullptr, AsyncAdd, nullptr, nullptr, nullptr, napi_default,
        nullptr},

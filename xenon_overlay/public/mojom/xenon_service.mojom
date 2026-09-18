@@ -140,7 +140,12 @@ interface XenonMainService {
   BindNodeAddonHost(
       string context_id,
       string endpoint_id,
-      pending_receiver<xenon.ipc.mojom.NodeAddonHost> receiver);
+      pending_receiver<xenon.ipc.mojom.NodeAddonHost> receiver,
+      pending_remote<xenon.ipc.mojom.IpcRenderer>? callback_renderer);
+
+  // Configures a document's isolated native-addon service without starting an
+  // Electron main script or creating a second ipcMain container.
+  InitializeNodeAddonRuntime(string context_id, string runtime_directory);
 
   // Native Widget/window-message events forwarded to the Electron-compatible
   // main isolate. Window ids are process-global and containers without the id

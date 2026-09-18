@@ -807,6 +807,7 @@ component("views") {
       "win/scoped_fullscreen_visibility.h",
       "win/user_resize_move_detector.h",
     ]
+    public_deps += [ "//xenon_overlay/buildflags" ]
     sources += [
       "controls/menu/menu_config_win.cc",
       "controls/menu/native_menu_win.cc",

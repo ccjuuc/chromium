@@ -354,7 +354,7 @@ XenonPlayerElectronController::XenonPlayerElectronController(
       "connect-src 'self' https: http: data: blob:;");
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::ImgSrc,
-      "img-src 'self' https: http: data: blob:;");
+      "img-src 'self' https: http: data: blob: file:;");
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::MediaSrc,
       "media-src 'self' https: http: data: blob: file:;");

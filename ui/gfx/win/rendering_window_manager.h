@@ -11,6 +11,11 @@
 #include "base/containers/flat_map.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include <memory>
+#endif
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -42,16 +47,46 @@ class COMPONENT_EXPORT(GFX) RenderingWindowManager {
   void UnregisterParent(HWND parent);
   bool HasValidChildWindow(HWND parent);
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // Opts a parent into GDI child-window interoperability. The GPU
+  // window is clipped around visible, opaque native siblings above it. The
+  // caller must retain a redirection bitmap for the parent. May be called
+  // before RegisterParent; the option survives compositor unregistration and
+  // is cleared on disable or parent destruction. Returns false if the parent
+  // is not a window in this process or event monitoring could not be installed.
+  bool SetNativeChildClippingEnabled(HWND parent, bool enabled);
+#endif
+
  private:
   friend class base::NoDestructor<RenderingWindowManager>;
 
   RenderingWindowManager();
   ~RenderingWindowManager();
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  struct NativeChildClippingState;
+  static void CALLBACK OnWindowEvent(HWINEVENTHOOK hook,
+                                     DWORD event,
+                                     HWND window,
+                                     LONG object_id,
+                                     LONG child_id,
+                                     DWORD event_thread,
+                                     DWORD event_time);
+  void UpdateNativeChildClipping();
+  void UpdateNativeChildClipping(HWND parent, NativeChildClippingState& state);
+  void StopNativeChildClipping(HWND parent);
+#endif
+
   // UI thread task runner.
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
   // Map from registered parent HWND to child HWND.
   base::flat_map<HWND, HWND> registered_hwnds_;
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  base::flat_map<HWND, std::unique_ptr<NativeChildClippingState>>
+      native_child_clipping_;
+  HWINEVENTHOOK native_child_event_hook_ = nullptr;
+  bool clipping_update_pending_ = false;
+#endif
 };
 
 }  // namespace gfx

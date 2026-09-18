@@ -116,11 +116,18 @@ void XenonIpcDocumentHost::GetRuntimeConfig(
           ResolveContainerId(),
           render_frame_host().GetLastCommittedURL().spec());
   if (config) {
+    content::WebContents* web_contents =
+        content::WebContents::FromRenderFrameHost(&render_frame_host());
     config->is_guest =
-        XenonElectronGuest::FromWebContents(
-            content::WebContents::FromRenderFrameHost(&render_frame_host())) !=
-        nullptr;
+        XenonElectronGuest::FromWebContents(web_contents) != nullptr;
     config->is_main_frame = render_frame_host().IsInPrimaryMainFrame();
+    const bool hosted = config->is_guest ||
+        XenonElectronWindowHost::GetInstance()->FindWindowIdForWebContents(
+            web_contents) != 0;
+    config->can_load_mapped_file_resources =
+        hosted && XenonManager::GetInstance()->IsDeclaredFileRendererURL(
+                      ResolveContainerId(),
+                      render_frame_host().GetLastCommittedURL());
   }
   std::move(callback).Run(std::move(config));
 }
@@ -286,13 +293,15 @@ void XenonIpcDocumentHost::BindRenderer(
 }
 
 void XenonIpcDocumentHost::BindNodeAddonHost(
-    mojo::PendingReceiver<xenon::ipc::mojom::NodeAddonHost> receiver) {
+    mojo::PendingReceiver<xenon::ipc::mojom::NodeAddonHost> receiver,
+    mojo::PendingRemote<xenon::ipc::mojom::IpcRenderer> callback_renderer) {
   if (!IsAllowedDocument() || endpoint_id_.empty()) {
     ResetAndDeleteThis();
     return;
   }
-  XenonManager::GetInstance()->BindNodeAddonHost(container_id_, endpoint_id_,
-                                                 std::move(receiver));
+  XenonManager::GetInstance()->BindNodeAddonHost(
+      container_id_, endpoint_id_, std::move(receiver),
+      std::move(callback_renderer));
 }
 
 void XenonIpcDocumentHost::Send(const std::string& channel,

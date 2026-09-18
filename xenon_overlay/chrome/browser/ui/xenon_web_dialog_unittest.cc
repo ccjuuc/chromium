@@ -5,7 +5,9 @@
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 
 #include <memory>
+#include <set>
 #include <string>
+#include <vector>
 
 #include "base/functional/bind.h"
 #include "base/run_loop.h"
@@ -184,6 +186,342 @@ TEST_F(XenonHostedWindowCloseTest, EntryPrefersTopLevelButSupportsOwnedContent) 
   EXPECT_EQ(3, EntryWindow());
 }
 
+// Exercise transaction recording without platform windows. Real Widget bounds
+// callbacks use the same recorder; the JavaScript contract tests verify reply
+// delivery, listener reentrancy, and late asynchronous events.
+class XenonHostedWindowBoundsTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    host_ = new XenonElectronWindowHost();
+    host_->shutting_down_ = true;
+  }
+
+  void TearDown() override {
+    host_->bounds_transaction_ = nullptr;
+    host_->bounds_transaction_container_.reset();
+    host_->windows_.clear();
+    delete host_;
+    widgets_.clear();
+  }
+
+  void AddWindow(int32_t id,
+                 const gfx::Rect& bounds,
+                 const std::string& container = "fixture") {
+    widgets_.push_back(std::make_unique<views::Widget>());
+    auto& entry = host_->windows_[id];
+    entry.widget = widgets_.back().get();
+    entry.bounds = bounds;
+    entry.container_id = container;
+  }
+
+  void BeginTransaction() {
+    changes_.clear();
+    host_->bounds_transaction_ = &changes_;
+    host_->bounds_transaction_container_ = "fixture";
+  }
+
+  base::Value EndTransaction(int32_t source = 1) {
+    host_->bounds_transaction_ = nullptr;
+    host_->bounds_transaction_container_.reset();
+    return host_->MakeWindowCallReply(source, base::Value("original"),
+                                      changes_);
+  }
+
+  void ObserveBounds(int32_t id, const gfx::Rect& bounds) {
+    host_->RecordBoundsChange(id, bounds);
+  }
+
+  void SetInitializing(int32_t id, bool initializing) {
+    host_->windows_.at(id).initializing_bounds = initializing;
+  }
+
+  void RemoveWindow(int32_t id) { host_->windows_.erase(id); }
+
+  bool Call(int32_t id,
+            const std::string& command,
+            base::Value* result,
+            std::string* error) {
+    return host_->Call(id, command, base::Value(), result, error);
+  }
+
+  base::test::TaskEnvironment task_environment_;
+  std::vector<std::unique_ptr<views::Widget>> widgets_;
+  std::vector<XenonElectronWindowHost::BoundsChange> changes_;
+  XenonElectronWindowHost* host_ = nullptr;
+};
+
+TEST_F(XenonHostedWindowBoundsTest, CoalescesCorrectionsWithoutFalseResize) {
+  AddWindow(1, gfx::Rect(10, 20, 300, 200));
+  BeginTransaction();
+  ObserveBounds(1, gfx::Rect(30, 20, 314, 214));
+  ObserveBounds(1, gfx::Rect(30, 20, 300, 200));
+  const auto reply = EndTransaction();
+  EXPECT_EQ("original", *reply.GetDict().FindString("value"));
+  EXPECT_EQ(2, reply.GetDict().FindDouble("boundsRevision"));
+  const auto* changes = reply.GetDict().FindList("boundsChanges");
+  ASSERT_TRUE(changes);
+  ASSERT_EQ(1u, changes->size());
+  const auto& change = (*changes)[0].GetDict();
+  EXPECT_EQ(1, change.FindInt("windowId"));
+  EXPECT_EQ(2, change.FindDouble("revision"));
+  EXPECT_EQ(true, change.FindBool("moved"));
+  EXPECT_EQ(false, change.FindBool("resized"));
+  const auto* bounds = change.FindDict("bounds");
+  ASSERT_TRUE(bounds);
+  EXPECT_EQ(30, bounds->FindInt("x"));
+  EXPECT_EQ(300, bounds->FindInt("width"));
+  EXPECT_FALSE(bounds->contains("revision"));
+}
+
+TEST_F(XenonHostedWindowBoundsTest,
+       RecordsAllAffectedWindowsInFirstChangeOrder) {
+  AddWindow(1, gfx::Rect(10, 20, 300, 200));
+  AddWindow(2, gfx::Rect(10, 20, 300, 200));
+  BeginTransaction();
+  ObserveBounds(2, gfx::Rect(10, 20, 400, 200));
+  ObserveBounds(1, gfx::Rect(30, 20, 300, 200));
+  ObserveBounds(2, gfx::Rect(10, 20, 500, 200));
+  const auto reply = EndTransaction();
+  const auto* changes = reply.GetDict().FindList("boundsChanges");
+  ASSERT_TRUE(changes);
+  ASSERT_EQ(2u, changes->size());
+  EXPECT_EQ(2, (*changes)[0].GetDict().FindInt("windowId"));
+  EXPECT_EQ(2, (*changes)[0].GetDict().FindDouble("revision"));
+  EXPECT_EQ(true, (*changes)[0].GetDict().FindBool("resized"));
+  EXPECT_EQ(1, (*changes)[1].GetDict().FindInt("windowId"));
+  EXPECT_EQ(1, (*changes)[1].GetDict().FindDouble("revision"));
+  EXPECT_EQ(false, (*changes)[1].GetDict().FindBool("resized"));
+  EXPECT_EQ(1, reply.GetDict().FindDouble("boundsRevision"));
+}
+
+TEST_F(XenonHostedWindowBoundsTest, OtherContainersKeepTheirOwnEventRoute) {
+  AddWindow(1, gfx::Rect(10, 20, 300, 200));
+  AddWindow(2, gfx::Rect(10, 20, 300, 200), "other");
+  BeginTransaction();
+  ObserveBounds(2, gfx::Rect(10, 20, 500, 200));
+  ObserveBounds(1, gfx::Rect(30, 20, 300, 200));
+  const auto reply = EndTransaction();
+  const auto* changes = reply.GetDict().FindList("boundsChanges");
+  ASSERT_TRUE(changes);
+  ASSERT_EQ(1u, changes->size());
+  EXPECT_EQ(1, (*changes)[0].GetDict().FindInt("windowId"));
+
+  base::Value other;
+  std::string error;
+  ASSERT_TRUE(Call(2, "get-minimum-size", &other, &error));
+  EXPECT_EQ(1, other.GetDict().FindDouble("boundsRevision"));
+  EXPECT_TRUE(other.GetDict().FindList("boundsChanges")->empty());
+}
+
+TEST_F(XenonHostedWindowBoundsTest,
+       ConstructionOnlyEstablishesGeometryBaseline) {
+  AddWindow(1, gfx::Rect(0, 0, 800, 600));
+  SetInitializing(1, true);
+  BeginTransaction();
+  ObserveBounds(1, gfx::Rect(10, 20, 300, 200));
+  const auto initial = EndTransaction();
+  ASSERT_TRUE(initial.GetDict().FindList("boundsChanges"));
+  EXPECT_TRUE(initial.GetDict().FindList("boundsChanges")->empty());
+  EXPECT_EQ(1, initial.GetDict().FindDouble("boundsRevision"));
+
+  SetInitializing(1, false);
+  BeginTransaction();
+  ObserveBounds(1, gfx::Rect(30, 20, 300, 200));
+  const auto shown = EndTransaction();
+  const auto& change =
+      shown.GetDict().FindList("boundsChanges")->front().GetDict();
+  EXPECT_EQ(true, change.FindBool("moved"));
+  EXPECT_EQ(false, change.FindBool("resized"));
+  EXPECT_EQ(2, change.FindDouble("revision"));
+}
+
+TEST_F(XenonHostedWindowBoundsTest,
+       UnchangedFinalBoundsDoNotImplyResizeOrMove) {
+  const gfx::Rect bounds(10, 20, 300, 200);
+  AddWindow(1, bounds);
+  BeginTransaction();
+  ObserveBounds(1, bounds);
+  const auto unchanged = EndTransaction();
+  EXPECT_TRUE(unchanged.GetDict().FindList("boundsChanges")->empty());
+  EXPECT_EQ(0, unchanged.GetDict().FindDouble("boundsRevision"));
+
+  BeginTransaction();
+  ObserveBounds(1, gfx::Rect(20, 30, 320, 220));
+  ObserveBounds(1, bounds);
+  const auto corrected = EndTransaction();
+  const auto& change =
+      corrected.GetDict().FindList("boundsChanges")->front().GetDict();
+  EXPECT_EQ(false, change.FindBool("moved"));
+  EXPECT_EQ(false, change.FindBool("resized"));
+  EXPECT_EQ(2, change.FindDouble("revision"));
+}
+
+TEST_F(XenonHostedWindowBoundsTest,
+       SeparateCallsKeepSeparateRevisionsAndChanges) {
+  AddWindow(1, gfx::Rect(10, 20, 300, 200));
+  BeginTransaction();
+  ObserveBounds(1, gfx::Rect(10, 20, 500, 200));
+  const auto first = EndTransaction();
+  EXPECT_EQ(1, first.GetDict().FindDouble("boundsRevision"));
+
+  BeginTransaction();
+  ObserveBounds(1, gfx::Rect(10, 20, 300, 200));
+  const auto second = EndTransaction();
+  EXPECT_EQ(2, second.GetDict().FindDouble("boundsRevision"));
+  EXPECT_EQ(true, second.GetDict()
+                      .FindList("boundsChanges")
+                      ->front()
+                      .GetDict()
+                      .FindBool("resized"));
+}
+
+TEST_F(XenonHostedWindowBoundsTest, DestroyedWindowsAreOmittedFromCallReply) {
+  AddWindow(1, gfx::Rect(10, 20, 300, 200));
+  AddWindow(2, gfx::Rect(10, 20, 300, 200));
+  BeginTransaction();
+  ObserveBounds(2, gfx::Rect(20, 30, 400, 300));
+  RemoveWindow(2);
+  const auto reply = EndTransaction();
+  EXPECT_TRUE(reply.GetDict().FindList("boundsChanges")->empty());
+}
+
+TEST_F(XenonHostedWindowBoundsTest,
+       GetterWrapsValueWithoutConsumingOuterChanges) {
+  AddWindow(1, gfx::Rect(10, 20, 300, 200));
+  BeginTransaction();
+  ObserveBounds(1, gfx::Rect(30, 20, 300, 200));
+  base::Value result;
+  std::string error;
+  ASSERT_TRUE(Call(1, "get-minimum-size", &result, &error));
+  EXPECT_TRUE(error.empty());
+  EXPECT_EQ(true, result.GetDict().FindBool("__xenonWindowCall"));
+  EXPECT_TRUE(result.GetDict().FindList("boundsChanges")->empty());
+  EXPECT_EQ(1, result.GetDict().FindDouble("boundsRevision"));
+  const auto* size = result.GetDict().FindDict("value");
+  ASSERT_TRUE(size);
+  EXPECT_EQ(0, size->FindInt("width"));
+  EXPECT_EQ(0, size->FindInt("height"));
+  ObserveBounds(1, gfx::Rect(40, 20, 300, 200));
+  const auto outer = EndTransaction();
+  const auto* changes = outer.GetDict().FindList("boundsChanges");
+  ASSERT_EQ(1u, changes->size());
+  EXPECT_EQ(2, changes->front().GetDict().FindDouble("revision"));
+}
+
+// Pair selection uses Widget identities without creating native windows. These
+// tests verify which windows may move together, independently of platform APIs.
+class XenonHostedWindowPairingTest : public testing::Test {
+ protected:
+  void SetUp() override { host_ = new XenonElectronWindowHost(); }
+
+  void TearDown() override {
+    // These fixture Widgets were never registered with the host as observers.
+    host_->windows_.clear();
+    delete host_;
+    widgets_.clear();
+  }
+
+  void AddWindow(int32_t id,
+                 int32_t parent = 0,
+                 bool paired = false,
+                 const std::string& container = "fixture",
+                 bool has_widget = true,
+                 bool transparent = false) {
+    auto& entry = host_->windows_[id];
+    if (has_widget) {
+      widgets_.push_back(std::make_unique<views::Widget>());
+      entry.widget = widgets_.back().get();
+    }
+    entry.parent_id = parent;
+    entry.container_id = container;
+    entry.transparent = transparent;
+    entry.sync_bounds_with_parent = paired;
+  }
+
+  void ExpectPaired(int32_t source, const std::set<int32_t>& expected) {
+    const auto actual = host_->GetPairedWindowIds(source);
+    EXPECT_EQ(expected, std::set<int32_t>(actual.begin(), actual.end()));
+    EXPECT_EQ(expected.size(), actual.size());
+  }
+
+  void RemoveWindow(int32_t id) { host_->windows_.erase(id); }
+
+  base::test::TaskEnvironment task_environment_;
+  std::vector<std::unique_ptr<views::Widget>> widgets_;
+  XenonElectronWindowHost* host_ = nullptr;
+};
+
+TEST_F(XenonHostedWindowPairingTest, ExplicitOpaquePairWorksInBothDirections) {
+  AddWindow(1);
+  AddWindow(2, 1, true);
+
+  ExpectPaired(1, {2});
+  ExpectPaired(2, {1});
+}
+
+TEST_F(XenonHostedWindowPairingTest, OrdinaryOwnerDoesNotDeclarePairing) {
+  AddWindow(1);
+  AddWindow(2, 1);
+  AddWindow(3, 1, false, "fixture", true, true);
+
+  ExpectPaired(1, {});
+  ExpectPaired(2, {});
+  ExpectPaired(3, {});
+}
+
+TEST_F(XenonHostedWindowPairingTest, PairedChainsAndSiblingsMoveAsOneGroup) {
+  AddWindow(1);
+  AddWindow(2, 1, true);
+  AddWindow(3, 1, true);
+  AddWindow(4, 2, true);
+  // An ordinary owned window can be the root of a separate paired group.
+  AddWindow(5, 1);
+  AddWindow(6, 5, true);
+
+  ExpectPaired(1, {2, 3, 4});
+  ExpectPaired(2, {1, 3, 4});
+  ExpectPaired(3, {1, 2, 4});
+  ExpectPaired(4, {1, 2, 3});
+  ExpectPaired(5, {6});
+  ExpectPaired(6, {5});
+}
+
+TEST_F(XenonHostedWindowPairingTest, MissingParentsAndOtherContainersStayApart) {
+  AddWindow(1);
+  AddWindow(2, 99, true);
+  AddWindow(3, 1, true, "other");
+  AddWindow(4, 1, true);
+
+  ExpectPaired(1, {4});
+  ExpectPaired(2, {});
+  ExpectPaired(3, {});
+  ExpectPaired(4, {1});
+  ExpectPaired(99, {});
+}
+
+TEST_F(XenonHostedWindowPairingTest, UnavailableWidgetCannotConnectGroups) {
+  AddWindow(1);
+  AddWindow(2, 1, true, "fixture", false);
+  AddWindow(3, 2, true);
+
+  ExpectPaired(1, {});
+  ExpectPaired(2, {});
+  ExpectPaired(3, {});
+}
+
+TEST_F(XenonHostedWindowPairingTest, RemovedWindowLeavesNoPairingConnection) {
+  AddWindow(1);
+  AddWindow(2, 1, true);
+  AddWindow(3, 2, true);
+  ExpectPaired(1, {2, 3});
+
+  RemoveWindow(2);
+
+  ExpectPaired(1, {});
+  ExpectPaired(2, {});
+  ExpectPaired(3, {});
+}
+
 class XenonHostedWindowUserAgentTest
     : public content::RenderViewHostTestHarness {
  protected:
@@ -211,6 +549,10 @@ class XenonHostedWindowUserAgentTest
     return web_contents()->GetUserAgentOverride().ua_string_override;
   }
 
+  GURL CommittedPairingURL() {
+    return GURL(host_->windows_.at(1).committed_url);
+  }
+
   std::unique_ptr<content::NavigationSimulator> StartNavigation(
       const GURL& url = GURL("https://fixture.test/player")) {
     content::NavigationController::LoadURLParams params(url);
@@ -229,6 +571,51 @@ class XenonHostedWindowUserAgentTest
 
   XenonElectronWindowHost* host_ = nullptr;
 };
+
+TEST_F(XenonHostedWindowUserAgentTest,
+       PairingURLChangesOnlyAfterSuccessfulCommit) {
+  const GURL first_url("https://fixture.test/first-control");
+  auto first = StartNavigation(first_url);
+  EXPECT_EQ(GURL("about:blank"), CommittedPairingURL());
+  first->ReadyToCommit();
+  EXPECT_EQ(GURL("about:blank"), CommittedPairingURL());
+  first->Commit();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(first_url, CommittedPairingURL());
+
+  auto canceled =
+      StartNavigation(GURL("https://fixture.test/canceled-control"));
+  EXPECT_EQ(first_url, CommittedPairingURL());
+  canceled->Fail(net::ERR_ABORTED);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(first_url, web_contents()->GetLastCommittedURL());
+  EXPECT_EQ(first_url, CommittedPairingURL());
+
+  const GURL next_url("https://fixture.test/next-control");
+  auto next = StartNavigation(next_url);
+  EXPECT_EQ(first_url, CommittedPairingURL());
+  next->Commit();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(next_url, CommittedPairingURL());
+}
+
+TEST_F(XenonHostedWindowUserAgentTest, CommittedErrorPageClearsPairingURL) {
+  const GURL first_url("https://fixture.test/first-control");
+  NavigateAndCommit(first_url);
+  ASSERT_EQ(first_url, CommittedPairingURL());
+
+  auto failed =
+      StartNavigation(GURL("https://fixture.test/unavailable-control"));
+  failed->Fail(net::ERR_TIMED_OUT);
+  EXPECT_EQ(first_url, CommittedPairingURL());
+  failed->CommitErrorPage();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(CommittedPairingURL().is_empty());
+
+  const GURL recovery_url("https://fixture.test/recovered-control");
+  NavigateAndCommit(recovery_url);
+  EXPECT_EQ(recovery_url, CommittedPairingURL());
+}
 
 TEST_F(XenonHostedWindowUserAgentTest,
        UpdateDuringNavigationDoesNotReloadPreviousBlankDocument) {

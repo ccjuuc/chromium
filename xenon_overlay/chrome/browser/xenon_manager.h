@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/functional/callback.h"
@@ -16,6 +17,12 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/public/mojom/xenon_service.mojom.h"
+
+class GURL;
+
+namespace url {
+class Origin;
+}
 
 #if BUILDFLAG(ENABLE_XENON_ASSOCIATED_SIDE)
 #include "mojo/public/cpp/bindings/associated_remote.h"
@@ -41,6 +48,18 @@ FORWARD_DECLARE_TEST(XenonManagerTest,
                      DisconnectedContainerRejectsRendererTraffic);
 FORWARD_DECLARE_TEST(XenonManagerTest,
                      StaleDisconnectPreservesRestartedContainer);
+FORWARD_DECLARE_TEST(XenonManagerTest,
+                     RendererAddonDisconnectDoesNotRestartOrCloseApp);
+FORWARD_DECLARE_TEST(XenonManagerTest,
+                     NativeInvokesUseDocumentServiceWhileAppIpcStaysInMain);
+FORWARD_DECLARE_TEST(XenonManagerTest,
+                     FileRendererPermissionRequiresDeclaredMapping);
+FORWARD_DECLARE_TEST(XenonManagerTest,
+                     ParentWindowPairingRequiresExactDeclaredURL);
+FORWARD_DECLARE_TEST(XenonManagerTest,
+                     RendererAddonRemovalAndAppExitCloseOnlyOwnedServices);
+FORWARD_DECLARE_TEST(XenonManagerTest,
+                     ResetClosesRendererAddonServicesWithoutRevivingDocuments);
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
 FORWARD_DECLARE_TEST(XenonManagerTest,
                      AppExitDisconnectsAllCopiesAndPreservesConfiguration);
@@ -52,7 +71,8 @@ FORWARD_DECLARE_TEST(
     XenonManagerTest,
     RendererMetadataDoesNotReadWorkingDirectoryBeforeInitialization);
 #if BUILDFLAG(ENABLE_XENON_ASSOCIATED_SIDE)
-FORWARD_DECLARE_TEST(XenonManagerTest, PingAssociated_WhenDisconnected_ReturnsError);
+FORWARD_DECLARE_TEST(XenonManagerTest,
+                     PingAssociated_WhenDisconnected_ReturnsError);
 #endif
 
 class XenonNodeObserver {
@@ -110,10 +130,19 @@ class XenonManager {
   // Registers and immediately starts (or reinitializes) a container.
   void InitializeElectronIpc(ipc::mojom::IpcMainConfigPtr config);
   std::string GetDefaultUserAgent(const std::string& container_id) const;
+  // These predicates describe an application's explicitly declared file to
+  // WebUI mappings. Callers must separately verify the actual window owner.
+  bool IsDeclaredFileRendererURL(const std::string& container_id,
+                                 const GURL& document_url) const;
+  bool IsDeclaredFileRendererOrigin(const std::string& container_id,
+                                    const url::Origin& origin) const;
+  // Matches only an explicitly configured final document URL, ignoring query
+  // and fragment. The caller must verify a parent in the same container exists.
+  bool ShouldPairElectronWindowWithParent(const std::string& container_id,
+                                          const GURL& document_url) const;
   void SetElectronIpcContainerForOrigin(const std::string& origin,
                                         const std::string& container_id);
-  std::string GetElectronIpcContainerForOrigin(
-      const std::string& origin) const;
+  std::string GetElectronIpcContainerForOrigin(const std::string& origin) const;
   ipc::mojom::IpcRendererConfigPtr GetElectronIpcRendererConfigForOrigin(
       const std::string& origin) const;
   ipc::mojom::IpcRendererConfigPtr GetElectronIpcRendererConfigForContainer(
@@ -131,7 +160,8 @@ class XenonManager {
   void BindNodeAddonHost(
       const std::string& container_id,
       const std::string& endpoint_id,
-      mojo::PendingReceiver<ipc::mojom::NodeAddonHost> receiver);
+      mojo::PendingReceiver<ipc::mojom::NodeAddonHost> receiver,
+      mojo::PendingRemote<ipc::mojom::IpcRenderer> callback_renderer);
   void ElectronIpcSend(const std::string& container_id,
                        const std::string& endpoint_id,
                        const std::string& channel,
@@ -141,12 +171,11 @@ class XenonManager {
                          const std::string& channel,
                          base::Value arguments,
                          ElectronIpcInvokeCallback callback);
-  void ElectronIpcSendSync(
-      const std::string& container_id,
-      const std::string& endpoint_id,
-      const std::string& channel,
-      base::Value arguments,
-      ElectronIpcSendSyncCallback callback);
+  void ElectronIpcSendSync(const std::string& container_id,
+                           const std::string& endpoint_id,
+                           const std::string& channel,
+                           base::Value arguments,
+                           ElectronIpcSendSyncCallback callback);
   void DispatchElectronWindowEvent(int32_t window_id,
                                    const std::string& event_name,
                                    base::Value arguments);
@@ -192,12 +221,11 @@ class XenonManager {
                           base::Value arguments,
                           ElectronWindowCallCallback callback) override;
   void CloseElectronWindow(int32_t window_id) override;
-  void ShowElectronOpenDialog(
-      const std::string& title,
-      bool directory,
-      bool allow_multi,
-      const std::vector<std::string>& extensions,
-      ShowElectronOpenDialogCallback callback) override;
+  void ShowElectronOpenDialog(const std::string& title,
+                              bool directory,
+                              bool allow_multi,
+                              const std::vector<std::string>& extensions,
+                              ShowElectronOpenDialogCallback callback) override;
 
   // WebUI: wait for the next Utility→Browser `OnServiceEvent` payload (tests
   // XenonBrowserObserver / SetBrowserObserver). Empty `message` means timeout,
@@ -207,11 +235,27 @@ class XenonManager {
 
  private:
   friend struct base::DefaultSingletonTraits<XenonManager>;
-  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest, Ping_WhenDisconnected_ReturnsNotRunning);
+  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
+                           Ping_WhenDisconnected_ReturnsNotRunning);
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
                            DisconnectedContainerRejectsRendererTraffic);
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
                            StaleDisconnectPreservesRestartedContainer);
+  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
+                           RendererAddonDisconnectDoesNotRestartOrCloseApp);
+  FRIEND_TEST_ALL_PREFIXES(
+      XenonManagerTest,
+      NativeInvokesUseDocumentServiceWhileAppIpcStaysInMain);
+  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
+                           FileRendererPermissionRequiresDeclaredMapping);
+  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
+                           ParentWindowPairingRequiresExactDeclaredURL);
+  FRIEND_TEST_ALL_PREFIXES(
+      XenonManagerTest,
+      RendererAddonRemovalAndAppExitCloseOnlyOwnedServices);
+  FRIEND_TEST_ALL_PREFIXES(
+      XenonManagerTest,
+      ResetClosesRendererAddonServicesWithoutRevivingDocuments);
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
   FRIEND_TEST_ALL_PREFIXES(
       XenonManagerTest,
@@ -225,7 +269,8 @@ class XenonManager {
       XenonManagerTest,
       RendererMetadataDoesNotReadWorkingDirectoryBeforeInitialization);
 #if BUILDFLAG(ENABLE_XENON_ASSOCIATED_SIDE)
-  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest, PingAssociated_WhenDisconnected_ReturnsError);
+  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
+                           PingAssociated_WhenDisconnected_ReturnsError);
 #endif
 
   XenonManager();
@@ -253,6 +298,22 @@ class XenonManager {
     mojo::ReceiverId observer_receiver_id = 0;
 #endif
   };
+  using RendererAddonKey = std::pair<std::string, std::string>;
+  struct RendererAddonServiceConnection {
+    ServiceRemote remote;
+    uint64_t container_generation = 0;
+    // A nonzero generation survives a crash until the Document is removed.
+    // Its old native proxies must never reconnect to a new addon process.
+    uint64_t generation = 0;
+  };
+  RendererAddonServiceConnection* FindRendererAddonService(
+      const RendererAddonKey& key);
+  RendererAddonServiceConnection* EnsureRendererAddonServiceStarted(
+      const RendererAddonKey& key);
+  void OnRendererAddonServiceDisconnected(const RendererAddonKey& key,
+                                          uint64_t generation);
+  void CloseRendererAddonService(RendererAddonServiceConnection* connection);
+  void CloseRendererAddonServicesForContainer(const std::string& container_id);
   ContainerServiceConnection* EnsureContainerServiceStarted(
       const std::string& container_id,
       bool explicit_restart = false);
@@ -291,6 +352,9 @@ class XenonManager {
   std::map<std::string, std::unique_ptr<ContainerServiceConnection>>
       container_services_;
   std::map<std::string, uint64_t> container_service_generations_;
+  std::map<RendererAddonKey, std::unique_ptr<RendererAddonServiceConnection>>
+      renderer_addon_services_;
+  uint64_t renderer_addon_service_generation_ = 0;
   uint64_t service_generation_ = 0;
 };
 

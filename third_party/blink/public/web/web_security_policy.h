@@ -34,14 +34,27 @@
 #include "services/network/public/mojom/cors_origin_pattern.mojom-shared.h"
 #include "services/network/public/mojom/referrer_policy.mojom-shared.h"
 #include "third_party/blink/public/platform/web_common.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 namespace blink {
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+class WebDocument;
+#endif
 class WebString;
 class WebURL;
 
 class BLINK_EXPORT WebSecurityPolicy {
  public:
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // Authorizes local subresource display for this document's security origin.
+  // Documents inheriting that origin (e.g. about:blank) inherit this
+  // capability. Embedders must validate the document's identity and final URL
+  // first. This does not grant universal access or add an origin-wide CORS
+  // exception.
+  static void GrantLoadLocalResources(const WebDocument&);
+#endif
+
   // Registers a URL scheme to be treated as display-isolated. This means
   // that pages cannot display these URLs unless they are from the same
   // scheme. For example, pages in other origin cannot create iframes or
