@@ -78,6 +78,7 @@
 #include "xenon_overlay/chrome/browser/ipc/xenon_os_bridge.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_zlib_bridge.h"
 #include "xenon_overlay/chrome/browser/napi/napi_loader.h"
+#include "xenon_overlay/common/asar/archive.h"
 #include "xenon_overlay/common/ipc/xenon_ipc_value_codec.h"
 #include "xenon_overlay/common/ipc/xenon_runtime_platform.h"
 #include "xenon_overlay/public/xenon_ipc_switches.h"
@@ -90,6 +91,132 @@ namespace {
 constexpr int kMaxPackageMainDepth = 32;
 constexpr int kMaxIpcValueDepth = 32;
 constexpr uint64_t kMaxSafeInteger = 9007199254740991ULL;
+
+// OS realpath/stat APIs cannot traverse an ASAR. Canonicalize the archive on
+// disk, then resolve the member and ASAR links so equivalent CommonJS requests
+// share one module record without changing __filename to an extracted file
+// path.
+bool NormalizeCommonJsPath(const base::FilePath& path,
+                           base::FilePath* normalized,
+                           bool* is_directory = nullptr,
+                           bool allow_missing_member = false) {
+  base::FilePath archive_path;
+  base::FilePath relative_path;
+  if (!asar::GetAsarArchivePath(path, &archive_path, &relative_path,
+                                /*allow_root=*/true)) {
+    if (!base::NormalizeFilePath(path, normalized)) {
+      return false;
+    }
+    if (is_directory) {
+      *is_directory = base::DirectoryExists(*normalized);
+    }
+    return true;
+  }
+
+  base::FilePath normalized_archive;
+  if (!base::NormalizeFilePath(archive_path, &normalized_archive)) {
+    return false;
+  }
+  base::FilePath member;
+  const auto components = relative_path.GetComponents();
+  for (size_t i = 0; i < components.size(); ++i) {
+    const auto& component = components[i];
+    if (component == FILE_PATH_LITERAL(".")) {
+      continue;
+    }
+    if (component == FILE_PATH_LITERAL("..")) {
+      if (member.empty()) {
+        // require() resolves '..' lexically, including leaving an archive.
+        // The caller still enforces the configured application module root.
+        base::FilePath outside = normalized_archive.DirName();
+        for (++i; i < components.size(); ++i) {
+          outside = outside.Append(components[i]);
+        }
+        return NormalizeCommonJsPath(outside, normalized, is_directory,
+                                     allow_missing_member);
+      }
+      member = member.DirName();
+      if (member.value() == FILE_PATH_LITERAL(".")) {
+        member.clear();
+      }
+    } else {
+      member = member.Append(component);
+    }
+  }
+
+  auto archive = asar::GetOrCreateAsarArchive(normalized_archive);
+  bool directory = false;
+  if (!archive) {
+    return false;
+  }
+  base::FilePath resolved_member;
+  if (archive->ResolvePath(member, &resolved_member)) {
+    if (!archive->StatPath(resolved_member, nullptr, &directory)) {
+      return false;
+    }
+    member = std::move(resolved_member);
+  } else if (!allow_missing_member) {
+    return false;
+  }
+  *normalized =
+      member.empty() ? normalized_archive : normalized_archive.Append(member);
+  if (is_directory) {
+    *is_directory = directory;
+  }
+  return true;
+}
+
+bool IsCommonJsDirectory(const base::FilePath& path) {
+  base::FilePath normalized;
+  bool is_directory = false;
+  return NormalizeCommonJsPath(path, &normalized, &is_directory) &&
+         is_directory;
+}
+
+bool ReadCommonJsFile(const base::FilePath& path, std::string* source) {
+  base::FilePath normalized;
+  bool is_directory = false;
+  if (!NormalizeCommonJsPath(path, &normalized, &is_directory) ||
+      is_directory) {
+    return false;
+  }
+  base::FilePath archive_path;
+  base::FilePath member;
+  if (!asar::GetAsarArchivePath(normalized, &archive_path, &member)) {
+    return base::ReadFileToString(normalized, source);
+  }
+  auto archive = asar::GetOrCreateAsarArchive(archive_path);
+  return archive && archive->ReadFile(member, source);
+}
+
+std::optional<base::FilePath> GetNativeCommonJsPath(const base::FilePath& path,
+                                                    std::string* error) {
+  base::FilePath archive_path;
+  base::FilePath member;
+  if (!asar::GetAsarArchivePath(path, &archive_path, &member)) {
+    return path;
+  }
+  auto archive = asar::GetOrCreateAsarArchive(archive_path);
+  asar::Archive::FileInfo info;
+  if (!archive || !archive->GetFileInfo(member, &info)) {
+    *error = "Cannot find native module: " + path.AsUTF8Unsafe();
+    return std::nullopt;
+  }
+  if (!info.unpacked) {
+    *error = "ERR_NOT_SUPPORTED: Native modules in ASAR must be unpacked: " +
+             path.AsUTF8Unsafe();
+    return std::nullopt;
+  }
+  base::FilePath unpacked_path;
+  base::FilePath normalized;
+  if (!archive->GetUnpackedPath(member, &unpacked_path) ||
+      !base::NormalizeFilePath(unpacked_path, &normalized) ||
+      base::DirectoryExists(normalized)) {
+    *error = "Cannot find unpacked native module: " + path.AsUTF8Unsafe();
+    return std::nullopt;
+  }
+  return normalized;
+}
 
 bool ConvertV8ToValue(v8::Isolate* isolate,
                       v8::Local<v8::Context> context,
@@ -470,10 +597,11 @@ bool XenonIpcMainContainer::InitializeInternal(
     // are lexical, so canonicalize both sides before enforcing the module root.
     base::FilePath normalized_main_script;
     base::FilePath normalized_app_path;
-    if (base::NormalizeFilePath(main_script_path_, &normalized_main_script)) {
+    if (NormalizeCommonJsPath(main_script_path_, &normalized_main_script,
+                              nullptr, /*allow_missing_member=*/true)) {
       main_script_path_ = std::move(normalized_main_script);
     }
-    if (base::NormalizeFilePath(app_path_, &normalized_app_path)) {
+    if (NormalizeCommonJsPath(app_path_, &normalized_app_path)) {
       app_path_ = std::move(normalized_app_path);
     }
     if (!app_path_.IsAbsolute() ||
@@ -913,10 +1041,11 @@ bool XenonIpcMainContainer::ResolveConfiguredMainScript() {
   } else if (command_line->HasSwitch(switches::kElectronApp)) {
     app_path_ = command_line->GetSwitchValuePath(switches::kElectronApp);
     base::FilePath normalized_app_path;
-    if (app_path_.empty() || !base::DirectoryExists(app_path_) ||
-        !base::NormalizeFilePath(app_path_, &normalized_app_path)) {
+    if (app_path_.empty() || !IsCommonJsDirectory(app_path_) ||
+        !NormalizeCommonJsPath(app_path_, &normalized_app_path)) {
       startup_error_ =
-          "--xenon-electron-app requires an existing application directory";
+          "--xenon-electron-app requires an existing application directory or "
+          "ASAR archive";
       return false;
     }
     app_path_ = normalized_app_path;
@@ -924,7 +1053,7 @@ bool XenonIpcMainContainer::ResolveConfiguredMainScript() {
 
     const base::FilePath package_path = app_path_.AppendASCII("package.json");
     std::string package_text;
-    if (!base::ReadFileToString(package_path, &package_text)) {
+    if (!ReadCommonJsFile(package_path, &package_text)) {
       startup_error_ = "Electron application has no readable package.json: " +
                        package_path.AsUTF8Unsafe();
       return false;
@@ -951,7 +1080,7 @@ bool XenonIpcMainContainer::ResolveConfiguredMainScript() {
   }
 
   base::FilePath normalized_main_script;
-  if (!base::NormalizeFilePath(main_script_path_, &normalized_main_script)) {
+  if (!NormalizeCommonJsPath(main_script_path_, &normalized_main_script)) {
     startup_error_ = "Configured main JavaScript does not exist: " +
                      main_script_path_.AsUTF8Unsafe();
     return false;
@@ -1062,12 +1191,16 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::LoadResolvedCommonJsModule(
   };
 
   if (normalized.MatchesExtension(FILE_PATH_LITERAL(".node"))) {
+    const auto native_path = GetNativeCommonJsPath(normalized, error);
+    if (!native_path) {
+      return {};
+    }
     if (native_addon_hooks_.load) {
       std::string load_error;
       bool loaded = false;
       {
         v8::Unlocker unlocker(isolate_);
-        loaded = native_addon_hooks_.load.Run(normalized.AsUTF8Unsafe(),
+        loaded = native_addon_hooks_.load.Run(native_path->AsUTF8Unsafe(),
                                               &load_error);
       }
       if (!loaded) {
@@ -1077,7 +1210,7 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::LoadResolvedCommonJsModule(
         return {};
       }
       v8::Local<v8::Value> forwarder;
-      if (!CreateNativeAddonForwarder(normalized.AsUTF8Unsafe())
+      if (!CreateNativeAddonForwarder(native_path->AsUTF8Unsafe())
                .ToLocal(&forwarder)) {
         *error = "Failed to create native addon forwarder: " + cache_key;
         return {};
@@ -1087,7 +1220,7 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::LoadResolvedCommonJsModule(
     }
     auto loaded_addon = std::make_unique<xenon::LoadedNodeAddon>();
     v8::Local<v8::Value> exports = xenon::LoadAndInitializeNodeAddon(
-        isolate_, context_.Get(isolate_), normalized, loaded_addon.get());
+        isolate_, context_.Get(isolate_), *native_path, loaded_addon.get());
     if (exports.IsEmpty()) {
       *error = "Failed to load Node-API addon: " + cache_key;
       return {};
@@ -1098,7 +1231,7 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::LoadResolvedCommonJsModule(
   }
 
   std::string source_text;
-  if (!base::ReadFileToString(normalized, &source_text)) {
+  if (!ReadCommonJsFile(normalized, &source_text)) {
     *error = "Failed to read module: " + cache_key;
     return {};
   }
@@ -1304,11 +1437,10 @@ std::optional<base::FilePath> XenonIpcMainContainer::ResolveCommonJsPath(
 
   auto normalize_file =
       [](const base::FilePath& candidate) -> std::optional<base::FilePath> {
-    if (!base::PathExists(candidate) || base::DirectoryExists(candidate)) {
-      return std::nullopt;
-    }
     base::FilePath normalized;
-    if (!base::NormalizeFilePath(candidate, &normalized)) {
+    bool is_directory = false;
+    if (!NormalizeCommonJsPath(candidate, &normalized, &is_directory) ||
+        is_directory) {
       return std::nullopt;
     }
     return normalized;
@@ -1326,11 +1458,11 @@ std::optional<base::FilePath> XenonIpcMainContainer::ResolveCommonJsPath(
     }
   }
 
-  if (base::DirectoryExists(requested_path)) {
+  if (IsCommonJsDirectory(requested_path)) {
     const base::FilePath package_path =
         requested_path.AppendASCII("package.json");
     std::string package_text;
-    if (base::ReadFileToString(package_path, &package_text)) {
+    if (ReadCommonJsFile(package_path, &package_text)) {
       std::optional<base::Value> package =
           base::JSONReader::Read(package_text, base::JSON_PARSE_RFC);
       if (!package || !package->is_dict()) {
@@ -1343,8 +1475,8 @@ std::optional<base::FilePath> XenonIpcMainContainer::ResolveCommonJsPath(
         base::FilePath normalized_directory;
         base::FilePath normalized_main;
         const bool points_to_same_directory =
-            base::NormalizeFilePath(requested_path, &normalized_directory) &&
-            base::NormalizeFilePath(main_path, &normalized_main) &&
+            NormalizeCommonJsPath(requested_path, &normalized_directory) &&
+            NormalizeCommonJsPath(main_path, &normalized_main) &&
             normalized_directory == normalized_main;
         if (!points_to_same_directory) {
           std::string main_error;
@@ -1532,7 +1664,7 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::RequireModule(
                     request.substr(0, package_end)))
                 .AppendASCII("package.json");
         std::string package_text;
-        if (base::ReadFileToString(package_path, &package_text)) {
+        if (ReadCommonJsFile(package_path, &package_text)) {
           std::optional<base::Value> package =
               base::JSONReader::Read(package_text, base::JSON_PARSE_RFC);
           if (!package || !package->is_dict()) {

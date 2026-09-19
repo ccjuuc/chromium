@@ -22,6 +22,8 @@ import sys
 import tempfile
 from pathlib import Path, PureWindowsPath
 
+from asar_sync_support import preflight_asar_public_key, write_asar_public_key
+
 
 def copy_tree(src: Path, dst: Path, *, include_maps: bool) -> tuple[int, int]:
     if dst.exists():
@@ -77,7 +79,7 @@ def validate_plugins_dir(plugins_dir: Path) -> None:
 
     Plugin names, rather than their version metadata, determine the entry:
     <name>/index.js first, then <name without .asar>.asar/index.js. Archive
-    existence is checked here; archive parsing happens during normalization.
+    existence is checked here; decoding configuration is checked separately.
     """
     config_path = plugins_dir / 'config.json'
     try:
@@ -103,11 +105,8 @@ def validate_plugins_dir(plugins_dir: Path) -> None:
 def normalize_plugin_asars(plugins_dir: Path, app_root: Path) -> int:
     """Convert vendor ASAR variants to the standard Electron ASAR format.
 
-    The hosted runtime deliberately implements only the public Electron ASAR
-    layout. Some packaged plugins use Thunder's build-time encrypted variant;
-    decrypt those with the source application's own build tool and immediately
-    repack them as standard ASARs. No product keys or formats enter Xenon's
-    runtime filesystem implementation.
+    This is an explicit compatibility option. The default sync preserves the
+    original archives and publishes only their public runtime decoding key.
     """
     archives = sorted(path for path in plugins_dir.rglob('*.asar')
                       if path.is_file())
@@ -207,6 +206,12 @@ def main() -> int:
         help=f'Target dir containing thunder_2025 (defaults to {default_out})')
     parser.add_argument('--include-maps', action='store_true')
     parser.add_argument(
+        '--asar-format', choices=('preserve', 'standard'), default='preserve',
+        help='Preserve original plugin archives (default), or explicitly convert to standard ASAR')
+    parser.add_argument(
+        '--asar-public-key', type=Path,
+        help='RSA public key for encrypted archives (default: <src>/../asar/security-asar/lib/rsa-pub.pem)')
+    parser.add_argument(
         '--skip-asar',
         action='store_true',
         help='do not create the standard renderer resource ASAR')
@@ -257,7 +262,18 @@ def main() -> int:
                         args.out / 'thunder_2025_frontend'):
             if plugins_src.is_relative_to(removed):
                 raise ValueError(f'plugin source would be removed by sync: {plugins_src}')
-    except ValueError as error:
+        archive_roots = [plugins_src, args.src / 'preload']
+        if not args.skip_asar:
+            archive_roots.extend(args.src / name for name in (
+                'main-renderer', 'modal-renderer', 'suspension-renderer',
+                'thunder-im', 'static'))
+        if args.player_sdk:
+            archive_roots.extend(args.player_sdk / name for name in (
+                'player', 'SDK', 'service', 'addins'))
+        asar_public_key = preflight_asar_public_key(
+            archive_roots, args.asar_public_key,
+            args.src.parent / 'asar/security-asar/lib/rsa-pub.pem')
+    except (ValueError, OSError) as error:
         print(error, file=sys.stderr)
         return 1
 
@@ -395,8 +411,10 @@ def main() -> int:
     plugins_dst = app_dst / 'plugins'
     copy_tree(plugins_src, plugins_dst, include_maps=args.include_maps)
     print(f'plugins: copied from {plugins_src} to {plugins_dst}')
-    if normalize_plugin_asars(plugins_dst, args.src.parent) < 0:
+    if (args.asar_format == 'standard' and
+            normalize_plugin_asars(plugins_dst, args.src.parent) < 0):
         return 1
+    write_asar_public_key(app_dst, asar_public_key)
 
     if not args.skip_asar:
         node = shutil.which('node')

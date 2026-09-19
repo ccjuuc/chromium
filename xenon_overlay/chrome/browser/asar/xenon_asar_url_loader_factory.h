@@ -10,8 +10,8 @@
 
 namespace xenon {
 
-// Creates a file: URL loader factory that transparently reads standard
-// Electron ASAR entries and delegates ordinary files to Chromium. Must be
+// Creates a file: URL loader factory that reads standard and configured
+// encrypted ASAR entries and delegates ordinary files to Chromium. Must be
 // called on UI. Both paths retain the default file origin/CORS policy; this
 // factory does not grant cross-origin read access to local resources.
 mojo::PendingRemote<network::mojom::URLLoaderFactory>

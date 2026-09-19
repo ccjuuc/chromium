@@ -21,6 +21,7 @@ import unittest
 from unittest import mock
 
 import sync_thunder_2025 as sync
+from asar_sync_support_unittest import PUBLIC_KEY, standard_asar
 
 
 class PluginReleaseTest(unittest.TestCase):
@@ -102,6 +103,72 @@ class PluginReleaseTest(unittest.TestCase):
             self.assertEqual(sync.main(), 1)
         self.assertIn('source would be removed', errors.getvalue())
         self.assertEqual(config.read_text(encoding='utf-8'), '{}')
+
+    def sync_arguments(self):
+        self.fixture('app/dist/main.js')
+        (self.root / 'app/dist/main-renderer').mkdir(exist_ok=True)
+        return ['sync', '--src', str(self.root / 'app/dist'),
+                '--out', str(self.root / 'out'), '--plugins-dir', str(self.plugins),
+                '--skip-asar']
+
+    @unittest.skipUnless(shutil.which('node'), 'Node.js public key validation')
+    def test_default_preserves_original_archives_and_publishes_public_key(self):
+        self.config({'original': {}})
+        original = b'opaque encrypted archive payload'
+        self.fixture('plugins/original.asar', original)
+        self.fixture('app/asar/security-asar/lib/rsa-pub.pem', PUBLIC_KEY)
+        with mock.patch.object(sys, 'argv', self.sync_arguments()), \
+                mock.patch.object(sync, 'normalize_plugin_asars') as normalize, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(sync.main(), 0)
+        normalize.assert_not_called()
+        app = self.root / 'out/thunder_2025/resources/app'
+        self.assertEqual((app / 'plugins/original.asar').read_bytes(), original)
+        self.assertEqual((app / 'asar-public-key.pem').read_bytes(), PUBLIC_KEY)
+
+    def test_standard_only_release_does_not_require_key_or_conversion(self):
+        self.config({'plain': {}})
+        self.fixture('plugins/plain.asar', standard_asar())
+        with mock.patch.object(sys, 'argv', self.sync_arguments()), \
+                mock.patch.object(sync, 'normalize_plugin_asars') as normalize, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(sync.main(), 0)
+        normalize.assert_not_called()
+        self.assertFalse((self.root /
+                          'out/thunder_2025/resources/app/asar-public-key.pem').exists())
+
+    def test_encrypted_release_without_key_preserves_existing_runtime(self):
+        self.config({'encrypted': {}})
+        self.fixture('plugins/encrypted.asar', b'encrypted fixture')
+        sentinel = self.fixture('out/thunder_2025/keep')
+        errors = io.StringIO()
+        with mock.patch.object(sys, 'argv', self.sync_arguments()), \
+                contextlib.redirect_stderr(errors):
+            self.assertEqual(sync.main(), 1)
+        self.assertIn('requires --asar-public-key', errors.getvalue())
+        self.assertEqual(sentinel.read_bytes(), b'fixture')
+
+    def test_private_key_is_rejected_before_deleting_runtime(self):
+        self.config({})
+        self.fixture('app/asar/security-asar/lib/rsa-pub.pem',
+                     b'-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----')
+        sentinel = self.fixture('out/thunder_2025/keep')
+        errors = io.StringIO()
+        with mock.patch.object(sys, 'argv', self.sync_arguments()), \
+                contextlib.redirect_stderr(errors):
+            self.assertEqual(sync.main(), 1)
+        self.assertNotIn('secret', errors.getvalue())
+        self.assertEqual(sentinel.read_bytes(), b'fixture')
+
+    def test_standard_conversion_requires_explicit_option(self):
+        self.config({'plain': {}})
+        self.fixture('plugins/plain.asar', standard_asar())
+        args = self.sync_arguments() + ['--asar-format', 'standard']
+        with mock.patch.object(sys, 'argv', args), \
+                mock.patch.object(sync, 'normalize_plugin_asars', return_value=1) as normalize, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(sync.main(), 0)
+        normalize.assert_called_once()
 
     @unittest.skipUnless(os.environ.get('THUNDER_APP_ROOT') and shutil.which('node'),
                          'set THUNDER_APP_ROOT and provide node for real ASAR tools')

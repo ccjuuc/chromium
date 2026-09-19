@@ -29,6 +29,7 @@
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_api_bridge.h"
 #include "xenon_overlay/chrome/browser/napi/napi_switches.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
+#include "xenon_overlay/common/asar/archive.h"
 #include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
 #include "xenon_overlay/public/xenon_ipc_switches.h"
 
@@ -110,7 +111,11 @@ XenonManager* XenonManager::GetInstance() {
 
 XenonManager::XenonManager() = default;
 
-XenonManager::~XenonManager() = default;
+XenonManager::~XenonManager() {
+  for (const auto& [container_id, config] : last_ipc_configs_) {
+    asar::RemoveArchivePublicKeys("electron:" + container_id);
+  }
+}
 
 void XenonManager::InitializeRuntimeMetadata() {
   if (runtime_metadata_initialized_) {
@@ -326,6 +331,33 @@ bool XenonManager::RegisterElectronIpc(ipc::mojom::IpcMainConfigPtr config) {
   }
   const std::string container_id =
       config->container_id.empty() ? "default" : config->container_id;
+  if (FindContainerService(container_id)) {
+    const auto previous = last_ipc_configs_.find(container_id);
+    if (previous != last_ipc_configs_.end()) {
+      const auto& old_keys = previous->second->archive_public_keys;
+      const auto& new_keys = config->archive_public_keys;
+      bool equal = old_keys.size() == new_keys.size();
+      for (size_t i = 0; equal && i < old_keys.size(); ++i) {
+        equal = old_keys[i]->root_path == new_keys[i]->root_path &&
+                old_keys[i]->public_key_pem == new_keys[i]->public_key_pem;
+      }
+      if (!equal) {
+        LOG(ERROR) << "Cannot replace ASAR keys while the container is running";
+        return false;
+      }
+    }
+  }
+  std::vector<asar::ArchiveKeyConfig> archive_keys;
+  for (const auto& key : config->archive_public_keys) {
+    archive_keys.push_back(
+        {base::FilePath::FromUTF8Unsafe(key->root_path), key->public_key_pem});
+  }
+  // Key validation and replacement are atomic. A malformed replacement must
+  // not revoke the last usable configuration or partially update the reader.
+  if (!asar::SetArchivePublicKeys("electron:" + container_id, archive_keys)) {
+    LOG(ERROR) << "Invalid or conflicting ASAR public key configuration";
+    return false;
+  }
   last_ipc_configs_.insert_or_assign(container_id, std::move(config));
   LOG(INFO) << "Registered Electron container configuration: " << container_id;
   return true;

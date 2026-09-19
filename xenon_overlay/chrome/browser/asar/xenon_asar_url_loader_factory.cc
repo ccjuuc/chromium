@@ -13,8 +13,10 @@
 #include <vector>
 
 #include "base/byte_size.h"
+#include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/memory/self_deleting.h"
 #include "base/numerics/safe_conversions.h"
@@ -29,7 +31,6 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
 #include "mojo/public/cpp/system/data_pipe_producer.h"
-#include "mojo/public/cpp/system/file_data_source.h"
 #include "net/base/filename_util.h"
 #include "net/base/mime_sniffer.h"
 #include "net/base/mime_util.h"
@@ -74,6 +75,46 @@ uint32_t ResponsePipeSize(uint64_t body_size) {
       network::GetDataPipeDefaultAllocationSize(
           network::DataPipeAllocationSize::kLargerSizeIfPossible)));
 }
+
+// Both MIME detection and the response body read logical member bytes. The
+// reader owns its file and decoding state and can outlive the cached Archive.
+class AsarDataSource : public mojo::DataPipeProducer::DataSource {
+ public:
+  explicit AsarDataSource(std::unique_ptr<asar::Archive::EntryReader> reader)
+      : reader_(std::move(reader)), end_(reader_->size()) {}
+
+  void SetRange(uint64_t start, uint64_t end) {
+    CHECK_LE(start, end);
+    CHECK_LE(end, reader_->size());
+    start_ = start;
+    end_ = end;
+  }
+
+  uint64_t GetLength() const override { return end_ - start_; }
+
+  ReadResult Read(uint64_t offset, base::span<char> buffer) override {
+    ReadResult result;
+    if (offset > GetLength()) {
+      result.result = MOJO_RESULT_INVALID_ARGUMENT;
+      return result;
+    }
+    const size_t count = base::checked_cast<size_t>(
+        std::min<uint64_t>(buffer.size(), GetLength() - offset));
+    auto read = reader_->Read(start_ + offset,
+                              base::as_writable_bytes(buffer).first(count));
+    if (!read) {
+      result.result = MOJO_RESULT_UNKNOWN;
+      return result;
+    }
+    result.bytes_read = *read;
+    return result;
+  }
+
+ private:
+  std::unique_ptr<asar::Archive::EntryReader> reader_;
+  uint64_t start_ = 0;
+  uint64_t end_;
+};
 
 class AsarURLLoader : public network::mojom::URLLoader {
  public:
@@ -164,30 +205,12 @@ class AsarURLLoader : public network::mojom::URLLoader {
 
     std::shared_ptr<asar::Archive> archive =
         asar::GetOrCreateAsarArchive(archive_path);
-    asar::Archive::FileInfo info;
-    if (!archive || !archive->GetFileInfo(relative_path, &info)) {
+    auto reader = archive ? archive->CreateReader(relative_path) : nullptr;
+    if (!reader) {
       OnClientComplete(net::ERR_FILE_NOT_FOUND);
       return;
     }
-
-    base::File file;
-    if (info.unpacked) {
-      base::FilePath unpacked_path;
-      if (!archive->GetUnpackedPath(relative_path, &unpacked_path)) {
-        OnClientComplete(net::ERR_FILE_NOT_FOUND);
-        return;
-      }
-      file = base::File(unpacked_path, base::File::FLAG_OPEN |
-                                           base::File::FLAG_READ |
-                                           base::File::FLAG_WIN_SHARE_DELETE);
-      info.offset = 0;
-    } else {
-      file = archive->DuplicateFile();
-    }
-    if (!file.IsValid()) {
-      OnClientComplete(net::ERR_FILE_NOT_FOUND);
-      return;
-    }
+    const uint64_t entry_size = reader->size();
 
     net::HttpByteRange byte_range;
     if (std::optional<std::string> range_header =
@@ -195,7 +218,7 @@ class AsarURLLoader : public network::mojom::URLLoader {
         range_header) {
       std::vector<net::HttpByteRange> ranges;
       if (!net::HttpUtil::ParseRangeHeader(*range_header, &ranges) ||
-          ranges.size() != 1 || !ranges[0].ComputeBounds(info.size)) {
+          ranges.size() != 1 || !ranges[0].ComputeBounds(entry_size)) {
         OnClientComplete(net::ERR_REQUEST_RANGE_NOT_SATISFIABLE);
         return;
       }
@@ -203,7 +226,7 @@ class AsarURLLoader : public network::mojom::URLLoader {
     }
 
     uint64_t first_byte_to_send = 0;
-    uint64_t total_bytes_to_send = info.size;
+    uint64_t total_bytes_to_send = entry_size;
     if (byte_range.IsValid()) {
       first_byte_to_send = byte_range.first_byte_position();
       total_bytes_to_send =
@@ -219,12 +242,11 @@ class AsarURLLoader : public network::mojom::URLLoader {
       return;
     }
 
-    auto file_data_source =
-        std::make_unique<mojo::FileDataSource>(std::move(file));
+    auto file_data_source = std::make_unique<AsarDataSource>(std::move(reader));
     std::vector<char> initial_read_buffer(
-        std::min<uint64_t>(net::kMaxBytesToSniff, info.size));
-    auto read_result = file_data_source->Read(
-        info.offset, base::span<char>(initial_read_buffer));
+        std::min<uint64_t>(net::kMaxBytesToSniff, entry_size));
+    auto read_result =
+        file_data_source->Read(0, base::span<char>(initial_read_buffer));
     if (read_result.result != MOJO_RESULT_OK) {
       OnClientComplete(ConvertMojoResultToNetError(read_result.result));
       return;
@@ -278,9 +300,8 @@ class AsarURLLoader : public network::mojom::URLLoader {
       return;
     }
 
-    file_data_source->SetRange(
-        info.offset + first_byte_to_send,
-        info.offset + first_byte_to_send + total_bytes_to_send);
+    file_data_source->SetRange(first_byte_to_send,
+                               first_byte_to_send + total_bytes_to_send);
     data_producer_ =
         std::make_unique<mojo::DataPipeProducer>(std::move(producer_handle));
     data_producer_->Write(

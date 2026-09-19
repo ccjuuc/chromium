@@ -22,6 +22,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from asar_sync_support import preflight_asar_public_key, write_asar_public_key
+
 
 def normalize_preloads(source: Path, archive: Path,
                        asar_module: Path) -> tuple[dict[str, bytes], int]:
@@ -114,6 +116,9 @@ def main() -> int:
     parser.add_argument(
         '--vendor-asar-module', type=Path,
         help='Original vendor ASAR module (default: <src>/../asar/security-asar/lib/asar.js)')
+    parser.add_argument(
+        '--asar-public-key', type=Path,
+        help='RSA public key for encrypted archives (default: rsa-pub.pem beside the vendor ASAR module)')
     args = parser.parse_args()
     args.src = args.src.resolve()
     args.out = args.out.resolve()
@@ -171,13 +176,23 @@ def main() -> int:
 
     # The vendor postbuild encrypts app/build scripts in place. Convert its
     # preloads back to public CommonJS source before deleting any old runtime.
-    # Product encryption formats and keys stay in the source project's tool.
+    # Standalone preload scripts still need source bytes. Copied ASAR archives
+    # retain their original encrypted bytes and use the public runtime key.
     archive = (args.source_archive or
                args.player_sdk / 'resources' / 'app' / 'out.asar').resolve()
     asar_module = (args.vendor_asar_module or
                    args.src.parent / 'asar' / 'security-asar' / 'lib' /
                    'asar.js').resolve()
     try:
+        archive_roots = [args.src / name for name in (
+            'preload', 'preload-native', 'public', 'static', 'main-renderer')]
+        archive_roots.extend(args.player_sdk / name for name in (
+            'player', 'SDK', 'Res', 'resources'))
+        if args.native_dir != args.player_sdk:
+            archive_roots.append(args.native_dir / 'player')
+        asar_public_key = preflight_asar_public_key(
+            archive_roots, args.asar_public_key,
+            asar_module.with_name('rsa-pub.pem'))
         preload_scripts, normalized_count = normalize_preloads(
             args.src, archive, asar_module)
     except (RuntimeError, ValueError, OSError) as error:
@@ -290,6 +305,8 @@ def main() -> int:
         print(
             f'PL-E SDK: copied {sdk_file_count} files and runtime to {main_dst}')
         print(f'PL-E native build: {args.native_dir}')
+
+    write_asar_public_key(main_dst / 'resources' / 'app', asar_public_key)
 
     copied, skipped = copy_tree(
         frontend_src, frontend_dst, include_maps=args.include_maps)

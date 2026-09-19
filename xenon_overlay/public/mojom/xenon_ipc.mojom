@@ -23,6 +23,14 @@ struct IpcRendererUrlMapping {
   string target_base_url;
 };
 
+// Trusted embedder configuration for legacy encrypted ASAR packages below an
+// absolute archive root. Only public keys are accepted; no key is exposed in
+// the document's renderer configuration.
+struct IpcArchivePublicKey {
+  string root_path;
+  string public_key_pem;
+};
+
 // Empty |embedded_main_source| means the Utility process resolves the main
 // module from its --xenon-main-js / --xenon-electron-app switches. Packaged
 // diagnostic surfaces can instead provide a CommonJS module as a resource.
@@ -56,6 +64,7 @@ struct IpcMainConfig {
   // URL exactly after GURL normalization, ignoring query and fragment. Paths
   // are not prefixes. Empty by default; callers must verify the actual parent.
   array<string> parent_window_pairing_urls;
+  array<IpcArchivePublicKey> archive_public_keys;
 };
 
 // Document-specific Electron metadata. A renderer process can host documents

@@ -21,6 +21,8 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "xenon_overlay/common/asar/archive.h"
+#include "xenon_overlay/common/asar/test_support.h"
 
 namespace xenon::ipc {
 namespace {
@@ -40,6 +42,10 @@ std::string TestBytes(size_t size) {
 class XenonFileSystemRangeTest : public testing::Test {
  protected:
   void SetUp() override { ASSERT_TRUE(temp_dir_.CreateUniqueTempDir()); }
+
+  void TearDown() override {
+    xenon::asar::RemoveArchivePublicKeys("fs-range-test");
+  }
 
   mojom::IpcResultPtr Read(const base::FilePath& path,
                            base::DictValue options = {},
@@ -212,6 +218,68 @@ TEST_F(XenonFileSystemRangeTest, UnpackedAsarRangesUseActualFileLength) {
       path, base::DictValue().Set("start", static_cast<int>(bytes.size())), "");
   ExpectBytes(archive_path_.AppendASCII("empty-unpacked.bin"),
               base::DictValue().Set("start", 0), "");
+}
+
+TEST_F(XenonFileSystemRangeTest, EncryptedAsarRangesReturnLogicalBytes) {
+  const std::string bytes = TestBytes(kLargeFileSize);
+  const std::string plain = "plain member after encrypted member";
+  const std::string unpacked("unpacked\0\xff", 10);
+  xenon::asar::TestArchiveBuilder builder;
+  archive_path_ = temp_dir_.GetPath().AppendASCII("encrypted.asar");
+  ASSERT_TRUE(
+      builder.Write(archive_path_, {{"encrypted.bin", bytes, true},
+                                    {"plain.bin", plain},
+                                    {"empty.bin", "", true},
+                                    {"unpacked.bin", unpacked, false, true}}));
+  ASSERT_TRUE(xenon::asar::SetArchivePublicKeys(
+      "fs-range-test", {{temp_dir_.GetPath(), builder.public_key_pem()}}));
+
+  const auto path = archive_path_.AppendASCII("encrypted.bin");
+  constexpr int kStart = 2 * 1024 * 1024 + 3;
+  ExpectBytes(path,
+              base::DictValue()
+                  .Set("start", kStart)
+                  .Set("end", kStart + static_cast<int>(kRangeSize) - 1),
+              std::string_view(bytes).substr(kStart, kRangeSize));
+  ExpectBytes(path, base::DictValue().Set("end", 0), bytes.substr(0, 1));
+  ExpectBytes(path,
+              base::DictValue()
+                  .Set("start", static_cast<int>(bytes.size()) - 19)
+                  .Set("end", kMaxSafeInteger),
+              std::string_view(bytes).substr(bytes.size() - 19));
+  ExpectBytes(
+      path, base::DictValue().Set("start", static_cast<int>(bytes.size())), "");
+  ExpectBytes(path, base::DictValue().Set("start", kMaxSafeInteger), "");
+  ExpectBytes(archive_path_.AppendASCII("empty.bin"),
+              base::DictValue().Set("start", 0).Set("end", 99), "");
+  ExpectBytes(archive_path_.AppendASCII("plain.bin"),
+              base::DictValue().Set("start", 3).Set("end", 16),
+              plain.substr(3, 14));
+  ExpectBytes(archive_path_.AppendASCII("unpacked.bin"),
+              base::DictValue().Set("start", 3).Set("end", kMaxSafeInteger),
+              unpacked.substr(3));
+  auto legacy =
+      Read(path, base::DictValue().Set("start", 3).Set("end", 18), false);
+  ASSERT_TRUE(legacy->success) << legacy->error;
+  EXPECT_EQ(base::Base64Encode(bytes.substr(3, 16)), legacy->value.GetString());
+}
+
+TEST_F(XenonFileSystemRangeTest, EncryptedAsarWholeReadPreservesPadding) {
+  xenon::asar::TestArchiveBuilder builder;
+  archive_path_ = temp_dir_.GetPath().AppendASCII("encrypted.asar");
+  ASSERT_TRUE(builder.Write(archive_path_, {{"script.js", "one", true}}));
+  ASSERT_TRUE(xenon::asar::SetArchivePublicKeys(
+      "fs-range-test", {{temp_dir_.GetPath(), builder.public_key_pem()}}));
+  const std::string padded = "one" + std::string(13, ' ');
+  const auto path = archive_path_.AppendASCII("script.js");
+  ExpectBytes(path, {}, padded);
+  ExpectBytes(path, base::DictValue().Set("start", 1), padded.substr(1));
+
+  // A cached archive must not keep serving decrypted content after its trusted
+  // key configuration is withdrawn.
+  xenon::asar::RemoveArchivePublicKeys("fs-range-test");
+  auto result = Read(path, base::DictValue().Set("end", 0));
+  EXPECT_FALSE(result->success);
 }
 
 TEST_F(XenonFileSystemRangeTest, NoRangeAndLegacyBase64ReadsRemainCompatible) {

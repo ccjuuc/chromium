@@ -28,6 +28,8 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "v8/include/v8.h"
+#include "xenon_overlay/common/asar/archive.h"
+#include "xenon_overlay/common/asar/test_support.h"
 
 namespace xenon {
 
@@ -349,6 +351,103 @@ class XenonServiceOwnerTest : public testing::Test {
   std::unique_ptr<XenonServiceImpl> service_;
   std::string addon_path_;
 };
+
+class XenonServiceArchiveTest : public XenonServiceOwnerTest {
+ protected:
+  void SetUp() override {
+    XenonServiceOwnerTest::SetUp();
+    ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+    ASSERT_TRUE(base::NormalizeFilePath(temp_dir_.GetPath(), &app_path_));
+    archive_path_ = app_path_.AppendASCII("sealed.asar");
+    ASSERT_TRUE(builder_.Write(archive_path_,
+                               {{"main.js", R"JS(
+            const data = require('./value.json');
+            require('electron').ipcMain.handle('archive-answer', () => data.answer);
+          )JS",
+                                 true},
+                                {"fail.js", R"JS(
+            const data = require('./value.json');
+            if (data.answer === 42) throw new Error('encrypted startup rejected');
+          )JS",
+                                 true},
+                                {"value.json", R"({"answer":42})", true}}));
+  }
+
+  std::pair<bool, std::string> InitializeArchiveApp(const char* member,
+                                                    bool configure_key) {
+    auto config = ipc::mojom::IpcMainConfig::New();
+    config->container_id = kContext;
+    config->embedded_main_source =
+        "require('./sealed.asar/" + std::string(member) + "');";
+    config->virtual_main_path = app_path_.AppendASCII("main.js").AsUTF8Unsafe();
+    config->app_path = app_path_.AsUTF8Unsafe();
+    config->app_name = "Encrypted archive service test";
+    if (configure_key) {
+      config->archive_public_keys.push_back(
+          ipc::mojom::IpcArchivePublicKey::New(app_path_.AsUTF8Unsafe(),
+                                               builder_.public_key_pem()));
+    }
+    base::test::TestFuture<bool, const std::string&> initialized;
+    browser_->InitializeElectronIpc(std::move(config),
+                                    initialized.GetCallback());
+    if (!initialized.Wait()) {
+      ADD_FAILURE() << "Electron main initialization did not finish";
+      return {false, "Initialization callback missing"};
+    }
+    return {initialized.Get<0>(), initialized.Get<1>()};
+  }
+
+  void ExpectArchiveReply() {
+    ResultFuture reply;
+    browser_->ElectronIpcInvoke(kContext, "archive-page", "archive-answer",
+                                base::Value(base::ListValue()),
+                                reply.GetCallback());
+    auto result = Finish(reply);
+    ASSERT_TRUE(result);
+    ASSERT_TRUE(result->success) << result->error;
+    ASSERT_TRUE(result->value.is_int());
+    EXPECT_EQ(42, result->value.GetInt());
+  }
+
+  base::ScopedEnvironmentVariableOverride hosted_directory_{
+      "XENON_HOSTED_APP_DIR", "previous-runtime"};
+  base::ScopedTempDir temp_dir_;
+  base::FilePath app_path_;
+  base::FilePath archive_path_;
+  asar::TestArchiveBuilder builder_;
+};
+
+TEST_F(XenonServiceArchiveTest,
+       EncryptedMainRequiresKeyAndServiceOwnsItsLifetime) {
+  const auto denied = InitializeArchiveApp("main.js", false);
+  EXPECT_FALSE(denied.first);
+  EXPECT_FALSE(denied.second.empty());
+  EXPECT_FALSE(asar::GetOrCreateAsarArchive(archive_path_));
+
+  const auto initialized = InitializeArchiveApp("main.js", true);
+  ASSERT_TRUE(initialized.first) << initialized.second;
+  ASSERT_NO_FATAL_FAILURE(ExpectArchiveReply());
+  // This also populates the shared archive cache before destroying its owner.
+  EXPECT_TRUE(asar::GetOrCreateAsarArchive(archive_path_));
+  service_.reset();
+  browser_.reset();
+  task_environment_.RunUntilIdle();
+  EXPECT_FALSE(asar::GetOrCreateAsarArchive(archive_path_));
+}
+
+TEST_F(XenonServiceArchiveTest, FailedEncryptedMainRevokesKeyAndAllowsRetry) {
+  const auto failed = InitializeArchiveApp("fail.js", true);
+  ASSERT_FALSE(failed.first);
+  EXPECT_NE(std::string::npos, failed.second.find("encrypted startup rejected"))
+      << failed.second;
+  // The module was decrypted before it threw. A subsequent independent reader
+  // must nevertheless fail after initialization rolls back the public key.
+  EXPECT_FALSE(asar::GetOrCreateAsarArchive(archive_path_));
+
+  const auto initialized = InitializeArchiveApp("main.js", true);
+  ASSERT_TRUE(initialized.first) << initialized.second;
+  ASSERT_NO_FATAL_FAILURE(ExpectArchiveReply());
+}
 
 TEST_F(XenonServiceOwnerTest, AddonRuntimeDoesNotInitializeElectronMain) {
   base::ScopedEnvironmentVariableOverride hosted_directory(

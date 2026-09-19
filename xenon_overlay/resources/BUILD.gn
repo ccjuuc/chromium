@@ -93,6 +93,9 @@ if (is_mac) {
 if (is_win) {
   action("copy_thunder_2025") {
     script = "//xenon_overlay/tools/copy_runtime_tree.py"
+    # Track additions/removals of the optional public key; the depfile tracks
+    # modifications to files that were copied by the previous invocation.
+    inputs = [ "thunder_2025/resources/app" ]
     src_dir = "thunder_2025"
     dst_dir = "$root_out_dir/thunder_2025"
     stamp_file = "$target_gen_dir/copy_thunder_2025.stamp"
@@ -113,6 +116,7 @@ if (is_win) {
 
   action("copy_xenon_player") {
     script = "//xenon_overlay/tools/copy_runtime_tree.py"
+    inputs = [ "xenon_player/main/resources/app" ]
     src_dir = "xenon_player"
     dst_dir = "$root_out_dir/xenon_player"
     stamp_file = "$target_gen_dir/copy_xenon_player.stamp"

@@ -195,13 +195,27 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
       thunder_config->virtual_main_path = thunder_main_path.AsUTF8Unsafe();
       thunder_config->app_path = thunder_app_dir.AsUTF8Unsafe();
       thunder_config->app_name = "Thunder";
+      bool archive_key_loaded = true;
+      const base::FilePath archive_key_path =
+          thunder_app_dir.AppendASCII("asar-public-key.pem");
+      if (base::PathExists(archive_key_path)) {
+        std::string archive_key;
+        if (!base::ReadFileToStringWithMaxSize(archive_key_path, &archive_key,
+                                               64 * 1024)) {
+          LOG(ERROR) << "Unable to read packaged ASAR public key";
+          archive_key_loaded = false;
+        }
+        thunder_config->archive_public_keys.push_back(
+            xenon::ipc::mojom::IpcArchivePublicKey::New(
+                thunder_app_dir.AsUTF8Unsafe(), std::move(archive_key)));
+      }
       // Preserve the hosted application's executable identity and version.
       // This file is not launched: Xenon still executes the main module.
       thunder_config->executable_path =
           thunder_runtime_dir.AppendASCII("Thunder.exe").AsUTF8Unsafe();
       const std::string thunder_app_version =
-          xenon::ipc::GetAppExecutableVersion(base::FilePath::FromUTF8Unsafe(
-              thunder_config->executable_path));
+          xenon::ipc::GetAppExecutableVersion(
+              base::FilePath::FromUTF8Unsafe(thunder_config->executable_path));
       if (!thunder_app_version.empty()) {
         thunder_config->app_version = thunder_app_version;
         thunder_config->default_user_agent = base::StringPrintf(
@@ -229,7 +243,8 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
         thunder_config->renderer_url_mappings.push_back(
             std::move(renderer_mapping));
       }
-      if (manager->RegisterElectronIpc(std::move(thunder_config))) {
+      if (archive_key_loaded &&
+          manager->RegisterElectronIpc(std::move(thunder_config))) {
         manager->SetElectronIpcContainerForOrigin(kThunder2025Origin,
                                                   kThunder2025ContainerId);
       }

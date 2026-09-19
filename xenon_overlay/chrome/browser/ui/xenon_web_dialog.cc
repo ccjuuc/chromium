@@ -1411,6 +1411,21 @@ void XenonWebDialog::ShowXenonPlayerElectron(Profile* profile) {
         player_config->app_path = player_dir.AsUTF8Unsafe();
         player_config->runtime_directory = player_dir.AsUTF8Unsafe();
         player_config->app_name = "xmp";
+        const base::FilePath packaged_app =
+            player_dir.AppendASCII("resources").AppendASCII("app");
+        const base::FilePath archive_key_path =
+            packaged_app.AppendASCII("asar-public-key.pem");
+        if (base::PathExists(archive_key_path)) {
+          std::string archive_key;
+          if (!base::ReadFileToStringWithMaxSize(archive_key_path, &archive_key,
+                                                 64 * 1024)) {
+            LOG(ERROR) << "Unable to read packaged ASAR public key";
+            return;
+          }
+          player_config->archive_public_keys.push_back(
+              xenon::ipc::mojom::IpcArchivePublicKey::New(
+                  packaged_app.AsUTF8Unsafe(), std::move(archive_key)));
+        }
         // Preserve the packaged executable identity for process.execPath and
         // app.getPath("exe"). The container does not launch this executable.
         player_config->executable_path =

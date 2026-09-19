@@ -92,35 +92,26 @@ bool ParseReadRange(const base::DictValue& request,
   return true;
 }
 
-// The file is already owned by this request. Packed ASAR entries add a base
-// offset and a logical size; ordinary and unpacked files use their actual EOF.
+// Ordinary files use their actual EOF, including readable pseudo-files whose
+// stat size is zero. The request owns this handle and its seek position.
 bool ReadFileRange(base::File file,
                    const FileReadRange& range,
-                   uint64_t base_offset,
-                   std::optional<uint64_t> entry_size,
                    std::string* contents) {
   if (!file.IsValid()) {
     return false;
   }
   contents->clear();
-  // Check the entry boundary before adding its offset, including when the
-  // requested start is MAX_SAFE_INTEGER. Unpacked files use physical EOF.
-  if (entry_size && range.start >= *entry_size) {
-    return true;
-  }
   constexpr uint64_t kMaxOffset = std::numeric_limits<int64_t>::max();
-  if (base_offset > kMaxOffset || range.start > kMaxOffset - base_offset) {
+  if (range.start > kMaxOffset) {
     return false;
   }
-  const uint64_t start = base_offset + range.start;
+  const uint64_t start = range.start;
   uint64_t remaining = kMaxOffset - start;
   if (range.end) {
     remaining = std::min(remaining, *range.end - range.start + 1);
   }
-  if (entry_size) {
-    remaining = std::min(remaining, *entry_size - range.start);
-  } else if (start && file.Seek(base::File::FROM_BEGIN,
-                                static_cast<int64_t>(start)) < 0) {
+  if (start &&
+      file.Seek(base::File::FROM_BEGIN, static_cast<int64_t>(start)) < 0) {
     return false;
   }
   // Probe EOF without growing |contents| first. Otherwise an exact-capacity
@@ -135,12 +126,42 @@ bool ReadFileRange(base::File file,
         std::min(remaining, static_cast<uint64_t>(buffer.size())));
     const size_t total = contents->size();
     const auto destination = base::span(buffer).first(count);
-    // ASAR duplicates may share an OS seek pointer, so their reads must carry
-    // an explicit position. Ordinary/unpacked handles are request-local; an
-    // initial sequential read also preserves readable non-seekable files.
+    // An initial sequential read also preserves readable non-seekable files.
+    const auto read = file.ReadAtCurrentPos(destination);
+    if (!read || *read > contents->max_size() - total) {
+      contents->clear();
+      return false;
+    }
+    contents->append(reinterpret_cast<const char*>(buffer.data()), *read);
+    remaining -= *read;
+    if (*read == 0) {
+      break;
+    }
+  }
+  return true;
+}
+
+bool ReadAsarRange(const xenon::asar::Archive::EntryReader& reader,
+                   const FileReadRange& range,
+                   std::string* contents) {
+  contents->clear();
+  // Check the logical boundary before offset arithmetic, including very large
+  // starts. Encrypted readers translate only the requested blocks to disk I/O.
+  if (range.start >= reader.size()) {
+    return true;
+  }
+  uint64_t remaining = reader.size() - range.start;
+  if (range.end) {
+    remaining = std::min(remaining, *range.end - range.start + 1);
+  }
+  std::vector<uint8_t> buffer(
+      static_cast<size_t>(std::min<uint64_t>(remaining, 64 * 1024)));
+  while (remaining) {
+    const size_t count =
+        static_cast<size_t>(std::min<uint64_t>(remaining, buffer.size()));
+    const size_t total = contents->size();
     const auto read =
-        entry_size ? file.Read(static_cast<int64_t>(start + total), destination)
-                   : file.ReadAtCurrentPos(destination);
+        reader.Read(range.start + total, base::span(buffer).first(count));
     if (!read || *read > contents->max_size() - total) {
       contents->clear();
       return false;
@@ -246,17 +267,9 @@ xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
       bool read = false;
       if (!read_range) {
         read = asar_archive->ReadFile(asar_relative_path, &contents);
-      } else if (asar_info.unpacked) {
-        base::FilePath unpacked_path;
-        if (asar_archive->GetUnpackedPath(asar_relative_path, &unpacked_path)) {
-          read = ReadFileRange(
-              base::File(unpacked_path,
-                         base::File::FLAG_OPEN | base::File::FLAG_READ),
-              *read_range, 0, std::nullopt, &contents);
-        }
       } else {
-        read = ReadFileRange(asar_archive->DuplicateFile(), *read_range,
-                             asar_info.offset, asar_info.size, &contents);
+        auto reader = asar_archive->CreateReader(asar_relative_path);
+        read = reader && ReadAsarRange(*reader, *read_range, &contents);
       }
       if (!read) {
         return error("ENOENT", "no such file or directory", "open");
@@ -295,7 +308,7 @@ xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
     const bool read =
         read_range ? ReadFileRange(base::File(path, base::File::FLAG_OPEN |
                                                         base::File::FLAG_READ),
-                                   *read_range, 0, std::nullopt, &contents)
+                                   *read_range, &contents)
                    : base::ReadFileToString(path, &contents);
     if (!read) {
       return error("ENOENT", "no such file or directory", "open");

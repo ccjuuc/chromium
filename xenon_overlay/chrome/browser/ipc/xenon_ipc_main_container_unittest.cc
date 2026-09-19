@@ -39,6 +39,8 @@
 #include "xenon_overlay/chrome/browser/ipc/xenon_app_runtime.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_file_system_bridge.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_os_bridge.h"
+#include "xenon_overlay/common/asar/archive.h"
+#include "xenon_overlay/common/asar/test_support.h"
 #include "xenon_overlay/common/ipc/xenon_ipc_value_codec.h"
 #include "xenon_overlay/services/xenon_node_executor.h"
 
@@ -746,6 +748,7 @@ class XenonIpcMainContainerTest : public gin::V8Test {
 
   void TearDown() override {
     container_.reset();
+    asar::RemoveArchivePublicKeys("main-container-test");
     base::CommandLine::ForCurrentProcess()->RemoveSwitch("xenon-main-js");
     base::CommandLine::ForCurrentProcess()->RemoveSwitch("xenon-electron-app");
     gin::V8Test::TearDown();
@@ -1893,6 +1896,230 @@ TEST_F(XenonIpcMainContainerTest,
   base::FilePath normalized_app_dir;
   ASSERT_TRUE(base::NormalizeFilePath(app_dir, &normalized_app_dir));
   EXPECT_EQ(normalized_app_dir.AsUTF8Unsafe(), path_result->value.GetString());
+}
+
+TEST_F(XenonIpcMainContainerTest, LoadsStandardAndEncryptedAsarApplications) {
+  container_.reset();
+  base::CommandLine::ForCurrentProcess()->RemoveSwitch("xenon-main-js");
+  asar::TestArchiveBuilder builder;
+  ASSERT_TRUE(asar::SetArchivePublicKeys(
+      "main-container-test",
+      {{temp_dir_.GetPath(), builder.public_key_pem()}}));
+  for (bool encrypted : {false, true}) {
+    SCOPED_TRACE(encrypted);
+    const base::FilePath app = temp_dir_.GetPath().AppendASCII(
+        encrypted ? "encrypted-app.asar" : "plain-app.asar");
+    ASSERT_TRUE(builder.Write(
+        app,
+        {{"package.json", R"({"name":"archive-app","main":"dist/main.js"})",
+          encrypted},
+         {"dist/main.js", R"JS(
+const {app, ipcMain} = require('electron');
+const alias = require('../counter-alias');
+const first = require('./counter');
+const same = require('./sub/../counter.js');
+const directoryAlias = require('../dist-alias/counter');
+const chainedAlias = require('../chained-alias/counter');
+const answer = require('./answer.json').value + require('fixture-dependency');
+const fallback = require('./fallback');
+const cycle = require('./cycle/a');
+const errors = [];
+for (const request of ['./missing', 'exports-package']) {
+  try { require(request); } catch (error) { errors.push(error.code); }
+}
+for (let i = 0; i < 2; ++i) {
+  try { require('./throws'); }
+  catch (error) { errors.push(error instanceof TypeError && error.message); }
+}
+ipcMain.handle('asar:modules', () => ({
+  answer, fallback, cycle, errors,
+  same: first === same && first === require('./counter') &&
+      first === alias && first === directoryAlias && first === chainedAlias,
+  relativeAnswer: alias.relativeAnswer,
+  aliasResolved: require.resolve('../counter-alias'),
+  directoryResolved: require.resolve('../dist-alias/counter'),
+  loads: first.loads, thrownLoads: globalThis.thrownLoads,
+  filename: first.filename, dirname: first.dirname,
+  resolved: require.resolve('./sub/../counter'), appPath: app.getAppPath()
+}));
+)JS",
+          encrypted},
+         {"dist/counter.js", R"JS(
+globalThis.counterLoads = (globalThis.counterLoads || 0) + 1;
+module.exports = {loads: globalThis.counterLoads,
+  relativeAnswer: require('./nested/relative').answer,
+  filename: __filename, dirname: __dirname};
+)JS",
+          encrypted},
+         {"dist/nested/relative.js", "exports.answer = 17;", encrypted},
+         {"counter-alias.js", "", false, false, "dist/counter.js"},
+         {"dist-alias", "", false, false, "dist"},
+         {"chained-alias", "", false, false, "dist-alias"},
+         {"dist/answer.json", R"({"value":40})", encrypted},
+         {"dist/sub/placeholder", ""},
+         {"dist/fallback/package.json", R"({"main":"."})", encrypted},
+         {"dist/fallback/index.js", "module.exports = 'index';", encrypted},
+         {"dist/cycle/a.js",
+          "exports.value = 7; module.exports = require('./b').value;",
+          encrypted},
+         {"dist/cycle/b.js", "exports.value = require('./a').value;",
+          encrypted},
+         {"dist/throws.js",
+          "globalThis.thrownLoads = (globalThis.thrownLoads || 0) + 1;"
+          "throw new TypeError('module failure');",
+          encrypted},
+         {"node_modules/fixture-dependency/package.json",
+          R"({"main":"lib/index.cjs"})", encrypted},
+         {"node_modules/fixture-dependency/lib/index.cjs",
+          "module.exports = 2;"},
+         {"node_modules/exports-package/package.json",
+          R"({"exports":"./index.js"})", encrypted},
+         {"node_modules/exports-package/index.js", "module.exports = 1;"}},
+        encrypted));
+    base::CommandLine::ForCurrentProcess()->AppendSwitchPath(
+        "xenon-electron-app", app);
+    container_ = std::make_unique<XenonIpcMainContainer>();
+    ASSERT_TRUE(container_->Initialize()) << container_->startup_error();
+    base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+    container_->Invoke("renderer-1", "asar:modules", Arguments({}),
+                       future.GetCallback());
+    auto result = future.Take();
+    ASSERT_TRUE(result->success) << result->error;
+    ASSERT_TRUE(result->value.is_dict());
+    const auto& value = result->value.GetDict();
+    EXPECT_EQ(42, value.FindInt("answer"));
+    ASSERT_TRUE(value.FindString("fallback"));
+    EXPECT_EQ("index", *value.FindString("fallback"));
+    EXPECT_EQ(7, value.FindInt("cycle"));
+    EXPECT_EQ(true, value.FindBool("same"));
+    EXPECT_EQ(17, value.FindInt("relativeAnswer"));
+    EXPECT_EQ(1, value.FindInt("loads"));
+    EXPECT_EQ(2, value.FindInt("thrownLoads"));
+    const auto* errors = value.FindList("errors");
+    ASSERT_TRUE(errors);
+    ASSERT_EQ(4u, errors->size());
+    EXPECT_EQ("MODULE_NOT_FOUND", (*errors)[0].GetString());
+    EXPECT_EQ("ERR_NOT_SUPPORTED", (*errors)[1].GetString());
+    EXPECT_EQ("module failure", (*errors)[2].GetString());
+    EXPECT_EQ("module failure", (*errors)[3].GetString());
+    base::FilePath normalized_app;
+    ASSERT_TRUE(base::NormalizeFilePath(app, &normalized_app));
+    const auto dist = normalized_app.AppendASCII("dist");
+    for (const char* property :
+         {"filename", "resolved", "aliasResolved", "directoryResolved"}) {
+      ASSERT_TRUE(value.FindString(property));
+      EXPECT_EQ(dist.AppendASCII("counter.js").AsUTF8Unsafe(),
+                *value.FindString(property));
+    }
+    ASSERT_TRUE(value.FindString("dirname"));
+    EXPECT_EQ(dist.AsUTF8Unsafe(), *value.FindString("dirname"));
+    ASSERT_TRUE(value.FindString("appPath"));
+    EXPECT_EQ(normalized_app.AsUTF8Unsafe(), *value.FindString("appPath"));
+    container_.reset();
+  }
+}
+
+TEST_F(XenonIpcMainContainerTest, LoadsConfiguredMainFromEncryptedAsar) {
+  container_.reset();
+  asar::TestArchiveBuilder builder;
+  const auto app = temp_dir_.GetPath().AppendASCII("main-script.asar");
+  ASSERT_TRUE(
+      builder.Write(app, {{"main.js",
+                           "require('electron').ipcMain.handle('asar:value', "
+                           "() => require('./value'));",
+                           true},
+                          {"value.js", "module.exports = 42;", true}}));
+  base::CommandLine::ForCurrentProcess()->AppendSwitchPath(
+      "xenon-main-js", app.AppendASCII("main.js"));
+  container_ = std::make_unique<XenonIpcMainContainer>();
+  EXPECT_FALSE(container_->Initialize());
+  container_.reset();
+  ASSERT_TRUE(asar::SetArchivePublicKeys("main-container-test",
+                                         {{app, builder.public_key_pem()}}));
+  container_ = std::make_unique<XenonIpcMainContainer>();
+  ASSERT_TRUE(container_->Initialize()) << container_->startup_error();
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "asar:value", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ(42, result->value.GetInt());
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       EmbeddedMainResolvesEncryptedAsarDependencies) {
+  container_.reset();
+  asar::TestArchiveBuilder builder;
+  const auto app = temp_dir_.GetPath().AppendASCII("embedded-main.asar");
+  ASSERT_TRUE(builder.Write(app, {{"value.js", "module.exports = 42;", true}}));
+  ASSERT_TRUE(asar::SetArchivePublicKeys("main-container-test",
+                                         {{app, builder.public_key_pem()}}));
+  XenonIpcMainContainer::EmbeddedMainModule main_module{
+      .source =
+          "require('electron').ipcMain.handle('asar:value', "
+          "() => require('./value'));",
+      .virtual_path = app.AppendASCII("main.js"),
+      .app_path = app,
+  };
+  container_ = std::make_unique<XenonIpcMainContainer>();
+  ASSERT_TRUE(container_->Initialize(std::move(main_module)))
+      << container_->startup_error();
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "asar:value", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ(42, result->value.GetInt());
+}
+
+TEST_F(XenonIpcMainContainerTest, AsarNativeModulesUseUnpackedCompanion) {
+  container_.reset();
+  base::CommandLine::ForCurrentProcess()->RemoveSwitch("xenon-main-js");
+  base::FilePath executable_dir;
+  ASSERT_TRUE(base::PathService::Get(base::DIR_EXE, &executable_dir));
+  std::string addon;
+  ASSERT_TRUE(base::ReadFileToString(
+      executable_dir.AppendASCII("test_addon.node"), &addon));
+  asar::TestArchiveBuilder builder;
+  const auto app = temp_dir_.GetPath().AppendASCII("native-app.asar");
+  ASSERT_TRUE(
+      builder.Write(app, {{"package.json", R"({"main":"main.js"})", true},
+                          {"main.js", R"JS(
+const {ipcMain} = require('electron');
+const native = require('./test_addon.node');
+ipcMain.handle('asar:native', () => {
+  let packedError;
+  try { require('./packed.node'); } catch (error) { packedError = error.code; }
+  return {answer: native.Add(20, 22), packedError,
+    same: native === require('./test_addon.node'),
+    resolved: require.resolve('./test_addon.node')};
+});
+)JS",
+                           true},
+                          {"test_addon.node", addon, false, true},
+                          {"packed.node", "not a native library"}}));
+  ASSERT_TRUE(asar::SetArchivePublicKeys("main-container-test",
+                                         {{app, builder.public_key_pem()}}));
+  base::CommandLine::ForCurrentProcess()->AppendSwitchPath("xenon-electron-app",
+                                                           app);
+  container_ = std::make_unique<XenonIpcMainContainer>();
+  ASSERT_TRUE(container_->Initialize()) << container_->startup_error();
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "asar:native", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  ASSERT_TRUE(result->value.is_dict());
+  const auto& value = result->value.GetDict();
+  EXPECT_EQ(42, value.FindInt("answer"));
+  EXPECT_EQ(true, value.FindBool("same"));
+  ASSERT_TRUE(value.FindString("packedError"));
+  EXPECT_EQ("ERR_NOT_SUPPORTED", *value.FindString("packedError"));
+  base::FilePath normalized_app;
+  ASSERT_TRUE(base::NormalizeFilePath(app, &normalized_app));
+  ASSERT_TRUE(value.FindString("resolved"));
+  EXPECT_EQ(normalized_app.AppendASCII("test_addon.node").AsUTF8Unsafe(),
+            *value.FindString("resolved"));
 }
 
 TEST_F(XenonIpcMainContainerTest, LoadsPackagedMainModuleWithoutDiskFile) {

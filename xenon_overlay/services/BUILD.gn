@@ -32,6 +32,7 @@ source_set("xenon_service") {
     "//xenon_overlay/chrome/browser:network_request_bridge",
     "//xenon_overlay/chrome/browser:os_bridge",
     "//xenon_overlay/chrome/browser:zlib_bridge",
+    "//xenon_overlay/common/asar",
     "//xenon_overlay/common/ipc:value_codec",
     "//xenon_overlay/public/mojom",
     "//xenon_overlay/resources:resources_grit",

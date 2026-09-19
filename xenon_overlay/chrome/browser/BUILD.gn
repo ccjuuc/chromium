@@ -375,6 +375,7 @@ if (enable_xenon_service) {
       "//services/network:test_support",
       "//testing/gtest",
       "//ui/views",
+      "//xenon_overlay/common/asar:test_support",
     ]
   }
 }
@@ -574,6 +575,8 @@ test("ipc_main_container_unittests") {
     "//v8",
     "//xenon_overlay/buildflags",
     "//xenon_overlay/common/asar",
+    "//xenon_overlay/common/asar:test_support",
+    "//xenon_overlay/common/asar:unit_tests",
     "//xenon_overlay/common/ipc:value_codec",
     "//xenon_overlay/public/mojom",
     "//xenon_overlay/resources:resources_grit",

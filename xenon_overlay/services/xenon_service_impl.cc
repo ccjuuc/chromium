@@ -26,6 +26,7 @@
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_ipc_main_container.h"
+#include "xenon_overlay/common/asar/archive.h"
 #include "xenon_overlay/services/xenon_child_process_bridge.h"
 #include "xenon_overlay/services/xenon_net_pipe_bridge.h"
 #include "xenon_overlay/services/xenon_node_executor.h"
@@ -156,7 +157,11 @@ XenonServiceImpl::XenonServiceImpl(
       &XenonServiceImpl::OnNodeAddonHostDisconnected, base::Unretained(this)));
 }
 
-XenonServiceImpl::~XenonServiceImpl() = default;
+XenonServiceImpl::~XenonServiceImpl() {
+  for (const auto& [container_id, container] : ipc_main_containers_) {
+    asar::RemoveArchivePublicKeys("electron:" + container_id);
+  }
+}
 
 void XenonServiceImpl::Initialize(
     mojo::PendingRemote<network::mojom::URLLoaderFactory> url_loader_factory) {
@@ -271,6 +276,19 @@ void XenonServiceImpl::InitializeElectronIpc(
   }
 
   ipc_main_ready_containers_.erase(container_id);
+
+  std::vector<asar::ArchiveKeyConfig> archive_keys;
+  if (config) {
+    for (const auto& key : config->archive_public_keys) {
+      archive_keys.push_back({base::FilePath::FromUTF8Unsafe(key->root_path),
+                              key->public_key_pem});
+    }
+  }
+  if (!asar::SetArchivePublicKeys("electron:" + container_id, archive_keys)) {
+    std::move(callback).Run(
+        false, "Invalid or conflicting ASAR public key configuration");
+    return;
+  }
 
   // The Xenon executable is the process image for the generic container, but
   // native Electron components may start child processes that locate their
@@ -442,6 +460,7 @@ void XenonServiceImpl::InitializeElectronIpc(
   }
   if (!initialized) {
     std::string error = container->startup_error();
+    asar::RemoveArchivePublicKeys("electron:" + container_id);
     std::move(callback).Run(false, std::move(error));
     return;
   }
@@ -450,9 +469,8 @@ void XenonServiceImpl::InitializeElectronIpc(
   // whenReady() must run after this Mojo reply, otherwise a sync
   // BrowserWindow constructor would deadlock the browser UI thread.
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE,
-      base::BindOnce(&XenonServiceImpl::MarkElectronIpcReady,
-                     weak_factory_.GetWeakPtr(), container_id));
+      FROM_HERE, base::BindOnce(&XenonServiceImpl::MarkElectronIpcReady,
+                                weak_factory_.GetWeakPtr(), container_id));
 }
 
 bool XenonServiceImpl::IsElectronIpcReady(

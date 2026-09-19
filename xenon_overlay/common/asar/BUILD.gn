@@ -4,5 +4,32 @@ source_set("asar") {
     "archive.h",
   ]
 
-  deps = [ "//base" ]
+  deps = [
+    "//base",
+    "//third_party/boringssl",
+  ]
+}
+
+source_set("test_support") {
+  testonly = true
+  sources = [
+    "test_support.cc",
+    "test_support.h",
+  ]
+  deps = [
+    "//base",
+    "//third_party/boringssl",
+  ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  sources = [ "archive_unittest.cc" ]
+  deps = [
+    ":asar",
+    ":test_support",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
 }
