@@ -48,6 +48,7 @@
 #include "xenon_overlay/chrome/browser/napi/js_native_api_v8.h"
 #include "xenon_overlay/chrome/browser/napi/napi_loader.h"
 #include "xenon_overlay/chrome/browser/napi/napi_switches.h"
+#include "xenon_overlay/common/asar/archive.h"
 #include "xenon_overlay/public/mojom/xenon_service.mojom.h"
 
 #if BUILDFLAG(IS_WIN)
@@ -345,7 +346,29 @@ PreparedAddon PrepareAddon(const base::FilePath& requested_path,
     return prepared;
   }
 
-  if (!base::NormalizeFilePath(requested_path, &prepared.path)) {
+  base::FilePath physical_path = requested_path;
+  base::FilePath archive_path;
+  base::FilePath relative_path;
+  if (asar::GetAsarArchivePath(requested_path, &archive_path, &relative_path,
+                               /*allow_root=*/true)) {
+    const auto archive = asar::GetOrCreateAsarArchive(archive_path);
+    base::FilePath canonical_relative;
+    asar::Archive::FileInfo info;
+    if (!archive || !archive->ResolvePath(relative_path, &canonical_relative) ||
+        !archive->GetFileInfo(canonical_relative, &info)) {
+      prepared.error = "Native addon archive member cannot be resolved";
+      return prepared;
+    }
+    if (!info.unpacked) {
+      prepared.error = "Native addon archive member must be unpacked";
+      return prepared;
+    }
+    if (!archive->GetUnpackedPath(canonical_relative, &physical_path)) {
+      prepared.error = "Native addon unpacked path cannot be resolved";
+      return prepared;
+    }
+  }
+  if (!base::NormalizeFilePath(physical_path, &prepared.path)) {
     prepared.error = "Native addon does not exist or cannot be resolved";
     return prepared;
   }
@@ -2367,7 +2390,7 @@ int32_t XenonNodeExecutor::RegisterNativeInstance(
     const std::string& module_path,
     v8::Local<v8::Object> object,
     uint64_t owner) {
-  const base::FilePath resolved_path = ResolveAddonPath(module_path);
+  const base::FilePath resolved_path = GetModuleCacheKey(module_path);
   const int identity_hash = object->GetIdentityHash();
   const auto range = addon_instance_ids_by_hash_.equal_range(identity_hash);
   for (auto it = range.first; it != range.second; ++it) {
@@ -2925,16 +2948,15 @@ XenonNodeExecutor::AddonModule* XenonNodeExecutor::FindModule(
 
 const XenonNodeExecutor::AddonModule* XenonNodeExecutor::FindModule(
     const std::string& module_path) const {
+  auto cached = addon_modules_.find(GetModuleCacheKey(module_path));
+  return cached == addon_modules_.end() ? nullptr : &cached->second;
+}
+
+base::FilePath XenonNodeExecutor::GetModuleCacheKey(
+    const std::string& module_path) const {
   const base::FilePath resolved = ResolveAddonPath(module_path);
   auto alias = addon_path_aliases_.find(resolved);
-  const base::FilePath& key =
-      alias != addon_path_aliases_.end() ? alias->second : resolved;
-  auto cached = addon_modules_.find(key);
-  if (cached != addon_modules_.end()) {
-    return &cached->second;
-  }
-  auto by_resolved = addon_modules_.find(resolved);
-  return by_resolved == addon_modules_.end() ? nullptr : &by_resolved->second;
+  return alias != addon_path_aliases_.end() ? alias->second : resolved;
 }
 
 void XenonNodeExecutor::RegisterModulePath(
@@ -2971,6 +2993,13 @@ bool XenonNodeExecutor::LoadAddonFromCurrentThread(const std::string& path,
       *error = prepared.error;
     }
     return false;
+  }
+
+  // A new request spelling (including an ASAR virtual path) may name an addon
+  // initialized by main or another renderer. Reuse its exports and instances.
+  if (HasModule(prepared.path.AsUTF8Unsafe())) {
+    RegisterModulePath(requested_path, prepared.path);
+    return true;
   }
 
   AutoV8Scope v8_scope(addon_isolate_, addon_context_);
@@ -3237,8 +3266,9 @@ void XenonNodeExecutor::LoadAddon(const std::string& path,
             }
 
             if (AddonModule* cached =
-                    self->FindModule(addon_path.AsUTF8Unsafe());
+                    self->FindModule(prepared.path.AsUTF8Unsafe());
                 cached && !cached->exports.IsEmpty()) {
+              self->RegisterModulePath(addon_path, prepared.path);
               std::move(callback).Run(
                   true, "",
                   include_export_tree
@@ -3608,7 +3638,7 @@ void XenonNodeExecutor::InvokeInstance(
     return;
   }
 
-  base::FilePath addon_path = ResolveAddonPath(module_path);
+  base::FilePath addon_path = GetModuleCacheKey(module_path);
   if (it->second.owner != promise_owner) {
     std::move(callback).Run(false, base::Value(), {},
                             "Native instance does not belong to this owner");
@@ -3758,7 +3788,7 @@ void XenonNodeExecutor::GetInstanceProperty(const std::string& module_path,
                             "Native instance does not belong to this owner");
     return;
   }
-  if (it->second.module_path != ResolveAddonPath(module_path)) {
+  if (it->second.module_path != GetModuleCacheKey(module_path)) {
     std::move(callback).Run(
         false, base::Value(),
         "Instance does not belong to module: " + module_path);
@@ -3815,7 +3845,7 @@ void XenonNodeExecutor::InspectInstanceMember(const std::string& module_path,
                             "Native instance does not belong to this owner");
     return;
   }
-  if (it->second.module_path != ResolveAddonPath(module_path)) {
+  if (it->second.module_path != GetModuleCacheKey(module_path)) {
     std::move(callback).Run(
         false, base::Value(),
         "Instance does not belong to module: " + module_path);
@@ -3885,7 +3915,7 @@ void XenonNodeExecutor::SetInstanceProperty(const std::string& module_path,
                             "Native instance does not belong to this owner");
     return;
   }
-  if (it->second.module_path != ResolveAddonPath(module_path)) {
+  if (it->second.module_path != GetModuleCacheKey(module_path)) {
     std::move(callback).Run(
         false, "Instance does not belong to module: " + module_path);
     return;
@@ -3930,7 +3960,7 @@ void XenonNodeExecutor::ReleaseInstance(const std::string& module_path,
   AutoV8Scope v8_scope(addon_isolate_, addon_context_);
   auto it = addon_instances_.find(instance_id);
   if (it == addon_instances_.end() || it->second.owner != owner ||
-      it->second.module_path != ResolveAddonPath(module_path)) {
+      it->second.module_path != GetModuleCacheKey(module_path)) {
     return;
   }
   RemoveNativeInstance(instance_id);

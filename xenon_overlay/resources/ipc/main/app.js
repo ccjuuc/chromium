@@ -119,9 +119,7 @@
       appQuitAdvancing = false;
     }
   }
-  app.isPackaged = Boolean(__xenonRendererBaseUrl) ||
-      (Array.isArray(globalThis.__xenonRendererUrlMappings) &&
-       globalThis.__xenonRendererUrlMappings.length > 0);
+  app.isPackaged = Boolean(globalThis.__xenonIsPackaged);
   app.getAppPath = () => __xenonAppPath;
   app.getPath = name => __xenonGetPath(String(name));
   app.getVersion = () => __xenonAppVersion;

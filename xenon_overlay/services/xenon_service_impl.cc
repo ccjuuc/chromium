@@ -432,7 +432,8 @@ void XenonServiceImpl::InitializeElectronIpc(
   container->SetWindowHooks(std::move(window_hooks));
 #endif
   bool initialized = false;
-  if (config && !config->embedded_main_source.empty()) {
+  if (config &&
+      (!config->embedded_main_source.empty() || !config->app_path.empty())) {
     std::vector<std::pair<std::string, std::string>> renderer_url_mappings;
     renderer_url_mappings.reserve(config->renderer_url_mappings.size());
     for (const auto& mapping : config->renderer_url_mappings) {
@@ -441,20 +442,46 @@ void XenonServiceImpl::InitializeElectronIpc(
                                            mapping->target_base_url);
       }
     }
-    ipc::XenonIpcMainContainer::EmbeddedMainModule main_module{
-        .source = std::move(config->embedded_main_source),
-        .virtual_path =
-            base::FilePath::FromUTF8Unsafe(config->virtual_main_path),
-        .app_path = base::FilePath::FromUTF8Unsafe(config->app_path),
-        .executable_path =
-            base::FilePath::FromUTF8Unsafe(config->executable_path),
-        .app_name = std::move(config->app_name),
-        .app_version = std::move(config->app_version),
-        .default_user_agent = std::move(config->default_user_agent),
-        .renderer_url_mappings = std::move(renderer_url_mappings),
-        .renderer_base_url = std::move(config->renderer_base_url),
-    };
-    initialized = container->Initialize(std::move(main_module));
+    if (!config->embedded_main_source.empty()) {
+      ipc::XenonIpcMainContainer::EmbeddedMainModule main_module{
+          .source = std::move(config->embedded_main_source),
+          .virtual_path =
+              base::FilePath::FromUTF8Unsafe(config->virtual_main_path),
+          .app_path = base::FilePath::FromUTF8Unsafe(config->app_path),
+          .executable_path =
+              base::FilePath::FromUTF8Unsafe(config->executable_path),
+          .app_name = std::move(config->app_name),
+          .app_version = std::move(config->app_version),
+          .default_user_agent = std::move(config->default_user_agent),
+          .renderer_url_mappings = std::move(renderer_url_mappings),
+          .renderer_base_url = std::move(config->renderer_base_url),
+          .resources_directory =
+              base::FilePath::FromUTF8Unsafe(config->resources_directory),
+          .working_directory =
+              base::FilePath::FromUTF8Unsafe(config->working_directory),
+          .is_packaged = config->is_packaged,
+      };
+      initialized = container->Initialize(std::move(main_module));
+    } else {
+      ipc::XenonIpcMainContainer::AppMainModule main_module{
+          .app_path = base::FilePath::FromUTF8Unsafe(config->app_path),
+          .main_script_path =
+              base::FilePath::FromUTF8Unsafe(config->main_script_path),
+          .executable_path =
+              base::FilePath::FromUTF8Unsafe(config->executable_path),
+          .resources_directory =
+              base::FilePath::FromUTF8Unsafe(config->resources_directory),
+          .working_directory =
+              base::FilePath::FromUTF8Unsafe(config->working_directory),
+          .app_name = std::move(config->app_name),
+          .app_version = std::move(config->app_version),
+          .default_user_agent = std::move(config->default_user_agent),
+          .renderer_url_mappings = std::move(renderer_url_mappings),
+          .renderer_base_url = std::move(config->renderer_base_url),
+          .is_packaged = config->is_packaged,
+      };
+      initialized = container->Initialize(std::move(main_module));
+    }
   } else {
     initialized = container->Initialize();
   }
@@ -479,8 +506,7 @@ bool XenonServiceImpl::IsElectronIpcReady(
       NormalizeIpcContainerId(container_id));
 }
 
-void XenonServiceImpl::MarkElectronIpcReady(
-    const std::string& container_id) {
+void XenonServiceImpl::MarkElectronIpcReady(const std::string& container_id) {
   const std::string normalized_id = NormalizeIpcContainerId(container_id);
   auto container = ipc_main_containers_.find(normalized_id);
   if (container == ipc_main_containers_.end()) {

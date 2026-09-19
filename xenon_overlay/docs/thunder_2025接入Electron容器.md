@@ -1,293 +1,115 @@
 # Thunder 2025 Electron 容器接入
 
-## 1. 接入目标
+## 1. 当前接入方式
 
-侧边栏 `TH` 运行 Thunder 2025 已编译的 Electron main、renderer 和原生 SDK，
-容器标识为 `thunder-2025`。发行版窗口保留 `file://` 页面来源；
-`chrome://thunder-2025/` 用于启动入口和未打 ASAR 时的开发资源入口。
+侧栏 `TH` 使用容器 `thunder-2025` 运行 Thunder 的原始应用归档和原生 SDK。main 在独立 Utility Process 中执行，由 Thunder main 创建 BrowserWindow；运行页面保持归档内的真实 `file://` URL。`chrome://thunder-2025/` 是侧栏启动入口。
 
-接入原则：
+应用目录按发行布局保留，宿主配置和公钥放在目录之外。通用导入命令、外置配置字段和一致性校验见 [Electron 应用目录接入](./电子应用目录接入.md)，进程及 IPC 架构见 [Electron IPC 容器架构与接入](./Electron_IPC容器设计与接入.md)。
 
-- 不启动 Thunder Electron runtime；main 在 Xenon 独立 Utility Process 内执行。
-- 不改写 Thunder main/renderer 的启动流程；兼容工作由通用 Electron 容器完成。
-- 保留 Thunder Electron 发行目录语义，避免破坏 `__dirname`、`process.execPath`、
-  `resources/app/plugins` 和 SDK 的相对路径。
-- TH 和 PL-E 使用各自的 addon、`player/`、`SDK/` 和 `containor.dll`，不共享
-  同名原生资源。
+容器提供已实现的 Electron/Node API 和兼容 native 的加载能力，不修改 Thunder 的 main、renderer、登录或播放逻辑。
 
-通用容器架构见 [Electron IPC 容器架构与接入](./Electron_IPC容器设计与接入.md)。
+## 2. 版本与制品来源
 
-## 2. 源产物与同步
+| 内容 | 当前来源与约束 |
+| --- | --- |
+| 完整应用主包 | `F:/thunder_2025/bin/Release/resources/app/out.asar`，标准 ASAR；268 个文件与此前已验证构建逐一相同。 |
+| Thunder executable、addon、播放器、SDK | `F:/thunder_2025/bin/Release`；当前 executable 版本为 `25.0.80.888`。 |
+| 应用元数据 | 保留发布方 `resources/app/package.json`，其中版本仍为 `25.0.0.888`。宿主用 executable 版本作为实际应用版本。 |
+| 插件 | 保留当前已验证的完整集合，包括 `XLLite/3.23.11`、游戏、播放器、网盘及 `VipPayCenter2025/2.0.7`。 |
 
-当前事实源：
+原 `bin/Release` 插件配置声明的 `XLLite/3.23.5` 缺少实际文件；Submodule 的 Release native 也与当前 native 不同。不能直接覆盖为任意一个旧 Release 目录，或因取用 ProductRelease 插件而顺带升级其他插件。更新时应先获得完整、版本匹配的发行制品，再通过通用导入器原样导入。
 
-| 内容 | 源目录 |
-|---|---|
-| main 与 renderer 编译产物 | `F:\thunder_2025\app\dist` |
-| Thunder 原生运行时与 player SDK | `F:\thunder_2025\bin\Release` |
-| 片库插件发布产物 | `F:\thunder_2025\Submodule\thunder_2025_bin\ProductRelease\resources\app\plugins\XLLite` |
-| 同步脚本 | `xenon_overlay/tools/sync_thunder_2025.py` |
+原 `package.json` 的 `main` 是 `./out/main/index.js`，实际主脚本位于 `out.asar/main.js`。当前保留原 package 字节，通过外置宿主配置覆盖入口，不改写 vendor 源码或归档。
 
-同步命令：
+## 3. 当前布局与配置
 
-```bat
-vpython3 xenon_overlay\tools\sync_thunder_2025.py ^
-  --src F:\thunder_2025\app\dist ^
-  --out out\Release_64 ^
-  --player-sdk F:\thunder_2025\bin\Release ^
-  --plugins-dir xenon_overlay\resources\thunder_2025\resources\app\plugins
-```
-
-默认过滤 source map。只在需要调试 renderer 时使用 `--include-maps`。
-`--skip-asar` 仅用于调试同步流程；正式打包必须生成 `renderer.asar`。
-
-`--plugins-dir` 必须指向完整插件目录，包含根 `config.json` 及其声明的所有
-入口。当前打包目录保留已有播放器、网盘和游戏插件，并补入完整的
-`XLLite/3.23.11.asar`、`3.23.11.asar.unpacked/` 与版本配置。上游
-`ProductRelease` 插件根目录并不包含全部已声明插件，不能直接作为完整同步源。
-同步到仓库默认资源目录时，应先将完整插件目录复制到独立 staging 目录，
-再把该路径传给 `--plugins-dir`，避免同步源位于即将重建的目标内。
-
-供应商 ASAR 在构建时转换为标准 ASAR；外置文件标记和 companion 目录保留。
-运行时无需识别供应商加密格式。
-
-脚本会校验：
-
-- `dist/main.js` 和 `dist/main-renderer/` 存在；
-- `thunder.exe` 存在；
-- 插件配置中的入口齐全（此项在清理旧运行目录前检查）；
-- `dk_addon.node`、`pc_addon.node`、`player_helper.node`、`thunder_helper.node`、
-  `lkhb.node` 齐全；
-- `player/` 和 `SDK/` 两个原生运行目录齐全。
-
-每次同步会重建 `out/Release_64/thunder_2025`，并清理旧版
-`thunder_2025_main`、`thunder_2025_frontend`、`thunder_2025_resources.asar` 和根目录
-`Thunder.exe`。这些旧路径不再是运行时输入。
-
-## 3. 当前目录结构
+仓库源资源和最终输出使用同一相对布局：
 
 ```text
-thunder_2025/
-  Thunder.exe                         # 应用身份，容器不启动它
-  *.node                              # Thunder/player 原生 addon
-  *.dll
-  player/
-    APlayer.dll
-    containor.dll
-    ...
-  SDK/
-  service/
-  addins/
-  resources/
-    app/
-      package.json                    # main = ./out/main.js
-      out/
-        main.js
-        <webpack chunks>
-        preload/
-      Release/
-        node_sqlite3.node             # 存在时保留 Electron 原路径
-      plugins/
-        player-plugin.asar
-        thunder-pan-plugin.asar
-        config.json
-        XLLite/
-          config.json
-          3.23.11.asar
-          3.23.11.asar.unpacked/
-            xllite.exe
-            version
-            version_code
-      renderer.asar
-        main-renderer/
-        modal-renderer/
-        suspension-renderer/
-        thunder-im/
-        static/
+resources/                         # 构建后对应宿主 exe 所在目录
+├─ thunder_2025.xenon.json         # 宿主接入声明
+├─ thunder_2025.asar-public-key.pem
+└─ thunder_2025/
+   ├─ Thunder.exe                 # 应用身份，不单独启动
+   ├─ *.node / *.dll
+   ├─ player/ / SDK/ / service/ / addins/
+   └─ resources/app/
+      ├─ package.json             # 保留原发布方内容
+      ├─ out.asar                 # main、chunks、preload、renderer、static
+      ├─ Release/node_sqlite3.node
+      └─ plugins/                 # 包括 ASAR 和原有 companion/unpacked 文件
 ```
 
-这个布局是有意对齐 Thunder 原 Electron 发行包，不是遗留文件混放：
+此前拆分的 `out/` 和 `renderer.asar` 已移除，preload 随完整归档保存。不存在 renderer URL 到另一套磁盘目录的产品映射，也不再把加密插件转换成普通 ASAR。
 
-- `Thunder.exe` 与 addon/SDK 同级，保持原生模块的 exe-relative 语义。
-- main 位于 `resources/app/out/main.js`，保持 `__dirname` 与 Thunder 已编译路径一致。
-- 播放器插件位于 `resources/app/plugins`，因为 main 按 `__dirname/../plugins` 定位。
-- renderer 合并到标准只读 ASAR，避免 main/frontend/ASAR 三份重复资源。
+当前 [thunder_2025.xenon.json](../resources/thunder_2025.xenon.json) 声明：
 
-PL-E 的 `xenon_player/main + frontend` 是另一种项目布局；它不是要求所有 Electron
-应用使用的通用磁盘格式。两者在运行时都使用同一套 `IpcMainConfig` 和容器架构。
+```json
+{
+  "application": "thunder_2025",
+  "executable": "thunder_2025/Thunder.exe",
+  "name": "Thunder",
+  "versionFromExecutable": true,
+  "main": "out.asar/main.js",
+  "archivePublicKey": "thunder_2025.asar-public-key.pem"
+}
+```
 
-## 4. 启动配置
+`application`、`executable`、公钥路径相对于 JSON 目录。解析后的应用根是 `thunder_2025/resources/app`，因此 `main` 相对于该目录。运行根为 `thunder_2025`，保持 `process.execPath`、`app.getPath('exe')`、原生 DLL 和 SDK 的发行路径语义。
 
-TH 在初始 Profile 就绪后由 `XenonBrowserMainExtraParts` 自动发现。只有
-`thunder_2025/resources/app/out/main.js` 可读时才注册配置；注册不创建 Utility，
-用户点击侧边栏 `TH` 后才初始化容器并执行 main。
+## 4. 启动、关闭与重开
 
 ```text
-container_id       = thunder-2025
-virtual_main_path  = <exe>/thunder_2025/resources/app/out/main.js
-app_path           = <exe>/thunder_2025/resources/app
-executable_path    = <exe>/thunder_2025/Thunder.exe
-runtime_directory  = <empty> -> defaults to executable_path.DirName()
-app_name           = Thunder
+Profile 就绪 → 读取外置配置并注册 thunder-2025
+点击 TH → 初始化 Utility → 执行 out.asar/main.js
+Thunder main → app.whenReady() → 创建 BrowserWindow
+Browser → 创建真实窗口与 WebContents → 激活应用窗口
 ```
 
-有效 `runtime_directory` 因此是 `<exe>/thunder_2025`。`Thunder.exe` 仅提供
-`process.execPath`、`app.getPath('exe')` 和版本资源；真正进程是 Xenon 的 Utility
-service，不会另起 Thunder.exe。
+侧栏仅初始化或激活容器，不额外构造 TH 主窗口，也不预先创建播放窗口。`Thunder.exe` 提供应用身份和版本资源，执行 main 的进程仍是 Xenon Utility。
 
-## 5. Renderer 与 ASAR 映射
+关闭遵循 BrowserWindow 的可取消关闭事件及应用退出语义，不以隐藏窗口替代销毁。正常退出时清理该容器的窗口、Utility 和 native 服务，保留配置以供下次明确打开。服务异常断开后等待用户重新打开，旧页面不能触发隐式重启或反复弹窗。
 
-Thunder production main 按以下语义构造 URL：
+窗口标题、激活、bounds、最小尺寸、父子关系和原生消息桥均由通用窗口实现处理。页面标题经过可取消的 `page-title-updated` 事件同步至真实 delegate，TH 主窗口因而显示页面声明的“迅雷”。
+
+## 5. 登录、文件来源与 UA
+
+TH 服务身份由接入层声明，当前 UA 格式为：
 
 ```text
-<main __dirname>/main-renderer/index.html
-<main __dirname>/modal-renderer/index.html
-<main __dirname>/suspension-renderer/index.html
+Thunder/<应用版本> XDASKernel/<应用版本> <Chromium User-Agent>
 ```
 
-发行版容器将 `out` 下的 renderer 路径映射到 ASAR 中的真实文件：
+应用版本取上述 executable 版本；main 与 renderer 使用同一容器配置。该身份声明位于 TH 接入点，不写入通用 ASAR、IPC 或 Node 模块实现。
 
-| 顺序 | 原路径前缀 | 目标 |
-|---|---|---|
-| 1 | `resources/app/out` | `file:///.../resources/app/renderer.asar/` |
+renderer 的应用路径、exe 路径和用户目录来自 Document 级运行配置。用户数据使用 Xenon 用户数据目录，不写入应用发行目录；更换应用文件不应清除登录状态。扫码、账密和自动登录均由 Thunder 自身回调及轮询处理。
 
-主窗口、modal、suspension 和 IM 都保留 Electron 的本地文件 URL 语义。
-`query/fragment`（包括 `boxId`、`ph`、`ch`）在映射后保留。
-将本地片库宿主改成 WebUI origin 会改变 XHR/CORS 行为：健康接口可成功，
-但无 CORS 响应头的服务首页会被拦截，导致插件一直重试而不创建 webview。
-本地文件访问规则只应用于已托管的 Electron 窗口和 guest，普通浏览器页面不受影响。
+片库宿主保持 `file://.../out.asar/...` 来源，相关本地文件访问规则只作用于托管 Electron 窗口及 guest。将该宿主换成 WebUI origin 会改变跨域行为：服务健康接口可以成功，但没有 CORS 许可的首页可能被阻止，表现为片库空白。
 
-`XenonThunder2025Config` 复用 `XenonPlayerElectronController` 的通用磁盘/ASAR 资源
-filter，默认 frontend 根为：
+## 6. 原生 SDK 和打包
 
-```text
-thunder_2025/resources/app/renderer.asar/main-renderer
+TH 与 PLE 各自使用同版本 addon、`player/`、`SDK/` 和 `containor.dll`，不能因文件同名而互相覆盖。当前 TH addon 位于发行根；原生模块按 executable 拼接的 DLL 路径，在对应应用运行根存在目标时由通用加载桥局部重定向。
+
+播放器子进程仍使用 Xenon 宿主程序，通过继承的 `XENON_HOSTED_APP_DIR` 定位 `thunder_2025/player/containor.dll`；不启动 `Thunder.exe` 作为 player child。
+
+构建和安装必须同时保留 `thunder_2025/`、同级的宿主 JSON 与公钥，不能仅复制归档或仅复制应用目录。用户配置、日志和下载缓存不属于发行输入。
+
+## 7. 检查与回归
+
+只读核对源资源和构建输出：
+
+```powershell
+python xenon_overlay/tools/import_electron_app.py `
+  --src xenon_overlay/resources/thunder_2025 `
+  --out out/Release_64/thunder_2025 --check
 ```
 
-开发时可用 `--xenon-thunder-2025-frontend-dir=<path>` 显式覆盖。路径不存在时
-不回退到未知目录，而是保持空值并记录错误。
+运行验收包括初始化、自动/扫码登录、片库、播放、游戏弹窗前台激活、拖动/最小尺寸，以及退出后从侧栏重开。定位时依次核对：
 
-## 6. 窗口流程
+1. 外置配置及公钥是否存在，main override 是否指向 `out.asar/main.js`。
+2. 日志是否记录 `thunder-2025` 容器成功初始化。
+3. 页面是否使用正确 `file://` 归档 URL，renderer endpoint 是否有有效 `window_id`。
+4. addon、SDK 和 player child 是否均来自 `thunder_2025`。
+5. 正常退出后是否释放旧服务，重开是否建立新的容器生命周期。
 
-```text
-Xenon 启动
-  -> 注册 thunder-2025 IpcMainConfig
-  -> 不启动 Utility，不执行 main
-
-点击侧边栏 TH
-  -> EnsureElectronIpcStarted("thunder-2025")
-  -> Utility 执行 Thunder main
-  -> Thunder main 在 app.whenReady() 创建 BrowserWindow
-  -> Browser 创建真实 Widget/WebContents
-  -> ActivateForContainer("thunder-2025") 激活当前或即将创建的主窗口
-```
-
-侧边栏不额外构造 TH 主窗口，否则会出现“两个窗口，第二个空白”。
-TH 的播放窗口也必须由 Thunder main 在播放时创建，不应在容器启动时预创建。
-
-BrowserWindow 的显隐、激活、bounds、父子关系和 Windows message hook 都通过
-`XenonElectronWindowHost` 通用命令桥实现，没有 TH 业务方法。
-
-## 7. 登录、UA 与用户数据
-
-- `default_user_agent` 由 Browser 基于应用名/版本与 Chromium UA 生成，main 和 renderer
-  使用同一容器配置。
-- renderer 的 `process.execPath`、app 路径和用户数据目录通过 Document 级
-  `GetRuntimeConfig()` 获取，不使用进程级推断。
-- `app.getPath('userData')` 使用 Xenon 默认用户数据目录，不放在
-  `Application/thunder_2025` 运行时目录。安装升级因此不应删除登录状态。
-- 扫码、账密登录和自动登录都应使用 Thunder 自身事件/轮询；容器不注入登录
-  mock，也不修改登录回调数据。
-
-## 8. 原生 SDK 与播放
-
-TH 的 `runtime_directory` 是 `thunder_2025` 根目录，因此：
-
-- addon 从 `thunder_2025/*.node` 加载；
-- addon 基于宿主 exe 构造的绝对 DLL 路径，在目标文件存在时被局部重定向到
-  `thunder_2025` 的同一相对路径；
-- addon 启动 Xenon player child 时，Utility 继承的 `XENON_HOSTED_APP_DIR` 使 child 加载
-  `thunder_2025/player/containor.dll`；
-- `Thunder.exe` 不是 player child，也不需要由容器启动。
-
-addon、伴生 DLL、`player/`、`SDK/` 必须来自同一套 Thunder 构建。即使 TH 和
-PL-E 的文件名一致，ABI、导出、配置和 Download SDK 版本也可能不一致，不能相互
-覆盖。
-
-## 9. 打包与安装
-
-`chrome.release` 使用：
-
-```text
-thunder_2025\**: %(ChromeDir)s\thunder_2025\
-```
-
-因此本地构建目录：
-
-```text
-out/Release_64/thunder_2025
-```
-
-安装后必须原样成为：
-
-```text
-C:\Users\<user>\AppData\Local\xenon\Application\thunder_2025
-```
-
-mini installer 在归档前校验 `Thunder.exe`、main、renderer ASAR、plugins、addons、
-`player/APlayer.dll` 和 `SDK/DownloadSDKServer.exe` 等关键产物。Setup 将该非版本目录
-作为可回滚的根目录 payload 安装，不放入 Chromium 版本号目录。
-
-## 10. 验证与故障定位
-
-同步后首先检查：
-
-```bat
-dir out\Release_64\thunder_2025\resources\app\out\main.js
-dir out\Release_64\thunder_2025\resources\app\renderer.asar
-dir out\Release_64\thunder_2025\player\containor.dll
-dir out\Release_64\thunder_2025\SDK\DownloadSDKServer.exe
-```
-
-启动调试：
-
-```bat
-out\Release_64\xlb153.exe --remote-debugging-port=9222 --enable-logging
-```
-
-定位顺序：
-
-1. 日志是否出现 `Electron container service initialized: thunder-2025`。
-2. main 是否读取 `resources/app/out/main.js`。
-3. 主窗口及文件弹窗是否保留 `renderer.asar` 下的真实 `file://` 来源；
-   `chrome://thunder-2025/` 用于启动接入，不能代替运行页面的文件来源。
-4. renderer endpoint 的 `window_id` 是否大于 0，否则 `BrowserWindow.fromWebContents()`
-   无法反查所属窗口。
-5. addon 路径是否位于 `thunder_2025`，是否意外加载了 `xenon_player` 或 Xenon 根
-   `SDK`。
-6. player child 是否带 `server-id/client-id/process-id`，并从 TH 目录加载
-   `player/containor.dll`。
-
-修复顺序应是“源产物 -> 同步布局 -> 容器配置 -> URL 映射 -> addon/SDK”。
-不应通过修改 TH 业务参数或添加播放/登录 mock 掩盖容器问题。
-
-### 10.1 主窗口标题修复与验收（2026-09-16）
-
-TH main 未显式设置窗口标题，HTML 的 `<title>` 为“迅雷”，但原生窗口显示
-“Electron Window”。原因有三处：host 对空标题使用硬编码兜底；设置标题时只改了
-`WidgetDelegate` 的参数，而 `WebDialogView` 实际读取派生类 `XenonWebDialog`
-的 `title_`；页面 `TitleWasSet` 也没有同步到 main。
-
-修复使用真实 delegate 的标题 setter，并将页面标题变化送回 main：先派发
-BrowserWindow 的可取消 `page-title-updated` 事件，未调用 `preventDefault()` 时
-执行 `setTitle`，随后派发 WebContents 事件。未指定标题时默认值为 `Electron`，
-显式传入的空标题保持为空。
-
-全量 JS 回归 **275/275 通过、零跳过**；生产 `chrome` 构建 **239/239 完成，
-退出码 0**。重启 9222 后，TH 原生主窗口 `1707340` 与 `document.title` 均为
-“迅雷”，`sdkInitReady: true`、`accountInitState: 2`。将页面标题临时改为
-“迅雷 · 标题同步验证”后，同一原生窗口随之更新；验证后已恢复“迅雷”并清理探针。
-本轮实机标题验收范围为 TH 主窗口及其动态页面标题同步。
-
-记录位于 `out/ple-update-7135-20260916/`：`title-production-build.log`、
-`title-native-validation.json` 和 `title-th-acceptance.json`。
+旧验证记录保留在对应 `out/` 诊断目录；其中历史拆分路径和旧同步命令不再作为当前接入方式。

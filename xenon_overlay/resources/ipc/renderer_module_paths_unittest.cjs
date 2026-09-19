@@ -5,7 +5,7 @@
 // Run with: node --test xenon_overlay/resources/ipc/renderer_module_paths_unittest.cjs
 const {readBootstrap} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
-const {existsSync, readFileSync} = require('node:fs');
+const {existsSync, readFileSync, statSync} = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
@@ -362,32 +362,41 @@ test('old hosts map only the matching document origin and preserve nested page p
 });
 
 const playerRoot = path.resolve(__dirname, '../../../out/Release_64/xenon_player');
-const actualBundlePath = path.join(playerRoot, 'frontend/static/js/58.js');
-const hasPlayerRuntime = existsSync(path.join(playerRoot, 'main/package.json')) &&
-    existsSync(path.join(playerRoot, 'frontend/index.html'));
+const actualBundlePath = process.env.XENON_TEST_PLAYER_BUNDLE;
+const hasPlayerRuntime = existsSync(path.join(playerRoot, 'resources/app/package.json')) &&
+    existsSync(path.join(playerRoot, 'resources/app/out.asar'));
+const playerBundleSkip = actualBundlePath === undefined ?
+    'requires XENON_TEST_PLAYER_BUNDLE from the matching packaged application' : false;
 for (const app of ['player', 'thunder']) {
   test(`actual bundled bindings resolves ${app} SQLite from its declared package`,
-       {skip: !hasPlayerRuntime}, () => {
+       {skip: playerBundleSkip}, () => {
     // Exercise the shipped webpack bindings factory itself. The numeric module
     // IDs are dependencies of this exact bundle, not loader special cases.
-    assert.ok(existsSync(actualBundlePath),
-        'Installed PLE is missing its SQLite consumer bundle: ' + actualBundlePath);
+    assert.ok(actualBundlePath && existsSync(actualBundlePath) && statSync(actualBundlePath).isFile(),
+        'XENON_TEST_PLAYER_BUNDLE must name a regular bundle file: ' + actualBundlePath);
+    assert.ok(hasPlayerRuntime,
+        'Installed PLE requires resources/app/package.json and resources/app/out.asar');
     const root = 'C:\\runtime\\' + app;
     const packageRoot = root + '\\resources\\app';
     const addon = packageRoot + '\\Release\\node_sqlite3.node';
+    const documentUrl = `file:///C:/runtime/${app}/resources/app/out.asar/main-renderer/index.html`;
+    const bundleUrl = new URL('static/js/58.js', documentUrl).href;
     const harness = createPathRenderer(new Map([
       [root + '\\package.json', '{}'],
       [packageRoot + '\\package.json', '{"name":"real-application"}'],
       [addon, 'native placeholder'],
       [root + '\\Release\\node_sqlite3.node', 'wrong same basename'],
-    ]), new Map(), root, {config: {
-      documentPath: packageRoot + '\\out\\main-renderer\\index.html',
-      rendererUrlMappings: [{sourcePathPrefix: packageRoot + '\\out\\main-renderer',
-                             targetBaseUrl: `chrome://${app}/`}],
-    }});
+    ]), new Map(), packageRoot, {
+      config: {
+        exeDir: root,
+        execPath: root + '\\host.exe',
+        documentPath: packageRoot + '\\out.asar\\main-renderer\\index.html',
+      },
+      location: new URL(documentUrl),
+    });
     const {context, nativeLoads} = harness;
     vm.runInContext(readFileSync(actualBundlePath, 'utf8'), context,
-        {filename: `chrome://${app}/static/js/58.js`});
+        {filename: bundleUrl});
     assert.equal(typeof context.webpackChunk_electron_main_renderer.at(-1)[1][57353],
         'function', 'packaged bindings factory is present');
     const value = vm.runInContext(`(() => {
@@ -398,10 +407,10 @@ for (const app of ['player', 'thunder']) {
       factory(module, module.exports, dependencies);
       globalThis.actualBundledBindings = module.exports;
       return module.exports('node_sqlite3');
-    })()`, context, {filename: `chrome://${app}/static/js/58.js`});
+    })()`, context, {filename: bundleUrl});
     assert.equal(value.version, 42);
     assert.deepEqual(nativeLoads, [addon]);
-    assert.equal(context.__filename, packageRoot + '\\out\\main-renderer\\index.html');
+    assert.equal(context.__filename, packageRoot + '\\out.asar\\main-renderer\\index.html');
     harness.removeFile(addon);
     delete context.require.cache[addon];
     assert.throws(() => context.actualBundledBindings('node_sqlite3'),

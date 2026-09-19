@@ -8,7 +8,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-function createRuntime(onWindowCall = () => null) {
+function createRuntime(onWindowCall = () => null, metadata = {}) {
   const calls = [];
   let nextWindowId = 1;
   const context = vm.createContext({
@@ -20,6 +20,8 @@ function createRuntime(onWindowCall = () => null) {
     __xenonRendererUrlMappings: [], __xenonAppName: 'fixture',
     __xenonAppVersion: '1', __xenonUserAgent: '',
     __xenonExecPath: 'C:\\fixture\\host.exe', __xenonPid: 1, __xenonEnv: {},
+    __xenonWorkingDirectory: 'C:\\fixture\\work',
+    __xenonResourcesPath: 'C:\\fixture\\resources', __xenonIsPackaged: false,
     __xenonChromeVersion: '142', __xenonV8Version: '', __xenonGetPath: () => '',
     __xenonCreateBrowserWindow(options) {
       const id = nextWindowId++;
@@ -39,11 +41,32 @@ function createRuntime(onWindowCall = () => null) {
     __xenonExitApp(code) {
       calls.push({command: 'exit-app', code});
     },
+    ...metadata,
   });
   const filename = path.join(__dirname, 'xenon_ipc_main_bootstrap.js');
   vm.runInContext(readBootstrap(filename), context, {filename});
   return {context, calls, BrowserWindow: context.__xenonElectron.BrowserWindow};
 }
+
+test('packaged application metadata does not depend on renderer URL mappings', () => {
+  const {context} = createRuntime(undefined, {
+    __xenonAppPath: 'C:\\release\\resources\\app.asar',
+    __xenonResourcesPath: 'C:\\release\\resources',
+    __xenonWorkingDirectory: 'D:\\launch-directory',
+    __xenonIsPackaged: true,
+  });
+  assert.equal(context.__xenonElectron.app.isPackaged, true);
+  assert.equal(context.__xenonElectron.app.getAppPath(), 'C:\\release\\resources\\app.asar');
+  assert.equal(context.process.resourcesPath, 'C:\\release\\resources');
+  assert.equal(context.process.cwd(), 'D:\\launch-directory');
+  assert.equal(context.__xenonPath.resolve('relative.txt'), 'D:\\launch-directory\\relative.txt');
+
+  const source = createRuntime(undefined, {
+    __xenonIsPackaged: false,
+    __xenonRendererUrlMappings: [{sourcePathPrefix: 'C:\\fixture', targetBaseUrl: 'chrome://fixture/'}],
+  });
+  assert.equal(source.context.__xenonElectron.app.isPackaged, false);
+});
 
 test('BrowserWindow preserves missing properties and resolves as an ordinary object', async () => {
   const {BrowserWindow} = createRuntime();

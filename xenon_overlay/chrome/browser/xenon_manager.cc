@@ -318,21 +318,10 @@ bool XenonManager::RegisterElectronIpc(ipc::mojom::IpcMainConfigPtr config) {
     return false;
   }
   config->executable_path = executable_path.AsUTF8Unsafe();
-  if (config->app_version.empty()) {
-    config->app_version = ipc::GetAppExecutableVersion(executable_path);
-  }
-  if (config->default_user_agent.empty()) {
-    std::string ua = embedder_support::GetUserAgent();
-    if (net::HttpUtil::IsToken(config->app_name) &&
-        net::HttpUtil::IsToken(config->app_version)) {
-      ua = config->app_name + "/" + config->app_version + " " + ua;
-    }
-    config->default_user_agent = ua;
-  }
   const std::string container_id =
       config->container_id.empty() ? "default" : config->container_id;
+  const auto previous = last_ipc_configs_.find(container_id);
   if (FindContainerService(container_id)) {
-    const auto previous = last_ipc_configs_.find(container_id);
     if (previous != last_ipc_configs_.end()) {
       const auto& old_keys = previous->second->archive_public_keys;
       const auto& new_keys = config->archive_public_keys;
@@ -347,6 +336,14 @@ bool XenonManager::RegisterElectronIpc(ipc::mojom::IpcMainConfigPtr config) {
       }
     }
   }
+  std::vector<asar::ArchiveKeyConfig> previous_archive_keys;
+  if (previous != last_ipc_configs_.end()) {
+    for (const auto& key : previous->second->archive_public_keys) {
+      previous_archive_keys.push_back(
+          {base::FilePath::FromUTF8Unsafe(key->root_path),
+           key->public_key_pem});
+    }
+  }
   std::vector<asar::ArchiveKeyConfig> archive_keys;
   for (const auto& key : config->archive_public_keys) {
     archive_keys.push_back(
@@ -354,9 +351,66 @@ bool XenonManager::RegisterElectronIpc(ipc::mojom::IpcMainConfigPtr config) {
   }
   // Key validation and replacement are atomic. A malformed replacement must
   // not revoke the last usable configuration or partially update the reader.
-  if (!asar::SetArchivePublicKeys("electron:" + container_id, archive_keys)) {
+  const std::string archive_key_owner = "electron:" + container_id;
+  if (!asar::SetArchivePublicKeys(archive_key_owner, archive_keys)) {
     LOG(ERROR) << "Invalid or conflicting ASAR public key configuration";
     return false;
+  }
+  const bool disk_application =
+      config->embedded_main_source.empty() && !config->app_path.empty();
+  if (disk_application) {
+    ipc::ElectronApplicationInfo application;
+    if (!ipc::ResolveElectronApplication(
+            base::FilePath::FromUTF8Unsafe(config->app_path), &application,
+            &error)) {
+      // The replacement key may be valid but unable to decrypt this app. Keep
+      // the previous configuration usable by its existing renderer windows.
+      if (!asar::SetArchivePublicKeys(archive_key_owner,
+                                      previous_archive_keys)) {
+        LOG(ERROR) << "Failed to restore previous ASAR public keys";
+      }
+      LOG(ERROR) << "Cannot register Electron container: " << error;
+      return false;
+    }
+    config->app_path = application.app_path.AsUTF8Unsafe();
+    if (config->app_name.empty()) {
+      config->app_name =
+          application.name.empty() ? "Application" : application.name;
+    }
+    if (config->app_version.empty()) {
+      config->app_version = application.version;
+    }
+    if (config->resources_directory.empty()) {
+      config->resources_directory =
+          application.resources_directory.AsUTF8Unsafe();
+    }
+    if (config->runtime_directory.empty()) {
+      config->runtime_directory = application.runtime_directory.AsUTF8Unsafe();
+    }
+    if (config->working_directory.empty()) {
+      config->working_directory = config->runtime_directory;
+    }
+    if (!config->is_packaged.has_value()) {
+      config->is_packaged = application.is_packaged;
+    }
+  } else if (!config->embedded_main_source.empty() &&
+             !config->is_packaged.has_value()) {
+    config->is_packaged = !config->renderer_base_url.empty() ||
+                          !config->renderer_url_mappings.empty();
+  }
+  if (config->app_version.empty()) {
+    config->app_version = ipc::GetAppExecutableVersion(executable_path);
+    if (disk_application && config->app_version.empty()) {
+      config->app_version = "0.0.0";
+    }
+  }
+  if (config->default_user_agent.empty()) {
+    std::string ua = embedder_support::GetUserAgent();
+    if (net::HttpUtil::IsToken(config->app_name) &&
+        net::HttpUtil::IsToken(config->app_version)) {
+      ua = config->app_name + "/" + config->app_version + " " + ua;
+    }
+    config->default_user_agent = ua;
   }
   last_ipc_configs_.insert_or_assign(container_id, std::move(config));
   LOG(INFO) << "Registered Electron container configuration: " << container_id;
@@ -550,10 +604,12 @@ XenonManager::GetElectronIpcRendererConfigForContainer(
   renderer_config->app_version = config_it->second->app_version;
   renderer_config->app_path = config_it->second->app_path;
   renderer_config->executable_path = config_it->second->executable_path;
-  renderer_config->is_packaged =
-      !config_it->second->renderer_base_url.empty() ||
-      !config_it->second->renderer_url_mappings.empty();
-  renderer_config->working_directory = startup_working_directory_;
+  renderer_config->resources_directory = config_it->second->resources_directory;
+  renderer_config->is_packaged = config_it->second->is_packaged.value_or(false);
+  renderer_config->working_directory =
+      config_it->second->working_directory.empty()
+          ? startup_working_directory_
+          : config_it->second->working_directory;
   for (const auto& mapping : config_it->second->renderer_url_mappings) {
     renderer_config->renderer_url_mappings.push_back(mapping.Clone());
   }

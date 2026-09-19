@@ -301,6 +301,7 @@ class XenonNodeExecutor {
   bool IsInstanceOwnerActive(uint64_t owner) const;
   AddonModule* FindModule(const std::string& module_path);
   const AddonModule* FindModule(const std::string& module_path) const;
+  base::FilePath GetModuleCacheKey(const std::string& module_path) const;
   void RegisterModulePath(const base::FilePath& requested_path,
                           const base::FilePath& canonical_path);
 

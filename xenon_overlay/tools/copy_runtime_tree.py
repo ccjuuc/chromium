@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import argparse
 import os
-import posixpath
 import shutil
+import stat
 import sys
 from pathlib import Path
 
@@ -36,55 +36,128 @@ def fallback_write_depfile(depfile_path: str, first_gn_output: str, inputs: list
         f.write(''.join(sb))
 
 
-def sync_tree(src_dir: Path, dst_dir: Path) -> tuple[int, int, list[str]]:
-    """Synchronize src_dir to dst_dir. Returns (copied_count, skipped_count, relative_inputs_to_cwd)."""
-    copied = 0
-    skipped = 0
-    cwd = Path.cwd()
-    input_rel_paths = []
+def _metadata_without_links(path: Path) -> os.stat_result | None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return None
+    if (stat.S_ISLNK(metadata.st_mode) or
+            getattr(metadata, 'st_file_attributes', 0) & 0x400 or
+            (stat.S_ISREG(metadata.st_mode) and metadata.st_nlink > 1)):
+        raise ValueError(f'links and reparse points are unsupported: {path}')
+    return metadata
 
-    dst_dir.mkdir(parents=True, exist_ok=True)
 
-    for root, _, files in os.walk(src_dir):
-        for file_name in files:
-            if file_name.lower() == 'xdaskernel.dll':
-                continue
-            src_file = Path(root) / file_name
-            rel_to_src = src_file.relative_to(src_dir)
-            dst_file = dst_dir / rel_to_src
+def _check_ancestors(path: Path) -> None:
+    for candidate in (*reversed(path.parents), path):
+        _metadata_without_links(candidate)
 
-            try:
-                rel_to_cwd = str(src_file.relative_to(cwd)).replace('\\', '/')
-            except ValueError:
-                rel_to_cwd = os.path.relpath(src_file, cwd).replace('\\', '/')
-            input_rel_paths.append(rel_to_cwd)
 
-            needs_copy = True
-            if dst_file.exists():
-                try:
-                    src_stat = src_file.stat()
-                    dst_stat = dst_file.stat()
-                    if src_stat.st_size == dst_stat.st_size and abs(src_stat.st_mtime - dst_stat.st_mtime) < 0.01:
-                        needs_copy = False
-                except OSError:
-                    needs_copy = True
+def _contains(parent: Path, child: Path) -> bool:
+    return child == parent or parent in child.parents
 
-            if needs_copy:
-                dst_file.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src_file, dst_file)
-                copied += 1
+
+def _validate_roots(source: Path, target: Path) -> tuple[Path, Path]:
+    # Resolve relative spelling, but do not follow links before checking them.
+    source, target = Path(os.path.abspath(source)), Path(os.path.abspath(target))
+    _check_ancestors(source)
+    _check_ancestors(target)
+    if not source.is_dir():
+        raise ValueError(f'source is not a directory: {source}')
+    source, target = source.resolve(), target.resolve()
+    if _contains(source, target) or _contains(target, source):
+        raise ValueError('source and destination directories must not overlap')
+    if target.exists() and not target.is_dir():
+        raise ValueError(f'destination is not a directory: {target}')
+    return source, target
+
+
+def _inventory(root: Path) -> tuple[set[str], set[str]]:
+    # String keys retain filename casing even on case-insensitive hosts.
+    directories, files = {'.'}, set()
+
+    def visit(directory: Path) -> None:
+        _check_ancestors(directory)
+        with os.scandir(directory) as entries:
+            children = sorted(entries, key=lambda item: item.name)
+        for entry in children:
+            path = directory / entry.name
+            metadata = _metadata_without_links(path)
+            if metadata is None:
+                raise ValueError(f'runtime changed while being scanned: {path}')
+            relative = path.relative_to(root).as_posix()
+            if stat.S_ISDIR(metadata.st_mode):
+                directories.add(relative)
+                visit(path)
+            elif stat.S_ISREG(metadata.st_mode):
+                files.add(relative)
             else:
-                skipped += 1
+                raise ValueError(f'unsupported filesystem entry: {path}')
 
-    for legacy_rel in ('XDASKernel.dll', 'main/XDASKernel.dll'):
-        legacy_dst = dst_dir / legacy_rel
-        if legacy_dst.is_file():
-            try:
-                legacy_dst.unlink()
-            except OSError:
-                pass
+    visit(root)
+    return directories, files
 
-    return copied, skipped, input_rel_paths
+
+def _checked_destination(root: Path, path: Path, *, allow_root: bool = False) -> Path:
+    _check_ancestors(path)
+    resolved_root, resolved_path = root.resolve(), path.resolve()
+    if (not _contains(resolved_root, resolved_path) or
+            (resolved_path == resolved_root and not allow_root)):
+        raise ValueError(f'refusing to modify a path outside destination: {path}')
+    return path
+
+
+def _same_contents(source: Path, target: Path) -> bool:
+    if source.stat().st_size != target.stat().st_size:
+        return False
+    # Timestamp equality alone cannot establish byte equality: release tools
+    # can preserve timestamps when replacing an archive or native library.
+    with source.open('rb') as original, target.open('rb') as existing:
+        while True:
+            original_bytes = original.read(1024 * 1024)
+            if original_bytes != existing.read(1024 * 1024):
+                return False
+            if not original_bytes:
+                return True
+
+
+def sync_tree(src_dir: Path, dst_dir: Path) -> tuple[int, int, list[str]]:
+    """Mirror layout and bytes incrementally; return copied, skipped, inputs."""
+    src_dir, dst_dir = _validate_roots(src_dir, dst_dir)
+    source_dirs, source_files = _inventory(src_dir)
+    target_dirs, target_files = (_inventory(dst_dir) if dst_dir.exists()
+                                 else (set(), set()))
+    # Validate both complete trees before deleting stale output or copying.
+    _checked_destination(dst_dir, dst_dir, allow_root=True).mkdir(
+        parents=True, exist_ok=True)
+    for relative in sorted(target_files - source_files):
+        _checked_destination(dst_dir, dst_dir / relative).unlink()
+    for relative in sorted(target_dirs - source_dirs,
+                           key=lambda path: (path.count('/'), path), reverse=True):
+        # Children were inventoried and removed individually. Never recurse
+        # through a directory that could have become a junction or symlink.
+        _checked_destination(dst_dir, dst_dir / relative).rmdir()
+    for relative in sorted(source_dirs, key=lambda path: (path.count('/'), path)):
+        _checked_destination(dst_dir, dst_dir / relative, allow_root=True).mkdir(
+            exist_ok=True)
+
+    copied = skipped = 0
+    for relative in sorted(source_files):
+        source, target = src_dir / relative, dst_dir / relative
+        _check_ancestors(source)
+        _checked_destination(dst_dir, target)
+        if target.exists() and _same_contents(source, target):
+            skipped += 1
+        else:
+            shutil.copy2(source, target)
+            copied += 1
+
+    # Directories are dependencies too: otherwise creating or removing an
+    # entry that was absent from the previous depfile would not rerun Ninja.
+    inputs = sorted(
+        os.path.relpath(src_dir / relative, Path.cwd()).replace('\\', '/')
+        for relative in source_dirs | source_files)
+    return copied, skipped, inputs
 
 
 def main() -> int:
@@ -95,14 +168,11 @@ def main() -> int:
     parser.add_argument('--depfile', type=Path, help='Depfile path for Ninja tracking')
     args = parser.parse_args()
 
-    src = args.src.resolve()
-    dest = args.dest.resolve()
-
-    if not src.is_dir():
-        print(f'Error: source directory does not exist: {src}', file=sys.stderr)
+    try:
+        copied, skipped, input_rel_paths = sync_tree(args.src, args.dest)
+    except (OSError, ValueError) as error:
+        print(f'Error: {error}', file=sys.stderr)
         return 1
-
-    copied, skipped, input_rel_paths = sync_tree(src, dest)
 
     if args.depfile:
         cwd = Path.cwd()

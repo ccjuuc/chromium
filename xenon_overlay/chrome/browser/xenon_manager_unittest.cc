@@ -9,6 +9,7 @@
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread_restrictions.h"
@@ -18,6 +19,8 @@
 #include "url/gurl.h"
 #include "url/origin.h"
 #include "xenon_overlay/buildflags/buildflags.h"
+#include "xenon_overlay/common/asar/archive.h"
+#include "xenon_overlay/common/asar/test_support.h"
 #include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
 
 namespace xenon {
@@ -208,6 +211,132 @@ TEST(XenonManagerTest,
       manager.GetElectronIpcRendererConfigForContainer(kContainerId);
   ASSERT_TRUE(renderer);
   EXPECT_TRUE(renderer->working_directory.empty());
+}
+
+TEST(XenonManagerTest, ExplicitRendererRuntimeMetadataDoesNotDependOnMappings) {
+  base::test::TaskEnvironment task_environment;
+  XenonManager* manager = XenonManager::GetInstance();
+  manager->InitializeRuntimeMetadata();
+  base::ScopedTempDir temp;
+  ASSERT_TRUE(temp.CreateUniqueTempDir());
+  base::FilePath root;
+  ASSERT_TRUE(base::NormalizeFilePath(temp.GetPath(), &root));
+  const auto app = root.AppendASCII("app");
+  const auto resources = root.AppendASCII("resources");
+  const auto working_directory = root.AppendASCII("launch-directory");
+  ASSERT_TRUE(base::CreateDirectory(app));
+  ASSERT_TRUE(
+      base::WriteFile(app.AppendASCII("package.json"),
+                      R"({"name":"manifest-fixture","version":"1.0.0"})"));
+  ASSERT_TRUE(base::CreateDirectory(resources));
+  ASSERT_TRUE(base::CreateDirectory(working_directory));
+  for (bool packaged : {true, false}) {
+    SCOPED_TRACE(packaged);
+    const std::string container =
+        packaged ? "explicit-runtime-metadata-original-release-test"
+                 : "explicit-runtime-metadata-mapped-source-test";
+    auto config = ipc::mojom::IpcMainConfig::New();
+    config->container_id = container;
+    config->app_path = app.AsUTF8Unsafe();
+    config->app_name = "Explicit fixture";
+    config->app_version = "9.8.7";
+    config->default_user_agent = "ExplicitFixture/9.8.7";
+    config->resources_directory = resources.AsUTF8Unsafe();
+    config->working_directory = working_directory.AsUTF8Unsafe();
+    config->is_packaged = packaged;
+    if (!packaged) {
+      config->renderer_url_mappings.push_back(
+          ipc::mojom::IpcRendererUrlMapping::New(app.AsUTF8Unsafe(),
+                                                 "chrome://source-fixture/"));
+    }
+    ASSERT_TRUE(manager->RegisterElectronIpc(std::move(config)));
+    const auto renderer =
+        manager->GetElectronIpcRendererConfigForContainer(container);
+    ASSERT_TRUE(renderer);
+    EXPECT_EQ(packaged, renderer->is_packaged);
+    EXPECT_EQ("Explicit fixture", renderer->app_name);
+    EXPECT_EQ("9.8.7", renderer->app_version);
+    EXPECT_EQ("ExplicitFixture/9.8.7", manager->GetDefaultUserAgent(container));
+    EXPECT_EQ(app.AsUTF8Unsafe(), renderer->app_path);
+    EXPECT_EQ(resources.AsUTF8Unsafe(), renderer->resources_directory);
+    EXPECT_EQ(working_directory.AsUTF8Unsafe(), renderer->working_directory);
+    EXPECT_EQ(packaged, renderer->renderer_url_mappings.empty());
+    EXPECT_EQ(0u, manager->service_generation(container));
+  }
+}
+
+TEST(XenonManagerTest,
+     DiskApplicationDefaultsSurviveFailedArchiveKeyReplacement) {
+  base::test::TaskEnvironment task_environment;
+  XenonManager* manager = XenonManager::GetInstance();
+  base::ScopedTempDir temp;
+  ASSERT_TRUE(temp.CreateUniqueTempDir());
+  base::FilePath release;
+  ASSERT_TRUE(base::NormalizeFilePath(temp.GetPath(), &release));
+  const auto resources = release.AppendASCII("resources");
+  const auto archive_path = resources.AppendASCII("app.asar");
+  ASSERT_TRUE(base::CreateDirectory(resources));
+  asar::TestArchiveBuilder archive;
+  ASSERT_TRUE(archive.Write(
+      archive_path, {{"package.json",
+                      R"({"name":"manifest-app","version":"3.2.1"})", true}}));
+
+  constexpr char kContainerId[] = "packaged-defaults-key-rollback-test";
+  auto config = ipc::mojom::IpcMainConfig::New();
+  config->container_id = kContainerId;
+  config->app_path = release.AsUTF8Unsafe();
+  config->archive_public_keys.push_back(ipc::mojom::IpcArchivePublicKey::New(
+      release.AsUTF8Unsafe(), archive.public_key_pem()));
+  ASSERT_TRUE(manager->RegisterElectronIpc(std::move(config)));
+  const auto renderer =
+      manager->GetElectronIpcRendererConfigForContainer(kContainerId);
+  ASSERT_TRUE(renderer);
+  EXPECT_EQ(archive_path.AsUTF8Unsafe(), renderer->app_path);
+  EXPECT_EQ("manifest-app", renderer->app_name);
+  EXPECT_EQ("3.2.1", renderer->app_version);
+  EXPECT_EQ(resources.AsUTF8Unsafe(), renderer->resources_directory);
+  EXPECT_EQ(release.AsUTF8Unsafe(), renderer->working_directory);
+  EXPECT_TRUE(renderer->is_packaged);
+  EXPECT_TRUE(renderer->renderer_url_mappings.empty());
+  const std::string user_agent = manager->GetDefaultUserAgent(kContainerId);
+  EXPECT_TRUE(user_agent.starts_with("manifest-app/3.2.1 "));
+
+  // A valid public key for another archive passes registry validation, but
+  // application parsing must fail without replacing the current key/config.
+  asar::TestArchiveBuilder wrong_key;
+  auto replacement = ipc::mojom::IpcMainConfig::New();
+  replacement->container_id = kContainerId;
+  replacement->app_path = release.AsUTF8Unsafe();
+  replacement->app_name = "Rejected replacement";
+  replacement->archive_public_keys.push_back(
+      ipc::mojom::IpcArchivePublicKey::New(release.AsUTF8Unsafe(),
+                                           wrong_key.public_key_pem()));
+  EXPECT_FALSE(manager->RegisterElectronIpc(std::move(replacement)));
+  const auto preserved =
+      manager->GetElectronIpcRendererConfigForContainer(kContainerId);
+  ASSERT_TRUE(preserved);
+  EXPECT_EQ(renderer->app_path, preserved->app_path);
+  EXPECT_EQ(renderer->app_name, preserved->app_name);
+  EXPECT_EQ(renderer->app_version, preserved->app_version);
+  EXPECT_EQ(renderer->resources_directory, preserved->resources_directory);
+  EXPECT_EQ(renderer->working_directory, preserved->working_directory);
+  EXPECT_EQ(renderer->is_packaged, preserved->is_packaged);
+  EXPECT_EQ(user_agent, manager->GetDefaultUserAgent(kContainerId));
+  EXPECT_TRUE(asar::GetOrCreateAsarArchive(archive_path));
+  EXPECT_EQ(0u, manager->service_generation(kContainerId));
+
+  // Replacing the app with an embedded diagnostic uses its mapping default
+  // for both processes, and revokes the disk app's public key.
+  auto embedded = ipc::mojom::IpcMainConfig::New();
+  embedded->container_id = kContainerId;
+  embedded->embedded_main_source = "void 0;";
+  embedded->renderer_base_url = "chrome://embedded-fixture/";
+  ASSERT_TRUE(manager->RegisterElectronIpc(std::move(embedded)));
+  const auto diagnostic =
+      manager->GetElectronIpcRendererConfigForContainer(kContainerId);
+  ASSERT_TRUE(diagnostic);
+  EXPECT_TRUE(diagnostic->is_packaged);
+  EXPECT_FALSE(asar::GetOrCreateAsarArchive(archive_path));
 }
 
 TEST(XenonManagerTest, Ping_WhenDisconnected_ReturnsNotRunning) {

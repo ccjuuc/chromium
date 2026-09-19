@@ -378,6 +378,7 @@ void XenonIpcRenderer::GetRuntimeConfig(gin::Arguments* args) {
   set_string("endianness", EndiannessName());
   set_string("documentPath", runtime_config_->document_path);
   set_string("cwd", runtime_config_->working_directory);
+  set_string("resourcesPath", runtime_config_->resources_directory);
   set_string("contextId", context_id_);
   v8::Local<v8::Object> versions = v8::Object::New(isolate);
   versions

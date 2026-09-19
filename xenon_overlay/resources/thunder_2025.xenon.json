@@ -1,0 +1,8 @@
+{
+  "application": "thunder_2025",
+  "executable": "thunder_2025/Thunder.exe",
+  "name": "Thunder",
+  "versionFromExecutable": true,
+  "main": "out.asar/main.js",
+  "archivePublicKey": "thunder_2025.asar-public-key.pem"
+}

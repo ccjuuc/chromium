@@ -1,3 +1,4 @@
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_app_config.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 
 #include <algorithm>
@@ -1399,70 +1400,17 @@ void XenonWebDialog::ShowXenonPlayerElectron(Profile* profile) {
           "xenon-player-test")) {
     base::FilePath executable_dir;
     if (base::PathService::Get(base::DIR_EXE, &executable_dir)) {
-      const base::FilePath player_dir =
-          executable_dir.AppendASCII("xenon_player").AppendASCII("main");
-      const base::FilePath player_main_path = player_dir.AppendASCII("main.js");
-      std::string player_main_source;
-      if (base::ReadFileToString(player_main_path, &player_main_source)) {
-        auto player_config = xenon::ipc::mojom::IpcMainConfig::New();
-        player_config->container_id = "xenon-player-test";
-        player_config->embedded_main_source = std::move(player_main_source);
-        player_config->virtual_main_path = player_main_path.AsUTF8Unsafe();
-        player_config->app_path = player_dir.AsUTF8Unsafe();
-        player_config->runtime_directory = player_dir.AsUTF8Unsafe();
-        player_config->app_name = "xmp";
-        const base::FilePath packaged_app =
-            player_dir.AppendASCII("resources").AppendASCII("app");
-        const base::FilePath archive_key_path =
-            packaged_app.AppendASCII("asar-public-key.pem");
-        if (base::PathExists(archive_key_path)) {
-          std::string archive_key;
-          if (!base::ReadFileToStringWithMaxSize(archive_key_path, &archive_key,
-                                                 64 * 1024)) {
-            LOG(ERROR) << "Unable to read packaged ASAR public key";
-            return;
-          }
-          player_config->archive_public_keys.push_back(
-              xenon::ipc::mojom::IpcArchivePublicKey::New(
-                  packaged_app.AsUTF8Unsafe(), std::move(archive_key)));
-        }
-        // Preserve the packaged executable identity for process.execPath and
-        // app.getPath("exe"). The container does not launch this executable.
-        player_config->executable_path =
-            player_dir.AppendASCII("xmp.exe").AsUTF8Unsafe();
-        // The WebUI frontend is extracted from this packaged renderer. Keep
-        // that source location so bundled CommonJS dependencies resolve their
-        // own package and native addons under resources/app.
-        auto renderer_mapping = xenon::ipc::mojom::IpcRendererUrlMapping::New();
-        renderer_mapping->source_path_prefix =
-            player_dir.AppendASCII("resources")
-                .AppendASCII("app")
-                .AppendASCII("out")
-                .AppendASCII("main-renderer")
-                .AsUTF8Unsafe();
-        renderer_mapping->target_base_url = "chrome://xenon-player-electron/";
-        // The embedded main entry is beside the runtime executable and builds
-        // sibling renderer URLs from that location. Declare this source alias
-        // explicitly, keeping the packaged source first for reverse CommonJS
-        // path resolution in renderer documents.
-        auto main_renderer_mapping = renderer_mapping.Clone();
-        main_renderer_mapping->source_path_prefix =
-            player_dir.AppendASCII("main-renderer").AsUTF8Unsafe();
-        player_config->renderer_url_mappings.push_back(
-            std::move(renderer_mapping));
-        player_config->renderer_url_mappings.push_back(
-            std::move(main_renderer_mapping));
-        player_config->renderer_base_url = "chrome://xenon-player-electron/";
-        // These tool pages are control surfaces for their native parent. Keep
-        // the declaration in application configuration; the window host uses
-        // the same pairing contract for any explicitly configured document.
-        player_config->parent_window_pairing_urls = {
-            "chrome://xenon-player-electron/clipper.html",
-            "chrome://xenon-player-electron/gifClipper.html"};
-        manager->SetElectronIpcContainerForOrigin(
-            "chrome://xenon-player-electron", "xenon-player-test");
-        manager->InitializeElectronIpc(std::move(player_config));
+      xenon::ipc::mojom::IpcMainConfigPtr player_config;
+      std::string error;
+      if (!xenon::ipc::LoadElectronAppConfig(
+              executable_dir.AppendASCII("xenon_player.xenon.json"),
+              "xenon-player-test", &player_config, &error)) {
+        LOG(ERROR) << "Unable to configure PLE: " << error;
+        return;
       }
+      manager->SetElectronIpcContainerForOrigin(
+          "chrome://xenon-player-electron", "xenon-player-test");
+      manager->InitializeElectronIpc(std::move(player_config));
     }
   }
   // A crashed Utility can leave its old browser window visible. An explicit
@@ -1473,7 +1421,8 @@ void XenonWebDialog::ShowXenonPlayerElectron(Profile* profile) {
   }
   if (!XenonElectronWindowHost::GetInstance()->ActivateForContainer(
           "xenon-player-test")) {
-    LOG(WARNING) << "ShowXenonPlayerElectron: waiting for ipcMain BrowserWindow";
+    LOG(WARNING)
+        << "ShowXenonPlayerElectron: waiting for ipcMain BrowserWindow";
   }
 }
 

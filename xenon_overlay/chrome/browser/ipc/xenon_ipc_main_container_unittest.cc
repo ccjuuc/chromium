@@ -1898,6 +1898,125 @@ TEST_F(XenonIpcMainContainerTest,
   EXPECT_EQ(normalized_app_dir.AsUTF8Unsafe(), path_result->value.GetString());
 }
 
+TEST_F(XenonIpcMainContainerTest, LoadsOriginalApplicationLayoutsAndMetadata) {
+  container_.reset();
+  base::FilePath root;
+  ASSERT_TRUE(base::NormalizeFilePath(temp_dir_.GetPath(), &root));
+  asar::TestArchiveBuilder builder;
+  ASSERT_TRUE(asar::SetArchivePublicKeys("main-container-test",
+                                         {{root, builder.public_key_pem()}}));
+  constexpr char kMain[] = R"JS(
+const {app, ipcMain} = require('electron');
+ipcMain.handle('application:metadata', () => ({
+  name: app.getName(), version: app.getVersion(), appPath: app.getAppPath(),
+  resources: process.resourcesPath, cwd: process.cwd(), packaged: app.isPackaged,
+  filename: __filename, answer: require('./dependency')
+}));
+)JS";
+  // The fixture's command-line main remains set. Explicit application config
+  // must take precedence rather than accidentally loading that global entry.
+  for (int layout = 0; layout < 3; ++layout) {
+    SCOPED_TRACE(layout);
+    const auto release = root.AppendASCII("layout" + std::to_string(layout));
+    const auto resources = release.AppendASCII("resources");
+    const auto app =
+        layout == 0 ? release
+                    : resources.AppendASCII(layout == 1 ? "app" : "app.asar");
+    const std::string manifest =
+        layout == 0
+            ? R"({"name":"original-app","version":"2.4","main":"dist/start"})"
+        : layout == 1
+            ? R"({"name":"original-app","version":"2.4","main":"dist"})"
+            : R"({"name":"original-app","version":"2.4"})";
+    const auto entry =
+        layout == 0   ? app.AppendASCII("dist").AppendASCII("start.js")
+        : layout == 1 ? app.AppendASCII("dist").AppendASCII("index.js")
+                      : app.AppendASCII("index.js");
+    if (layout == 2) {
+      ASSERT_TRUE(base::CreateDirectory(resources));
+      ASSERT_TRUE(builder.Write(
+          app, {{"package.json", manifest, true},
+                {"index.js", kMain, true},
+                {"dependency.js", "module.exports = 42;", true}}));
+    } else {
+      ASSERT_TRUE(base::CreateDirectory(entry.DirName()));
+      ASSERT_TRUE(base::WriteFile(app.AppendASCII("package.json"), manifest));
+      ASSERT_TRUE(base::WriteFile(entry, kMain));
+      ASSERT_TRUE(base::WriteFile(entry.DirName().AppendASCII("dependency.js"),
+                                  "module.exports = 42;"));
+    }
+    XenonIpcMainContainer::AppMainModule module;
+    module.app_path = release;
+    module.working_directory = root;
+    container_ = std::make_unique<XenonIpcMainContainer>();
+    ASSERT_TRUE(container_->Initialize(std::move(module)))
+        << container_->startup_error();
+    base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+    container_->Invoke("renderer-1", "application:metadata", Arguments({}),
+                       future.GetCallback());
+    auto result = future.Take();
+    ASSERT_TRUE(result->success) << result->error;
+    ASSERT_TRUE(result->value.is_dict());
+    const auto& value = result->value.GetDict();
+    EXPECT_EQ("original-app", *value.FindString("name"));
+    EXPECT_EQ("2.4", *value.FindString("version"));
+    EXPECT_EQ(app.AsUTF8Unsafe(), *value.FindString("appPath"));
+    EXPECT_EQ(resources.AsUTF8Unsafe(), *value.FindString("resources"));
+    EXPECT_EQ(root.AsUTF8Unsafe(), *value.FindString("cwd"));
+    EXPECT_EQ(entry.AsUTF8Unsafe(), *value.FindString("filename"));
+    EXPECT_EQ(layout != 0, value.FindBool("packaged"));
+    EXPECT_EQ(42, value.FindInt("answer"));
+    container_.reset();
+  }
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       ExplicitApplicationEntryPreservesRootAndMetadata) {
+  container_.reset();
+  base::FilePath root;
+  ASSERT_TRUE(base::NormalizeFilePath(temp_dir_.GetPath(), &root));
+  const auto app = root.AppendASCII("application");
+  ASSERT_TRUE(base::CreateDirectory(app));
+  ASSERT_TRUE(base::WriteFile(app.AppendASCII("package.json"),
+                              R"({"name":"manifest","main":"missing.js"})"));
+  const auto main = app.AppendASCII("real.js");
+  ASSERT_TRUE(base::WriteFile(main, R"JS(
+const {app, ipcMain} = require('electron');
+ipcMain.handle('application:override', () => ({
+  name: app.getName(), version: app.getVersion(), packaged: app.isPackaged,
+  resources: process.resourcesPath, filename: __filename
+}));
+)JS"));
+  XenonIpcMainContainer::AppMainModule module;
+  module.app_path = app;
+  container_ = std::make_unique<XenonIpcMainContainer>();
+  EXPECT_FALSE(container_->Initialize(module));
+  container_.reset();
+  module.main_script_path = main;
+  module.app_name = "Configured name";
+  module.app_version = "3.1";
+  module.resources_directory = root;
+  module.is_packaged = true;
+  container_ = std::make_unique<XenonIpcMainContainer>();
+  ASSERT_TRUE(container_->Initialize(module)) << container_->startup_error();
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "application:override", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& value = result->value.GetDict();
+  EXPECT_EQ("Configured name", *value.FindString("name"));
+  EXPECT_EQ("3.1", *value.FindString("version"));
+  EXPECT_EQ(true, value.FindBool("packaged"));
+  EXPECT_EQ(root.AsUTF8Unsafe(), *value.FindString("resources"));
+  EXPECT_EQ(main.AsUTF8Unsafe(), *value.FindString("filename"));
+  container_.reset();
+  module.main_script_path = main_script_;
+  container_ = std::make_unique<XenonIpcMainContainer>();
+  EXPECT_FALSE(container_->Initialize(std::move(module)));
+  EXPECT_NE(std::string::npos, container_->startup_error().find("outside"));
+}
+
 TEST_F(XenonIpcMainContainerTest, LoadsStandardAndEncryptedAsarApplications) {
   container_.reset();
   base::CommandLine::ForCurrentProcess()->RemoveSwitch("xenon-main-js");

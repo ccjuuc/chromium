@@ -535,6 +535,10 @@ bool XenonIpcMainContainer::Initialize(EmbeddedMainModule main_module) {
   return InitializeInternal(std::move(main_module));
 }
 
+bool XenonIpcMainContainer::Initialize(AppMainModule main_module) {
+  return InitializeInternal(std::nullopt, std::move(main_module));
+}
+
 void XenonIpcMainContainer::SetNativeAddonHooks(NativeAddonHooks hooks) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   native_addon_hooks_ = std::move(hooks);
@@ -569,7 +573,8 @@ void XenonIpcMainContainer::SetNetPipeSender(
 }
 
 bool XenonIpcMainContainer::InitializeInternal(
-    std::optional<EmbeddedMainModule> main_module) {
+    std::optional<EmbeddedMainModule> main_module,
+    std::optional<AppMainModule> app_module) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (initialized_) {
     return true;
@@ -577,6 +582,18 @@ bool XenonIpcMainContainer::InitializeInternal(
 
   startup_error_.clear();
   embedded_main_source_.reset();
+  main_script_path_.clear();
+  module_root_.clear();
+  app_path_.clear();
+  executable_path_.clear();
+  resources_directory_.clear();
+  working_directory_.clear();
+  is_packaged_ = false;
+  app_name_ = "Application";
+  app_version_ = "0.0.0";
+  default_user_agent_.clear();
+  renderer_url_mappings_.clear();
+  renderer_base_url_.clear();
   if (main_module) {
     if (main_module->source.empty()) {
       startup_error_ = "Embedded main JavaScript source is empty";
@@ -618,13 +635,39 @@ bool XenonIpcMainContainer::InitializeInternal(
     default_user_agent_ = std::move(main_module->default_user_agent);
     renderer_url_mappings_ = std::move(main_module->renderer_url_mappings);
     renderer_base_url_ = std::move(main_module->renderer_base_url);
+    resources_directory_ = std::move(main_module->resources_directory);
+    working_directory_ = std::move(main_module->working_directory);
+    is_packaged_ = main_module->is_packaged.value_or(
+        !renderer_base_url_.empty() || !renderer_url_mappings_.empty());
     embedded_main_source_ = std::move(main_module->source);
+  } else if (app_module) {
+    if (!ResolveApplicationMain(std::move(*app_module))) {
+      return false;
+    }
   } else if (!ResolveConfiguredMainScript()) {
     return false;
   }
 
   if (!ResolveAppExecutable(executable_path_, &executable_path_,
                             &startup_error_)) {
+    return false;
+  }
+  if (resources_directory_.empty()) {
+    const auto executable_directory = executable_path_.DirName();
+    resources_directory_ =
+        executable_directory.BaseName().value() == FILE_PATH_LITERAL("MacOS")
+            ? executable_directory.DirName().AppendASCII("Resources")
+            : executable_directory.AppendASCII("resources");
+  }
+  if (working_directory_.empty() &&
+      !base::GetCurrentDirectory(&working_directory_)) {
+    startup_error_ = "Application working directory is unavailable";
+    return false;
+  }
+  if (!resources_directory_.IsAbsolute() || !working_directory_.IsAbsolute() ||
+      !base::DirectoryExists(working_directory_)) {
+    startup_error_ =
+        "Application resources and working directories are invalid";
     return false;
   }
 
@@ -676,6 +719,22 @@ bool XenonIpcMainContainer::InitializeInternal(
               v8::String::NewFromUtf8(isolate_,
                                       executable_path_.AsUTF8Unsafe().c_str())
                   .ToLocalChecked())
+        .Check();
+    global
+        ->Set(context,
+              v8::String::NewFromUtf8Literal(isolate_, "__xenonResourcesPath"),
+              gin::StringToV8(isolate_, resources_directory_.AsUTF8Unsafe()))
+        .Check();
+    global
+        ->Set(
+            context,
+            v8::String::NewFromUtf8Literal(isolate_, "__xenonWorkingDirectory"),
+            gin::StringToV8(isolate_, working_directory_.AsUTF8Unsafe()))
+        .Check();
+    global
+        ->Set(context,
+              v8::String::NewFromUtf8Literal(isolate_, "__xenonIsPackaged"),
+              v8::Boolean::New(isolate_, is_packaged_))
         .Check();
     global
         ->Set(context, v8::String::NewFromUtf8Literal(isolate_, "__xenonPid"),
@@ -1024,6 +1083,52 @@ bool XenonIpcMainContainer::RunBootstrap() {
          capture_function("__xenonShutdownApp", &shutdown_app_);
 }
 
+bool XenonIpcMainContainer::ResolveApplicationMain(AppMainModule main_module) {
+  ElectronApplicationInfo application;
+  if (!ResolveElectronApplication(main_module.app_path, &application,
+                                  &startup_error_)) {
+    return false;
+  }
+  app_path_ = application.app_path;
+  module_root_ = app_path_;
+  base::FilePath candidate = main_module.main_script_path.empty()
+                                 ? application.main_script_path
+                                 : main_module.main_script_path;
+  if (!candidate.IsAbsolute()) {
+    startup_error_ = "Application main script override must be absolute";
+    return false;
+  }
+  auto resolved = ResolveCommonJsPath(candidate, &startup_error_);
+  if (!resolved ||
+      (*resolved != module_root_ && !module_root_.IsParent(*resolved))) {
+    if (resolved) {
+      startup_error_ =
+          "Configured main JavaScript is outside its application "
+          "directory: " +
+          resolved->AsUTF8Unsafe();
+    }
+    return false;
+  }
+  main_script_path_ = std::move(*resolved);
+  app_name_ = !main_module.app_name.empty() ? std::move(main_module.app_name)
+              : application.name.empty()    ? "Application"
+                                            : application.name;
+  app_version_ = !main_module.app_version.empty()
+                     ? std::move(main_module.app_version)
+                 : application.version.empty() ? "0.0.0"
+                                               : application.version;
+  executable_path_ = std::move(main_module.executable_path);
+  resources_directory_ = main_module.resources_directory.empty()
+                             ? application.resources_directory
+                             : std::move(main_module.resources_directory);
+  working_directory_ = std::move(main_module.working_directory);
+  is_packaged_ = main_module.is_packaged.value_or(application.is_packaged);
+  default_user_agent_ = std::move(main_module.default_user_agent);
+  renderer_url_mappings_ = std::move(main_module.renderer_url_mappings);
+  renderer_base_url_ = std::move(main_module.renderer_base_url);
+  return true;
+}
+
 bool XenonIpcMainContainer::ResolveConfiguredMainScript() {
   const base::CommandLine* command_line =
       base::CommandLine::ForCurrentProcess();
@@ -1039,40 +1144,10 @@ bool XenonIpcMainContainer::ResolveConfiguredMainScript() {
     app_path_ = main_script_path_.DirName();
     module_root_ = app_path_;
   } else if (command_line->HasSwitch(switches::kElectronApp)) {
-    app_path_ = command_line->GetSwitchValuePath(switches::kElectronApp);
-    base::FilePath normalized_app_path;
-    if (app_path_.empty() || !IsCommonJsDirectory(app_path_) ||
-        !NormalizeCommonJsPath(app_path_, &normalized_app_path)) {
-      startup_error_ =
-          "--xenon-electron-app requires an existing application directory or "
-          "ASAR archive";
-      return false;
-    }
-    app_path_ = normalized_app_path;
-    module_root_ = app_path_;
-
-    const base::FilePath package_path = app_path_.AppendASCII("package.json");
-    std::string package_text;
-    if (!ReadCommonJsFile(package_path, &package_text)) {
-      startup_error_ = "Electron application has no readable package.json: " +
-                       package_path.AsUTF8Unsafe();
-      return false;
-    }
-    std::optional<base::Value> package =
-        base::JSONReader::Read(package_text, base::JSON_PARSE_RFC);
-    if (!package || !package->is_dict()) {
-      startup_error_ = "Electron application package.json is invalid";
-      return false;
-    }
-    if (const std::string* name = package->GetDict().FindString("name")) {
-      app_name_ = *name;
-    }
-    if (const std::string* version = package->GetDict().FindString("version")) {
-      app_version_ = *version;
-    }
-    const std::string* main = package->GetDict().FindString("main");
-    main_script_path_ = app_path_.Append(
-        base::FilePath::FromUTF8Unsafe(main ? *main : "main.js"));
+    AppMainModule application;
+    application.app_path =
+        command_line->GetSwitchValuePath(switches::kElectronApp);
+    return ResolveApplicationMain(std::move(application));
   }
 
   if (main_script_path_.empty()) {

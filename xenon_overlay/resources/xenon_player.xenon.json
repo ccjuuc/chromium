@@ -1,0 +1,10 @@
+{
+  "application": "xenon_player",
+  "executable": "xenon_player/xmp.exe",
+  "name": "xmp",
+  "archivePublicKey": "xenon_player.asar-public-key.pem",
+  "parentWindowPairing": [
+    "out.asar/main-renderer/clipper.html",
+    "out.asar/main-renderer/gifClipper.html"
+  ]
+}

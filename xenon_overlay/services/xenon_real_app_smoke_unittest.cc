@@ -26,7 +26,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 #include "v8/include/v8.h"
-#include "xenon_overlay/chrome/browser/ipc/xenon_app_runtime.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_app_config.h"
 #include "xenon_overlay/services/xenon_service_impl.h"
 
 namespace xenon {
@@ -78,45 +78,18 @@ class XenonRealAppSmokeTest : public testing::Test {
     const base::FilePath root =
         command_line->GetSwitchValuePath("xenon-app-smoke-root");
     ASSERT_TRUE(root.IsAbsolute());
-    const base::FilePath runtime =
-        thunder ? root.AppendASCII("thunder_2025")
-                : root.AppendASCII("xenon_player").AppendASCII("main");
-    const base::FilePath app =
-        thunder ? runtime.AppendASCII("resources").AppendASCII("app") : runtime;
-    const base::FilePath entry =
-        thunder ? app.AppendASCII("out").AppendASCII("main.js")
-                : app.AppendASCII("main.js");
-    const base::FilePath executable =
-        runtime.AppendASCII(thunder ? "Thunder.exe" : "xmp.exe");
-    auto config = ipc::mojom::IpcMainConfig::New();
-    config->container_id = thunder ? "thunder-2025" : "xenon-player-test";
-    config->virtual_main_path = entry.AsUTF8Unsafe();
-    config->app_path = app.AsUTF8Unsafe();
-    config->executable_path = executable.AsUTF8Unsafe();
-    config->runtime_directory = runtime.AsUTF8Unsafe();
-    config->app_name = thunder ? "Thunder" : "xmp";
-    config->app_version = ipc::GetAppExecutableVersion(executable);
-    if (thunder) {
-      auto primary = ipc::mojom::IpcRendererUrlMapping::New();
-      primary->source_path_prefix =
-          entry.DirName().AppendASCII("main-renderer").AsUTF8Unsafe();
-      primary->target_base_url = "chrome://thunder-2025/";
-      config->renderer_url_mappings.push_back(std::move(primary));
-      auto other = ipc::mojom::IpcRendererUrlMapping::New();
-      other->source_path_prefix = entry.DirName().AsUTF8Unsafe();
-      other->target_base_url =
-          net::FilePathToFileURL(app.AppendASCII("renderer.asar")).spec() + "/";
-      config->renderer_url_mappings.push_back(std::move(other));
-    } else {
-      config->renderer_base_url = "chrome://xenon-player-electron/";
-    }
-    ASSERT_TRUE(base::ReadFileToString(entry, &config->embedded_main_source))
-        << entry;
-    ASSERT_TRUE(base::PathExists(executable)) << executable;
+    ipc::mojom::IpcMainConfigPtr config;
+    std::string configuration_error;
+    ASSERT_TRUE(ipc::LoadElectronAppConfig(
+        root.AppendASCII(thunder ? "thunder_2025.xenon.json"
+                                 : "xenon_player.xenon.json"),
+        thunder ? "thunder-2025" : "xenon-player-test", &config,
+        &configuration_error))
+        << configuration_error;
 
     base::DictValue report;
     report.Set("application", thunder ? "TH" : "PL-E");
-    report.Set("main", config->virtual_main_path);
+    report.Set("main_override", config->main_script_path);
     report.Set("app_path", config->app_path);
     report.Set("runtime_directory", config->runtime_directory);
     report.Set("executable_identity", config->executable_path);

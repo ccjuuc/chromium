@@ -490,7 +490,7 @@
         if (resolvedDevice && resolvedAbsolute) break;
       }
       if (!resolvedAbsolute) {
-        const cwd = String(__xenonAppPath || '.').replace(/\//g, '\\');
+        const cwd = globalThis.process.cwd().replace(/\//g, '\\');
         return win32.normalize(cwd + '\\' + resolvedTail);
       }
       return win32.normalize(resolvedDevice + resolvedTail);

@@ -109,7 +109,25 @@ source_set("app_runtime") {
     "ipc/xenon_app_runtime.cc",
     "ipc/xenon_app_runtime.h",
   ]
-  deps = [ "//base" ]
+  deps = [
+    "//base",
+    "//xenon_overlay/common/asar",
+  ]
+}
+
+source_set("electron_app_config") {
+  sources = [
+    "ipc/xenon_electron_app_config.cc",
+    "ipc/xenon_electron_app_config.h",
+  ]
+  deps = [
+    ":app_runtime",
+    "//base",
+    "//net",
+    "//url",
+    "//xenon_overlay/common/asar",
+    "//xenon_overlay/public/mojom",
+  ]
 }
 
 source_set("os_bridge") {
@@ -287,6 +305,7 @@ source_set("browser") {
   deps = [
     ":app_runtime",
     ":electron_api_bridge",
+    ":electron_app_config",
     ":filesystem_bridge",
     ":napi",
     ":network_request_bridge",
@@ -537,7 +556,9 @@ test("ipc_main_container_unittests") {
     "../../services/xenon_service_impl.cc",
     "../../services/xenon_service_impl.h",
     "../../services/xenon_service_impl_unittest.cc",
+    "ipc/xenon_app_runtime_unittest.cc",
     "ipc/xenon_electron_api_bridge_unittest.cc",
+    "ipc/xenon_electron_app_config_unittest.cc",
     "ipc/xenon_file_system_bridge_unittest.cc",
     "ipc/xenon_ipc_main_container.cc",
     "ipc/xenon_ipc_main_container.h",
@@ -551,6 +572,7 @@ test("ipc_main_container_unittests") {
   deps = [
     ":app_runtime",
     ":electron_api_bridge",
+    ":electron_app_config",
     ":filesystem_bridge",
     ":napi",
     ":network_request_bridge",

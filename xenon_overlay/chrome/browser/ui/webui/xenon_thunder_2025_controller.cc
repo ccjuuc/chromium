@@ -34,7 +34,7 @@ XenonThunder2025Config::CreateWebUIController(content::WebUI* web_ui,
   // Product-specific controllers only supply routing and asset policy.
   return std::make_unique<XenonPlayerElectronController>(
       web_ui, kThunder2025Host, kThunderFrontendDirSwitch,
-      "thunder_2025/resources/app/renderer.asar/main-renderer",
+      "thunder_2025/resources/app/out.asar/main-renderer",
       std::vector<std::string>{"xunlei.com"});
 }
 

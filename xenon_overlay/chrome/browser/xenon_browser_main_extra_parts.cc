@@ -24,7 +24,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
-#include "xenon_overlay/chrome/browser/ipc/xenon_app_runtime.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_app_config.h"
 #include "xenon_overlay/chrome/browser/reminder/xenon_reminder_notification_manager.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_reminder_browser_observer.h"
@@ -173,84 +173,39 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
   } else {
     // An explicit command-line Electron application is itself an activation
     // request, so preserve eager startup for that mode.
-    manager->InitializeElectronIpc(std::move(ipc_config));
-    manager->SetElectronIpcContainerForOrigin(kIpcTestOrigin, "default");
+    const auto* command_line = base::CommandLine::ForCurrentProcess();
+    std::string error;
+    if (!command_line->HasSwitch(xenon::ipc::switches::kMainScript) &&
+        command_line->HasSwitch(xenon::ipc::switches::kElectronApp) &&
+        !xenon::ipc::LoadElectronAppConfig(
+            command_line->GetSwitchValuePath(
+                xenon::ipc::switches::kElectronApp),
+            "default", &ipc_config, &error)) {
+      LOG(ERROR) << "Unable to configure Electron application: " << error;
+    } else {
+      manager->InitializeElectronIpc(std::move(ipc_config));
+      manager->SetElectronIpcContainerForOrigin(kIpcTestOrigin, "default");
+    }
   }
 
   base::FilePath executable_dir;
   if (base::PathService::Get(base::DIR_EXE, &executable_dir)) {
-    const base::FilePath thunder_runtime_dir =
-        executable_dir.AppendASCII("thunder_2025");
-    const base::FilePath thunder_app_dir =
-        thunder_runtime_dir.AppendASCII("resources").AppendASCII("app");
-    const base::FilePath thunder_main_dir =
-        thunder_app_dir.AppendASCII("out");
-    const base::FilePath thunder_main_path =
-        thunder_main_dir.AppendASCII("main.js");
-    std::string thunder_main_source;
-    if (base::ReadFileToString(thunder_main_path, &thunder_main_source)) {
-      auto thunder_config = xenon::ipc::mojom::IpcMainConfig::New();
-      thunder_config->container_id = kThunder2025ContainerId;
-      thunder_config->embedded_main_source = std::move(thunder_main_source);
-      thunder_config->virtual_main_path = thunder_main_path.AsUTF8Unsafe();
-      thunder_config->app_path = thunder_app_dir.AsUTF8Unsafe();
-      thunder_config->app_name = "Thunder";
-      bool archive_key_loaded = true;
-      const base::FilePath archive_key_path =
-          thunder_app_dir.AppendASCII("asar-public-key.pem");
-      if (base::PathExists(archive_key_path)) {
-        std::string archive_key;
-        if (!base::ReadFileToStringWithMaxSize(archive_key_path, &archive_key,
-                                               64 * 1024)) {
-          LOG(ERROR) << "Unable to read packaged ASAR public key";
-          archive_key_loaded = false;
-        }
-        thunder_config->archive_public_keys.push_back(
-            xenon::ipc::mojom::IpcArchivePublicKey::New(
-                thunder_app_dir.AsUTF8Unsafe(), std::move(archive_key)));
-      }
-      // Preserve the hosted application's executable identity and version.
-      // This file is not launched: Xenon still executes the main module.
-      thunder_config->executable_path =
-          thunder_runtime_dir.AppendASCII("Thunder.exe").AsUTF8Unsafe();
-      const std::string thunder_app_version =
-          xenon::ipc::GetAppExecutableVersion(
-              base::FilePath::FromUTF8Unsafe(thunder_config->executable_path));
-      if (!thunder_app_version.empty()) {
-        thunder_config->app_version = thunder_app_version;
-        thunder_config->default_user_agent = base::StringPrintf(
-            "Thunder/%s XDASKernel/%s %s", thunder_app_version.c_str(),
-            thunder_app_version.c_str(),
-            embedder_support::GetUserAgent().c_str());
-      }
-      const base::FilePath thunder_renderer_archive =
-          thunder_app_dir.AppendASCII("renderer.asar");
-      if (base::PathExists(thunder_renderer_archive)) {
-        // Preserve Electron's local-file origin. Rewriting this window to a
-        // WebUI origin changes XHR/CORS semantics for its local services.
-        auto archive_mapping =
-            xenon::ipc::mojom::IpcRendererUrlMapping::New();
-        archive_mapping->source_path_prefix = thunder_main_dir.AsUTF8Unsafe();
-        archive_mapping->target_base_url =
-            net::FilePathToFileURL(thunder_renderer_archive).spec() + "/";
-        thunder_config->renderer_url_mappings.push_back(
-            std::move(archive_mapping));
-      } else {
-        auto renderer_mapping = xenon::ipc::mojom::IpcRendererUrlMapping::New();
-        renderer_mapping->source_path_prefix =
-            thunder_main_dir.AppendASCII("main-renderer").AsUTF8Unsafe();
-        renderer_mapping->target_base_url = "chrome://thunder-2025/";
-        thunder_config->renderer_url_mappings.push_back(
-            std::move(renderer_mapping));
-      }
-      if (archive_key_loaded &&
-          manager->RegisterElectronIpc(std::move(thunder_config))) {
+    xenon::ipc::mojom::IpcMainConfigPtr thunder_config;
+    std::string error;
+    if (xenon::ipc::LoadElectronAppConfig(
+            executable_dir.AppendASCII("thunder_2025.xenon.json"),
+            kThunder2025ContainerId, &thunder_config, &error)) {
+      // This product's service identity remains an embedder declaration.
+      const auto& version = thunder_config->app_version;
+      thunder_config->default_user_agent = base::StringPrintf(
+          "Thunder/%s XDASKernel/%s %s", version.c_str(), version.c_str(),
+          embedder_support::GetUserAgent().c_str());
+      if (manager->RegisterElectronIpc(std::move(thunder_config))) {
         manager->SetElectronIpcContainerForOrigin(kThunder2025Origin,
                                                   kThunder2025ContainerId);
       }
     } else {
-      LOG(WARNING) << "Thunder 2025 main script not found: "
-                   << thunder_main_path;
+      LOG(WARNING) << "Unable to configure Thunder: " << error;
     }
   }
 
@@ -258,8 +213,9 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
   xenon::RegisterXenonLoginStartupHooks();
 #endif
 
-  LOG(INFO) << "XenonBrowserMainExtraParts: Initializing XenonManager for profile: "
-            << profile->GetDebugName();
+  LOG(INFO)
+      << "XenonBrowserMainExtraParts: Initializing XenonManager for profile: "
+      << profile->GetDebugName();
 
   // Register the Xenon WebUI Config (with Mojo)
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(

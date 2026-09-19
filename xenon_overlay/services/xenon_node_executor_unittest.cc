@@ -11,18 +11,28 @@
 #include <vector>
 
 #include "base/base_paths.h"
+#include "base/files/file_util.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/path_service.h"
 #include "base/task/execution_fence.h"
+#include "base/test/scoped_command_line.h"
+#include "base/test/scoped_path_override.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "gin/function_template.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "xenon_overlay/chrome/browser/napi/napi_switches.h"
+#include "xenon_overlay/common/asar/archive.h"
+#include "xenon_overlay/common/asar/test_support.h"
 
 namespace xenon {
 
 class XenonNodeExecutorTestPeer {
  public:
+  static size_t ModuleCount(const XenonNodeExecutor& executor) {
+    return executor.addon_modules_.size();
+  }
   static void RegisterCollectibleCallback(XenonNodeExecutor& executor,
                                           int32_t client_id,
                                           int32_t callback_id) {
@@ -304,6 +314,153 @@ class XenonNodePromiseTest : public testing::Test {
   std::unique_ptr<XenonNodeExecutor> executor_;
   std::string addon_path_;
 };
+
+class XenonNodeArchiveTest : public XenonNodePromiseTest {
+ protected:
+  void SetUp() override {
+    XenonNodePromiseTest::SetUp();
+    ASSERT_FALSE(HasFatalFailure());
+    base::FilePath executable_directory;
+    ASSERT_TRUE(base::PathService::Get(base::DIR_EXE, &executable_directory));
+    ASSERT_TRUE(temporary_.CreateUniqueTempDirUnderPath(executable_directory));
+    std::string native_bytes;
+    ASSERT_TRUE(base::ReadFileToString(
+        base::FilePath::FromUTF8Unsafe(addon_path_), &native_bytes));
+    archive_path_ = temporary_.GetPath().AppendASCII("native.asar");
+    asar::TestArchiveBuilder builder;
+    ASSERT_TRUE(builder.Write(
+        archive_path_, {{"bin/addon.node", native_bytes, false, true},
+                        {"alias.node", "", false, false, "bin/addon.node"},
+                        {"packed.node", native_bytes}}));
+    ASSERT_TRUE(asar::SetArchivePublicKeys(
+        "native-archive-test",
+        {{temporary_.GetPath(), builder.public_key_pem()}}));
+    virtual_path_ = archive_path_.AppendASCII("bin")
+                        .AppendASCII("addon.node")
+                        .AsUTF8Unsafe();
+    alias_path_ = archive_path_.AppendASCII("alias.node").AsUTF8Unsafe();
+    physical_path_ = archive_path_.AddExtension(FILE_PATH_LITERAL("unpacked"))
+                         .AppendASCII("bin")
+                         .AppendASCII("addon.node")
+                         .AsUTF8Unsafe();
+  }
+
+  void TearDown() override {
+    executor_.reset();
+    task_environment_.RunUntilIdle();
+    asar::RemoveArchivePublicKeys("native-archive-test");
+  }
+
+  void SetMarker(const std::string& path) {
+    base::test::TestFuture<bool, const std::string&> result;
+    executor_->SetExportProperty(path, "", "cacheMarker", base::Value(91),
+                                 result.GetCallback());
+    ASSERT_TRUE(result.Get<0>()) << result.Get<1>();
+  }
+
+  void ExpectMarker(const std::string& path) {
+    base::test::TestFuture<bool, base::Value, const std::string&> result;
+    executor_->GetExportProperty(path, "", "cacheMarker", result.GetCallback());
+    ASSERT_TRUE(result.Get<0>()) << result.Get<2>();
+    ASSERT_TRUE(result.Get<1>().is_int());
+    EXPECT_EQ(91, result.Get<1>().GetInt());
+  }
+
+  base::ScopedTempDir temporary_;
+  base::FilePath archive_path_;
+  std::string virtual_path_;
+  std::string alias_path_;
+  std::string physical_path_;
+};
+
+TEST_F(XenonNodeArchiveTest, PhysicalThenVirtualLoadsShareTheOriginalExports) {
+  std::string error;
+  ASSERT_TRUE(executor_->LoadAddonFromCurrentThread(physical_path_, &error))
+      << error;
+  SetMarker(physical_path_);
+  const size_t modules = XenonNodeExecutorTestPeer::ModuleCount(*executor_);
+  LoadFuture virtual_load;
+  executor_->LoadAddon(virtual_path_, virtual_load.GetCallback(), false);
+  ASSERT_TRUE(virtual_load.Get<0>()) << virtual_load.Get<1>();
+  ASSERT_TRUE(executor_->LoadAddonFromCurrentThread(alias_path_, &error))
+      << error;
+  ExpectMarker(physical_path_);
+  ExpectMarker(virtual_path_);
+  ExpectMarker(alias_path_);
+  EXPECT_EQ(modules, XenonNodeExecutorTestPeer::ModuleCount(*executor_));
+}
+
+TEST_F(XenonNodeArchiveTest, VirtualThenPhysicalLoadsShareNativeInstances) {
+  LoadFuture initial;
+  executor_->LoadAddon(virtual_path_, initial.GetCallback(), false);
+  ASSERT_TRUE(initial.Get<0>()) << initial.Get<1>();
+  SetMarker(virtual_path_);
+  const size_t modules = XenonNodeExecutorTestPeer::ModuleCount(*executor_);
+  std::string error;
+  ASSERT_TRUE(executor_->LoadAddonFromCurrentThread(physical_path_, &error))
+      << error;
+  ASSERT_TRUE(executor_->LoadAddonFromCurrentThread(alias_path_, &error))
+      << error;
+  ExpectMarker(physical_path_);
+  EXPECT_EQ(modules, XenonNodeExecutorTestPeer::ModuleCount(*executor_));
+
+  base::test::TestFuture<bool, int32_t, const std::string&> constructed;
+  executor_->ConstructExport(virtual_path_, "OwnedHandle", 0, {},
+                             constructed.GetCallback(), 1);
+  ASSERT_TRUE(constructed.Get<0>()) << constructed.Get<2>();
+  const int32_t instance = constructed.Get<1>();
+  InvokeFuture read;
+  executor_->InvokeInstance(physical_path_, instance, "read", 0, {},
+                            read.GetCallback(), false, {}, 1);
+  ASSERT_TRUE(read.Get<0>()) << read.Get<3>();
+  EXPECT_EQ(42, read.Get<1>().GetInt());
+  base::test::TestFuture<bool, const std::string&> changed;
+  executor_->SetInstanceProperty(alias_path_, instance, "value",
+                                 base::Value(73), changed.GetCallback(), 1);
+  ASSERT_TRUE(changed.Get<0>()) << changed.Get<1>();
+  base::test::TestFuture<bool, base::Value, const std::string&> property;
+  executor_->GetInstanceProperty(virtual_path_, instance, "value",
+                                 property.GetCallback(), 1);
+  ASSERT_TRUE(property.Get<0>()) << property.Get<2>();
+  EXPECT_EQ(73, property.Get<1>().GetInt());
+  executor_->ReleaseInstance(alias_path_, instance, 1,
+                             executor_->GetInstanceOwnerToken(1));
+  EXPECT_EQ(0u, XenonNodeExecutorTestPeer::InstanceCount(*executor_, 1));
+}
+
+TEST_F(XenonNodeArchiveTest, PackedMissingAndEscapingMembersAreRejected) {
+  const size_t modules = XenonNodeExecutorTestPeer::ModuleCount(*executor_);
+  std::string error;
+  EXPECT_FALSE(executor_->LoadAddonFromCurrentThread(
+      archive_path_.AppendASCII("packed.node").AsUTF8Unsafe(), &error));
+  EXPECT_EQ("Native addon archive member must be unpacked", error);
+  // A neighboring valid addon cannot be reached by escaping the ASAR path.
+  const auto outside = temporary_.GetPath().AppendASCII("outside.node");
+  ASSERT_TRUE(
+      base::CopyFile(base::FilePath::FromUTF8Unsafe(addon_path_), outside));
+  for (const auto& invalid :
+       {archive_path_.AppendASCII("missing.node"),
+        archive_path_.AppendASCII("..").AppendASCII("outside.node")}) {
+    error.clear();
+    EXPECT_FALSE(
+        executor_->LoadAddonFromCurrentThread(invalid.AsUTF8Unsafe(), &error));
+    EXPECT_EQ("Native addon archive member cannot be resolved", error);
+  }
+  EXPECT_EQ(modules, XenonNodeExecutorTestPeer::ModuleCount(*executor_));
+}
+
+TEST_F(XenonNodeArchiveTest, UnpackedResolutionPreservesNativeDirectoryPolicy) {
+  base::test::ScopedCommandLine command_line;
+  command_line.GetProcessCommandLine()->RemoveSwitch(
+      napi_switches::kAllowExternalNodeAddons);
+  const auto allowed_directory = temporary_.GetPath().AppendASCII("allowed");
+  ASSERT_TRUE(base::CreateDirectory(allowed_directory));
+  base::ScopedPathOverride executable_directory(base::DIR_EXE,
+                                                allowed_directory);
+  std::string error;
+  EXPECT_FALSE(executor_->LoadAddonFromCurrentThread(virtual_path_, &error));
+  EXPECT_NE(std::string::npos, error.find("outside the executable directory"));
+}
 
 TEST_F(XenonNodePromiseTest, BinaryWirePreservesEveryViewKindAndEmptyValues) {
   const char* kinds[] = {

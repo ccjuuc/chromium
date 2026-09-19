@@ -1,0 +1,653 @@
+{
+  "version": "7.1.35.173",
+  "source": "F:/xl-player/xmp_7.1.35",
+  "branch": "feature/7.1.35",
+  "tag": "7.1.35_173-win-channel",
+  "commit": "72e98fd9a46b2338a86831d55557962f184bc9d5",
+  "submodules": {
+    "app/src/player-comp": "c38075f16fead545eb1c8da72ac6e55737bec3ad",
+    "cppsrc/native_core": "58ee6d3f54daf8ae67712c28c1dd74cfcd109351",
+    "cppsrc/player_comp_native": "b056f92566b506698f955ad7f31eeec86cef46a7",
+    "setup/xmp_xdas_pack": "4adfacefaa308f52df2e034c9877ec025ebbf0b9"
+  },
+  "build": {
+    "date": "2026-09-16",
+    "native": "x64 Release, standard N-API, XDAS_OPEN_LOG=OFF",
+    "javascript": "pnpm --filter @electron/* run build; thunder-pan-plugin rsbuild build",
+    "sdk": "pinned setup/xmp_xdas_pack/ProductRelease with fresh native and application artifacts",
+    "executableVersion": "7.1.35.173, stamped with the vendor rcedit tool from the exact HEAD release tag"
+  },
+  "files": [
+    {
+      "path": "aplayer.vsr",
+      "bytes": 236643,
+      "sha256": "b0847067fb7936fd1ed8f14afffdc878d62874b4218fec11c761cb74e060a9f3"
+    },
+    {
+      "path": "AssociateHelper.exe",
+      "bytes": 345640,
+      "sha256": "5ea80940a1d61f2a67ad6d491fa2b99b9bf66ab0692a40d05963ad736a72b701"
+    },
+    {
+      "path": "cacert.pem",
+      "bytes": 254472,
+      "sha256": "2666ffbba8b793fc7607347ea2fdfcaa81c0337df6f639821fcdd20bb2bcb4a2"
+    },
+    {
+      "path": "D3DCompiler_43.dll",
+      "bytes": 2526056,
+      "sha256": "44c3a7e330b54a35a9efa015831392593aa02e7da1460be429d17c3644850e8a"
+    },
+    {
+      "path": "d3dcompiler_47.dll",
+      "bytes": 4916712,
+      "sha256": "7353f25dc5cf84d09894e3e0461cef0e56799adbc617fce37620ca67240b547d"
+    },
+    {
+      "path": "D3DX9_43.dll",
+      "bytes": 2401112,
+      "sha256": "84b900dbd7fa978d6e0caee26fc54f2f61d92c9c75d10b35f00e3e82cd1d67b4"
+    },
+    {
+      "path": "dk_addon.node",
+      "bytes": 3018752,
+      "sha256": "f459389b1040984507960714bfb8caab37fa8ff6867d505d288bf1d3f552d1a9"
+    },
+    {
+      "path": "ffmpeg.dll",
+      "bytes": 2778656,
+      "sha256": "e9c3847b26b90854b403a676fe996fb9a4797e16e695e372d2ec8c39eb052f30"
+    },
+    {
+      "path": "libcrypto-3-x64.dll",
+      "bytes": 6915104,
+      "sha256": "a54fab46dc84388a7a0ea769975d4bb00cbda410561e425bd6b7cb75a492c14a"
+    },
+    {
+      "path": "libcurl.dll",
+      "bytes": 1508896,
+      "sha256": "eb2335c79b228c16542dd47e3f977d8c57da7ea3fceb1a4db6668ebb74abdf43"
+    },
+    {
+      "path": "libeay32.dll",
+      "bytes": 2298912,
+      "sha256": "b8364075e0a5992551570c5046065db66d29cdc627780d418ff5b6298fa88d6f"
+    },
+    {
+      "path": "libEGL.dll",
+      "bytes": 495136,
+      "sha256": "ba57c3f5bed2a0a61fc89ba3f99b237b0429070f4853a013f18ad94ddf0ca2b9"
+    },
+    {
+      "path": "libexpat.dll",
+      "bytes": 289824,
+      "sha256": "49424d6be95dd1b26c5e8a9d2bdca335b75c2db8e4e230ea215408148c74e1b2"
+    },
+    {
+      "path": "libgcc_s_seh-1.dll",
+      "bytes": 107187,
+      "sha256": "25d9b0700f69e4a9c36b84d5df80ff6528c387980789f7e189f8c2aafa9d5a57"
+    },
+    {
+      "path": "libGLESv2.dll",
+      "bytes": 7535616,
+      "sha256": "3a7776363a8b40459083680bd94a42e2509c5a6b1c4b0fb982e12ea8a65f1c80"
+    },
+    {
+      "path": "libglslang-default-resource-limits.dll",
+      "bytes": 63065,
+      "sha256": "053b61b75ea929da38a6a13d87713b03ad8935f2242e7b5ae5d6f7f08de1c5cc"
+    },
+    {
+      "path": "libplacebo-274.dll",
+      "bytes": 6697220,
+      "sha256": "d8d91fadb8162176fc8bd996377d69abc9ff3818ab306e3d602a943a683bcb7c"
+    },
+    {
+      "path": "libssl-3-x64.dll",
+      "bytes": 1436192,
+      "sha256": "22609b2d1642c81dda2b43908f760b749e18416864db30bfd44b31bb028c6b03"
+    },
+    {
+      "path": "libstdc++-6.dll",
+      "bytes": 2025890,
+      "sha256": "c9c27574f5fadd4cb736612d26c237e66d3efc604c7f4354cbd5130ee61a8890"
+    },
+    {
+      "path": "libwinpthread-1.dll",
+      "bytes": 60356,
+      "sha256": "59253c066730ee42f70f5517afefd7524e86fc71877814e12ea804ca31d5daa5"
+    },
+    {
+      "path": "MediaInfo.exe",
+      "bytes": 9293720,
+      "sha256": "30f2828a45a1895b033c3cd7784581033327e7b393033c55f4a03bb15cab0d89"
+    },
+    {
+      "path": "minizip.dll",
+      "bytes": 180768,
+      "sha256": "f6d3e0f8d1dab6fe7b3c10e406f5b8345dad99dfb8b7dd0162a64f6bac293b26"
+    },
+    {
+      "path": "pc_addon.node",
+      "bytes": 4495360,
+      "sha256": "08215b39059c12b4154f5491297f0c9c7a1a2411ab99852c5a11296eee69a5da"
+    },
+    {
+      "path": "player/APlayer.dll",
+      "bytes": 32379040,
+      "sha256": "802fde82e44da318d0b1152e5e6ead041984dd4fd194bbebde711cb829286426"
+    },
+    {
+      "path": "player/containor.dll",
+      "bytes": 359424,
+      "sha256": "78b50fa10af8dbf8d90d7ac9176d4047c0ec32c9b9959c8104f7a34c7ff9bf1f"
+    },
+    {
+      "path": "player/D3DCompiler_43.dll",
+      "bytes": 2526056,
+      "sha256": "44c3a7e330b54a35a9efa015831392593aa02e7da1460be429d17c3644850e8a"
+    },
+    {
+      "path": "player/D3DX9_43.dll",
+      "bytes": 2401112,
+      "sha256": "84b900dbd7fa978d6e0caee26fc54f2f61d92c9c75d10b35f00e3e82cd1d67b4"
+    },
+    {
+      "path": "player/libgcc_s_seh-1.dll",
+      "bytes": 107187,
+      "sha256": "25d9b0700f69e4a9c36b84d5df80ff6528c387980789f7e189f8c2aafa9d5a57"
+    },
+    {
+      "path": "player/libglslang-default-resource-limits.dll",
+      "bytes": 63065,
+      "sha256": "053b61b75ea929da38a6a13d87713b03ad8935f2242e7b5ae5d6f7f08de1c5cc"
+    },
+    {
+      "path": "player/libplacebo-274.dll",
+      "bytes": 6697220,
+      "sha256": "d8d91fadb8162176fc8bd996377d69abc9ff3818ab306e3d602a943a683bcb7c"
+    },
+    {
+      "path": "player/libstdc++-6.dll",
+      "bytes": 2025890,
+      "sha256": "c9c27574f5fadd4cb736612d26c237e66d3efc604c7f4354cbd5130ee61a8890"
+    },
+    {
+      "path": "player/libwinpthread-1.dll",
+      "bytes": 60356,
+      "sha256": "59253c066730ee42f70f5517afefd7524e86fc71877814e12ea804ca31d5daa5"
+    },
+    {
+      "path": "player/onnxruntime.dll",
+      "bytes": 14186016,
+      "sha256": "dec964ab1ee36cc9b0ae247d13b376627992fc57dec0454354017ab8fd84f1ea"
+    },
+    {
+      "path": "player/onnxruntime_providers_shared.dll",
+      "bytes": 22088,
+      "sha256": "a2b3a50956aa75a9879c8472bc7df4f7a8072bcd2db19a1b7d988e7688f293ef"
+    },
+    {
+      "path": "player/SPIRV.dll",
+      "bytes": 3144086,
+      "sha256": "8fbecba3194fe6e0ad47df22cee3fa34ef10518a7bd0e07370292bae6ade5a43"
+    },
+    {
+      "path": "player/vcruntime140.dll",
+      "bytes": 119376,
+      "sha256": "f843cd00d9aff9a902dd7c98d6137639a10bd84904d81a085c28a3b29f8223c1"
+    },
+    {
+      "path": "player/vulkan-1.dll",
+      "bytes": 1102304,
+      "sha256": "15fc747036e023bd311e60c9b3775a47575f0cf2d43fc6003f54dc2e7c4fe195"
+    },
+    {
+      "path": "player/xl_video_control.dll",
+      "bytes": 864104,
+      "sha256": "15feef563b339b31d16169f1caa322ca9ca6fe7a48d550f35a2866fa0161e656"
+    },
+    {
+      "path": "player_helper.node",
+      "bytes": 456192,
+      "sha256": "4406abd5a1db3e1146e5988d8b13291d460379aff637488db952a5f5ae7bd41c"
+    },
+    {
+      "path": "Res/3GP.ico",
+      "bytes": 15086,
+      "sha256": "deb9113ac4b443d09c052262008ba0ca4583055f22fae053932b71fbd4b9f6b5"
+    },
+    {
+      "path": "Res/AMR.ico",
+      "bytes": 15086,
+      "sha256": "b2dc890dd776593b3729060c8576ffd1230cbacfad5eb2bacf4637d44d7b7e21"
+    },
+    {
+      "path": "Res/ASS.ico",
+      "bytes": 15086,
+      "sha256": "35cdd757deca7cff5a071b5a96b07cdf39573332e64659fd80c5f99a59451deb"
+    },
+    {
+      "path": "Res/Audio.ico",
+      "bytes": 15086,
+      "sha256": "e0ec9707bef2cb27562a591411fe5b83f81edce503c1a60e2adfe1303c0cccb0"
+    },
+    {
+      "path": "Res/AVI.ico",
+      "bytes": 15086,
+      "sha256": "503a27af15ce605d35feffddfeb6ceb3cb5d7f415064a002e307bc0028e73abb"
+    },
+    {
+      "path": "Res/CDA.ico",
+      "bytes": 15086,
+      "sha256": "a54e8c6bbe6d6217f5cb615faa185286ebbffe871bd4667e389388ebab33290e"
+    },
+    {
+      "path": "Res/default.png",
+      "bytes": 3529,
+      "sha256": "686d9468b199422d2daaba60695b7c37a6821648dc9338346755930038dad8f9"
+    },
+    {
+      "path": "Res/dvd.ico",
+      "bytes": 15086,
+      "sha256": "5acf724ab37e03ecc63ac60d9239747ec57b05a3f7a2070f4e99f3c24847337c"
+    },
+    {
+      "path": "Res/FLAC.ico",
+      "bytes": 15086,
+      "sha256": "bafaf71bc9519d07120c2619f378b0df8cee5e53c0fc4c87af339deca7129979"
+    },
+    {
+      "path": "Res/FLV.ico",
+      "bytes": 15086,
+      "sha256": "b3d59a76bf2920a9db7dda9f3cd6583c688886aa4321f7d9f1d6eb3f934b7c38"
+    },
+    {
+      "path": "Res/IDX.ico",
+      "bytes": 15086,
+      "sha256": "8fd43dfeefb4a6760a0f742265dfd09928201a4fadb1129556b8b8e5f99026f1"
+    },
+    {
+      "path": "Res/IFO.ico",
+      "bytes": 15086,
+      "sha256": "17de0beca1a5cf21418d6b9adeba9e39fb6cc49955f4285e039f1ab1808346b0"
+    },
+    {
+      "path": "Res/MKV.ico",
+      "bytes": 15086,
+      "sha256": "d2781f2f50be500b508465aa743fb845d75781ee26cd48347e083c29ea7b43fa"
+    },
+    {
+      "path": "Res/MOV.ico",
+      "bytes": 15086,
+      "sha256": "af0f0c48900a23333c4640f1185860db95aa8d479ef609ae7b30136afc26944c"
+    },
+    {
+      "path": "Res/MP3.ico",
+      "bytes": 15086,
+      "sha256": "57f5e2eddcc3fbaa239cc3d9c4164fe52b47aa11b7557b2f29b6d79b822ab133"
+    },
+    {
+      "path": "Res/MP4.ico",
+      "bytes": 15086,
+      "sha256": "87c70a58a9c1430632409549c3c5781888a0d5b95ca5d02e871142f228495823"
+    },
+    {
+      "path": "Res/MPG.ico",
+      "bytes": 15086,
+      "sha256": "6609d3b684da00f353b55f96a136bdbf0af3047e6fa2f2da70cb196b7aeb4d84"
+    },
+    {
+      "path": "Res/PMP.ico",
+      "bytes": 15086,
+      "sha256": "5c54feb61e9da798344ee1510acf3e37630f83158bf83e8b0d67dcd32a875ed2"
+    },
+    {
+      "path": "Res/PSB.ico",
+      "bytes": 15086,
+      "sha256": "3b3e3a6e14dc97c64eff3dd0de891d9c08ec2e7ff295c4836800ea46fac11f17"
+    },
+    {
+      "path": "Res/RA.ico",
+      "bytes": 15086,
+      "sha256": "f4ddac9674c98c5cd576e6de84dc7ebb0e7be1402cff1960e4379cb254a476ea"
+    },
+    {
+      "path": "Res/RM.ico",
+      "bytes": 15086,
+      "sha256": "6f4dd1867b860041720ae2dab985fc8ec5cd255ffd33d083b29edd4e62d72339"
+    },
+    {
+      "path": "Res/SMI.ico",
+      "bytes": 15086,
+      "sha256": "0a498321d37c44ef85202c55039c030d55186ad287792170382397cd641bb576"
+    },
+    {
+      "path": "Res/SRT.ico",
+      "bytes": 15086,
+      "sha256": "df3ac8d1c0d99d3c22e794b9d7edf8231e1d7355e57cded1eae3ad4713b03a6b"
+    },
+    {
+      "path": "Res/SSA.ico",
+      "bytes": 15086,
+      "sha256": "b1c640bf90fef6b806faa3670f84f889cb9e05b0d028d66cd0c50bb5a4d114c1"
+    },
+    {
+      "path": "Res/SSF.ico",
+      "bytes": 15086,
+      "sha256": "b51bd83588ed447a715748dc6363e583f2fa79379e6167c8b1e8239b55289057"
+    },
+    {
+      "path": "Res/SUB.ico",
+      "bytes": 15086,
+      "sha256": "e50bbd9fd2e55da0429e013f042c2dbe79671e1223321227861cb7e44f75539f"
+    },
+    {
+      "path": "Res/sup.ico",
+      "bytes": 15086,
+      "sha256": "7a66f7ba61c8f94cf01ac926375412c35c4e886da0b37935ed6cdc929e9b0a04"
+    },
+    {
+      "path": "Res/SWF.ico",
+      "bytes": 15086,
+      "sha256": "e8b2e494c42b08e819f00d33d521cf7febe35b9f21a759d627a972d254a55673"
+    },
+    {
+      "path": "Res/USF.ico",
+      "bytes": 15086,
+      "sha256": "c5a2c3fd1244607bb26b08eacb7f7d130d7b901de7e5855b44f9dbceb50eb613"
+    },
+    {
+      "path": "Res/VIDEO.ico",
+      "bytes": 15086,
+      "sha256": "fff02c782c82f32909f87da29600ce346d0375b6161b21d013f4283573e0e793"
+    },
+    {
+      "path": "Res/vob.ico",
+      "bytes": 15086,
+      "sha256": "6cf015a6032474e2dde5080d9bfeeb0a884dc4163e584e82ef35f9f4b2d6433c"
+    },
+    {
+      "path": "Res/WAV.ico",
+      "bytes": 15086,
+      "sha256": "ccbc4e998423d1eabbcfa4391a343d5f34081d5bc2cafa462276f298892676cc"
+    },
+    {
+      "path": "Res/WMA.ico",
+      "bytes": 15086,
+      "sha256": "a83accf362be6b51ea1373fbe7ba5f074ae36c0e889cbaa3eca6782121715fd4"
+    },
+    {
+      "path": "Res/wmv.ico",
+      "bytes": 15086,
+      "sha256": "528702e049d82d9ce175e2fc402d7cbd4873c19ac22b3c83ff338cbc543a153f"
+    },
+    {
+      "path": "resources/app/out.asar",
+      "bytes": 21206807,
+      "sha256": "aef070038e724f08992a78f0f0088dd8e264545f4f40506dff65b7e5bd3e4612"
+    },
+    {
+      "path": "resources/app/package.json",
+      "bytes": 90,
+      "sha256": "1b2f57fdc8cc1648800e4cee75474287dcea9722c6e4df6695b82d93f0631691"
+    },
+    {
+      "path": "resources/app/plugins/config.json",
+      "bytes": 60,
+      "sha256": "52c7f567e3acaeab3bef03fbeef979d8a027846cdee613fee7671285a4db8c30"
+    },
+    {
+      "path": "resources/app/plugins/thunder-pan-plugin.asar",
+      "bytes": 2522363,
+      "sha256": "8726a01677a431bd34194703308103ecf3a94427a33b7167a252afc2033631df"
+    },
+    {
+      "path": "resources/app/Release/node_sqlite3.node",
+      "bytes": 1733152,
+      "sha256": "b987602086036a0b7c3c44d8e1fc5b1e20cb7f12af2bfd684bf2d001ab370e47"
+    },
+    {
+      "path": "scrape-sdk.dll",
+      "bytes": 32726456,
+      "sha256": "aa646402ec5b2210a9f5bb9bc4db37f0c5027899a4c53dd2f93efe5d71b03384"
+    },
+    {
+      "path": "SDK/AssistantTools.dll",
+      "bytes": 414368,
+      "sha256": "d2811487dd011b9fadf581611deb6ecb82244ee8efef016e94e6c0377100654f"
+    },
+    {
+      "path": "SDK/DownloadSDK.dll",
+      "bytes": 3879072,
+      "sha256": "cbe5063eff355b5f81c52f3cc782dca1cbc9f690fd200e58c419d8c52a17cdb9"
+    },
+    {
+      "path": "SDK/DownloadSDKProxy.dll",
+      "bytes": 264352,
+      "sha256": "41b2d0c9523c54b7509669f289723a8a4696fd6ef76e5ae659c9b68f19c99065"
+    },
+    {
+      "path": "SDK/DownloadSDKServer.exe",
+      "bytes": 290976,
+      "sha256": "1438f9be62696d6c6035a348956bc3bc06b7fec5215be6a41b95f3aec96f1442"
+    },
+    {
+      "path": "SDK/Ftp.dll",
+      "bytes": 209056,
+      "sha256": "e61d5d2b909e1075a180eafd8a3f7e8ecf36acdc4d744fd288e40661dc34e272"
+    },
+    {
+      "path": "SDK/Http.dll",
+      "bytes": 325280,
+      "sha256": "f6d248a8aa047feadd0bf6b79245397663d6d70b84e20e0f245c48cccb8fde97"
+    },
+    {
+      "path": "SDK/libcurl.dll",
+      "bytes": 884896,
+      "sha256": "2ce6fe189c9354bfa24b322720a2104c09e0d581c97cd40ffb0cd785b26f9c6c"
+    },
+    {
+      "path": "SDK/libeay32.dll",
+      "bytes": 2288128,
+      "sha256": "b0ac0d0e8f4a8393815502e80af519f11ba76fbfba299a2766249d93c445a1ae"
+    },
+    {
+      "path": "SDK/Microsoft.VC90.CRT.manifest",
+      "bytes": 1859,
+      "sha256": "525a37f2f699d7baf0b728e1a4d503ba1a5fa8fb9608c4c6d7060a029d0387a5"
+    },
+    {
+      "path": "SDK/minizip.dll",
+      "bytes": 163488,
+      "sha256": "e7b01aa48db31cd72b75a3df699c41006556b30b3511c4b4707e69e320b4e0d8"
+    },
+    {
+      "path": "SDK/msvcp90.dll",
+      "bytes": 853312,
+      "sha256": "7ee97643cfeda8a79b7cafa5ef3a010b2f85ef868356d30d7ee09af8e85ff38a"
+    },
+    {
+      "path": "SDK/msvcr90.dll",
+      "bytes": 624448,
+      "sha256": "4546eb9106e86e471caf0870acdd4d1fe34c2ad293f596fd55b82215b922ae14"
+    },
+    {
+      "path": "SDK/P2PBase.dll",
+      "bytes": 1625248,
+      "sha256": "e53e45b0cc02047c8724492594ef0a8ed4fdc8ba1242c2db5028e1e580bba2a4"
+    },
+    {
+      "path": "SDK/P2PCommonObjects.dll",
+      "bytes": 279200,
+      "sha256": "bfbdce5f708c6a5cc3b84b9bb3f1cbc82af743d39f202ee8b05069254fa0750d"
+    },
+    {
+      "path": "SDK/P2PFramework.dll",
+      "bytes": 578208,
+      "sha256": "601f35c5f79e1ab567d77c28e756ccf10c2bab29aa9f63f97f6110273ed2ff4c"
+    },
+    {
+      "path": "SDK/P2PIO.dll",
+      "bytes": 256672,
+      "sha256": "5037db82aafe487aa20fb72f0b0d09c976c8e80f2b4a01a524c02054de52bd69"
+    },
+    {
+      "path": "SDK/P2PStat.dll",
+      "bytes": 411296,
+      "sha256": "03b8357da1e777997e60905c28a594125d3041150326c5ec65f2c30a9f20c271"
+    },
+    {
+      "path": "SDK/P2PTarget.dll",
+      "bytes": 218784,
+      "sha256": "2556c0f87b6f88cb56dc91b4978f71d0d885b39dd1975bee5bf7c9ba4ea11ac0"
+    },
+    {
+      "path": "SDK/ProxyVerifier.dll",
+      "bytes": 118944,
+      "sha256": "1c2aeb60c332b6f05d639edf9ff256f2b0b40491b6019f0c5d182c55ebc4cf78"
+    },
+    {
+      "path": "SDK/ssleay32.dll",
+      "bytes": 461312,
+      "sha256": "1db40204cf43a3cb8f2394297af95eca55f1ea36ea4683d3fbbf89c1d273ce01"
+    },
+    {
+      "path": "SDK/statXml.xml",
+      "bytes": 1495,
+      "sha256": "a70fb833117e982c78ef05ec038713645604505f9ee15d5b489ac7be2b0adffd"
+    },
+    {
+      "path": "SDK/TcpImpl.dll",
+      "bytes": 4496544,
+      "sha256": "0ad4947689f2b404c7bad8e181cd4eb91c97dfc0f14921e857b769778884c713"
+    },
+    {
+      "path": "SDK/upnp.exe",
+      "bytes": 172704,
+      "sha256": "18a39814bf92e324d35b47227a4e1c2858924e47d06c6204942c3cf8a47f1d06"
+    },
+    {
+      "path": "SDK/xar/DownloadDispatcher.xta",
+      "bytes": 1039847,
+      "sha256": "86efbfa2e76de88709133a36b1a649f925062ad8f8501f1947cfa2a013ce5b37"
+    },
+    {
+      "path": "SDK/xl_thunder_sdk.dll",
+      "bytes": 5099168,
+      "sha256": "a4d652492b7bff5a1b2c36c231aec45901b561799f3df049ebe61ea5a20cc4fb"
+    },
+    {
+      "path": "SDK/XLBugHandler.dll",
+      "bytes": 718496,
+      "sha256": "db4dc47cad83535360c51790d69a990ae121a73234474e4be0c1925fc6084e7f"
+    },
+    {
+      "path": "SDK/XLBugReport.exe",
+      "bytes": 1233056,
+      "sha256": "cda7552e6ef0a3bd861fb3b834b4a908f1a2592289b292e026858ea29a516a82"
+    },
+    {
+      "path": "SDK/XLFileAssistant.exe",
+      "bytes": 289440,
+      "sha256": "f319dffc32f9b76ab6484b9d4039c0a69fbcf2ecfec3530653da894badf4e18c"
+    },
+    {
+      "path": "SDK/XLLiveUDownload.dll",
+      "bytes": 167072,
+      "sha256": "479fdc4a0e912cedefd57c68084c6ebd87cfb40ce7f6c2c77adab133cf4365b3"
+    },
+    {
+      "path": "SDK/XLReImport.dll",
+      "bytes": 511136,
+      "sha256": "a9ed829521cd1c4757537342328100de45fef47384a7974c22b9679c0c7c8b85"
+    },
+    {
+      "path": "SDK/XLTaskUpgrade.dll",
+      "bytes": 492192,
+      "sha256": "c57d0f80be9f94a54a5a059ba1942499cf107ac2ecaffc86305417d910f12f7d"
+    },
+    {
+      "path": "SDK/XUdt.dll",
+      "bytes": 778912,
+      "sha256": "d27e387d9794df7b4391a0dcdc7f6e04f575bdf08dd0e1305e8f9b23f25a58f9"
+    },
+    {
+      "path": "SDK/zlib1.dll",
+      "bytes": 509600,
+      "sha256": "6cd27d5422299018a914f9db313ab557e2a73dda654a5ac4a06d90a3c5cd279a"
+    },
+    {
+      "path": "SPIRV.dll",
+      "bytes": 3144086,
+      "sha256": "8fbecba3194fe6e0ad47df22cee3fa34ef10518a7bd0e07370292bae6ade5a43"
+    },
+    {
+      "path": "ssleay32.dll",
+      "bytes": 472096,
+      "sha256": "a077788b32cff479373a0bdc5e78c02d9e45f3bbc8d058b16635fb29e436dd2c"
+    },
+    {
+      "path": "vk_swiftshader.dll",
+      "bytes": 5144608,
+      "sha256": "aed3842280965e6e398e727b3bc9c98612e8aae9d93b84d69ec7d63af918dd65"
+    },
+    {
+      "path": "vulkan-1.dll",
+      "bytes": 1102304,
+      "sha256": "15fc747036e023bd311e60c9b3775a47575f0cf2d43fc6003f54dc2e7c4fe195"
+    },
+    {
+      "path": "xl_video_control.dll",
+      "bytes": 868000,
+      "sha256": "8bc66e8221961d754079825f5810a0717243622da10918a32778405fff6faac1"
+    },
+    {
+      "path": "XLBugHandler.dll",
+      "bytes": 909344,
+      "sha256": "1cd6dfa1d4aaba3f9a06380ea0a39051df7039b9739fdbb8d222649cee87c6d3"
+    },
+    {
+      "path": "XLBugReport.exe",
+      "bytes": 1354784,
+      "sha256": "beccf8d9535b0dea940c936f728bd1aa4504b8166ed6a96cfef6fd3edc9e0dd9"
+    },
+    {
+      "path": "xlstat4.dll",
+      "bytes": 1500192,
+      "sha256": "1a70aafe09e778ddf5f6e7cbcca939bea1b79ebc3699c5510bba751a9c8685b4"
+    },
+    {
+      "path": "xlstat4.xml",
+      "bytes": 1262,
+      "sha256": "c2541c3be52e3e07f9d9a590bf46e07bbcb6e408b853405f38e7b8d6618d5b25"
+    },
+    {
+      "path": "xmp.exe",
+      "bytes": 515072,
+      "sha256": "6053e9ceddb1c96a0f4f9f5dcce3cbb5944fb0b1780cd12a6183e08f36b8da5d"
+    },
+    {
+      "path": "xmp.ico",
+      "bytes": 77711,
+      "sha256": "605dd0a71cf410d3d36f535e896c01b3e03252171418eed3b8ede6ffbbe50789"
+    },
+    {
+      "path": "xmp_helper.node",
+      "bytes": 1879040,
+      "sha256": "cb1adaca340e0a6f8aba3e6d951d46b099630ec0369026d5b299318c573289b5"
+    },
+    {
+      "path": "zlib1.dll",
+      "bytes": 564768,
+      "sha256": "67c25262f5f96d60969a152b2777fa67f08ffaff680e84e0fd712d154295197c"
+    }
+  ],
+  "layout": {
+    "format": "electron-release",
+    "application": "resources/app",
+    "main": "resources/app/out.asar/main.js",
+    "note": "Existing verified 7.1.35 application archive, stamped executable and native binaries; no extraction or re-encryption."
+  }
+}

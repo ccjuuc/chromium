@@ -61,6 +61,27 @@ class XenonIpcMainContainer {
     std::string default_user_agent;
     std::vector<std::pair<std::string, std::string>> renderer_url_mappings;
     std::string renderer_base_url;
+    base::FilePath resources_directory;
+    base::FilePath working_directory;
+    std::optional<bool> is_packaged;
+  };
+
+  // Loads package.json and the original main module directly from a source
+  // directory, release layout or ASAR. Empty metadata uses the manifest.
+  struct AppMainModule {
+    base::FilePath app_path;
+    // Optional explicit entry for packages with an incorrect manifest. Must
+    // remain inside the resolved application root; no source rewrite occurs.
+    base::FilePath main_script_path;
+    base::FilePath executable_path;
+    base::FilePath resources_directory;
+    base::FilePath working_directory;
+    std::string app_name;
+    std::string app_version;
+    std::string default_user_agent;
+    std::vector<std::pair<std::string, std::string>> renderer_url_mappings;
+    std::string renderer_base_url;
+    std::optional<bool> is_packaged;
   };
 
   using InvokeCallback =
@@ -136,6 +157,7 @@ class XenonIpcMainContainer {
 
   bool Initialize();
   bool Initialize(EmbeddedMainModule main_module);
+  bool Initialize(AppMainModule main_module);
   void SetNativeAddonHooks(NativeAddonHooks hooks);
   void SetWindowHooks(WindowHooks hooks);
   void SetAppExitHandler(base::RepeatingCallback<void(int)> handler);
@@ -196,7 +218,10 @@ class XenonIpcMainContainer {
     std::vector<v8::Global<v8::Value>> args;
   };
 
-  bool InitializeInternal(std::optional<EmbeddedMainModule> main_module);
+  bool InitializeInternal(
+      std::optional<EmbeddedMainModule> main_module,
+      std::optional<AppMainModule> app_module = std::nullopt);
+  bool ResolveApplicationMain(AppMainModule main_module);
   bool RunBootstrap();
   bool ResolveConfiguredMainScript();
   bool MaybeLoadConfiguredMainScript();
@@ -335,6 +360,9 @@ class XenonIpcMainContainer {
   base::FilePath module_root_;
   base::FilePath app_path_;
   base::FilePath executable_path_;
+  base::FilePath resources_directory_;
+  base::FilePath working_directory_;
+  bool is_packaged_ = false;
   std::optional<std::string> embedded_main_source_;
   NativeAddonHooks native_addon_hooks_;
   WindowHooks window_hooks_;

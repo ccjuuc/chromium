@@ -315,7 +315,7 @@ XenonPlayerElectronController::XenonPlayerElectronController(
     : XenonPlayerElectronController(web_ui,
                                     kPlayerElectronHost,
                                     kPlayerFrontendDirSwitch,
-                                    "xenon_player/frontend",
+                                    "xenon_player/resources/app/out.asar/main-renderer",
                                     {"xunlei.com"}) {}
 
 XenonPlayerElectronController::XenonPlayerElectronController(

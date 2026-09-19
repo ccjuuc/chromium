@@ -31,9 +31,9 @@ struct IpcArchivePublicKey {
   string public_key_pem;
 };
 
-// Empty |embedded_main_source| means the Utility process resolves the main
-// module from its --xenon-main-js / --xenon-electron-app switches. Packaged
-// diagnostic surfaces can instead provide a CommonJS module as a resource.
+// Applications load their package.json from |app_path|. Embedded modules are
+// reserved for diagnostic surfaces. Only an empty app_path and source fall
+// back to the process command line.
 struct IpcMainConfig {
   // Routes one renderer group to one independent main-process context. Empty
   // keeps the legacy single-container behavior.
@@ -41,15 +41,24 @@ struct IpcMainConfig {
   string embedded_main_source;
   string virtual_main_path;
   string app_path;
+  // Optional absolute disk entry overriding package.main. It must stay inside
+  // app_path; use only when the supplied package manifest needs an override.
+  string main_script_path;
   string app_name;
   string app_version;
   // Original packaged executable identity (not launched by the container).
   // Must be an existing absolute file; empty uses the actual host executable.
   string executable_path;
   // Absolute directory containing native child-process resources. Independent
-  // of the executable identity and main-module path. Empty defaults to the
-  // executable directory, or app_path when no executable is provided.
+  // of the executable identity and main-module path. Disk applications infer
+  // it from their release layout. Embedded modules default to the executable
+  // directory, or app_path when no executable is provided.
   string runtime_directory;
+  string resources_directory;
+  string working_directory;
+  // Independent of renderer URL rewriting. Null lets the main loader infer
+  // the value from the application layout.
+  bool? is_packaged;
   // Browser/embedder user agent used by Electron session.defaultSession.
   // Empty means the compatibility layer has no authoritative value.
   string default_user_agent;
@@ -85,6 +94,7 @@ struct IpcRendererConfig {
   string app_version;
   string app_path;
   string executable_path;
+  string resources_directory;
   string user_data_path;
   string app_data_path;
   string local_app_data_path;

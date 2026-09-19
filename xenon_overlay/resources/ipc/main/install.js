@@ -185,6 +185,7 @@
     type: 'browser',
     argv: [hostedExecPath],
     execPath: hostedExecPath,
+    resourcesPath: String(globalThis.__xenonResourcesPath || ''),
     pid: __xenonPid,
     platform: __xenonPlatform,
     arch: __xenonArch,
@@ -199,7 +200,13 @@
       v8: __xenonV8Version,
     },
     version: 'v0.0.0-compat',
-    cwd: () => __xenonAppPath,
+    cwd: () => {
+      if (typeof globalThis.__xenonWorkingDirectory !== 'string') {
+        throw Object.assign(new Error('Process working directory is unavailable'),
+                            {code: 'ERR_NOT_SUPPORTED'});
+      }
+      return globalThis.__xenonWorkingDirectory;
+    },
     // Electron process.getSystemVersion() — OS release string.
     getSystemVersion: () =>
         (typeof __xenonOsRelease === 'string' && __xenonOsRelease) ||

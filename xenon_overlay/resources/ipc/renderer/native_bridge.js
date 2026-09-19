@@ -17,6 +17,7 @@
     },
     pid: injectedPaths.pid,
     execPath,
+    resourcesPath: injectedPaths.resourcesPath || '',
     argv: [execPath],
     cwd() {
       if (typeof injectedPaths.cwd === 'string' && injectedPaths.cwd) return injectedPaths.cwd;

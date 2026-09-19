@@ -18,6 +18,7 @@
 #include "base/path_service.h"
 #include "base/scoped_environment_variable_override.h"
 #include "base/test/run_until.h"
+#include "base/test/scoped_command_line.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
@@ -447,6 +448,79 @@ TEST_F(XenonServiceArchiveTest, FailedEncryptedMainRevokesKeyAndAllowsRetry) {
   const auto initialized = InitializeArchiveApp("main.js", true);
   ASSERT_TRUE(initialized.first) << initialized.second;
   ASSERT_NO_FATAL_FAILURE(ExpectArchiveReply());
+}
+
+TEST_F(XenonServiceOwnerTest,
+       DiskApplicationConfigOverridesCommandLineAndPreservesRuntimeMetadata) {
+  base::ScopedEnvironmentVariableOverride hosted_directory(
+      "XENON_HOSTED_APP_DIR", "previous-runtime");
+  base::ScopedTempDir temp;
+  ASSERT_TRUE(temp.CreateUniqueTempDir());
+  base::FilePath root;
+  ASSERT_TRUE(base::NormalizeFilePath(temp.GetPath(), &root));
+  const auto app = root.AppendASCII("configured-app");
+  const auto resources = root.AppendASCII("shared-resources");
+  const auto working_directory = root.AppendASCII("launch-directory");
+  ASSERT_TRUE(base::CreateDirectory(app));
+  ASSERT_TRUE(base::CreateDirectory(resources));
+  ASSERT_TRUE(base::CreateDirectory(working_directory));
+  ASSERT_TRUE(
+      base::WriteFile(app.AppendASCII("package.json"),
+                      R"({"name":"disk-app","version":"4.3","main":"entry"})"));
+  ASSERT_TRUE(
+      base::WriteFile(app.AppendASCII("value.json"), R"({"answer":42})"));
+  ASSERT_TRUE(base::WriteFile(app.AppendASCII("entry.js"), R"JS(
+const {app, ipcMain} = require('electron');
+const data = require('./value.json');
+ipcMain.handle('disk-app:metadata', () => ({
+  answer: data.answer, appPath: app.getAppPath(), filename: __filename,
+  name: app.getName(), version: app.getVersion(), packaged: app.isPackaged,
+  resources: process.resourcesPath, cwd: process.cwd()
+}));
+)JS"));
+  const auto decoy = root.AppendASCII("command-line-main.js");
+  ASSERT_TRUE(
+      base::WriteFile(decoy, "throw new Error('wrong command-line main');"));
+  base::test::ScopedCommandLine command_line;
+  command_line.GetProcessCommandLine()->AppendSwitchPath("xenon-main-js",
+                                                         decoy);
+
+  auto config = ipc::mojom::IpcMainConfig::New();
+  config->container_id = kContext;
+  config->app_path = app.AsUTF8Unsafe();
+  config->runtime_directory = root.AsUTF8Unsafe();
+  config->resources_directory = resources.AsUTF8Unsafe();
+  config->working_directory = working_directory.AsUTF8Unsafe();
+  config->is_packaged = true;
+  ASSERT_TRUE(config->embedded_main_source.empty());
+  ASSERT_TRUE(config->renderer_url_mappings.empty());
+  base::test::TestFuture<bool, const std::string&> initialized;
+  browser_->InitializeElectronIpc(std::move(config), initialized.GetCallback());
+  ASSERT_TRUE(initialized.Wait());
+  ASSERT_TRUE(initialized.Get<0>()) << initialized.Get<1>();
+
+  ResultFuture reply;
+  browser_->ElectronIpcInvoke(kContext, "disk-page", "disk-app:metadata",
+                              base::Value(base::ListValue()),
+                              reply.GetCallback());
+  auto result = Finish(reply);
+  ASSERT_TRUE(result);
+  ASSERT_TRUE(result->success) << result->error;
+  ASSERT_TRUE(result->value.is_dict());
+  const auto& value = result->value.GetDict();
+  EXPECT_EQ(42, value.FindInt("answer"));
+  EXPECT_EQ(true, value.FindBool("packaged"));
+  for (const char* key :
+       {"appPath", "filename", "name", "version", "resources", "cwd"}) {
+    ASSERT_TRUE(value.FindString(key)) << key;
+  }
+  EXPECT_EQ(app.AsUTF8Unsafe(), *value.FindString("appPath"));
+  EXPECT_EQ(app.AppendASCII("entry.js").AsUTF8Unsafe(),
+            *value.FindString("filename"));
+  EXPECT_EQ("disk-app", *value.FindString("name"));
+  EXPECT_EQ("4.3", *value.FindString("version"));
+  EXPECT_EQ(resources.AsUTF8Unsafe(), *value.FindString("resources"));
+  EXPECT_EQ(working_directory.AsUTF8Unsafe(), *value.FindString("cwd"));
 }
 
 TEST_F(XenonServiceOwnerTest, AddonRuntimeDoesNotInitializeElectronMain) {

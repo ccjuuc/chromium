@@ -4,16 +4,18 @@
 
 const {readBootstrap} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
-const {existsSync, readFileSync} = require('node:fs');
+const {existsSync, readFileSync, statSync} = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
 const source = readBootstrap(path.join(__dirname, 'xenon_ipc_renderer_bootstrap.js'));
 const playerRoot = path.resolve(__dirname, '../../../out/Release_64/xenon_player');
-const bundlePath = path.join(playerRoot, 'frontend/static/js/58.js');
-const hasPlayerRuntime = existsSync(path.join(playerRoot, 'main/package.json')) &&
-    existsSync(path.join(playerRoot, 'frontend/index.html'));
+const bundlePath = process.env.XENON_TEST_PLAYER_BUNDLE;
+const hasPlayerRuntime = existsSync(path.join(playerRoot, 'resources/app/package.json')) &&
+    existsSync(path.join(playerRoot, 'resources/app/out.asar'));
+const playerBundleSkip = bundlePath === undefined ?
+    'requires XENON_TEST_PLAYER_BUNDLE from the matching packaged application' : false;
 const addonPath = 'C:\\test-app\\node_sqlite3.node';
 const methods = {
   Database: ['close', 'exec', 'wait', 'configure', 'serialize', 'parallelize', 'interrupt'],
@@ -25,7 +27,10 @@ const methods = {
 // Only native transport is replaced; this checks the JS/native bridge contract,
 // not SQLite's SQL engine (covered separately by real-addon tests).
 function sqliteRenderer(metadataMode = 'exact') {
-  assert.ok(existsSync(bundlePath), 'Installed PLE is missing its SQLite consumer bundle: ' + bundlePath);
+  assert.ok(bundlePath && existsSync(bundlePath) && statSync(bundlePath).isFile(),
+      'XENON_TEST_PLAYER_BUNDLE must name a regular bundle file: ' + bundlePath);
+  assert.ok(hasPlayerRuntime,
+      'Installed PLE requires resources/app/package.json and resources/app/out.asar');
   let dispatch, nextId = 1;
   const instances = new Map(), calls = [], callbackErrors = [];
   function wire(id) {
@@ -124,7 +129,7 @@ function sqliteRenderer(metadataMode = 'exact') {
 }
 
 test('packaged SQLite supports verbose, open events, callback receivers and run/finalize chains',
-    {skip: !hasPlayerRuntime}, async () => {
+    {skip: playerBundleSkip}, async () => {
   const {sqlite, calls, callbackErrors} = sqliteRenderer();
   sqlite.verbose();
   let db;
@@ -170,7 +175,7 @@ test('packaged SQLite supports verbose, open events, callback receivers and run/
 });
 
 test('packaged SQLite retains prototype additions with the legacy array transport',
-    {skip: !hasPlayerRuntime}, async () => {
+    {skip: playerBundleSkip}, async () => {
   const {sqlite, calls, callbackErrors} = sqliteRenderer('legacy');
   let db;
   await new Promise(resolve => {
@@ -186,7 +191,7 @@ test('packaged SQLite retains prototype additions with the legacy array transpor
 });
 
 test('packaged SQLite verbose prepare preserves its native bind method and callback receiver',
-    {skip: !hasPlayerRuntime}, async () => {
+    {skip: playerBundleSkip}, async () => {
   const {sqlite, calls, callbackErrors} = sqliteRenderer();
   assert.equal(typeof sqlite.Statement.prototype.bind, 'function');
   sqlite.verbose();
@@ -218,7 +223,7 @@ test('packaged SQLite verbose prepare preserves its native bind method and callb
 });
 
 test('packaged SQLite preserves open failure and Database callback context',
-    {skip: !hasPlayerRuntime}, async () => {
+    {skip: playerBundleSkip}, async () => {
   const {sqlite, callbackErrors} = sqliteRenderer();
   let db;
   await new Promise(resolve => {
