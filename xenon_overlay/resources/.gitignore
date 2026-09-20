@@ -1,0 +1,5 @@
+# Build these Electron applications in their source repositories, then import
+# complete releases with tools/sync_thunder_2025.py or tools/sync_xenon_player.py.
+# See ../docs/电子应用目录接入.md for the build and import workflow.
+/thunder_2025/
+/xenon_player/

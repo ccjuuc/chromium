@@ -96,6 +96,28 @@ class InstallerPayloadTest(unittest.TestCase):
         self.assertEqual(report['external_files'], [])
         self.assertEqual([path.name for path in self.staged_root().iterdir()], ['host.exe'])
 
+    def test_selected_standard_application_does_not_require_host_sidecars(self):
+        # Existing applications and their sidecars in out/ must not leak into
+        # a package that explicitly selects only an ordinary Electron release.
+        result, report = self.run_staging(
+            ['--xenon-payload-directory=application-b'], payloads=False)
+        self.assertEqual(result, 0)
+        self.assertEqual([app['path'] for app in report['applications']],
+                         ['application-b'])
+        self.assertEqual(report['external_files'], [])
+        self.assertEqual(sorted(path.name for path in self.staged_root().iterdir()),
+                         ['application-b', 'host.exe'])
+
+    def test_missing_or_invalid_selected_application_keeps_existing_staging(self):
+        sentinel = self.write(self.staged_root(), 'keep', b'old staging')
+        self.write(self.build, 'incomplete-release/native.node', b'not an app')
+        for name in ('missing-release', 'incomplete-release'):
+            with self.subTest(name=name), contextlib.redirect_stderr(io.StringIO()):
+                result, _ = self.run_staging(
+                    [f'--xenon-payload-directory={name}'], payloads=False)
+                self.assertEqual(result, 1)
+                self.assertEqual(sentinel.read_bytes(), b'old staging')
+
     def test_optional_globs_only_add_matching_external_regular_files(self):
         self.write(self.build, 'msvcp140.dll', b'vc runtime')
         self.write(self.build, 'msvcp140_1.dll', b'additional runtime')

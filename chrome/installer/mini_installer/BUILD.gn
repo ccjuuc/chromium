@@ -17,6 +17,7 @@ import("//ui/base/ui_features.gni")
 import("//ui/gl/features.gni")
 import("//v8/gni/v8.gni")
 import("//xenon_overlay/buildflags/features.gni")
+import("//xenon_overlay/resources/electron_apps.gni")
 
 declare_args() {
   # The Chrome archive is maximally compressed in official builds to reduce the
@@ -253,54 +254,22 @@ action("mini_installer_archive") {
   }
 
   if (enable_xenon_service) {
-    deps += [
-      "//xenon_overlay/resources:copy_electron_app_configs",
-      "//xenon_overlay/resources:copy_thunder_2025",
-      "//xenon_overlay/resources:copy_xenon_player",
-    ]
+    deps += [ "//xenon_overlay/resources:copy_electron_apps" ]
     inputs += [ "//xenon_overlay/tools/import_electron_app.py" ]
 
-    # Keep product declarations behind the service switch. The overlay wrapper
-    # stages each complete tree byte-for-byte and tracks its recursive inputs.
-    args += [
-      "--xenon-payload-directory=thunder_2025",
-      "--xenon-payload-directory=xenon_player",
-      "--xenon-payload-source=thunder_2025=" +
-          rebase_path("//xenon_overlay/resources/thunder_2025", root_build_dir),
-      "--xenon-payload-source=xenon_player=" +
-          rebase_path("//xenon_overlay/resources/xenon_player", root_build_dir),
-    ]
-    foreach(asset,
-            [
-              "thunder_2025.xenon.json",
-              "thunder_2025.asar-public-key.pem",
-              "xenon_player.xenon.json",
-              "xenon_player.asar-public-key.pem",
-            ]) {
+    # Only explicitly selected releases enter the installer, including when
+    # unselected applications remain in an existing build output directory.
+    foreach(app, xenon_electron_apps) {
+      args += [
+        "--xenon-payload-directory=$app",
+        "--xenon-payload-source=$app=" +
+            rebase_path("//xenon_overlay/resources/$app", root_build_dir),
+      ]
+    }
+    foreach(source, xenon_electron_app_host_files) {
+      asset = get_path_info(source, "file")
       inputs += [ "$root_out_dir/$asset" ]
       args += [ "--xenon-payload-file=$asset" ]
-    }
-    foreach(asset,
-            [
-              "thunder_2025/Thunder.exe",
-              "thunder_2025/resources/app/package.json",
-              "thunder_2025/resources/app/out.asar",
-              "thunder_2025/resources/app/Release/node_sqlite3.node",
-              "thunder_2025/resources/app/plugins/player-plugin.asar",
-              "thunder_2025/resources/app/plugins/thunder-pan-plugin.asar",
-              "thunder_2025/dk_addon.node",
-              "thunder_2025/pc_addon.node",
-              "thunder_2025/player_helper.node",
-              "thunder_2025/thunder_helper.node",
-              "thunder_2025/player/APlayer.dll",
-              "thunder_2025/SDK/DownloadSDKServer.exe",
-              "xenon_player/xmp.exe",
-              "xenon_player/resources/app/package.json",
-              "xenon_player/resources/app/out.asar",
-              "xenon_player/pc_addon.node",
-              "xenon_player/player/containor.dll",
-            ]) {
-      args += [ "--xenon-required-file=$asset" ]
     }
     if (enable_xenon_node_uv_compat) {
       args += [

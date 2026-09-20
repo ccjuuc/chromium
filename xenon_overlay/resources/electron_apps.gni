@@ -1,0 +1,46 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//xenon_overlay/buildflags/features.gni")
+
+declare_args() {
+  # Complete releases imported into //xenon_overlay/resources/<name> locally.
+  # An empty list builds/packages the host without any Electron applications.
+  xenon_electron_apps = []
+}
+
+assert(
+    xenon_electron_apps == [] || (is_win && enable_xenon_service),
+    "Bundling Electron applications currently requires Windows and enable_xenon_service. Other platforms can use --xenon-electron-app=<release-directory>.")
+
+xenon_electron_app_host_files = []
+_seen_apps = []
+foreach(_app, xenon_electron_apps) {
+  assert(_app != "" && _app != "." && _app != ".." &&
+             string_replace(_app, "/", "") == _app &&
+             string_replace(_app, "\\", "") == _app &&
+             string_replace(_app, ":", "") == _app,
+         "xenon_electron_apps entries must be single directory names.")
+  foreach(_previous, _seen_apps) {
+    assert(_app != _previous, "Duplicate xenon_electron_apps entry: $_app")
+  }
+  _seen_apps += [ _app ]
+  _source = "//xenon_overlay/resources/$_app"
+  assert(
+      path_exists(_source),
+      "Missing Electron release: $_source. Build it in its source repository, then run python3 xenon_overlay/tools/import_electron_app.py --src <complete-release> --out xenon_overlay/resources/$_app; or remove it from xenon_electron_apps.")
+
+  # Host configuration stays outside the unchanged release. Standard Electron
+  # applications need neither a Xenon configuration nor an archive public key.
+  foreach(_suffix,
+          [
+            ".xenon.json",
+            ".asar-public-key.pem",
+          ]) {
+    _file = "$_source$_suffix"
+    if (path_exists(_file)) {
+      xenon_electron_app_host_files += [ _file ]
+    }
+  }
+}

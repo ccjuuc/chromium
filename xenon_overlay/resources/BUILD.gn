@@ -1,6 +1,7 @@
 import("//third_party/node/node.gni")
 import("//tools/grit/grit_rule.gni")
 import("//xenon_overlay/buildflags/features.gni")
+import("electron_apps.gni")
 import("ipc/bootstrap_sources.gni")
 
 node("ipc_bootstrap") {
@@ -91,56 +92,44 @@ if (is_mac) {
 }
 
 if (is_win) {
-  action("copy_thunder_2025") {
-    script = "//xenon_overlay/tools/copy_runtime_tree.py"
-    inputs = [ "thunder_2025" ]
-    src_dir = "thunder_2025"
-    dst_dir = "$root_out_dir/thunder_2025"
-    stamp_file = "$target_gen_dir/copy_thunder_2025.stamp"
-    depfile = "$target_gen_dir/copy_thunder_2025.d"
+  foreach(app, xenon_electron_apps) {
+    action("copy_electron_app_$app") {
+      script = "//xenon_overlay/tools/copy_runtime_tree.py"
+      inputs = [ app ]
+      src_dir = app
+      dst_dir = "$root_out_dir/$app"
+      stamp_file = "$target_gen_dir/copy_electron_app_$app.stamp"
+      depfile = "$target_gen_dir/copy_electron_app_$app.d"
 
-    outputs = [ stamp_file ]
-    args = [
-      "--src",
-      rebase_path(src_dir, root_build_dir),
-      "--dest",
-      rebase_path(dst_dir, root_build_dir),
-      "--stamp",
-      rebase_path(stamp_file, root_build_dir),
-      "--depfile",
-      rebase_path(depfile, root_build_dir),
-    ]
+      outputs = [ stamp_file ]
+      args = [
+        "--src",
+        rebase_path(src_dir, root_build_dir),
+        "--dest",
+        rebase_path(dst_dir, root_build_dir),
+        "--stamp",
+        rebase_path(stamp_file, root_build_dir),
+        "--depfile",
+        rebase_path(depfile, root_build_dir),
+      ]
+    }
   }
 
-  action("copy_xenon_player") {
-    script = "//xenon_overlay/tools/copy_runtime_tree.py"
-    inputs = [ "xenon_player" ]
-    src_dir = "xenon_player"
-    dst_dir = "$root_out_dir/xenon_player"
-    stamp_file = "$target_gen_dir/copy_xenon_player.stamp"
-    depfile = "$target_gen_dir/copy_xenon_player.d"
-
-    outputs = [ stamp_file ]
-    args = [
-      "--src",
-      rebase_path(src_dir, root_build_dir),
-      "--dest",
-      rebase_path(dst_dir, root_build_dir),
-      "--stamp",
-      rebase_path(stamp_file, root_build_dir),
-      "--depfile",
-      rebase_path(depfile, root_build_dir),
-    ]
+  if (xenon_electron_app_host_files != []) {
+    copy("copy_electron_app_configs") {
+      sources = xenon_electron_app_host_files
+      outputs = [ "$root_out_dir/{{source_file_part}}" ]
+    }
+  } else {
+    group("copy_electron_app_configs") {
+    }
   }
 
-  copy("copy_electron_app_configs") {
-    sources = [
-      "thunder_2025.asar-public-key.pem",
-      "thunder_2025.xenon.json",
-      "xenon_player.asar-public-key.pem",
-      "xenon_player.xenon.json",
-    ]
-    outputs = [ "$root_out_dir/{{source_file_part}}" ]
+  group("copy_electron_apps") {
+    public_deps = [ ":copy_electron_app_configs" ]
+    foreach(app, xenon_electron_apps) {
+      public_deps += [ ":copy_electron_app_$app" ]
+    }
   }
 }
 
@@ -152,11 +141,7 @@ group("resources") {
   ]
 
   if (is_win) {
-    public_deps += [
-      ":copy_electron_app_configs",
-      ":copy_thunder_2025",
-      ":copy_xenon_player",
-    ]
+    public_deps += [ ":copy_electron_apps" ]
   }
 
   if (is_mac) {

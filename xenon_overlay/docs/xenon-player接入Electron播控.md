@@ -8,9 +8,11 @@ main 在独立 Utility Process 中执行，renderer、preload 和原生模块使
 
 该入口与 `XP` 早期播控验证页、`XPE` 通用 IPC 测试页相互独立。兼容层只提供已经实现的 Electron/Node API 和兼容 native 加载能力。
 
+`xenon_overlay/resources/xenon_player/` 是开发者自行生成后导入的本地目录，已加入 `.gitignore`，不再随本仓库跟踪。同级接入 JSON、公钥及历史来源记录继续保留。
+
 ## 2. 版本与来源
 
-当前保留已验证的 **7.1.35.173**：
+此前已验证的基线为 **7.1.35.173**；需要复现该版本时使用下列源码及固定子模块，不从旧二进制目录拼凑：
 
 ```text
 工程    F:/xl-player/xmp_7.1.35
@@ -32,11 +34,57 @@ main、renderer、两类 preload 及网盘插件来自该版本构建；四个�
 
 SDK 以固定的 `setup/xmp_xdas_pack/ProductRelease` 为基础，叠加上述新版应用及原生产物。该目录以及同级 Release 都只是 SDK 底包：旧 `package.json` 标记 `12.1.4.1340`，旧 `out.asar` 的主脚本、preload、renderer 与 7.1.35 不同，并且没有新版 `preload-native`。不能把它直接镜像为完整新版应用。
 
-当前保留最新加密 `out.asar`；抽样主脚本、两类 preload 和 renderer 解密内容与最新 `app/build` 一致，仅含格式规定的空格补齐。四个主 addon 及 `containor.dll` 与新 native 构建相同；`xmp.exe` 已按发布 tag 将版本资源盖章为 `7.1.35.173`，不能用构建目录中仍标记 `7.0.0.8` 的 executable 盲目覆盖。
+上述已验证制品使用加密 `out.asar`；抽样主脚本、两类 preload 和 renderer 解密内容与当时的 `app/build` 一致，仅含格式规定的空格补齐。四个主 addon 及 `containor.dll` 与该次 native 构建相同；`xmp.exe` 已按发布 tag 将版本资源盖章为 `7.1.35.173`，不能用构建目录中仍标记 `7.0.0.8` 的 executable 盲目覆盖。
 
-源码、子模块、构建配置及当前目录逐文件 SHA-256 记录在外置 [xenon_player.release-manifest.json](../resources/xenon_player.release-manifest.json)。
+源码、子模块、构建配置及当时目录的逐文件 SHA-256 记录在外置 [xenon_player.release-manifest.json](../resources/xenon_player.release-manifest.json)。这是此前已验证制品的历史记录，不代表开发者当前导入内容；新清单通过 `--manifest` 写入 `out/`。
+
+### 2.1 从源码生成并导入Windows发行目录
+
+源码仓库为 [xl_client/xmp_xdas_2](https://new-gitlab.xunlei.cn/xl_client/xmp_xdas_2)；本机仓库的 origin 为 `git@new-gitlab.xunlei.cn:xl_client/xmp_xdas_2.git`。在独立目录检出 `7.1.35_173-win-channel`（上述提交），按该提交的 `.gitmodules` 初始化固定子模块。SDK 底包由 `setup/xmp_xdas_pack` 提供，来源为 [xmp_xdas_bin_2](https://new-gitlab.xunlei.cn/xl_client/xmp_xdas_bin_2)。
+
+以下命令依据该版本真实发布脚本，交由开发者在 PLE 的 Windows 构建环境执行。需要 Node/npm/pnpm、私有包访问、CMake 和源仓库要求的 Visual Studio 2019 x64 及安装器工具链；不能只安装前端依赖就认为已具备完整发布环境。
+
+在 PLE 仓库的 `script` 目录，用命令提示符运行：
+
+```bat
+call package_cpp.bat 7.1.35.173 OFF
+if errorlevel 1 exit /b 1
+call package_app.bat F:\xl-player\xmp_7.1.35\setup\xmp_xdas_pack 7.1.35.173 Channel
+```
+
+将底包路径替换为本机路径。`package_cpp.bat` 负责 native/安装辅助程序编译及 `xmp.exe` 版本写入；有签名要求时，在发布方规定的 payload 签名阶段完成后再组装。`package_app.bat` 会清理自己的 `script/package/`，调用应用构建和 ASAR 生成，按“ProductRelease 底包 → `bin/resources/app` → `cppsrc/build/Release`”组装 **`script/package/program/`**，并继续生成外层安装包。`Channel` 参数对应 `build:tag`；该版本没有 `build:test`，不要使用 `Release` 参数代替它。
+
+检查 `program/` 中 `xmp.exe` 的版本为 `7.1.35.173`、四个主 addon、`player/containor.dll`、`resources/app/out.asar` 及插件齐全，并在 PLE 自身完成播放和工具窗验收。脚本中有些复制/安装器阶段未统一检查失败码，不能只凭脚本最后的退出码认定目录完整。
+
+然后在 Chromium 源码根目录执行：
+
+```powershell
+python3 xenon_overlay/tools/sync_xenon_player.py `
+  --src F:/xl-player/xmp_7.1.35/script/package/program `
+  --out xenon_overlay/resources `
+  --manifest out/import-manifests/xenon_player.json
+```
+
+`xenon_electron_apps` 默认是 `[]`。执行 `gn args out/Release_64`，保留已有构建参数，并加入 PLE：
+
+```gn
+xenon_electron_apps = [ "xenon_player" ]
+```
+
+若还需附带 TH，将列表设为 `[ "thunder_2025", "xenon_player" ]`，并先导入 TH。自动附带应用目前只支持启用 `enable_xenon_service` 的 Windows 构建。然后执行：
+
+```powershell
+gn gen out/Release_64
+autoninja -C out/Release_64 chrome
+```
+
+导入器只复制该完整目录并校验，不重新组装底包或盖章 executable。导入目录或更改应用列表后必须重新运行 `gn gen`，使构建和打包目标采用当前选择的应用；移除本地目录前应先从列表移除对应项。
+
+此流程仅针对 Windows。源码虽有 `script/mac`、Darwin 目标及双架构库，当前 mac 构建链仍需修复 `uchardet` 目标遗漏、播放器静态库目录等问题；本文不将现有 mac 脚本列为已验证可执行的发布路径。
 
 ## 3. 当前目录与配置
+
+以下为本地导入后的布局，`xenon_player/` 不受 Git 跟踪；同级历史清单不参与应用运行或复制完整性判断。
 
 ```text
 resources/                           # 构建后对应宿主 exe 所在目录
@@ -120,7 +168,7 @@ PLE 使用自身 addon、播放器和 Download SDK，不与 TH 共享同名文�
 
 构建输出和安装目录保持同一相对布局，应用目录与外置 JSON、公钥一起安装。release manifest 位于应用目录外，记录制品来源和哈希，不参与应用的 require 路径。
 
-只读检查仓库源资源和输出：
+只读检查本地导入资源和输出：
 
 ```powershell
 python xenon_overlay/tools/import_electron_app.py `

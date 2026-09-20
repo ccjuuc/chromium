@@ -1,5 +1,2 @@
-# Preserve imported Electron releases, including vendor whitespace, byte-for-byte.
-# Keep Git metadata outside the application payloads.
-thunder_2025/** -text -whitespace
-xenon_player/** -text -whitespace
+# Public host configuration stays separate from locally generated app releases.
 *.asar-public-key.pem text eol=lf

@@ -23,7 +23,8 @@ import shutil
 import sys
 
 from import_electron_app import (ImportFailure, absolute_path, check_ancestors,
-                                 contains, import_application, inventory)
+                                 contains, detect_layout, import_application,
+                                 inventory)
 
 
 class StagingComplete(Exception):
@@ -82,6 +83,7 @@ def prepare_payloads(archive, options, wrapper_options) -> tuple[list, list]:
                contains(relative, previous['path']) for previous in directories):
             raise ImportFailure('application payload directories must not overlap')
         expected = inventory(source)
+        detect_layout(source)
         canonical = canonical_sources.pop(relative, None)
         if canonical is not None and inventory(canonical) != expected:
             raise ImportFailure(
