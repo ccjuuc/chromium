@@ -14,6 +14,7 @@
 #include "content/browser/webui/url_data_manager.h"
 #include "content/common/content_export.h"
 #include "ui/base/template_expressions.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 namespace content {
 class URLDataManagerBackend;
@@ -45,7 +46,12 @@ struct DeleteURLDataSource {
 // pointers and should never be deleted on the IO thread, since their calls
 // are handled almost always on the UI thread and there's a possibility of a
 // data race.  The |DeleteDataSource| trait above is used to enforce this.
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+// Xenon's WebUI proxy subclasses this type across component boundaries.
 class CONTENT_EXPORT URLDataSourceImpl
+#else
+class URLDataSourceImpl
+#endif
     : public base::RefCountedThreadSafe<URLDataSourceImpl,
                                         DeleteURLDataSource> {
  public:
