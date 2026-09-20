@@ -155,10 +155,18 @@ v8::Local<v8::Object> MakeLoadFailureObject(
       ->Set(context, gin::StringToV8(isolate, "error"),
             gin::StringToV8(isolate, error_msg))
       .Check();
+#if BUILDFLAG(IS_WIN)
   result
       ->Set(context, gin::StringToV8(isolate, "code"),
             v8::Integer::New(isolate, load_error.code))
       .Check();
+#else
+  // POSIX NativeLibraryLoadError only has |message|, not |code|.
+  result
+      ->Set(context, gin::StringToV8(isolate, "code"),
+            v8::Integer::New(isolate, 0))
+      .Check();
+#endif
   result
       ->Set(context, gin::StringToV8(isolate, "module"),
             gin::StringToV8(isolate, module_name))

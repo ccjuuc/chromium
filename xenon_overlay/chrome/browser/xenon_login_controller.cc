@@ -575,13 +575,21 @@ void XenonLoginController::ShowLoginDialog(Profile* profile, bool is_relogin) {
 
     if (presentation == 2) {
       if (parent_browser && parent_browser->GetWindow()) {
-        parent = parent_browser->GetWindow()->GetNativeWindow();
+        if (views::Widget* parent_widget =
+                views::Widget::GetWidgetForNativeWindow(
+                    parent_browser->GetWindow()->GetNativeWindow())) {
+          parent = parent_widget->GetNativeView();
+        }
         modal_type = ui::mojom::ModalType::kWindow;
       }
     } else if (parent_browser && parent_browser->GetWindow()) {
       // presentation 0 / 1: non-modal, but still parent to the active session
       // browser so Z-order and ownership match the user's main window.
-      parent = parent_browser->GetWindow()->GetNativeWindow();
+      if (views::Widget* parent_widget =
+              views::Widget::GetWidgetForNativeWindow(
+                  parent_browser->GetWindow()->GetNativeWindow())) {
+        parent = parent_widget->GetNativeView();
+      }
     }
   }
 

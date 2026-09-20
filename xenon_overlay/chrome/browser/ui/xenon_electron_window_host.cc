@@ -1453,11 +1453,13 @@ void XenonElectronWindowHost::OnNativeWindowMessage(uint64_t hwnd,
     if (entry.hwnd != hwnd) {
       continue;
     }
+#if BUILDFLAG(IS_WIN)
     if (entry.frameless && CanResetDwmAppearance(message)) {
       ConfigureFramelessDwmWindow(
           reinterpret_cast<HWND>(static_cast<uintptr_t>(hwnd)),
           entry.sync_bounds_with_parent);
     }
+#endif
     if (!entry.hooked_messages.contains(message)) {
       return;
     }

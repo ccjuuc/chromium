@@ -1233,7 +1233,8 @@ class HighLevelAnimationDemo : public views::View {
 
  private:
   void OpenWidgetFadeSample() {
-    ShowWidgetFadeSample(GetWidget() ? GetWidget()->GetNativeView() : nullptr);
+    ShowWidgetFadeSample(GetWidget() ? GetWidget()->GetNativeView()
+                                     : gfx::NativeView());
   }
 };
 

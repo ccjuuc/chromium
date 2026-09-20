@@ -44,10 +44,10 @@
 #include "net/base/url_util.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "services/network/public/mojom/cors_origin_pattern.mojom.h"
+#include "build/build_config.h"
 #include "ui/views/background.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
-#include "ui/views/win/hwnd_util.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
@@ -60,6 +60,7 @@
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
 #include "ui/display/win/screen_win.h"
+#include "ui/views/win/hwnd_util.h"
 #endif
 
 namespace xenon {
@@ -693,14 +694,18 @@ void XenonPlayerElectronController::ScanDirectoryVideos(
             base::FilePath dir = base::FilePath::FromUTF8Unsafe(dir_str);
             if (!base::DirectoryExists(dir)) return results;
 
-            static const wchar_t* const kVideoExts[] = {
-                L".mp4", L".mkv", L".avi", L".rmvb", L".wmv", L".flv", L".mov", L".ts"};
+            static const base::FilePath::CharType* const kVideoExts[] = {
+                FILE_PATH_LITERAL(".mp4"), FILE_PATH_LITERAL(".mkv"),
+                FILE_PATH_LITERAL(".avi"), FILE_PATH_LITERAL(".rmvb"),
+                FILE_PATH_LITERAL(".wmv"), FILE_PATH_LITERAL(".flv"),
+                FILE_PATH_LITERAL(".mov"), FILE_PATH_LITERAL(".ts")};
             base::FileEnumerator enumerator(dir, false,
                                            base::FileEnumerator::FILES);
             for (base::FilePath file = enumerator.Next(); !file.empty();
                  file = enumerator.Next()) {
-              std::wstring ext = base::ToLowerASCII(file.Extension());
-              for (const wchar_t* valid_ext : kVideoExts) {
+              const base::FilePath::StringType ext =
+                  base::ToLowerASCII(file.Extension());
+              for (const base::FilePath::CharType* valid_ext : kVideoExts) {
                 if (ext == valid_ext) {
                   results.push_back(file.AsUTF8Unsafe());
                   break;

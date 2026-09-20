@@ -50,6 +50,11 @@ views::Widget* GetParentWidget(content::WebUI* web_ui) {
                       : nullptr;
 }
 
+gfx::NativeView GetParentNativeView(content::WebUI* web_ui) {
+  views::Widget* widget = GetParentWidget(web_ui);
+  return widget ? widget->GetNativeView() : gfx::NativeView();
+}
+
 xunlei::XenonToast::Type ToastTypeFromString(const std::string& type) {
   if (type == "success") {
     return xunlei::XenonToast::Type::kSuccess;
@@ -206,7 +211,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
       return;
     }
     XenonShadowTestWindow::ShowWidgetShadowTestWindow(
-        web_contents->GetTopLevelNativeWindow());
+        GetParentNativeView(web_ui()));
   }
 
   void HandleShowWidgetShadowSample(const base::ListValue& args) {
@@ -224,7 +229,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
       return;
     }
     XenonShadowTestWindow::ShowWidgetShadowSample(
-        web_contents->GetTopLevelNativeWindow(), shadow_type_str, borderless,
+        GetParentNativeView(web_ui()), shadow_type_str, borderless,
         show_backdrop);
   }
 
@@ -235,7 +240,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
       return;
     }
     XenonShadowTestWindow::ShowViewShadowTestWindow(
-        web_contents->GetTopLevelNativeWindow());
+        GetParentNativeView(web_ui()));
   }
 
   void HandleShowViewBorderTestWindow(const base::ListValue& args) {
@@ -245,7 +250,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
       return;
     }
     XenonShadowTestWindow::ShowViewBorderTestWindow(
-        web_contents->GetTopLevelNativeWindow());
+        GetParentNativeView(web_ui()));
   }
 
   void HandleShowViewAnimationTestWindow(const base::ListValue& args) {
@@ -255,7 +260,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
       return;
     }
     XenonShadowTestWindow::ShowViewAnimationTestWindow(
-        web_contents->GetTopLevelNativeWindow());
+        GetParentNativeView(web_ui()));
   }
 
   void HandleShowCommonDialog(const base::ListValue& args) {
@@ -289,7 +294,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
                                          ? XenonCommonDialog::Style::kSmall
                                          : XenonCommonDialog::Style::kMedium;
 
-    gfx::NativeWindow parent = nullptr;
+    gfx::NativeWindow parent{};
     content::WebContents* web_contents = web_ui()->GetWebContents();
     if (web_contents) {
       parent = web_contents->GetTopLevelNativeWindow();
@@ -327,7 +332,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
 
     XenonWebDialog::ShowWithOptions(
         web_contents->GetBrowserContext(), url, options,
-        /*out_widget=*/nullptr, web_contents->GetTopLevelNativeWindow(),
+        /*out_widget=*/nullptr, GetParentNativeView(web_ui()),
         base::OnceClosure());
   }
 

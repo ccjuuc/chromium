@@ -561,8 +561,13 @@ void XenonCommonDialog::Show(gfx::NativeWindow parent,
     widget = constrained_window::CreateBrowserModalDialogViews(
         std::move(delegate), parent);
   } else {
+    gfx::NativeView parent_view{};
+    if (views::Widget* parent_widget =
+            views::Widget::GetWidgetForNativeWindow(parent)) {
+      parent_view = parent_widget->GetNativeView();
+    }
     widget = views::DialogDelegate::CreateDialogWidget(
-        std::move(delegate), gfx::NativeWindow(), parent);
+        std::move(delegate), parent, parent_view);
   }
 
   // Preferred size already includes the shadow margin (the content view carries

@@ -72,8 +72,10 @@ namespace xenon {
 namespace {
 
 constexpr int kDialogCornerRadius = 16;
+#if BUILDFLAG(IS_WIN)
 // On Win11 this only enables DWMWCP_ROUND; the OS chooses the actual radius.
 constexpr int kDwmRoundedCornerHintRadius = 1;
+#endif
 constexpr int kFramelessCompositorShadowElevation = 8;
 
 #if BUILDFLAG(IS_WIN)
@@ -192,10 +194,6 @@ int FramelessCompositorShadowMargin() {
   return margin;
 }
 #else
-bool IsWin11OrLater() {
-  return false;
-}
-
 bool UseDwmRoundedCorners(bool) {
   return false;
 }
@@ -988,11 +986,17 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
   content::WebContents* web_contents = nullptr;
   if (modal_type == ui::mojom::ModalType::kChild && parent) {
     GlobalBrowserCollection* browsers = GlobalBrowserCollection::GetInstance();
-    BrowserWindowInterface* browser_window =
-        browsers->FindBrowserWithWindow(parent);
-    if (!browser_window) {
+    BrowserWindowInterface* browser_window = nullptr;
+    if (views::Widget* parent_widget =
+            views::Widget::GetWidgetForNativeView(parent)) {
       browser_window =
-          browsers->FindBrowserWithWindow(parent->GetToplevelWindow());
+          browsers->FindBrowserWithWindow(parent_widget->GetNativeWindow());
+      if (!browser_window) {
+        if (views::Widget* top = parent_widget->GetTopLevelWidget()) {
+          browser_window =
+              browsers->FindBrowserWithWindow(top->GetNativeWindow());
+        }
+      }
     }
     Browser* browser = browser_window
                            ? browser_window->GetBrowserForMigrationOnly()
@@ -1030,7 +1034,9 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
     params.delegate = new XenonWebDialogView(
         context, delegate, std::make_unique<ChromeWebContentsHandler>());
     params.remove_standard_frame = !frame;
+#if BUILDFLAG(IS_WIN)
     params.dont_show_in_taskbar = skip_taskbar;
+#endif
     params.type = views::Widget::InitParams::TYPE_WINDOW;
     params.parent = parent;
     if (!show_shadow) {

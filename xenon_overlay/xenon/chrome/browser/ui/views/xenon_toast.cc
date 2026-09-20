@@ -549,7 +549,7 @@ class XenonToastView : public views::View, public views::WidgetObserver {
     parent()->RemoveChildViewT(this);
   }
 
-  gfx::NativeWindow parent_window_ = nullptr;
+  gfx::NativeWindow parent_window_;
   raw_ptr<ToastIconView> icon_view_ = nullptr;
   raw_ptr<ToastSpinnerView> spinner_view_ = nullptr;
   raw_ptr<views::Label> text_label_ = nullptr;
