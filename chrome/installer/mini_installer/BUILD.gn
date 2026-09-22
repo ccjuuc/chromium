@@ -359,10 +359,20 @@ copy("copy_signing") {
   outputs = [ "$root_out_dir/signing/mini_installer/{{source_file_part}}" ]
 }
 
+if (custom_exe_name != "" && custom_version_string != "") {
+  mini_installer_output_name = "${custom_exe_name}_installer_${custom_version_string}"
+} else {
+  mini_installer_output_name = "mini_installer"
+}
+
 # Generates a mini_installer executable containing the resources provided in the
 # caller's `rc_file`.
 template("generate_mini_installer") {
   executable(target_name) {
+    if (target_name == "mini_installer") {
+      output_name = mini_installer_output_name
+    }
+
     sources = [ invoker.rc_file ]
 
     # This target is special so we manually override most linker flags and
@@ -447,14 +457,14 @@ if (!(is_component_build && is_debug && target_cpu == "x86") &&
             root_out_dir)
     inputs = [
       "$root_out_dir/" + alternate_version_generator_rel_path,
-      "$root_out_dir/mini_installer.exe",
+      "$root_out_dir/${mini_installer_output_name}.exe",
     ]
     outputs = [ "$root_out_dir/$target_name.exe" ]
     args = [
       "--alternate_version_generator",
       alternate_version_generator_rel_path,
       "--mini_installer",
-      "mini_installer.exe",
+      "${mini_installer_output_name}.exe",
       "--out",
       "$target_name.exe",
       "--path_7za",
