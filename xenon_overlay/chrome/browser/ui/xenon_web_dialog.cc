@@ -1055,6 +1055,7 @@ void XenonWebDialog::ShowForLogin(content::BrowserContext* context,
   ShowInternal(context, url, width, height, title, out_widget, parent,
                modal_type, std::move(on_dialog_closed), show_close_button,
                /*frame=*/false, /*dwm=*/XenonWebDialog::kDefaultUseDwm,
+               /*transparent=*/false,
                /*system_rounded_corners=*/false,
                /*resizable=*/XenonWebDialog::kDefaultResizable,
                 /*minimizable=*/true, /*maximizable=*/true,
@@ -1095,6 +1096,7 @@ void XenonWebDialog::ShowWithOptions(content::BrowserContext* context,
       options.FindBool("showCloseButton").value_or(true),
       options.FindBool("frame").value_or(false),
       options.FindBool("dwm").value_or(XenonWebDialog::kDefaultUseDwm),
+      options.FindBool("transparent").value_or(false),
       options.FindBool("systemRoundedCorners").value_or(false),
       options.FindBool("resizable").value_or(
           XenonWebDialog::kDefaultResizable),
@@ -1120,6 +1122,7 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
                                   bool show_close_button,
                                   bool frame,
                                   bool dwm,
+                                  bool transparent,
                                   bool system_rounded_corners,
                                   bool resizable,
                                   bool minimizable,
@@ -1163,7 +1166,7 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
   auto* delegate =
       new XenonWebDialog(url, width, height, title, delegate_modal_type,
                           std::move(on_dialog_closed), show_close_button, frame,
-                          dwm, system_rounded_corners, show_shadow);
+                          dwm, transparent, system_rounded_corners, show_shadow);
   delegate->set_can_resize(resizable);
   delegate->set_can_minimize(minimizable);
   delegate->set_can_maximize(maximizable);
@@ -1284,12 +1287,14 @@ bool XenonWebDialog::UseTransparentWebContentsBackground() const {
   if (background_color_) {
     return SkColorGetA(*background_color_) != SK_AlphaOPAQUE;
   }
-  // Electron playerControlWnd is created with transparent:true (dwm=false).
-  // The first URL is about:blank; still keep the WebContents clear so the
-  // native video HWND can show through CSS-transparent areas.
-  if (!dwm_) {
+  // Window transparency and DWM rendering are independent. Treating every
+  // non-DWM window as transparent skips both the root-layer and WebView
+  // rounded-corner clips, leaving ordinary frameless dialogs square.
+  if (transparent_) {
     return true;
   }
+  // Keep dedicated player surfaces clear so native video can show through
+  // CSS-transparent areas.
   return url_.SchemeIs("chrome") && (url_.host() == "xenon-player" ||
                                      url_.host() == "xenon-player-by-elec" ||
                                      url_.host() == "xenon-player-electron");
@@ -1474,6 +1479,7 @@ XenonWebDialog::XenonWebDialog(const GURL& url,
                                bool show_close_button,
                                bool frame,
                                bool dwm,
+                               bool transparent,
                                bool system_rounded_corners,
                                bool show_shadow)
     : url_(url),
@@ -1485,6 +1491,7 @@ XenonWebDialog::XenonWebDialog(const GURL& url,
       show_close_button_(show_close_button),
       frame_(frame),
       dwm_(dwm),
+      transparent_(transparent),
       system_rounded_corners_(system_rounded_corners),
       show_shadow_(show_shadow) {}
 

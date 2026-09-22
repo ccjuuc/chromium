@@ -33,7 +33,7 @@ class XenonHostedWindowCloseTest : public testing::Test {
     dialog_ = new XenonWebDialog(
         GURL("about:blank"), 320, 200, u"fixture",
         ui::mojom::ModalType::kNone, base::OnceClosure(), true, false, false,
-        false, false);
+        false, false, false);
     host_ = new XenonElectronWindowHost();
     // Selection needs an identity, not an initialized native window.
     widget_ = std::make_unique<views::Widget>();
@@ -50,6 +50,18 @@ class XenonHostedWindowCloseTest : public testing::Test {
   void AttachCloseHandler() {
     dialog_->SetCloseRequestHandler(base::BindRepeating(
         &XenonHostedWindowCloseTest::OnCloseRequested, base::Unretained(this)));
+  }
+
+  void RecreateDialog(bool transparent) {
+    delete dialog_;
+    dialog_ = new XenonWebDialog(
+        GURL("about:blank"), 320, 200, u"fixture",
+        ui::mojom::ModalType::kNone, base::OnceClosure(), true, false, false,
+        transparent, false, false);
+  }
+
+  bool UsesTransparentBackground() const {
+    return dialog_->UseTransparentWebContentsBackground();
   }
 
   bool OnCloseRequested() {
@@ -102,6 +114,13 @@ class XenonHostedWindowCloseTest : public testing::Test {
   bool authorized_ = false;
   int close_requests_ = 0;
 };
+
+TEST_F(XenonHostedWindowCloseTest,
+       NonDwmRenderingDoesNotImplyTransparentCanvas) {
+  EXPECT_FALSE(UsesTransparentBackground());
+  RecreateDialog(true);
+  EXPECT_TRUE(UsesTransparentBackground());
+}
 
 TEST_F(XenonHostedWindowCloseTest, OrdinaryDialogsKeepNativeAndDomClose) {
   EXPECT_TRUE(RequestNativeClose());

@@ -840,6 +840,7 @@ bool XenonElectronWindowHost::CreateHostedWindow(
   options.Set("modal", false);
   options.Set("frame", frame);
   options.Set("dwm", !transparent);
+  options.Set("transparent", transparent);
   // DWM rounded clipping is only meaningful for an owned overlay that follows
   // its native parent. Top-level transparent canvases stay unrounded.
   options.Set("systemRoundedCorners",

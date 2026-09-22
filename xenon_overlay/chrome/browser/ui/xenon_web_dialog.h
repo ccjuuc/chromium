@@ -151,6 +151,7 @@ class XenonWebDialog : public ui::WebDialogDelegate {
                  bool show_close_button,
                  bool frame,
                  bool dwm,
+                 bool transparent,
                  bool system_rounded_corners,
                  bool show_shadow);
   ~XenonWebDialog() override;
@@ -167,6 +168,7 @@ class XenonWebDialog : public ui::WebDialogDelegate {
                            bool show_close_button,
                            bool frame,
                            bool dwm,
+                           bool transparent,
                            bool system_rounded_corners,
                            bool resizable,
                            bool minimizable,
@@ -205,6 +207,7 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   bool show_close_button_ = false;
   bool frame_ = false;
   bool dwm_ = kDefaultUseDwm;
+  bool transparent_ = false;
   std::optional<SkColor> background_color_;
   bool system_rounded_corners_ = false;
   bool show_shadow_ = true;
