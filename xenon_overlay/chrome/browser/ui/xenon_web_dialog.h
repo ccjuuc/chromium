@@ -8,6 +8,7 @@
 #include "base/values.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/gfx/geometry/point.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/web_dialogs/web_dialog_delegate.h"
 #include "url/gurl.h"
@@ -178,7 +179,8 @@ class XenonWebDialog : public ui::WebDialogDelegate {
                            bool show,
                            bool show_shadow,
                            bool use_custom_modal = false,
-                           bool preserve_native_child_content = false);
+                           bool preserve_native_child_content = false,
+                           std::optional<gfx::Point> origin = std::nullopt);
 
   // ui::WebDialogDelegate:
   ui::mojom::ModalType GetDialogModalType() const override;

@@ -25,6 +25,7 @@
 #include "ui/base/hit_test.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor_extra/shadow.h"
+#include "ui/display/screen.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/skia_conversions.h"
@@ -1088,6 +1089,13 @@ void XenonWebDialog::ShowWithOptions(content::BrowserContext* context,
     }
   }
 
+  const std::optional<int> opt_x = options.FindInt("x");
+  const std::optional<int> opt_y = options.FindInt("y");
+  std::optional<gfx::Point> origin = std::nullopt;
+  if (opt_x.has_value() && opt_y.has_value()) {
+    origin = gfx::Point(*opt_x, *opt_y);
+  }
+
   ShowInternal(
       context, url, width > 0 ? width : 800, height > 0 ? height : 600, title,
       out_widget, parent,
@@ -1107,7 +1115,43 @@ void XenonWebDialog::ShowWithOptions(content::BrowserContext* context,
       options.FindBool("show").value_or(true),
       options.FindBool("shadow").value_or(true),
       use_custom_modal,
-      options.FindBool("preserveNativeChildContent").value_or(false));
+      options.FindBool("preserveNativeChildContent").value_or(false),
+      origin);
+}
+
+gfx::Rect CalculateInitialBounds(const gfx::Size& initial_size,
+                                 gfx::NativeView parent,
+                                 const std::optional<gfx::Point>& origin) {
+  if (origin.has_value()) {
+    return gfx::Rect(*origin, initial_size);
+  }
+
+  display::Screen* screen = display::Screen::Get();
+  if (!screen) {
+    return gfx::Rect(initial_size);
+  }
+
+  display::Display display;
+  gfx::Rect target_rect;
+  if (parent) {
+    display = screen->GetDisplayNearestView(parent);
+    if (views::Widget* parent_widget =
+            views::Widget::GetWidgetForNativeView(parent)) {
+      target_rect = parent_widget->GetWindowBoundsInScreen();
+    }
+  } else {
+    display = screen->GetDisplayNearestPoint(screen->GetCursorScreenPoint());
+  }
+
+  if (!display.is_valid()) {
+    return gfx::Rect(initial_size);
+  }
+
+  const gfx::Rect work_area = display.work_area();
+  gfx::Rect bounds = target_rect.IsEmpty() ? work_area : target_rect;
+  bounds.ToCenteredSize(initial_size);
+  bounds.AdjustToFit(work_area);
+  return bounds;
 }
 
 void XenonWebDialog::ShowInternal(content::BrowserContext* context,
@@ -1132,7 +1176,8 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
                                   bool show,
                                   bool show_shadow,
                                   bool use_custom_modal,
-                                  bool preserve_native_child_content) {
+                                  bool preserve_native_child_content,
+                                  std::optional<gfx::Point> origin) {
   content::WebContents* web_contents = nullptr;
   if (modal_type == ui::mojom::ModalType::kChild && parent) {
     GlobalBrowserCollection* browsers = GlobalBrowserCollection::GetInstance();
@@ -1216,6 +1261,10 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
 #endif
     }
 
+    gfx::Size initial_size(width, height);
+    EnlargeForFramelessCompositorShadow(&initial_size, frame, dwm, show_shadow);
+    params.bounds = CalculateInitialBounds(initial_size, parent, origin);
+
     widget->Init(std::move(params));
 #if BUILDFLAG(IS_WIN)
     if (modal_type == ui::mojom::ModalType::kWindow && parent && use_custom_modal) {
@@ -1225,7 +1274,7 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
 #endif
     // Match Electron BrowserWindow: no explicit origin → center on screen.
     // Owned/parented overlays keep the parent-relative placement from Init.
-    if (!parent) {
+    if (!parent && !origin.has_value()) {
       const gfx::Size size = widget->GetWindowBoundsInScreen().size();
       if (!size.IsEmpty()) {
         widget->CenterWindow(size);
