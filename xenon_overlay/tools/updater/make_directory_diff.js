@@ -193,23 +193,8 @@ function main() {
         fs.copyFileSync(rootSetup, destSetup);
       }
     }
-
-    // If live xlbrowser.dll is deployed in Application, synchronize it into oldRootDir to match the active runtime
-    const liveBaseDll = 'C:\\Users\\Administrator\\AppData\\Local\\xlb153\\Application\\' + baseVersion + '\\xlbrowser.dll';
-    const oldBaseDll = path.join(oldRootDir, baseVersion, 'xlbrowser.dll');
-    if (fs.existsSync(liveBaseDll) && fs.existsSync(oldBaseDll)) {
-      console.log(`[*] Synchronizing deployed base xlbrowser.dll into comparison tree: ${liveBaseDll}`);
-      fs.copyFileSync(liveBaseDll, oldBaseDll);
-    }
-
-    // Synchronize newly compiled xlbrowser.dll into target tree
-    const compiledDll = path.join(rootDir, 'out', 'Release_64', 'xlbrowser.dll');
-    const targetDll = path.join(newRootDir, targetVersion, 'xlbrowser.dll');
-    if (fs.existsSync(compiledDll) && fs.existsSync(targetDll)) {
-      console.log(`[*] Synchronizing compiled target xlbrowser.dll into target tree: ${compiledDll}`);
-      fs.copyFileSync(compiledDll, targetDll);
-    }
   }
+
 
   const bundleDir = path.join(stagingDir, 'bundle');
   const patchesDir = path.join(bundleDir, 'patches');
