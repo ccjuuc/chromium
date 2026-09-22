@@ -17,6 +17,7 @@
 #include "chrome/browser/permissions/permission_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/push_messaging/push_messaging_service_impl.h"
+#include "components/gcm_driver/features.h"
 #include "components/gcm_driver/instance_id/instance_id_profile_service.h"
 #include "components/safe_browsing/buildflags.h"
 
@@ -28,6 +29,14 @@
 // static
 PushMessagingServiceImpl* PushMessagingServiceFactory::GetForProfile(
     content::BrowserContext* context) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // Report service unavailability instead of validating stored subscriptions
+  // as invalid and causing the Push API to delete them while GCM is disabled.
+  if (!base::FeatureList::IsEnabled(gcm::features::kXenonGCM)) {
+    return nullptr;
+  }
+#endif
+
   // The Push API is not currently supported in incognito mode.
   // See https://crbug.com/41124656.
   if (context->IsOffTheRecord())

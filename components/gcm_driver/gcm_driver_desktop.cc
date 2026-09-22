@@ -20,6 +20,7 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/trace_event/trace_event.h"
+#include "components/gcm_driver/features.h"
 #include "components/gcm_driver/gcm_account_mapper.h"
 #include "components/gcm_driver/gcm_app_handler.h"
 #include "components/gcm_driver/gcm_client_factory.h"
@@ -571,6 +572,13 @@ void GCMDriverDesktop::ValidateRegistration(
 
   GCMClient::Result result = EnsureStarted(GCMClient::IMMEDIATE_START);
   if (result != GCMClient::SUCCESS) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    if (result == GCMClient::GCM_DISABLED) {
+      ui_thread_->PostTask(FROM_HERE,
+                           base::BindOnce(std::move(callback), false));
+      return;
+    }
+#endif
     // Can't tell whether the registration is valid or not, so don't run the
     // callback (let it hang indefinitely).
     return;
@@ -904,6 +912,13 @@ void GCMDriverDesktop::ValidateToken(const std::string& app_id,
 
   GCMClient::Result result = EnsureStarted(GCMClient::IMMEDIATE_START);
   if (result != GCMClient::SUCCESS) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    if (result == GCMClient::GCM_DISABLED) {
+      ui_thread_->PostTask(FROM_HERE,
+                           base::BindOnce(std::move(callback), false));
+      return;
+    }
+#endif
     // Can't tell whether the registration is valid or not, so don't run the
     // callback (let it hang indefinitely).
     DLOG(ERROR) << "Unable to validate the InstanceID token: cannot start the "
@@ -1188,6 +1203,14 @@ void GCMDriverDesktop::SetAccountTokens(
 GCMClient::Result GCMDriverDesktop::EnsureStarted(
     GCMClient::StartMode start_mode) {
   DCHECK(ui_thread_->RunsTasksInCurrentSequence());
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // Gate both restored subscriptions (delayed start) and explicit registration
+  // or InstanceID requests before scheduling any check-in/MCS connection.
+  if (!base::FeatureList::IsEnabled(features::kXenonGCM)) {
+    return GCMClient::GCM_DISABLED;
+  }
+#endif
 
   if (gcm_started_)
     return GCMClient::SUCCESS;

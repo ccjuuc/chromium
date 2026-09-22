@@ -37,6 +37,14 @@
 #include "services/network/test/test_network_connection_tracker.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/test/test_future.h"
+#include "components/gcm_driver/features.h"
+#endif
 
 namespace gcm {
 
@@ -167,6 +175,9 @@ class GCMDriverTest : public testing::Test {
   }
 
  private:
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  base::test::ScopedFeatureList feature_list_;
+#endif
   std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_;
   base::ScopedTempDir temp_dir_;
   TestingPrefServiceSimple prefs_;
@@ -202,6 +213,9 @@ GCMDriverTest::~GCMDriverTest() {
 }
 
 void GCMDriverTest::SetUp() {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  feature_list_.InitAndEnableFeature(features::kXenonGCM);
+#endif
   io_thread_.Start();
   ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
 }
@@ -359,6 +373,104 @@ void GCMDriverTest::UnregisterCompleted(GCMClient::Result result) {
   unregistration_result_ = result;
   AsyncOperationCompleted();
 }
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+class GCMDriverDisabledTest : public GCMDriverTest {
+ public:
+  void SetUp() override {
+    GCMDriverTest::SetUp();
+    disabled_feature_list_.InitAndDisableFeature(features::kXenonGCM);
+    CreateDriver();
+    AddAppHandlers();
+    PumpIOLoop();
+    PumpUILoop();
+  }
+
+  void ExpectNoClientStart() {
+    PumpIOLoop();
+    PumpUILoop();
+    EXPECT_FALSE(driver()->IsStarted());
+    EXPECT_FALSE(driver()->IsConnected());
+    EXPECT_FALSE(gcm_connection_observer()->connected());
+    // The fake client normally delays startup for AddAppHandler. Check that
+    // no IO-thread Start was requested, including that delayed-start path.
+    histogram_tester_.ExpectTotalCount("GCM.ClientStartDelay", 0);
+  }
+
+ private:
+  base::test::ScopedFeatureList disabled_feature_list_;
+  base::HistogramTester histogram_tester_;
+};
+
+TEST_F(GCMDriverDisabledTest, AddAppHandlerDoesNotStartClient) {
+  EXPECT_TRUE(HasAppHandlers());
+  EXPECT_EQ(gcm_app_handler(), driver()->GetAppHandler(kTestAppID1));
+  ExpectNoClientStart();
+}
+
+TEST_F(GCMDriverDisabledTest, RegisterDoesNotLeavePendingOperation) {
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    base::test::TestFuture<const std::string&, GCMClient::Result> result;
+    driver()->Register(kTestAppID1, ToSenderList("sender"),
+                       result.GetCallback());
+    PumpIOLoop();
+    PumpUILoop();
+    ASSERT_TRUE(result.IsReady());
+    EXPECT_TRUE(result.Get<0>().empty());
+    EXPECT_EQ(GCMClient::GCM_DISABLED, result.Get<1>());
+  }
+  ExpectNoClientStart();
+
+  // Reusing the same registration after enabling must not encounter a stale
+  // pending callback from either rejected request.
+  base::test::ScopedFeatureList enabled_feature_list;
+  enabled_feature_list.InitAndEnableFeature(features::kXenonGCM);
+  Register(kTestAppID1, ToSenderList("sender"), GCMDriverTest::WAIT);
+  EXPECT_EQ(GCMClient::SUCCESS, registration_result());
+  EXPECT_FALSE(registration_id().empty());
+}
+
+TEST_F(GCMDriverDisabledTest, GetTokenDoesNotLeavePendingOperation) {
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    base::test::TestFuture<const std::string&, GCMClient::Result> result;
+    driver()->GetInstanceIDHandlerInternal()->GetToken(
+        kTestAppID1, kUserID1, kScope, base::TimeDelta(), result.GetCallback());
+    PumpIOLoop();
+    PumpUILoop();
+    ASSERT_TRUE(result.IsReady());
+    EXPECT_TRUE(result.Get<0>().empty());
+    EXPECT_EQ(GCMClient::GCM_DISABLED, result.Get<1>());
+  }
+  ExpectNoClientStart();
+
+  base::test::ScopedFeatureList enabled_feature_list;
+  enabled_feature_list.InitAndEnableFeature(features::kXenonGCM);
+  base::test::TestFuture<const std::string&, GCMClient::Result> result;
+  driver()->GetInstanceIDHandlerInternal()->GetToken(
+      kTestAppID1, kUserID1, kScope, base::TimeDelta(), result.GetCallback());
+  ASSERT_TRUE(result.Wait());
+  EXPECT_EQ(GCMClient::SUCCESS, result.Get<1>());
+  EXPECT_FALSE(result.Get<0>().empty());
+}
+
+TEST_F(GCMDriverDisabledTest, ValidateRegistrationCompletesWithoutStarting) {
+  base::test::TestFuture<bool> result;
+  driver()->ValidateRegistration(kTestAppID1, ToSenderList("sender"),
+                                 "registration", result.GetCallback());
+  ExpectNoClientStart();
+  ASSERT_TRUE(result.IsReady());
+  EXPECT_FALSE(result.Get());
+}
+
+TEST_F(GCMDriverDisabledTest, ValidateTokenCompletesWithoutStarting) {
+  base::test::TestFuture<bool> result;
+  driver()->GetInstanceIDHandlerInternal()->ValidateToken(
+      kTestAppID1, kUserID1, kScope, "token", result.GetCallback());
+  ExpectNoClientStart();
+  ASSERT_TRUE(result.IsReady());
+  EXPECT_FALSE(result.Get());
+}
+#endif  // BUILDFLAG(ENABLE_XENON_SERVICE)
 
 TEST_F(GCMDriverTest, Create) {
   // Create GCMDriver first. By default GCM is set to delay start.

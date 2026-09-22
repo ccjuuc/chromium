@@ -15,6 +15,10 @@ namespace gcm {
 
 namespace features {
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+BASE_FEATURE(kXenonGCM, "XenonGCM", base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
+
 BASE_FEATURE(kInvalidateTokenFeature,
              "GCMTokenInvalidAfterDays",
              base::FEATURE_ENABLED_BY_DEFAULT);

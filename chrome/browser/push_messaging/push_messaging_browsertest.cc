@@ -52,6 +52,7 @@
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/gcm_driver/common/gcm_message.h"
 #include "components/gcm_driver/fake_gcm_profile_service.h"
+#include "components/gcm_driver/features.h"
 #include "components/gcm_driver/gcm_client.h"
 #include "components/gcm_driver/instance_id/fake_gcm_driver_for_instance_id.h"
 #include "components/gcm_driver/instance_id/instance_id_driver.h"
@@ -173,7 +174,11 @@ class PushMessagingBrowserTestBase
       : scoped_testing_factory_installer_(
             base::BindRepeating(&gcm::FakeGCMProfileService::Build)),
         gcm_service_(nullptr),
-        gcm_driver_(nullptr) {}
+        gcm_driver_(nullptr) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    gcm_feature_list_.InitAndEnableFeature(gcm::features::kXenonGCM);
+#endif
+  }
 
   ~PushMessagingBrowserTestBase() override = default;
 
@@ -402,6 +407,9 @@ class PushMessagingBrowserTestBase
   std::unique_ptr<NotificationDisplayServiceTester> notification_tester_;
 
  private:
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  base::test::ScopedFeatureList gcm_feature_list_;
+#endif
   std::unique_ptr<net::EmbeddedTestServer> https_server_;
   raw_ptr<PushMessagingServiceImpl, DanglingUntriaged> push_service_;
 };

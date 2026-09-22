@@ -6,6 +6,7 @@
 #define COMPONENTS_GCM_DRIVER_FEATURES_H_
 
 #include "base/feature_list.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 namespace base {
 class TimeDelta;
@@ -14,6 +15,11 @@ class TimeDelta;
 namespace gcm {
 
 namespace features {
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+// Xenon products opt in to Google's push service explicitly.
+BASE_DECLARE_FEATURE(kXenonGCM);
+#endif
 
 BASE_DECLARE_FEATURE(kInvalidateTokenFeature);
 extern const char kParamNameTokenInvalidationPeriodDays[];

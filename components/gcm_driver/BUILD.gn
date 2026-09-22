@@ -4,6 +4,8 @@
 
 import("//build/buildflag_header.gni")
 import("//components/gcm_driver/config.gni")
+import("//testing/test.gni")
+import("//xenon_overlay/buildflags/features.gni")
 
 buildflag_header("gcm_buildflags") {
   header = "gcm_buildflags.h"
@@ -49,6 +51,7 @@ static_library("gcm_driver") {
     "//components/gcm_driver/instance_id",
     "//components/version_info:channel",
     "//crypto",
+    "//xenon_overlay/buildflags",
   ]
 
   deps = [
@@ -201,6 +204,28 @@ source_set("unit_tests") {
     deps += [
       "//components/signin/public/identity_manager:test_support",
       "//google_apis",
+    ]
+  }
+}
+
+# Keep the desktop enable/disable contract runnable without linking every
+# Chromium component test. This uses the same source as components_unittests.
+if (enable_xenon_service && !use_gcm_from_platform) {
+  test("gcm_driver_desktop_unittests") {
+    sources = [ "gcm_driver_desktop_unittest.cc" ]
+    deps = [
+      ":gcm_driver",
+      ":test_support",
+      "//base",
+      "//base/test:test_support",
+      "//components/os_crypt/async/browser:test_support",
+      "//components/prefs:test_support",
+      "//google_apis:run_all_unittests",
+      "//net:test_support",
+      "//services/network:test_support",
+      "//services/network/public/cpp",
+      "//services/network/public/mojom",
+      "//testing/gtest",
     ]
   }
 }

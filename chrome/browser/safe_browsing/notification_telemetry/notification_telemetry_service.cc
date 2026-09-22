@@ -28,6 +28,7 @@
 #include "net/base/url_util.h"
 #include "url/gurl.h"
 #include "url/origin.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 namespace safe_browsing {
 
@@ -67,6 +68,11 @@ NotificationTelemetryService::NotificationTelemetryService(
   service_worker_context_->AddObserver(this);
   PushMessagingServiceImpl* push_messaging_service =
       PushMessagingServiceFactory::GetForProfile(profile_);
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (!push_messaging_service) {
+    return;
+  }
+#endif
   // Notification Telemetry Service is a keyed service and will outlive
   // any invocations of the callback being registered with the push messaging
   // service (also a keyed service).

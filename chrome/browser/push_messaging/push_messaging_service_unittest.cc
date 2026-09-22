@@ -36,6 +36,7 @@
 #include "components/gcm_driver/crypto/gcm_crypto_test_helpers.h"
 #include "components/gcm_driver/fake_gcm_client_factory.h"
 #include "components/gcm_driver/fake_gcm_profile_service.h"
+#include "components/gcm_driver/features.h"
 #include "components/gcm_driver/gcm_profile_service.h"
 #include "components/history/core/browser/history_database_params.h"
 #include "components/history/core/browser/history_service.h"
@@ -133,7 +134,11 @@ std::unique_ptr<KeyedService> BuildTestHistoryService(
 
 class PushMessagingServiceTest : public ::testing::Test {
  public:
-  PushMessagingServiceTest() = default;
+  PushMessagingServiceTest() {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    gcm_feature_list_.InitAndEnableFeature(gcm::features::kXenonGCM);
+#endif
+  }
   ~PushMessagingServiceTest() override = default;
 
   void SetUp() override {
@@ -272,6 +277,9 @@ class PushMessagingServiceTest : public ::testing::Test {
   }
 
  private:
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  base::test::ScopedFeatureList gcm_feature_list_;
+#endif
   content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 
@@ -282,6 +290,39 @@ class PushMessagingServiceTest : public ::testing::Test {
       block_async_;
 #endif  // BUILDFLAG(IS_ANDROID)
 };
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+class PushMessagingServiceDisabledTest : public PushMessagingServiceTest {
+ public:
+  PushMessagingServiceDisabledTest() {
+    feature_list_.InitWithFeatures(
+        {features::kPushSubscriptionWithExpirationTime},
+        {gcm::features::kXenonGCM});
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+TEST_F(PushMessagingServiceDisabledTest, PreservesStoredSubscriptions) {
+  const auto identifier = push_messaging::AppIdentifier::Generate(
+      GURL(kTestOrigin), kTestServiceWorkerId, base::Time::UnixEpoch());
+  ASSERT_TRUE(identifier.IsExpired());
+  PushMessagingAppIdentifier::PersistToPrefs(identifier, profile());
+  ASSERT_EQ(1u, PushMessagingAppIdentifier::GetCount(profile()));
+
+  EXPECT_EQ(nullptr, PushMessagingServiceFactory::GetForProfile(profile()));
+  PushMessagingServiceImpl::InitializeForProfile(profile());
+  task_environment().RunUntilIdle();
+
+  EXPECT_EQ(nullptr, PushMessagingServiceFactory::GetForProfile(profile()));
+  EXPECT_EQ(1u, PushMessagingAppIdentifier::GetCount(profile()));
+  const auto stored_identifier =
+      PushMessagingAppIdentifier::FindByAppId(profile(), identifier.app_id());
+  ASSERT_FALSE(stored_identifier.is_null());
+  EXPECT_EQ(identifier.ToPrefValue(), stored_identifier.ToPrefValue());
+}
+#endif  // BUILDFLAG(ENABLE_XENON_SERVICE)
 
 TEST_F(PushMessagingServiceTest, RecordsRevocationAndSourceUiNoReporterTest) {
   base::HistogramTester histograms;
@@ -561,7 +602,11 @@ class ExtensionsPushMessagingServiceTest
     : public ExtensionServiceTestWithInstall,
       public testing::WithParamInterface<ContextType> {
  public:
-  ExtensionsPushMessagingServiceTest() = default;
+  ExtensionsPushMessagingServiceTest() {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    gcm_feature_list_.InitAndEnableFeature(gcm::features::kXenonGCM);
+#endif
+  }
 
   ExtensionsPushMessagingServiceTest(
       const ExtensionsPushMessagingServiceTest&) = delete;
@@ -587,6 +632,9 @@ class ExtensionsPushMessagingServiceTest
   }
 
  private:
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  base::test::ScopedFeatureList gcm_feature_list_;
+#endif
   // Required to prevent DCHECK failure in VariationsIdsProvider::GetInstance()
   // when loading the service worker script, as unit tests do not automatically
   // initialize the global variations instance.

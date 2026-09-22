@@ -14,6 +14,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
+#include "components/gcm_driver/features.h"
 #include "components/gcm_driver/gcm_activity.h"
 #include "components/gcm_driver/gcm_internals_constants.h"
 #include "components/gcm_driver/gcm_profile_service.h"
@@ -120,7 +121,12 @@ base::DictValue SetGCMInternalsInfo(const gcm::GCMClient::GCMStatistics* stats,
 
     base::DictValue device_info;
     device_info.Set(kProfileServiceCreated, profile_service != nullptr);
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    device_info.Set(kGcmEnabled,
+                    base::FeatureList::IsEnabled(gcm::features::kXenonGCM));
+#else
     device_info.Set(kGcmEnabled, true);
+#endif
     device_info.Set(kGcmClientCreated, stats->gcm_client_created);
     device_info.Set(kGcmClientState, stats->gcm_client_state);
     device_info.Set(kConnectionClientCreated, stats->connection_client_created);
