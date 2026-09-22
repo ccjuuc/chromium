@@ -1075,7 +1075,29 @@
   Object.defineProperty(nativeTheme, 'shouldUseDarkColors', {get: () => false});
   const powerMonitor = new EventEmitter();
   const autoUpdater = new EventEmitter();
-  autoUpdater.checkForUpdates = () => Promise.resolve(null);
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.setFeedURL = (urlOrOptions) => {
+    const url = typeof urlOrOptions === 'string' ? urlOrOptions : (urlOrOptions && urlOrOptions.url ? urlOrOptions.url : '');
+    return callElectronApi('autoUpdater.setFeedURL', {url});
+  };
+  autoUpdater.getFeedURL = async () => {
+    const res = await callElectronApi('autoUpdater.getFeedURL', {});
+    return (res && res.url) || '';
+  };
+  autoUpdater.checkForUpdates = async () => {
+    autoUpdater.emit('checking-for-update');
+    return callElectronApi('autoUpdater.checkForUpdates', {});
+  };
+  autoUpdater.checkForUpdatesAndNotify = async () => {
+    return autoUpdater.checkForUpdates();
+  };
+  autoUpdater.downloadUpdate = async () => {
+    return callElectronApi('autoUpdater.downloadUpdate', {});
+  };
+  autoUpdater.quitAndInstall = () => {
+    callElectronApi('autoUpdater.quitAndInstall', {});
+  };
   const electronModule = {
     app,
     ipcMain,

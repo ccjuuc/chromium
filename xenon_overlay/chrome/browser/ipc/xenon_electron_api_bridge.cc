@@ -16,6 +16,9 @@
 #include "url/gurl.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_shell.h"
 
+#include "xenon_overlay/chrome/browser/updater/xenon_update_manager.h"
+#include "xenon_overlay/chrome/browser/updater/xenon_update_types.h"
+
 namespace xenon::ipc {
 namespace {
 
@@ -31,6 +34,63 @@ mojom::IpcResultPtr Failure(std::string error) {
   result->success = false;
   result->error = std::move(error);
   return result;
+}
+
+void CallAutoUpdater(const base::DictValue& arguments,
+                     const std::string& operation,
+                     ElectronApiCallback callback) {
+  auto* manager = xenon::updater::XenonUpdateManager::GetInstance();
+  if (operation == "autoUpdater.setFeedURL") {
+    const std::string* url = arguments.FindString("url");
+    if (!url) {
+      std::move(callback).Run(
+          Failure("ERR_INVALID_ARG_VALUE: autoUpdater.setFeedURL requires url"));
+      return;
+    }
+    manager->SetFeedURL(*url);
+    std::move(callback).Run(Success());
+    return;
+  }
+  if (operation == "autoUpdater.getFeedURL") {
+    base::DictValue result;
+    result.Set("url", manager->GetFeedURL());
+    std::move(callback).Run(Success(base::Value(std::move(result))));
+    return;
+  }
+  if (operation == "autoUpdater.checkForUpdates") {
+    const std::string* url = arguments.FindString("url");
+    manager->CheckForUpdates(url ? *url : "");
+    base::DictValue result;
+    result.Set("status", "checking");
+    std::move(callback).Run(Success(base::Value(std::move(result))));
+    return;
+  }
+  if (operation == "autoUpdater.downloadUpdate") {
+    manager->DownloadUpdate();
+    base::DictValue result;
+    result.Set("status", "downloading");
+    std::move(callback).Run(Success(base::Value(std::move(result))));
+    return;
+  }
+  if (operation == "autoUpdater.quitAndInstall") {
+    manager->QuitAndInstall();
+    base::DictValue result;
+    result.Set("status", "installing");
+    std::move(callback).Run(Success(base::Value(std::move(result))));
+    return;
+  }
+  if (operation == "autoUpdater.getState") {
+    base::DictValue result;
+    result.Set("state",
+               xenon::updater::UpdateStateToString(manager->GetState()));
+    if (manager->GetManifest()) {
+      result.Set("manifest", manager->GetManifest()->ToValue().Clone());
+    }
+    std::move(callback).Run(Success(base::Value(std::move(result))));
+    return;
+  }
+  std::move(callback).Run(
+      Failure("ERR_NOT_SUPPORTED: unsupported autoUpdater operation " + operation));
 }
 
 void CallClipboard(const base::DictValue& arguments,
@@ -130,6 +190,10 @@ void CallElectronApi(base::Value arguments, ElectronApiCallback callback) {
   }
   if (base::StartsWith(*operation, "clipboard.")) {
     CallClipboard(arguments.GetDict(), *operation, std::move(callback));
+    return;
+  }
+  if (base::StartsWith(*operation, "autoUpdater.")) {
+    CallAutoUpdater(arguments.GetDict(), *operation, std::move(callback));
     return;
   }
   if (*operation == "shell.openExternal" || *operation == "shell.openPath" ||

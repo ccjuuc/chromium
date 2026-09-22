@@ -58,6 +58,11 @@
       <include name="IDR_XENON_PLAYER_BY_ELEC_HTML" file="webui/xenon_player_by_elec/index.html" type="BINDATA" />
       <include name="IDR_XENON_PLAYER_BY_ELEC_CSS" file="webui/xenon_player_by_elec/index.css" type="BINDATA" />
       <include name="IDR_XENON_PLAYER_BY_ELEC_JS" file="webui/xenon_player_by_elec/index.js" type="BINDATA" />
+
+      <!-- Xenon Update WebUI (chrome://xenon-update) -->
+      <include name="IDR_XENON_UPDATE_HTML" file="webui/xenon_update/index.html" type="BINDATA" />
+      <include name="IDR_XENON_UPDATE_CSS" file="webui/xenon_update/index.css" type="BINDATA" />
+      <include name="IDR_XENON_UPDATE_JS" file="webui/xenon_update/index.js" type="BINDATA" />
     </includes>
   </release>
 </grit>

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>检查更新 - Xenon Update</title>
+  <link rel="stylesheet" href="index.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="logo-box">
+        <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        <h1>Xenon 增量更新管理器</h1>
+      </div>
+      <div class="version-badge" id="currentVersionBadge">当前版本: 检测中...</div>
+    </header>
+
+    <main class="main-content">
+      <!-- 状态指示卡片 -->
+      <section class="card status-card">
+        <div class="status-indicator-box">
+          <div class="status-dot" id="statusDot"></div>
+          <div class="status-text-group">
+            <h2 id="statusTitle">就绪</h2>
+            <p id="statusDesc">准备好检查更新或配置更新源</p>
+          </div>
+        </div>
+
+        <div class="progress-wrapper" id="progressWrapper" style="display: none;">
+          <div class="progress-bar">
+            <div class="progress-fill" id="progressFill" style="width: 0%;"></div>
+          </div>
+          <div class="progress-info">
+            <span id="progressPercent">0%</span>
+            <span id="progressSpeed"></span>
+          </div>
+        </div>
+
+        <div class="action-buttons">
+          <button id="btnCheckUpdate" class="btn btn-primary">
+            <span class="btn-text">检查更新</span>
+          </button>
+          <button id="btnRestartInstall" class="btn btn-success" style="display: none;">
+            <span class="btn-text">立即重启生效 (方案B)</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- 服务端与场景配置 -->
+      <section class="card config-card">
+        <h3>更新服务器设置</h3>
+        <div class="form-group">
+          <label for="serverUrlInput">Feed URL (检查更新接口):</label>
+          <div class="input-group">
+            <input type="text" id="serverUrlInput" value="http://127.0.0.1:8999/api/v1/update/check" placeholder="http://127.0.0.1:8999/api/v1/update/check" />
+            <button id="btnSaveFeedUrl" class="btn btn-secondary">保存配置</button>
+          </div>
+        </div>
+
+        <div class="scenario-group">
+          <span class="scenario-label">快速模拟测试场景 (本地 Node Mock 服务):</span>
+          <div class="scenario-buttons">
+            <button class="btn btn-scenario" data-mode="diff">1. 差分增量包 (Zucchini)</button>
+            <button class="btn btn-scenario" data-mode="full">2. 全量包回退</button>
+            <button class="btn btn-scenario" data-mode="latest">3. 已是最新</button>
+            <button class="btn btn-scenario" data-mode="corrupt">4. 损坏校验回退</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 日志记录面板 -->
+      <section class="card log-card">
+        <div class="log-header">
+          <h3>更新与安装日志</h3>
+          <button id="btnClearLog" class="btn-link">清空日志</button>
+        </div>
+        <div class="log-console" id="logConsole">
+          <div class="log-entry info">[System] 检查更新模块已初始化</div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script type="module" src="index.js"></script>
+</body>
+</html>

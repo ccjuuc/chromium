@@ -167,6 +167,41 @@ source_set("filesystem_bridge") {
   ]
 }
 
+source_set("xenon_updater") {
+  sources = [
+    "updater/xenon_update_downloader.cc",
+    "updater/xenon_update_downloader.h",
+    "updater/xenon_update_installer.h",
+    "updater/xenon_update_manager.cc",
+    "updater/xenon_update_manager.h",
+    "updater/xenon_update_patcher.cc",
+    "updater/xenon_update_patcher.h",
+    "updater/xenon_update_types.cc",
+    "updater/xenon_update_types.h",
+  ]
+  if (is_win) {
+    sources += [ "updater/xenon_update_installer_win.cc" ]
+  } else if (is_mac) {
+    sources += [ "updater/xenon_update_installer_mac.mm" ]
+  } else {
+    sources += [ "updater/xenon_update_installer_posix.cc" ]
+  }
+
+  deps = [
+    "//base",
+    "//chrome/browser:browser_process",
+    "//chrome/browser/lifetime:termination_notification",
+    "//components/version_info",
+    "//components/zucchini:zucchini_io",
+    "//components/zucchini:zucchini_lib",
+    "//crypto",
+    "//net",
+    "//services/network/public/cpp",
+    "//third_party/zlib/google:zip",
+    "//url",
+  ]
+}
+
 source_set("electron_api_bridge") {
   sources = [
     "ipc/xenon_electron_api_bridge.cc",
@@ -174,6 +209,7 @@ source_set("electron_api_bridge") {
     "ipc/xenon_electron_shell.h",
   ]
   deps = [
+    ":xenon_updater",
     "//base",
     "//ui/base/clipboard",
     "//url",
@@ -247,6 +283,8 @@ source_set("browser") {
     "ui/webui/xenon_thunder_2025_controller.h",
     "ui/webui/xenon_ui_controller.cc",
     "ui/webui/xenon_ui_controller.h",
+    "ui/webui/xenon_update_ui_controller.cc",
+    "ui/webui/xenon_update_ui_controller.h",
     "ui/webui/xenon_webui_controller.cc",
     "ui/webui/xenon_webui_controller.h",
     "ui/webui/xenon_webui_dev_proxy.cc",
@@ -314,6 +352,7 @@ source_set("browser") {
     ":xenon_common_bubble",
     ":xenon_common_dialog",
     ":xenon_prefs",
+    ":xenon_updater",
     "//base",
     "//chrome/browser:browser_process",
     "//chrome/browser/background/extensions",
@@ -385,6 +424,7 @@ if (enable_xenon_service) {
     sources = [
       "asar/xenon_asar_url_loader_factory_unittest.cc",
       "ui/xenon_web_dialog_unittest.cc",
+      "updater/xenon_update_manager_unittest.cc",
       "xenon_manager_unittest.cc",
     ]
     deps = [
@@ -616,3 +656,23 @@ test("ipc_main_container_unittests") {
     deps += [ "//xenon_overlay/third_party:libuv" ]
   }
 }
+
+test("xenon_updater_unittests") {
+  testonly = true
+  sources = [
+    "updater/xenon_update_manager_unittest.cc",
+    "updater/xenon_updater_unittest_stubs.cc",
+  ]
+  deps = [
+    ":xenon_updater",
+    "//base",
+    "//base/test:run_all_unittests",
+    "//base/test:test_support",
+    "//components/zucchini:zucchini_io",
+    "//components/zucchini:zucchini_lib",
+    "//mojo/core/embedder",
+    "//services/network:test_support",
+    "//testing/gtest",
+  ]
+}
+

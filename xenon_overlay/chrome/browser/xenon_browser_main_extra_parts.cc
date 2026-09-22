@@ -35,6 +35,8 @@
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_player_electron_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_thunder_2025_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_ui_controller.h"
+#include "xenon_overlay/chrome/browser/ui/webui/xenon_update_ui_controller.h"
+#include "xenon_overlay/chrome/browser/updater/xenon_update_manager.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_node_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/video_sniffer_webui_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_webui_controller.h"
@@ -58,6 +60,7 @@ namespace {
 constexpr char kIpcTestOrigin[] = "chrome://xenon-player-by-elec";
 constexpr char kPlayerElectronOrigin[] = "chrome://xenon-player-electron";
 constexpr char kThunder2025Origin[] = "chrome://thunder-2025";
+constexpr char kUpdateOrigin[] = "chrome://xenon-update";
 constexpr char kIpcTestContainerId[] = "xenon-ipc-test";
 constexpr char kThunder2025ContainerId[] = "thunder-2025";
 
@@ -69,7 +72,8 @@ void EnableBuiltInIpcOrigins(base::CommandLine* command_line) {
       ",",
       base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
   for (const char* origin :
-       {kIpcTestOrigin, kPlayerElectronOrigin, kThunder2025Origin}) {
+       {kIpcTestOrigin, kPlayerElectronOrigin, kThunder2025Origin,
+        kUpdateOrigin}) {
     if (std::find(allowed_origins.begin(), allowed_origins.end(), origin) ==
         allowed_origins.end()) {
       allowed_origins.emplace_back(origin);
@@ -122,6 +126,15 @@ void XenonBrowserMainExtraParts::PostMainMessageLoopRun() {
     reminder_browser_observer_.reset();
   }
   xenon_fonts::UnregisterXunleiFonts();
+
+  // 正常退出时，若已就绪新版本，自动启动后台静默迁移（不拉起新进程，下次打开生效）
+  auto* update_manager = xenon::updater::XenonUpdateManager::GetInstance();
+  if (update_manager &&
+      update_manager->GetState() ==
+          xenon::updater::UpdateState::kUpdateDownloaded) {
+    LOG(INFO) << "[XenonBrowserMainExtraParts] Applying staged update on normal exit...";
+    update_manager->InstallOnExit();
+  }
 }
 
 void XenonBrowserMainExtraParts::PreProfileInit() {
@@ -266,6 +279,10 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
       std::make_unique<xenon::XenonPlayerByElecConfig>());
   LOG(INFO) << "XenonBrowserMainExtraParts: Registered XenonPlayerByElecConfig";
 
+  content::WebUIConfigMap::GetInstance().AddWebUIConfig(
+      std::make_unique<xenon::XenonUpdateConfig>());
+  LOG(INFO) << "XenonBrowserMainExtraParts: Registered XenonUpdateConfig";
+
 #if BUILDFLAG(ENABLE_XENON_AI)
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<xenon::XenonAiSidePanelUIConfig>());
@@ -286,4 +303,7 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
   if (base::CommandLine::ForCurrentProcess()->HasSwitch("show-xenon-extension")) {
     xenon::XenonWebDialog::ShowXenonOverlay(profile);
   }
+
+  // 启动时自动同步注册表并异步清理历史旧版本目录
+  xenon::updater::XenonUpdateManager::GetInstance()->OnVersionStartup();
 }

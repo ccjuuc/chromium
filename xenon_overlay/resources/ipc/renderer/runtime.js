@@ -317,6 +317,32 @@
       setZoomLevel: () => unsupportedElectronApi('webFrame.setZoomLevel'),
       getZoomLevel: () => unsupportedElectronApi('webFrame.getZoomLevel'),
     },
+    autoUpdater: (() => {
+      const updater = new EventEmitter();
+      updater.autoDownload = true;
+      updater.autoInstallOnAppQuit = true;
+      updater.setFeedURL = (urlOrOptions) => {
+        const url = typeof urlOrOptions === 'string' ? urlOrOptions : (urlOrOptions && urlOrOptions.url ? urlOrOptions.url : '');
+        return invokeHostElectronApi('autoUpdater.setFeedURL', {url});
+      };
+      updater.getFeedURL = async () => {
+        const res = await invokeHostElectronApi('autoUpdater.getFeedURL', {});
+        return (res && res.url) || '';
+      };
+      updater.checkForUpdates = async () => {
+        updater.emit('checking-for-update');
+        return invokeHostElectronApi('autoUpdater.checkForUpdates', {});
+      };
+      updater.checkForUpdatesAndNotify = async () => updater.checkForUpdates();
+      updater.downloadUpdate = async () => invokeHostElectronApi('autoUpdater.downloadUpdate', {});
+      updater.quitAndInstall = () => {
+        invokeHostElectronApi('autoUpdater.quitAndInstall', {});
+      };
+      ipcRenderer.on('__xenon:auto-updater-event', (_event, eventName, ...args) => {
+        updater.emit(eventName, ...args);
+      });
+      return updater;
+    })(),
   };
   globalThis.__xenonElectronIpc = electron;
   // Guest preloads can explicitly expose their own API, but a page without

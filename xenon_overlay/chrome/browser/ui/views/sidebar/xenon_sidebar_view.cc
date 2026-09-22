@@ -70,6 +70,7 @@ constexpr SidebarShortcut kShortcuts[] = {
     {"PLE", "Player via Electron Container",
      "chrome://xenon-player-electron/"},
     {"TH", "Thunder 2025", "chrome://thunder-2025/"},
+    {"UPD", "检查更新", "chrome://xenon-update/"},
     // {"VT", "Local Video Test", "chrome://local-video-test/"},
     // {"RDL", "Render DLL Test", "chrome://render-dll-test/"},
     // {"MI", "Media Internals", "chrome://media-internals/"},
