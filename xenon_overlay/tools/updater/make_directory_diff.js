@@ -39,11 +39,23 @@ function getAllFiles(dir, baseDir = dir) {
   const list = fs.readdirSync(dir);
   for (const item of list) {
     const fullPath = path.join(dir, item);
-    const stat = fs.statSync(fullPath);
-    if (stat.isDirectory()) {
+    let stat;
+    try {
+      stat = fs.lstatSync(fullPath);
+    } catch (err) {
+      continue;
+    }
+    const relPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
+    if (stat.isSymbolicLink()) {
+      results.push({
+        fullPath,
+        relPath,
+        size: 0,
+        symlink: fs.readlinkSync(fullPath)
+      });
+    } else if (stat.isDirectory()) {
       results = results.concat(getAllFiles(fullPath, baseDir));
     } else {
-      const relPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
       results.push({ fullPath, relPath, size: stat.size });
     }
   }
@@ -225,6 +237,15 @@ function main() {
     const norm = isMacMode ? { isVersionScope: false, subPath: newFile.relPath } : normalizeToVersionRelative(newFile.relPath, targetVersion);
     const key = (norm.isVersionScope ? '<VER>/' : '') + norm.subPath;
     const targetRel = newFile.relPath;
+    if (newFile.symlink) {
+      actions.push({
+        target: targetRel,
+        action: 'symlink',
+        link: newFile.symlink
+      });
+      copyCount++;
+      continue;
+    }
     const newSha = computeSha256(newFile.fullPath);
 
     const oldFile = oldFilesMap.get(key);

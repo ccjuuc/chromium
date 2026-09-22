@@ -191,6 +191,7 @@ source_set("xenon_updater") {
     "//base",
     "//chrome/browser:browser_process",
     "//chrome/browser/lifetime:termination_notification",
+    "//chrome/common:non_code_constants",
     "//components/version_info",
     "//components/zucchini:zucchini_io",
     "//components/zucchini:zucchini_lib",
@@ -671,8 +672,10 @@ test("xenon_updater_unittests") {
     "//components/zucchini:zucchini_io",
     "//components/zucchini:zucchini_lib",
     "//mojo/core/embedder",
+    "//net",
     "//services/network:test_support",
     "//testing/gtest",
+    "//third_party/zlib/google:zip",
   ]
 }
 

@@ -8,6 +8,11 @@
 
 namespace xenon::updater {
 
+std::string XenonUpdateInstaller::ReadBundleShortVersion(
+    const base::FilePath&) {
+  return std::string();
+}
+
 bool XenonUpdateInstaller::InstallAndRelaunch(
     const base::FilePath& staged_path,
     const base::FilePath& target_install_dir,

@@ -9,6 +9,10 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/test/task_environment.h"
+#include "build/build_config.h"
+#include "net/base/url_util.h"
+#include "third_party/zlib/google/zip.h"
+#include "url/gurl.h"
 #include "mojo/core/embedder/embedder.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
@@ -143,6 +147,20 @@ TEST_F(XenonUpdateManagerTest, CheckUpdateAvailableAndNotAvailable) {
   manager_->SetCurrentVersionForTesting("1.0.0.0");
 
   std::string feed_url = "https://update.xenon.com/check";
+  const char* platform =
+#if BUILDFLAG(IS_MAC)
+      "mac";
+#elif BUILDFLAG(IS_WIN)
+      "win";
+#else
+      "linux";
+#endif
+  auto request_url = [&](const std::string& version) {
+    return net::AppendQueryParameter(
+               net::AppendQueryParameter(GURL(feed_url), "platform", platform),
+               "version", version)
+        .spec();
+  };
   std::string response_newer = R"({
     "target_version": "1.1.0.0",
     "is_diff": false,
@@ -151,7 +169,8 @@ TEST_F(XenonUpdateManagerTest, CheckUpdateAvailableAndNotAvailable) {
     "sha256": "1234"
   })";
 
-  test_url_loader_factory_.AddResponse(feed_url, response_newer);
+  test_url_loader_factory_.AddResponse(request_url("1.0.0.0"), response_newer);
+  test_url_loader_factory_.AddResponse(request_url("1.1.0.0"), response_newer);
   manager_->CheckForUpdates(feed_url);
 
   task_environment_.RunUntilIdle();
@@ -238,6 +257,70 @@ TEST_F(XenonUpdateManagerTest, PlanBCleanupOldVersions) {
   // Current version 1.1 and non-version directory should be preserved
   EXPECT_TRUE(base::DirectoryExists(ver_1_1));
   EXPECT_TRUE(base::DirectoryExists(non_ver_dir));
+}
+
+TEST_F(XenonUpdateManagerTest, BundleManifestStagesFromAppNotTempParent) {
+  base::FilePath app = temp_dir_.GetPath().AppendASCII("Old.app");
+  base::FilePath resource =
+      app.AppendASCII("Contents").AppendASCII("Resources").AppendASCII("keep.dat");
+  ASSERT_TRUE(base::CreateDirectory(resource.DirName()));
+  ASSERT_TRUE(base::WriteFile(resource, "keep-me"));
+
+  base::FilePath bundle = temp_dir_.GetPath().AppendASCII("bundle");
+  base::FilePath added = bundle.AppendASCII("files")
+                              .AppendASCII("Contents")
+                              .AppendASCII("Info.plist");
+  ASSERT_TRUE(base::CreateDirectory(added.DirName()));
+  ASSERT_TRUE(base::WriteFile(added, "plist"));
+  const char manifest[] = R"({
+    "platform": "mac",
+    "base_version": "1.0.0.1",
+    "target_version": "1.0.0.2",
+    "actions": [
+      {
+        "target": "Contents/Resources/kept.dat",
+        "action": "copy",
+        "base": "Contents/Resources/keep.dat"
+      },
+      {
+        "target": "Contents/Info.plist",
+        "action": "add",
+        "source": "files/Contents/Info.plist"
+      },
+      {
+        "target": "Contents/Frameworks/Current",
+        "action": "symlink",
+        "link": "keep.dat"
+      }
+    ]
+  })";
+  ASSERT_TRUE(base::WriteFile(bundle.AppendASCII("manifest.json"), manifest));
+
+  base::FilePath patch_zip = temp_dir_.GetPath().AppendASCII("patch.zip");
+  ASSERT_TRUE(zip::Zip(bundle, patch_zip, /*include_hidden_files=*/true));
+
+  base::FilePath target = temp_dir_.GetPath()
+                              .AppendASCII("xenon_update_1.0.0.2")
+                              .AppendASCII("New.app");
+  auto result = XenonUpdateManager::PrepareVersionDirectory(
+      app, resource, patch_zip, target,
+      temp_dir_.GetPath().AppendASCII("staging"));
+  EXPECT_TRUE(result.success) << result.error;
+  std::string kept;
+  ASSERT_TRUE(base::ReadFileToString(
+      target.AppendASCII("Contents").AppendASCII("Resources").AppendASCII("kept.dat"),
+      &kept));
+  EXPECT_EQ("keep-me", kept);
+  std::string plist;
+  ASSERT_TRUE(base::ReadFileToString(
+      target.AppendASCII("Contents").AppendASCII("Info.plist"), &plist));
+  EXPECT_EQ("plist", plist);
+  base::FilePath created_link =
+      target.AppendASCII("Contents").AppendASCII("Frameworks").AppendASCII("Current");
+  EXPECT_TRUE(base::IsLink(created_link));
+  base::FilePath link_target;
+  ASSERT_TRUE(base::ReadSymbolicLink(created_link, &link_target));
+  EXPECT_EQ(FILE_PATH_LITERAL("keep.dat"), link_target.value());
 }
 
 }  // namespace xenon::updater

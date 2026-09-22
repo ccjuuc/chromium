@@ -5,6 +5,8 @@
 #ifndef XENON_OVERLAY_CHROME_BROWSER_UPDATER_XENON_UPDATE_INSTALLER_H_
 #define XENON_OVERLAY_CHROME_BROWSER_UPDATER_XENON_UPDATE_INSTALLER_H_
 
+#include <string>
+
 #include "base/files/file_path.h"
 
 namespace xenon::updater {
@@ -20,6 +22,10 @@ class XenonUpdateInstaller {
       const base::FilePath& staged_path,
       const base::FilePath& target_install_dir,
       const base::FilePath& relaunch_executable);
+
+  // CFBundleShortVersionString of a macOS app bundle, then CFBundleVersion.
+  // Empty when |bundle_path| has no Info.plist. Only implemented on macOS.
+  static std::string ReadBundleShortVersion(const base::FilePath& bundle_path);
 };
 
 }  // namespace xenon::updater

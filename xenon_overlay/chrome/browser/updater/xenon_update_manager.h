@@ -118,6 +118,9 @@ class XenonUpdateManager {
   void NotifyError(const std::string& message);
 
   void OnCheckResponse(std::optional<std::string> response_body);
+  void OnDownloadTempDirCreated(base::ScopedTempDir dir, bool created);
+  void BeginPackageDownload();
+  void OnInstallInitiated(bool initiated);
   void StartPackageDownload(const UpdatePackageInfo& package, bool is_diff);
   void OnDownloadProgress(const DownloadProgress& progress);
   void OnDownloadComplete(bool is_diff, bool success, const std::string& error);
@@ -132,6 +135,8 @@ class XenonUpdateManager {
   base::FilePath install_dir_override_;
   base::FilePath base_file_override_;
   base::ScopedTempDir temp_download_dir_;
+  bool download_temp_dir_ready_ = false;
+  bool install_started_ = false;
   base::FilePath downloaded_file_;
   base::FilePath staged_output_file_;
 

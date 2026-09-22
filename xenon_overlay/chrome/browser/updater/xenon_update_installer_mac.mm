@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "base/apple/bundle_locations.h"
+#include "base/apple/foundation_util.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -16,8 +17,29 @@
 #include "base/process/process.h"
 #include "base/process/process_handle.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/sys_string_conversions.h"
+#include "base/unguessable_token.h"
 
 namespace xenon::updater {
+
+std::string XenonUpdateInstaller::ReadBundleShortVersion(
+    const base::FilePath& bundle_path) {
+  if (bundle_path.empty()) {
+    return std::string();
+  }
+  base::FilePath plist_path =
+      bundle_path.Append("Contents").Append("Info.plist");
+  @autoreleasepool {
+    NSDictionary* info = [NSDictionary dictionaryWithContentsOfFile:
+        base::apple::FilePathToNSString(plist_path)];
+    NSString* version = base::apple::ObjCCast<NSString>(
+        info[@"CFBundleShortVersionString"]);
+    if (version.length == 0) {
+      version = base::apple::ObjCCast<NSString>(info[@"CFBundleVersion"]);
+    }
+    return base::SysNSStringToUTF8(version);
+  }
+}
 
 bool XenonUpdateInstaller::InstallAndRelaunch(
     const base::FilePath& staged_path,
@@ -52,9 +74,18 @@ bool XenonUpdateInstaller::InstallAndRelaunch(
     }
   }
 
-  // 3. Codesign verification check (Gatekeeper security compliance)
+  if (!base::DirectoryExists(staged_app)) {
+    LOG(ERROR) << "[XenonUpdateInstaller] Staged update is not an app bundle: "
+               << staged_app.value();
+    return false;
+  }
+
+  // 3. Codesign verification. Unsigned local builds continue; a bundle that
+  // already has a signature must verify before it replaces the installed app.
   base::FilePath codesign_bin("/usr/bin/codesign");
-  if (base::PathExists(codesign_bin) && base::DirectoryExists(staged_app)) {
+  base::FilePath signature_dir =
+      staged_app.Append("Contents").Append("_CodeSignature");
+  if (base::PathExists(codesign_bin) && base::DirectoryExists(signature_dir)) {
     base::CommandLine verify_cmd(codesign_bin);
     verify_cmd.AppendArg("--verify");
     verify_cmd.AppendArg("--deep");
@@ -63,15 +94,14 @@ bool XenonUpdateInstaller::InstallAndRelaunch(
 
     std::string verify_output;
     int exit_code = -1;
-    if (base::GetAppOutputWithExitCode(verify_cmd, &verify_output, &exit_code)) {
-      if (exit_code != 0) {
-        LOG(WARNING) << "[XenonUpdateInstaller] Codesign verification warning ("
-                     << exit_code << "): " << verify_output;
-      } else {
-        VLOG(1) << "[XenonUpdateInstaller] Codesign verification passed for "
-                << staged_app.value();
-      }
+    if (!base::GetAppOutputWithExitCode(verify_cmd, &verify_output, &exit_code) ||
+        exit_code != 0) {
+      LOG(ERROR) << "[XenonUpdateInstaller] Codesign verification failed ("
+                 << exit_code << "): " << verify_output;
+      return false;
     }
+    VLOG(1) << "[XenonUpdateInstaller] Codesign verification passed for "
+            << staged_app.value();
   }
 
   // 4. Generate transient atomic replacement helper script
@@ -82,7 +112,8 @@ bool XenonUpdateInstaller::InstallAndRelaunch(
 
   int current_pid = base::GetCurrentProcId();
   base::FilePath script_path = temp_dir.Append(
-      "xenon_mac_update_" + base::NumberToString(current_pid) + ".sh");
+      "xenon_mac_update_" + base::NumberToString(current_pid) + "_" +
+      base::UnguessableToken::Create().ToString() + ".sh");
 
   std::string script_content = "#!/bin/bash\n";
   script_content += "# Xenon macOS Atomic Swap & Relaunch Helper\n";
@@ -107,7 +138,7 @@ bool XenonUpdateInstaller::InstallAndRelaunch(
 
   // Relaunch the upgraded application if requested
   if (!relaunch_executable.empty()) {
-    script_content += "open -n \"$TARGET\"\n";
+    script_content += "/usr/bin/open -n \"$TARGET\"\n";
   }
 
   // Self-remove the script file
