@@ -22,7 +22,9 @@
 #include "base/process/process.h"
 #include "base/process/process_handle.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/version.h"
+#include "base/win/registry.h"
 #include "base/win/scoped_handle.h"
 #include "chrome/common/chrome_switches.h"
 
@@ -106,7 +108,158 @@ bool CopyVersionDirectory(const base::FilePath& source,
   return entries.GetError() == base::File::FILE_OK;
 }
 
+bool SameInstallDirectory(const base::FilePath& registered,
+                          const base::FilePath& installation) {
+  return registered.IsAbsolute() && base::FilePath::CompareEqualIgnoreCase(
+                                        registered.NormalizePathSeparators()
+                                            .StripTrailingSeparators()
+                                            .value(),
+                                        installation.NormalizePathSeparators()
+                                            .StripTrailingSeparators()
+                                            .value());
+}
+
+base::FilePath InstallationFromSetup(const base::FilePath& setup) {
+  // The setup file may already have been removed by version cleanup. Validate
+  // its registered layout without requiring the old executable to exist.
+  if (!setup.IsAbsolute() ||
+      !base::FilePath::CompareEqualIgnoreCase(setup.BaseName().value(),
+                                              L"setup.exe") ||
+      !base::FilePath::CompareEqualIgnoreCase(
+          setup.DirName().BaseName().value(), L"Installer") ||
+      !base::Version(setup.DirName().DirName().BaseName().MaybeAsASCII())
+           .IsValid()) {
+    return {};
+  }
+  return setup.DirName().DirName().DirName();
+}
+
+bool RegistrationMatches(base::win::RegKey& key,
+                         const base::FilePath& installation,
+                         bool uninstall_key) {
+  std::wstring value;
+  if (uninstall_key &&
+      key.ReadValue(L"InstallLocation", &value) == ERROR_SUCCESS &&
+      !value.empty()) {
+    return SameInstallDirectory(base::FilePath(value), installation);
+  }
+  if (key.ReadValue(L"UninstallString", &value) == ERROR_SUCCESS &&
+      !value.empty()) {
+    // The product key contains a raw path (which may contain spaces), whereas
+    // the uninstall key contains a quoted command with arguments.
+    const base::FilePath setup =
+        uninstall_key ? base::CommandLine::FromString(value).GetProgram()
+                      : base::FilePath(value);
+    const base::FilePath registered = InstallationFromSetup(setup);
+    if (!registered.empty()) {
+      return SameInstallDirectory(registered, installation);
+    }
+  }
+  if (!uninstall_key &&
+      key.ReadValue(L"InstallerSuccessLaunchCmdLine", &value) ==
+          ERROR_SUCCESS &&
+      !value.empty()) {
+    return SameInstallDirectory(
+        base::CommandLine::FromString(value).GetProgram().DirName(),
+        installation);
+  }
+  return false;
+}
+
+void WriteRegistrationValue(base::win::RegKey& key,
+                            const wchar_t* name,
+                            const std::wstring& value) {
+  const LONG result = key.WriteValue(name, value.c_str());
+  if (result != ERROR_SUCCESS) {
+    LOG(ERROR) << "Failed to update installed version registration: " << result;
+  }
+}
+
+std::wstring UpdatedSetupCommand(base::win::RegKey& key,
+                                 const wchar_t* name,
+                                 const base::FilePath& setup,
+                                 bool cleanup,
+                                 bool system_install) {
+  std::wstring value;
+  base::CommandLine command(setup);
+  if (key.ReadValue(name, &value) == ERROR_SUCCESS && !value.empty()) {
+    command = base::CommandLine::FromString(value);
+    command.SetProgram(setup);
+  }
+  // Retain mode/channel, MSI, and logging arguments registered by setup.
+  if (cleanup) {
+    if (!command.HasSwitch("cleanup-for-downgrade-version")) {
+      command.AppendSwitchNative("cleanup-for-downgrade-version", L"$1");
+    }
+    if (!command.HasSwitch("cleanup-for-downgrade-operation")) {
+      command.AppendSwitchNative("cleanup-for-downgrade-operation", L"$2");
+    }
+  } else if (!command.HasSwitch("uninstall")) {
+    command.AppendSwitch("uninstall");
+  }
+  if (system_install && !command.HasSwitch("system-level")) {
+    command.AppendSwitch("system-level");
+  }
+  return L"\"" + setup.value() + L"\" " + command.GetArgumentsString();
+}
+
 }  // namespace
+
+void XenonUpdateInstaller::UpdateRegistryVersion(
+    const base::FilePath& install_dir,
+    const base::FilePath& executable,
+    const std::string& version) {
+  const std::wstring product =
+      executable.BaseName().RemoveFinalExtension().value();
+  if (product.empty() || !install_dir.IsAbsolute() ||
+      !base::Version(version).IsValid() ||
+      !base::DirectoryExists(install_dir.AppendASCII(version))) {
+    return;
+  }
+  const std::wstring app_path = L"Software\\" + product;
+  const std::wstring uninstall_path =
+      L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + product;
+  const base::FilePath setup = install_dir.AppendASCII(version)
+                                   .AppendASCII("Installer")
+                                   .AppendASCII("setup.exe");
+  const bool has_setup = base::PathExists(setup);
+  const std::wstring version_w = base::ASCIIToWide(version);
+
+  for (HKEY root : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
+    for (bool is_uninstall : {false, true}) {
+      const std::wstring& key_path = is_uninstall ? uninstall_path : app_path;
+      for (REGSAM view : {KEY_WOW64_32KEY, KEY_WOW64_64KEY}) {
+        base::win::RegKey key;
+        if (key.Open(root, key_path.c_str(),
+                     KEY_QUERY_VALUE | KEY_SET_VALUE | view) != ERROR_SUCCESS ||
+            !RegistrationMatches(key, install_dir, is_uninstall)) {
+          continue;
+        }
+        if (is_uninstall) {
+          WriteRegistrationValue(key, L"DisplayVersion", version_w);
+          WriteRegistrationValue(key, L"Version", version_w);
+          if (has_setup) {
+            WriteRegistrationValue(
+                key, L"UninstallString",
+                UpdatedSetupCommand(key, L"UninstallString", setup,
+                                    /*cleanup=*/false,
+                                    root == HKEY_LOCAL_MACHINE));
+          }
+        } else {
+          WriteRegistrationValue(key, L"pv", version_w);
+          if (has_setup) {
+            WriteRegistrationValue(key, L"UninstallString", setup.value());
+            WriteRegistrationValue(
+                key, L"DowngradeCleanupCommand",
+                UpdatedSetupCommand(key, L"DowngradeCleanupCommand", setup,
+                                    /*cleanup=*/true,
+                                    root == HKEY_LOCAL_MACHINE));
+          }
+        }
+      }
+    }
+  }
+}
 
 std::string XenonUpdateInstaller::ReadBundleShortVersion(
     const base::FilePath&) {
@@ -463,6 +616,13 @@ bool XenonUpdateInstaller::InstallAndRelaunch(
       return false;
     }
   }
+
+  // Publish registration only after the file transaction and any relaunch
+  // handoff succeed. Older target releases may not synchronize it at startup.
+  const base::FilePath committed_version =
+      version_staged ? staged_path : installed_version;
+  UpdateRegistryVersion(target_install_dir, target_exe,
+                        committed_version.BaseName().MaybeAsASCII());
 
   // Locked backup images may remain until browser exit. Keep this private
   // recovery directory; it is safe to clean on a subsequent successful start.

@@ -452,9 +452,9 @@ void XenonUpdateManager::StartSystemUpdate(bool check_only) {
   for (auto& observer : observers_) {
     observer.OnCheckingForUpdate();
   }
-  system_updater_->Start(check_only,
-      base::BindRepeating(&XenonUpdateManager::OnSystemUpdateEvent,
-                         weak_factory_.GetWeakPtr()));
+  system_updater_->Start(
+      check_only, base::BindRepeating(&XenonUpdateManager::OnSystemUpdateEvent,
+                                      weak_factory_.GetWeakPtr()));
 }
 
 void XenonUpdateManager::OnSystemUpdateEvent(
@@ -486,8 +486,9 @@ void XenonUpdateManager::OnSystemUpdateEvent(
       progress.bytes_downloaded = std::max<int64_t>(0, event.downloaded);
       progress.total_bytes = std::max<int64_t>(0, event.total);
       if (progress.total_bytes > 0) {
-        progress.percent = static_cast<int>(std::clamp(
-            100.0 * progress.bytes_downloaded / progress.total_bytes, 0.0, 100.0));
+        progress.percent = static_cast<int>(
+            std::clamp(100.0 * progress.bytes_downloaded / progress.total_bytes,
+                       0.0, 100.0));
       }
       OnDownloadProgress(progress);
       break;
@@ -524,7 +525,8 @@ void XenonUpdateManager::OnSystemUpdateEvent(
 void XenonUpdateManager::CheckForUpdates(const std::string& feed_url) {
   if (system_updater_) {
     if (system_update_active_ || state_ == UpdateState::kCheckingForUpdate ||
-        state_ == UpdateState::kDownloading || state_ == UpdateState::kPatching ||
+        state_ == UpdateState::kDownloading ||
+        state_ == UpdateState::kPatching ||
         state_ == UpdateState::kUpdateDownloaded || install_started_) {
       return;
     }
@@ -1111,7 +1113,9 @@ XenonUpdateManager::PrepareVersionDirectory(
       return true;
     };
     std::set<base::FilePath> targets;
+#if !BUILDFLAG(IS_WIN)
     std::vector<std::pair<base::FilePath, base::FilePath>> links;
+#endif
     for (const auto& value : *actions) {
       if (!value.is_dict()) {
         return fail("Invalid action in patch manifest");
@@ -1154,6 +1158,9 @@ XenonUpdateManager::PrepareVersionDirectory(
         return fail("Cannot create destination directory: " + *target);
       }
       if (*type == "symlink") {
+#if BUILDFLAG(IS_WIN)
+        return fail("Symbolic link actions are not supported on Windows");
+#else
         const std::string* link = action.FindString("link");
         if (!bundle || !link || link->empty() || link->front() == '/' ||
             link->find('\\') != std::string::npos ||
@@ -1180,6 +1187,7 @@ XenonUpdateManager::PrepareVersionDirectory(
         }
         links.emplace_back(dest, link_path);
         continue;
+#endif
       }
       const std::string* sha = action.FindString("sha256");
       if (!sha || sha->size() != 64) {
@@ -1265,7 +1273,6 @@ XenonUpdateManager::PrepareVersionDirectory(
         }
       }
     }
-#endif
     for (const auto& [dest, link] : links) {
       if (base::PathExists(dest) || base::IsLink(dest) ||
           !base::CreateSymbolicLink(link, dest)) {
@@ -1280,6 +1287,7 @@ XenonUpdateManager::PrepareVersionDirectory(
         return fail("Application link is broken or escapes staging directory");
       }
     }
+#endif
     if (!bundle) {
       base::ListValue root_deletions;
       if (parsed->Find("deletions") && !parsed->FindList("deletions")) {
@@ -1610,56 +1618,9 @@ void XenonUpdateManager::OnLastInstallErrorRead(std::string error) {
 void XenonUpdateManager::UpdateRegistryVersion(base::FilePath install_dir,
                                                const std::string& version) {
 #if BUILDFLAG(IS_WIN)
-  if (version.empty()) {
-    return;
-  }
-  base::FilePath current_exe;
-  std::wstring product_name;
-  if (base::PathService::Get(base::FILE_EXE, &current_exe)) {
-    product_name = current_exe.BaseName().RemoveFinalExtension().value();
-  }
-  if (product_name.empty()) {
-    return;
-  }
-
-  std::wstring app_reg = L"Software\\" + product_name;
-  std::wstring uninst_reg =
-      L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" +
-      product_name;
-
-  std::wstring version_w = base::ASCIIToWide(version);
-  base::FilePath setup_path = install_dir.AppendASCII(version)
-                                  .Append(FILE_PATH_LITERAL("Installer"))
-                                  .Append(FILE_PATH_LITERAL("setup.exe"));
-  std::wstring setup_exe = setup_path.value();
-
-  for (HKEY root : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
-    base::win::RegKey app_key;
-    if (app_key.Open(root, app_reg.c_str(), KEY_SET_VALUE | KEY_WOW64_32KEY) ==
-            ERROR_SUCCESS ||
-        app_key.Open(root, app_reg.c_str(), KEY_SET_VALUE) == ERROR_SUCCESS) {
-      app_key.WriteValue(L"pv", version_w.c_str());
-      if (base::PathExists(setup_path)) {
-        app_key.WriteValue(L"UninstallString", setup_exe.c_str());
-        std::wstring cleanup_cmd = L"\"" + setup_exe +
-                                   L"\" --cleanup-for-downgrade-version=$1 "
-                                   L"--cleanup-for-downgrade-operation=$2";
-        app_key.WriteValue(L"DowngradeCleanupCommand", cleanup_cmd.c_str());
-      }
-    }
-
-    base::win::RegKey uninstall_key;
-    if (uninstall_key.Open(root, uninst_reg.c_str(),
-                           KEY_SET_VALUE | KEY_WOW64_32KEY) == ERROR_SUCCESS ||
-        uninstall_key.Open(root, uninst_reg.c_str(), KEY_SET_VALUE) ==
-            ERROR_SUCCESS) {
-      uninstall_key.WriteValue(L"DisplayVersion", version_w.c_str());
-      uninstall_key.WriteValue(L"Version", version_w.c_str());
-      if (base::PathExists(setup_path)) {
-        std::wstring uninst_cmd = L"\"" + setup_exe + L"\" --uninstall";
-        uninstall_key.WriteValue(L"UninstallString", uninst_cmd.c_str());
-      }
-    }
+  base::FilePath executable;
+  if (base::PathService::Get(base::FILE_EXE, &executable)) {
+    XenonUpdateInstaller::UpdateRegistryVersion(install_dir, executable, version);
   }
 #endif
 }

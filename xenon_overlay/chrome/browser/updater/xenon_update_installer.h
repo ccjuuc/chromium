@@ -69,6 +69,13 @@ class XenonUpdateInstaller {
                                  const base::FilePath& relaunch_executable,
                                  std::string* error = nullptr);
 
+  // Windows only. Updates existing registrations belonging to |install_dir|
+  // after a directory installation commits, or when that version starts.
+  // Does not create registrations or finalize an asynchronous installer EXE.
+  static void UpdateRegistryVersion(const base::FilePath& install_dir,
+                                    const base::FilePath& executable,
+                                    const std::string& version);
+
   // CFBundleShortVersionString of a macOS app bundle, then CFBundleVersion.
   // Empty when |bundle_path| has no Info.plist. Only implemented on macOS.
   static std::string ReadBundleShortVersion(const base::FilePath& bundle_path);

@@ -46,10 +46,15 @@ test('target permissions are recorded for copy, add and patch actions', t => {
     return { status: 0 };
   };
   const actions = f.manifest({ zucchini: 'test-codec', run }).actions;
+  // Windows chmod only changes the read-only attribute; executable/group bits
+  // are not represented. Still verify that every action records the mode the
+  // filesystem actually exposes, and keep exact POSIX expectations elsewhere.
+  const expectedMode = (name, posixMode) => process.platform === 'win32' ?
+    fs.statSync(path.join(f.newRoot, name)).mode & 0o777 : posixMode;
   assert.deepEqual(actions.map(({ target, action, mode }) => ({ target, action, mode })), [
-    { target: 'add', action: 'add', mode: 0o751 },
-    { target: 'copy', action: 'copy', mode: 0o755 },
-    { target: 'patch', action: 'patch', mode: 0o750 },
+    { target: 'add', action: 'add', mode: expectedMode('add', 0o751) },
+    { target: 'copy', action: 'copy', mode: expectedMode('copy', 0o755) },
+    { target: 'patch', action: 'patch', mode: expectedMode('patch', 0o750) },
   ]);
   for (const action of actions) assert.match(action.sha256, /^[A-F0-9]{64}$/);
 });
@@ -197,6 +202,90 @@ test('Windows setup is added virtually without modifying either input tree', t =
   assert.equal(manifest.actions.find(a => a.target === '1.0.0.2/Installer/setup.exe').action, 'add');
   assert.equal(fs.existsSync(path.join(f.oldRoot, '1.0.0.1/Installer')), false);
   assert.equal(fs.existsSync(path.join(f.newRoot, '1.0.0.2/Installer')), false);
+});
+
+test('Windows mini-installer extracts both CAB setup and separate 7z browser resources', t => {
+  const f = fixture(t);
+  const oldInstaller = f.write(f.root, 'old.exe', 'old installer');
+  const newInstaller = f.write(f.root, 'new.EXE', 'new installer');
+  const calls = [];
+  const run = (_tool, args) => {
+    calls.push(args);
+    if (args[0] === 'a') {
+      fs.writeFileSync(args[2], 'test archive');
+      return { status: 0 };
+    }
+    const destination = args.find(arg => arg.startsWith('-o')).slice(2);
+    const isOld = path.basename(destination) === 'old';
+    const version = isOld ? '1.0.0.1' : '1.0.0.2';
+    if (args.includes('-t7z')) {
+      f.write(destination, 'chrome.7z', 'browser archive');
+    } else if (path.basename(args[1]) === 'chrome.7z') {
+      f.write(destination, `Chrome-bin/${version}/resource.pak`, 'unchanged resource');
+      f.write(destination, 'Chrome-bin/browser.exe', isOld ? 'old launcher' : 'new launcher');
+    } else {
+      f.write(destination, 'setup.exe', isOld ? 'old setup' : 'new setup');
+    }
+    return { status: 0 };
+  };
+  const result = buildPackage({ old: oldInstaller, new: newInstaller,
+    out: path.join(f.root, 'patch.zip'), sevenZip: process.execPath },
+  { platform: 'win32', tempRoot: f.tempRoot, projectRoot: f.root, run });
+  assert.equal(result.manifest.base_version, '1.0.0.1');
+  assert.equal(result.manifest.target_version, '1.0.0.2');
+  assert.equal(result.manifest.actions.find(a => a.target === '1.0.0.2/resource.pak').action, 'copy');
+  assert.equal(result.manifest.actions.find(a => a.target === '1.0.0.2/Installer/setup.exe').action, 'add');
+  assert.deepEqual(calls.filter(args => args[0] === 'x').map(args =>
+    args.includes('-t7z') ? '7z resource' : path.basename(args[1]) === 'chrome.7z' ? 'browser tree' : 'CAB setup'),
+  ['CAB setup', '7z resource', 'browser tree', 'CAB setup', '7z resource', 'browser tree']);
+  assert.equal(fs.readFileSync(oldInstaller, 'utf8'), 'old installer');
+  assert.equal(fs.readFileSync(newInstaller, 'utf8'), 'new installer');
+  assert.deepEqual(fs.readdirSync(f.tempRoot), []);
+});
+
+test('Windows installer browser resource failure preserves the previous package', t => {
+  const f = fixture(t);
+  const oldInstaller = f.write(f.root, 'old.exe', 'old installer');
+  const newInstaller = f.write(f.root, 'new.exe', 'new installer');
+  const output = f.write(f.root, 'patch.zip', 'previous package');
+  for (const failedCommand of [true, false]) {
+    const run = (_tool, args) => {
+      assert.equal(args[0], 'x', 'failed extraction must never publish an archive');
+      if (args.includes('-t7z')) return failedCommand ?
+        { status: 2, stderr: 'damaged 7z resource' } : { status: 0 };
+      f.write(args.find(arg => arg.startsWith('-o')).slice(2), 'setup.exe', 'setup');
+      return { status: 0 };
+    };
+    assert.throws(() => buildPackage({ old: oldInstaller, new: newInstaller, out: output,
+      sevenZip: process.execPath },
+    { platform: 'win32', tempRoot: f.tempRoot, projectRoot: f.root, run }),
+    failedCommand ? /damaged 7z resource/ : /no browser payload/);
+    assert.equal(fs.readFileSync(output, 'utf8'), 'previous package');
+    assert.deepEqual(fs.readdirSync(f.tempRoot), []);
+  }
+});
+
+test('Windows installer extraction keeps already expanded browser layouts', t => {
+  const f = fixture(t);
+  const oldInstaller = f.write(f.root, 'old.exe', 'old installer');
+  const newInstaller = f.write(f.root, 'new.exe', 'new installer');
+  for (const prefix of ['', 'Chrome-bin/']) {
+    const run = (_tool, args) => {
+      assert.equal(args.includes('-t7z'), false, 'an expanded browser needs no resource retry');
+      if (args[0] === 'a') fs.writeFileSync(args[2], 'test archive');
+      else {
+        const destination = args.find(arg => arg.startsWith('-o')).slice(2);
+        const version = path.basename(destination) === 'old' ? '1.0.0.1' : '1.0.0.2';
+        f.write(destination, `${prefix}${version}/resource.pak`, 'resource');
+      }
+      return { status: 0 };
+    };
+    const result = buildPackage({ old: oldInstaller, new: newInstaller,
+      out: path.join(f.root, 'patch.zip'), sevenZip: process.execPath },
+    { platform: 'win32', tempRoot: f.tempRoot, projectRoot: f.root, run });
+    assert.equal(result.manifest.actions[0].action, 'copy');
+    assert.deepEqual(fs.readdirSync(f.tempRoot), []);
+  }
 });
 
 test('native ZIP package roundtrips permissions and leaves no staging files', { skip: process.platform === 'win32' }, t => {

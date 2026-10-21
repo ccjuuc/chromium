@@ -33,6 +33,19 @@
 #include "xenon_overlay/chrome/browser/updater/xenon_update_types.h"
 #include "xenon_overlay/chrome/browser/updater/xenon_updater_test_support.h"
 
+#if BUILDFLAG(IS_WIN)
+#include <array>
+#include <map>
+
+#include "base/base_paths.h"
+#include "base/environment.h"
+#include "base/files/file.h"
+#include "base/test/scoped_path_override.h"
+#include "base/test/test_reg_util_win.h"
+#include "base/version.h"
+#include "crypto/hash.h"
+#endif
+
 #if BUILDFLAG(IS_MAC)
 #include <sys/stat.h>
 
@@ -60,6 +73,41 @@ const char* TestPlatform() {
   return "linux";
 #endif
 }
+
+#if BUILDFLAG(IS_WIN)
+using FileHashes = std::map<base::FilePath, std::string>;
+
+bool AddFileHash(const base::FilePath& file,
+                 const base::FilePath& relative,
+                 FileHashes* hashes) {
+  base::File input(file, base::File::FLAG_OPEN | base::File::FLAG_READ);
+  std::array<uint8_t, crypto::hash::kSha256Size> digest;
+  if (!crypto::hash::HashFile(crypto::hash::kSha256, &input, digest)) {
+    return false;
+  }
+  hashes->emplace(relative, base::HexEncode(digest));
+  return true;
+}
+
+bool SnapshotTree(const base::FilePath& root, FileHashes* hashes) {
+  hashes->clear();
+  if (!base::DirectoryExists(root)) {
+    return false;
+  }
+  base::FileEnumerator files(
+      root, true, base::FileEnumerator::FILES, base::FilePath::StringType(),
+      base::FileEnumerator::FolderSearchPolicy::ALL,
+      base::FileEnumerator::ErrorPolicy::STOP_ENUMERATION);
+  for (base::FilePath file = files.Next(); !file.empty(); file = files.Next()) {
+    base::FilePath relative;
+    if (!root.AppendRelativePath(file, &relative) ||
+        !AddFileHash(file, relative, hashes)) {
+      return false;
+    }
+  }
+  return files.GetError() == base::File::FILE_OK;
+}
+#endif
 
 base::DictValue RegularAction(const std::string& target,
                               const std::string& type,
@@ -213,6 +261,65 @@ class XenonUpdateManagerTest : public testing::Test {
     manager_->CheckForUpdates(url);
     task_environment_.RunUntilIdle();
   }
+
+#if BUILDFLAG(IS_WIN)
+  void VerifyWindowsDiffFallback(bool corrupt_download) {
+    const base::FilePath full_tree = temp_dir_.GetPath().AppendASCII("full");
+    WriteRelative(full_tree, "Chrome-bin/1.0.0.2/resource.dat",
+                  "full resource");
+    WriteRelative(full_tree, "Chrome-bin/browser.exe", "full launcher");
+    const base::FilePath full_archive =
+        temp_dir_.GetPath().AppendASCII("full.zip");
+    ASSERT_TRUE(
+        zip::Zip(full_tree, full_archive, /*include_hidden_files=*/true));
+    std::string full;
+    ASSERT_TRUE(base::ReadFileToString(full_archive, &full));
+    base::ListValue actions;
+    actions.Append(RegularAction("1.0.0.2/resource.dat", "copy",
+                                 "1.0.0.1/missing.dat", "missing base"));
+    std::string diff;
+    ASSERT_TRUE(base::ReadFileToString(
+        MakePatch(PatchManifest(std::move(actions), "win")), &diff));
+    UpdateManifest feed;
+    feed.target_version = "1.0.0.2";
+    feed.is_diff = true;
+    feed.diff_package = TestPackage("https://update.xenon.test/diff.zip", diff);
+    feed.full_package = TestPackage("https://update.xenon.test/full.zip", full);
+    if (corrupt_download) {
+      diff[0] ^= 1;  // Same byte count, wrong SHA-256.
+    }
+    test_url_loader_factory_.AddResponse(feed.diff_package->url.spec(), diff);
+    // Let both downloads finish in the same run so the failed diff's deferred
+    // deletion can overlap full-package verification and extraction.
+    test_url_loader_factory_.AddResponse(feed.full_package->url.spec(), full);
+    BeginFeedDownload(feed);
+    ASSERT_EQ(UpdateState::kUpdateDownloaded, manager_->GetState())
+        << observer_.last_error_;
+    ASSERT_TRUE(observer_.downloaded_manifest_);
+    EXPECT_FALSE(observer_.downloaded_manifest_->is_diff);
+    EXPECT_EQ(1, observer_.downloaded_count_);
+    EXPECT_EQ(3u, test_url_loader_factory_.total_requests());
+    EXPECT_TRUE(observer_.last_error_.empty());
+    std::string contents;
+    ASSERT_TRUE(base::ReadFileToString(
+        manager_->GetStagedPath().AppendASCII("1.0.0.2/resource.dat"),
+        &contents));
+    EXPECT_EQ("full resource", contents);
+    ASSERT_TRUE(base::ReadFileToString(
+        manager_->GetStagedPath().AppendASCII("browser.exe"), &contents));
+    EXPECT_EQ("full launcher", contents);
+    // Extraction is under full_<attempt>/Chrome-bin. The successfully verified
+    // fallback ZIP must remain after every queued failed-download cleanup.
+    const base::FilePath downloads =
+        manager_->GetStagedPath().DirName().DirName();
+    ASSERT_TRUE(base::ReadFileToString(
+        downloads.AppendASCII("2_update_patch.zip"), &contents));
+    EXPECT_EQ(full, contents);
+    EXPECT_FALSE(base::PathExists(temp_dir_.GetPath()
+                                      .AppendASCII("Installed.app")
+                                      .AppendASCII("1.0.0.2")));
+  }
+#endif
 
 #if BUILDFLAG(IS_MAC)
   void StartReadyPrivilegedDiff() {
@@ -512,6 +619,13 @@ TEST_F(XenonUpdateManagerTest, BundleManifestStagesFromAppNotTempParent) {
   auto result = XenonUpdateManager::PrepareVersionDirectory(
       app, resource, patch_zip, target,
       temp_dir_.GetPath().AppendASCII("staging"));
+#if BUILDFLAG(IS_WIN)
+  // Windows must reject a macOS symbolic-link action, not create a partially
+  // reconstructed bundle or depend on POSIX-only filesystem APIs.
+  EXPECT_FALSE(result.success);
+  EXPECT_EQ("Symbolic link actions are not supported on Windows", result.error);
+  EXPECT_FALSE(base::PathExists(target));
+#else
   EXPECT_TRUE(result.success) << result.error;
   std::string kept;
   ASSERT_TRUE(base::ReadFileToString(target.AppendASCII("Contents")
@@ -530,6 +644,7 @@ TEST_F(XenonUpdateManagerTest, BundleManifestStagesFromAppNotTempParent) {
   base::FilePath link_target;
   ASSERT_TRUE(base::ReadSymbolicLink(created_link, &link_target));
   EXPECT_EQ(FILE_PATH_LITERAL("../Resources/kept.dat"), link_target.value());
+#endif
 }
 
 TEST_F(XenonUpdateManagerTest, ManifestMissingCopyFailsWithoutCommitting) {
@@ -838,6 +953,176 @@ TEST_F(XenonUpdateManagerTest,
   ASSERT_EQ(1u, recorded->GetList().size());
   EXPECT_EQ("obsolete.dll", recorded->GetList()[0].GetString());
 }
+
+#if BUILDFLAG(IS_WIN)
+TEST_F(XenonUpdateManagerTest, WindowsCorruptDiffDownloadFallsBackToFullZip) {
+  VerifyWindowsDiffFallback(/*corrupt_download=*/true);
+}
+
+TEST_F(XenonUpdateManagerTest, WindowsFailedDiffApplicationFallsBackToFullZip) {
+  VerifyWindowsDiffFallback(/*corrupt_download=*/false);
+}
+
+// Opt-in release validation: all inputs remain read-only, and both staging and
+// installation operate on a private copy. No process is launched and no browser
+// registry entries are changed. Supply all three XENON_WIN_DIFF_* variables.
+TEST_F(XenonUpdateManagerTest, WindowsRealPackageStagesAndInstallsExactTree) {
+  registry_util::RegistryOverrideManager registry_override;
+  ASSERT_NO_FATAL_FAILURE(registry_override.OverrideRegistry(HKEY_CURRENT_USER));
+  ASSERT_NO_FATAL_FAILURE(registry_override.OverrideRegistry(HKEY_LOCAL_MACHINE));
+  base::Environment environment;
+  const auto old_value = environment.GetVar("XENON_WIN_DIFF_OLD_ROOT");
+  const auto new_value = environment.GetVar("XENON_WIN_DIFF_NEW_ROOT");
+  const auto patch_value = environment.GetVar("XENON_WIN_DIFF_PATCH");
+  if (!old_value && !new_value && !patch_value) {
+    GTEST_SKIP() << "Set XENON_WIN_DIFF_OLD_ROOT, XENON_WIN_DIFF_NEW_ROOT and "
+                    "XENON_WIN_DIFF_PATCH to validate real release packages";
+  }
+  ASSERT_TRUE(old_value && new_value && patch_value)
+      << "All three real-package paths are required";
+  const base::FilePath old_root = base::FilePath::FromUTF8Unsafe(*old_value);
+  const base::FilePath new_root = base::FilePath::FromUTF8Unsafe(*new_value);
+  const base::FilePath patch_input =
+      base::FilePath::FromUTF8Unsafe(*patch_value);
+  ASSERT_TRUE(old_root.IsAbsolute() && new_root.IsAbsolute() &&
+              patch_input.IsAbsolute());
+  ASSERT_TRUE(base::DirectoryExists(old_root));
+  ASSERT_TRUE(base::DirectoryExists(new_root));
+  ASSERT_TRUE(base::PathExists(patch_input));
+
+  FileHashes old_input, new_input, patch_hash;
+  ASSERT_TRUE(SnapshotTree(old_root, &old_input));
+  ASSERT_TRUE(SnapshotTree(new_root, &new_input));
+  ASSERT_FALSE(old_input.empty());
+  ASSERT_FALSE(new_input.empty());
+  ASSERT_TRUE(AddFileHash(patch_input, patch_input.BaseName(), &patch_hash));
+  const base::FilePath download = temp_dir_.GetPath().AppendASCII("download");
+  ASSERT_TRUE(base::CreateDirectory(download));
+  const base::FilePath patch = download.AppendASCII("patch.zip");
+  ASSERT_TRUE(base::CopyFile(patch_input, patch));
+  const base::FilePath inspection =
+      temp_dir_.GetPath().AppendASCII("inspection");
+  ASSERT_TRUE(zip::Unzip(patch, inspection));
+  std::string json;
+  ASSERT_TRUE(
+      base::ReadFileToString(inspection.AppendASCII("manifest.json"), &json));
+  const auto manifest = base::JSONReader::ReadDict(json, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(manifest);
+  const auto* base_version = manifest->FindString("base_version");
+  const auto* target_version = manifest->FindString("target_version");
+  ASSERT_TRUE(base_version && target_version);
+  ASSERT_TRUE(base::Version(*base_version).IsValid());
+  ASSERT_TRUE(base::Version(*target_version).IsValid());
+  ASSERT_GT(base::Version(*target_version), base::Version(*base_version));
+  ASSERT_TRUE(base::DirectoryExists(old_root.AppendASCII(*base_version)));
+  ASSERT_TRUE(base::DirectoryExists(new_root.AppendASCII(*target_version)));
+
+  const base::FilePath installation =
+      temp_dir_.GetPath().AppendASCII("installed");
+  ASSERT_TRUE(base::CopyDirectory(old_root, installation, true));
+  const base::FilePath launcher = installation.AppendASCII("xlb153.exe");
+  ASSERT_TRUE(base::PathExists(launcher));
+  ASSERT_TRUE(base::PathExists(new_root.AppendASCII("xlb153.exe")));
+  // Mini installers keep setup.exe beside Chrome-bin. The generator includes
+  // it virtually; model the real installed location without changing inputs.
+  const base::FilePath old_setup_relative =
+      base::FilePath::FromASCII(*base_version)
+          .AppendASCII("Installer")
+          .AppendASCII("setup.exe");
+  if (!base::PathExists(installation.Append(old_setup_relative))) {
+    ASSERT_TRUE(base::CreateDirectory(
+        installation.Append(old_setup_relative).DirName()));
+    ASSERT_TRUE(base::CopyFile(old_root.DirName().AppendASCII("setup.exe"),
+                               installation.Append(old_setup_relative)));
+  }
+  FileHashes expected = new_input;
+  const base::FilePath setup_relative =
+      base::FilePath::FromASCII(*target_version)
+          .AppendASCII("Installer")
+          .AppendASCII("setup.exe");
+  if (!expected.contains(setup_relative)) {
+    ASSERT_TRUE(AddFileHash(new_root.DirName().AppendASCII("setup.exe"),
+                            setup_relative, &expected));
+  }
+  FileHashes before;
+  ASSERT_TRUE(SnapshotTree(installation, &before));
+  const base::ScopedPathOverride executable_override(
+      base::FILE_EXE, launcher, /*is_absolute=*/true, /*create=*/false);
+  const base::FilePath current = installation.AppendASCII(*base_version);
+  const auto staged = XenonUpdateManager::PrepareVersionDirectory(
+      current, current.AppendASCII("xlbrowser.dll"), patch,
+      temp_dir_.GetPath().AppendASCII("versions").AppendASCII(*target_version),
+      temp_dir_.GetPath().AppendASCII("staging"), {}, *base_version,
+      *target_version);
+  ASSERT_TRUE(staged.success) << staged.error;
+  FileHashes after_staging;
+  ASSERT_TRUE(SnapshotTree(installation, &after_staging));
+  EXPECT_EQ(before, after_staging)
+      << "Staging changed the running installation";
+  ASSERT_TRUE(XenonUpdateInstaller::InstallAndRelaunch(
+      staged.staged_dir, installation,
+      /*relaunch_executable=*/base::FilePath()));
+
+  EXPECT_FALSE(
+      base::PathExists(installation.AppendASCII(".xenon-install.lock")));
+  // Successful Windows transactions retain root-file backups until the old
+  // process exits. Verify that precise recovery content before excluding it
+  // from the release tree comparison; unknown internal files must still fail.
+  base::FileEnumerator recoveries(installation, false,
+                                  base::FileEnumerator::DIRECTORIES,
+                                  FILE_PATH_LITERAL(".xenon-recovery-*"));
+  const base::FilePath recovery = recoveries.Next();
+  ASSERT_FALSE(recovery.empty());
+  EXPECT_TRUE(recoveries.Next().empty());
+  const base::FilePath previous_version =
+      base::FilePath::FromASCII(*base_version);
+  FileHashes expected_recovery;
+  for (const auto& [relative, hash] : before) {
+    if (!previous_version.IsParent(relative)) {
+      expected_recovery.emplace(
+          base::FilePath(FILE_PATH_LITERAL("backup")).Append(relative), hash);
+    }
+  }
+  FileHashes recovery_files;
+  ASSERT_TRUE(SnapshotTree(recovery, &recovery_files));
+  EXPECT_EQ(expected_recovery, recovery_files);
+  FileHashes installed;
+  ASSERT_TRUE(SnapshotTree(installation, &installed));
+  size_t retained = 0;
+  for (auto it = installed.begin(); it != installed.end();) {
+    if (previous_version.IsParent(it->first)) {
+      const auto original = before.find(it->first);
+      ASSERT_NE(before.end(), original);
+      EXPECT_EQ(original->second, it->second) << it->first;
+      ++retained;
+      it = installed.erase(it);
+    } else if (recovery.BaseName().IsParent(it->first)) {
+      it = installed.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  size_t old_version_files = 0;
+  for (const auto& [relative, hash] : before) {
+    if (previous_version.IsParent(relative)) {
+      ++old_version_files;
+    }
+  }
+  EXPECT_EQ(old_version_files, retained);
+  EXPECT_EQ(expected, installed)
+      << "Installed files differ from the new release";
+  FileHashes unchanged;
+  ASSERT_TRUE(SnapshotTree(old_root, &unchanged));
+  EXPECT_EQ(old_input, unchanged);
+  ASSERT_TRUE(SnapshotTree(new_root, &unchanged));
+  EXPECT_EQ(new_input, unchanged);
+  unchanged.clear();
+  ASSERT_TRUE(AddFileHash(patch_input, patch_input.BaseName(), &unchanged));
+  EXPECT_EQ(patch_hash, unchanged);
+  RecordProperty("verified_target_files", static_cast<int>(expected.size()));
+  RecordProperty("preserved_previous_files", static_cast<int>(retained));
+}
+#endif
 
 TEST_F(XenonUpdateManagerTest, InvalidFullZipDoesNotNotifyDownloaded) {
   const std::string invalid = "not a ZIP archive";
@@ -1569,12 +1854,15 @@ TEST_F(XenonUpdateManagerTest, StartupRecoversRollbackErrorForLaterPageLoad) {
 namespace {
 class FakeSystemUpdater : public XenonSystemUpdater {
  public:
-  std::string GetFeedURL() const override { return "https://updates.xenon.test/service/update2/json"; }
+  std::string GetFeedURL() const override {
+    return "https://updates.xenon.test/service/update2/json";
+  }
   void Start(bool check_only, Observer observer) override {
     checks.push_back(check_only);
     observer_ = std::move(observer);
   }
-  void Emit(Event::Phase phase, std::string version = "1.0.0.2",
+  void Emit(Event::Phase phase,
+            std::string version = "1.0.0.2",
             std::string error = "") {
     Event event;
     event.phase = phase;
@@ -1585,6 +1873,7 @@ class FakeSystemUpdater : public XenonSystemUpdater {
     observer_.Run(event);
   }
   std::vector<bool> checks;
+
  private:
   Observer observer_;
 };
@@ -1605,7 +1894,8 @@ TEST_F(XenonUpdateManagerTest, SystemUpdaterOwnsFeedAndDoesNotUseLegacyHTTP) {
   EXPECT_EQ(test_url_loader_factory_.NumPending(), 0);
 }
 
-TEST_F(XenonUpdateManagerTest, SystemUpdaterWaitsForExitWithoutReportingInstalled) {
+TEST_F(XenonUpdateManagerTest,
+       SystemUpdaterWaitsForExitWithoutReportingInstalled) {
   auto backend = std::make_unique<FakeSystemUpdater>();
   auto* fake = backend.get();
   manager_->SetSystemUpdaterForTesting(std::move(backend));
@@ -1631,7 +1921,8 @@ TEST_F(XenonUpdateManagerTest, SystemUpdaterWaitsForExitWithoutReportingInstalle
   EXPECT_FALSE(manager_->GetStagedIsInstallerPackage());
   manager_->InstallOnExit();
   EXPECT_EQ(fake->checks.size(), 1u);
-  fake->Emit(XenonSystemUpdater::Event::Phase::kError, "", "Installer was blocked");
+  fake->Emit(XenonSystemUpdater::Event::Phase::kError, "",
+             "Installer was blocked");
   EXPECT_EQ(manager_->GetState(), UpdateState::kError);
   EXPECT_FALSE(manager_->SystemUpdateInstalled());
 }
@@ -1658,7 +1949,8 @@ TEST_F(XenonUpdateManagerTest, SystemUpdaterNoUpdateAndFailureCanRetry) {
   fake->Emit(XenonSystemUpdater::Event::Phase::kNoUpdate, "");
   EXPECT_EQ(manager_->GetState(), UpdateState::kUpdateNotAvailable);
   manager_->CheckForUpdates();
-  fake->Emit(XenonSystemUpdater::Event::Phase::kError, "", "service unavailable");
+  fake->Emit(XenonSystemUpdater::Event::Phase::kError, "",
+             "service unavailable");
   EXPECT_EQ(manager_->GetLastError(), "service unavailable");
   manager_->CheckForUpdates();
   EXPECT_EQ(fake->checks.size(), 3u);

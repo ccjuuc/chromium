@@ -254,6 +254,19 @@ export function buildPackage(options, { run = spawnSync, platform = process.plat
         fs.mkdirSync(dir);
         runChecked(run, sevenZip, ['x', input, `-o${dir}`, '-y']);
         const embedded = path.join(dir, 'chrome.7z');
+        const hasBrowserTree = () => fs.existsSync(path.join(dir, 'Chrome-bin')) ||
+          fs.readdirSync(dir).some(entry => /^\d+(\.\d+){3}$/.test(entry) &&
+            fs.lstatSync(path.join(dir, entry)).isDirectory());
+        // Chromium mini-installers can contain both a CAB setup resource and a
+        // separate 7z browser resource. Auto-detection stops at the first CAB,
+        // so explicitly select 7z when it did not expose the browser payload.
+        if (path.extname(input).toLowerCase() === '.exe' &&
+            !fs.existsSync(embedded) && !hasBrowserTree()) {
+          runChecked(run, sevenZip, ['x', '-t7z', input, `-o${dir}`, '-y']);
+          if (!fs.existsSync(embedded) && !hasBrowserTree()) {
+            throw new Error(`Installer contains no browser payload: ${input}`);
+          }
+        }
         if (fs.existsSync(embedded)) runChecked(run, sevenZip, ['x', embedded, `-o${dir}`, '-y']);
       }
       return fs.existsSync(path.join(dir, 'Chrome-bin')) ? path.join(dir, 'Chrome-bin') : dir;

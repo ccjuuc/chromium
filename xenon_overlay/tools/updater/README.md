@@ -176,6 +176,31 @@ ninja -C out/release_arm64 xenon_updater_unittests
 out/release_arm64/xenon_updater_unittests
 ```
 
+Windows 差分验证使用同一测试目标。真实安装包可直接传给生成器：工具先提取安装器的 CAB 资源；若浏览器载荷位于独立 7z 资源中，会继续提取 `chrome.7z`，保留 `setup.exe` 并将其收录到目标版本的 `Installer` 目录。
+
+```powershell
+node xenon_overlay/tools/updater/make_directory_diff.js `
+  --old /path/to/old_installer.exe --new /path/to/new_installer.exe `
+  --out /path/to/patch.zip
+third_party/ninja/ninja.exe -C out/Release_64 xenon_updater_unittests
+out/Release_64/xenon_updater_unittests.exe
+```
+
+可选的真实包原生测试接受已解包的 `Chrome-bin` 根目录和生成的补丁。`setup.exe` 应位于各自 `Chrome-bin` 的父目录，或已在版本目录的 `Installer/setup.exe` 中。当前测试使用 `xlb153.exe` 启动器和 `xlbrowser.dll`：
+
+```powershell
+$env:XENON_WIN_DIFF_OLD_ROOT = 'H:\validation\old\Chrome-bin'
+$env:XENON_WIN_DIFF_NEW_ROOT = 'H:\validation\new\Chrome-bin'
+$env:XENON_WIN_DIFF_PATCH = 'H:\validation\patch.zip'
+out/Release_64/xenon_updater_unittests.exe `
+  --gtest_filter=XenonUpdateManagerTest.WindowsRealPackageStagesAndInstallsExactTree `
+  --single-process-tests --gtest_color=no
+```
+
+未提供这些变量时测试明确跳过，提供部分变量或无效路径则失败。测试将旧安装和补丁复制到独立临时目录，调用生产差分准备和安装代码，校验目标文件全树 SHA-256、旧版本保留、恢复备份及输入不变。它不启动浏览器、不修改真实安装的注册表登记，也不验证真实浏览器重启；常规测试另外覆盖坏差分下载/应用后回退全量 ZIP、文件锁冲突及安装回滚。
+
+Windows 差分和完整目录安装在文件提交及可选重启进程创建成功后，同步该安装已有的注册表版本、卸载程序及降级清理路径，不依赖目标版本启动时补写。更新命令保留原有的系统安装、渠道、MSI 及日志参数。安装失败或重启创建失败时保留原登记；同名的其他安装和未登记的便携目录不会被写入。独立 EXE 安装包仅启动安装器，其登记仍由安装器负责。注册表回归测试隔离 HKCU/HKLM，覆盖成功收尾、参数保留、文件锁和启动失败回滚及安装目录归属。
+
 ---
 
 ### 3. `mock_update_server.js` - 更新模拟服务器

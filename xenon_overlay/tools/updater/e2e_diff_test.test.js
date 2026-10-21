@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { verifyStaging } from './e2e_diff_test.js';
 
@@ -124,7 +124,7 @@ test('CLI exits nonzero for an update failure using in-process CDP mocks', t => 
     };
   `);
   const script = fileURLToPath(new URL('./e2e_diff_test.js', import.meta.url));
-  const result = spawnSync(process.execPath, ['--import', preload, script, '--timeout-ms', '500'],
+  const result = spawnSync(process.execPath, ['--import', pathToFileURL(preload).href, script, '--timeout-ms', '500'],
     { encoding: 'utf8', timeout: 2000 });
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stderr, /simulated SHA-256 mismatch/);
