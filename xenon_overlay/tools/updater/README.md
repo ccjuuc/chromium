@@ -10,6 +10,7 @@
 xenon_overlay/tools/updater/
 ├── make_directory_diff.js    # 全目录清单驱动差分生成与打包工具
 ├── make_directory_diff.test.js # 生成器 Node.js 单元测试
+├── make_mac_pkg.js           # 将 .app 打成安装到 /Applications 的 .pkg
 ├── mock_update_server.js     # 本地 Node.js 更新模拟服务器 (零依赖)
 ├── e2e_diff_test.js          # 端到端自动化更新测试工具 (CDP 协议)
 ├── trigger_restart.js        # 触发重启生效与原子置换工具 (quitAndInstall)
@@ -77,7 +78,31 @@ ZIP 需要 Unix/macOS 的文件类型及权限元数据。全量包中的顶层�
 
 ---
 
-### 2. `mock_update_server.js` - 更新模拟服务器
+### 2. `make_mac_pkg.js` - macOS 安装包生成工具
+把一个 `.app` 打成组件安装包。双击后由“安装器”安装到 `/Applications`。版本取 `CFBundleShortVersionString`（四段版本），不用只有后两段的 `CFBundleVersion`。
+
+这是分发给用户的安装包。应用内更新仍使用 `patch.zip` / `package.zip`，不消费这个 `.pkg`。
+
+要使用应用内更新，输入 `.app` 须已用 Developer ID Application 签名；`--sign` 使用 Developer ID Installer，只签名 `.pkg`，不会给应用签名。应用内更新要求安装目录可写，不会自动提权。
+
+**用法**：
+```bash
+node xenon_overlay/tools/updater/make_mac_pkg.js \
+  --app out/release_arm64/xl153.app
+
+# 指定输出和安装器签名。包标识不要用 org.chromium.Chromium，
+# 否则安装器会把它当成已安装的 Chromium 而跳过。
+node xenon_overlay/tools/updater/make_mac_pkg.js \
+  --app /tmp/xl153-old.app \
+  --out test_packages/xl153_installer_1.0.0.1.pkg \
+  --sign "Developer ID Installer: Example"
+```
+
+默认输出为 `test_packages/<程序名>_installer_<版本>.pkg`。
+
+---
+
+### 3. `mock_update_server.js` - 更新模拟服务器
 原生 Node.js 实现，零外部 npm 依赖，用于本地联调与自动化测试。
 
 **接口说明**：
@@ -96,7 +121,7 @@ node xenon_overlay/tools/updater/mock_update_server.js --port 8999 --mode full
 
 ---
 
-### 3. `e2e_diff_test.js` - 端到端更新自动化测试
+### 4. `e2e_diff_test.js` - 端到端更新自动化测试
 通过 Chrome DevTools Protocol (CDP) 连接本地运行的浏览器实例（调试端口 9222），驱动检查更新、下载、目录解构与后台校验，并抓取当前 WebUI 界面截图 `e2e_diff_screenshot.png`。
 
 **用法**：
@@ -106,7 +131,7 @@ node xenon_overlay/tools/updater/e2e_diff_test.js
 
 ---
 
-### 4. `trigger_restart.js` - 触发立即重启并安装
+### 5. `trigger_restart.js` - 触发立即重启并安装
 通过 CDP 发送 `chrome.send('quitAndInstall')`。macOS 的安装已在后台完成，此调用请求 Chromium 保存会话并重启；Windows 继续执行退出后的文件替换和重启。
 
 **用法**：
@@ -116,7 +141,7 @@ node xenon_overlay/tools/updater/trigger_restart.js
 
 ---
 
-### 5. `reset_env_1001.ps1` - 测试环境一键重置
+### 6. `reset_env_1001.ps1` - 测试环境一键重置
 将 `AppData\Local\xlb153\Application` 目录及注册表一键还原到干净的 `1.0.0.1` 状态，便于重复验证全流程。
 
 **用法**：

@@ -9,10 +9,13 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/test/task_environment.h"
+#include "build/build_config.h"
 #include "mojo/core/embedder/embedder.h"
+#include "net/base/url_util.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 #include "xenon_overlay/chrome/browser/updater/xenon_update_patcher.h"
 #include "xenon_overlay/chrome/browser/updater/xenon_update_types.h"
 
@@ -106,7 +109,8 @@ TEST_F(XenonUpdateManagerTest, ParseManifest) {
   EXPECT_EQ("2.0.0.0", manifest->target_version);
   EXPECT_TRUE(manifest->is_diff);
   ASSERT_TRUE(manifest->diff_package.has_value());
-  EXPECT_EQ("https://example.com/patch.zucc", manifest->diff_package->url.spec());
+  EXPECT_EQ("https://example.com/patch.zucc",
+            manifest->diff_package->url.spec());
   EXPECT_EQ(1024, manifest->diff_package->size);
   ASSERT_TRUE(manifest->full_package.has_value());
   EXPECT_EQ("https://example.com/full.zip", manifest->full_package->url.spec());
@@ -116,21 +120,25 @@ TEST_F(XenonUpdateManagerTest, ZucchiniPatchGenerationAndApplication) {
   base::FilePath old_file = temp_dir_.GetPath().AppendASCII("old_binary.bin");
   base::FilePath new_file = temp_dir_.GetPath().AppendASCII("new_binary.bin");
   base::FilePath patch_file = temp_dir_.GetPath().AppendASCII("patch.zucc");
-  base::FilePath restored_file = temp_dir_.GetPath().AppendASCII("restored.bin");
+  base::FilePath restored_file =
+      temp_dir_.GetPath().AppendASCII("restored.bin");
 
   std::string old_data = "Hello World! This is Xenon base version 1.0.0.";
-  std::string new_data = "Hello World! This is Xenon upgraded version 2.0.0 with new features.";
+  std::string new_data =
+      "Hello World! This is Xenon upgraded version 2.0.0 with new features.";
 
   ASSERT_TRUE(base::WriteFile(old_file, old_data));
   ASSERT_TRUE(base::WriteFile(new_file, new_data));
 
   // Generate Zucchini patch
-  bool gen_ok = XenonUpdatePatcher::GeneratePatch(old_file, new_file, patch_file);
+  bool gen_ok =
+      XenonUpdatePatcher::GeneratePatch(old_file, new_file, patch_file);
   ASSERT_TRUE(gen_ok);
   EXPECT_TRUE(base::PathExists(patch_file));
 
   // Apply Zucchini patch
-  bool apply_ok = XenonUpdatePatcher::ApplyPatch(old_file, patch_file, restored_file);
+  bool apply_ok =
+      XenonUpdatePatcher::ApplyPatch(old_file, patch_file, restored_file);
   ASSERT_TRUE(apply_ok);
   EXPECT_TRUE(base::PathExists(restored_file));
 
@@ -143,6 +151,20 @@ TEST_F(XenonUpdateManagerTest, CheckUpdateAvailableAndNotAvailable) {
   manager_->SetCurrentVersionForTesting("1.0.0.0");
 
   std::string feed_url = "https://update.xenon.com/check";
+  const char* platform =
+#if BUILDFLAG(IS_MAC)
+      "mac";
+#elif BUILDFLAG(IS_WIN)
+      "win";
+#else
+      "linux";
+#endif
+  auto request_url = [&](const std::string& version) {
+    return net::AppendQueryParameter(
+               net::AppendQueryParameter(GURL(feed_url), "platform", platform),
+               "version", version)
+        .spec();
+  };
   std::string response_newer = R"({
     "target_version": "1.1.0.0",
     "is_diff": false,
@@ -151,7 +173,8 @@ TEST_F(XenonUpdateManagerTest, CheckUpdateAvailableAndNotAvailable) {
     "sha256": "1234"
   })";
 
-  test_url_loader_factory_.AddResponse(feed_url, response_newer);
+  test_url_loader_factory_.AddResponse(request_url("1.0.0.0"), response_newer);
+  test_url_loader_factory_.AddResponse(request_url("1.1.0.0"), response_newer);
   manager_->CheckForUpdates(feed_url);
 
   task_environment_.RunUntilIdle();
@@ -173,7 +196,8 @@ TEST_F(XenonUpdateManagerTest, CheckUpdateAvailableAndNotAvailable) {
 
 TEST_F(XenonUpdateManagerTest, PendingCheckKeepsItsManifestAndFeed) {
   manager_->SetCurrentVersionForTesting("1.0.0.0");
-  const std::string feed = "https://update.xenon.com/check";
+  const std::string feed =
+      "https://update.xenon.com/check?platform=mac&version=1.0.0.0";
   test_url_loader_factory_.AddResponse(feed, R"({
     "target_version": "1.1.0.0",
     "is_diff": false,
@@ -196,6 +220,58 @@ TEST_F(XenonUpdateManagerTest, PendingCheckKeepsItsManifestAndFeed) {
   EXPECT_EQ("1.1.0.0", observer_.available_manifest_->target_version);
 }
 
+TEST_F(XenonUpdateManagerTest, CheckPreservesExplicitQueryParameters) {
+  manager_->SetCurrentVersionForTesting("1.0.0.0");
+  const std::string feed =
+      "https://update.xenon.com/"
+      "check?platform=custom&version=2.0.0.0&channel=dev";
+  test_url_loader_factory_.AddResponse(feed, R"({
+    "target_version": "1.1.0.0",
+    "is_diff": false,
+    "url": "https://update.xenon.com/package.zip",
+    "size": 5000,
+    "sha256": "1234"
+  })");
+
+  manager_->CheckForUpdates(feed);
+  task_environment_.RunUntilIdle();
+  EXPECT_TRUE(observer_.last_error_.empty());
+  ASSERT_TRUE(observer_.available_manifest_);
+  EXPECT_EQ("1.1.0.0", observer_.available_manifest_->target_version);
+}
+
+TEST_F(XenonUpdateManagerTest, PendingDownloadKeepsItsManifestAndFeed) {
+  manager_->SetCurrentVersionForTesting("1.0.0.0");
+  const std::string feed =
+      "https://update.xenon.com/check?platform=mac&version=1.0.0.0";
+  test_url_loader_factory_.AddResponse(feed, R"({
+    "target_version": "1.1.0.0",
+    "is_diff": false,
+    "url": "https://update.xenon.com/package.zip",
+    "size": 5000,
+    "sha256": "1234"
+  })");
+  manager_->CheckForUpdates(feed);
+  task_environment_.RunUntilIdle();
+  ASSERT_EQ(UpdateState::kUpdateAvailable, manager_->GetState());
+
+  // Directory creation is still pending; reserve the manifest immediately.
+  manager_->DownloadUpdate();
+  EXPECT_EQ(UpdateState::kDownloading, manager_->GetState());
+  manager_->CheckForUpdates("https://other.example/check");
+  manager_->DownloadUpdate();
+  manager_->QuitAndInstall();
+  task_environment_.RunUntilIdle();
+
+  EXPECT_EQ(UpdateState::kDownloading, manager_->GetState());
+  EXPECT_EQ(feed, manager_->GetFeedURL());
+  EXPECT_EQ(1, observer_.checking_count_);
+  EXPECT_TRUE(observer_.last_error_.empty());
+  ASSERT_TRUE(manager_->GetManifest());
+  EXPECT_EQ("1.1.0.0", manager_->GetManifest()->target_version);
+  EXPECT_EQ(1, test_url_loader_factory_.NumPending());
+}
+
 TEST_F(XenonUpdateManagerTest, PlanBVersionedDirectoryStaging) {
   base::FilePath install_dir = temp_dir_.GetPath().AppendASCII("app_install");
   base::FilePath old_ver_dir = install_dir.AppendASCII("1.0.0.0");
@@ -203,17 +279,20 @@ TEST_F(XenonUpdateManagerTest, PlanBVersionedDirectoryStaging) {
 
   base::FilePath old_dll = old_ver_dir.Append(FILE_PATH_LITERAL("chrome.dll"));
   base::FilePath old_asset = old_ver_dir.AppendASCII("resources.pak");
-  std::string old_dll_content = "Xenon Chrome DLL version 1.0.0.0 binary content.";
+  std::string old_dll_content =
+      "Xenon Chrome DLL version 1.0.0.0 binary content.";
   std::string asset_content = "PAK resource pack content 12345.";
   ASSERT_TRUE(base::WriteFile(old_dll, old_dll_content));
   ASSERT_TRUE(base::WriteFile(old_asset, asset_content));
 
   // Prepare new dll content and generate diff patch
-  std::string new_dll_content = "Xenon Chrome DLL version 1.1.0.0 updated binary content!";
+  std::string new_dll_content =
+      "Xenon Chrome DLL version 1.1.0.0 updated binary content!";
   base::FilePath temp_new_dll = temp_dir_.GetPath().AppendASCII("temp_new.dll");
   base::FilePath patch_file = temp_dir_.GetPath().AppendASCII("patch.zucc");
   ASSERT_TRUE(base::WriteFile(temp_new_dll, new_dll_content));
-  ASSERT_TRUE(XenonUpdatePatcher::GeneratePatch(old_dll, temp_new_dll, patch_file));
+  ASSERT_TRUE(
+      XenonUpdatePatcher::GeneratePatch(old_dll, temp_new_dll, patch_file));
 
   // Run Plan B PrepareVersionDirectory
   base::FilePath target_ver_dir = install_dir.AppendASCII("1.1.0.0");
@@ -227,7 +306,8 @@ TEST_F(XenonUpdateManagerTest, PlanBVersionedDirectoryStaging) {
   EXPECT_TRUE(base::DirectoryExists(target_ver_dir));
 
   // Verify patched DLL exists and has updated content
-  base::FilePath new_dll = target_ver_dir.Append(FILE_PATH_LITERAL("chrome.dll"));
+  base::FilePath new_dll =
+      target_ver_dir.Append(FILE_PATH_LITERAL("chrome.dll"));
   EXPECT_TRUE(base::PathExists(new_dll));
   std::string actual_new_dll;
   ASSERT_TRUE(base::ReadFileToString(new_dll, &actual_new_dll));

@@ -555,6 +555,22 @@ struct MacUpdateInstallContext::State {
 MacUpdateInstallContext::MacUpdateInstallContext() = default;
 MacUpdateInstallContext::~MacUpdateInstallContext() = default;
 
+std::string XenonUpdateInstaller::ReadBundleShortVersion(
+    const base::FilePath& bundle_path) {
+  if (bundle_path.empty()) {
+    return {};
+  }
+  @autoreleasepool {
+    const base::FilePath plist_path = InfoPlist(bundle_path);
+    std::string version =
+        PlistString(plist_path, @"CFBundleShortVersionString");
+    if (version.empty()) {
+      version = PlistString(plist_path, @"CFBundleVersion");
+    }
+    return version;
+  }
+}
+
 base::FilePath XenonUpdateInstaller::PrepareMacFullUpdate(
     const base::FilePath& downloaded_file,
     const base::FilePath& staging_root,

@@ -113,6 +113,42 @@ class XenonMacInstallerTest : public testing::Test {
   base::FilePath staging_;
 };
 
+TEST_F(XenonMacInstallerTest, BundleVersionRejectsEmptyAndMissingPaths) {
+  EXPECT_TRUE(
+      XenonUpdateInstaller::ReadBundleShortVersion(base::FilePath()).empty());
+  EXPECT_TRUE(XenonUpdateInstaller::ReadBundleShortVersion(
+                  root_.GetPath().AppendASCII("missing.app"))
+                  .empty());
+}
+
+TEST_F(XenonMacInstallerTest, BundleVersionPrefersShortVersion) {
+  const base::FilePath bundle = MakeBundle("package");
+  ASSERT_TRUE(base::WriteFile(
+      bundle.AppendASCII("Contents/Info.plist"),
+      "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict>"
+      "<key>CFBundleShortVersionString</key><string>1.0.0.1</string>"
+      "<key>CFBundleVersion</key><string>142.0.7444.0</string>"
+      "</dict></plist>"));
+  EXPECT_EQ("1.0.0.1", XenonUpdateInstaller::ReadBundleShortVersion(bundle));
+}
+
+TEST_F(XenonMacInstallerTest, BundleVersionFallsBackToBundleVersion) {
+  const base::FilePath bundle = MakeBundle("package");
+  for (const char* short_version :
+       {"", "<key>CFBundleShortVersionString</key><string></string>",
+        "<key>CFBundleShortVersionString</key><integer>1</integer>"}) {
+    SCOPED_TRACE(short_version);
+    ASSERT_TRUE(base::WriteFile(
+        bundle.AppendASCII("Contents/Info.plist"),
+        std::string("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict>") +
+            short_version +
+            "<key>CFBundleVersion</key><string>142.0.7444.0</string>"
+            "</dict></plist>"));
+    EXPECT_EQ("142.0.7444.0",
+              XenonUpdateInstaller::ReadBundleShortVersion(bundle));
+  }
+}
+
 TEST_F(XenonMacInstallerTest, FullZipPreservesExecutableAndInternalSymlink) {
   const base::FilePath original = MakeBundle("package");
   ASSERT_TRUE(base::CreateSymbolicLink(base::FilePath("MacOS/Xenon"),

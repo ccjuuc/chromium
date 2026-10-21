@@ -15,9 +15,9 @@
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/values.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "base/values.h"
 #include "base/version.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
@@ -26,6 +26,7 @@
 #include "components/version_info/version_info.h"
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
+
 #include "base/win/registry.h"
 #elif BUILDFLAG(IS_MAC)
 #include "base/apple/bundle_locations.h"
@@ -34,6 +35,7 @@
 #include "base/task/bind_post_task.h"
 #endif
 #include "net/base/load_flags.h"
+#include "net/base/url_util.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "third_party/zlib/google/zip.h"
@@ -46,6 +48,16 @@
 namespace xenon::updater {
 
 namespace {
+
+std::string UpdatePlatformName() {
+#if BUILDFLAG(IS_MAC)
+  return "mac";
+#elif BUILDFLAG(IS_WIN)
+  return "win";
+#else
+  return "linux";
+#endif
+}
 
 #if BUILDFLAG(IS_MAC)
 void DeleteMacDownloadDirectory(base::FilePath directory) {
@@ -81,7 +93,7 @@ constexpr net::NetworkTrafficAnnotationTag kCheckTrafficAnnotation =
           sender: "Xenon Application Updater"
           description: "Checks for application updates."
           trigger: "User requested update or automatic background update check."
-          data: "None."
+          data: "The application platform and current version."
           destination: OTHER
         }
         policy {
@@ -134,6 +146,24 @@ std::string XenonUpdateManager::GetCurrentVersion() const {
   if (!current_version_override_.empty()) {
     return current_version_override_;
   }
+#if BUILDFLAG(IS_MAC)
+  // Snapshot the running product version before any update replaces the outer
+  // bundle's Info.plist. Subsequent checks must not report the installed update
+  // as the version of this still-running process.
+  static const base::NoDestructor<std::string> bundle_version([] {
+    base::FilePath bundle_path = base::apple::OuterBundlePath();
+    if (bundle_path.empty()) {
+      base::FilePath exe_dir;
+      if (base::PathService::Get(base::DIR_EXE, &exe_dir)) {
+        bundle_path = exe_dir.DirName().DirName();
+      }
+    }
+    return XenonUpdateInstaller::ReadBundleShortVersion(bundle_path);
+  }());
+  if (base::Version(*bundle_version).IsValid()) {
+    return *bundle_version;
+  }
+#endif
   base::FilePath module_dir;
   if (base::PathService::Get(base::DIR_MODULE, &module_dir)) {
     std::string dir_version = module_dir.BaseName().MaybeAsASCII();
@@ -144,7 +174,8 @@ std::string XenonUpdateManager::GetCurrentVersion() const {
   return std::string(chrome::kChromeVersion);
 }
 
-void XenonUpdateManager::SetCurrentVersionForTesting(const std::string& version) {
+void XenonUpdateManager::SetCurrentVersionForTesting(
+    const std::string& version) {
   current_version_override_ = version;
 }
 
@@ -153,7 +184,8 @@ void XenonUpdateManager::SetURLLoaderFactoryForTesting(
   test_url_loader_factory_ = std::move(factory);
 }
 
-void XenonUpdateManager::SetBaseFileForTesting(const base::FilePath& base_file) {
+void XenonUpdateManager::SetBaseFileForTesting(
+    const base::FilePath& base_file) {
   base_file_override_ = base_file;
 }
 
@@ -166,7 +198,8 @@ XenonUpdateManager::GetURLLoaderFactory() {
   if (test_url_loader_factory_) {
     return test_url_loader_factory_;
   }
-  if (g_browser_process && g_browser_process->system_network_context_manager()) {
+  if (g_browser_process &&
+      g_browser_process->system_network_context_manager()) {
     return g_browser_process->system_network_context_manager()
         ->GetSharedURLLoaderFactory();
   }
@@ -198,9 +231,10 @@ base::FilePath XenonUpdateManager::GetDefaultInstallDir() const {
   for (HKEY root : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
     for (const auto& subkey : reg_subkeys) {
       base::win::RegKey reg_key;
-      if (reg_key.Open(root, subkey.c_str(), KEY_QUERY_VALUE | KEY_WOW64_32KEY) ==
-              ERROR_SUCCESS ||
-          reg_key.Open(root, subkey.c_str(), KEY_QUERY_VALUE) == ERROR_SUCCESS) {
+      if (reg_key.Open(root, subkey.c_str(),
+                       KEY_QUERY_VALUE | KEY_WOW64_32KEY) == ERROR_SUCCESS ||
+          reg_key.Open(root, subkey.c_str(), KEY_QUERY_VALUE) ==
+              ERROR_SUCCESS) {
         std::wstring uninstall_str;
         if (reg_key.ReadValue(L"UninstallString", &uninstall_str) ==
                 ERROR_SUCCESS &&
@@ -365,6 +399,13 @@ void XenonUpdateManager::CheckForUpdates(const std::string& feed_url) {
     NotifyError("Invalid update feed URL: " + feed_url_);
     return;
   }
+  std::string existing_query;
+  if (!net::GetValueForKeyInQuery(url, "platform", &existing_query)) {
+    url = net::AppendQueryParameter(url, "platform", UpdatePlatformName());
+  }
+  if (!net::GetValueForKeyInQuery(url, "version", &existing_query)) {
+    url = net::AppendQueryParameter(url, "version", GetCurrentVersion());
+  }
 
   auto factory = GetURLLoaderFactory();
   if (!factory) {
@@ -383,8 +424,8 @@ void XenonUpdateManager::CheckForUpdates(const std::string& feed_url) {
   request->load_flags = net::LOAD_BYPASS_CACHE | net::LOAD_DISABLE_CACHE;
   request->credentials_mode = network::mojom::CredentialsMode::kOmit;
 
-  check_loader_ =
-      network::SimpleURLLoader::Create(std::move(request), kCheckTrafficAnnotation);
+  check_loader_ = network::SimpleURLLoader::Create(std::move(request),
+                                                   kCheckTrafficAnnotation);
   check_loader_->DownloadToString(
       factory.get(),
       base::BindOnce(&XenonUpdateManager::OnCheckResponse,
@@ -438,8 +479,9 @@ void XenonUpdateManager::DownloadUpdate() {
       state_ == UpdateState::kDownloading || state_ == UpdateState::kPatching ||
       state_ == UpdateState::kInstalling ||
       state_ == UpdateState::kUpdateDownloaded) {
-    LOG(WARNING) << "[XenonUpdateManager] DownloadUpdate ignored while in state: "
-                 << UpdateStateToString(state_);
+    LOG(WARNING)
+        << "[XenonUpdateManager] DownloadUpdate ignored while in state: "
+        << UpdateStateToString(state_);
     return;
   }
 
@@ -459,20 +501,37 @@ void XenonUpdateManager::DownloadUpdate() {
 
 void XenonUpdateManager::StartPackageDownload(const UpdatePackageInfo& package,
                                               bool is_diff) {
-  if (!temp_download_dir_.IsValid()) {
-    temp_download_dir_.Take();
-    if (!temp_download_dir_.CreateUniqueTempDir()) {
-      NotifyError("Failed to create temporary directory for update download");
-      return;
-    }
+  // Reserve the operation before posting work so a second UI request cannot
+  // replace its manifest. Each attempt gets a distinct directory, including a
+  // full-package fallback while the downloader deletes a corrupt diff.
+  SetState(UpdateState::kDownloading);
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(
+          [](base::ScopedTempDir previous) {
+            base::ScopedTempDir directory;
+            const bool created = directory.CreateUniqueTempDir();
+            return std::make_pair(std::move(directory), created);
+          },
+          std::move(temp_download_dir_)),
+      base::BindOnce(&XenonUpdateManager::OnDownloadTempDirCreated,
+                     weak_factory_.GetWeakPtr(), package, is_diff));
+}
+
+void XenonUpdateManager::OnDownloadTempDirCreated(
+    UpdatePackageInfo package,
+    bool is_diff,
+    std::pair<base::ScopedTempDir, bool> result) {
+  if (!result.second) {
+    NotifyError("Failed to create temporary directory for update download");
+    return;
   }
+  temp_download_dir_ = std::move(result.first);
   auto factory = GetURLLoaderFactory();
   if (!factory) {
     NotifyError("Network context is not available for update download");
     return;
   }
-
-  SetState(UpdateState::kDownloading);
 
   std::string filename;
   std::string_view url_path = package.url.path();
@@ -699,7 +758,8 @@ XenonUpdateManager::PrepareVersionDirectory(
   }
 
   // 1. Resolve differential patches (supports .zip bundle or direct .zucc)
-  base::FilePath patch_dir = patch_file.DirName().AppendASCII("extracted_patches");
+  base::FilePath patch_dir =
+      patch_file.DirName().AppendASCII("extracted_patches");
   if (base::PathExists(patch_dir)) {
     base::DeletePathRecursively(patch_dir);
   }
@@ -716,7 +776,8 @@ XenonUpdateManager::PrepareVersionDirectory(
     // =========================================================================
     // Full Directory Manifest-Driven Differential Update Mode
     // =========================================================================
-    LOG(INFO) << "[XenonUpdateManager] Executing manifest-driven full directory diff update";
+    LOG(INFO) << "[XenonUpdateManager] Executing manifest-driven full "
+                 "directory diff update";
 
     std::string manifest_content;
     if (!base::ReadFileToString(manifest_path, &manifest_content)) {
@@ -746,7 +807,8 @@ XenonUpdateManager::PrepareVersionDirectory(
         base_ver_str_ptr ? *base_ver_str_ptr
                          : current_version_dir.BaseName().MaybeAsASCII();
 
-    const std::string* platform_str_ptr = parsed_manifest->FindString("platform");
+    const std::string* platform_str_ptr =
+        parsed_manifest->FindString("platform");
     bool is_bundle_mode = false;
 #if BUILDFLAG(IS_MAC)
     is_bundle_mode = true;
@@ -802,11 +864,13 @@ XenonUpdateManager::PrepareVersionDirectory(
         const std::string* base_ptr = act.FindString("base");
         std::string base_rel = base_ptr ? *base_ptr : "";
         if (is_in_version_dir) {
-          base::FilePath src_file = install_dir.Append(
-              base::FilePath::FromUTF8Unsafe(base_rel).NormalizePathSeparators());
+          base::FilePath src_file =
+              install_dir.Append(base::FilePath::FromUTF8Unsafe(base_rel)
+                                     .NormalizePathSeparators());
           if (!base::PathExists(src_file) && !current_version_dir.empty()) {
             base::FilePath candidate = current_version_dir.Append(
-                base::FilePath::FromUTF8Unsafe(sub_rel).NormalizePathSeparators());
+                base::FilePath::FromUTF8Unsafe(sub_rel)
+                    .NormalizePathSeparators());
             if (base::PathExists(candidate)) {
               src_file = candidate;
             }
@@ -819,11 +883,13 @@ XenonUpdateManager::PrepareVersionDirectory(
                          << base_rel;
           }
         } else {
-          base::FilePath target_file = install_dir.Append(
-              base::FilePath::FromUTF8Unsafe(target_rel).NormalizePathSeparators());
+          base::FilePath target_file =
+              install_dir.Append(base::FilePath::FromUTF8Unsafe(target_rel)
+                                     .NormalizePathSeparators());
           if (!base::PathExists(target_file)) {
-            base::FilePath src_file = install_dir.Append(
-                base::FilePath::FromUTF8Unsafe(base_rel).NormalizePathSeparators());
+            base::FilePath src_file =
+                install_dir.Append(base::FilePath::FromUTF8Unsafe(base_rel)
+                                       .NormalizePathSeparators());
             if (base::PathExists(src_file)) {
               base::CreateDirectory(target_file.DirName());
               base::CopyFile(src_file, target_file);
@@ -834,12 +900,14 @@ XenonUpdateManager::PrepareVersionDirectory(
       } else if (action_type == "add") {
         const std::string* source_ptr = act.FindString("source");
         std::string source_rel = source_ptr ? *source_ptr : "";
-        base::FilePath src_file = patch_dir.Append(
-            base::FilePath::FromUTF8Unsafe(source_rel).NormalizePathSeparators());
+        base::FilePath src_file =
+            patch_dir.Append(base::FilePath::FromUTF8Unsafe(source_rel)
+                                 .NormalizePathSeparators());
         if (!base::PathExists(src_file)) {
           LOG(ERROR) << "[XenonUpdateManager] Missing added file: "
                      << src_file.value() << " for target: " << target_rel;
-          result.error = "Missing file for add action: " + source_rel + " (" + src_file.MaybeAsASCII() + ")";
+          result.error = "Missing file for add action: " + source_rel + " (" +
+                         src_file.MaybeAsASCII() + ")";
           base::DeletePathRecursively(temp_staging_dir);
           return result;
         }
@@ -848,8 +916,9 @@ XenonUpdateManager::PrepareVersionDirectory(
           base::CopyFile(src_file, dest_path);
           count_added++;
         } else {
-          base::FilePath target_file = install_dir.Append(
-              base::FilePath::FromUTF8Unsafe(target_rel).NormalizePathSeparators());
+          base::FilePath target_file =
+              install_dir.Append(base::FilePath::FromUTF8Unsafe(target_rel)
+                                     .NormalizePathSeparators());
           base::CreateDirectory(target_file.DirName());
           if (!base::CopyFile(src_file, target_file)) {
             base::FilePath staged_new = target_file.DirName().Append(
@@ -864,12 +933,15 @@ XenonUpdateManager::PrepareVersionDirectory(
         std::string base_rel = base_ptr ? *base_ptr : "";
         std::string patch_rel = patch_rel_ptr ? *patch_rel_ptr : "";
 
-        base::FilePath patch_file_full = patch_dir.Append(
-            base::FilePath::FromUTF8Unsafe(patch_rel).NormalizePathSeparators());
+        base::FilePath patch_file_full =
+            patch_dir.Append(base::FilePath::FromUTF8Unsafe(patch_rel)
+                                 .NormalizePathSeparators());
         if (!base::PathExists(patch_file_full)) {
           LOG(ERROR) << "[XenonUpdateManager] Missing patch file: "
-                     << patch_file_full.value() << " for target: " << target_rel;
-          result.error = "Missing patch file in archive: " + patch_rel + " (" + patch_file_full.MaybeAsASCII() + ")";
+                     << patch_file_full.value()
+                     << " for target: " << target_rel;
+          result.error = "Missing patch file in archive: " + patch_rel + " (" +
+                         patch_file_full.MaybeAsASCII() + ")";
           base::DeletePathRecursively(temp_staging_dir);
           return result;
         }
@@ -877,8 +949,9 @@ XenonUpdateManager::PrepareVersionDirectory(
         base::FilePath src_base = install_dir.Append(
             base::FilePath::FromUTF8Unsafe(base_rel).NormalizePathSeparators());
         if (!base::PathExists(src_base) && !current_version_dir.empty()) {
-          base::FilePath candidate = current_version_dir.Append(
-              base::FilePath::FromUTF8Unsafe(sub_rel).NormalizePathSeparators());
+          base::FilePath candidate =
+              current_version_dir.Append(base::FilePath::FromUTF8Unsafe(sub_rel)
+                                             .NormalizePathSeparators());
           if (base::PathExists(candidate)) {
             src_base = candidate;
           }
@@ -906,20 +979,23 @@ XenonUpdateManager::PrepareVersionDirectory(
           std::string patch_err;
           if (!XenonUpdatePatcher::ApplyPatch(src_base, patch_file_full,
                                               dest_path, &patch_err)) {
-            result.error = "Failed to apply differential patch to " + target_rel + " [" + patch_err + "]";
+            result.error = "Failed to apply differential patch to " +
+                           target_rel + " [" + patch_err + "]";
             base::DeletePathRecursively(temp_staging_dir);
             return result;
           }
           count_patched++;
         } else {
-          base::FilePath target_file = install_dir.Append(
-              base::FilePath::FromUTF8Unsafe(target_rel).NormalizePathSeparators());
+          base::FilePath target_file =
+              install_dir.Append(base::FilePath::FromUTF8Unsafe(target_rel)
+                                     .NormalizePathSeparators());
           base::FilePath staged_new = target_file.DirName().Append(
               FILE_PATH_LITERAL("new_") + target_file.BaseName().value());
           std::string patch_err;
           if (!XenonUpdatePatcher::ApplyPatch(src_base, patch_file_full,
                                               staged_new, &patch_err)) {
-            result.error = "Failed to apply differential patch to " + target_rel + " [" + patch_err + "]";
+            result.error = "Failed to apply differential patch to " +
+                           target_rel + " [" + patch_err + "]";
             base::DeletePathRecursively(temp_staging_dir);
             return result;
           }
@@ -973,7 +1049,8 @@ XenonUpdateManager::PrepareVersionDirectory(
   }
 
   LOG(WARNING) << "[XenonUpdateManager] Not using manifest mode (is_zip="
-               << is_zip << ", manifest_exists=" << base::PathExists(manifest_path)
+               << is_zip
+               << ", manifest_exists=" << base::PathExists(manifest_path)
                << "). Falling back to legacy single-file mode.";
 
   // Fallback: Legacy Single-File / Companion Patch Mode
@@ -981,10 +1058,11 @@ XenonUpdateManager::PrepareVersionDirectory(
   base::FilePath exe_patch;
 
   if (is_zip) {
-    LOG(INFO) << "[XenonUpdateManager] Successfully unpacked differential update archive";
+    LOG(INFO) << "[XenonUpdateManager] Successfully unpacked differential "
+                 "update archive";
     // Check for DLL patch in archive
-    base::FilePath candidate_dll =
-        patch_dir.Append(base_file.BaseName().value() + FILE_PATH_LITERAL(".zucc"));
+    base::FilePath candidate_dll = patch_dir.Append(
+        base_file.BaseName().value() + FILE_PATH_LITERAL(".zucc"));
     if (base::PathExists(candidate_dll)) {
       dll_patch = candidate_dll;
     } else {
@@ -995,8 +1073,8 @@ XenonUpdateManager::PrepareVersionDirectory(
     }
 
     // Check for Launcher patch in archive
-    base::FilePath candidate_exe =
-        patch_dir.Append(current_exe.BaseName().value() + FILE_PATH_LITERAL(".zucc"));
+    base::FilePath candidate_exe = patch_dir.Append(
+        current_exe.BaseName().value() + FILE_PATH_LITERAL(".zucc"));
     if (base::PathExists(candidate_exe)) {
       exe_patch = candidate_exe;
     } else {
@@ -1006,9 +1084,10 @@ XenonUpdateManager::PrepareVersionDirectory(
       }
     }
   } else {
-    // If patch_file is a standalone .zucc, check if a companion .zucc exists beside it
-    base::FilePath candidate_exe =
-        patch_file.DirName().Append(current_exe.BaseName().value() + FILE_PATH_LITERAL(".zucc"));
+    // If patch_file is a standalone .zucc, check if a companion .zucc exists
+    // beside it
+    base::FilePath candidate_exe = patch_file.DirName().Append(
+        current_exe.BaseName().value() + FILE_PATH_LITERAL(".zucc"));
     if (base::PathExists(candidate_exe)) {
       exe_patch = candidate_exe;
     }
@@ -1017,7 +1096,8 @@ XenonUpdateManager::PrepareVersionDirectory(
   // 2. Apply Zucchini patch to generate new main binary (xlbrowser.dll)
   base::FilePath target_binary = temp_staging_dir.Append(base_file.BaseName());
   if (!XenonUpdatePatcher::ApplyPatch(base_file, dll_patch, target_binary)) {
-    result.error = "Zucchini differential patch application failed for main binary";
+    result.error =
+        "Zucchini differential patch application failed for main binary";
     base::DeletePathRecursively(temp_staging_dir);
     return result;
   }
@@ -1049,7 +1129,8 @@ XenonUpdateManager::PrepareVersionDirectory(
   std::string current_ver_str = current_version_dir.BaseName().MaybeAsASCII();
   std::string target_ver_str = target_version_dir.BaseName().MaybeAsASCII();
 
-  // 3b. Ensure <target_version>.manifest exists for Windows SxS assembly binding
+  // 3b. Ensure <target_version>.manifest exists for Windows SxS assembly
+  // binding
   if (!target_ver_str.empty()) {
     base::FilePath target_manifest =
         temp_staging_dir.AppendASCII(target_ver_str + ".manifest");
@@ -1059,47 +1140,58 @@ XenonUpdateManager::PrepareVersionDirectory(
       std::string manifest_content;
       if (base::PathExists(src_manifest) &&
           base::ReadFileToString(src_manifest, &manifest_content)) {
-        base::ReplaceSubstringsAfterOffset(&manifest_content, 0, current_ver_str, target_ver_str);
+        base::ReplaceSubstringsAfterOffset(&manifest_content, 0,
+                                           current_ver_str, target_ver_str);
         base::WriteFile(target_manifest, manifest_content);
       }
     }
   }
 
-  // 2b. Stage new_<launcher>.exe in install_dir via genuine Zucchini differential patch
+  // 2b. Stage new_<launcher>.exe in install_dir via genuine Zucchini
+  // differential patch
   if (base::PathExists(current_exe) && !target_ver_str.empty()) {
-    base::FilePath new_exe =
-        install_dir.Append(FILE_PATH_LITERAL("new_") + current_exe.BaseName().value());
-    base::FilePath staged_launcher = temp_staging_dir.Append(current_exe.BaseName());
+    base::FilePath new_exe = install_dir.Append(FILE_PATH_LITERAL("new_") +
+                                                current_exe.BaseName().value());
+    base::FilePath staged_launcher =
+        temp_staging_dir.Append(current_exe.BaseName());
 
     if (!exe_patch.empty() && base::PathExists(exe_patch)) {
       if (XenonUpdatePatcher::ApplyPatch(current_exe, exe_patch, new_exe)) {
-        LOG(INFO) << "[XenonUpdateManager] Successfully generated new launcher via Zucchini patch: "
+        LOG(INFO) << "[XenonUpdateManager] Successfully generated new launcher "
+                     "via Zucchini patch: "
                   << new_exe.value();
         base::CopyFile(new_exe, staged_launcher);
       } else {
-        LOG(ERROR) << "[XenonUpdateManager] Failed to apply Zucchini patch to launcher executable!";
+        LOG(ERROR) << "[XenonUpdateManager] Failed to apply Zucchini patch to "
+                      "launcher executable!";
       }
     } else {
-      LOG(WARNING) << "[XenonUpdateManager] No differential patch found for launcher executable.";
+      LOG(WARNING) << "[XenonUpdateManager] No differential patch found for "
+                      "launcher executable.";
     }
   }
 
-  // 2c. Update setup.exe in Installer directory if a differential patch or new binary is provided
-  base::FilePath setup_patch = patch_dir.Append(FILE_PATH_LITERAL("setup.exe.zucc"));
+  // 2c. Update setup.exe in Installer directory if a differential patch or new
+  // binary is provided
+  base::FilePath setup_patch =
+      patch_dir.Append(FILE_PATH_LITERAL("setup.exe.zucc"));
   if (base::PathExists(setup_patch)) {
     base::FilePath current_setup =
         current_version_dir.Append(FILE_PATH_LITERAL("Installer"))
-                           .Append(FILE_PATH_LITERAL("setup.exe"));
+            .Append(FILE_PATH_LITERAL("setup.exe"));
     base::FilePath target_installer_dir =
         temp_staging_dir.Append(FILE_PATH_LITERAL("Installer"));
     base::FilePath target_setup =
         target_installer_dir.Append(FILE_PATH_LITERAL("setup.exe"));
     if (base::PathExists(current_setup)) {
       base::CreateDirectory(target_installer_dir);
-      if (XenonUpdatePatcher::ApplyPatch(current_setup, setup_patch, target_setup)) {
-        LOG(INFO) << "[XenonUpdateManager] Successfully updated setup.exe via differential patch";
+      if (XenonUpdatePatcher::ApplyPatch(current_setup, setup_patch,
+                                         target_setup)) {
+        LOG(INFO) << "[XenonUpdateManager] Successfully updated setup.exe via "
+                     "differential patch";
       } else {
-        LOG(ERROR) << "[XenonUpdateManager] Failed to apply differential patch to setup.exe";
+        LOG(ERROR) << "[XenonUpdateManager] Failed to apply differential patch "
+                      "to setup.exe";
       }
     }
   }
@@ -1115,7 +1207,8 @@ XenonUpdateManager::PrepareVersionDirectory(
   }
   if (!base::Move(temp_staging_dir, target_version_dir)) {
     if (!base::CopyDirectory(temp_staging_dir, target_version_dir, true)) {
-      result.error = "Failed to move staged directory to target version directory";
+      result.error =
+          "Failed to move staged directory to target version directory";
       base::DeletePathRecursively(temp_staging_dir);
       return result;
     }
@@ -1132,7 +1225,8 @@ void XenonUpdateManager::OnPatchCompleteWithOutput(
   if (!result.success) {
     if (manifest_->full_package) {
       LOG(WARNING) << "[XenonUpdateManager] Patch application failed: "
-                   << result.error << ". Falling back to full package download.";
+                   << result.error
+                   << ". Falling back to full package download.";
       manifest_->is_diff = false;
       StartPackageDownload(*manifest_->full_package, /*is_diff=*/false);
       return;
@@ -1155,8 +1249,7 @@ void XenonUpdateManager::CleanupOldVersions() {
   return;
 #endif
   base::ThreadPool::PostDelayedTask(
-      FROM_HERE,
-      {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
       base::BindOnce(&XenonUpdateManager::DoCleanupOldVersions,
                      GetDefaultInstallDir(), GetCurrentVersion()),
       base::Seconds(3));
@@ -1164,17 +1257,21 @@ void XenonUpdateManager::CleanupOldVersions() {
 
 // static
 void XenonUpdateManager::DoCleanupOldVersions(base::FilePath install_dir,
-                                             std::string current_ver_str) {
+                                              std::string current_ver_str) {
   LOG(INFO) << "[XenonUpdateManager] DoCleanupOldVersions started: install_dir="
             << install_dir.value() << ", current_ver=" << current_ver_str;
+  if (install_dir.FinalExtension() == FILE_PATH_LITERAL(".app")) {
+    return;
+  }
   base::Version current_version(current_ver_str);
   if (!current_version.IsValid() || !base::DirectoryExists(install_dir)) {
-    LOG(WARNING) << "[XenonUpdateManager] DoCleanupOldVersions: invalid version or missing install dir";
+    LOG(WARNING) << "[XenonUpdateManager] DoCleanupOldVersions: invalid "
+                    "version or missing install dir";
     return;
   }
   // 1. Clean up older version directories
-  base::FileEnumerator enumerator(
-      install_dir, /*recursive=*/false, base::FileEnumerator::DIRECTORIES);
+  base::FileEnumerator enumerator(install_dir, /*recursive=*/false,
+                                  base::FileEnumerator::DIRECTORIES);
   for (base::FilePath dir = enumerator.Next(); !dir.empty();
        dir = enumerator.Next()) {
     std::string dirname = dir.BaseName().MaybeAsASCII();
@@ -1185,10 +1282,12 @@ void XenonUpdateManager::DoCleanupOldVersions(base::FilePath install_dir,
       if (!base::DeletePathRecursively(dir)) {
 #if BUILDFLAG(IS_WIN)
         base::FileEnumerator sub_enum(dir, /*recursive=*/true,
-                                     base::FileEnumerator::FILES);
-        for (base::FilePath f = sub_enum.Next(); !f.empty(); f = sub_enum.Next()) {
+                                      base::FileEnumerator::FILES);
+        for (base::FilePath f = sub_enum.Next(); !f.empty();
+             f = sub_enum.Next()) {
           if (!base::DeleteFile(f)) {
-            ::MoveFileExW(f.value().c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
+            ::MoveFileExW(f.value().c_str(), nullptr,
+                          MOVEFILE_DELAY_UNTIL_REBOOT);
           }
         }
         base::DeletePathRecursively(dir);
@@ -1198,9 +1297,9 @@ void XenonUpdateManager::DoCleanupOldVersions(base::FilePath install_dir,
   }
 
   // 2. Clean up any leftover old_* or new_* binaries in install_dir
-  base::FileEnumerator file_enumerator(
-      install_dir, /*recursive=*/false, base::FileEnumerator::FILES,
-      FILE_PATH_LITERAL("old_*"));
+  base::FileEnumerator file_enumerator(install_dir, /*recursive=*/false,
+                                       base::FileEnumerator::FILES,
+                                       FILE_PATH_LITERAL("old_*"));
   for (base::FilePath file = file_enumerator.Next(); !file.empty();
        file = file_enumerator.Next()) {
     if (!base::DeleteFile(file)) {
@@ -1210,9 +1309,9 @@ void XenonUpdateManager::DoCleanupOldVersions(base::FilePath install_dir,
     }
   }
 
-  base::FileEnumerator new_file_enumerator(
-      install_dir, /*recursive=*/false, base::FileEnumerator::FILES,
-      FILE_PATH_LITERAL("new_*"));
+  base::FileEnumerator new_file_enumerator(install_dir, /*recursive=*/false,
+                                           base::FileEnumerator::FILES,
+                                           FILE_PATH_LITERAL("new_*"));
   for (base::FilePath file = new_file_enumerator.Next(); !file.empty();
        file = new_file_enumerator.Next()) {
     base::DeleteFile(file);
@@ -1228,7 +1327,7 @@ void XenonUpdateManager::OnVersionStartup() {
 
 // static
 void XenonUpdateManager::UpdateRegistryVersion(base::FilePath install_dir,
-                                              const std::string& version) {
+                                               const std::string& version) {
 #if BUILDFLAG(IS_WIN)
   if (version.empty()) {
     return;
@@ -1244,29 +1343,35 @@ void XenonUpdateManager::UpdateRegistryVersion(base::FilePath install_dir,
 
   std::wstring app_reg = L"Software\\" + product_name;
   std::wstring uninst_reg =
-      L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + product_name;
+      L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" +
+      product_name;
 
   std::wstring version_w = base::ASCIIToWide(version);
   base::FilePath setup_path = install_dir.AppendASCII(version)
-                                        .Append(FILE_PATH_LITERAL("Installer"))
-                                        .Append(FILE_PATH_LITERAL("setup.exe"));
+                                  .Append(FILE_PATH_LITERAL("Installer"))
+                                  .Append(FILE_PATH_LITERAL("setup.exe"));
   std::wstring setup_exe = setup_path.value();
 
   for (HKEY root : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
     base::win::RegKey app_key;
-    if (app_key.Open(root, app_reg.c_str(), KEY_SET_VALUE | KEY_WOW64_32KEY) == ERROR_SUCCESS ||
+    if (app_key.Open(root, app_reg.c_str(), KEY_SET_VALUE | KEY_WOW64_32KEY) ==
+            ERROR_SUCCESS ||
         app_key.Open(root, app_reg.c_str(), KEY_SET_VALUE) == ERROR_SUCCESS) {
       app_key.WriteValue(L"pv", version_w.c_str());
       if (base::PathExists(setup_path)) {
         app_key.WriteValue(L"UninstallString", setup_exe.c_str());
-        std::wstring cleanup_cmd = L"\"" + setup_exe + L"\" --cleanup-for-downgrade-version=$1 --cleanup-for-downgrade-operation=$2";
+        std::wstring cleanup_cmd = L"\"" + setup_exe +
+                                   L"\" --cleanup-for-downgrade-version=$1 "
+                                   L"--cleanup-for-downgrade-operation=$2";
         app_key.WriteValue(L"DowngradeCleanupCommand", cleanup_cmd.c_str());
       }
     }
 
     base::win::RegKey uninstall_key;
-    if (uninstall_key.Open(root, uninst_reg.c_str(), KEY_SET_VALUE | KEY_WOW64_32KEY) == ERROR_SUCCESS ||
-        uninstall_key.Open(root, uninst_reg.c_str(), KEY_SET_VALUE) == ERROR_SUCCESS) {
+    if (uninstall_key.Open(root, uninst_reg.c_str(),
+                           KEY_SET_VALUE | KEY_WOW64_32KEY) == ERROR_SUCCESS ||
+        uninstall_key.Open(root, uninst_reg.c_str(), KEY_SET_VALUE) ==
+            ERROR_SUCCESS) {
       uninstall_key.WriteValue(L"DisplayVersion", version_w.c_str());
       uninstall_key.WriteValue(L"Version", version_w.c_str());
       if (base::PathExists(setup_path)) {
@@ -1283,15 +1388,26 @@ void XenonUpdateManager::InstallOnExit() {
   // macOS installation has already completed before kUpdateDownloaded.
   return;
 #else
+  if (install_started_) {
+    return;
+  }
   if (state_ != UpdateState::kUpdateDownloaded || staged_output_file_.empty()) {
     return;
   }
+  install_started_ = true;
   if (manifest_ && !manifest_->target_version.empty()) {
     UpdateRegistryVersion(GetDefaultInstallDir(), manifest_->target_version);
   }
-  // Launch update helper without relaunching browser
-  XenonUpdateInstaller::InstallAndRelaunch(
-      staged_output_file_, GetDefaultInstallDir(), /*relaunch_executable=*/base::FilePath());
+  base::ThreadPool::PostTask(
+      FROM_HERE,
+      {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
+       base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
+      base::BindOnce(
+          [](base::FilePath staged, base::FilePath install_dir) {
+            XenonUpdateInstaller::InstallAndRelaunch(
+                staged, install_dir, /*relaunch_executable=*/base::FilePath());
+          },
+          staged_output_file_, GetDefaultInstallDir()));
 #endif
 }
 
@@ -1310,26 +1426,42 @@ void XenonUpdateManager::QuitAndInstall() {
   }
   chrome::AttemptRestart();
 #else
+  if (install_started_) {
+    return;
+  }
   if (state_ != UpdateState::kUpdateDownloaded || staged_output_file_.empty()) {
     NotifyError("No update ready for installation");
     return;
   }
+  install_started_ = true;
+  SetState(UpdateState::kInstalling);
 
   if (manifest_ && !manifest_->target_version.empty()) {
     UpdateRegistryVersion(GetDefaultInstallDir(), manifest_->target_version);
   }
 
-  bool initiated = XenonUpdateInstaller::InstallAndRelaunch(
-      staged_output_file_, GetDefaultInstallDir(), GetDefaultExecutable());
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE,
+      {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
+       base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
+      base::BindOnce(&XenonUpdateInstaller::InstallAndRelaunch,
+                     staged_output_file_, GetDefaultInstallDir(),
+                     GetDefaultExecutable()),
+      base::BindOnce(&XenonUpdateManager::OnInstallInitiated,
+                     weak_factory_.GetWeakPtr()));
+#endif
+}
 
+void XenonUpdateManager::OnInstallInitiated(bool initiated) {
   if (!initiated) {
+    install_started_ = false;
     NotifyError("Failed to initiate update installation and relaunch");
     return;
   }
 
-  // Gracefully exit the application to allow the external helper to replace files.
+  // Gracefully exit the application to allow the external helper to replace
+  // files.
   chrome::ExitIgnoreUnloadHandlers();
-#endif
 }
 
 }  // namespace xenon::updater

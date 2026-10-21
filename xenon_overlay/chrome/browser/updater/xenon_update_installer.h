@@ -30,6 +30,10 @@ class MacUpdateInstallContext {
 
 class XenonUpdateInstaller {
  public:
+  // CFBundleShortVersionString of a macOS app bundle, then CFBundleVersion.
+  // Empty for a missing/invalid Info.plist or on platforms other than macOS.
+  static std::string ReadBundleShortVersion(const base::FilePath& bundle_path);
+
 #if BUILDFLAG(IS_MAC)
   // Blocking operations: call on a MayBlock worker. The returned bundle lives
   // in a unique private directory beneath staging_root, owned by the caller.

@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
@@ -127,6 +128,10 @@ class XenonUpdateManager {
 
   void OnCheckResponse(std::optional<std::string> response_body);
   void StartPackageDownload(const UpdatePackageInfo& package, bool is_diff);
+  void OnDownloadTempDirCreated(UpdatePackageInfo package,
+                                bool is_diff,
+                                std::pair<base::ScopedTempDir, bool> result);
+  void OnInstallInitiated(bool initiated);
   void OnDownloadProgress(const DownloadProgress& progress);
   void OnDownloadComplete(bool is_diff, bool success, const std::string& error);
   void OnPatchCompleteWithOutput(VersionStagingResult result);
@@ -156,6 +161,7 @@ class XenonUpdateManager {
   base::FilePath install_dir_override_;
   base::FilePath base_file_override_;
   base::ScopedTempDir temp_download_dir_;
+  bool install_started_ = false;
   base::FilePath downloaded_file_;
   base::FilePath staged_output_file_;
 

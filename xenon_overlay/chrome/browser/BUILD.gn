@@ -719,6 +719,7 @@ test("xenon_updater_unittests") {
     "//components/zucchini:zucchini_lib",
     "//crypto",
     "//mojo/core/embedder",
+    "//net",
     "//services/network:test_support",
     "//testing/gtest",
   ]
