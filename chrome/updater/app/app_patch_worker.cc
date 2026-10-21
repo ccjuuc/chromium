@@ -17,6 +17,10 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/task/bind_post_task.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "chrome/updater/app/app.h"
 #include "chrome/updater/constants.h"
 #include "components/services/patch/file_patcher_impl.h"
@@ -92,10 +96,20 @@ void AppPatchWorker::FirstTaskRun() {
     return;
   }
 
-  mojo::MakeSelfOwnedReceiver(
-      std::make_unique<FilePatcherImplWithShutdown>(
-          base::BindOnce(&AppPatchWorker::Shutdown, this, kErrorOk)),
-      mojo::PendingReceiver<patch::mojom::FilePatcher>(std::move(pipe)));
+  base::ThreadPool::CreateSequencedTaskRunner({base::MayBlock()})
+      ->PostTask(
+          FROM_HERE,
+          base::BindOnce(
+              [](mojo::PendingReceiver<patch::mojom::FilePatcher> receiver,
+                 base::OnceClosure shutdown_callback) {
+                mojo::MakeSelfOwnedReceiver(
+                    std::make_unique<FilePatcherImplWithShutdown>(
+                        std::move(shutdown_callback)),
+                    std::move(receiver));
+              },
+              mojo::PendingReceiver<patch::mojom::FilePatcher>(std::move(pipe)),
+              base::BindPostTaskToCurrentDefault(
+                  base::BindOnce(&AppPatchWorker::Shutdown, this, kErrorOk))));
 }
 
 scoped_refptr<App> MakeAppPatchWorker() {

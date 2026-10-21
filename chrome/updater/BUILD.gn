@@ -915,7 +915,9 @@ if (is_win || is_mac || is_linux) {
 
   source_set("updater_test_sources") {
     testonly = true
+    include_dirs = [ "//third_party/puffin/src/include" ]
     sources = [
+      "app/app_patch_worker_unittest.cc",
       "app/app_server_unittest.cc",
       "app/app_uninstall_unittest.cc",
       "app/app_utils_unittest.cc",
@@ -991,6 +993,7 @@ if (is_win || is_mac || is_linux) {
       "//components/policy/core/common:common_constants",
       "//components/policy/proto",
       "//components/prefs:test_support",
+      "//components/services/patch/public/mojom",
       "//components/update_client",
       "//net:test_support",
       "//testing/gmock",
@@ -998,12 +1001,16 @@ if (is_win || is_mac || is_linux) {
       "//third_party/abseil-cpp:absl",
       "//third_party/crashpad/crashpad/client",
       "//third_party/fuzztest",
+      "//third_party/puffin:libpuffpatch",
       "//third_party/re2",
       "//third_party/zlib/google:compression_utils",
       "//url",
     ]
 
     data = [
+      "//components/test/data/update_client/puffin_patch_test/puffin_app_v1.crx3",
+      "//components/test/data/update_client/puffin_patch_test/puffin_app_v1_to_v2.puff",
+      "//components/test/data/update_client/puffin_patch_test/puffin_app_v2.crx3",
       "test/data/app_logos/googletest.bmp",
       "test/data/signed.exe",  # Payload used by network tests.
       "test/data/signed.exe.gz",

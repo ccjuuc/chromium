@@ -129,6 +129,75 @@ XENON_VERIFY_TOOL="$PWD/out/release_arm64/xenon_updater_verify" \
 差分响应的 Chromium 原生 Omaha 解析均在这些测试中覆盖。macOS 进程等待测试需要
 允许 `pgrep` 读取本机进程列表；HTTP 测试需要允许监听本机回环端口。
 
+差分工作进程另有真实 Mojo 子进程回归，验证补丁还原、损坏补丁错误返回和正常退出。
+文件操作在带 `MayBlock` 的任务序列执行，退出回调回到主序列，避免主线程的阻塞检查
+使工作进程崩溃并导致有效差分也回退完整包。
+
+```sh
+autoninja -C out/release_arm64 updater_tests
+ISOLATED_OUTDIR="$(mktemp -d)" out/release_arm64/updater_tests \
+  --gtest_filter='AppPatchWorkerTest.*' --test-launcher-jobs=1
+```
+
+这里的过滤器限定为仅操作临时文件和子进程的两项测试。不要去掉过滤器直接运行整套
+品牌 Updater 集成测试；其中的安装/卸载用例会修改本机 Updater。
+
 代码/协议/离线制包测试不等于系统升级验收。正式证书配置后，仍须验证首次管理员
 安装、系统服务注册、完整更新、缓存命中差分、损坏差分自动回退、安装锁、root 所有权、
 退出再打开、Gatekeeper、网页正常加载及 Updater 自更新。
+
+## 开发签名下的本机验证
+
+开发签名可以验证本机更新逻辑。以下测试自动创建临时的 ad-hoc 签名应用和真实 PKG，
+执行生成的完整 `.install` 脚本，使用原生 plist 读取、PKG 解包、文件哈希和 codesign
+检查。测试仅在临时脚本中替换 root 身份、所有权查询、进程查询及 Apple Installer
+调用；不会调用系统 `installer`，不会安装或注册系统服务，也不会修改 `/Applications`。
+
+```sh
+python3 xenon_overlay/tools/updater/system_updater_install_test.py
+python3 xenon_overlay/tools/updater/mac_native_update_test.py
+```
+
+第一组覆盖作用域和注册路径错误、包损坏、符号链接、等待超时、等待期间目标或版本
+变化、安装返回错误、部分写入后的新进程重试，以及安装返回成功但签名、应用身份或
+版本不符。部分写入用例保留有效的 Info.plist，破坏资源签名，再要求同版本完整包修复；
+它不能证明元数据丢失、真实 Installer 中断或断电后的恢复。第二组测试现有旧后端的
+原生辅助进程和应用替换，不代表系统 Updater 的 PKG 安装流程已经通过。
+
+开发签名仍会被正式发布身份检查拒绝。`--development` 系统服务 PKG 的安装阻断保持
+有效，不能用它模拟正式 Developer ID、Gatekeeper、公证和 root 服务安装验收。
+
+真实浏览器的 ad-hoc 冒烟测试应复制构建产物并使用全新的临时 `--user-data-dir`。
+若本机钥匙串授权导致自动化等待，可在该临时实例使用 Chromium 自带的
+`--use-mock-keychain`；这不验证真实钥匙串访问，也不适用于日常用户配置。
+系统更新模式从临时目录启动时应报告固定安装路径错误，并允许重试；该检查通过
+仅证明浏览器与原生更新接口的错误处理正常，不表示系统服务安装或升级成功。
+
+## 正式签名制品验收入口
+
+`system_updater_release_test.py` 检查正式签名旧、新应用的身份、递增版本和公证票据，
+检查 PKG 签名及其载荷是否与新版应用一致，再用 Chromium 原生 CRX verifier 校验发布
+公钥，并验证 CRX 内的 PKG 和 `.install` 与预期一致。所有操作只读取输入并使用临时
+解包目录，不执行输入中的安装脚本。
+
+```sh
+XENON_REQUIRE_RELEASE_FIXTURES=1 \
+XENON_RELEASE_OLD_APP='/ABS/OLD/xl153.app' \
+XENON_RELEASE_NEW_APP='/ABS/NEW/xl153.app' \
+XENON_RELEASE_PKG='/ABS/RELEASE/application.pkg' \
+XENON_RELEASE_CRX='/ABS/RELEASE/update.crx3' \
+XENON_RELEASE_TEAM_ID='YOURTEAMID' \
+XENON_RELEASE_KEY_SHA256='RELEASE_PUBLIC_KEY_SHA256_HEX_OR_BASE64' \
+XENON_VERIFY_TOOL="$PWD/out/release_arm64/xenon_updater_verify" \
+  python3 xenon_overlay/tools/updater/system_updater_release_test.py
+```
+
+如果制包指定了非默认的 `--wait-seconds`，同时设置相同的
+`XENON_RELEASE_WAIT_SECONDS`。日常离线回归未配置任何发布输入时明确显示 `SKIPPED`；
+只配置部分输入、配置错误，或者设置 `XENON_REQUIRE_RELEASE_FIXTURES=1` 后缺少输入，
+均会失败。发布 CI 必须启用该要求，并确认三项 `SignedReleaseTest` 实际通过。
+
+制品检查之后，仍需在独立 macOS 测试机或虚拟机执行真实系统验收：首次管理员安装、
+普通用户请求更新、服务注册与 root 所有权、等待所有浏览器退出、安装后正常启动；
+再验证下载损坏与差分回退、安装失败和服务重启后的重试，以及安装中断和磁盘不足的
+恢复结果。不能以跳过的测试、开发签名通过或制品检查通过替代这一步。
