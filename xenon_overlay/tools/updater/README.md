@@ -1,6 +1,9 @@
 > macOS 系统级 Xenon Updater（Chromium Updater + Omaha 4.0）见
 > [SYSTEM_UPDATER.md](SYSTEM_UPDATER.md)。下面的自定义 JSON/patch.zip 工具属于原有协议。
 
+当前系统 Updater 的打包入口为 `package_macos.py`，差分入口为
+`make_updater_delta.py`。可直接使用的命令及输出说明见 [PACKAGING.md](PACKAGING.md)。
+
 # Xenon 增量与差分更新工具链 (Xenon Updater Tools)
 
 本目录包含 Xenon 增量更新与差分包构建、服务模拟、自动化测试与环境部署的核心工具。

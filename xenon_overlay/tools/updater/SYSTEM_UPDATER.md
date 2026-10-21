@@ -50,6 +50,10 @@ Updater 的开发 override 改掉。Google 的事件上传、云策略和 Enterp
 
 ## 发布制包
 
+统一打包入口为 `package_macos.py`，差分入口为 `make_updater_delta.py`。
+从已签名应用生成 PKG、CRX、发布清单及差分的完整命令见 [PACKAGING.md](PACKAGING.md)。
+下述低层脚本也可单独使用。
+
 先按 Chromium 的 macOS 签名流程签名、公证浏览器及 `XenonUpdater.app`。
 正式制包要求匹配的 Developer ID Application Team、Developer ID Installer
 签名以及公证票据。签名与 CRX 发布密钥是两种不同的身份。
@@ -181,6 +185,7 @@ autoninja -C out/release_arm64 xenon_updater_unittests \
 out/release_arm64/xenon_updater_unittests --test-launcher-jobs=1
 python3 chrome/updater/branding_xenon_test.py
 XENON_PUFFIN_TOOL="$PWD/out/release_arm64/puffin" \
+XENON_PACKAGE_TOOLS_DIR="$PWD/out/release_arm64" \
 XENON_CRX_TOOL="$PWD/out/release_arm64/crx3_build_action" \
 XENON_VERIFY_TOOL="$PWD/out/release_arm64/xenon_updater_verify" \
   python3 -m unittest discover -s xenon_overlay/tools/updater -p '*_test.py'
