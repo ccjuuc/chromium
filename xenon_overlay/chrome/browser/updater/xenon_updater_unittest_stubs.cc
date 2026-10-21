@@ -8,6 +8,7 @@
 // Stubs for browser process dependencies not needed in standalone updater unit tests.
 namespace chrome {
 void ExitIgnoreUnloadHandlers() {}
+void AttemptRestart() {}
 }  // namespace chrome
 
 class SystemNetworkContextManager {

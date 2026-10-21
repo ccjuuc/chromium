@@ -167,8 +167,24 @@ source_set("filesystem_bridge") {
   ]
 }
 
+if (is_mac) {
+  action("xenon_mac_install_script") {
+    script = "//xenon_overlay/tools/updater/generate_mac_install_script.py"
+    inputs = [ "//chrome/updater/mac/.install.sh" ]
+    outputs = [ "$target_gen_dir/updater/xenon_mac_install_script.h" ]
+    args = [
+      "--input",
+      rebase_path(inputs[0], root_build_dir),
+      "--output",
+      rebase_path(outputs[0], root_build_dir),
+    ]
+  }
+}
+
 source_set("xenon_updater") {
   sources = [
+    "updater/xenon_update_bundle.cc",
+    "updater/xenon_update_bundle.h",
     "updater/xenon_update_downloader.cc",
     "updater/xenon_update_downloader.h",
     "updater/xenon_update_installer.h",
@@ -191,6 +207,7 @@ source_set("xenon_updater") {
     "//base",
     "//chrome/browser:browser_process",
     "//chrome/browser/lifetime:termination_notification",
+    "//chrome/common:non_code_constants",
     "//components/version_info",
     "//components/zucchini:zucchini_io",
     "//components/zucchini:zucchini_lib",
@@ -200,6 +217,17 @@ source_set("xenon_updater") {
     "//third_party/zlib/google:zip",
     "//url",
   ]
+  if (is_mac) {
+    deps += [
+      ":xenon_mac_install_script",
+      "//chrome/browser/lifetime",
+      "//third_party/zlib:minizip",
+    ]
+    frameworks = [
+      "Foundation.framework",
+      "Security.framework",
+    ]
+  }
 }
 
 source_set("electron_api_bridge") {
@@ -424,18 +452,30 @@ if (enable_xenon_service) {
     sources = [
       "asar/xenon_asar_url_loader_factory_unittest.cc",
       "ui/xenon_web_dialog_unittest.cc",
+      "updater/xenon_update_bundle_unittest.cc",
       "updater/xenon_update_manager_unittest.cc",
       "xenon_manager_unittest.cc",
     ]
+    if (is_mac) {
+      sources += [
+        "updater/xenon_update_installer_mac_integration_unittest.mm",
+        "updater/xenon_update_installer_mac_unittest.mm",
+      ]
+    }
     deps = [
       ":browser",
+      ":xenon_updater",
       "//base/test:test_support",
       "//content/test:test_support",
+      "//crypto",
       "//services/network:test_support",
       "//testing/gtest",
       "//ui/views",
       "//xenon_overlay/common/asar:test_support",
     ]
+    if (is_mac) {
+      deps += [ "//third_party/zlib:minizip" ]
+    }
   }
 }
 
@@ -660,9 +700,16 @@ test("ipc_main_container_unittests") {
 test("xenon_updater_unittests") {
   testonly = true
   sources = [
+    "updater/xenon_update_bundle_unittest.cc",
     "updater/xenon_update_manager_unittest.cc",
     "updater/xenon_updater_unittest_stubs.cc",
   ]
+  if (is_mac) {
+    sources += [
+      "updater/xenon_update_installer_mac_integration_unittest.mm",
+      "updater/xenon_update_installer_mac_unittest.mm",
+    ]
+  }
   deps = [
     ":xenon_updater",
     "//base",
@@ -670,9 +717,12 @@ test("xenon_updater_unittests") {
     "//base/test:test_support",
     "//components/zucchini:zucchini_io",
     "//components/zucchini:zucchini_lib",
+    "//crypto",
     "//mojo/core/embedder",
     "//services/network:test_support",
     "//testing/gtest",
   ]
+  if (is_mac) {
+    deps += [ "//third_party/zlib:minizip" ]
+  }
 }
-

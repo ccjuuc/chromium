@@ -15,6 +15,7 @@ const serverUrlInput = document.getElementById('serverUrlInput');
 const btnSaveFeedUrl = document.getElementById('btnSaveFeedUrl');
 const logConsole = document.getElementById('logConsole');
 const btnClearLog = document.getElementById('btnClearLog');
+let installBeforeRestart = false;
 
 function appendLog(type, text) {
   const time = new Date().toLocaleTimeString();
@@ -31,8 +32,25 @@ function setStatus(state, title, desc) {
   statusDesc.textContent = desc;
 }
 
+function showReady(manifest) {
+  const ver = manifest?.target_version || '新版本';
+  setStatus('downloaded', '新版本已就绪', installBeforeRestart
+      ? `版本 v${ver} 已安装，重启后生效`
+      : `版本 v${ver} 已准备完成，重启后生效`);
+  progressWrapper.style.display = 'none';
+  btnCheckUpdate.style.display = 'none';
+  btnRestartInstall.style.display = 'inline-block';
+}
+
+function showInstalling() {
+  setStatus('downloading', '正在安装更新...', '安装完成后即可重启使用新版本');
+  progressWrapper.style.display = 'none';
+  btnCheckUpdate.disabled = true;
+}
+
 // 1. 注册 Chromium 原生 WebUI 监听器
 addWebUiListener('initial-state', (info) => {
+  installBeforeRestart = !!info.install_before_restart;
   if (info.current_version) {
     currentVersionBadge.textContent = `当前版本: v${info.current_version}`;
   }
@@ -40,6 +58,14 @@ addWebUiListener('initial-state', (info) => {
     serverUrlInput.value = info.feed_url;
   }
   appendLog('info', `初始化就绪: 当前版本 v${info.current_version || '未知'}, Feed: ${info.feed_url || '未设置'}`);
+  if (info.state === 'update-downloaded') {
+    showReady(info.manifest);
+  } else if (info.state === 'installing') {
+    showInstalling();
+  } else if (['checking-for-update', 'downloading', 'patching'].includes(info.state)) {
+    btnCheckUpdate.disabled = true;
+    setStatus('downloading', '正在处理更新...', '请等待更新完成');
+  }
 });
 
 addWebUiListener('checking-for-update', () => {
@@ -69,12 +95,14 @@ addWebUiListener('update-not-available', (version) => {
 });
 
 addWebUiListener('download-progress', (progress) => {
+  progressWrapper.style.display = 'flex';
+  setStatus('downloading', '正在下载更新...', '正在下载更新包');
   const percent = Math.round(progress.percent || 0);
   progressFill.style.width = `${percent}%`;
   progressPercent.textContent = `${percent}%`;
   if (percent >= 100) {
-    statusDesc.textContent = '下载完成 (100%)，正在进行差分合成与方案B目录准备...';
-    appendLog('info', '下载完成 (100%)，后台正在组织版本隔离目录...');
+    statusDesc.textContent = '下载完成，正在校验并准备更新...';
+    appendLog('info', '下载完成，正在校验并准备更新');
   } else {
     statusDesc.textContent = `正在下载中... ${percent}%`;
     appendLog('info', `下载进度: ${percent}%`);
@@ -82,18 +110,21 @@ addWebUiListener('download-progress', (progress) => {
 });
 
 addWebUiListener('update-downloaded', (manifest) => {
-  const ver = manifest?.target_version || '新版本';
-  setStatus('downloaded', '新版本已就绪！', `版本 v${ver} 方案B目录构建完成，可立即重启切换`);
-  appendLog('success', `【方案B更新就绪】v${ver} 目录与资源准备完毕，点击重启即可秒级切换！`);
-  progressWrapper.style.display = 'none';
-  btnCheckUpdate.style.display = 'none';
-  btnRestartInstall.style.display = 'inline-block';
+  showReady(manifest);
+  appendLog('success', statusDesc.textContent);
+});
+
+addWebUiListener('installing-update', () => {
+  showInstalling();
+  appendLog('info', '正在安装更新');
 });
 
 addWebUiListener('update-error', (errorMsg) => {
   setStatus('error', '更新失败', errorMsg || '未知错误');
   appendLog('error', `更新异常: ${errorMsg}`);
   btnCheckUpdate.disabled = false;
+  btnCheckUpdate.style.display = 'inline-block';
+  btnRestartInstall.style.display = 'none';
   progressWrapper.style.display = 'none';
 });
 

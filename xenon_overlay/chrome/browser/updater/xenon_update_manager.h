@@ -11,16 +11,22 @@
 
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
+#include "build/build_config.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "xenon_overlay/chrome/browser/updater/xenon_update_downloader.h"
 #include "xenon_overlay/chrome/browser/updater/xenon_update_types.h"
 
 namespace xenon::updater {
+
+#if BUILDFLAG(IS_MAC)
+class MacUpdateInstallContext;
+#endif
 
 class XenonUpdateManager {
  public:
@@ -31,6 +37,7 @@ class XenonUpdateManager {
     virtual void OnUpdateNotAvailable(const std::string& current_version) {}
     virtual void OnDownloadProgress(const DownloadProgress& progress) {}
     virtual void OnUpdateDownloaded(const UpdateManifest& manifest) {}
+    virtual void OnInstallingUpdate() {}
     virtual void OnUpdateError(const std::string& error_message) {}
   };
 
@@ -66,10 +73,11 @@ class XenonUpdateManager {
   // Initiates download of the discovered update.
   void DownloadUpdate();
 
-  // Replaces files and relaunches application.
+  // Relaunches after installation. On macOS the update is already installed;
+  // other platforms perform their staged replacement here.
   void QuitAndInstall();
 
-  // Applies staged update upon normal exit without relaunching.
+  // Applies staged update upon normal exit without relaunching (non-macOS).
   void InstallOnExit();
 
   // Synchronizes product version in Windows registry.
@@ -122,6 +130,22 @@ class XenonUpdateManager {
   void OnDownloadProgress(const DownloadProgress& progress);
   void OnDownloadComplete(bool is_diff, bool success, const std::string& error);
   void OnPatchCompleteWithOutput(VersionStagingResult result);
+
+#if BUILDFLAG(IS_MAC)
+  static VersionStagingResult PrepareAndInstallMacUpdate(
+      base::FilePath package,
+      base::FilePath current_app,
+      base::FilePath staging_parent,
+      std::string current_version,
+      std::string target_version,
+      bool is_diff,
+      base::OnceClosure on_installing,
+      std::shared_ptr<MacUpdateInstallContext> install_context);
+  void OnMacInstalling();
+  void OnMacUpdateInstalled(bool is_diff, VersionStagingResult result);
+  void CleanupMacDownloadDirectory();
+  std::shared_ptr<MacUpdateInstallContext> mac_install_context_;
+#endif
 
   UpdateState state_ = UpdateState::kIdle;
   std::string feed_url_;

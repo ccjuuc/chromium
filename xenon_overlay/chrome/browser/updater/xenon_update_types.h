@@ -24,6 +24,7 @@ enum class UpdateState {
   kPatching,
   kUpdateDownloaded,
   kError,
+  kInstalling,
 };
 
 const char* UpdateStateToString(UpdateState state);

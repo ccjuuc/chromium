@@ -28,6 +28,8 @@ const char* UpdateStateToString(UpdateState state) {
       return "update-downloaded";
     case UpdateState::kError:
       return "error";
+    case UpdateState::kInstalling:
+      return "installing";
   }
 }
 

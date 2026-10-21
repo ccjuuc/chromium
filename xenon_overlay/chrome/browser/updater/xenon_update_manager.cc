@@ -30,17 +30,50 @@
 #elif BUILDFLAG(IS_MAC)
 #include "base/apple/bundle_locations.h"
 #include "base/apple/foundation_util.h"
+#include "base/functional/callback_helpers.h"
+#include "base/task/bind_post_task.h"
 #endif
 #include "net/base/load_flags.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "third_party/zlib/google/zip.h"
 #include "xenon_overlay/chrome/browser/updater/xenon_update_installer.h"
+#if BUILDFLAG(IS_MAC)
+#include "xenon_overlay/chrome/browser/updater/xenon_update_bundle.h"
+#endif
 #include "xenon_overlay/chrome/browser/updater/xenon_update_patcher.h"
 
 namespace xenon::updater {
 
 namespace {
+
+#if BUILDFLAG(IS_MAC)
+void DeleteMacDownloadDirectory(base::FilePath directory) {
+  // A valid bundle may contain read-only directories. Restore search/write
+  // access before removing our private staging tree, without following links.
+  std::vector<base::FilePath> pending{directory};
+  while (!pending.empty()) {
+    base::FilePath current = std::move(pending.back());
+    pending.pop_back();
+    if (base::IsLink(current) || !base::DirectoryExists(current)) {
+      continue;
+    }
+    if (!base::SetPosixFilePermissions(current, 0700)) {
+      continue;
+    }
+    base::FileEnumerator children(current, false,
+                                  base::FileEnumerator::DIRECTORIES |
+                                      base::FileEnumerator::SHOW_SYM_LINKS);
+    for (base::FilePath child = children.Next(); !child.empty();
+         child = children.Next()) {
+      pending.push_back(std::move(child));
+    }
+  }
+  if (!base::DeletePathRecursively(directory)) {
+    LOG(WARNING) << "Could not remove update staging directory: " << directory;
+  }
+}
+#endif
 
 constexpr net::NetworkTrafficAnnotationTag kCheckTrafficAnnotation =
     net::DefineNetworkTrafficAnnotation("xenon_update_check", R"(
@@ -300,6 +333,9 @@ void XenonUpdateManager::SetState(UpdateState new_state) {
 }
 
 void XenonUpdateManager::NotifyError(const std::string& message) {
+#if BUILDFLAG(IS_MAC)
+  CleanupMacDownloadDirectory();
+#endif
   SetState(UpdateState::kError);
   for (auto& observer : observers_) {
     observer.OnUpdateError(message);
@@ -307,6 +343,15 @@ void XenonUpdateManager::NotifyError(const std::string& message) {
 }
 
 void XenonUpdateManager::CheckForUpdates(const std::string& feed_url) {
+  // Keep the manifest bound to the active download/install operation. In
+  // particular, a second check must not replace an installed update awaiting
+  // restart with a different manifest.
+  if (state_ == UpdateState::kCheckingForUpdate ||
+      state_ == UpdateState::kDownloading || state_ == UpdateState::kPatching ||
+      state_ == UpdateState::kInstalling ||
+      state_ == UpdateState::kUpdateDownloaded) {
+    return;
+  }
   if (!feed_url.empty()) {
     feed_url_ = feed_url;
   }
@@ -389,8 +434,9 @@ void XenonUpdateManager::OnCheckResponse(
 }
 
 void XenonUpdateManager::DownloadUpdate() {
-  if (state_ == UpdateState::kDownloading ||
-      state_ == UpdateState::kPatching ||
+  if (state_ == UpdateState::kCheckingForUpdate ||
+      state_ == UpdateState::kDownloading || state_ == UpdateState::kPatching ||
+      state_ == UpdateState::kInstalling ||
       state_ == UpdateState::kUpdateDownloaded) {
     LOG(WARNING) << "[XenonUpdateManager] DownloadUpdate ignored while in state: "
                  << UpdateStateToString(state_);
@@ -399,11 +445,6 @@ void XenonUpdateManager::DownloadUpdate() {
 
   if (!manifest_) {
     NotifyError("No active update manifest to download");
-    return;
-  }
-
-  if (!temp_download_dir_.IsValid() && !temp_download_dir_.CreateUniqueTempDir()) {
-    NotifyError("Failed to create temporary directory for update download");
     return;
   }
 
@@ -416,9 +457,15 @@ void XenonUpdateManager::DownloadUpdate() {
   }
 }
 
-void XenonUpdateManager::StartPackageDownload(
-    const UpdatePackageInfo& package,
-    bool is_diff) {
+void XenonUpdateManager::StartPackageDownload(const UpdatePackageInfo& package,
+                                              bool is_diff) {
+  if (!temp_download_dir_.IsValid()) {
+    temp_download_dir_.Take();
+    if (!temp_download_dir_.CreateUniqueTempDir()) {
+      NotifyError("Failed to create temporary directory for update download");
+      return;
+    }
+  }
   auto factory = GetURLLoaderFactory();
   if (!factory) {
     NotifyError("Network context is not available for update download");
@@ -431,8 +478,12 @@ void XenonUpdateManager::StartPackageDownload(
   std::string_view url_path = package.url.path();
   if (base::EndsWith(url_path, ".zip", base::CompareCase::INSENSITIVE_ASCII)) {
     filename = "update_patch.zip";
-  } else if (base::EndsWith(url_path, ".zucc", base::CompareCase::INSENSITIVE_ASCII)) {
+  } else if (base::EndsWith(url_path, ".zucc",
+                            base::CompareCase::INSENSITIVE_ASCII)) {
     filename = "update_patch.zucc";
+  } else if (base::EndsWith(url_path, ".dmg",
+                            base::CompareCase::INSENSITIVE_ASCII)) {
+    filename = "update_package.dmg";
   } else {
     filename = is_diff ? "update_patch.zip" : "update_package.bin";
   }
@@ -452,14 +503,18 @@ void XenonUpdateManager::OnDownloadProgress(const DownloadProgress& progress) {
   }
 }
 
-void XenonUpdateManager::OnDownloadComplete(
-    bool is_diff,
-    bool success,
-    const std::string& error) {
+void XenonUpdateManager::OnDownloadComplete(bool is_diff,
+                                            bool success,
+                                            const std::string& error) {
   if (!success) {
     if (is_diff && manifest_->full_package) {
-      LOG(WARNING) << "[XenonUpdateManager] Differential download failed: " << error
-                   << ". Falling back to full package download.";
+      LOG(WARNING) << "[XenonUpdateManager] Differential download failed: "
+                   << error << ". Falling back to full package download.";
+#if BUILDFLAG(IS_MAC)
+      // Hash verification may still have an asynchronous deletion queued for
+      // the corrupt archive. Give the full download a distinct directory.
+      CleanupMacDownloadDirectory();
+#endif
       manifest_->is_diff = false;
       StartPackageDownload(*manifest_->full_package, /*is_diff=*/false);
       return;
@@ -467,6 +522,28 @@ void XenonUpdateManager::OnDownloadComplete(
     NotifyError("Download failed: " + error);
     return;
   }
+
+#if BUILDFLAG(IS_MAC)
+  SetState(UpdateState::kPatching);
+  if (!mac_install_context_) {
+    mac_install_context_ = std::make_shared<MacUpdateInstallContext>();
+  }
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE,
+      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
+       base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
+      base::BindOnce(&XenonUpdateManager::PrepareAndInstallMacUpdate,
+                     downloaded_file_, GetDefaultInstallDir(),
+                     temp_download_dir_.Take(), GetCurrentVersion(),
+                     manifest_->target_version, is_diff,
+                     base::BindPostTaskToCurrentDefault(
+                         base::BindOnce(&XenonUpdateManager::OnMacInstalling,
+                                        weak_factory_.GetWeakPtr())),
+                     mac_install_context_),
+      base::BindOnce(&XenonUpdateManager::OnMacUpdateInstalled,
+                     weak_factory_.GetWeakPtr(), is_diff));
+  return;
+#endif
 
   if (is_diff) {
     // Perform Zucchini patch and stage version-isolated directory in background
@@ -481,8 +558,7 @@ void XenonUpdateManager::OnDownloadComplete(
 
     std::vector<std::string> deletions = manifest_->deletions;
     base::ThreadPool::PostTaskAndReplyWithResult(
-        FROM_HERE,
-        {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
         base::BindOnce(&XenonUpdateManager::PrepareVersionDirectory,
                        current_version_dir, base_file, downloaded_file_,
                        target_version_dir, temp_staging_dir,
@@ -497,6 +573,102 @@ void XenonUpdateManager::OnDownloadComplete(
     }
   }
 }
+
+#if BUILDFLAG(IS_MAC)
+// static
+XenonUpdateManager::VersionStagingResult
+XenonUpdateManager::PrepareAndInstallMacUpdate(
+    base::FilePath package,
+    base::FilePath current_app,
+    base::FilePath staging_parent,
+    std::string current_version,
+    std::string target_version,
+    bool is_diff,
+    base::OnceClosure on_installing,
+    std::shared_ptr<MacUpdateInstallContext> install_context) {
+  // Keep preparation, installation and cleanup in one blocking task so that
+  // ordinary shutdown cannot strand a prepared bundle awaiting a UI reply.
+  base::ScopedClosureRunner download_cleanup(
+      base::BindOnce(&DeleteMacDownloadDirectory, staging_parent));
+  VersionStagingResult result;
+  base::ScopedTempDir staging;
+  if (!staging.CreateUniqueTempDirUnderPath(staging_parent)) {
+    result.error = "Failed to create a private update staging directory";
+    return result;
+  }
+
+  if (is_diff) {
+    const base::FilePath unpacked = staging.GetPath().AppendASCII("patch");
+    if (!zip::Unzip(package, unpacked)) {
+      result.error = "Failed to extract the differential update archive";
+      return result;
+    }
+    result.staged_dir = staging.GetPath().Append(current_app.BaseName());
+    if (!ReconstructMacUpdateBundle(current_app, unpacked, result.staged_dir,
+                                    current_version, target_version,
+                                    &result.error)) {
+      return result;
+    }
+  } else {
+    result.staged_dir = XenonUpdateInstaller::PrepareMacFullUpdate(
+        package, staging.GetPath(), current_app.BaseName(), &result.error);
+    if (result.staged_dir.empty()) {
+      return result;
+    }
+  }
+
+  // The surrounding download cleanup owns this tree through installation.
+  staging.Take();
+  std::move(on_installing).Run();
+  result.success = XenonUpdateInstaller::InstallMacUpdate(
+      result.staged_dir, current_app, target_version, &result.error,
+      install_context.get());
+  return result;
+}
+
+void XenonUpdateManager::OnMacInstalling() {
+  SetState(UpdateState::kInstalling);
+  for (auto& observer : observers_) {
+    observer.OnInstallingUpdate();
+  }
+}
+
+void XenonUpdateManager::OnMacUpdateInstalled(bool is_diff,
+                                              VersionStagingResult result) {
+  downloaded_file_.clear();
+  if (!result.success) {
+    if (is_diff && manifest_->full_package) {
+      LOG(WARNING) << "[XenonUpdateManager] macOS differential update failed: "
+                   << result.error << "; retrying with the full package";
+      manifest_->is_diff = false;
+      StartPackageDownload(*manifest_->full_package, /*is_diff=*/false);
+      return;
+    }
+    NotifyError("Failed to install macOS update: " + result.error);
+    return;
+  }
+
+  mac_install_context_.reset();
+  staged_output_file_.clear();
+  SetState(UpdateState::kUpdateDownloaded);
+  for (auto& observer : observers_) {
+    observer.OnUpdateDownloaded(*manifest_);
+  }
+}
+
+void XenonUpdateManager::CleanupMacDownloadDirectory() {
+  downloaded_file_.clear();
+  base::FilePath directory = temp_download_dir_.Take();
+  if (directory.empty()) {
+    return;
+  }
+  base::ThreadPool::PostTask(
+      FROM_HERE,
+      {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+       base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
+      base::BindOnce(&DeleteMacDownloadDirectory, std::move(directory)));
+}
+#endif  // BUILDFLAG(IS_MAC)
 
 // static
 XenonUpdateManager::VersionStagingResult
@@ -977,6 +1149,11 @@ void XenonUpdateManager::OnPatchCompleteWithOutput(
 }
 
 void XenonUpdateManager::CleanupOldVersions() {
+#if BUILDFLAG(IS_MAC)
+  // The Chromium install script retains the previous and in-use Framework
+  // versions. Do not apply the Windows directory cleanup to an app bundle.
+  return;
+#endif
   base::ThreadPool::PostDelayedTask(
       FROM_HERE,
       {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
@@ -1102,6 +1279,10 @@ void XenonUpdateManager::UpdateRegistryVersion(base::FilePath install_dir,
 }
 
 void XenonUpdateManager::InstallOnExit() {
+#if BUILDFLAG(IS_MAC)
+  // macOS installation has already completed before kUpdateDownloaded.
+  return;
+#else
   if (state_ != UpdateState::kUpdateDownloaded || staged_output_file_.empty()) {
     return;
   }
@@ -1111,9 +1292,24 @@ void XenonUpdateManager::InstallOnExit() {
   // Launch update helper without relaunching browser
   XenonUpdateInstaller::InstallAndRelaunch(
       staged_output_file_, GetDefaultInstallDir(), /*relaunch_executable=*/base::FilePath());
+#endif
 }
 
 void XenonUpdateManager::QuitAndInstall() {
+  if (state_ == UpdateState::kCheckingForUpdate ||
+      state_ == UpdateState::kDownloading || state_ == UpdateState::kPatching ||
+      state_ == UpdateState::kInstalling) {
+    // A premature restart request must not change the active operation to
+    // kError and allow another check to replace its manifest.
+    return;
+  }
+#if BUILDFLAG(IS_MAC)
+  if (state_ != UpdateState::kUpdateDownloaded) {
+    NotifyError("No installed update is ready for restart");
+    return;
+  }
+  chrome::AttemptRestart();
+#else
   if (state_ != UpdateState::kUpdateDownloaded || staged_output_file_.empty()) {
     NotifyError("No update ready for installation");
     return;
@@ -1133,6 +1329,7 @@ void XenonUpdateManager::QuitAndInstall() {
 
   // Gracefully exit the application to allow the external helper to replace files.
   chrome::ExitIgnoreUnloadHandlers();
+#endif
 }
 
 }  // namespace xenon::updater

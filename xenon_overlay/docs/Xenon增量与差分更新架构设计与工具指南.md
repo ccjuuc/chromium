@@ -36,12 +36,11 @@
    - [6.6 `reset_env_1001.ps1` 本地基线一键重置工具](#66-reset_env_1001ps1-本地基线一键重置工具)
 7. [端到端实战验证步骤](#7-端到端实战验证步骤)
 8. [常见问题排查与 FAQ](#8-常见问题排查与-faq)
-9. [macOS 平台全目录差分与增量更新适配设计](#9-macos-平台全目录差分与增量更新适配设计)
-   - [9.1 App Bundle 物理目录树与版本规范](#91-app-bundle-物理目录树与版本规范)
-   - [9.2 Mach-O 二进制与通用资源差分算法](#92-mach-o-二进制与通用资源差分算法)
-   - [9.3 Code Signature (代码签名) 与 Apple 公证闭环](#93-code-signature-代码签名-与-apple-公证闭环)
-   - [9.4 POSIX Inode 原生原子替换与平滑唤醒流程](#94-posix-inode-原生原子替换与平滑唤醒流程)
-   - [9.5 工具链多平台命令参考](#95-工具链多平台命令参考)
+9. [macOS：保留 JSON/差分协议，复用 Chromium 安装行为](#9-macos保留-json差分协议复用-chromium-安装行为)
+   - [9.1 安装与重启时序](#91-安装与重启时序)
+   - [9.2 mac 差分清单 v2](#92-mac-差分清单-v2)
+   - [9.3 发布与运行要求](#93-发布与运行要求)
+   - [9.4 构建与验证](#94-构建与验证)
 
 ---
 
@@ -460,94 +459,51 @@ node xenon_overlay/tools/updater/trigger_restart.js
 
 ---
 
-## 9. macOS 平台全目录差分与增量更新适配设计
+## 9. macOS：保留 JSON/差分协议，复用 Chromium 安装行为
 
-虽然 Xenon 增量更新最初在 Windows 上验证，但其**清单驱动（Manifest-Driven）全目录差分**架构具备天然的跨平台一致性。针对 macOS 的系统特质（App Bundle 封装、Mach-O 格式、POSIX Inode 文件机制与 Apple 强签名体系），Xenon 进行了针对性全链路适配：
+macOS 继续使用 Xenon 的检查接口、下载 SHA-256 校验和 Zucchini 差分包，未接入 Omaha/CRX 或独立 Chromium Updater 服务。安装阶段直接复用当前仓库的 `chrome/updater/mac/.install.sh`，避免维护第二套整包移动脚本。构建时将该脚本嵌入生成的头文件；客户端只注入已经验证的目标版本，不执行更新包下发的脚本。
 
-### 9.1 App Bundle 物理目录树与版本规范
+### 9.1 安装与重启时序
 
-与 Windows 采用 `Application/<version>/` 版本子目录多版本并存不同，macOS 应用程序以单一的标准 **Bundle 目录**（如 `/Applications/Xenon.app`）存在：
+1. 将更新包下载到私有临时目录并校验包 SHA-256。
+2. 差分包按 v2 清单重建独立 `.app`；全量 ZIP 保留权限和符号链接解压，DMG 只读挂载后复制目标应用并卸载。
+3. 验证应用标识、版本、Developer ID 签名、Team ID 与当前应用的 designated requirement。签名、权限或目录检查失败即停止。
+4. 工作线程持有安装锁，执行 Chromium 安装脚本并等待真实退出码。脚本先安装 `Contents/Frameworks/<产品> Framework.framework/Versions/<新版本>`，再更新外围应用文件和 `Current` 链接。
+5. 脚本保留刚被替换版本，以及 `ps/lsof` 发现仍被使用的版本；失败时按脚本自身的错误处理返回失败。普通关闭会等待已经开始的安装任务。
+6. 安装成功才发出兼容的 `update-downloaded` 事件，此时 mac 上的含义是“已安装，等待重启”。`quitAndInstall` 调用 Chromium 的浏览器重启入口；退出钩子不再执行第二次安装。
 
-```text
-Xenon.app/
-└── Contents/
-    ├── Info.plist                     # 应用主元数据，提供 CFBundleShortVersionString
-    ├── MacOS/
-    │   └── Xenon                      # 主程序启动可执行文件 (Mach-O)
-    ├── Frameworks/
-    │   └── Xenon Framework.framework/
-    │       ├── Xenon Framework        # 核心框架动态库 (Mach-O, 类似 xlbrowser.dll)
-    │       ├── Helpers/               # 子进程 Helper.app (Renderer, GPU, Alert 等)
-    │       └── Resources/             # resources.pak, icudtl.dat 等二进制资源
-    ├── Resources/                     # 图标 .icns, locales/*.lproj
-    └── _CodeSignature/
-        └── CodeResources              # 整个 Bundle 的代码签名哈希证书树
-```
+这是版本目录安装，不是整个 `.app` 的原子事务。首次写入前在内存中保存已经验证的发布者、designated requirement、原版本及安装目录 inode；同一浏览器进程内的失败重试据此修复外围文件的部分写入，不会因已写入新版 Info.plist 或暂时损坏的资源签名而拒绝全量回退。重试仍须验证新包签名、原安装目录和版本不倒退。此状态不持久化；断电或浏览器被强杀后的损坏安装仍可能需要完整安装包修复，没有启动失败自动回滚。Chromium 脚本原有的 quarantine 清理只会在前置签名检查通过后执行。
 
-- **安装目录解析**：在 macOS 下，客户端通过 Chromium 原生接口 `base::apple::OuterBundlePath()` 动态解析出当前正在运行的 `.app` 根目录（例如 `/Applications/Xenon.app`）；
-- **版本识别**：解析 `Contents/Info.plist` 中的 `CFBundleShortVersionString` 与 `CFBundleVersion`，无需写死版本号；
-- **重构沙箱**：差分还原阶段，客户端在系统的安全临时目录（如 `/tmp/xenon_update_<target_version>/Xenon.app`）整树重建出一个完整的独立 `.app` Bundle。
+### 9.2 mac 差分清单 v2
 
-### 9.2 Mach-O 二进制与通用资源差分算法
+顶层 feed 的字段保持不变；ZIP 内 `manifest.json` 使用 `schema_version: 2`、`platform: "mac"`、`base_version`、`target_version` 和 `root_mode`。
 
-| 文件类别 | 匹配与判定策略 | 差分算法 | 典型带宽收益 |
-| :--- | :--- | :--- | :--- |
-| **Mach-O 二进制** (`Contents/MacOS/Xenon`, `Frameworks/Xenon Framework`) | 发生内容修改且体积 $> 64\text{ KB}$ | **Zucchini `-raw` 模式**（SA-IS 后缀数组与贪婪等价块匹配） | 压缩率约 **70% ~ 85%** |
-| **静态资源** (`.pak`, `.dat`, `.bin`, `.icns`) | 新旧版本 SHA-256 完全一致 | **`action: "copy"` (本地零字节复用)** | **0 字节传输**（95%+ 资源） |
-| **微小资源或新增补** (`Info.plist`, 新增资源) | 体积 $< 64\text{ KB}$ 或全新引入 | **`action: "add"` (全量打包入 `files/`)** | 按需完整下发 |
-| **代码签名证书** (`Contents/_CodeSignature/CodeResources`) | 每次编译签名必变 | **作为全量资源打包纳入更新** | 保证签名与新版完全一致 |
+- `copy/add/patch`：保留原有路径字段，新增 POSIX `mode`，强制核验最终文件的 `sha256`、`size`。缺文件、复制失败或补丁校验失败都终止重建。
+- `directory`：显式记录目录和 `mode`，内容创建完毕后恢复权限。
+- `symlink`：记录 `link_target`，不展开链接。还原器拒绝越界、循环和指向未声明目标的链接，禁止通过链接父目录写文件。
+- 所有路径必须相对于各自根目录；拒绝绝对路径、父目录穿越及重复目标。
+- 生成器将 Framework 的 `Versions/<版本>` 归一化后匹配新旧文件，`base` 仍记录真实旧版路径，因此版本目录变化不会把整棵 Framework 都变成 `add`。
 
-### 9.3 Code Signature (代码签名) 与 Apple 公证闭环
+旧版 mac 差分清单缺少这些元数据，客户端会拒绝并尝试全量包。服务端必须提供有效、完整签名的全量 ZIP/DMG 作为回退。Windows 清单仍使用原有格式。
 
-这是 macOS 增量更新最严苛的安全底线：
-1. **公证闭环**：服务端必须在 macOS 构建机上先对 `New.app` 完成全量编译、签名（`codesign --deep`）以及苹果官方公证（`xcrun notarytool`）；
-2. **基于签名后版本的差分对比**：`make_directory_diff.js` 必须以**已签名、已公证**的 `Old.app` 和 `New.app` 作为输入对比；
-3. **客户端就地验证 (Gatekeeper Defense)**：
-   在 [`xenon_update_installer_mac.mm`](file:///h:/chromium_142/src/xenon_overlay/chrome/browser/updater/xenon_update_installer_mac.mm) 执行原子置换前，客户端调用系统命令执行完整性自检：
-   ```bash
-   /usr/bin/codesign --verify --deep --strict /path/to/staged/Xenon.app
-   ```
-   若自检失败（例如本地组装出现位翻转），立即安全中止置换并回退请求全量 `.dmg` / 全量安装包，杜绝任何因签名异常导致应用被 macOS 内核 `SIGKILL` 强退的风险。
+### 9.3 发布与运行要求
 
-### 9.4 POSIX Inode 原生原子替换与平滑唤醒流程
+使用最终完成签名和公证的发布 `.app` 生成差分；不要在差分生成后再改变应用文件。签名检查验证发布者与完整性，不代替发布端 Apple 公证流程，也不提供 CUP/CRX 响应认证。发布端仍应通过 HTTPS 提供现有 JSON 接口。
 
-与 Windows NT 下运行中可执行文件被排他锁死不同，macOS 遵循标准的 POSIX 文件语义：
-- **运行中可执行文件允许被 `mv`（重命名）或 `unlink`（删除）**，内核文件系统通过 Inode 引用计数维系当前运行进程的代码段映射，直至所有进程退出后磁盘块才会被系统回收。
+全量 ZIP/DMG 优先选择与已安装应用同名的顶层 `.app`；否则要求包中只有一个顶层 `.app`，复制到私有暂存目录并保留用户的安装名称。应用被重命名也能更新；包内应用的身份仍由签名和 bundle ID 校验。下载 URL 无扩展名时通过包内容识别 ZIP/DMG。
 
-**原子替换与重启流程**：
-```mermaid
-sequenceDiagram
-    autonumber
-    participant OldBrowser as 当前运行中的旧版 Xenon
-    participant HelperScript as /tmp/xenon_mac_update.sh
-    participant LaunchServices as macOS LaunchServices
+安装进程需要对目标应用及其父目录有写权限（父目录存放共享安装锁）。权限不足会明确失败，不会静默提权或假报成功。此实现没有原生 Updater 的 LaunchAgent/LaunchDaemon 与 privileged helper；浏览器不运行时不会自行检查下载。
 
-    OldBrowser->>HelperScript: 写入并启动独立的 bash 脚本 (带 PID)
-    OldBrowser->>OldBrowser: 退出主窗口并平滑 exit(0)
-    Note over HelperScript: while kill -0 "$PID" 阻塞等待父进程退出
-    HelperScript->>HelperScript: mv /Applications/Xenon.app /Applications/Xenon.app.old
-    HelperScript->>HelperScript: mv /tmp/.../Xenon.app /Applications/Xenon.app
-    HelperScript->>HelperScript: xattr -dr com.apple.quarantine /Applications/Xenon.app
-    HelperScript->>HelperScript: touch /Applications/Xenon.app
-    HelperScript->>LaunchServices: open -n /Applications/Xenon.app
-    HelperScript->>HelperScript: rm -rf /Applications/Xenon.app.old && rm -f "$0"
-    LaunchServices-->>OldBrowser: 拉起新版进程，接管桌面应用
-```
-
-### 9.5 工具链多平台命令参考
-
-构建与测试工具全面支持 `--platform mac` 与自动格式探测：
+### 9.4 构建与验证
 
 ```bash
-# 1. 针对 macOS 的两个 .app 目录执行全目录差分打包
 node xenon_overlay/tools/updater/make_directory_diff.js \
-  --old /path/to/Xenon-1.0.0.1.app \
-  --new /path/to/Xenon-1.0.0.2.app \
-  --out test_packages/patch.zip
+  --old /releases/old/Xenon.app \
+  --new /releases/new/Xenon.app \
+  --zucchini /build/out/Release/zucchini \
+  --out /releases/patch.zip
 
-# 2. 模拟服务器指定针对 macOS 提供响应
-node xenon_overlay/tools/updater/mock_update_server.js --port 8999 --mode diff
-
-# 3. 客户端检查更新请求 (携带 platform 参数或根据 User-Agent 自动识别)
-curl http://127.0.0.1:8999/api/v1/update/check?platform=mac
+node --test xenon_overlay/tools/updater/make_directory_diff.test.js
 ```
+
+`xenon_updater_unittests` 覆盖清单重建的内容校验、错误路径与失败处理；POSIX 环境还覆盖执行权限和 Framework 链接。mac 原生用例覆盖 ZIP 元数据、重命名、DMG 识别、安装锁及签名拒绝；真实签名包的 ZIP/DMG 安装和失败恢复可按 [mac 集成测试说明](../chrome/browser/updater/mac_install_integration_tests.md) 执行。运行中旧版本保留、浏览器实际重启及断电恢复仍须在 mac 验收。Windows 上通过的单测不代表 mac 安装流程已经实机验证。

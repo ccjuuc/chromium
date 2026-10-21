@@ -171,6 +171,31 @@ TEST_F(XenonUpdateManagerTest, CheckUpdateAvailableAndNotAvailable) {
   EXPECT_EQ("1.1.0.0", observer_.not_available_version_);
 }
 
+TEST_F(XenonUpdateManagerTest, PendingCheckKeepsItsManifestAndFeed) {
+  manager_->SetCurrentVersionForTesting("1.0.0.0");
+  const std::string feed = "https://update.xenon.com/check";
+  test_url_loader_factory_.AddResponse(feed, R"({
+    "target_version": "1.1.0.0",
+    "is_diff": false,
+    "url": "https://update.xenon.com/package.zip",
+    "size": 5000,
+    "sha256": "1234"
+  })");
+
+  manager_->CheckForUpdates(feed);
+  manager_->CheckForUpdates("https://other.example/check");
+  manager_->DownloadUpdate();
+  manager_->QuitAndInstall();
+  EXPECT_EQ(UpdateState::kCheckingForUpdate, manager_->GetState());
+  EXPECT_EQ(feed, manager_->GetFeedURL());
+
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(1, observer_.checking_count_);
+  EXPECT_TRUE(observer_.last_error_.empty());
+  ASSERT_TRUE(observer_.available_manifest_);
+  EXPECT_EQ("1.1.0.0", observer_.available_manifest_->target_version);
+}
+
 TEST_F(XenonUpdateManagerTest, PlanBVersionedDirectoryStaging) {
   base::FilePath install_dir = temp_dir_.GetPath().AppendASCII("app_install");
   base::FilePath old_ver_dir = install_dir.AppendASCII("1.0.0.0");

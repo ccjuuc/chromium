@@ -10,6 +10,7 @@
 
 #include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
+#include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "content/public/browser/browser_context.h"
@@ -135,6 +136,12 @@ class XenonUpdateMessageHandler
     }
   }
 
+  void OnInstallingUpdate() override {
+    if (IsJavascriptAllowed()) {
+      FireWebUIListener("installing-update");
+    }
+  }
+
   void OnUpdateError(const std::string& error_message) override {
     if (IsJavascriptAllowed()) {
       FireWebUIListener("update-error", base::Value(error_message));
@@ -180,6 +187,11 @@ class XenonUpdateMessageHandler
     info.Set("current_version", manager->GetCurrentVersion());
     info.Set("feed_url", manager->GetFeedURL());
     info.Set("state", updater::UpdateStateToString(manager->GetState()));
+#if BUILDFLAG(IS_MAC)
+    info.Set("install_before_restart", true);
+#else
+    info.Set("install_before_restart", false);
+#endif
     if (manager->GetManifest()) {
       info.Set("manifest", manager->GetManifest()->ToValue().Clone());
     }
