@@ -16,6 +16,7 @@ import sys
 import tempfile
 
 from updater_packaging_common import publish_file, run, sha256, version
+from updater_payload_ranges import nested_gzip_ranges
 
 
 def check_crx(path):
@@ -67,7 +68,16 @@ def build_delta(args, *, command=run):
         check_crx(target)
         old_hash, new_hash = sha256(baseline), sha256(target)
         patch, restored = stage / "update.puff", stage / "restored.crx3"
-        command([tool, "-puffdiff", baseline, target, patch], cwd=stage)
+        old_ranges, new_ranges = [], []
+        if args.compression == "auto":
+            old_ranges = nested_gzip_ranges(baseline)
+            new_ranges = nested_gzip_ranges(target)
+        if old_ranges or new_ranges:
+            encoded = [",".join(f"{offset}:{length}" for offset, length in ranges) or "none"
+                       for ranges in (old_ranges, new_ranges)]
+            command([tool, "-puffdiff-gzip", baseline, target, patch, *encoded], cwd=stage)
+        else:
+            command([tool, "-puffdiff", baseline, target, patch], cwd=stage)
         if not patch.is_file() or patch.stat().st_size == 0:
             raise ValueError("Puffin did not produce a patch")
         command([tool, "-puffpatch", baseline, restored, patch], cwd=stage)
@@ -84,6 +94,9 @@ def build_delta(args, *, command=run):
                     "size": patch.stat().st_size, "sha256": sha256(patch),
                     "full_file": new.name, "full_size": target.stat().st_size,
                     "full_sha256": new_hash, "roundtrip_verified": True,
+                    "compression": {"mode": args.compression,
+                                    "source_gzip_streams": len(old_ranges),
+                                    "target_gzip_streams": len(new_ranges)},
                     "recommended": smaller, "default_payload": "delta" if smaller else "full"}
         publish_file(patch, output)
         if metadata_output:
@@ -102,6 +115,8 @@ def parser():
     result.add_argument("--puffin", required=True, help="Built //third_party/puffin:puffin tool")
     result.add_argument("--out", required=True)
     result.add_argument("--metadata", help="Optional JSON sidecar")
+    result.add_argument("--compression", choices=("auto", "opaque"), default="auto",
+                        help="Detect embedded PKG gzip streams (default), or use legacy opaque diff")
     return result
 
 

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -17,6 +18,8 @@
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/logging/logging_settings.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_split.h"
 #include "base/strings/sys_string_conversions.h"
 
 #include "puffin/file_stream.h"
@@ -50,6 +53,11 @@ void PrintHelp() {
                << "puffdiff usage:\n"
                << "  puffin -puffdiff <source_file_path> "
                   "<destination_file_path> <output_patch_file_path>\n"
+               << "embedded gzip puffdiff usage:\n"
+               << "  puffin -puffdiff-gzip <source_file_path> "
+                  "<destination_file_path> <output_patch_file_path> "
+                  "<source_ranges> <destination_ranges>\n"
+               << "  ranges: byte_offset:byte_length,... or none\n"
                << "puffpatch usage:\n"
                << " puffin -puffpatch <source_file_path> <output_file_path> "
                   "<input_patch_file_path>";
@@ -148,11 +156,55 @@ bool LocateDeflatesBasedOnFileType(const UniqueStreamPtr& stream,
   return true;
 }
 
+bool LocateDeflatesInGzipRanges(const UniqueStreamPtr& stream,
+                                const string& ranges,
+                                vector<BitExtent>* deflates) {
+  uint64_t stream_size = 0;
+  if (ranges.empty() || !stream->GetSize(&stream_size) ||
+      stream_size > std::numeric_limits<uint64_t>::max() / 8) {
+    return false;
+  }
+  uint64_t previous_end = 0;
+  for (const auto& range : base::SplitStringPiece(
+           ranges, ",", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL)) {
+    const auto parts = base::SplitStringPiece(range, ":", base::KEEP_WHITESPACE,
+                                              base::SPLIT_WANT_ALL);
+    uint64_t offset = 0;
+    uint64_t length = 0;
+    if (parts.size() != 2 || !base::StringToUint64(parts[0], &offset) ||
+        !base::StringToUint64(parts[1], &length) || length < 18 ||
+        offset < previous_end || offset > stream_size ||
+        length > stream_size - offset) {
+      LOG(ERROR) << "Invalid or overlapping gzip range: " << range;
+      return false;
+    }
+    Buffer data(length);
+    if (!stream->Seek(offset) || !stream->Read(data.data(), data.size())) {
+      return false;
+    }
+    vector<BitExtent> located;
+    if (!puffin::LocateDeflatesInGzip(data, &located)) {
+      return false;
+    }
+    for (const auto& deflate : located) {
+      if (deflate.offset > length * 8 ||
+          deflate.length > length * 8 - deflate.offset) {
+        return false;
+      }
+      deflates->emplace_back(offset * 8 + deflate.offset, deflate.length);
+    }
+    previous_end = offset + length;
+  }
+  return stream->Seek(0);
+}
+
 }  // namespace
 
 bool ExecutePuffDiff(const string& src_file_path,
                      const string& dst_file_path,
-                     const string& patch_file_path) {
+                     const string& patch_file_path,
+                     const string& src_gzip_ranges,
+                     const string& dst_gzip_ranges) {
   auto src_deflates_byte = vector<ByteExtent>();
   auto dst_deflates_byte = vector<ByteExtent>();
   auto src_deflates_bit = vector<BitExtent>();
@@ -174,14 +226,20 @@ bool ExecutePuffDiff(const string& src_file_path,
     return false;
   }
 
-  if (!LocateDeflatesBasedOnFileType(src_stream, src_file_path,
-                                     &src_deflates_bit)) {
+  if (!(src_gzip_ranges == "none"
+            ? LocateDeflatesBasedOnFileType(src_stream, src_file_path,
+                                            &src_deflates_bit)
+            : LocateDeflatesInGzipRanges(src_stream, src_gzip_ranges,
+                                         &src_deflates_bit))) {
     LOG(ERROR) << "Failed to locate deflates base on source filetype";
     PrintHelp();
     return false;
   }
-  if (!LocateDeflatesBasedOnFileType(dst_stream, dst_file_path,
-                                     &dst_deflates_bit)) {
+  if (!(dst_gzip_ranges == "none"
+            ? LocateDeflatesBasedOnFileType(dst_stream, dst_file_path,
+                                            &dst_deflates_bit)
+            : LocateDeflatesInGzipRanges(dst_stream, dst_gzip_ranges,
+                                         &dst_deflates_bit))) {
     LOG(ERROR) << "Failed to locate deflates base on destination filetype";
     PrintHelp();
     return false;
@@ -300,6 +358,7 @@ bool Main(int argc, char** argv) {
   std::ignore = logging::InitLogging(settings);
   logging::SetMinLogLevel(logging::LOGGING_VERBOSE);
   bool cmd_puffdiff = command_line.HasSwitch("puffdiff");
+  bool cmd_puffdiff_gzip = command_line.HasSwitch("puffdiff-gzip");
   bool cmd_puffpatch = command_line.HasSwitch("puffpatch");
 
   std::vector<base::FilePath> values;
@@ -307,8 +366,9 @@ bool Main(int argc, char** argv) {
     values.emplace_back(arg);
   }
 
-  if (cmd_puffdiff && !cmd_puffpatch) {
-    if (values.size() != 3) {
+  if ((cmd_puffdiff || cmd_puffdiff_gzip) &&
+      !(cmd_puffdiff && cmd_puffdiff_gzip) && !cmd_puffpatch) {
+    if (values.size() != (cmd_puffdiff_gzip ? 5u : 3u)) {
       PrintHelp();
       return false;
     }
@@ -317,8 +377,11 @@ bool Main(int argc, char** argv) {
     std::string dst_file_path(values[1].AsUTF8Unsafe());
     std::string patch_file_path(values[2].AsUTF8Unsafe());
 
-    return ExecutePuffDiff(src_file_path, dst_file_path, patch_file_path);
-  } else if (cmd_puffpatch && !cmd_puffdiff) {
+    return ExecutePuffDiff(
+        src_file_path, dst_file_path, patch_file_path,
+        cmd_puffdiff_gzip ? values[3].AsUTF8Unsafe() : "none",
+        cmd_puffdiff_gzip ? values[4].AsUTF8Unsafe() : "none");
+  } else if (cmd_puffpatch && !cmd_puffdiff && !cmd_puffdiff_gzip) {
     if (values.size() != 3) {
       PrintHelp();
       return false;
@@ -332,7 +395,7 @@ bool Main(int argc, char** argv) {
   }
   // Only one operation must be selected. If zero or both are selected, fail.
   LOG(ERROR) << "First argument must be one of:\n"
-                "  -puffdiff or -puffpatch.";
+                "  -puffdiff, -puffdiff-gzip or -puffpatch.";
   PrintHelp();
   return false;
 }

@@ -80,6 +80,67 @@ uint32 数字比较，拒绝降级和非法版本。同版本允许重装，以�
 `make_updater_delta.py` 使用上游 Puffin 对旧、新 CRX 做差分，生成后必须实际还原并
 逐字节对比；若差分不小于完整包，则不推荐发布该差分，服务端也不会提供该差分流水线。
 
+### PKG 压缩载荷的差分优化
+
+默认 `--compression auto` 会读取 CRX 中未压缩存放的 `application.pkg`，从 XAR
+目录定位内部 gzip `Payload` 的绝对字节区间，交给离线 Puffin 的 `-puffdiff-gzip`
+模式处理。外层 ZIP 的普通扫描无法发现这些嵌套压缩区间；直接比较压缩字节会放大
+应用的小改动。定位过程支持 ZIP64、嵌套组件和连续 gzip member，拒绝越界、重叠、
+截断数据和过大的 XAR 目录。其他载荷格式继续使用原有差分路径。
+
+此过程不重新打包或重签 PKG/CRX，也不修改客户端或补丁协议。补丁仍包含完整的
+标准 Puffin 区间信息，现有解码器可恢复原始 CRX 的每一个字节，再由原有公钥验证、
+安装器和完整包回退流程处理。先重建制包工具；旧工具不支持新模式时会报错退出，
+不会把未优化的结果当作优化成功。
+
+大型载荷建议使用独立的系统 malloc 制包工具，避免 Zucchini 后缀数组的大分配受到
+PartitionAlloc 限制。以下设置只用于离线工具目录，不修改浏览器或 Updater 的分配器：
+
+```gn
+is_debug = false
+is_component_build = false
+target_cpu = "arm64"
+symbol_level = 0
+use_allocator_shim = false
+use_partition_alloc_as_malloc = false
+enable_backup_ref_ptr_support = false
+enable_pointer_compression_support = false
+```
+
+```sh
+autoninja -C out/updater_tools_arm64 puffin
+python3 xenon_overlay/tools/updater/make_updater_delta.py \
+  --old-crx /ABS/RELEASE/old.crx3 --new-crx /ABS/RELEASE/new.crx3 \
+  --from-version 1.0.0.3 --to-version 1.0.0.4 \
+  --puffin out/updater_tools_arm64/puffin \
+  --out /ABS/RELEASE/update.puff --metadata /ABS/RELEASE/update.json
+```
+
+JSON 元数据记录两侧识别到的 gzip 流数。`--compression opaque` 可用于与旧算法
+对照；两种模式都必须通过原生还原和逐字节比较，才会发布补丁。没有小于完整包时
+仍推荐完整更新。优化收益取决于真实版本的内容差异和压缩布局，不能用资源/版本号
+测试夹具的比例承诺跨 Chromium 版本升级的大小。
+
+2026-10-21 对同一批已签名 CRX 的实测如下，大小单位为十进制 MB/KB：
+
+| 版本 | 完整 CRX | 原差分 | 优化差分 | 相对完整包节省 |
+| --- | ---: | ---: | ---: | ---: |
+| 1.0.0.3 → 1.0.0.4 | 235.669 MB | 193.287 MB | 710.700 KB | 99.6984% |
+| 1.0.0.4 → 1.0.0.5 | 235.669 MB | 190.624 MB | 671.873 KB | 99.7149% |
+
+两组都通过修改前的 Puffin 解码器逐字节还原及 Chromium 固定公钥验签。
+第二组离线生成及回放验证合计约 108 秒、峰值 RSS 约 4.62 GB；旧解码器单独回放约
+5.82 秒、峰值 RSS 约 769 MB。这些是本机单次进程测量，不代表所有设备。
+这批版本复用同一编译代码，主要变更版本元数据和测试资源；本次验证是离线重建、
+兼容性和带宽验收，没有重新执行系统安装，也不代表 Developer ID/公证验收。
+
+随后同日在本机执行真实系统安装及四次更新：1.0.0.2 → 1.0.0.3 完整更新，
+1.0.0.3 → 1.0.0.4 和 1.0.0.4 → 1.0.0.5 分别只下载 710,700 和 671,873 字节的
+优化补丁，均无完整包下载；1.0.0.5 → 1.0.0.6 的故意损坏补丁自动回退完整包成功。
+测试使用优化前的同一 Updater 二进制，每次安装后文件、权限、root 所有权和签名
+匹配，五次浏览器启动及正常退出通过，localStorage 保留。临时测试服务及残留已清理。
+该轮使用用户明确授权的上游测试启动器及 ad-hoc 测试制品，不扩大正式签名验收范围。
+
 Omaha 4.0 的差分基准是客户端缓存中的旧 CRX 的 SHA256，而不是已安装 app 目录。
 首次 PKG 安装没有这个缓存时，第一次更新走完整 CRX/PKG；后续缓存匹配才下发差分。
 旧版自定义 `patch.zip` 不兼容此协议。CRX 发布 key 变更需要规划 Updater 信任迁移，
@@ -109,6 +170,10 @@ out/release_arm64/xenon_updater_verify --crx=/ABS/update.crx3 \
 
 在仓库根目录运行以下命令。测试只使用临时制品，不安装 PKG、不注册系统服务。
 原生测试工具的环境变量不能省略，否则对应的集成测试会跳过。
+
+差分测试覆盖嵌套 PKG、ZIP64、连续 gzip member、压缩区间边界、截断输入、签名 CRX
+和实际带宽改善。可另外设置 `XENON_PUFFIN_DECODER=/ABS/OLD/puffin`，用修改前的
+工具验证新补丁的解码兼容性；`XENON_PUFFIN_TOOL` 始终指向已重建的制包工具。
 
 ```sh
 autoninja -C out/release_arm64 xenon_updater_unittests \

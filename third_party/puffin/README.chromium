@@ -67,3 +67,6 @@ issue in nonembedded android component_updater.
 - Replaced LOG with VLOG to avoid unnecessary logging unless logging is enabled.
 - Add missing includes to common.h and stream.h.
 - Changed the chromium base::File invocations to use the span-based API.
+- Added an offline puffdiff-gzip CLI mode for bounded embedded gzip ranges;
+  generated patches use the existing Puffin format and unmodified decoder.
+- Reject truncated gzip optional headers and footers during deflate discovery.

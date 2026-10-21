@@ -233,12 +233,14 @@ bool LocateDeflatesInGzip(const Buffer& data, vector<BitExtent>* deflates) {
       offset += 2;
     }
 
+    TEST_AND_RETURN_FALSE(offset < data.size());
     uint64_t compressed_size = 0;
     TEST_AND_RETURN_FALSE(LocateDeflatesInDeflateStream(
         data.data() + offset, data.size() - offset, offset, deflates,
         &compressed_size));
     offset += compressed_size;
 
+    TEST_AND_RETURN_FALSE(data.size() - offset >= 8);
     // Ignore CRC32 and uncompressed size.
     offset += 8;
     member_start = offset;
