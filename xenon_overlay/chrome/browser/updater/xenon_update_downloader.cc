@@ -40,14 +40,14 @@ constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 
 std::pair<bool, std::string> VerifyFileHashBlocking(
     const base::FilePath& path,
+    int64_t expected_size,
     const std::string& expected_sha256) {
-  if (expected_sha256.empty()) {
-    return {true, ""};
-  }
-
   base::File file(path, base::File::FLAG_OPEN | base::File::FLAG_READ);
   if (!file.IsValid()) {
     return {false, "Failed to open downloaded file for hash verification"};
+  }
+  if (file.GetLength() != expected_size) {
+    return {false, "Downloaded file size does not match the manifest"};
   }
 
   std::unique_ptr<crypto::SecureHash> hash =
@@ -88,9 +88,8 @@ XenonUpdateDownloader::~XenonUpdateDownloader() {
 void XenonUpdateDownloader::Cancel() {
   url_loader_.reset();
   weak_factory_.InvalidateWeakPtrs();
-  if (completion_callback_) {
-    std::move(completion_callback_).Run(false, "Download cancelled");
-  }
+  completion_callback_.Reset();
+  progress_callback_.Reset();
 }
 
 void XenonUpdateDownloader::StartDownload(
@@ -128,7 +127,7 @@ void XenonUpdateDownloader::StartDownload(
       url_loader_factory.get(),
       base::BindOnce(&XenonUpdateDownloader::OnDownloadComplete,
                      weak_factory_.GetWeakPtr()),
-      destination_path_);
+      destination_path_, package_info_.size);
 }
 
 void XenonUpdateDownloader::OnDownloadProgress(uint64_t current) {
@@ -166,7 +165,8 @@ void XenonUpdateDownloader::OnDownloadComplete(base::FilePath file_path) {
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE,
       {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-      base::BindOnce(&VerifyFileHashBlocking, file_path, package_info_.sha256),
+      base::BindOnce(&VerifyFileHashBlocking, file_path, package_info_.size,
+                     package_info_.sha256),
       base::BindOnce(&XenonUpdateDownloader::OnVerifyHashComplete,
                      weak_factory_.GetWeakPtr()));
 }
@@ -176,10 +176,21 @@ void XenonUpdateDownloader::OnVerifyHashComplete(
   bool matches = result.first;
   const std::string& error = result.second;
   if (!matches) {
-    // Delete corrupt file
+    // Finish deleting this attempt before its owner can reuse the path for a
+    // fallback. A detached deletion could otherwise unlink the new download.
     base::ThreadPool::PostTask(
-        FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-        base::GetDeleteFileCallback(destination_path_));
+        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+        base::GetDeleteFileCallback(
+            destination_path_,
+            base::BindOnce(
+                [](base::WeakPtr<XenonUpdateDownloader> self, std::string error,
+                   bool deleted) {
+                  if (self && self->completion_callback_) {
+                    std::move(self->completion_callback_).Run(false, error);
+                  }
+                },
+                weak_factory_.GetWeakPtr(), error)));
+    return;
   }
 
   if (completion_callback_) {

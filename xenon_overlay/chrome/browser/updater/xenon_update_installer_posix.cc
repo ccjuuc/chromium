@@ -16,7 +16,11 @@ std::string XenonUpdateInstaller::ReadBundleShortVersion(
 bool XenonUpdateInstaller::InstallAndRelaunch(
     const base::FilePath& staged_path,
     const base::FilePath& target_install_dir,
-    const base::FilePath& relaunch_executable) {
+    const base::FilePath& relaunch_executable,
+    std::string* error) {
+  if (error) {
+    *error = "Update installation is not supported on this platform";
+  }
   LOG(WARNING) << "[XenonUpdateInstaller] InstallAndRelaunch not implemented on this POSIX platform";
   return false;
 }

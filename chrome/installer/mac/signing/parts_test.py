@@ -3,6 +3,8 @@
 # found in the LICENSE file.
 
 import asyncio
+import pathlib
+import plistlib
 import unittest
 from unittest import mock
 
@@ -31,6 +33,75 @@ class TestGetParts(unittest.TestCase):
                          all_parts['helper-app'].identifier)
         self.assertIn('libEGL.dylib', all_parts)
         self.assertIn('libGLESv2.dylib', all_parts)
+        self.assertEqual(
+            'App Product.app/Contents/Helpers/xenon_update_helper',
+            all_parts['xenon-update-helper'].path)
+        privileged = all_parts['xenon-privileged-update-helper']
+        self.assertEqual(
+            'App Product.app/Contents/Helpers/xenon_privileged_update_helper',
+            privileged.path)
+        self.assertEqual(
+            'test.signing.bundle_id.xenon-privileged-update-helper',
+            privileged.identifier)
+        self.assertTrue(privileged.sign_with_identifier)
+        self.assertIsNone(privileged.entitlements)
+        self.assertEqual(model.CodeSignOptions.FULL_HARDENED_RUNTIME_OPTIONS,
+                         privileged.options)
+        self.assertEqual(model.VerifyOptions.DEEP | model.VerifyOptions.STRICT,
+                         privileged.verify_options)
+
+    @mock.patch('signing.commands.run_command')
+    def test_xenon_helpers_use_app_identity_and_explicit_identifiers(self, run):
+        config = test_config.TestConfig()
+        paths = model.Paths('/$I', '/$O', '/$W')
+        all_parts = parts.get_parts(config)
+        for name in ('xenon-update-helper', 'xenon-privileged-update-helper'):
+            with self.subTest(helper=name):
+                part = all_parts[name]
+                signing.sign_part(paths, config, part)
+                command = run.call_args.args[0]
+                self.assertEqual(config.identity,
+                                 command[command.index('--sign') + 1])
+                self.assertEqual(config.base_bundle_id + '.' + name,
+                                 command[command.index('--identifier') + 1])
+                self.assertIn('--timestamp', command)
+                self.assertNotIn('--entitlements', command)
+
+    @mock.patch('signing.commands.run_command')
+    def test_xenon_helpers_use_customized_app_identifiers(self, run):
+        config = model.Distribution(
+            channel='canary',
+            app_name_fragment='Canary',
+            product_dirname='canary',
+            creator_code='cana',
+            channel_customize=True).to_config(test_config.TestConfig())
+        paths = model.Paths('/$I', '/$O', '/$W')
+        all_parts = parts.get_parts(config)
+        self.assertNotEqual(config.base_config.base_bundle_id,
+                            all_parts['app'].identifier)
+        for name in ('xenon-update-helper', 'xenon-privileged-update-helper'):
+            with self.subTest(helper=name):
+                signing.sign_part(paths, config, all_parts[name])
+                command = run.call_args.args[0]
+                expected = all_parts['app'].identifier + '.' + name
+                self.assertEqual(expected, all_parts[name].identifier)
+                self.assertEqual(expected,
+                                 command[command.index('--identifier') + 1])
+                self.assertEqual(config.identity,
+                                 command[command.index('--sign') + 1])
+
+    def test_xenon_privileged_launchd_contract(self):
+        repo = pathlib.Path(__file__).resolve().parents[4]
+        updater = repo / 'xenon_overlay/chrome/browser/updater'
+        with (updater / 'com.xl153.updater.privileged.plist').open('rb') as fh:
+            job = plistlib.load(fh)
+        helper = parts.get_parts(test_config.TestConfig())[
+            'xenon-privileged-update-helper']
+        self.assertEqual('com.xl153.updater.privileged', job['Label'])
+        self.assertEqual({'com.xl153.updater.privileged': True},
+                         job['MachServices'])
+        self.assertEqual(helper.path.split('.app/', 1)[1], job['BundleProgram'])
+        self.assertEqual({'Label', 'BundleProgram', 'MachServices'}, set(job))
 
     def test_get_parts_static_angle(self):
 
@@ -76,6 +147,10 @@ class TestGetParts(unittest.TestCase):
             all_parts['helper-alerts'].identifier)
         self.assertEqual('test.signing.bundle_id.helper',
                          all_parts['helper-app'].identifier)
+        # Xenon authenticates its two helpers against the actual outer app ID.
+        for name in ('xenon-update-helper', 'xenon-privileged-update-helper'):
+            self.assertEqual('test.signing.bundle_id.canary.' + name,
+                             all_parts[name].identifier)
 
     def test_get_parts_chrome_branded(self):
         config = test_config.TestConfig()
@@ -205,6 +280,7 @@ class TestSignChrome(unittest.TestCase):
         self.assertEqual(
             set([p.path for p in parts.get_parts(config).values()]),
             set(signed_paths))
+        self.assertEqual(len(signed_paths), len(set(signed_paths)))
 
         # Make sure that the framework, helper, and the app are the last three
         # parts that are signed.
@@ -294,11 +370,13 @@ class TestSignChrome(unittest.TestCase):
                 '/$W/App Product.app/Contents/embedded.provisionprofile')
         ])
 
-        # Ensure that only the app is signed.
+        # Outer-bundle helpers must be signed even when reusing the framework.
         signed_paths = [
             call[1][2].path for call in kwargs['sign_part'].mock_calls
         ]
         self.assertEqual(signed_paths, [
+            'App Product.app/Contents/Helpers/xenon_update_helper',
+            'App Product.app/Contents/Helpers/xenon_privileged_update_helper',
             'App Product.app/Contents/Library/LaunchServices/test.signing.bundle_id.UpdaterPrivilegedHelper',
             'App Product.app'
         ])
@@ -351,6 +429,10 @@ class TestSignChrome(unittest.TestCase):
         self.assertNotIn(
             'App Product.app/Contents/Library/LaunchServices' +
             '/test.signing.bundle_id.UpdaterPrivilegedHelper',
+            [call[1][2].path for call in kwargs['sign_part'].mock_calls])
+        # Xenon's privilege service does not depend on the Chromium updater.
+        self.assertIn(
+            'App Product.app/Contents/Helpers/xenon_privileged_update_helper',
             [call[1][2].path for call in kwargs['sign_part'].mock_calls])
 
     @mock.patch('signing.parts._sanity_check_version_keys')

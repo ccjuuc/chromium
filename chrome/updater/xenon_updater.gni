@@ -1,0 +1,17 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+declare_args() {
+  # Xenon is an explicit macOS-only product, independent of the browser brand.
+  enable_xenon_updater = false
+
+  # There is intentionally no default update service or publisher identity.
+  # HTTPS is required. Local integration tests must explicitly opt into HTTP.
+  xenon_updater_update_url = ""
+  xenon_updater_allow_insecure_localhost = false
+  xenon_updater_mac_team_id = ""
+
+  # Required standard base64 SHA-256 hash of the CRX publisher SPKI DER key.
+  xenon_updater_crx_public_key_hash = ""
+}

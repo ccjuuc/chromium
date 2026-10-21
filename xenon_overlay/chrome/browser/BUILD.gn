@@ -1,4 +1,5 @@
 import("//build/config/ui.gni")
+import("//chrome/updater/xenon_updater.gni")
 import("//chrome/version.gni")
 import("//testing/test.gni")
 import("//third_party/skia/modules/svg/svg.gni")
@@ -167,30 +168,120 @@ source_set("filesystem_bridge") {
   ]
 }
 
-source_set("xenon_updater") {
-  sources = [
-    "updater/xenon_update_downloader.cc",
-    "updater/xenon_update_downloader.h",
-    "updater/xenon_update_installer.h",
-    "updater/xenon_update_manager.cc",
-    "updater/xenon_update_manager.h",
-    "updater/xenon_update_patcher.cc",
-    "updater/xenon_update_patcher.h",
-    "updater/xenon_update_types.cc",
-    "updater/xenon_update_types.h",
-  ]
-  if (is_win) {
-    sources += [ "updater/xenon_update_installer_win.cc" ]
-  } else if (is_mac) {
-    sources += [ "updater/xenon_update_installer_mac.mm" ]
-  } else {
-    sources += [ "updater/xenon_update_installer_posix.cc" ]
+if (is_mac) {
+  source_set("xenon_update_mac_privileged_util") {
+    sources = [
+      "updater/xenon_update_mac_privileged_generation.h",
+      "updater/xenon_update_mac_privileged_generation.mm",
+      "updater/xenon_update_mac_privileged_protocol.h",
+      "updater/xenon_update_mac_privileged_util.h",
+      "updater/xenon_update_mac_privileged_util.mm",
+    ]
+    frameworks = [
+      "Foundation.framework",
+      "Security.framework",
+    ]
   }
 
+  source_set("xenon_update_mac_privileged_client") {
+    sources = [
+      "updater/xenon_update_mac_privileged_client.h",
+      "updater/xenon_update_mac_privileged_client.mm",
+    ]
+    public_deps = [ ":xenon_update_mac_privileged_util" ]
+    frameworks = [
+      "AppKit.framework",
+      "Foundation.framework",
+      "Security.framework",
+      "ServiceManagement.framework",
+    ]
+  }
+
+  source_set("xenon_update_mac_util") {
+    sources = [
+      "updater/xenon_update_mac_util.h",
+      "updater/xenon_update_mac_util.mm",
+    ]
+    frameworks = [
+      "Foundation.framework",
+      "Security.framework",
+    ]
+  }
+
+  executable("xenon_update_helper") {
+    sources = [ "updater/xenon_update_mac_helper.mm" ]
+    deps = [
+      ":xenon_update_mac_privileged_client",
+      ":xenon_update_mac_util",
+    ]
+    frameworks = [ "AppKit.framework" ]
+  }
+
+  bundle_data("xenon_update_helper_bundle_data") {
+    sources = [ "$root_out_dir/xenon_update_helper" ]
+    outputs = [ "{{bundle_contents_dir}}/Helpers/{{source_file_part}}" ]
+    public_deps = [ ":xenon_update_helper" ]
+  }
+
+  # The privileged process contains only the narrow native update service.
+  # Browser/renderer and GUI dependencies belong in the unprivileged client.
+  executable("xenon_privileged_update_helper") {
+    sources = [ "updater/xenon_update_mac_privileged_service.mm" ]
+    deps = [ ":xenon_update_mac_privileged_util" ]
+    frameworks = [
+      "Foundation.framework",
+      "Security.framework",
+    ]
+  }
+
+  bundle_data("xenon_privileged_update_helper_bundle_data") {
+    sources = [ "$root_out_dir/xenon_privileged_update_helper" ]
+    outputs = [ "{{bundle_contents_dir}}/Helpers/{{source_file_part}}" ]
+    public_deps = [ ":xenon_privileged_update_helper" ]
+  }
+
+  bundle_data("xenon_privileged_update_launchd_bundle_data") {
+    sources = [ "updater/com.xl153.updater.privileged.plist" ]
+    outputs =
+        [ "{{bundle_contents_dir}}/Library/LaunchDaemons/{{source_file_part}}" ]
+  }
+}
+
+xenon_updater_sources = [
+  "updater/xenon_system_updater.h",
+  "updater/xenon_update_browser_context.h",
+  "updater/xenon_update_downloader.cc",
+  "updater/xenon_update_downloader.h",
+  "updater/xenon_update_installer.h",
+  "updater/xenon_update_manager.cc",
+  "updater/xenon_update_manager.h",
+  "updater/xenon_update_patcher.cc",
+  "updater/xenon_update_patcher.h",
+  "updater/xenon_update_types.cc",
+  "updater/xenon_update_types.h",
+]
+if (is_win) {
+  xenon_updater_sources += [ "updater/xenon_update_installer_win.cc" ]
+} else if (is_mac) {
+  xenon_updater_sources += [ "updater/xenon_update_installer_mac.mm" ]
+} else {
+  xenon_updater_sources += [ "updater/xenon_update_installer_posix.cc" ]
+}
+
+if (enable_xenon_updater) {
+  xenon_updater_sources += [ "updater/xenon_system_updater.cc" ]
+} else {
+  xenon_updater_sources += [ "updater/xenon_system_updater_stub.cc" ]
+}
+
+source_set("xenon_updater") {
+  sources =
+      xenon_updater_sources + [ "updater/xenon_update_browser_context.cc" ]
   deps = [
     "//base",
     "//chrome/browser:browser_process",
-    "//chrome/browser/lifetime:termination_notification",
+    "//chrome/browser/lifetime",
+    "//chrome/browser/net",
     "//chrome/common:non_code_constants",
     "//components/version_info",
     "//components/zucchini:zucchini_io",
@@ -201,6 +292,19 @@ source_set("xenon_updater") {
     "//third_party/zlib/google:zip",
     "//url",
   ]
+  if (enable_xenon_updater) {
+    deps += [
+      "//chrome/updater:branding_header",
+      "//chrome/updater:browser_sources",
+    ]
+  }
+  if (is_mac) {
+    deps += [
+      ":xenon_update_mac_privileged_client",
+      ":xenon_update_mac_util",
+    ]
+    frameworks = [ "AppKit.framework" ]
+  }
 }
 
 source_set("electron_api_bridge") {
@@ -359,6 +463,7 @@ source_set("browser") {
     "//chrome/browser/background/extensions",
     "//chrome/browser/extensions",
     "//chrome/browser/lifetime:termination_notification",
+    "//chrome/browser/profiles:profile",
     "//chrome/browser/ui",
     "//chrome/browser/ui/startup",
     "//chrome/browser/ui/startup:xenon_login_startup_hooks",
@@ -425,18 +530,33 @@ if (enable_xenon_service) {
     sources = [
       "asar/xenon_asar_url_loader_factory_unittest.cc",
       "ui/xenon_web_dialog_unittest.cc",
+      "updater/xenon_update_downloader_unittest.cc",
       "updater/xenon_update_manager_unittest.cc",
+      "updater/xenon_updater_test_support.h",
       "xenon_manager_unittest.cc",
     ]
     deps = [
       ":browser",
       "//base/test:test_support",
+      "//chrome/test:test_support",
       "//content/test:test_support",
+      "//crypto",
       "//services/network:test_support",
       "//testing/gtest",
+      "//third_party/zlib:minizip",
       "//ui/views",
       "//xenon_overlay/common/asar:test_support",
     ]
+    if (is_win) {
+      sources += [ "updater/xenon_update_installer_win_unittest.cc" ]
+    }
+    if (is_mac) {
+      sources += [ "updater/xenon_update_mac_util_unittest.mm" ]
+      deps += [
+        ":xenon_update_mac_privileged_client",
+        ":xenon_update_mac_util",
+      ]
+    }
   }
 }
 
@@ -660,22 +780,47 @@ test("ipc_main_container_unittests") {
 
 test("xenon_updater_unittests") {
   testonly = true
-  sources = [
-    "updater/xenon_update_manager_unittest.cc",
-    "updater/xenon_updater_unittest_stubs.cc",
-  ]
+  defines = [ "XENON_UPDATER_STANDALONE_TESTS" ]
+  sources = xenon_updater_sources + [
+              "updater/xenon_update_downloader_unittest.cc",
+              "updater/xenon_update_manager_unittest.cc",
+              "updater/xenon_updater_test_support.h",
+              "updater/xenon_updater_unittest_stubs.cc",
+            ]
   deps = [
-    ":xenon_updater",
     "//base",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
+    "//chrome/browser/lifetime:termination_notification",
+    "//chrome/common:non_code_constants",
+    "//components/version_info",
     "//components/zucchini:zucchini_io",
     "//components/zucchini:zucchini_lib",
+    "//crypto",
     "//mojo/core/embedder",
     "//net",
     "//services/network:test_support",
+    "//services/network/public/cpp",
     "//testing/gtest",
+    "//third_party/zlib:minizip",
     "//third_party/zlib/google:zip",
+    "//url",
   ]
+  if (enable_xenon_updater) {
+    deps += [
+      "//chrome/updater:branding_header",
+      "//chrome/updater:browser_sources",
+    ]
+  }
+  if (is_win) {
+    sources += [ "updater/xenon_update_installer_win_unittest.cc" ]
+  }
+  if (is_mac) {
+    sources += [ "updater/xenon_update_mac_util_unittest.mm" ]
+    deps += [
+      ":xenon_update_mac_privileged_client",
+      ":xenon_update_mac_util",
+    ]
+    frameworks = [ "AppKit.framework" ]
+  }
 }
-

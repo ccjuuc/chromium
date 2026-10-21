@@ -9,13 +9,13 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "url/gurl.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_shell.h"
-
 #include "xenon_overlay/chrome/browser/updater/xenon_update_manager.h"
 #include "xenon_overlay/chrome/browser/updater/xenon_update_types.h"
 
@@ -36,15 +36,83 @@ mojom::IpcResultPtr Failure(std::string error) {
   return result;
 }
 
+class AutoUpdaterEventBridge : public updater::XenonUpdateManager::Observer {
+ public:
+  AutoUpdaterEventBridge() {
+    updater::XenonUpdateManager::GetInstance()->AddObserver(this);
+  }
+
+  static AutoUpdaterEventBridge& Get() {
+    static base::NoDestructor<AutoUpdaterEventBridge> instance;
+    return *instance;
+  }
+
+  void SetCallback(AutoUpdaterEventCallback callback) {
+    callback_ = std::move(callback);
+  }
+
+  void OnCheckingForUpdate() override { Emit("checking-for-update"); }
+  void OnUpdateAvailable(const updater::UpdateManifest& manifest) override {
+    Emit("update-available", base::ListValue().Append(manifest.ToValue()));
+  }
+  void OnUpdateNotAvailable(const std::string& version) override {
+    Emit("update-not-available",
+         base::ListValue().Append(base::DictValue().Set("version", version)));
+  }
+  void OnDownloadProgress(const updater::DownloadProgress& progress) override {
+    Emit("download-progress", base::ListValue().Append(progress.ToValue()));
+  }
+  void OnUpdateDownloaded(const updater::UpdateManifest& manifest) override {
+    Emit("update-downloaded", base::ListValue().Append(manifest.ToValue()));
+  }
+  void OnUpdateError(const std::string& message) override {
+    Emit("error", base::ListValue().Append(message));
+  }
+
+ private:
+  void Emit(const std::string& name, base::ListValue arguments = {}) {
+    if (callback_) {
+      callback_.Run(name, std::move(arguments));
+    }
+  }
+
+  AutoUpdaterEventCallback callback_;
+};
+
 void CallAutoUpdater(const base::DictValue& arguments,
                      const std::string& operation,
                      ElectronApiCallback callback) {
   auto* manager = xenon::updater::XenonUpdateManager::GetInstance();
+  if (operation == "autoUpdater.configure" ||
+      operation == "autoUpdater.getConfiguration") {
+    if (operation == "autoUpdater.configure") {
+      for (const char* key : {"autoDownload", "autoInstallOnAppQuit"}) {
+        if (const base::Value* value = arguments.Find(key);
+            value && !value->is_bool()) {
+          std::move(callback).Run(
+              Failure(std::string("ERR_INVALID_ARG_TYPE: ") + key +
+                      " must be a boolean"));
+          return;
+        }
+      }
+      if (auto value = arguments.FindBool("autoDownload")) {
+        manager->SetAutoDownload(*value);
+      }
+      if (auto value = arguments.FindBool("autoInstallOnAppQuit")) {
+        manager->SetAutoInstallOnAppQuit(*value);
+      }
+    }
+    std::move(callback).Run(Success(base::Value(
+        base::DictValue()
+            .Set("autoDownload", manager->GetAutoDownload())
+            .Set("autoInstallOnAppQuit", manager->GetAutoInstallOnAppQuit()))));
+    return;
+  }
   if (operation == "autoUpdater.setFeedURL") {
     const std::string* url = arguments.FindString("url");
     if (!url) {
-      std::move(callback).Run(
-          Failure("ERR_INVALID_ARG_VALUE: autoUpdater.setFeedURL requires url"));
+      std::move(callback).Run(Failure(
+          "ERR_INVALID_ARG_VALUE: autoUpdater.setFeedURL requires url"));
       return;
     }
     manager->SetFeedURL(*url);
@@ -75,7 +143,9 @@ void CallAutoUpdater(const base::DictValue& arguments,
   if (operation == "autoUpdater.quitAndInstall") {
     manager->QuitAndInstall();
     base::DictValue result;
-    result.Set("status", "installing");
+    // This acknowledges only the request. Preparation, OS launch approval and
+    // rollback finish asynchronously; it is not an installation success.
+    result.Set("status", "requested");
     std::move(callback).Run(Success(base::Value(std::move(result))));
     return;
   }
@@ -83,14 +153,20 @@ void CallAutoUpdater(const base::DictValue& arguments,
     base::DictValue result;
     result.Set("state",
                xenon::updater::UpdateStateToString(manager->GetState()));
+    result.Set("error", manager->GetLastError());
+    result.Set("is_installer_package", manager->GetStagedIsInstallerPackage());
+    result.Set("installer_opened", manager->GetInstallerOpened());
+    result.Set("requires_elevation", manager->GetRequiresElevation());
+    result.Set("elevation_approval_required",
+               manager->GetElevationApprovalRequired());
     if (manager->GetManifest()) {
       result.Set("manifest", manager->GetManifest()->ToValue().Clone());
     }
     std::move(callback).Run(Success(base::Value(std::move(result))));
     return;
   }
-  std::move(callback).Run(
-      Failure("ERR_NOT_SUPPORTED: unsupported autoUpdater operation " + operation));
+  std::move(callback).Run(Failure(
+      "ERR_NOT_SUPPORTED: unsupported autoUpdater operation " + operation));
 }
 
 void CallClipboard(const base::DictValue& arguments,
@@ -164,6 +240,10 @@ void CallClipboard(const base::DictValue& arguments,
 }
 
 }  // namespace
+
+void SetAutoUpdaterEventCallback(AutoUpdaterEventCallback callback) {
+  AutoUpdaterEventBridge::Get().SetCallback(std::move(callback));
+}
 
 void CallElectronApi(base::Value arguments, ElectronApiCallback callback) {
   // Renderer IPC transports the arguments after the channel as a list, while

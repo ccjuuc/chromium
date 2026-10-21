@@ -5,8 +5,10 @@
 #include "xenon_overlay/chrome/browser/updater/xenon_update_types.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "base/json/json_reader.h"
+#include "base/strings/string_util.h"
 
 namespace xenon::updater {
 
@@ -32,7 +34,9 @@ const char* UpdateStateToString(UpdateState state) {
 }
 
 bool UpdatePackageInfo::IsValid() const {
-  return url.is_valid() && size > 0 && !sha256.empty();
+  return url.is_valid() && size > 0 && size <= 9007199254740991LL &&
+         sha256.size() == 64 &&
+         std::ranges::all_of(sha256, [](char ch) { return base::IsHexDigit(ch); });
 }
 
 base::DictValue UpdatePackageInfo::ToValue() const {
@@ -56,6 +60,13 @@ std::optional<UpdatePackageInfo> UpdatePackageInfo::FromValue(
 
   int64_t package_size = 0;
   if (std::optional<double> size_double = dict.FindDouble("size")) {
+    // JSON sizes also cross the JavaScript bridge. Reject rounded, fractional,
+    // and out-of-range values before converting floating point to an integer.
+    if (!std::isfinite(*size_double) || *size_double <= 0 ||
+        *size_double > 9007199254740991.0 ||
+        std::floor(*size_double) != *size_double) {
+      return std::nullopt;
+    }
     package_size = static_cast<int64_t>(*size_double);
   } else if (std::optional<int> size_int = dict.FindInt("size")) {
     package_size = *size_int;

@@ -58,6 +58,23 @@ def get_parts(config):
                 'chrome_crashpad_handler',
                 options=CodeSignOptions.FULL_HARDENED_RUNTIME_OPTIONS,
                 verify_options=verify_options),
+        'xenon-update-helper':
+            CodeSignedProduct(
+                '{.app_product}.app/Contents/Helpers/xenon_update_helper'.format(
+                    config),
+                '{}.xenon-update-helper'.format(config.base_bundle_id),
+                options=CodeSignOptions.FULL_HARDENED_RUNTIME_OPTIONS,
+                sign_with_identifier=True,
+                verify_options=verify_options),
+        'xenon-privileged-update-helper':
+            CodeSignedProduct(
+                ('{.app_product}.app/Contents/Helpers/'
+                 'xenon_privileged_update_helper').format(config),
+                '{}.xenon-privileged-update-helper'.format(
+                    config.base_bundle_id),
+                options=CodeSignOptions.FULL_HARDENED_RUNTIME_OPTIONS,
+                sign_with_identifier=True,
+                verify_options=verify_options),
         'helper-app':
             CodeSignedProduct(
                 '{0.framework_dir}/Helpers/{0.product} Helper.app'.format(
@@ -195,6 +212,11 @@ async def sign_chrome(paths, config, sign_framework=False):
 
     _sanity_check_version_keys(paths, parts)
 
+    # These helpers are in the outer app, so also sign them when a channel build
+    # reuses an already-signed framework.
+    signing.sign_part(paths, config, parts['xenon-update-helper'])
+    signing.sign_part(paths, config, parts['xenon-privileged-update-helper'])
+
     if sign_framework:
         # To sign an .app bundle that contains nested code, the nested
         # components themselves must be signed. Each of these components is
@@ -203,7 +225,8 @@ async def sign_chrome(paths, config, sign_framework=False):
         # signing the Current version.
         # https://developer.apple.com/library/content/technotes/tn2206/_index.html#//apple_ref/doc/uid/DTS40007919-CH1-TNTAG13
         for name, part in parts.items():
-            if name in ('app', 'framework', 'privileged-helper'):
+            if name in ('app', 'framework', 'privileged-helper',
+                        'xenon-update-helper', 'xenon-privileged-update-helper'):
                 continue
             signing.sign_part(paths, config, part)
 

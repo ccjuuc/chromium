@@ -7,16 +7,12 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "third_party/skia/include/core/SkPath.h"
-#include "third_party/skia/include/core/SkPathBuilder.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/compositor/layer.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/views/widget/widget.h"
-#include "ui/views/widget/widget_delegate.h"
 #include "xenon_overlay/chrome/browser/reminder/xenon_reminder_notification_manager.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_reminder_notification_container.h"
 
@@ -26,31 +22,6 @@ namespace {
 
 constexpr int kMarginRight = 5;
 constexpr int kMarginTop = 30;
-
-class XenonReminderWidgetDelegate : public views::WidgetDelegate {
- public:
-  explicit XenonReminderWidgetDelegate(
-      XenonReminderNotificationContainer* container)
-      : container_(container) {}
-  ~XenonReminderWidgetDelegate() override = default;
-
-  bool WidgetHasHitTestMask() const override { return false; }
-
-  void GetWidgetHitTestMask(SkPath* mask) const override {
-    if (!mask || !container_) {
-      return;
-    }
-    SkPathBuilder builder;
-    std::vector<gfx::Rect> card_bounds = container_->GetCardBounds();
-    for (const gfx::Rect& rect : card_bounds) {
-      builder.addRect(gfx::RectToSkRect(rect));
-    }
-    *mask = builder.detach();
-  }
-
- private:
-  raw_ptr<XenonReminderNotificationContainer> container_;
-};
 
 bool CalculateContentSize(XenonReminderNotificationContainer* container,
                           int& out_width,
@@ -284,12 +255,8 @@ void XenonReminderNotificationWidget::CreateBrowserWidget(
 
   auto container =
       std::make_unique<XenonReminderNotificationContainer>(profile_);
-  XenonReminderNotificationContainer* container_ptr = container.get();
-
-  auto delegate =
-      std::make_unique<XenonReminderWidgetDelegate>(container_ptr);
-  params.delegate = delegate.release();
-
+  // The default delegate has the required rectangular hit testing and is
+  // destroyed with the Widget. InitParams does not own a supplied delegate.
   widget_ = std::make_unique<views::Widget>();
   widget_->Init(std::move(params));
 
@@ -327,12 +294,6 @@ void XenonReminderNotificationWidget::CreateDesktopWidget() {
 
   auto container = std::make_unique<XenonReminderNotificationContainer>(
       profile_, /*is_desktop=*/true);
-  XenonReminderNotificationContainer* container_ptr = container.get();
-
-  auto delegate =
-      std::make_unique<XenonReminderWidgetDelegate>(container_ptr);
-  params.delegate = delegate.release();
-
   desktop_widget_ = std::make_unique<views::Widget>();
   desktop_widget_->Init(std::move(params));
 

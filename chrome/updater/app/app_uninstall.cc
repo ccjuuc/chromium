@@ -38,6 +38,7 @@
 #include "chrome/updater/lock.h"
 #include "chrome/updater/persisted_data.h"
 #include "chrome/updater/prefs.h"
+#include "chrome/updater/updater_branding.h"
 #include "chrome/updater/updater_scope.h"
 #include "chrome/updater/updater_version.h"
 #include "chrome/updater/util/util.h"
@@ -141,6 +142,10 @@ namespace {
 
 // Uninstalls the enterprise companion app if it exists.
 [[nodiscard]] int UninstallEnterpriseCompanionApp() {
+#if UPDATER_IS_XENON_BRANDED
+  // A Chromium/Google companion belongs to a separate installed product.
+  return kErrorOk;
+#else
   std::optional<base::FilePath> exe_path =
       enterprise_companion::FindExistingInstall();
   if (!exe_path) {
@@ -171,6 +176,7 @@ namespace {
           << !enterprise_companion::FindExistingInstall();
 
   return exit_code == 0 ? kErrorOk : kErrorFailedToUninstallCompanionApp;
+#endif
 }
 
 void UninstallInThreadPool(UpdaterScope scope,
@@ -233,7 +239,8 @@ void AppUninstall::UninstallAll(UninstallPingReason reason) {
   uninstall_data.app_id = kUpdaterAppId;
   uninstall_data.brand =
       config_->GetUpdaterPersistedData()->GetBrandCode(kUpdaterAppId);
-  uninstall_data.requires_network_encryption = false;
+  uninstall_data.requires_network_encryption =
+      UPDATER_IS_XENON_BRANDED && !XENON_UPDATER_ALLOW_INSECURE_LOCALHOST;
   uninstall_data.version =
       config_->GetUpdaterPersistedData()->GetProductVersion(kUpdaterAppId);
   if (!uninstall_data.version.IsValid()) {

@@ -28,8 +28,11 @@
 #include "chrome/updater/action_handler.h"
 #include "chrome/updater/app/app_utils.h"
 #include "chrome/updater/constants.h"
+#include "chrome/updater/external_constants.h"
+#include "chrome/updater/external_constants_default.h"
 #include "chrome/updater/get_updater_scope.h"
 #include "chrome/updater/update_service.h"
+#include "chrome/updater/updater_branding.h"
 #include "chrome/updater/usage_stats_permissions.h"
 #include "chrome/updater/util/util.h"
 #include "components/crx_file/crx_verifier.h"
@@ -146,11 +149,18 @@ void Installer::MakeCrxComponentFromAppInfo(
   update_client::CrxComponent component;
   component.installer = scoped_refptr<Installer>(this);
   component.action_handler = MakeActionHandler();
-  component.requires_network_encryption = false;
+  component.requires_network_encryption =
+      UPDATER_IS_XENON_BRANDED && !XENON_UPDATER_ALLOW_INSECURE_LOCALHOST;
   component.crx_format_requirement = crx_verifier_format_;
   if (crx_public_key_hash_) {
     component.pk_hash = *crx_public_key_hash_;
   }
+#if UPDATER_IS_XENON_BRANDED
+  // A caller/override must never remove or substitute Xenon's publisher pin.
+  const auto trusted_constants = CreateDefaultExternalConstants();
+  component.crx_format_requirement = trusted_constants->CrxVerifierFormat();
+  component.pk_hash = *trusted_constants->CrxPublicKeyHash();
+#endif
   component.app_id = app_id_;
 
   // Query server for install data only when the client does not specify one.

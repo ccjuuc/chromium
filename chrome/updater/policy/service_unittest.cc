@@ -21,6 +21,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/process/launch.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "base/test/test_timeouts.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -37,6 +38,7 @@
 #include "chrome/updater/test/test_scope.h"
 #include "chrome/updater/test/unit_test_util.h"
 #include "chrome/updater/updater_branding.h"
+#include "components/policy/core/common/policy_types.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/abseil-cpp/absl/strings/str_format.h"
@@ -359,6 +361,23 @@ TEST_F(PolicyServiceTest, DefaultPolicyValue) {
       policy_service->GetMinorVersionRolloutPolicy("test1");
   EXPECT_FALSE(minor_version_rollout_policy);
 }
+
+#if UPDATER_IS_XENON_BRANDED
+TEST_F(PolicyServiceTest, XenonPolicyFetchCompletesAsynchronouslyWithoutCloud) {
+  auto policy_service =
+      CreatePolicyServiceForTesting({GetDefaultValuesPolicyManager()});
+  base::test::TestFuture<int> first;
+  base::test::TestFuture<int> second;
+  policy_service->FetchPolicies(policy::PolicyFetchReason::kUserRequest,
+                                first.GetCallback());
+  policy_service->FetchPolicies(policy::PolicyFetchReason::kUserRequest,
+                                second.GetCallback());
+  EXPECT_FALSE(first.IsReady());
+  EXPECT_FALSE(second.IsReady());
+  EXPECT_EQ(first.Get(), 0);
+  EXPECT_EQ(second.Get(), 0);
+}
+#endif
 
 TEST_F(PolicyServiceTest, ValidatePolicyValues) {
   {

@@ -47,9 +47,8 @@ constexpr net::NetworkTrafficAnnotationTag kScenarioTrafficAnnotation =
           policy_exception_justification: "Development and testing only."
         })");
 
-class XenonUpdateMessageHandler
-    : public content::WebUIMessageHandler,
-      public updater::XenonUpdateManager::Observer {
+class XenonUpdateMessageHandler : public content::WebUIMessageHandler,
+                                  public updater::XenonUpdateManager::Observer {
  public:
   XenonUpdateMessageHandler() = default;
   ~XenonUpdateMessageHandler() override {
@@ -68,6 +67,12 @@ class XenonUpdateMessageHandler
         "downloadUpdate",
         base::BindRepeating(&XenonUpdateMessageHandler::HandleDownloadUpdate,
                             base::Unretained(this)));
+
+    web_ui()->RegisterMessageCallback(
+        "downloadFullInstaller",
+        base::BindRepeating(
+            &XenonUpdateMessageHandler::HandleDownloadFullInstaller,
+            base::Unretained(this)));
 
     web_ui()->RegisterMessageCallback(
         "quitAndInstall",
@@ -91,14 +96,13 @@ class XenonUpdateMessageHandler
 
     web_ui()->RegisterMessageCallback(
         "cleanupOldVersions",
-        base::BindRepeating(&XenonUpdateMessageHandler::HandleCleanupOldVersions,
-                            base::Unretained(this)));
+        base::BindRepeating(
+            &XenonUpdateMessageHandler::HandleCleanupOldVersions,
+            base::Unretained(this)));
   }
 
   void OnJavascriptAllowed() override {}
-  void OnJavascriptDisallowed() override {
-    scenario_loader_.reset();
-  }
+  void OnJavascriptDisallowed() override { scenario_loader_.reset(); }
 
   // XenonUpdateManager::Observer:
   void OnCheckingForUpdate() override {
@@ -121,27 +125,74 @@ class XenonUpdateMessageHandler
 
   void OnDownloadProgress(const updater::DownloadProgress& progress) override {
     if (IsJavascriptAllowed()) {
-      base::DictValue dict;
-      dict.Set("percent", progress.percent);
-      dict.Set("bytes_downloaded", static_cast<double>(progress.bytes_downloaded));
-      dict.Set("total_bytes", static_cast<double>(progress.total_bytes));
-      FireWebUIListener("download-progress", dict);
+      FireWebUIListener("download-progress", progress.ToValue());
+    }
+  }
+
+  void OnUpdateStateChanged(updater::UpdateState state) override {
+    if (IsJavascriptAllowed()) {
+      FireWebUIListener("update-state-changed", GetUpdateState());
     }
   }
 
   void OnUpdateDownloaded(const updater::UpdateManifest& manifest) override {
     if (IsJavascriptAllowed()) {
-      FireWebUIListener("update-downloaded", manifest.ToValue());
+      auto* manager = updater::XenonUpdateManager::GetInstance();
+      base::DictValue info = manifest.ToValue();
+      info.Set("is_installer_package", manager->GetStagedIsInstallerPackage());
+      info.Set("installer_opened", manager->GetInstallerOpened());
+      info.Set("requires_elevation", manager->GetRequiresElevation());
+      info.Set("elevation_approval_required",
+               manager->GetElevationApprovalRequired());
+      info.Set("system_updater", manager->UsesSystemUpdater());
+      info.Set("system_update_installed", manager->SystemUpdateInstalled());
+      FireWebUIListener("update-downloaded", info);
+    }
+  }
+
+  void OnInstallerOpened() override {
+    if (IsJavascriptAllowed()) {
+      FireWebUIListener("update-state-changed", GetUpdateState());
+    }
+  }
+
+  void OnElevationApprovalRequired() override {
+    if (IsJavascriptAllowed()) {
+      FireWebUIListener("update-state-changed", GetUpdateState());
     }
   }
 
   void OnUpdateError(const std::string& error_message) override {
     if (IsJavascriptAllowed()) {
       FireWebUIListener("update-error", base::Value(error_message));
+      // Installation errors can retain a ready update for a user retry.
+      FireWebUIListener("update-state-changed", GetUpdateState());
     }
   }
 
  private:
+  base::DictValue GetUpdateState() const {
+    auto* manager = updater::XenonUpdateManager::GetInstance();
+    base::DictValue info;
+    info.Set("state", updater::UpdateStateToString(manager->GetState()));
+    info.Set("error", manager->GetLastError());
+    info.Set("is_installer_package", manager->GetStagedIsInstallerPackage());
+    info.Set("installer_opened", manager->GetInstallerOpened());
+    info.Set("requires_elevation", manager->GetRequiresElevation());
+    info.Set("elevation_approval_required",
+             manager->GetElevationApprovalRequired());
+    info.Set("system_updater", manager->UsesSystemUpdater());
+    info.Set("system_update_installed", manager->SystemUpdateInstalled());
+    info.Set("manifest", manager->GetManifest()
+                             ? base::Value(manager->GetManifest()->ToValue())
+                             : base::Value());
+    info.Set("download_progress",
+             manager->GetDownloadProgress()
+                 ? base::Value(manager->GetDownloadProgress()->ToValue())
+                 : base::Value());
+    return info;
+  }
+
   void HandleCheckForUpdates(const base::ListValue& args) {
     AllowJavascript();
     std::string feed_url;
@@ -156,6 +207,14 @@ class XenonUpdateMessageHandler
     updater::XenonUpdateManager::GetInstance()->DownloadUpdate();
   }
 
+  void HandleDownloadFullInstaller(const base::ListValue& args) {
+    AllowJavascript();
+    if (updater::XenonUpdateManager::GetInstance()->UsesSystemUpdater()) {
+      return;
+    }
+    updater::XenonUpdateManager::GetInstance()->DownloadFullInstaller();
+  }
+
   void HandleQuitAndInstall(const base::ListValue& args) {
     AllowJavascript();
     updater::XenonUpdateManager::GetInstance()->QuitAndInstall();
@@ -168,26 +227,29 @@ class XenonUpdateMessageHandler
 
   void HandleSetFeedURL(const base::ListValue& args) {
     AllowJavascript();
+    if (updater::XenonUpdateManager::GetInstance()->UsesSystemUpdater()) {
+      return;
+    }
     if (!args.empty() && args[0].is_string()) {
-      updater::XenonUpdateManager::GetInstance()->SetFeedURL(args[0].GetString());
+      updater::XenonUpdateManager::GetInstance()->SetFeedURL(
+          args[0].GetString());
     }
   }
 
   void HandleGetInitialState(const base::ListValue& args) {
     AllowJavascript();
     auto* manager = updater::XenonUpdateManager::GetInstance();
-    base::DictValue info;
+    base::DictValue info = GetUpdateState();
     info.Set("current_version", manager->GetCurrentVersion());
     info.Set("feed_url", manager->GetFeedURL());
-    info.Set("state", updater::UpdateStateToString(manager->GetState()));
-    if (manager->GetManifest()) {
-      info.Set("manifest", manager->GetManifest()->ToValue().Clone());
-    }
     FireWebUIListener("initial-state", info);
   }
 
   void HandleSwitchScenario(const base::ListValue& args) {
     AllowJavascript();
+    if (updater::XenonUpdateManager::GetInstance()->UsesSystemUpdater()) {
+      return;
+    }
     if (args.empty() || !args[0].is_string()) {
       return;
     }
@@ -207,7 +269,8 @@ class XenonUpdateMessageHandler
     request->url = scenario_url;
     request->method = "GET";
 
-    if (!g_browser_process || !g_browser_process->system_network_context_manager()) {
+    if (!g_browser_process ||
+        !g_browser_process->system_network_context_manager()) {
       return;
     }
     auto factory = g_browser_process->system_network_context_manager()

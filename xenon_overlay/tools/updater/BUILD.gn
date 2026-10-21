@@ -1,0 +1,21 @@
+# Copyright 2026 The Xenon Overlay Authors. All rights reserved.
+
+# Offline release validation. This target never starts or installs a service.
+group("release_tools") {
+  testonly = true
+  deps = [
+    ":xenon_updater_verify",
+    "//components/crx_file:crx3_build_action",
+    "//third_party/puffin",
+  ]
+}
+
+executable("xenon_updater_verify") {
+  testonly = true
+  sources = [ "xenon_updater_verify.cc" ]
+  deps = [
+    "//base",
+    "//components/crx_file",
+    "//components/update_client",
+  ]
+}

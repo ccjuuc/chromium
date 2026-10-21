@@ -411,7 +411,8 @@ if (!is_android && !is_mac) {
       "//third_party/widevine/cdm",
     ]
 
-    # window.renderDll smoke test module — land next to xenon.exe / chrome.exe.
+    # window.renderDll smoke test module — land next to xenon.exe /
+    # chrome.exe.
     if ((is_win || is_mac || is_linux) && !is_official_build) {
       data_deps += [ "//tools/render_dll_add" ]
     }
@@ -593,6 +594,9 @@ if (is_win) {
       "//build:branding_buildflags",
       "//chrome/common:buildflags",
       "//chrome/common:version_header",
+      "//xenon_overlay/chrome/browser:xenon_privileged_update_helper_bundle_data",
+      "//xenon_overlay/chrome/browser:xenon_privileged_update_launchd_bundle_data",
+      "//xenon_overlay/chrome/browser:xenon_update_helper_bundle_data",
     ]
 
     if (enable_updater) {
@@ -1671,7 +1675,8 @@ if (!is_android) {
     }
 
     # Xenon: merge //xenon_overlay/resources into chrome_extra_paks output
-    # (resources.pak) so ResourceBundle loads them with default pak startup path.
+    # (resources.pak) so ResourceBundle loads them with default pak startup
+    # path.
     additional_extra_paks = [
       "$root_gen_dir/xenon_overlay/resources/xenon_resources.pak",
       "$root_gen_dir/xenon_overlay/resources/webui/xenon_webui_resources.pak",

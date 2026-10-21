@@ -12,8 +12,10 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/singleton.h"
+#include "base/scoped_observation.h"
 #include "base/values.h"
 #include "build/buildflag.h"
+#include "chrome/browser/profiles/profile_observer.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/public/mojom/xenon_service.mojom.h"
@@ -43,6 +45,9 @@ class BrowserContext;
 
 namespace xenon {
 
+FORWARD_DECLARE_TEST(XenonManagerTest, ClearsContextBeforeProfileDestruction);
+FORWARD_DECLARE_TEST(XenonManagerTest, SwitchingContextObservesOnlyCurrentProfile);
+FORWARD_DECLARE_TEST(XenonManagerTest, DestructionUnregistersProfileObserver);
 FORWARD_DECLARE_TEST(XenonManagerTest, Ping_WhenDisconnected_ReturnsNotRunning);
 FORWARD_DECLARE_TEST(XenonManagerTest,
                      DisconnectedContainerRejectsRendererTraffic);
@@ -90,9 +95,10 @@ class XenonNodeObserver {
 // - enable_xenon_browser_observer — XenonBrowserObserver receiver +
 // SetBrowserObserver.
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
-class XenonManager : public mojom::XenonBrowserObserver {
+class XenonManager : public ProfileObserver,
+                     public mojom::XenonBrowserObserver {
 #else
-class XenonManager {
+class XenonManager : public ProfileObserver {
 #endif
  public:
   static XenonManager* GetInstance();
@@ -236,6 +242,12 @@ class XenonManager {
  private:
   friend struct base::DefaultSingletonTraits<XenonManager>;
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
+                          ClearsContextBeforeProfileDestruction);
+  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
+                          SwitchingContextObservesOnlyCurrentProfile);
+  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
+                          DestructionUnregistersProfileObserver);
+  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
                            Ping_WhenDisconnected_ReturnsNotRunning);
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
                            DisconnectedContainerRejectsRendererTraffic);
@@ -274,11 +286,10 @@ class XenonManager {
 #endif
 
   XenonManager();
-#if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
   ~XenonManager() override;
-#else
-  ~XenonManager();
-#endif
+
+  // ProfileObserver:
+  void OnProfileWillBeDestroyed(Profile* profile) override;
 
   void OnDisconnected();
   void OnContainerServiceDisconnected(const std::string& container_id,
@@ -345,6 +356,7 @@ class XenonManager {
 #endif
   raw_ptr<XenonNodeObserver> node_observer_ = nullptr;
   raw_ptr<content::BrowserContext> last_browser_context_ = nullptr;
+  base::ScopedObservation<Profile, ProfileObserver> profile_observation_{this};
   bool runtime_metadata_initialized_ = false;
   std::string startup_working_directory_;
   std::map<std::string, ipc::mojom::IpcMainConfigPtr> last_ipc_configs_;

@@ -845,6 +845,24 @@
   let activeNativeMenu = null;
   globalThis.__xenonDispatchBrowserWindowEvent =
       (windowId, eventName, details = null) => {
+    if (windowId === 0 && eventName === 'auto-updater') {
+      if (!details || typeof details.event !== 'string' ||
+          !Array.isArray(details.args)) return;
+      // This is a host-wide updater event, so it also works before the app has
+      // created a BrowserWindow. Use the existing document endpoint transport.
+      for (const endpointId of rendererWebContents.keys()) {
+        __xenonSendToRenderer(endpointId, '__xenon:auto-updater-event',
+            [details.event, ...details.args]);
+      }
+      const args = details.event === 'error' ?
+          [new Error(String(details.args[0]))] : details.args;
+      // A container that does not use the host updater must not acquire an
+      // unhandled EventEmitter error merely because another app requested it.
+      if (details.event !== 'error' || autoUpdater.listenerCount('error') > 0) {
+        autoUpdater.emit(details.event, ...args);
+      }
+      return;
+    }
     const guest = guestWebContents.get(Number(windowId));
     if (guest && eventName.startsWith('guest-')) {
       const name = eventName.slice('guest-'.length);
@@ -1075,8 +1093,15 @@
   Object.defineProperty(nativeTheme, 'shouldUseDarkColors', {get: () => false});
   const powerMonitor = new EventEmitter();
   const autoUpdater = new EventEmitter();
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  for (const property of ['autoDownload', 'autoInstallOnAppQuit']) {
+    Object.defineProperty(autoUpdater, property, {
+      enumerable: true,
+      get: () => callElectronApi('autoUpdater.getConfiguration')[property],
+      set: value => {
+        callElectronApi('autoUpdater.configure', {[property]: value});
+      },
+    });
+  }
   autoUpdater.setFeedURL = (urlOrOptions) => {
     const url = typeof urlOrOptions === 'string' ? urlOrOptions : (urlOrOptions && urlOrOptions.url ? urlOrOptions.url : '');
     return callElectronApi('autoUpdater.setFeedURL', {url});
@@ -1086,7 +1111,6 @@
     return (res && res.url) || '';
   };
   autoUpdater.checkForUpdates = async () => {
-    autoUpdater.emit('checking-for-update');
     return callElectronApi('autoUpdater.checkForUpdates', {});
   };
   autoUpdater.checkForUpdatesAndNotify = async () => {

@@ -11,6 +11,7 @@
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "base/strings/sys_string_conversions.h"
+#include "chrome/updater/updater_branding.h"
 
 NSString* const kCRUTicketBrandKey = @"KSBrandID";
 NSString* const kCRUTicketTagKey = @"KSChannelID";
@@ -292,8 +293,12 @@ NSString* const kKSTicketVersionKeyKey = @"versionKey";
       brandPath_ = base::apple::FilePathToNSString(brandPath);
       brandKey_ = kCRUTicketBrandKey;
     }
+#if UPDATER_IS_XENON_BRANDED
+    serverURL_ = [NSURL URLWithString:@UPDATE_CHECK_URL];
+#else
     serverURL_ =
         [NSURL URLWithString:@"https://tools.google.com/service/update2"];
+#endif
     serverType_ = @"Omaha";
     ticketVersion_ = 1;
   }

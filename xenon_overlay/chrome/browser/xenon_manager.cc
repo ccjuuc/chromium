@@ -14,6 +14,7 @@
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "build/buildflag.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/embedder_support/user_agent_utils.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
@@ -109,9 +110,20 @@ XenonManager* XenonManager::GetInstance() {
   return base::Singleton<XenonManager>::get();
 }
 
-XenonManager::XenonManager() = default;
+XenonManager::XenonManager() {
+  ipc::SetAutoUpdaterEventCallback(base::BindRepeating(
+      [](XenonManager* manager, const std::string& event,
+         base::ListValue arguments) {
+        manager->DispatchElectronWindowEvent(
+            0, "auto-updater",
+            base::Value(base::DictValue().Set("event", event)
+                            .Set("args", std::move(arguments))));
+      },
+      base::Unretained(this)));
+}
 
 XenonManager::~XenonManager() {
+  ipc::SetAutoUpdaterEventCallback({});
   for (const auto& [container_id, config] : last_ipc_configs_) {
     asar::RemoveArchivePublicKeys("electron:" + container_id);
   }
@@ -131,9 +143,20 @@ void XenonManager::InitializeRuntimeMetadata() {
 }
 
 void XenonManager::SetBrowserContext(content::BrowserContext* context) {
-  if (context) {
-    last_browser_context_ = context;
+  if (!context || context == last_browser_context_) {
+    return;
   }
+  profile_observation_.Reset();
+  last_browser_context_ = context;
+  profile_observation_.Observe(Profile::FromBrowserContext(context));
+}
+
+void XenonManager::OnProfileWillBeDestroyed(Profile* profile) {
+  DCHECK_EQ(last_browser_context_, profile);
+  // The manager outlives ProfileManager during browser shutdown. Drop the
+  // context before Profile destruction, including when an update quits Chrome.
+  last_browser_context_ = nullptr;
+  profile_observation_.Reset();
 }
 
 void XenonManager::EnsureServiceStarted(content::BrowserContext* context) {

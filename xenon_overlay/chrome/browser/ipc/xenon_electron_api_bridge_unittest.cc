@@ -8,12 +8,16 @@
 #include <utility>
 
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/test/test_clipboard.h"
+#include "xenon_overlay/chrome/browser/updater/xenon_update_manager.h"
 
 namespace xenon::ipc {
 namespace {
@@ -112,6 +116,53 @@ TEST_F(XenonElectronApiBridgeTest, InvalidRequestsAndUnknownApisFail) {
   auto unknown = Call(base::DictValue().Set("operation", "shell.fakeSuccess"));
   EXPECT_FALSE(unknown->success);
   EXPECT_TRUE(unknown->error.starts_with("ERR_NOT_SUPPORTED:"));
+}
+
+TEST_F(XenonElectronApiBridgeTest, AutoUpdaterConfigurationUsesNativeState) {
+  auto* manager = updater::XenonUpdateManager::GetInstance();
+  const bool auto_download = manager->GetAutoDownload();
+  const bool install_on_quit = manager->GetAutoInstallOnAppQuit();
+  base::ScopedClosureRunner restore(base::BindLambdaForTesting([=] {
+    manager->SetAutoDownload(auto_download);
+    manager->SetAutoInstallOnAppQuit(install_on_quit);
+  }));
+  auto configured = Call(base::DictValue()
+                             .Set("operation", "autoUpdater.configure")
+                             .Set("autoDownload", false)
+                             .Set("autoInstallOnAppQuit", false));
+  ASSERT_TRUE(configured->success);
+  EXPECT_FALSE(manager->GetAutoDownload());
+  EXPECT_FALSE(manager->GetAutoInstallOnAppQuit());
+  auto invalid = Call(base::DictValue()
+                          .Set("operation", "autoUpdater.configure")
+                          .Set("autoDownload", true)
+                          .Set("autoInstallOnAppQuit", "false"));
+  EXPECT_FALSE(invalid->success);
+  EXPECT_FALSE(manager->GetAutoDownload());
+  manager->SetAutoDownload(true);
+  auto read = Call(base::DictValue()
+                       .Set("operation", "autoUpdater.getConfiguration"));
+  ASSERT_TRUE(read->success);
+  EXPECT_EQ(read->value.GetDict().FindBool("autoDownload"), true);
+  EXPECT_EQ(read->value.GetDict().FindBool("autoInstallOnAppQuit"), false);
+}
+
+TEST_F(XenonElectronApiBridgeTest, AutoUpdaterForwardsNativeErrors) {
+  auto* manager = updater::XenonUpdateManager::GetInstance();
+  const std::string feed = manager->GetFeedURL();
+  base::ScopedClosureRunner restore(base::BindLambdaForTesting([=] {
+    SetAutoUpdaterEventCallback({});
+    manager->SetFeedURL(feed);
+  }));
+  base::test::TestFuture<std::string, base::ListValue> event;
+  SetAutoUpdaterEventCallback(
+      event.GetRepeatingCallback<const std::string&, base::ListValue>());
+  manager->SetFeedURL("");
+  Call(base::DictValue().Set("operation", "autoUpdater.checkForUpdates"));
+  ASSERT_TRUE(event.IsReady());
+  EXPECT_EQ(event.Get<0>(), "error");
+  ASSERT_EQ(event.Get<1>().size(), 1U);
+  EXPECT_EQ(event.Get<1>()[0].GetString(), "No update feed URL configured");
 }
 
 #if BUILDFLAG(IS_WIN)

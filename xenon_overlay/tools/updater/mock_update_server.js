@@ -33,66 +33,42 @@ export class UpdateState {
     this.mode = 'diff'; // 'diff', 'full', 'latest', 'corrupt'
     this.latestVersion = '1.0.0.2';
     this.changelog = '1. 支持原生全目录差分更新\n2. 修复已知问题与性能优化';
-    this.ensurePackageFiles();
   }
 
   getBaseUrl() {
     return `http://${this.host}:${this.port}`;
   }
 
-  ensurePackageFiles() {
-    try {
-      if (!fs.existsSync(this.dataDir)) {
-        fs.mkdirSync(this.dataDir, { recursive: true });
-      }
-      const diffFile = path.join(this.dataDir, 'patch.zucc');
-      const fullFile = path.join(this.dataDir, 'package.zip');
-      if (!fs.existsSync(diffFile) || fs.statSync(diffFile).size < 1024 * 1024) {
-        const buf = Buffer.alloc(2 * 1024 * 1024, 0x5a);
-        buf.write('ZUCCHINI_TEST_PAYLOAD');
-        fs.writeFileSync(diffFile, buf);
-      }
-      if (!fs.existsSync(fullFile) || fs.statSync(fullFile).size < 1024 * 1024) {
-        const buf = Buffer.alloc(2 * 1024 * 1024, 0x6b);
-        buf.write('PK\x03\x04');
-        fs.writeFileSync(fullFile, buf);
-      }
-    } catch (err) {
-      console.error('[UpdateServer] ensurePackageFiles error:', err);
-    }
-  }
-
   computeFileInfo(filePath) {
-    if (!fs.existsSync(filePath)) {
-      return null;
+    // Hash the actual file without synthesizing packages or loading a large
+    // installer into memory. A missing package is a server configuration error.
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile() || stat.size === 0) {
+        throw new Error(`Not a non-empty package file: ${path.basename(filePath)}`);
+      }
+      const hash = crypto.createHash('sha256');
+      const buffer = Buffer.alloc(1024 * 1024);
+      let count;
+      while ((count = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+        hash.update(buffer.subarray(0, count));
+      }
+      return { size: stat.size, sha256: hash.digest('hex').toUpperCase() };
+    } finally {
+      fs.closeSync(fd);
     }
-    const stat = fs.statSync(filePath);
-    const hash = crypto.createHash('sha256');
-    const content = fs.readFileSync(filePath);
-    hash.update(content);
-    return {
-      size: stat.size,
-      sha256: hash.digest('hex').toUpperCase()
-    };
   }
 
   buildManifest(clientVersion = null, platform = 'win') {
-    this.ensurePackageFiles();
     const baseUrl = this.getBaseUrl();
 
     const patchZip = path.join(this.dataDir, 'patch.zip');
     const diffFile = fs.existsSync(patchZip) ? patchZip : path.join(this.dataDir, 'patch.zucc');
-    const fullPkgName = (platform === 'mac' && fs.existsSync(path.join(this.dataDir, 'package.dmg'))) ? 'package.dmg' : 'package.zip';
+    const fullPkgName = platform === 'mac' ? 'package.pkg' : 'package.zip';
     const fullFile = path.join(this.dataDir, fullPkgName);
 
-    const diffInfo = this.computeFileInfo(diffFile) || {
-      size: 1024,
-      sha256: 'A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4E5F60718293A4B5C6D7E8F90'
-    };
-    const fullInfo = this.computeFileInfo(fullFile) || {
-      size: 2048,
-      sha256: 'B1C2D3E4F5061728394A5B6C7D8E9F01B1C2D3E4F5061728394A5B6C7D8E9F01'
-    };
+    const fullInfo = this.computeFileInfo(fullFile);
 
     if (this.mode === 'latest') {
       const ver = clientVersion || '1.0.0.1';
@@ -134,6 +110,7 @@ export class UpdateState {
     };
 
     if (isDiffMode) {
+      const diffInfo = this.computeFileInfo(diffFile);
       const isZip = fs.existsSync(patchZip);
       manifest.diff_package = {
         url: isZip ? `${baseUrl}/downloads/patch.zip` : `${baseUrl}/downloads/patch.zucc`,
@@ -168,8 +145,18 @@ export function createServer(state = new UpdateState()) {
       const platformParam = parsedUrl.searchParams.get('platform');
       const ua = req.headers['user-agent'] || '';
       const platform = platformParam || (ua.includes('Macintosh') || ua.includes('Mac OS') ? 'mac' : 'win');
-      const manifest = state.buildManifest(clientVersion, platform);
-      const json = JSON.stringify(manifest, null, 2);
+      let json;
+      try {
+        json = JSON.stringify(state.buildManifest(clientVersion, platform), null, 2);
+      } catch (error) {
+        console.error('[UpdateServer] Cannot build update manifest:', error.message);
+        res.writeHead(503, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'no-store'
+        });
+        res.end(JSON.stringify({ error: 'Update package unavailable', detail: error.message }));
+        return;
+      }
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
         'Content-Length': Buffer.byteLength(json),
@@ -212,6 +199,7 @@ export function createServer(state = new UpdateState()) {
       });
 
       const readStream = fs.createReadStream(filePath);
+      readStream.on('error', error => res.destroy(error));
       readStream.pipe(res);
       return;
     }

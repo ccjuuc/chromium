@@ -30,6 +30,7 @@
 #include "chrome/updater/constants.h"
 #include "chrome/updater/crx_downloader_factory.h"
 #include "chrome/updater/external_constants.h"
+#include "chrome/updater/external_constants_default.h"
 #include "chrome/updater/get_updater_scope.h"
 #include "chrome/updater/net/network.h"
 #include "chrome/updater/out_of_process_patcher.h"
@@ -37,6 +38,7 @@
 #include "chrome/updater/persisted_data.h"
 #include "chrome/updater/policy/service.h"
 #include "chrome/updater/prefs.h"
+#include "chrome/updater/updater_branding.h"
 #include "chrome/updater/updater_scope.h"
 #include "chrome/updater/usage_stats_permissions.h"
 #include "chrome/updater/util/util.h"
@@ -73,10 +75,11 @@ Configurator::Configurator(scoped_refptr<UpdaterPrefs> prefs,
       crx_cache_(base::MakeRefCounted<update_client::CrxCache>(
           GetCrxCacheDirectory(scope))),
       event_logger_(
-          RemoteEventLoggingAllowed(
-              scope,
-              persisted_data_->GetAppIds(),
-              external_constants->GetEventLoggingPermissionProvider())
+          !UPDATER_IS_XENON_BRANDED &&
+                  RemoteEventLoggingAllowed(
+                      scope,
+                      persisted_data_->GetAppIds(),
+                      external_constants->GetEventLoggingPermissionProvider())
               ? UpdaterEventLogger::Create(
                     std::make_unique<RemoteLoggingDelegate>(
                         scope,
@@ -136,7 +139,11 @@ base::TimeDelta Configurator::UpdateDelay() const {
 
 std::vector<GURL> Configurator::UpdateUrl() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+#if UPDATER_IS_XENON_BRANDED
+  return CreateDefaultExternalConstants()->UpdateURL();
+#else
   return external_constants_->UpdateURL();
+#endif
 }
 
 std::vector<GURL> Configurator::PingUrl() const {
@@ -226,7 +233,11 @@ bool Configurator::EnabledBackgroundDownloader() const {
 
 bool Configurator::EnabledCupSigning() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+#if UPDATER_IS_XENON_BRANDED
+  return false;
+#else
   return external_constants_->UseCUP();
+#endif
 }
 
 PrefService* Configurator::GetPrefService() const {
@@ -274,12 +285,20 @@ scoped_refptr<PolicyService> Configurator::GetPolicyService() const {
 
 crx_file::VerifierFormat Configurator::GetCrxVerifierFormat() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+#if UPDATER_IS_XENON_BRANDED
+  return CreateDefaultExternalConstants()->CrxVerifierFormat();
+#else
   return external_constants_->CrxVerifierFormat();
+#endif
 }
 
 std::optional<std::vector<uint8_t>> Configurator::GetCrxPublicKeyHash() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+#if UPDATER_IS_XENON_BRANDED
+  return CreateDefaultExternalConstants()->CrxPublicKeyHash();
+#else
   return external_constants_->CrxPublicKeyHash();
+#endif
 }
 
 base::TimeDelta Configurator::MinimumEventLoggingCooldown() const {

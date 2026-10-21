@@ -38,6 +38,8 @@ class XenonUpdateDownloader {
       ProgressCallback progress_callback,
       CompletionCallback completion_callback);
 
+  // Cancels silently. In particular, replacing a request must not run the old
+  // completion callback and re-enter its owner's fallback/download logic.
   void Cancel();
 
   bool is_downloading() const { return url_loader_ != nullptr; }

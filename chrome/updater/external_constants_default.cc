@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "base/base64.h"
+#include "base/check.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -24,11 +25,18 @@
 namespace updater {
 namespace {
 
-constexpr std::optional<std::vector<uint8_t>> GetCrxPublicKeyHash() {
+std::optional<std::vector<uint8_t>> GetCrxPublicKeyHash() {
+#if UPDATER_IS_XENON_BRANDED
+  auto hash = base::Base64Decode(CRX_PKHASH);
+  CHECK(hash && hash->size() == 32u)
+      << "Xenon Updater requires a pinned SHA-256 CRX publisher key.";
+  return hash;
+#else
   if constexpr (std::string_view(CRX_PKHASH).empty()) {
     return std::nullopt;
   }
   return base::Base64Decode(CRX_PKHASH);
+#endif
 }
 
 class DefaultExternalConstants : public ExternalConstants {
@@ -37,7 +45,16 @@ class DefaultExternalConstants : public ExternalConstants {
 
   // Overrides of ExternalConstants:
   std::vector<GURL> UpdateURL() const override {
-    return std::vector<GURL>{GURL(UPDATE_CHECK_URL)};
+    const GURL url(UPDATE_CHECK_URL);
+#if UPDATER_IS_XENON_BRANDED
+    CHECK(url.is_valid() && !url.has_username() && !url.has_password() &&
+          !url.has_ref());
+    CHECK(url.SchemeIs("https") ||
+          (XENON_UPDATER_ALLOW_INSECURE_LOCALHOST && url.SchemeIs("http") &&
+           (url.host() == "localhost" || url.host() == "127.0.0.1" ||
+            url.host() == "[::1]")));
+#endif
+    return std::vector<GURL>{url};
   }
 
   GURL CrashUploadURL() const override { return GURL(CRASH_UPLOAD_URL); }
@@ -48,7 +65,7 @@ class DefaultExternalConstants : public ExternalConstants {
     return GURL(UPDATER_EVENT_LOGGING_URL);
   }
 
-  bool UseCUP() const override { return true; }
+  bool UseCUP() const override { return !UPDATER_IS_XENON_BRANDED; }
 
   base::TimeDelta InitialDelay() const override { return kInitialDelay; }
 
@@ -57,7 +74,12 @@ class DefaultExternalConstants : public ExternalConstants {
   }
 
   crx_file::VerifierFormat CrxVerifierFormat() const override {
+#if UPDATER_IS_XENON_BRANDED
+    // Xenon pins its own CRX signing key, not Google's publisher proof.
+    return crx_file::VerifierFormat::CRX3;
+#else
     return crx_file::VerifierFormat::CRX3_WITH_PUBLISHER_PROOF;
+#endif
   }
 
   std::optional<std::vector<uint8_t>> CrxPublicKeyHash() const override {

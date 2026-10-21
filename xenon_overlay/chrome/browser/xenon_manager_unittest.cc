@@ -14,6 +14,8 @@
 #include "base/test/task_environment.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/buildflag.h"
+#include "chrome/test/base/testing_profile.h"
+#include "content/public/test/browser_task_environment.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -24,6 +26,49 @@
 #include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
 
 namespace xenon {
+
+TEST(XenonManagerTest, ClearsContextBeforeProfileDestruction) {
+  content::BrowserTaskEnvironment task_environment;
+  XenonManager manager;
+  auto profile = std::make_unique<TestingProfile>();
+  manager.SetBrowserContext(profile.get());
+  EXPECT_EQ(manager.last_browser_context_, profile.get());
+  EXPECT_TRUE(manager.profile_observation_.IsObservingSource(profile.get()));
+
+  profile.reset();
+
+  EXPECT_EQ(manager.last_browser_context_, nullptr);
+  EXPECT_FALSE(manager.profile_observation_.IsObserving());
+}
+
+TEST(XenonManagerTest, SwitchingContextObservesOnlyCurrentProfile) {
+  content::BrowserTaskEnvironment task_environment;
+  XenonManager manager;
+  auto first = std::make_unique<TestingProfile>();
+  auto second = std::make_unique<TestingProfile>();
+  manager.SetBrowserContext(first.get());
+  manager.SetBrowserContext(second.get());
+  manager.SetBrowserContext(second.get());
+
+  first.reset();
+  EXPECT_EQ(manager.last_browser_context_, second.get());
+  EXPECT_TRUE(manager.profile_observation_.IsObservingSource(second.get()));
+
+  second.reset();
+  EXPECT_EQ(manager.last_browser_context_, nullptr);
+  EXPECT_FALSE(manager.profile_observation_.IsObserving());
+}
+
+TEST(XenonManagerTest, DestructionUnregistersProfileObserver) {
+  content::BrowserTaskEnvironment task_environment;
+  auto profile = std::make_unique<TestingProfile>();
+  {
+    XenonManager manager;
+    manager.SetBrowserContext(profile.get());
+  }
+  // No CheckedObserver violation or callback to a freed manager.
+  profile.reset();
+}
 
 TEST(XenonManagerTest, RegisterElectronIpcDoesNotStartService) {
   base::test::TaskEnvironment task_environment;

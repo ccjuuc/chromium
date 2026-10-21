@@ -4,7 +4,18 @@
 
 import("//build/config/chrome_build.gni")
 
-if (is_chrome_branded) {
+import("//chrome/updater/xenon_updater.gni")
+
+if (enable_xenon_updater) {
+  assert(is_mac, "enable_xenon_updater is supported only on macOS.")
+  assert(!is_chrome_branded,
+         "Xenon Updater must not override Google Chrome branding.")
+  assert(xenon_updater_update_url != "",
+         "Xenon Updater requires an explicit xenon_updater_update_url.")
+  assert(xenon_updater_crx_public_key_hash != "",
+         "Xenon Updater requires xenon_updater_crx_public_key_hash.")
+  import("//chrome/updater/branding_xenon.gni")
+} else if (is_chrome_branded) {
   import("//chrome/updater/internal/branding_google.gni")
 } else {
   browser_name = "Chromium"
@@ -107,4 +118,14 @@ if (is_chrome_branded) {
   } else {
     legacy_google_update_appid = "{8B2B92A3-1BA2-4154-A89C-DA74C9C505E4}"
   }
+}
+
+updater_is_xenon_branded = 0
+if (enable_xenon_updater) {
+  updater_is_xenon_branded = 1
+}
+
+updater_xenon_allow_insecure_localhost = 0
+if (enable_xenon_updater && xenon_updater_allow_insecure_localhost) {
+  updater_xenon_allow_insecure_localhost = 1
 }

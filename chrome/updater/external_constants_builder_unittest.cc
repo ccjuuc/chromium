@@ -50,7 +50,7 @@ TEST_F(ExternalConstantsBuilderTests, TestOverridingNothing) {
       ExternalConstantsOverrider::FromDefaultJSONFile(
           CreateDefaultExternalConstants());
 
-  EXPECT_TRUE(verifier->UseCUP());
+  EXPECT_EQ(verifier->UseCUP(), !UPDATER_IS_XENON_BRANDED);
 
   std::vector<GURL> urls = verifier->UpdateURL();
   ASSERT_EQ(urls.size(), 1ul);
@@ -113,7 +113,7 @@ TEST_F(ExternalConstantsBuilderTests, TestPartialOverrideWithMultipleURLs) {
       ExternalConstantsOverrider::FromDefaultJSONFile(
           CreateDefaultExternalConstants());
 
-  EXPECT_TRUE(verifier->UseCUP());
+  EXPECT_EQ(verifier->UseCUP(), !UPDATER_IS_XENON_BRANDED);
 
   std::vector<GURL> urls = verifier->UpdateURL();
   ASSERT_EQ(urls.size(), 2ul);
@@ -152,7 +152,7 @@ TEST_F(ExternalConstantsBuilderTests, TestClearedEverything) {
   scoped_refptr<ExternalConstantsOverrider> verifier =
       ExternalConstantsOverrider::FromDefaultJSONFile(
           CreateDefaultExternalConstants());
-  EXPECT_TRUE(verifier->UseCUP());
+  EXPECT_EQ(verifier->UseCUP(), !UPDATER_IS_XENON_BRANDED);
 
   std::vector<GURL> urls = verifier->UpdateURL();
   ASSERT_EQ(urls.size(), 1ul);

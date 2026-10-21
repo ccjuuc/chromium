@@ -24,6 +24,7 @@ import("//build/toolchain/rbe.gni")
 import("//build/util/generate_wrapper.gni")
 import("//chrome/browser/buildflags.gni")
 import("//chrome/enterprise_companion/buildflags.gni")
+import("//chrome/updater/xenon_updater.gni")
 import("//components/enterprise/buildflags/buildflags.gni")
 import("//device/vr/buildflags/buildflags.gni")
 import("//extensions/buildflags/buildflags.gni")
@@ -174,6 +175,10 @@ group("gn_all") {
 
     if (enable_updater) {
       deps += [ "//chrome/updater" ]
+    }
+
+    if (enable_xenon_updater) {
+      deps += [ "//xenon_overlay/tools/updater:release_tools" ]
     }
 
     if (enable_enterprise_companion) {

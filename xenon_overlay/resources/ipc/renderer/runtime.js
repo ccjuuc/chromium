@@ -319,8 +319,15 @@
     },
     autoUpdater: (() => {
       const updater = new EventEmitter();
-      updater.autoDownload = true;
-      updater.autoInstallOnAppQuit = true;
+      for (const property of ['autoDownload', 'autoInstallOnAppQuit']) {
+        Object.defineProperty(updater, property, {
+          enumerable: true,
+          get: () => callHostElectronApi('autoUpdater.getConfiguration')[property],
+          set: value => {
+            callHostElectronApi('autoUpdater.configure', {[property]: value});
+          },
+        });
+      }
       updater.setFeedURL = (urlOrOptions) => {
         const url = typeof urlOrOptions === 'string' ? urlOrOptions : (urlOrOptions && urlOrOptions.url ? urlOrOptions.url : '');
         return invokeHostElectronApi('autoUpdater.setFeedURL', {url});
@@ -330,7 +337,6 @@
         return (res && res.url) || '';
       };
       updater.checkForUpdates = async () => {
-        updater.emit('checking-for-update');
         return invokeHostElectronApi('autoUpdater.checkForUpdates', {});
       };
       updater.checkForUpdatesAndNotify = async () => updater.checkForUpdates();
@@ -339,6 +345,10 @@
         invokeHostElectronApi('autoUpdater.quitAndInstall', {});
       };
       ipcRenderer.on('__xenon:auto-updater-event', (_event, eventName, ...args) => {
+        if (eventName === 'error') {
+          if (updater.listenerCount('error') === 0) return;
+          args = [new Error(String(args[0]))];
+        }
         updater.emit(eventName, ...args);
       });
       return updater;

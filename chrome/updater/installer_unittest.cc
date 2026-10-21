@@ -18,7 +18,10 @@
 #include "base/version.h"
 #include "build/build_config.h"
 #include "chrome/updater/activity.h"
+#include "chrome/updater/external_constants.h"
+#include "chrome/updater/external_constants_default.h"
 #include "chrome/updater/test/test_scope.h"
+#include "chrome/updater/updater_branding.h"
 #include "components/crx_file/crx_verifier.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
@@ -61,8 +64,21 @@ TEST(InstallerTest, Simple) {
   EXPECT_EQ(crx.ap, "ap");
   EXPECT_EQ(crx.brand, "BRND");
   EXPECT_EQ(crx.lang, "foolang");
+  EXPECT_EQ(
+      crx.requires_network_encryption,
+      UPDATER_IS_XENON_BRANDED && !XENON_UPDATER_ALLOW_INSECURE_LOCALHOST);
+#if UPDATER_IS_XENON_BRANDED
+  // Even this caller's missing pin / upstream proof format cannot weaken Xenon.
+  EXPECT_EQ(crx.crx_format_requirement, crx_file::VerifierFormat::CRX3);
+  const auto expected_pin =
+      CreateDefaultExternalConstants()->CrxPublicKeyHash();
+  ASSERT_TRUE(expected_pin);
+  EXPECT_EQ(expected_pin->size(), 32u);
+  EXPECT_EQ(crx.pk_hash, *expected_pin);
+#else
   EXPECT_EQ(crx.crx_format_requirement,
             crx_file::VerifierFormat::CRX3_WITH_PUBLISHER_PROOF);
+#endif
   EXPECT_EQ(crx.target_version_prefix, "target_version_prefix");
   EXPECT_TRUE(crx.rollback_allowed);
   EXPECT_FALSE(crx.same_version_update_allowed);

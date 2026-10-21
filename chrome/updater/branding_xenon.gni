@@ -1,0 +1,73 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Imported only by branding.gni after the opt-in/platform checks. Validation of
+# endpoint and signing configuration is also a dependency of branded outputs.
+import("//build/config/chrome_build.gni")
+import("//chrome/updater/xenon_updater.gni")
+assert(enable_xenon_updater && is_mac && !is_chrome_branded)
+
+# These strings are consumed by version.py's expression substitutions. Reject
+# expression/string delimiters before generating any build actions.
+foreach(_value,
+        [
+          xenon_updater_update_url,
+          xenon_updater_mac_team_id,
+          xenon_updater_crx_public_key_hash,
+        ]) {
+  assert(
+      filter_include([ _value ],
+                     [
+                       "*\"*",
+                       "*'*",
+                       "*\\*",
+                       "*$0x0a*",
+                       "*$0x0d*",
+                     ]) == [],
+      "Xenon branding arguments must not contain quotes or control characters.")
+}
+
+browser_name = "xl153"
+browser_product_name = "xl153"
+browser_appid = "org.chromium.Chromium"
+mac_browser_bundle_identifier = "org.chromium.Chromium"
+
+updater_company_full_name = "Xenon"
+updater_company_short_name = "Xenon"
+updater_company_short_name_lowercase = "xenon"
+updater_company_short_name_uppercase = "XENON"
+updater_copyright = "Copyright 2026 Xenon. All rights reserved."
+updater_product_full_name = "XenonUpdater"
+updater_product_full_name_dashed_lowercase = "xenon-updater"
+updater_product_full_display_name = "Xenon Updater"
+updater_metainstaller_name = "Xenon Installer"
+mac_updater_bundle_identifier = "com.xenon.XenonUpdater"
+updater_appid = mac_updater_bundle_identifier
+qualification_appid = "com.xenon.XenonUpdater.qualification"
+platform_experience_helper_appid = "com.xenon.XenonUpdater.platform-experience"
+
+# This also isolates the legacy compatibility paths from Chromium/Google.
+keystone_app_name = "XenonSoftwareUpdate"
+keystone_bundle_identifier = "com.xenon.Keystone"
+legacy_google_update_appid = keystone_bundle_identifier
+privileged_helper_bundle_name = "XenonUpdaterPrivilegedHelper"
+privileged_helper_name = "com.xenon.Xenon.UpdaterPrivilegedHelper"
+legacy_service_name_prefix = "xenonupdate"
+prefs_access_mutex = "com.xenon.XenonUpdater.prefs"
+setup_mutex_prefix = "com.xenon.XenonUpdater.setup"
+
+updater_app_icon_path = "//chrome/app/theme/chromium/mac/app.icns"
+grdfile_name = "chromium_strings"
+extra_args_is_chrome_branded = "IS_CHROME_BRANDED=False"
+mac_team_identifier = xenon_updater_mac_team_id
+crx_pkhash = xenon_updater_crx_public_key_hash
+update_check_url = xenon_updater_update_url
+
+# No upstream crash, event, help, or logo service is inherited. An empty Team ID
+# is unconfigured; it does not authorize ad-hoc signed privileged IPC callers.
+crash_product_name = "XenonUpdater"
+crash_upload_url = ""
+updater_event_logging_url = ""
+help_center_url = ""
+app_logo_url = ""

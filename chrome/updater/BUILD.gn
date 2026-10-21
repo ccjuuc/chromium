@@ -465,7 +465,10 @@ if (is_win || is_mac || is_linux) {
         "mac/setup/ks_tickets.mm",
       ]
 
-      deps = [ "//base" ]
+      deps = [
+        ":branding_header",
+        "//base",
+      ]
     }
   }
 
@@ -576,6 +579,7 @@ if (is_win || is_mac || is_linux) {
       "//chrome/enterprise_companion/device_management_storage:*",
       "//chrome/test:*",
       "//chrome/test:unit_tests",
+      "//xenon_overlay/chrome/browser:*",
     ]
   }
 

@@ -5,6 +5,8 @@
 #ifndef XENON_OVERLAY_CHROME_BROWSER_IPC_XENON_ELECTRON_API_BRIDGE_H_
 #define XENON_OVERLAY_CHROME_BROWSER_IPC_XENON_ELECTRON_API_BRIDGE_H_
 
+#include <string>
+
 #include "base/functional/callback.h"
 #include "base/values.h"
 #include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
@@ -13,6 +15,12 @@ namespace xenon::ipc {
 
 using ElectronApiCallback =
     base::OnceCallback<void(xenon::ipc::mojom::IpcResultPtr)>;
+
+// Browser-owned transport for native updater notifications. The callback is
+// invoked on the UI sequence with the event name and its argument list.
+using AutoUpdaterEventCallback =
+    base::RepeatingCallback<void(const std::string&, base::ListValue)>;
+void SetAutoUpdaterEventCallback(AutoUpdaterEventCallback callback);
 
 // Calls clipboard/shell APIs for an already-authorized Electron endpoint.
 // Accepts a direct main-process request or the renderer's one-argument list.

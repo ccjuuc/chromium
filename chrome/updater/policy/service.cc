@@ -43,6 +43,7 @@
 #include "chrome/updater/policy/policy_manager.h"
 #include "chrome/updater/prefs.h"
 #include "chrome/updater/update_service.h"
+#include "chrome/updater/updater_branding.h"
 #include "chrome/updater/updater_scope.h"
 #include "components/crash/core/common/crash_key.h"
 #include "components/policy/core/common/policy_types.h"
@@ -65,8 +66,10 @@ void PolicyService::PolicyManagers::CreateManagers(
   if (!external_constants) {
     return;
   }
+#if !UPDATER_IS_XENON_BRANDED
   dm_policy_manager_ =
       CreateDMPolicyManager(external_constants->IsMachineManaged());
+#endif
   external_constants_policy_manager_ =
       CreateDictPolicyManager(external_constants->DictPolicies());
   platform_policy_manager_ =
@@ -157,11 +160,17 @@ PolicyService::~PolicyService() = default;
 void PolicyService::FetchPolicies(policy::PolicyFetchReason reason,
                                   base::OnceCallback<void(int)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+#if UPDATER_IS_XENON_BRANDED
+  // This product has no Enterprise Companion or Google cloud policy service.
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(std::move(callback), kErrorOk));
+#else
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::WithBaseSyncPrimitives()},
       base::BindOnce(&IsCloudManaged),
       base::BindOnce(&PolicyService::DoFetchPolicies,
                      base::WrapRefCounted(this), reason, std::move(callback)));
+#endif
 }
 
 void PolicyService::DoFetchPolicies(policy::PolicyFetchReason reason,

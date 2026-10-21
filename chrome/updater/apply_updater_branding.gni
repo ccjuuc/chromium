@@ -11,11 +11,38 @@ import("//chrome/updater/branding.gni")
 # to the underlying `process_version` call; typically, an invocation of this
 # template will specify `output` and `template_file`.
 template("apply_updater_branding") {
+  _branding_deps = []
+  if (defined(invoker.deps)) {
+    _branding_deps += invoker.deps
+  }
+  if (enable_xenon_updater) {
+    _validation_target = "${target_name}_xenon_branding_validation"
+    _validation_stamp =
+        "$target_gen_dir/${target_name}.xenon-branding-validated"
+    action(_validation_target) {
+      script = "//chrome/updater/validate_xenon_branding.py"
+      outputs = [ _validation_stamp ]
+      args = [
+        "--update-url=$xenon_updater_update_url",
+        "--team-id=$xenon_updater_mac_team_id",
+        "--crx-public-key-hash=$xenon_updater_crx_public_key_hash",
+        "--stamp=" + rebase_path(_validation_stamp, root_build_dir),
+      ]
+      if (xenon_updater_allow_insecure_localhost) {
+        args += [ "--allow-insecure-localhost" ]
+      }
+    }
+    _branding_deps += [ ":$_validation_target" ]
+  }
   _sources = [ "//chrome/VERSION" ]
   if (defined(invoker.sources)) {
     _sources += invoker.sources
   }
   _extra_args = [
+    "-e",
+    "UPDATER_IS_XENON_BRANDED=$updater_is_xenon_branded",
+    "-e",
+    "XENON_UPDATER_ALLOW_INSECURE_LOCALHOST=$updater_xenon_allow_insecure_localhost",
     "-e",
     "BROWSER_NAME=\"$browser_name\"",
     "-e",
@@ -85,8 +112,10 @@ template("apply_updater_branding") {
                            [
                              "sources",
                              "extra_args",
+                             "deps",
                            ])
     sources = _sources
     extra_args = _extra_args
+    deps = _branding_deps
   }
 }

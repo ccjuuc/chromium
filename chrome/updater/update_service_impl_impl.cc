@@ -63,6 +63,7 @@
 #include "chrome/updater/remove_uninstalled_apps_task.h"
 #include "chrome/updater/update_block_check.h"
 #include "chrome/updater/update_service.h"
+#include "chrome/updater/updater_branding.h"
 #include "chrome/updater/updater_version.h"
 #include "chrome/updater/usage_stats_permissions.h"
 #include "chrome/updater/util/util.h"
@@ -731,6 +732,12 @@ void UpdateServiceImplImpl::FetchPolicies(
   VLOG(1) << __func__;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+#if UPDATER_IS_XENON_BRANDED
+  // Do not install/contact the upstream Enterprise Companion on this machine.
+  main_task_runner_->PostTask(FROM_HERE,
+                              base::BindOnce(std::move(callback), kErrorOk));
+#else
+
   if (GetUpdaterScope() == UpdaterScope::kUser) {
     VLOG(2) << "Policy fetch skipped for user updater.";
     std::move(callback).Run(0);
@@ -752,6 +759,7 @@ void UpdateServiceImplImpl::FetchPolicies(
   } else {
     config_->GetPolicyService()->FetchPolicies(reason, std::move(callback));
   }
+#endif
 }
 
 void UpdateServiceImplImpl::RegisterApp(
@@ -794,7 +802,8 @@ void UpdateServiceImplImpl::RegisterApp(
     install_data.app_id = request.app_id;
     install_data.brand = request.brand_code;
     install_data.lang = request.lang.value_or("");
-    install_data.requires_network_encryption = false;
+    install_data.requires_network_encryption =
+        UPDATER_IS_XENON_BRANDED && !XENON_UPDATER_ALLOW_INSECURE_LOCALHOST;
     install_data.version = base::Version(request.version);
     update_client_->SendPing(
         install_data,
@@ -1581,7 +1590,9 @@ void UpdateServiceImplImpl::RunInstallerImpl(
               install_data.app_id = app_id;
               install_data.lang = language;
               install_data.brand = brand;
-              install_data.requires_network_encryption = false;
+              install_data.requires_network_encryption =
+                  UPDATER_IS_XENON_BRANDED &&
+                  !XENON_UPDATER_ALLOW_INSECURE_LOCALHOST;
               install_data.install_source = install_source.empty()
                                                 ? kInstallSourceOffline
                                                 : install_source;
