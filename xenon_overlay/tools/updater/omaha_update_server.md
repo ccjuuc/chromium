@@ -1,13 +1,16 @@
-# Xenon Omaha development endpoint
+# Xenon Omaha update endpoint
 
-`omaha_update_server.js` is a dependency-free Node server for the Chromium
-Updater in this checkout. It serves **Omaha 4.0**, not the legacy Xenon manifest
-API and not Omaha 3.1. It does not create archives, execute installers, install
-services, or change a running server. The existing mock server is separate.
+`omaha_update_server.js` is a dependency-free Node server for the Xenon
+**Omaha 4.0** macOS clients in this checkout. One catalog can publish browser
+and Updater releases for multiple macOS architectures. macOS uses the system
+Chromium Updater. Windows clients retain the separate JSON + ZIP update flow
+and do not use this Omaha endpoint. The server does not create archives, execute
+installers, install services, or change a running server. The legacy JSON
+`mock_update_server.js` remains a separate compatibility/testing endpoint.
 
 ## Trust contract
 
-The Xenon system Updater integration uses **HTTPS plus a mandatory 32-byte
+The Xenon Omaha clients use **HTTPS plus a mandatory 32-byte
 SHA-256 pin of the release key's DER SubjectPublicKeyInfo, with standard CRX3
 signature verification**. Xenon does not use Google's CUP keys. Both the
 browser payload and Updater self-update payload must satisfy the configured
@@ -67,8 +70,8 @@ The single-app format is:
 
 The sizes and hashes above are placeholders, not runnable artifacts. Omit
 `differential` for a full-only release. `minimum_version` may optionally limit
-eligible installed versions; it defaults to `0`. This Mac installer contract
-accepts `arm64` or `x86_64` (`x64` requests normalize to `x86_64`). Versions use
+eligible installed versions; it defaults to `0`. `platform` must be `mac`;
+`arch` accepts `arm64` or `x86_64` (`x64` requests normalize to `x86_64`). Versions use
 one to four unsigned 32-bit decimal components; omitted trailing zeroes compare
 equally. Unknown manifest fields are errors.
 
@@ -76,23 +79,38 @@ A differential is offered only when its size is strictly smaller than the full
 CRX. Equal or larger patches may remain in the catalog, but are omitted from
 responses even when the client has the matching cached baseline and patch format.
 
-To serve browser and Updater self-update checks from one endpoint, put both
-release objects (without their individual `schema_version`) in:
+To serve several macOS architecture variants and optional Updater
+self-update checks from one endpoint, put the release objects (without their
+individual `schema_version`) in `apps`. This example shows the routing fields;
+each object must also contain the required `version` and `full` fields shown
+above:
 
 ```json
 {
   "schema_version": 1,
   "apps": [
-    { "appid": "org.chromium.Chromium", "...": "browser release fields above" },
-    { "appid": "com.xenon.XenonUpdater", "...": "Updater release fields above" }
+    { "appid": "org.chromium.Chromium", "platform": "mac", "arch": "arm64" },
+    { "appid": "org.chromium.Chromium", "platform": "mac", "arch": "x86_64" },
+    { "appid": "com.xenon.XenonUpdater", "platform": "mac", "arch": "arm64" }
   ]
 }
 ```
 
-App IDs compare case-insensitively and must be unique. Each release has its own
-fixed version, platform, architecture, full CRX and optional patches. Request
-fields cannot override these values. An unlisted app receives
-`error-unknownApplication`, never another app's artifact.
+The tuple `(appid, platform, arch)` must be unique; app IDs compare
+case-insensitively. Each tuple has one target version, full CRX and optional
+patches. Artifact basenames must remain unique across the entire catalog, so
+include platform and architecture in filenames when combining release outputs.
+The server matches app ID, OS, then client binary architecture; it never falls
+back to another platform or architecture. An unlisted app receives
+`error-unknownApplication`; a missing platform or architecture variant receives
+`error-osnotsupported` or `error-hwnotsupported`.
+
+Request `arch` identifies the running client binary and takes precedence over
+`os.arch`, which can describe different hardware under emulation. For example,
+an `arch: "x64"` macOS client on an `os.arch: "arm64"` host receives the
+`mac/x86_64` release. When both `@os` and `os.platform` are present, they must
+identify macOS. Recognized platform aliases are `mac` and `Mac OS X`; the
+manifest platform name is always `mac`. Windows manifests are rejected.
 
 The importable `loadCatalog(absoluteManifestPath)` validates a prepared manifest
 without starting a listener; close the returned catalog after validation:
@@ -100,7 +118,8 @@ without starting a listener; close the returned catalog after validation:
 ```js
 import { loadCatalog } from './omaha_update_server.js';
 const catalog = await loadCatalog('/absolute/release/release.json');
-console.log(catalog.releases.map(({ appid, version }) => ({ appid, version })));
+console.log(catalog.releases.map(({ appid, version, platform, arch }) =>
+  ({ appid, version, platform, arch })));
 await catalog.close();
 ```
 
@@ -142,11 +161,12 @@ An eligible full update supplies `status: "ok"`, `nextversion`, and one
 pipeline:
 
 1. `download`: exact `size`, `out: {sha256}`, `urls: [{url}]`.
-2. `crx3`: `in: {sha256}`, exact full-CRX `size`, `path: "."`, `arguments: ""`.
+2. `crx3`: `in: {sha256}` and exact full-CRX `size`.
 
-For Mac, the CRX must contain the Updater installer executables (`.install` and
-optionally the pre/post-install equivalents) at its root. The server cannot
-select a different script, inject `run` operations, or add arguments.
+The macOS CRX must contain the Updater installer executables (`.install` and
+optionally the pre/post-install equivalents) at its root. Its `crx3` operation
+also contains the fixed `path: "."` and `arguments: ""` fields.
+The server cannot select a different script, inject `run` operations, or add arguments.
 
 A differential is offered only when `from_version` equals the installed
 version, `cached_items` includes `previous_sha256`, and the client advertises
@@ -157,7 +177,7 @@ operation error; the server does not fake a successful patch or require a
 second update check. When no eligible cached base exists, only the full
 pipeline is returned.
 
-`previous_sha256` identifies an old **complete CRX in the Updater cache**, not
+`previous_sha256` identifies an old **complete CRX in the client's update cache**, not
 an installed app tree or an executable. Legacy `fp`/`fingerprint` values may
 appear as ignored extra request fields; they do not establish the presence of
 cached bytes. The current 4.0 serializer sends `cached_items`, not `fp`.

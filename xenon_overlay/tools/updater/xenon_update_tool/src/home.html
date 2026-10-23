@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="xenon-admin-token" content="{{ADMIN_TOKEN}}">
+  <title>Xenon 更新服务</title>
+  <script src="/assets/home.js" defer></script>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; color: #17242a; background: #f5f7f8; font-synthesis: none; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    a { color: #176a54; text-underline-offset: 3px; }
+    a:hover { color: #104b3c; }
+    a:focus-visible, summary:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #69bca5; outline-offset: 3px; }
+    [hidden] { display: none !important; }
+    .shell { max-width: 1240px; margin: 0 auto; padding: 0 36px; }
+    .topbar { background: #fff; border-bottom: 1px solid #e1e7e9; }
+    .topbar .shell { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+    .brand { display: flex; align-items: center; gap: 12px; font-size: 17px; font-weight: 650; letter-spacing: .1px; }
+    .brand-mark { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: #173d33; color: #fff; font-size: 19px; font-weight: 600; }
+    .status { display: inline-flex; align-items: center; gap: 8px; background: #edf7f1; color: #246b46; border: 1px solid #d9eddf; border-radius: 100px; padding: 6px 12px; font-size: 12px; white-space: nowrap; }
+    .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #3a9460; }
+    main { padding-top: 38px !important; padding-bottom: 44px !important; }
+    .heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 26px; }
+    h1 { margin: 0 0 10px; font-size: 28px; letter-spacing: -.6px; line-height: 1.3; font-weight: 650; }
+    p { margin: 0; line-height: 1.7; }
+    .muted { color: #66757c; font-size: 14px; }
+    .refresh { flex-shrink: 0; border: 1px solid #ccd7d4; border-radius: 7px; background: #fff; padding: 9px 15px; font-size: 13px; font-weight: 550; text-decoration: none; }
+    .refresh:hover { background: #f0f6f3; }
+    .platform-tabs { display: flex; gap: 8px; padding: 5px; background: #e9eeec; border-radius: 9px; margin-bottom: 24px; width: fit-content; }
+    .platform-tab { border: 1px solid transparent; border-radius: 6px; padding: 11px 22px; background: transparent; color: #60736a; font-size: 14px; font-weight: 600; }
+    .platform-tab[aria-selected="true"] { background: #fff; border-color: #dce4df; color: #215c47; box-shadow: 0 1px 3px #19392b0c; }
+    .platform-intro { margin-bottom: 20px; }
+    .global-notice { margin: 0 0 20px !important; }
+    .stats { display: grid; grid-template-columns: minmax(0, 2.3fr) repeat(2, minmax(120px, 1fr)); gap: 16px; margin-bottom: 26px; }
+    .stat { background: #fff; border: 1px solid #e0e6e8; border-radius: 10px; padding: 21px 22px; min-width: 0; }
+    .label { color: #617179; font-size: 12px; font-weight: 550; margin-bottom: 12px; }
+    .number { font-size: 30px; line-height: 1.1; font-weight: 650; font-variant-numeric: tabular-nums; }
+    .hint { margin-top: 9px; color: #7a878e; font-size: 12px; }
+    code, pre { font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace; }
+    .endpoint { display: block; color: #1e5142; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+    .method { display: inline-block; margin-right: 7px; padding: 1px 5px; background: #ecf4ef; border-radius: 3px; color: #3b6956; font: 600 10px/1.5 "Segoe UI", sans-serif; vertical-align: 1px; }
+    .panel { border: 1px solid #e0e6e8; border-radius: 10px; background: #fff; overflow: hidden; }
+    .panel-head { padding: 22px 24px 19px; border-bottom: 1px solid #e7ecee; }
+    h2 { margin: 0 0 7px; font-size: 17px; font-weight: 650; }
+    .table-scroll { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; font-size: 13px; text-align: left; }
+    th { padding: 13px 20px; background: #fafbfc; color: #738088; font-size: 12px; font-weight: 550; white-space: nowrap; border-bottom: 1px solid #e7ecee; }
+    td { padding: 19px 20px; border-bottom: 1px solid #edf0f2; vertical-align: middle; line-height: 1.6; }
+    tbody tr:last-child td { border-bottom: 0; }
+    td:first-child { max-width: 280px; overflow-wrap: anywhere; }
+    td:not(:first-child) { white-space: nowrap; }
+    td code { font-size: 12px; }
+    td[colspan] { padding: 45px 24px; text-align: center; color: #748188; white-space: normal; }
+    td a { font-weight: 550; }
+    .workflow { margin-top: 26px; padding: 24px; }
+    .section-gap { margin-top: 26px; }
+    .admin-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(260px, 1fr); gap: 24px; margin-top: 22px; }
+    fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+    legend { padding: 0; margin-bottom: 10px; font-size: 12px; color: #617179; font-weight: 550; }
+    .source-options { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+    .source-options label { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border: 1px solid #dfe6e3; border-radius: 6px; font-size: 13px; cursor: pointer; background: #fafcfb; }
+    .source-options label:has(input:checked) { background: #eaf4ef; border-color: #9ebfb1; color: #215c47; }
+    input[type="radio"], input[type="checkbox"] { accent-color: #286b54; margin: 0; }
+    .field { display: flex; flex-direction: column; gap: 7px; margin-bottom: 17px; min-width: 0; }
+    .field > label { font-size: 12px; font-weight: 550; color: #53656c; }
+    .field input:not([type="checkbox"]), .field select, .field textarea { width: 100%; min-width: 0; background: #fff; color: #263d45; border: 1px solid #ccd7db; border-radius: 6px; padding: 10px 11px; font: inherit; font-size: 13px; }
+    .field textarea { resize: vertical; min-height: 90px; line-height: 1.6; }
+    .field input::placeholder { color: #99a4a8; }
+    .field input[type="file"] { padding: 14px; border-style: dashed; background: #f8faf9; }
+    .field input[type="file"]::file-selector-button { font: inherit; background: #fff; color: #34614f; border: 1px solid #d2ded7; border-radius: 4px; padding: 7px 10px; margin-right: 12px; cursor: pointer; }
+    .field small { color: #7c898e; font-size: 11px; line-height: 1.6; }
+    .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+    button { font: inherit; cursor: pointer; }
+    .button { border: 1px solid #27664f; border-radius: 6px; padding: 10px 16px; background: #27664f; color: white; font-size: 13px; font-weight: 550; }
+    .button:hover:not(:disabled) { background: #1c533f; }
+    .button.secondary { background: #fff; color: #32624e; border-color: #c5d5cb; }
+    .button:disabled { opacity: .55; cursor: wait; }
+    input:disabled, select:disabled, textarea:disabled { opacity: .65; }
+    .action-row { display: flex; align-items: center; gap: 13px; flex-wrap: wrap; }
+    .action-row small { color: #7c898e; font-size: 11px; }
+    .job { border: 1px solid #e1e8e5; background: #f8faf9; border-radius: 8px; padding: 18px; align-self: start; }
+    .job h3 { font-size: 13px; margin: 0 0 14px; }
+    .job-state { display: inline-block; border-radius: 5px; background: #e8efec; color: #527163; padding: 4px 8px; margin-bottom: 11px; font-size: 11px; }
+    .job-state[data-status="succeeded"] { background: #deefe4; color: #2b714a; }
+    .job-state[data-status="failed"] { background: #f8e7e3; color: #a05243; }
+    .job-state[data-status="running"], .job-state[data-status="queued"] { background: #e6edf8; color: #49658d; }
+    .job p { font-size: 12px; color: #6e7e76; overflow-wrap: anywhere; }
+    .job ul { margin: 12px 0; padding-left: 18px; color: #8c6741; font-size: 12px; line-height: 1.7; }
+    .job-error { color: #a64d3f !important; margin-top: 11px; white-space: pre-wrap; }
+    .job details { margin-top: 14px; padding-top: 12px; }
+    .job details pre { max-height: 280px; overflow: auto; }
+    .job-link { display: inline-block; margin-top: 14px; font-size: 12px; }
+    .notice { margin: 18px 0 0; padding: 12px 14px; border: 1px solid #e2e8e4; border-radius: 6px; background: #f3f7f4; color: #526d5e; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+    .notice[data-kind="error"] { background: #fff5f1; border-color: #efd7cd; color: #9b5540; }
+    .notice[data-kind="success"] { background: #eff7f1; border-color: #d6e8da; color: #3b6e4c; }
+    .settings { margin: 24px 0 0; padding: 20px 24px; border: 1px solid #e0e6e8; border-radius: 10px; background: #fff; }
+    .settings > summary { color: #243d32; font-size: 15px; font-weight: 600; }
+    .settings form { margin-top: 20px; }
+    .settings .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
+    .check-field { display: flex; align-items: flex-start; gap: 9px; font-size: 12px; line-height: 1.6; color: #65776d; margin: 3px 0 19px; }
+    .check-field input { margin-top: 3px; }
+    .history-head { display: flex; justify-content: space-between; gap: 15px; align-items: start; }
+    .history-count { font-size: 12px; color: #78877e; white-space: nowrap; }
+    pre { margin: 12px 0 0; padding: 14px 16px; border: 1px solid #e4e9ec; border-radius: 6px; background: #f7f9fa; font-size: 12px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; color: #31474f; }
+    details { margin-top: 21px; padding-top: 18px; border-top: 1px solid #e9edef; }
+    summary { color: #47635a; font-size: 13px; cursor: pointer; width: fit-content; }
+    details p { margin-top: 12px; }
+    footer { padding-top: 24px; color: #8a969c; font-size: 12px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    footer code { overflow-wrap: anywhere; }
+    @media (max-width: 760px) {
+      .shell { padding: 0 20px; }
+      .topbar .shell { min-height: 65px; }
+      main { padding-top: 27px !important; }
+      h1 { font-size: 24px; }
+      .heading { gap: 14px; }
+      .heading p { max-width: 35em; }
+      .stats { grid-template-columns: 1fr 1fr; gap: 12px; }
+      .stat:first-child { grid-column: 1 / -1; }
+      .stat { padding: 18px; }
+      .admin-grid { grid-template-columns: 1fr; gap: 22px; }
+      .settings .field-grid { grid-template-columns: 1fr; }
+      .panel-head, .workflow { padding: 20px; }
+      .refresh { padding: 8px 12px; }
+      th, td { padding-left: 16px; padding-right: 16px; }
+    }
+  </style>
+</head>
+<body data-admin-enabled="{{ADMIN_ENABLED}}">
+  <header class="topbar">
+    <div class="shell">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">X</span>Xenon 更新服务</div>
+      <span class="status">服务运行中</span>
+    </div>
+  </header>
+  <main class="shell">
+    <div class="heading">
+      <div>
+        <h1>更新发布管理</h1>
+        <p class="muted">按平台配置发布工具，导入安装包并生成历史版本差分。</p>
+      </div>
+      <a class="refresh" id="page-refresh" href="/#mac">刷新状态</a>
+    </div>
+    <div class="platform-tabs" role="tablist" aria-label="更新平台">
+      <button type="button" class="platform-tab" role="tab" id="mac-tab" aria-selected="true" aria-controls="mac-panel" tabindex="0">macOS</button>
+      <button type="button" class="platform-tab" role="tab" id="windows-tab" aria-selected="false" aria-controls="windows-panel" tabindex="-1">Windows</button>
+    </div>
+    <p class="notice global-notice" id="read-only-message" hidden>当前页面用于查看发布状态。上传安装包和发布配置仅在服务所在电脑的本机管理页面开放。</p>
+    <p class="notice global-notice" id="service-notice" role="status" aria-live="polite" hidden></p>
+    <noscript><p class="notice global-notice">浏览器需要启用 JavaScript，才能切换平台、上传安装包和管理发布配置。</p></noscript>
+    <section id="mac-panel" role="tabpanel" aria-labelledby="mac-tab" tabindex="0">
+    <div class="platform-intro"><h2>macOS 发布</h2><p class="muted">应用 PKG · Omaha 4.0 · CRX3 / Puffin</p></div>
+    <section class="stats" aria-label="服务状态">
+      <div class="stat">
+        <div class="label">更新检查地址</div>
+        <code class="endpoint"><span class="method">POST</span>{{ENDPOINT}}</code>
+        <p class="hint">由浏览器客户端调用，打开网页查看状态即可。</p>
+      </div>
+      <div class="stat">
+        <div class="label">当前发行项</div>
+        <div class="number">{{RELEASE_COUNT}}</div>
+        <p class="hint">按应用、平台与架构区分</p>
+      </div>
+      <div class="stat">
+        <div class="label">已发布差分包</div>
+        <div class="number">{{DIFF_COUNT}}</div>
+        <p class="hint">完整更新包始终保留</p>
+      </div>
+    </section>
+    <section class="panel" aria-labelledby="releases-title">
+      <div class="panel-head">
+        <h2 id="releases-title">当前版本</h2>
+        <p class="muted">发布清单验证通过后，服务会自动加载。点击刷新可查看最新结果。</p>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">应用</th><th scope="col">平台</th><th scope="col">架构</th><th scope="col">版本</th><th scope="col">全量包</th><th scope="col">差分</th><th scope="col">下载</th></tr></thead>
+          <tbody>{{RELEASE_ROWS}}</tbody>
+        </table>
+      </div>
+    </section>
+    <div id="admin-workspace" hidden>
+      <section class="panel workflow" aria-labelledby="publish-title">
+        <h2 id="publish-title">发布安装包</h2>
+        <p class="muted">导入本项目的 macOS 应用 PKG，自动制包并生成适用于历史低版本的差分。</p>
+        <p class="hint">此面板只接受 macOS 应用 PKG，不接受浏览器与 Updater 组合安装包。</p>
+        <p class="hint">macOS PKG 原始内容和安装权限会保留；Apple 签名及公证须在制包阶段完成。</p>
+        <div class="admin-grid">
+          <form id="import-form" novalidate>
+            <fieldset id="import-fields">
+              <legend>安装包来源</legend>
+              <div class="source-options">
+                <label><input type="radio" name="source-type" value="upload" checked>上传文件</label>
+                <label><input type="radio" name="source-type" value="url">下载链接</label>
+                <label><input type="radio" name="source-type" value="path">服务器本地路径</label>
+              </div>
+              <div class="field" id="upload-field">
+                <label for="package-file">选择安装包</label>
+                <input id="package-file" type="file" accept=".pkg">
+                <small id="upload-hint">支持 macOS .pkg，安装包会上传到服务所在电脑。</small>
+              </div>
+              <div class="field" id="url-field" hidden>
+                <label for="package-url">安装包下载地址</label>
+                <input id="package-url" type="url" placeholder="https://example.com/releases/browser.pkg" autocomplete="off">
+                <small>由服务器下载安装包。使用 HTTPS 地址；仅本机回环地址允许 HTTP。</small>
+              </div>
+              <div class="field" id="path-field" hidden>
+                <label for="package-path">服务器上的安装包完整路径</label>
+                <input id="package-path" type="text" placeholder="H:\releases\browser.pkg 或 /srv/releases/browser.pkg" autocomplete="off">
+                <small>读取服务所在电脑的文件，不是浏览器所在电脑的路径。</small>
+              </div>
+              <div class="field-row">
+                <div class="field">
+                  <label for="package-version">版本号（可选）</label>
+                  <input id="package-version" type="text" placeholder="自动识别，例如 1.0.0.2" autocomplete="off">
+                </div>
+                <div class="field">
+                  <label for="package-arch">架构（可选）</label>
+                  <select id="package-arch"><option value="">自动识别</option><option value="x86_64">x86_64</option><option value="arm64">arm64</option></select>
+                  <small>通用应用或元数据无法识别时，请指定目标架构。</small>
+                </div>
+              </div>
+            </fieldset>
+            <div class="action-row"><button class="button" id="publish-button" type="submit" disabled>正在读取配置…</button><small id="host-hint">正在连接本机管理服务</small></div>
+            <p class="notice" id="import-notice" role="status" aria-live="polite" hidden></p>
+          </form>
+          <aside class="job" aria-labelledby="job-title" aria-live="polite">
+            <h3 id="job-title">发布任务</h3>
+            <span class="job-state" id="job-status">暂无任务</span>
+            <p id="job-stage">选择安装包后开始发布。处理期间可在这里查看进度。</p>
+            <p class="job-error" id="job-error" hidden></p>
+            <ul id="job-warnings" hidden></ul>
+            <details id="job-result" hidden><summary>查看任务结果</summary><pre id="job-result-text"></pre></details>
+            <a class="job-link" id="job-refresh" href="/#mac" hidden>刷新当前版本</a>
+          </aside>
+        </div>
+      </section>
+      <details class="settings" id="settings-panel">
+        <summary>macOS 发布配置</summary>
+        <p class="muted">配置签名私钥和制包工具在服务器上的路径。私钥保留在服务器，本页面不上传私钥文件。</p>
+        <form id="config-form">
+          <fieldset id="config-fields">
+            <div class="field-grid">
+              <div class="field"><label for="config-key-path">发布签名私钥路径</label><input id="config-key-path" name="key_path" type="text" placeholder="服务器上的 release-key.pk8" autocomplete="off"><small>用于 CRX3 发布签名，需要与客户端信任的公钥对应。</small></div>
+              <div class="field"><label for="config-key-hash">发布公钥 SHA-256</label><input id="config-key-hash" name="key_hash" type="text" placeholder="留空从私钥自动计算，或填写 Hex / Base64" autocomplete="off"><small>必须与客户端信任的公钥摘要一致。</small></div>
+              <div class="field"><label for="config-tools-dir">原生工具目录</label><input id="config-tools-dir" name="tools_dir" type="text" placeholder="例如 H:\chromium_142\src\out\Release_64" autocomplete="off"><small>包含 Puffin、CRX 校验等原生制包工具。</small></div>
+              <div class="field"><label for="config-python">Python 可执行文件</label><input id="config-python" name="python" type="text" placeholder="留空使用自动发现的工具" autocomplete="off"></div>
+              <div class="field"><label for="config-openssl">OpenSSL 可执行文件</label><input id="config-openssl" name="openssl" type="text" placeholder="留空使用自动发现的工具" autocomplete="off"></div>
+            </div>
+          </fieldset>
+          <div class="action-row"><button class="button secondary" id="save-config-button" type="submit" disabled>保存发布配置</button><small id="config-host"></small></div>
+          <p class="notice" id="config-notice" role="status" aria-live="polite" hidden></p>
+        </form>
+      </details>
+      <section class="panel section-gap" aria-labelledby="history-title">
+        <div class="panel-head history-head"><div><h2 id="history-title">历史版本</h2><p class="muted">已导入的版本保留为差分基准，发布新版时自动匹配同平台和架构。</p></div><span class="history-count" id="history-count"></span></div>
+        <div class="table-scroll"><table><thead><tr><th scope="col">版本</th><th scope="col">平台</th><th scope="col">架构</th></tr></thead><tbody id="history-rows"><tr><td colspan="3">正在读取历史版本…</td></tr></tbody></table></div>
+      </section>
+    </div>
+    </section>
+    <section id="windows-panel" role="tabpanel" aria-labelledby="windows-tab" tabindex="0" hidden>
+      <div class="platform-intro"><h2>Windows 发布</h2><p class="muted">EXE / 安装目录 ZIP · JSON + ZIP · Zucchini</p></div>
+      <section class="stats" aria-label="Windows 服务状态">
+        <div class="stat"><div class="label">更新检查地址</div><code class="endpoint"><span class="method">GET</span><span id="windows-endpoint">{{ORIGIN}}/api/v1/update/check</span></code><p class="hint" id="windows-endpoint-hint">客户端携带 platform=win 和 version；可在更新地址添加 arch 参数指定架构。</p></div>
+        <div class="stat"><div class="label">当前发行项</div><div class="number" id="windows-release-count">—</div><p class="hint">每种架构的最高版本</p></div>
+        <div class="stat"><div class="label">已发布差分包</div><div class="number" id="windows-diff-count">—</div><p class="hint">按客户端当前版本匹配差分</p></div>
+      </section>
+      <p class="notice" id="windows-read-only-message" hidden>请打开本机管理页面，查看 Windows 已发布版本并管理 JSON + ZIP 发布。</p>
+      <div id="windows-admin-workspace" hidden>
+        <section class="panel" aria-labelledby="windows-releases-title">
+          <div class="panel-head"><h2 id="windows-releases-title">当前版本</h2><p class="muted">每种架构单独发布，始终提供全量 ZIP 作为回退。</p></div>
+          <div class="table-scroll"><table><thead><tr><th scope="col">版本</th><th scope="col">架构</th><th scope="col">全量包</th><th scope="col">差分</th><th scope="col">下载</th></tr></thead><tbody id="windows-release-rows"><tr><td colspan="5">正在读取发布版本…</td></tr></tbody></table></div>
+        </section>
+        <section class="panel workflow" aria-labelledby="windows-publish-title">
+          <h2 id="windows-publish-title">发布安装包</h2>
+          <p class="muted">导入本项目的 EXE 安装包或完整安装目录 ZIP，自动生成全量 ZIP 和历史版本差分。</p>
+          <p class="hint">自动识别产品版本和架构。ZIP 应包含浏览器程序、版本目录和 Installer/setup.exe；也支持 Chrome-bin 外层目录。</p>
+          <div class="admin-grid">
+            <form id="windows-import-form" novalidate>
+              <fieldset id="windows-import-fields">
+                <legend>安装包来源</legend>
+                <div class="source-options">
+                  <label><input type="radio" name="windows-source-type" value="upload" checked>上传文件</label>
+                  <label><input type="radio" name="windows-source-type" value="url">下载链接</label>
+                  <label><input type="radio" name="windows-source-type" value="path">服务器本地路径</label>
+                </div>
+                <div class="field" id="windows-upload-field"><label for="windows-package-file">选择安装包</label><input id="windows-package-file" type="file" accept=".exe,.zip"><small id="windows-upload-hint">支持 Windows .exe 或安装目录 .zip，文件会上传到服务所在电脑。</small></div>
+                <div class="field" id="windows-url-field" hidden><label for="windows-package-url">安装包下载地址</label><input id="windows-package-url" type="url" placeholder="https://example.com/releases/browser.exe" autocomplete="off"><small>由服务器下载文件。使用 HTTPS 地址；仅本机回环地址允许 HTTP。</small></div>
+                <div class="field" id="windows-path-field" hidden><label for="windows-package-path">服务器上的安装包完整路径</label><input id="windows-package-path" type="text" placeholder="H:\releases\browser.exe 或 /srv/releases/browser.zip" autocomplete="off"><small>读取服务所在电脑的文件，不是浏览器所在电脑的路径。</small></div>
+                <div class="field-row">
+                  <div class="field"><label for="windows-package-version">版本号（可选）</label><input id="windows-package-version" type="text" placeholder="自动识别，例如 1.0.0.2" autocomplete="off"><small>填写后必须与安装包的四段产品版本一致。</small></div>
+                  <div class="field"><label for="windows-package-arch">架构（可选）</label><select id="windows-package-arch"><option value="">自动识别</option><option value="x86_64">x86_64</option><option value="arm64">arm64</option><option value="x86">x86</option></select><small>填写后必须与安装包架构一致。</small></div>
+                </div>
+              </fieldset>
+              <div class="action-row"><button class="button" id="windows-publish-button" type="submit" disabled>正在读取配置…</button><small id="windows-host-hint">正在连接本机管理服务</small></div>
+              <p class="notice" id="windows-import-notice" role="status" aria-live="polite" hidden></p>
+            </form>
+            <aside class="job" aria-labelledby="windows-job-title" aria-live="polite">
+              <h3 id="windows-job-title">发布任务</h3><span class="job-state" id="windows-job-status">暂无任务</span><p id="windows-job-stage">选择安装包后开始发布。处理期间可在这里查看进度。</p>
+              <p class="job-error" id="windows-job-error" hidden></p><ul id="windows-job-warnings" hidden></ul>
+              <details id="windows-job-result" hidden><summary>查看任务结果</summary><pre id="windows-job-result-text"></pre></details>
+              <a class="job-link" id="windows-job-refresh" href="/#windows" hidden>刷新当前版本</a>
+            </aside>
+          </div>
+        </section>
+        <details class="settings" id="windows-settings-panel">
+          <summary>Windows 发布配置</summary>
+          <p class="muted">工具路径留空时自动查找。配置独立保存，适用于此服务后续的 Windows 发布任务。</p>
+          <form id="windows-config-form">
+            <fieldset id="windows-config-fields">
+              <div class="field-grid">
+                <div class="field"><label for="windows-config-node">Node.js 可执行文件</label><input id="windows-config-node" name="node" type="text" placeholder="留空自动查找 node" autocomplete="off"><small>用于安装包处理和目录差分。</small></div>
+                <div class="field"><label for="windows-config-seven-zip">7-Zip 可执行文件</label><input id="windows-config-seven-zip" name="seven_zip" type="text" placeholder="留空自动查找 7zz / 7z / 7za" autocomplete="off"><small>使用服务所在系统的原生工具解包及压缩。</small></div>
+                <div class="field"><label for="windows-config-zucchini">Zucchini 可执行文件</label><input id="windows-config-zucchini" name="zucchini" type="text" placeholder="留空自动查找 zucchini" autocomplete="off"><small>用于生成并回放校验文件差分；差分不可用时发布全量包。</small></div>
+                <div class="field"><label for="windows-config-default-arch">默认客户端架构</label><select id="windows-config-default-arch" name="default_arch"><option value="x86_64">x86_64</option><option value="arm64">arm64</option><option value="x86">x86</option></select><small>客户端未携带 arch 时使用。多架构部署请在各客户端更新地址中指定 ?arch=x86_64、?arch=arm64 或 ?arch=x86。</small></div>
+              </div>
+              <div class="field"><label for="windows-config-changelog">更新说明</label><textarea id="windows-config-changelog" name="changelog" rows="3" placeholder="填写本次发布的更新说明"></textarea><small>保存后用于后续发布版本的更新提示。</small></div>
+              <label class="check-field" for="windows-config-force-update"><input id="windows-config-force-update" name="force_update" type="checkbox">将后续发布标记为强制更新</label>
+            </fieldset>
+            <div class="action-row"><button class="button secondary" id="windows-save-config-button" type="submit" disabled>保存发布配置</button><small id="windows-config-host"></small></div>
+            <p class="notice" id="windows-config-notice" role="status" aria-live="polite" hidden></p>
+          </form>
+        </details>
+        <section class="panel section-gap" aria-labelledby="windows-history-title">
+          <div class="panel-head history-head"><div><h2 id="windows-history-title">历史版本</h2><p class="muted">保留安装目录作为差分基准，自动匹配同架构的低版本。</p></div><span class="history-count" id="windows-history-count"></span></div>
+          <div class="table-scroll"><table><thead><tr><th scope="col">版本</th><th scope="col">平台</th><th scope="col">架构</th></tr></thead><tbody id="windows-history-rows"><tr><td colspan="3">正在读取历史版本…</td></tr></tbody></table></div>
+        </section>
+      </div>
+    </section>
+    <footer><span>macOS：Omaha / CRX3 · Windows：JSON + ZIP</span><code>{{ORIGIN}}</code></footer>
+  </main>
+</body>
+</html>

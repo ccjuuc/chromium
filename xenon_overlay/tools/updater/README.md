@@ -1,8 +1,38 @@
-> macOS 系统级 Xenon Updater（Chromium Updater + Omaha 4.0）见
-> [SYSTEM_UPDATER.md](SYSTEM_UPDATER.md)。下面的自定义 JSON/patch.zip 工具属于原有协议。
+> Windows 使用 **JSON + ZIP + Zucchini**，macOS 使用 **Omaha 4.0 + CRX3 + Puffin** 与系统 Updater。
+> `enable_xenon_updater` 仅用于 macOS；axum 服务提供两个独立面板管理两种发布协议。
+>
+> - [axum 一体化工具](xenon_update_tool/README.md)：macOS PKG 和 Windows EXE/安装目录 ZIP 导入、独立配置、历史差分和更新服务。
+> - [升级服务启动与配置](UPDATE_SERVICE.md)：macOS Omaha、Windows JSON + ZIP、HTTPS 反代与客户端配置。
+> - [打包与差分](PACKAGING.md)：Windows JSON + ZIP 与 macOS Omaha 各自的制包入口。
+> - [macOS 系统服务](SYSTEM_UPDATER.md)：macOS 的服务安装、签名和运行语义。
+> - [Omaha 协议参考](omaha_update_server.md)：macOS 请求、响应、架构路由和验证规则。
 
-当前系统 Updater 的打包入口为 `package_macos.py`，差分入口为
-`make_updater_delta.py`。可直接使用的命令及输出说明见 [PACKAGING.md](PACKAGING.md)。
+Windows 可在 axum 的 Windows 面板导入 EXE 或完整安装目录 ZIP，自动发布全量 ZIP、Zucchini 差分和 JSON 清单。
+本文下方的 `make_directory_diff.js` 仍可单独从完整安装目录或 EXE 制差分；`mock_update_server.js` 保留用于联调。
+
+发布工具首次运行 `xenon-update init`，随后用 `xenon-update serve` 启动（不是 `--serve`）。
+默认本机管理页面为 `http://127.0.0.1:9001/`；配置 `public_origin` 后，更新仍走 9001，
+管理页面独立为 `http://127.0.0.1:9002/`，可配置 `admin_port` 并通过 SSH 隧道访问。
+
+在 macOS 面板配置服务器上的 CRX 发布私钥和原生工具目录；公钥摘要可留空从私钥自动计算，须与 macOS 客户端 pin 一致。
+导入已准备的 macOS 应用 `.pkg`，无需先安装：原始 PKG 字节和权限保留并封装为 CRX3，
+安装入口 `.install` 保持 `0755`。macOS 组合 Updater 安装包不作为更新输入。
+工具为每个应用/架构的最高版本生成最新 32 个低版本的差分，完整 CRX 始终保留；生成失败或客户端无基准时回退全量。
+macOS 客户端每个 app ID 缓存一份完整 CRX，首更通常全量；Windows JSON 差分直接使用已安装文件，不依赖旧完整 ZIP 缓存。
+
+在 Windows 面板配置 Node.js、7-Zip、Zucchini 路径（可留空自动发现），以及默认客户端架构、更新说明和强制更新选项。
+支持上传、HTTPS 链接和服务器本地路径导入，单文件最多 8 GiB；无需执行或预先安装 EXE。
+完整 ZIP 根目录包含 `xlb153.exe`、唯一的四段版本目录及 `<版本>/Installer/setup.exe`，也允许 `Chrome-bin/` 外层目录。
+服务端保存展开的历史安装树，按同架构最高版本生成最近 32 个低版本差分；补丁验证失败或不省流量时回退全量 ZIP。
+Windows 更新地址为 `/api/v1/update/check?arch=x86_64`，可改为 `arm64` 或 `x86`；
+客户端会追加平台和当前版本，但不会自动追加架构，未指定 `arch` 时使用面板中的默认值。
+Windows 配置独立存储在 `xenon-update.json` 的 `windows` 对象中；CLI `publish` 仍仅用于 macOS Omaha。
+
+发布服务可运行在 Windows/Linux。Linux 上的 macOS 网页制包需 Python 3.10+、OpenSSL、本项目 Linux 原生工具和配套 Python 脚本；
+Windows 网页制包需 Node.js、Linux 原生 7-Zip/Zucchini，以及 `prepare_windows_release.mjs`、`make_directory_diff.js`。
+所有工具必须与服务宿主系统一致，不能在 Linux 上直接使用 Windows `.exe` 工具。
+大包 Puffin 需系统分配器构建，当前自动切换只覆盖 Windows 宿主。Linux 尚未完成端到端实测，
+具体部署布局与操作见[工具文档](xenon_update_tool/README.md#linux-部署与管理端访问)。
 
 # Xenon 增量与差分更新工具链 (Xenon Updater Tools)
 
@@ -14,6 +44,8 @@
 
 ```
 xenon_overlay/tools/updater/
+├── xenon_update_tool/        # axum 服务、macOS / Windows 发布面板
+├── prepare_windows_release.mjs # EXE/安装目录 ZIP 规范化、全量及历史差分
 ├── make_directory_diff.js    # 全目录清单驱动差分生成与打包工具
 ├── make_mac_pkg.js           # 将 .app 打成安装到系统 /Applications 的 .pkg
 ├── mock_update_server.js     # 本地 Node.js 更新模拟服务器 (零依赖)
@@ -178,6 +210,12 @@ out/release_arm64/xenon_updater_unittests
 
 Windows 差分验证使用同一测试目标。真实安装包可直接传给生成器：工具先提取安装器的 CAB 资源；若浏览器载荷位于独立 7z 资源中，会继续提取 `chrome.7z`，保留 `setup.exe` 并将其收录到目标版本的 `Installer` 目录。
 
+Windows 仍使用 JSON + ZIP + Zucchini 下载协议。差分在本地重建并验证完整目标文件树，然后交给目标版本的 Chromium `setup.exe` 安装；本地准备完整文件树不代表下载全量包。完整目标目录必须位于安装目录之外；旧版留在安装目录内的准备目录不能直接重用。更新器将新版 `Installer/setup.exe` 复制到源目录之外，以 `--install-source-dir=<完整目标目录>`、`--install-directory=<现有安装目录>`、`--silent`、`--do-not-launch-chrome` 和 `--do-not-register-for-update-launch` 调用。差分的根目录删除清单也交给 setup 事务处理。
+
+安装事务、回滚、注册表登记、旧版本清理及占用中的启动器替换由 Chromium setup 负责。更新器只接受能唯一匹配现有安装路径的登记，继承用户/系统安装范围和受支持的渠道、MSI 参数；登记缺失或范围冲突会停止安装。系统安装需要管理员权限；无法交互提权的退出安装必须已经提权。**目标版本必须重新构建并携带支持 `--install-source-dir` 的新版 setup；重新发布旧 setup 无法启用此流程。**
+
+更新器等待 setup 返回，并检查目标版本、已安装的 setup 和启动器。setup 启动或安装失败会保留准备输入以便重试；若仍存在待切换的 `new_chrome.exe`，不会启动旧启动器冒充升级成功。setup 成功完成后的浏览器重启失败会单独报告，不撤销已完成的安装。
+
 ```powershell
 node xenon_overlay/tools/updater/make_directory_diff.js `
   --old /path/to/old_installer.exe --new /path/to/new_installer.exe `
@@ -186,20 +224,22 @@ third_party/ninja/ninja.exe -C out/Release_64 xenon_updater_unittests
 out/Release_64/xenon_updater_unittests.exe
 ```
 
-可选的真实包原生测试接受已解包的 `Chrome-bin` 根目录和生成的补丁。`setup.exe` 应位于各自 `Chrome-bin` 的父目录，或已在版本目录的 `Installer/setup.exe` 中。当前测试使用 `xlb153.exe` 启动器和 `xlbrowser.dll`：
+可选的真实包交接测试接受已解包的 `Chrome-bin` 根目录和生成的补丁。它使用模拟 setup 执行器，不执行真实安装。`setup.exe` 应位于各自 `Chrome-bin` 的父目录，或已在版本目录的 `Installer/setup.exe` 中。当前测试使用 `xlb153.exe` 启动器和 `xlbrowser.dll`：
 
 ```powershell
 $env:XENON_WIN_DIFF_OLD_ROOT = 'H:\validation\old\Chrome-bin'
 $env:XENON_WIN_DIFF_NEW_ROOT = 'H:\validation\new\Chrome-bin'
 $env:XENON_WIN_DIFF_PATCH = 'H:\validation\patch.zip'
 out/Release_64/xenon_updater_unittests.exe `
-  --gtest_filter=XenonUpdateManagerTest.WindowsRealPackageStagesAndInstallsExactTree `
+  --gtest_filter=XenonUpdateManagerTest.WindowsRealPackageStagesAndHandsOffExactTree `
   --single-process-tests --gtest_color=no
 ```
 
-未提供这些变量时测试明确跳过，提供部分变量或无效路径则失败。测试将旧安装和补丁复制到独立临时目录，调用生产差分准备和安装代码，校验目标文件全树 SHA-256、旧版本保留、恢复备份及输入不变。它不启动浏览器、不修改真实安装的注册表登记，也不验证真实浏览器重启；常规测试另外覆盖坏差分下载/应用后回退全量 ZIP、文件锁冲突及安装回滚。
+未提供这些变量时测试明确跳过，提供部分变量或无效路径则失败。测试将旧安装和补丁复制到独立临时目录，调用生产差分准备及 setup 交接代码，校验交给 setup 的目标文件全树 SHA-256、新版 setup 副本、调用参数和输入不变。模拟执行器在交接边界返回失败，因此不会安装或启动浏览器；HKCU/HKLM 登记只在当前测试进程内隔离。此结果不能作为原生 setup 安装成功的证明，真实安装、回滚及浏览器重启需在独立环境中另外验收。
 
-Windows 差分和完整目录安装在文件提交及可选重启进程创建成功后，同步该安装已有的注册表版本、卸载程序及降级清理路径，不依赖目标版本启动时补写。更新命令保留原有的系统安装、渠道、MSI 及日志参数。安装失败或重启创建失败时保留原登记；同名的其他安装和未登记的便携目录不会被写入。独立 EXE 安装包仅启动安装器，其登记仍由安装器负责。注册表回归测试隔离 HKCU/HKLM，覆盖成功收尾、参数保留、文件锁和启动失败回滚及安装目录归属。
+常规测试另外覆盖坏差分下载/应用后回退全量 ZIP、完整目录和差分的 setup 交接、登记范围与参数保留、setup 失败重试、安装结果不完整及重启失败后的保留行为。更新器和浏览器启动流程均不再直接改写 Windows 安装登记，也不自行删除旧版本目录。
+
+新安装流程不再创建 `.xenon-recovery-*`。启动时仍延迟约 3 秒清理旧更新器遗留的已提交恢复目录：只接受有效 `committed` 标记且目标版本不高于当前运行版本的目录，并使用旧事务锁避免与旧安装事务冲突。被旧进程占用时保留标记及剩余内容，后续启动重试。失败、回滚未完成、无标记的历史目录及包含重解析点的目录均保留；无标记目录需在确认新版已正常运行、旧进程退出且无需恢复后单独清理。
 
 ---
 

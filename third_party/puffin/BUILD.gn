@@ -79,14 +79,44 @@ static_library("libpuffdiff") {
   ]
 }
 
-executable("puffin") {
-  configs += [ ":target_defaults" ]
-  deps = [
-    ":libpuffdiff",
-    ":libpuffpatch",
-    "//base",
-  ]
-  sources = [ "src/chromium_main.cc" ]
+if (is_win && current_toolchain == default_toolchain) {
+  # Offline diff generation builds a suffix array with one uint32 per input
+  # byte. Large releases exceed PartitionAlloc's per-allocation limit. Use the
+  # same system-allocator toolchain as the zucchini CLI; client libraries keep
+  # their normal allocator and the patch format is unchanged.
+  _toolchain =
+      "//build/toolchain/win:win_clang_$target_cpu" + "_with_system_allocator"
+  _label = ":puffin($_toolchain)"
+  _out_dir = get_label_info(_label, "root_out_dir")
+
+  copy("copy_puffin_exe") {
+    sources = [ "$_out_dir/puffin.exe" ]
+    outputs = [ "$root_out_dir/puffin.exe" ]
+    deps = [ _label ]
+  }
+
+  copy("copy_puffin_root_pdb") {
+    sources = [ "$_out_dir/puffin.exe.pdb" ]
+    outputs = [ "$root_out_dir/puffin.exe.pdb" ]
+    deps = [ _label ]
+  }
+
+  group("puffin") {
+    public_deps = [
+      ":copy_puffin_exe",
+      ":copy_puffin_root_pdb",
+    ]
+  }
+} else {
+  executable("puffin") {
+    configs += [ ":target_defaults" ]
+    deps = [
+      ":libpuffdiff",
+      ":libpuffpatch",
+      "//base",
+    ]
+    sources = [ "src/chromium_main.cc" ]
+  }
 }
 
 config("test_defaults") {

@@ -42,11 +42,26 @@ function deepFreeze(value) {
   return Object.freeze(value);
 }
 
-// Files are opened once with O_NOFOLLOW and retained. Requests never resolve a
-// caller-supplied filesystem path; replacing a directory entry cannot redirect
-// a download to an unlisted file. In-place modifications fail the stat check.
+// Node does not expose O_NOFOLLOW on Windows. Check the directory entry and
+// match the opened file's identity before reading any bytes on every platform.
+async function openRegularFile(filename) {
+  const expected = await fs.lstat(filename, { bigint: true });
+  requireValue(expected.isFile() && !expected.isSymbolicLink(), 'Expected a regular file without a symlink');
+  const handle = await fs.open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    requireValue(sameFile(expected, await handle.stat({ bigint: true })), 'File changed while opening');
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
+// Files are opened once and retained. Requests never resolve a caller-supplied
+// filesystem path; replacing a directory entry cannot redirect a download to
+// an unlisted file. In-place modifications fail the stat check.
 export async function loadCatalog(manifestPath) {
-  const manifestHandle = await fs.open(path.resolve(manifestPath), constants.O_RDONLY | constants.O_NOFOLLOW);
+  const manifestHandle = await openRegularFile(path.resolve(manifestPath));
   let manifest;
   try {
     const stat = await manifestHandle.stat();
@@ -60,17 +75,18 @@ export async function loadCatalog(manifestPath) {
     requireValue(Array.isArray(manifest.apps) && manifest.apps.length > 0 && manifest.apps.length <= 32, 'Invalid manifest apps');
   }
   const releases = multiple ? manifest.apps : [manifest];
-  const ids = new Set();
+  const releaseKeys = new Set();
   for (const release of releases) {
     keys(release, [...(multiple ? [] : ['schema_version']), 'appid', 'version', 'minimum_version', 'platform', 'arch', 'full', 'differential'], 'release');
     requireValue(typeof release.appid === 'string' && /^[\x21-\x7e]{1,128}$/.test(release.appid), 'Invalid appid');
-    requireValue(!ids.has(release.appid.toLowerCase()), 'Duplicate manifest appid');
-    ids.add(release.appid.toLowerCase());
     version(release.version);
     version(release.minimum_version ?? '0');
     requireValue(compareVersions(release.minimum_version ?? '0', release.version) < 0, 'minimum_version must be below target');
-    requireValue(release.platform === 'mac', 'This installer contract currently supports mac only');
+    requireValue(release.platform === 'mac', 'Unsupported manifest platform: Omaha is macOS-only; Windows uses JSON + ZIP');
     requireValue(['arm64', 'x86_64'].includes(release.arch), 'Unsupported manifest architecture');
+    const releaseKey = JSON.stringify([release.appid.toLowerCase(), release.platform, release.arch]);
+    requireValue(!releaseKeys.has(releaseKey), 'Duplicate manifest appid/platform/arch');
+    releaseKeys.add(releaseKey);
     requireValue(release.differential === undefined || (Array.isArray(release.differential) && release.differential.length <= 32), 'Invalid differential list');
   }
   const root = await fs.realpath(path.dirname(path.resolve(manifestPath)));
@@ -97,7 +113,7 @@ export async function loadCatalog(manifestPath) {
       requireValue(!artifacts.has(entry.file), 'Duplicate artifact filename');
       requireValue(Number.isSafeInteger(entry.size) && entry.size > 0, 'Artifact size must be a positive safe integer');
       requireValue(typeof entry.sha256 === 'string' && SHA256.test(entry.sha256), 'Artifact SHA256 must be 64 lowercase hex digits');
-      const handle = await fs.open(path.join(root, entry.file), constants.O_RDONLY | constants.O_NOFOLLOW);
+      const handle = await openRegularFile(path.join(root, entry.file));
       // Track immediately so a subsequent validation failure closes this fd.
       artifacts.set(entry.file, { handle });
       const stat = await handle.stat({ bigint: true });
@@ -137,16 +153,22 @@ export function buildResponse(catalog, body, origin, now = Date.now()) {
     const id = app.appid.toLowerCase();
     requireValue(!seen.has(id), 'Duplicate request appid');
     seen.add(id);
-    const manifest = catalog.releases.find(release => release.appid.toLowerCase() === id);
-    const reply = { appid: app.appid, status: manifest ? 'ok' : 'error-unknownApplication' };
+    const candidates = catalog.releases.filter(release => release.appid.toLowerCase() === id);
+    const reply = { appid: app.appid, status: candidates.length ? 'ok' : 'error-unknownApplication' };
     if (reply.status !== 'ok' || app.updatecheck === undefined) return reply; // Ping acknowledgment.
     requireValue(plain(app.updatecheck), 'Invalid updatecheck');
     const no = (status, info) => ({ ...reply, updatecheck: { status, info } });
     const reportedPlatform = request.os?.platform ?? request['@os'];
-    if (platform(reportedPlatform) !== manifest.platform ||
-        (request['@os'] !== undefined && platform(request['@os']) !== manifest.platform))
+    const clientPlatform = platform(reportedPlatform);
+    const platformCandidates = candidates.filter(release => release.platform === clientPlatform);
+    if (!platformCandidates.length ||
+        (request['@os'] !== undefined && platform(request['@os']) !== clientPlatform))
       return no('error-osnotsupported', 'Release platform mismatch');
-    if (architecture(request.arch ?? request.os?.arch) !== manifest.arch)
+    // request.arch describes the client binary; os.arch can describe a
+    // different host architecture when running under emulation.
+    const manifest = platformCandidates.find(release =>
+      release.arch === architecture(request.arch ?? request.os?.arch));
+    if (!manifest)
       return no('error-hwnotsupported', 'Release architecture mismatch');
     const current = app.version ?? '0';
     version(current);
@@ -165,7 +187,9 @@ export function buildResponse(catalog, body, origin, now = Date.now()) {
     const cached = new Set((app.cached_items ?? []).map(item => item.sha256));
     const download = artifact => ({ type: 'download', size: artifact.size, out: { sha256: artifact.sha256 },
       urls: [{ url: `${origin}/artifacts/${artifact.file}` }] });
-    const install = () => ({ type: 'crx3', in: { sha256: manifest.full.sha256 }, size: manifest.full.size, path: '.', arguments: '' });
+    // macOS uses the system Updater's fixed .install entrypoint.
+    const install = () => ({ type: 'crx3', in: { sha256: manifest.full.sha256 }, size: manifest.full.size,
+      path: '.', arguments: '' });
     const pipelines = [];
     const diff = (manifest.differential ?? []).find(item => compareVersions(current, item.from_version) === 0 &&
       cached.has(item.previous_sha256) && formats.has(item.type) && item.size < manifest.full.size);
@@ -289,7 +313,7 @@ async function main(args) {
   } catch (error) { await catalog.close(); throw error; }
   server.on('error', async error => { console.error(error.message); await catalog.close(); process.exitCode = 1; });
   server.listen(port, '127.0.0.1', () => console.log(JSON.stringify({ listening: `http://127.0.0.1:${port}${ENDPOINT}`,
-    apps: catalog.releases.map(({ appid, version }) => ({ appid, version })), cup: 'unsupported-development-only' })));
+    apps: catalog.releases.map(({ appid, version, platform, arch }) => ({ appid, version, platform, arch })), cup: 'unsupported-development-only' })));
   const stop = () => { server.close(async () => { await catalog.close(); }); server.closeIdleConnections(); };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);

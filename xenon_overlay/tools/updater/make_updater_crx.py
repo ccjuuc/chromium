@@ -110,22 +110,27 @@ fi
 '''
 
 
-def public_key(key, expected_hash, *, command=run):
+def public_key(key, expected_hash, *, command=run, openssl="/usr/bin/openssl"):
     path = Path(key)
     info = path.lstat()
     if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or
-            info.st_uid != os.geteuid() or info.st_mode & 0o077):
+            getattr(info, "st_file_attributes", 0) & 0x400):
+        raise ValueError("CRX signing key must be a regular file with no links")
+    if os.name == "nt":
+        from updater_host_util import check_private_key_acl
+        check_private_key_acl(path)
+    elif info.st_uid != os.geteuid() or info.st_mode & 0o077:
         raise ValueError("CRX signing key must be a private, owned 0600 regular file")
     pin = parse_sha256_pin(expected_hash)
-    command(["/usr/bin/openssl", "rsa", "-inform", "DER", "-in", key,
+    command([openssl, "rsa", "-inform", "DER", "-in", key,
              "-passin", "pass:", "-check", "-noout"])
     # The native creator dereferences FromPrivateKeyInfo's result. Traditional
     # PKCS#1 RSA keys also pass `openssl rsa`, but are not valid inputs to it.
-    command(["/usr/bin/openssl", "pkcs8", "-inform", "DER", "-in", key,
+    command([openssl, "pkcs8", "-inform", "DER", "-in", key,
              "-nocrypt", "-out", os.devnull])
-    public = command(["/usr/bin/openssl", "pkey", "-inform", "DER", "-in", key,
+    public = command([openssl, "pkey", "-inform", "DER", "-in", key,
                       "-pubout", "-outform", "DER"])
-    description = command(["/usr/bin/openssl", "pkey", "-pubin", "-inform", "DER",
+    description = command([openssl, "pkey", "-pubin", "-inform", "DER",
                            "-text_pub", "-noout"], input=public).decode()
     bits = re.search(r"Public-Key:\s*\((\d+) bit\)", description)
     if not bits or int(bits.group(1)) < 2048:
@@ -172,7 +177,7 @@ def single_field(fields, number):
     return values[0]
 
 
-def verify_crx(crx, archive, expected_public, *, command=run):
+def verify_crx(crx, archive, expected_public, *, command=run, openssl="/usr/bin/openssl"):
     with open(crx, "rb") as source:
         prefix = source.read(12)
         if len(prefix) != 12 or prefix[:4] != b"Cr24":
@@ -191,7 +196,7 @@ def verify_crx(crx, archive, expected_public, *, command=run):
         with tempfile.TemporaryDirectory(prefix="xenon-crx-verify-") as temporary:
             stage = Path(temporary)
             (stage / "signature").write_bytes(single_field(proof, 2))
-            public_pem = command(["/usr/bin/openssl", "pkey", "-pubin", "-inform",
+            public_pem = command([openssl, "pkey", "-pubin", "-inform",
                                   "DER", "-outform", "PEM"], input=expected_public)
             (stage / "public.pem").write_bytes(public_pem)
             payload_hash = hashlib.sha256()
@@ -204,7 +209,7 @@ def verify_crx(crx, archive, expected_public, *, command=run):
                     signed.write(block)
             if payload_hash.hexdigest() != sha256(archive):
                 raise ValueError("CRX archive differs from the verified input ZIP")
-            command(["/usr/bin/openssl", "dgst", "-sha256", "-verify", stage / "public.pem",
+            command([openssl, "dgst", "-sha256", "-verify", stage / "public.pem",
                      "-signature", stage / "signature", stage / "signed-data"])
 
 

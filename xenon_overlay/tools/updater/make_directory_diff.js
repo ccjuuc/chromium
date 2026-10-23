@@ -14,7 +14,18 @@ import { fileURLToPath } from 'node:url';
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
 function sha256(file) {
-  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex').toUpperCase();
+  const fd = fs.openSync(file, 'r');
+  try {
+    const hash = crypto.createHash('sha256');
+    const buffer = Buffer.alloc(1024 * 1024);
+    let count;
+    while ((count = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+      hash.update(buffer.subarray(0, count));
+    }
+    return hash.digest('hex').toUpperCase();
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function runChecked(run, tool, args, options = {}) {

@@ -1,5 +1,9 @@
 # macOS 系统级 Xenon Updater
 
+这是 macOS 端的系统服务指南。Omaha 发布服务的启动和配置见
+[UPDATE_SERVICE.md](UPDATE_SERVICE.md)，制包说明见 [PACKAGING.md](PACKAGING.md)。
+Windows 使用原有 JSON + ZIP 更新流程，不接入 Omaha，也不安装本文描述的系统 Updater 服务。
+
 本模式复用 `chrome/updater` 的系统服务、IPC、下载缓存、更新流水线及差分失败回退。
 浏览器通过原生 `UpdateService` API 请求更新，不启动提权 shell，也不同时调用旧的
 SMAppService 差分安装流程。首次安装使用管理员授权的系统 PKG，浏览器固定安装到

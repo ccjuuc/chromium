@@ -65,17 +65,31 @@ test('full pipeline exactly follows current Omaha 4.0 download/crx3 schema', asy
     out: { sha256: catalog.manifest.full.sha256 }, urls: [{ url: `${origin}/artifacts/app.crx3` }] },
   { type: 'crx3', in: { sha256: catalog.manifest.full.sha256 }, size: catalog.manifest.full.size, path: '.', arguments: '' }]);
 });
+test('Windows releases are rejected and Windows requests never receive a macOS package', async t => {
+  const invalid = await fixture(t, manifest => { manifest.platform = 'win'; manifest.arch = 'x86_64'; });
+  await assert.rejects(invalid.load, /Unsupported manifest platform/);
+  // A multi-release catalog must reject Windows as well as a single release.
+  const { schema_version, ...windowsRelease } = invalid.manifest;
+  await fs.writeFile(invalid.manifestPath, JSON.stringify({ schema_version: 1, apps: [windowsRelease] }));
+  await assert.rejects(invalid.load, /Unsupported manifest platform/);
+  const catalog = await (await fixture(t)).load();
+  for (const arch of ['x64', 'arm64']) {
+    const result = update(catalog, {}, { '@os': 'win', arch, os: { platform: 'Windows', arch } });
+    assert.equal(result.status, 'error-osnotsupported');
+    assert.equal(result.pipelines, undefined);
+  }
+});
 test('native Chromium parser accepts full and differential response pipelines', {
   skip: !process.env.XENON_VERIFY_TOOL,
 }, async t => {
-  const fixtureData = await fixture(t);
-  const catalog = await fixtureData.load();
-  for (const differential of [false, true]) {
+  for (const [arch, differential] of [['x86_64', false], ['x86_64', true], ['arm64', false], ['arm64', true]]) {
+    const fixtureData = await fixture(t, manifest => { manifest.arch = arch; });
+    const catalog = await fixtureData.load();
     const body = request(catalog, differential ? {
       cached_items: [{ sha256: catalog.manifest.differential[0].previous_sha256 }],
-    } : {});
+    } : {}, { arch });
     const response = buildResponse(catalog, body, origin);
-    const responsePath = path.join(fixtureData.directory, `response-${differential}.json`);
+    const responsePath = path.join(fixtureData.directory, `response-${arch}-${differential}.json`);
     await fs.writeFile(responsePath, RESPONSE_PREFIX + JSON.stringify(response));
     const result = spawnSync(process.env.XENON_VERIFY_TOOL, [`--response=${responsePath}`], { encoding: 'utf8' });
     assert.equal(result.error, undefined);
@@ -166,6 +180,69 @@ test('one endpoint routes browser and updater app IDs to separate pinned release
   assert.equal(apps[2].status, 'error-unknownApplication');
   await fs.writeFile(f.manifestPath, JSON.stringify({ schema_version: 1, apps: [browser, browser] }));
   await assert.rejects(f.load, /Duplicate manifest appid/);
+});
+
+test('one macOS app routes independently by client binary architecture', async t => {
+  const f = await fixture(t);
+  const releases = [];
+  for (const [platform, arch, version] of [
+    ['mac', 'arm64', '1.0.0.2'], ['mac', 'x86_64', '1.0.0.3'],
+  ]) {
+    const { schema_version, ...release } = f.manifest;
+    Object.assign(release, { platform, arch, version, differential: [],
+      full: { ...release.full, file: `${platform}-${arch}.crx3` } });
+    await fs.copyFile(path.join(f.directory, f.manifest.full.file), path.join(f.directory, release.full.file));
+    releases.push(release);
+  }
+  await fs.writeFile(f.manifestPath, JSON.stringify({ schema_version: 1, apps: releases }));
+  const catalog = await f.load();
+  for (const expected of releases) {
+    const body = request({ manifest: expected }, { appid: expected.appid.toUpperCase() }, {
+      '@os': expected.platform, arch: expected.arch === 'x86_64' ? 'x64' : expected.arch,
+      os: { platform: 'Mac OS X', arch: 'arm64' },
+    });
+    const result = buildResponse(catalog, body, origin).response.apps[0].updatecheck;
+    assert.equal(result.status, 'ok');
+    assert.equal(result.nextversion, expected.version);
+    assert.deepEqual(result.pipelines[0].operations[0].urls, [{ url: `${origin}/artifacts/${expected.full.file}` }]);
+    const install = result.pipelines[0].operations[1];
+    assert.equal(install.path, '.');
+    assert.equal(install.arguments, '');
+  }
+
+  const browser = { manifest: f.manifest };
+  for (const requestPatch of [
+    { '@os': 'mac', os: { platform: 'Windows' } },
+    { '@os': 'win', os: { platform: 'Mac OS X' } },
+    { '@os': 'linux', os: { platform: 'Linux' } },
+  ]) {
+    assert.equal(buildResponse(catalog, request(browser, {}, requestPatch), origin)
+      .response.apps[0].updatecheck.status, 'error-osnotsupported');
+  }
+  const unsupportedArch = request(browser, {}, { arch: 'x86' });
+  assert.equal(buildResponse(catalog, unsupportedArch, origin).response.apps[0].updatecheck.status, 'error-hwnotsupported');
+  const hardwareFallback = request(browser, {}, { arch: undefined, os: { platform: 'Mac OS X', arch: 'x64' } });
+  assert.equal(buildResponse(catalog, hardwareFallback, origin).response.apps[0].updatecheck.nextversion, '1.0.0.3');
+});
+
+test('catalog rejects duplicate app/platform/architecture even with a different target version or app ID case', async t => {
+  const f = await fixture(t);
+  const { schema_version, ...release } = f.manifest;
+  const duplicate = { ...release, appid: release.appid.toUpperCase(), version: '1.0.0.3' };
+  await fs.writeFile(f.manifestPath, JSON.stringify({ schema_version: 1, apps: [release, duplicate] }));
+  await assert.rejects(f.load, /Duplicate manifest appid\/platform\/arch/);
+  for (const change of [m => { m.platform = 'linux'; }, m => { m.platform = 'Windows'; }, m => { m.platform = 'win'; },
+    m => { m.arch = 'x64'; }, m => { m.arch = 'x86'; }]) {
+    const invalid = await fixture(t, change);
+    await assert.rejects(invalid.load, /Unsupported manifest (platform|architecture)/);
+  }
+});
+
+test('an unsupported macOS architecture never falls through to another app variant', async t => {
+  const catalog = await (await fixture(t, manifest => { manifest.arch = 'x86_64'; })).load();
+  assert.equal(update(catalog).status, 'error-hwnotsupported');
+  const unknownOS = { arch: 'x64', os: { platform: 'unknown' } };
+  assert.equal(update(catalog, {}, unknownOS).status, 'error-osnotsupported');
 });
 test('manifest cannot configure executable paths, arguments, URLs or directory traversal', async t => {
   for (const change of [m => { m.arguments = '--run-anything'; }, m => { m.full.url = 'https://other.test/app'; },
