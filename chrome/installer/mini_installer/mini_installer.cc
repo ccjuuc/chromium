@@ -34,6 +34,7 @@
 
 #include <sddl.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -578,6 +579,9 @@ void DeleteExtractedFiles(HMODULE module,
                           const PathString& setup_path,
                           const PathString& base_path,
                           int& max_delete_attempts) {
+  if (base_path.empty()) {
+    return;
+  }
   if (!archive_path.empty()) {
     DeleteWithRetryAndMetrics(archive_path.get(), max_delete_attempts);
   }
@@ -699,19 +703,21 @@ bool GetModuleDir(HMODULE module, PathString* directory) {
 bool CreateWorkDir(const wchar_t* base_path,
                    PathString* work_dir,
                    ProcessExitResult* exit_code) {
+  work_dir->clear();
+  PathString candidate;
   *exit_code = ProcessExitResult(PATH_STRING_OVERFLOW);
-  if (!work_dir->assign(base_path) || !work_dir->append(kTempPrefix)) {
+  if (!candidate.assign(base_path) || !candidate.append(kTempPrefix)) {
     return false;
   }
 
   // Store the location where we'll append the id.
-  size_t end = work_dir->length();
+  size_t end = candidate.length();
 
   // Check if we'll have enough buffer space to continue.
   // The name of the directory will use up 11 chars and then we need to append
   // the trailing backslash and a terminator.  We've already added the prefix
   // to the buffer, so let's just make sure we've got enough space for the rest.
-  if ((work_dir->capacity() - end) < (_countof("fffff.tmp") + 1)) {
+  if ((candidate.capacity() - end) < (_countof("fffff.tmp") + 1)) {
     return false;
   }
 
@@ -734,24 +740,27 @@ bool CreateWorkDir(const wchar_t* base_path,
     // because of little endianness, but we don't care since it's just
     // a name. Since we checked capaity at the front end, we don't need to
     // duplicate it here.
-    HexEncode(&id, sizeof(id), UNSAFE_TODO(work_dir->get() + end),
-              work_dir->capacity() - end);
+    HexEncode(&id, sizeof(id), UNSAFE_TODO(candidate.get() + end),
+              candidate.capacity() - end);
 
     // We only want the first 5 digits to remain within the 8.3 file name
     // format (compliant with previous implementation).
-    work_dir->truncate_at(end + 5);
+    candidate.truncate_at(end + 5);
 
     // for consistency with the previous implementation which relied on
     // GetTempFileName, we append the .tmp extension.
-    work_dir->append(L".tmp");
+    candidate.append(L".tmp");
 
-    if (::CreateDirectory(work_dir->get(),
+    if (::CreateDirectory(candidate.get(),
                           sa.lpSecurityDescriptor ? &sa : nullptr)) {
       // Yay!  Now let's just append the backslash and we're done.
-      work_dir->append(L"\\");
+      candidate.append(L"\\");
+      work_dir->assign(candidate);
       *exit_code = ProcessExitResult(SUCCESS_EXIT_CODE);
       break;
     }
+    *exit_code =
+        ProcessExitResult(UNABLE_TO_GET_WORK_DIRECTORY, ::GetLastError());
   }
 
   if (sa.lpSecurityDescriptor) {
@@ -761,18 +770,66 @@ bool CreateWorkDir(const wchar_t* base_path,
   return exit_code->IsSuccess();
 }
 
-// Creates and returns a temporary directory in |work_dir| that can be used to
-// extract mini_installer payload. |work_dir| ends with a path separator.
-// Returns true if |work_dir| is available for use, or false in case of error
-// (indicated by |exit_code|).
-bool GetWorkDir(HMODULE module,
-                PathString* work_dir,
-                ProcessExitResult* exit_code) {
-  PathString base_path;
+bool GetWorkDir(PathString* work_dir, ProcessExitResult* exit_code) {
+  work_dir->clear();
+  *exit_code = ProcessExitResult(UNABLE_TO_GET_WORK_DIRECTORY);
+  HANDLE token;
+  if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &token)) {
+    *exit_code =
+        ProcessExitResult(UNABLE_TO_GET_WORK_DIRECTORY, ::GetLastError());
+    return false;
+  }
+  TOKEN_ELEVATION elevation = {};
+  DWORD size = 0;
+  const bool have_elevation = !!::GetTokenInformation(
+      token, TokenElevation, &elevation, sizeof(elevation), &size);
+  const DWORD token_error = have_elevation ? ERROR_SUCCESS : ::GetLastError();
+  ::CloseHandle(token);
+  if (!have_elevation) {
+    *exit_code = ProcessExitResult(UNABLE_TO_GET_WORK_DIRECTORY, token_error);
+    return false;
+  }
 
-  // Create a directory next to the current module.
-  return GetModuleDir(module, &base_path) &&
-         CreateWorkDir(base_path.get(), work_dir, exit_code);
+  PathString base_path;
+  if (elevation.TokenIsElevated) {
+    // Elevated processes must not extract executables below a user-controlled
+    // TEMP/TMP directory. Match Chromium's secure temporary roots, including
+    // the Program Files fallback for Windows versions without SystemTemp.
+    const UINT length = ::GetWindowsDirectoryW(
+        base_path.get(), static_cast<UINT>(base_path.capacity()));
+    if (length && length < base_path.capacity() &&
+        base_path.append(L"\\SystemTemp\\") &&
+        CreateWorkDir(base_path.get(), work_dir, exit_code)) {
+      return true;
+    }
+    const HRESULT result = ::SHGetFolderPathW(
+        nullptr, CSIDL_PROGRAM_FILES, nullptr, SHGFP_TYPE_CURRENT,
+        base_path.get());
+    if (FAILED(result)) {
+      *exit_code = ProcessExitResult(UNABLE_TO_GET_WORK_DIRECTORY, result);
+      return false;
+    }
+    if (!base_path.append(L"\\")) {
+      *exit_code = ProcessExitResult(PATH_STRING_OVERFLOW);
+      return false;
+    }
+  } else {
+    const DWORD length = ::GetTempPathW(
+        static_cast<DWORD>(base_path.capacity()), base_path.get());
+    if (!length) {
+      *exit_code =
+          ProcessExitResult(UNABLE_TO_GET_WORK_DIRECTORY, ::GetLastError());
+      return false;
+    }
+    if (length >= base_path.capacity()) {
+      *exit_code = ProcessExitResult(PATH_STRING_OVERFLOW);
+      return false;
+    }
+  }
+
+  // Never fall back to the installer directory: it may be read-only, on a
+  // network share, or a download folder that should not hold extracted files.
+  return CreateWorkDir(base_path.get(), work_dir, exit_code);
 }
 
 namespace {
@@ -794,7 +851,7 @@ ProcessExitResult InstallWork(void* opaque, HWND progress_hwnd) {
   ProcessExitResult exit_code = ProcessExitResult(SUCCESS_EXIT_CODE);
 
   PostInstallerUiProgress(progress_hwnd, 8, kInstallerUiStageExtractArchive);
-  if (!GetWorkDir(ctx->module, ctx->base_path, &exit_code))
+  if (!GetWorkDir(ctx->base_path, &exit_code))
     return exit_code;
 
   exit_code = UnpackBinaryResources(

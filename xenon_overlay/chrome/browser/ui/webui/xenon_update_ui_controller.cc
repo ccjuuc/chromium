@@ -254,7 +254,8 @@ class XenonUpdateMessageHandler : public content::WebUIMessageHandler,
       return;
     }
     std::string mode = args[0].GetString();
-    std::string feed_url = "http://127.0.0.1:8999/api/v1/update/check";
+    std::string feed_url =
+        "http://127.0.0.1:9001/api/v1/update/check?arch=x86_64";
     if (args.size() > 1 && args[1].is_string()) {
       std::string custom_url = args[1].GetString();
       if (!custom_url.empty()) {

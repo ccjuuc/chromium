@@ -7,13 +7,16 @@
 #include <string>
 
 #include "base/base_paths.h"
+#include "base/base_paths_win.h"
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
+#include "base/scoped_environment_variable_override.h"
 #include "base/scoped_native_library.h"
 #include "base/test/test_reg_util_win.h"
+#include "base/win/access_token.h"
 #include "base/win/registry.h"
 #include "chrome/install_static/install_details.h"
 #include "chrome/installer/mini_installer/configuration.h"
@@ -76,6 +79,79 @@ TEST(MiniInstallerTest, GetModuleDir) {
   EXPECT_EQ(UNSAFE_TODO(directory.get()[directory.length() - 1]), L'\\');
 }
 
+TEST(MiniInstallerTest, WorkDirectoryUsesTemporaryRoot) {
+  base::ScopedTempDir temporary_root;
+  ASSERT_TRUE(temporary_root.CreateUniqueTempDir());
+  const base::FilePath user_temp = temporary_root.GetPath().Append(
+      FILE_PATH_LITERAL("installer staging \u66F4\u65B0"));
+  ASSERT_TRUE(base::CreateDirectory(user_temp));
+  base::ScopedEnvironmentVariableOverride tmp_override(
+      "TMP", user_temp.AsUTF8Unsafe());
+  ASSERT_TRUE(tmp_override.IsOverridden());
+
+  PathString first_path;
+  PathString second_path;
+  ProcessExitResult result(GENERIC_ERROR);
+  ASSERT_TRUE(GetWorkDir(&first_path, &result));
+  EXPECT_TRUE(result.IsSuccess());
+  ASSERT_TRUE(base::DirectoryExists(base::FilePath(first_path.get())));
+  base::ScopedTempDir first;
+  ASSERT_TRUE(
+      first.Set(base::FilePath(first_path.get()).StripTrailingSeparators()));
+  ASSERT_TRUE(GetWorkDir(&second_path, &result));
+  EXPECT_TRUE(result.IsSuccess());
+  ASSERT_TRUE(base::DirectoryExists(base::FilePath(second_path.get())));
+  base::ScopedTempDir second;
+  ASSERT_TRUE(
+      second.Set(base::FilePath(second_path.get()).StripTrailingSeparators()));
+
+  EXPECT_TRUE(StrEndsWith(first_path.get(), L"\\"));
+  EXPECT_TRUE(StrEndsWith(second_path.get(), L"\\"));
+  EXPECT_NE(first.GetPath(), second.GetPath());
+  const base::FilePath work_root = first.GetPath().DirName();
+  EXPECT_EQ(work_root, second.GetPath().DirName());
+  EXPECT_NE(work_root, base::PathService::CheckedGet(base::DIR_EXE));
+
+  auto token = base::win::AccessToken::FromCurrentProcess();
+  ASSERT_TRUE(token);
+  if (token->IsElevated()) {
+    // An elevated installer must ignore the user-controlled TMP directory.
+    const base::FilePath system_temp =
+        base::PathService::CheckedGet(base::DIR_WINDOWS).AppendASCII("SystemTemp");
+    const base::FilePath program_files =
+        base::PathService::CheckedGet(base::DIR_PROGRAM_FILES);
+    EXPECT_TRUE(work_root == system_temp || work_root == program_files);
+    EXPECT_TRUE(base::IsDirectoryEmpty(user_temp));
+  } else {
+    EXPECT_EQ(work_root, user_temp);
+  }
+}
+
+TEST(MiniInstallerTest, WorkDirectoryFailsWithoutUsableParent) {
+  base::ScopedTempDir parent;
+  ASSERT_TRUE(parent.CreateUniqueTempDir());
+  const std::wstring missing_parent =
+      parent.GetPath().AppendASCII("missing").value() + L"\\";
+  PathString work_path;
+  ASSERT_TRUE(work_path.assign(L"previous path"));
+  ProcessExitResult result(SUCCESS_EXIT_CODE);
+  EXPECT_FALSE(CreateWorkDir(missing_parent.c_str(), &work_path, &result));
+  EXPECT_EQ(result.exit_code, UNABLE_TO_GET_WORK_DIRECTORY);
+  EXPECT_EQ(result.windows_error, static_cast<DWORD>(ERROR_PATH_NOT_FOUND));
+  EXPECT_TRUE(work_path.empty());
+  EXPECT_TRUE(base::IsDirectoryEmpty(parent.GetPath()));
+}
+
+TEST(MiniInstallerTest, WorkDirectoryRejectsOverlongPath) {
+  PathString work_path;
+  ASSERT_TRUE(work_path.assign(L"previous path"));
+  ProcessExitResult result(SUCCESS_EXIT_CODE);
+  const std::wstring overlong_path(MAX_PATH, L'x');
+  EXPECT_FALSE(CreateWorkDir(overlong_path.c_str(), &work_path, &result));
+  EXPECT_EQ(result.exit_code, PATH_STRING_OVERFLOW);
+  EXPECT_TRUE(work_path.empty());
+}
+
 struct UnpackParams {
   UnpackParams(base::FilePath mini_installer_file_path,
                std::wstring expected_unpacked_archive_file_name,
@@ -128,8 +204,14 @@ INSTANTIATE_TEST_SUITE_P(
 // Tests unpacking the compressed chrome.packed.7z and setup.ex_ from a test
 // mini_installer.
 TEST_P(MiniInstallerTest, UnpackMiniInstaller) {
+  PathString work_path;
+  ProcessExitResult work_result(GENERIC_ERROR);
+  ASSERT_TRUE(GetWorkDir(&work_path, &work_result));
+  ASSERT_TRUE(work_result.IsSuccess());
+  ASSERT_TRUE(base::DirectoryExists(base::FilePath(work_path.get())));
   base::ScopedTempDir temp_dir;
-  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  ASSERT_TRUE(
+      temp_dir.Set(base::FilePath(work_path.get()).StripTrailingSeparators()));
 
   int max_delete_attempts = 0;
   PathString setup_path;
@@ -141,9 +223,8 @@ TEST_P(MiniInstallerTest, UnpackMiniInstaller) {
                      LOAD_LIBRARY_AS_IMAGE_RESOURCE));
   ASSERT_TRUE(loaded_module.is_valid());
 
-  std::wstring temp_path = temp_dir.GetPath().value() + L"\\";
   ProcessExitResult exit_code =
-      UnpackBinaryResources(loaded_module.get(), temp_path.c_str(), setup_path,
+      UnpackBinaryResources(loaded_module.get(), work_path.get(), setup_path,
                             archive_path, archive_type, max_delete_attempts);
   EXPECT_EQ(exit_code.exit_code, SUCCESS_EXIT_CODE);
 

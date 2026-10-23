@@ -49,6 +49,17 @@ ProcessExitResult GetPreviousSetupExePath(const Configuration& configuration,
 // are undefined and may have been modified.
 bool GetModuleDir(HMODULE module, PathString* directory);
 
+// Creates a private extraction directory below |base_path|. The base path must
+// end with a separator, as will |work_dir| on success. Errors set |exit_code|.
+bool CreateWorkDir(const wchar_t* base_path,
+                   PathString* work_dir,
+                   ProcessExitResult* exit_code);
+
+// Creates a private extraction directory in the Windows temporary directory.
+// Elevated processes use a secure system location. Never falls back to the
+// installer directory. On success, |work_dir| ends with a path separator.
+bool GetWorkDir(PathString* work_dir, ProcessExitResult* exit_code);
+
 // Appends everything following the path to the executable in |command_line|
 // verbatim to |buffer|, including all whitespace, quoted arguments,
 // etc. |buffer| is unchanged in case of error.
