@@ -6,8 +6,10 @@
 
 #include <windows.h>
 
-#include <algorithm>
-#include <set>
+#include <map>
+#include <optional>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "base/command_line.h"
@@ -15,15 +17,16 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/json/json_reader.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/process/launch.h"
 #include "base/process/process.h"
 #include "base/process/process_handle.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/utf_string_conversions.h"
 #include "base/version.h"
+#include "base/win/access_token.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_handle.h"
 #include "chrome/common/chrome_switches.h"
@@ -31,7 +34,7 @@
 namespace xenon::updater {
 namespace {
 
-bool IsSafeRootPath(const base::FilePath& path) {
+bool IsSafeRelativePath(const base::FilePath& path) {
   if (path.empty() || path.IsAbsolute() || path.ReferencesParent() ||
       path.value().find(L':') != std::wstring::npos ||
       path.value().find(L'\0') != std::wstring::npos) {
@@ -46,8 +49,14 @@ bool IsSafeRootPath(const base::FilePath& path) {
       return false;
     }
   }
-  // Root operations must never modify another side-by-side version tree.
-  return !base::Version(base::FilePath(components.front()).MaybeAsASCII())
+  return true;
+}
+
+bool IsSafeRootPath(const base::FilePath& path) {
+  // Root payloads must never overwrite the normalized version directory.
+  return IsSafeRelativePath(path) &&
+         !base::Version(
+              base::FilePath(path.GetComponents().front()).MaybeAsASCII())
               .IsValid();
 }
 
@@ -71,17 +80,172 @@ bool HasNoReparsePoints(const base::FilePath& root,
   return true;
 }
 
-bool CopyVersionDirectory(const base::FilePath& source,
-                          const base::FilePath& destination) {
-  const DWORD attributes = ::GetFileAttributesW(source.value().c_str());
-  if (attributes == INVALID_FILE_ATTRIBUTES ||
-      !(attributes & FILE_ATTRIBUTE_DIRECTORY) ||
-      (attributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
-      !base::CreateDirectory(destination)) {
+bool IsPlainDirectory(const base::FilePath& path) {
+  const DWORD attributes = ::GetFileAttributesW(path.value().c_str());
+  return attributes != INVALID_FILE_ATTRIBUTES &&
+         (attributes & FILE_ATTRIBUTE_DIRECTORY) &&
+         !(attributes & FILE_ATTRIBUTE_REPARSE_POINT);
+}
+
+base::win::ScopedHandle AcquireInstallationLock(
+    const base::FilePath& install_dir) {
+  if (!install_dir.IsAbsolute() || install_dir.ReferencesParent() ||
+      !IsPlainDirectory(install_dir)) {
+    return {};
+  }
+  base::win::ScopedHandle lock(::CreateFileW(
+      install_dir.AppendASCII(".xenon-install.lock").value().c_str(),
+      GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
+      FILE_ATTRIBUTE_HIDDEN | FILE_FLAG_DELETE_ON_CLOSE |
+          FILE_FLAG_OPEN_REPARSE_POINT,
+      nullptr));
+  BY_HANDLE_FILE_INFORMATION info = {};
+  if (!lock.is_valid() || !::GetFileInformationByHandle(lock.get(), &info) ||
+      (info.dwFileAttributes &
+       (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) {
+    return {};
+  }
+  return lock;
+}
+
+bool WriteCommittedMarker(const base::FilePath& recovery,
+                          const std::string& version) {
+  if (!IsPlainDirectory(recovery)) {
     return false;
   }
-  // CopyDirectory's Windows enumerator ignores read errors. A version must be
-  // copied completely before its launcher can be committed.
+  // CREATE_NEW never follows or overwrites an existing marker/reparse point.
+  base::win::ScopedHandle marker(::CreateFileW(
+      recovery.AppendASCII("committed").value().c_str(), GENERIC_WRITE,
+      FILE_SHARE_READ, nullptr, CREATE_NEW,
+      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  DWORD written = 0;
+  return marker.is_valid() &&
+         ::WriteFile(marker.get(), version.data(),
+                     static_cast<DWORD>(version.size()), &written, nullptr) &&
+         written == version.size();
+}
+
+// Caller owns .xenon-install.lock. Keep the commit marker until every backup
+// has been removed, so files locked by the old process can be retried at
+// startup.
+void CleanupCommittedRecoveryDirectory(const base::FilePath& recovery,
+                                       const base::Version& current_version) {
+  if (!IsPlainDirectory(recovery)) {
+    return;
+  }
+  const base::FilePath marker = recovery.AppendASCII("committed");
+  const DWORD attributes = ::GetFileAttributesW(marker.value().c_str());
+  if (attributes == INVALID_FILE_ATTRIBUTES ||
+      (attributes &
+       (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) {
+    return;
+  }
+  std::string version;
+  if (!base::ReadFileToStringWithMaxSize(marker, &version, 256)) {
+    return;
+  }
+  const base::Version committed_version(version);
+  if (!committed_version.IsValid() || committed_version > current_version) {
+    return;
+  }
+
+  // Validate the entire tree before removing anything. Non-recursive deletes
+  // below cannot accidentally remove the marker first or traverse a junction.
+  std::vector<base::FilePath> children;
+  base::FileEnumerator entries(
+      recovery, true,
+      base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES,
+      base::FilePath::StringType(),
+      base::FileEnumerator::FolderSearchPolicy::ALL,
+      base::FileEnumerator::ErrorPolicy::STOP_ENUMERATION);
+  for (base::FilePath item = entries.Next(); !item.empty();
+       item = entries.Next()) {
+    base::FilePath relative;
+    if (!recovery.AppendRelativePath(item, &relative) ||
+        !HasNoReparsePoints(recovery, relative)) {
+      return;
+    }
+    if (!base::FilePath::CompareEqualIgnoreCase(item.value(), marker.value())) {
+      children.push_back(item);
+    }
+  }
+  if (entries.GetError() != base::File::FILE_OK) {
+    return;
+  }
+  bool removed = true;
+  for (auto it = children.rbegin(); it != children.rend(); ++it) {
+    base::FilePath relative;
+    if (!IsPlainDirectory(recovery) ||
+        !recovery.AppendRelativePath(*it, &relative) ||
+        !HasNoReparsePoints(recovery, relative)) {
+      return;
+    }
+    if (!base::DeleteFile(*it)) {
+      removed = false;
+    }
+  }
+  if (!removed || !IsPlainDirectory(recovery) ||
+      !HasNoReparsePoints(recovery, marker.BaseName()) ||
+      !base::DeleteFile(marker)) {
+    return;
+  }
+  if (!base::DeleteFile(recovery) && IsPlainDirectory(recovery) &&
+      !WriteCommittedMarker(recovery, version)) {
+    LOG(WARNING) << "Failed to retain update cleanup marker in "
+                 << recovery.value();
+  }
+}
+
+bool IsPlainFile(const base::FilePath& path) {
+  const DWORD attributes = ::GetFileAttributesW(path.value().c_str());
+  return attributes != INVALID_FILE_ATTRIBUTES &&
+         !(attributes &
+           (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT));
+}
+
+bool SameInstallDirectory(const base::FilePath& registered,
+                          const base::FilePath& installation) {
+  return registered.IsAbsolute() && !registered.ReferencesParent() &&
+         base::FilePath::CompareEqualIgnoreCase(
+             registered.NormalizePathSeparators()
+                 .StripTrailingSeparators()
+                 .value(),
+             installation.NormalizePathSeparators()
+                 .StripTrailingSeparators()
+                 .value());
+}
+
+bool PathsOverlap(const base::FilePath& first, const base::FilePath& second) {
+  const auto left = first.NormalizePathSeparators().StripTrailingSeparators();
+  const auto right = second.NormalizePathSeparators().StripTrailingSeparators();
+  return SameInstallDirectory(left, right) || left.IsParent(right) ||
+         right.IsParent(left);
+}
+
+bool HasPlainAncestors(base::FilePath path) {
+  while (!path.empty()) {
+    const DWORD attributes = ::GetFileAttributesW(path.value().c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES ||
+        (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+      return false;
+    }
+    const base::FilePath parent = path.DirName();
+    if (parent == path) {
+      break;
+    }
+    path = parent;
+  }
+  return true;
+}
+
+// Copy into a private setup source, leaving the downloaded input intact for
+// retries. Metadata is handed to setup separately, never installed as payload.
+bool CopyPayload(const base::FilePath& source,
+                 const base::FilePath& destination,
+                 bool version_payload) {
+  if (!IsPlainDirectory(source) || !base::CreateDirectory(destination)) {
+    return false;
+  }
   base::FileEnumerator entries(
       source, true,
       base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES,
@@ -92,7 +256,20 @@ bool CopyVersionDirectory(const base::FilePath& source,
        item = entries.Next()) {
     base::FilePath relative;
     if (!source.AppendRelativePath(item, &relative) ||
-        relative.ReferencesParent() || !HasNoReparsePoints(source, relative)) {
+        !HasNoReparsePoints(source, relative)) {
+      return false;
+    }
+    const auto components = relative.GetComponents();
+    if (version_payload &&
+        (base::FilePath::CompareEqualIgnoreCase(components.front(),
+                                                L".xenon-root") ||
+         (components.size() == 1 &&
+          base::FilePath::CompareEqualIgnoreCase(components.front(),
+                                                 L".xenon-deletions.json")))) {
+      continue;
+    }
+    if (!(version_payload ? IsSafeRelativePath(relative)
+                          : IsSafeRootPath(relative))) {
       return false;
     }
     const base::FilePath output = destination.Append(relative);
@@ -100,7 +277,7 @@ bool CopyVersionDirectory(const base::FilePath& source,
       if (!base::CreateDirectory(output)) {
         return false;
       }
-    } else if (!base::CreateDirectory(output.DirName()) ||
+    } else if (!IsPlainFile(item) || !base::CreateDirectory(output.DirName()) ||
                !base::CopyFile(item, output)) {
       return false;
     }
@@ -108,21 +285,10 @@ bool CopyVersionDirectory(const base::FilePath& source,
   return entries.GetError() == base::File::FILE_OK;
 }
 
-bool SameInstallDirectory(const base::FilePath& registered,
-                          const base::FilePath& installation) {
-  return registered.IsAbsolute() && base::FilePath::CompareEqualIgnoreCase(
-                                        registered.NormalizePathSeparators()
-                                            .StripTrailingSeparators()
-                                            .value(),
-                                        installation.NormalizePathSeparators()
-                                            .StripTrailingSeparators()
-                                            .value());
-}
-
 base::FilePath InstallationFromSetup(const base::FilePath& setup) {
-  // The setup file may already have been removed by version cleanup. Validate
-  // its registered layout without requiring the old executable to exist.
-  if (!setup.IsAbsolute() ||
+  // Old setup may have been removed by version cleanup. Its registered layout
+  // is still useful for identifying the installation scope.
+  if (!setup.IsAbsolute() || setup.ReferencesParent() ||
       !base::FilePath::CompareEqualIgnoreCase(setup.BaseName().value(),
                                               L"setup.exe") ||
       !base::FilePath::CompareEqualIgnoreCase(
@@ -145,8 +311,7 @@ bool RegistrationMatches(base::win::RegKey& key,
   }
   if (key.ReadValue(L"UninstallString", &value) == ERROR_SUCCESS &&
       !value.empty()) {
-    // The product key contains a raw path (which may contain spaces), whereas
-    // the uninstall key contains a quoted command with arguments.
+    // Product registration stores a raw path; ARP stores a quoted command.
     const base::FilePath setup =
         uninstall_key ? base::CommandLine::FromString(value).GetProgram()
                       : base::FilePath(value);
@@ -166,99 +331,167 @@ bool RegistrationMatches(base::win::RegKey& key,
   return false;
 }
 
-void WriteRegistrationValue(base::win::RegKey& key,
-                            const wchar_t* name,
-                            const std::wstring& value) {
-  const LONG result = key.WriteValue(name, value.c_str());
-  if (result != ERROR_SUCCESS) {
-    LOG(ERROR) << "Failed to update installed version registration: " << result;
+struct InstallationOptions {
+  bool system_level = false;
+  std::map<std::string, std::wstring> switches;
+};
+
+bool MergeInstallationArguments(const base::CommandLine& registered,
+                                InstallationOptions* options) {
+  if (registered.HasSwitch("system-level") && !options->system_level) {
+    return false;
   }
+  // Never replay arbitrary uninstall/cleanup actions from registration.
+  for (const char* name :
+       {"channel", "chrome-beta", "chrome-dev", "chrome-sxs", "msi"}) {
+    if (!registered.HasSwitch(name)) {
+      continue;
+    }
+    const std::wstring value = registered.GetSwitchValueNative(name);
+    if (std::string_view(name) != "channel" && !value.empty()) {
+      return false;
+    }
+    auto [it, inserted] = options->switches.emplace(name, value);
+    if (!inserted && it->second != value) {
+      return false;
+    }
+  }
+  int mode_count = 0;
+  for (const char* mode : {"chrome-beta", "chrome-dev", "chrome-sxs"}) {
+    mode_count += options->switches.contains(mode);
+  }
+  if (mode_count > 1) {
+    return false;
+  }
+  const auto channel = options->switches.find("channel");
+  if (channel != options->switches.end()) {
+    for (const auto& [mode, expected] :
+         {std::pair{"chrome-beta", L"beta"}, std::pair{"chrome-dev", L"dev"},
+          std::pair{"chrome-sxs", L"canary"}}) {
+      if (options->switches.contains(mode) && channel->second != expected) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
-std::wstring UpdatedSetupCommand(base::win::RegKey& key,
-                                 const wchar_t* name,
-                                 const base::FilePath& setup,
-                                 bool cleanup,
-                                 bool system_install) {
-  std::wstring value;
-  base::CommandLine command(setup);
-  if (key.ReadValue(name, &value) == ERROR_SUCCESS && !value.empty()) {
-    command = base::CommandLine::FromString(value);
-    command.SetProgram(setup);
-  }
-  // Retain mode/channel, MSI, and logging arguments registered by setup.
-  if (cleanup) {
-    if (!command.HasSwitch("cleanup-for-downgrade-version")) {
-      command.AppendSwitchNative("cleanup-for-downgrade-version", L"$1");
-    }
-    if (!command.HasSwitch("cleanup-for-downgrade-operation")) {
-      command.AppendSwitchNative("cleanup-for-downgrade-operation", L"$2");
-    }
-  } else if (!command.HasSwitch("uninstall")) {
-    command.AppendSwitch("uninstall");
-  }
-  if (system_install && !command.HasSwitch("system-level")) {
-    command.AppendSwitch("system-level");
-  }
-  return L"\"" + setup.value() + L"\" " + command.GetArgumentsString();
-}
-
-}  // namespace
-
-void XenonUpdateInstaller::UpdateRegistryVersion(
-    const base::FilePath& install_dir,
-    const base::FilePath& executable,
-    const std::string& version) {
-  const std::wstring product =
-      executable.BaseName().RemoveFinalExtension().value();
-  if (product.empty() || !install_dir.IsAbsolute() ||
-      !base::Version(version).IsValid() ||
-      !base::DirectoryExists(install_dir.AppendASCII(version))) {
-    return;
+std::optional<InstallationOptions> ResolveInstallationOptions(
+    const base::FilePath& installation,
+    const base::FilePath& launcher_name) {
+  const std::wstring product = launcher_name.RemoveFinalExtension().value();
+  if (product.empty()) {
+    return std::nullopt;
   }
   const std::wstring app_path = L"Software\\" + product;
   const std::wstring uninstall_path =
       L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + product;
-  const base::FilePath setup = install_dir.AppendASCII(version)
-                                   .AppendASCII("Installer")
-                                   .AppendASCII("setup.exe");
-  const bool has_setup = base::PathExists(setup);
-  const std::wstring version_w = base::ASCIIToWide(version);
-
+  std::optional<InstallationOptions> result;
   for (HKEY root : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
-    for (bool is_uninstall : {false, true}) {
-      const std::wstring& key_path = is_uninstall ? uninstall_path : app_path;
+    InstallationOptions options;
+    options.system_level = root == HKEY_LOCAL_MACHINE;
+    bool matched = false;
+    for (bool uninstall : {false, true}) {
+      const auto& key_path = uninstall ? uninstall_path : app_path;
       for (REGSAM view : {KEY_WOW64_32KEY, KEY_WOW64_64KEY}) {
         base::win::RegKey key;
-        if (key.Open(root, key_path.c_str(),
-                     KEY_QUERY_VALUE | KEY_SET_VALUE | view) != ERROR_SUCCESS ||
-            !RegistrationMatches(key, install_dir, is_uninstall)) {
+        if (key.Open(root, key_path.c_str(), KEY_QUERY_VALUE | view) !=
+                ERROR_SUCCESS ||
+            !RegistrationMatches(key, installation, uninstall)) {
           continue;
         }
-        if (is_uninstall) {
-          WriteRegistrationValue(key, L"DisplayVersion", version_w);
-          WriteRegistrationValue(key, L"Version", version_w);
-          if (has_setup) {
-            WriteRegistrationValue(
-                key, L"UninstallString",
-                UpdatedSetupCommand(key, L"UninstallString", setup,
-                                    /*cleanup=*/false,
-                                    root == HKEY_LOCAL_MACHINE));
-          }
-        } else {
-          WriteRegistrationValue(key, L"pv", version_w);
-          if (has_setup) {
-            WriteRegistrationValue(key, L"UninstallString", setup.value());
-            WriteRegistrationValue(
-                key, L"DowngradeCleanupCommand",
-                UpdatedSetupCommand(key, L"DowngradeCleanupCommand", setup,
-                                    /*cleanup=*/true,
-                                    root == HKEY_LOCAL_MACHINE));
+        matched = true;
+        std::wstring value;
+        const wchar_t* argument_value =
+            uninstall ? L"UninstallString" : L"UninstallArguments";
+        if (key.ReadValue(argument_value, &value) == ERROR_SUCCESS &&
+            !value.empty()) {
+          const auto command = base::CommandLine::FromString(
+              uninstall ? value : L"setup.exe " + value);
+          if (!MergeInstallationArguments(command, &options)) {
+            return std::nullopt;
           }
         }
       }
     }
+    if (matched) {
+      if (result) {
+        // A single physical installation cannot be both per-user and system.
+        return std::nullopt;
+      }
+      result = std::move(options);
+    }
   }
+  return result;
+}
+
+void AppendInstallationOptions(const InstallationOptions& options,
+                               base::CommandLine* command) {
+  if (options.system_level) {
+    command->AppendSwitch("system-level");
+  }
+  for (const auto& [name, value] : options.switches) {
+    command->AppendSwitchNative(name, value);
+  }
+}
+
+base::RepeatingCallback<int(const base::CommandLine&)>& SetupRunner() {
+  static base::NoDestructor<
+      base::RepeatingCallback<int(const base::CommandLine&)>>
+      runner;
+  return *runner;
+}
+
+int RunSetup(const base::CommandLine& command) {
+  if (SetupRunner()) {
+    return SetupRunner().Run(command);
+  }
+  base::LaunchOptions options;
+  options.current_directory = command.GetProgram().DirName();
+  options.start_hidden = true;
+  base::Process process = base::LaunchProcess(command, options);
+  int exit_code = -1;
+  if (!process.IsValid() || !process.WaitForExit(&exit_code)) {
+    return -1;
+  }
+  return exit_code;
+}
+
+}  // namespace
+
+void XenonUpdateInstaller::CleanupRecoveryDirectories(
+    const base::FilePath& install_dir,
+    const std::string& current_version) {
+  const base::Version version(current_version);
+  if (!version.IsValid() ||
+      !IsPlainDirectory(install_dir.AppendASCII(current_version))) {
+    return;
+  }
+  base::win::ScopedHandle install_lock = AcquireInstallationLock(install_dir);
+  if (!install_lock.is_valid()) {
+    return;
+  }
+  std::vector<base::FilePath> recoveries;
+  base::FileEnumerator entries(
+      install_dir, false, base::FileEnumerator::DIRECTORIES,
+      FILE_PATH_LITERAL(".xenon-recovery-*"),
+      base::FileEnumerator::FolderSearchPolicy::ALL,
+      base::FileEnumerator::ErrorPolicy::STOP_ENUMERATION);
+  for (base::FilePath item = entries.Next(); !item.empty();
+       item = entries.Next()) {
+    recoveries.push_back(item);
+  }
+  if (entries.GetError() != base::File::FILE_OK) {
+    return;
+  }
+  for (const auto& recovery : recoveries) {
+    CleanupCommittedRecoveryDirectory(recovery, version);
+  }
+}
+
+void XenonUpdateInstaller::SetSetupRunnerForTesting(
+    base::RepeatingCallback<int(const base::CommandLine&)> runner) {
+  SetupRunner() = std::move(runner);
 }
 
 std::string XenonUpdateInstaller::ReadBundleShortVersion(
@@ -274,359 +507,196 @@ bool XenonUpdateInstaller::InstallAndRelaunch(
   if (error) {
     error->clear();
   }
-  if (!base::PathExists(staged_path)) {
-    LOG(ERROR) << "[XenonUpdateInstaller] Staged path does not exist: "
-               << staged_path.value();
-    return false;
-  }
-
-  // 1. If staged_path is a standalone executable (e.g. full installer exe),
-  // launch it directly.
-  if (!base::DirectoryExists(staged_path) &&
-      staged_path.MatchesExtension(FILE_PATH_LITERAL(".exe"))) {
-    base::CommandLine installer_cmd(staged_path);
-    installer_cmd.AppendSwitch("silent");
-    base::LaunchOptions options;
-    options.start_hidden = true;
-    base::Process process = base::LaunchProcess(installer_cmd, options);
-    if (!process.IsValid()) {
-      LOG(ERROR)
-          << "[XenonUpdateInstaller] Failed to launch installer executable: "
-          << staged_path.value();
-      return false;
+  auto fail = [&](const std::string& message) {
+    LOG(ERROR) << "[XenonUpdateInstaller] " << message;
+    if (error) {
+      *error = message;
     }
-    return true;
+    return false;
+  };
+  // Standalone installers retain their existing asynchronous handoff contract.
+  // The synchronous directory-source setup contract below is only for ZIP and
+  // reconstructed differential packages.
+  if (IsPlainFile(staged_path) &&
+      staged_path.MatchesExtension(FILE_PATH_LITERAL(".exe"))) {
+    base::CommandLine installer_command(staged_path);
+    installer_command.AppendSwitch("silent");
+    base::LaunchOptions launch_options;
+    launch_options.start_hidden = true;
+    base::Process process =
+        base::LaunchProcess(installer_command, launch_options);
+    return process.IsValid() || fail("Cannot launch the installer executable.");
+  }
+  if (!staged_path.IsAbsolute() || staged_path.ReferencesParent() ||
+      !target_install_dir.IsAbsolute() ||
+      target_install_dir.ReferencesParent() ||
+      !IsPlainDirectory(target_install_dir) ||
+      !HasPlainAncestors(staged_path) ||
+      !HasPlainAncestors(target_install_dir) ||
+      PathsOverlap(staged_path, target_install_dir)) {
+    return fail(
+        "Update source and installation must be separate existing "
+        "paths without links.");
   }
 
-  // 2. Resolve target launcher executable name
   base::FilePath target_exe_name = relaunch_executable.BaseName();
   if (target_exe_name.empty()) {
     base::FilePath current_exe;
-    if (base::PathService::Get(base::FILE_EXE, &current_exe)) {
-      target_exe_name = current_exe.BaseName();
+    if (!base::PathService::Get(base::FILE_EXE, &current_exe)) {
+      return fail("Cannot identify the installed browser executable.");
+    }
+    target_exe_name = current_exe.BaseName();
+  }
+  if (!IsSafeRootPath(target_exe_name) ||
+      !target_exe_name.MatchesExtension(FILE_PATH_LITERAL(".exe"))) {
+    return fail("Invalid installed browser executable.");
+  }
+  const auto installation =
+      ResolveInstallationOptions(target_install_dir, target_exe_name);
+  if (!installation) {
+    return fail("Cannot uniquely identify the registered installation.");
+  }
+  if (installation->system_level && relaunch_executable.empty()) {
+    const auto token = base::win::AccessToken::FromCurrentProcess();
+    if (!token || !token->IsElevated()) {
+      return fail(
+          "System installation requires an explicit restart to request "
+          "administrator approval.");
     }
   }
 
-  base::FilePath target_exe = target_install_dir.Append(target_exe_name);
-
-  if (!base::DirectoryExists(staged_path)) {
-    LOG(ERROR) << "Unsupported full update package: " << staged_path.value();
-    return false;
-  }
-
-  // Multiple browser profiles can update the same installation. Keep a single
-  // transaction owner; the OS releases/removes the lock even on process death.
-  const base::FilePath lock_path =
-      target_install_dir.AppendASCII(".xenon-install.lock");
-  base::win::ScopedHandle install_lock(
-      ::CreateFileW(lock_path.value().c_str(), GENERIC_READ | GENERIC_WRITE, 0,
-                    nullptr, OPEN_ALWAYS,
-                    FILE_ATTRIBUTE_HIDDEN | FILE_FLAG_DELETE_ON_CLOSE |
-                        FILE_FLAG_OPEN_REPARSE_POINT,
-                    nullptr));
-  if (!install_lock.is_valid()) {
-    LOG(ERROR) << "Installation is not writable or another update is running";
-    return false;
-  }
-
-  const bool has_version_name =
-      base::Version(staged_path.BaseName().MaybeAsASCII()).IsValid();
-  const bool version_staged =
-      has_version_name && staged_path.DirName() == target_install_dir;
-  const bool version_package =
-      version_staged ||
-      (has_version_name &&
-       base::DirectoryExists(staged_path.AppendASCII(".xenon-root")));
-  base::FilePath root_files =
-      version_package ? staged_path.AppendASCII(".xenon-root") : staged_path;
-  base::FilePath incoming_version;
-  base::FilePath installed_version;
-  if (!version_staged) {
-    if (version_package) {
-      // A differential package is prepared privately outside the installation.
-      // Copy it into this transaction before publishing its version directory.
-      incoming_version = staged_path;
+  const base::FilePath target_exe = target_install_dir.Append(target_exe_name);
+  base::ScopedTempDir temporary;
+  base::FilePath setup_executable;
+  base::FilePath source;
+  base::FilePath version_name;
+  const bool directory_source = IsPlainDirectory(staged_path);
+  if (directory_source) {
+    if (!temporary.CreateUniqueTempDir() ||
+        PathsOverlap(temporary.GetPath(), target_install_dir) ||
+        PathsOverlap(temporary.GetPath(), staged_path)) {
+      return fail("Cannot create an external setup workspace.");
+    }
+    const bool differential_source =
+        base::Version(staged_path.BaseName().MaybeAsASCII()).IsValid() &&
+        IsPlainDirectory(staged_path.AppendASCII(".xenon-root"));
+    if (differential_source) {
+      source = temporary.GetPath().AppendASCII("Chrome-bin");
+      version_name = staged_path.BaseName();
+      if (!CopyPayload(staged_path, source.Append(version_name), true) ||
+          !CopyPayload(staged_path.AppendASCII(".xenon-root"), source, false)) {
+        return fail("Cannot prepare the differential package for setup.");
+      }
+      const base::FilePath deletions =
+          staged_path.AppendASCII(".xenon-deletions.json");
+      if (base::PathExists(deletions) &&
+          (!IsPlainFile(deletions) ||
+           !base::CopyFile(deletions,
+                           source.AppendASCII(".xenon-deletions.json")))) {
+        return fail("Cannot prepare the package deletion manifest.");
+      }
     } else {
-      base::FileEnumerator dirs(staged_path, false,
-                                base::FileEnumerator::DIRECTORIES);
-      for (base::FilePath dir = dirs.Next(); !dir.empty(); dir = dirs.Next()) {
-        if (base::Version(dir.BaseName().MaybeAsASCII()).IsValid()) {
-          if (!incoming_version.empty()) {
-            LOG(ERROR) << "Ambiguous full package version directories";
-            return false;
+      source = staged_path;
+      if (!IsPlainFile(source.Append(target_exe_name)) &&
+          IsPlainDirectory(source.AppendASCII("Chrome-bin"))) {
+        source = source.AppendASCII("Chrome-bin");
+      }
+      base::FileEnumerator versions(
+          source, false, base::FileEnumerator::DIRECTORIES,
+          base::FilePath::StringType(),
+          base::FileEnumerator::FolderSearchPolicy::ALL,
+          base::FileEnumerator::ErrorPolicy::STOP_ENUMERATION);
+      for (base::FilePath version = versions.Next(); !version.empty();
+           version = versions.Next()) {
+        if (base::Version(version.BaseName().MaybeAsASCII()).IsValid()) {
+          if (!version_name.empty() || !IsPlainDirectory(version)) {
+            return fail("Full package contains ambiguous version directories.");
           }
-          incoming_version = dir;
+          version_name = version.BaseName();
         }
       }
+      if (versions.GetError() != base::File::FILE_OK || version_name.empty()) {
+        return fail("Full package has no readable version directory.");
+      }
     }
-    if (incoming_version.empty()) {
-      return false;
+    const base::FilePath setup_relative =
+        version_name.AppendASCII("Installer").AppendASCII("setup.exe");
+    const base::FilePath packaged_setup = source.Append(setup_relative);
+    if (!IsPlainFile(source.Append(target_exe_name)) ||
+        !HasNoReparsePoints(source, setup_relative) ||
+        !IsPlainFile(packaged_setup)) {
+      return fail(
+          "Update package must include its launcher and new setup.exe.");
     }
-    installed_version = target_install_dir.Append(incoming_version.BaseName());
-    if (base::PathExists(installed_version)) {
-      // Never delete an existing version: another process may be using it.
-      return false;
+    // Setup moves its private payload and installs its own executable. Run a
+    // separate copy so neither the source tree nor the installed setup is busy.
+    setup_executable = temporary.GetPath().AppendASCII("setup.exe");
+    if (!base::CopyFile(packaged_setup, setup_executable)) {
+      return fail("Cannot prepare the new setup executable.");
     }
+  } else {
+    return fail("Unsupported Windows update package.");
   }
 
-  base::ScopedTempDir transaction;
-  if (!transaction.CreateUniqueTempDirUnderPath(
-          target_install_dir, FILE_PATH_LITERAL(".xenon-recovery-"))) {
-    return false;
+  base::CommandLine setup_command(setup_executable);
+  AppendInstallationOptions(*installation, &setup_command);
+  setup_command.AppendSwitchPath("install-directory", target_install_dir);
+  setup_command.AppendSwitch("do-not-launch-chrome");
+  setup_command.AppendSwitch("do-not-register-for-update-launch");
+  setup_command.AppendSwitch("silent");
+  if (directory_source) {
+    setup_command.AppendSwitchPath("install-source-dir", source);
   }
-  struct Replacement {
-    base::FilePath ready;
-    base::FilePath target;
-    base::FilePath backup;
-    bool delete_only = false;
-    bool had_original = false;
-    bool committed = false;
-  };
-  std::vector<Replacement> replacements;
-  auto compare_paths = [](const base::FilePath& left,
-                          const base::FilePath& right) {
-    return base::FilePath::CompareLessIgnoreCase(left.value(), right.value());
-  };
-  std::set<base::FilePath, decltype(compare_paths)> targets(compare_paths);
-  if (base::DirectoryExists(root_files)) {
-    base::FileEnumerator files(
-        root_files, true,
-        base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES,
-        base::FilePath::StringType(),
-        base::FileEnumerator::FolderSearchPolicy::ALL,
-        base::FileEnumerator::ErrorPolicy::STOP_ENUMERATION);
-    for (base::FilePath file = files.Next(); !file.empty();
-         file = files.Next()) {
-      if (!version_package && !incoming_version.empty() &&
-          (incoming_version == file || incoming_version.IsParent(file))) {
-        continue;
-      }
-      base::FilePath relative;
-      if (!root_files.AppendRelativePath(file, &relative) ||
-          !IsSafeRootPath(relative) ||
-          !HasNoReparsePoints(root_files, relative) ||
-          !HasNoReparsePoints(target_install_dir, relative)) {
-        return false;
-      }
-      if (files.GetInfo().IsDirectory()) {
-        continue;
-      }
-      if (!targets.insert(relative).second) {
-        return false;
-      }
-      // Stage every file before modifying the running installation.
-      Replacement replacement;
-      replacement.ready =
-          transaction.GetPath().AppendASCII("ready").Append(relative);
-      replacement.target = target_install_dir.Append(relative);
-      replacement.backup =
-          transaction.GetPath().AppendASCII("backup").Append(relative);
-      if (!base::CreateDirectory(replacement.ready.DirName()) ||
-          !base::CreateDirectory(replacement.backup.DirName()) ||
-          !base::CopyFile(file, replacement.ready)) {
-        return false;
-      }
-      replacements.push_back(std::move(replacement));
-    }
-    if (files.GetError() != base::File::FILE_OK) {
-      return false;
-    }
+  // Setup owns SetupSingleton, elevation, file rollback and OS registration.
+  // In particular, do not acquire the legacy writable installation lock here.
+  const int exit_code = RunSetup(setup_command);
+  if (exit_code != 0) {
+    return fail(exit_code == -1 ? "Cannot start or wait for setup.exe."
+                                : "setup.exe failed with exit code " +
+                                      base::NumberToString(exit_code) + ".");
   }
-  const base::FilePath deletions_file =
-      staged_path.AppendASCII(".xenon-deletions.json");
-  if (version_package && base::PathExists(deletions_file)) {
-    std::string json;
-    if (!base::ReadFileToStringWithMaxSize(deletions_file, &json,
-                                           1024 * 1024)) {
-      return false;
-    }
-    auto deletions = base::JSONReader::ReadList(json, base::JSON_PARSE_RFC);
-    if (!deletions) {
-      return false;
-    }
-    for (const auto& value : *deletions) {
-      if (!value.is_string()) {
-        return false;
-      }
-      const base::FilePath relative =
-          base::FilePath::FromUTF8Unsafe(value.GetString());
-      if (!IsSafeRootPath(relative) ||
-          !HasNoReparsePoints(target_install_dir, relative) ||
-          !targets.insert(relative).second) {
-        return false;
-      }
-      Replacement replacement;
-      replacement.target = target_install_dir.Append(relative);
-      replacement.backup =
-          transaction.GetPath().AppendASCII("backup").Append(relative);
-      replacement.delete_only = true;
-      if (!base::PathExists(replacement.target)) {
-        continue;
-      }
-      if (base::DirectoryExists(replacement.target) ||
-          !base::CreateDirectory(replacement.backup.DirName())) {
-        return false;
-      }
-      replacements.push_back(std::move(replacement));
-    }
-  }
-  const bool has_launcher = std::any_of(
-      replacements.begin(), replacements.end(), [&](const Replacement& item) {
-        return !item.delete_only &&
-               base::FilePath::CompareEqualIgnoreCase(item.target.value(),
-                                                      target_exe.value());
-      });
-  if (!has_launcher) {
-    LOG(ERROR) << "Update contains no launcher/root files";
-    return false;
-  }
-  // Make the launcher visible last, after every other root file is in place.
-  std::sort(replacements.begin(), replacements.end(),
-            [&](const Replacement& left, const Replacement& right) {
-              const bool left_launcher = base::FilePath::CompareEqualIgnoreCase(
-                  left.target.value(), target_exe.value());
-              const bool right_launcher =
-                  base::FilePath::CompareEqualIgnoreCase(right.target.value(),
-                                                         target_exe.value());
-              if (left_launcher != right_launcher) {
-                return !left_launcher;
-              }
-              return compare_paths(left.target, right.target);
-            });
-  bool installed_new_version = false;
-  if (!incoming_version.empty()) {
-    base::FilePath ready_version = transaction.GetPath().AppendASCII("version");
-    if (!CopyVersionDirectory(incoming_version, ready_version)) {
-      return false;
-    }
-    // Private root payloads have already been staged above. Keep transaction
-    // metadata out of the published version tree and leave the input untouched.
-    if (version_package && (!base::DeletePathRecursively(
-                                ready_version.AppendASCII(".xenon-root")) ||
-                            !base::DeleteFile(ready_version.AppendASCII(
-                                ".xenon-deletions.json")))) {
-      return false;
-    }
-    if (!::MoveFileExW(ready_version.value().c_str(),
-                       installed_version.value().c_str(), 0)) {
-      return false;
-    }
-    installed_new_version = true;
-  }
-  std::vector<base::FilePath> created_directories;
-  auto rollback = [&]() {
-    bool restored = true;
-    for (auto it = replacements.rbegin(); it != replacements.rend(); ++it) {
-      if (it->committed && !base::DeleteFile(it->target)) {
-        restored = false;
-      }
-      if (it->had_original &&
-          !::MoveFileExW(it->backup.value().c_str(), it->target.value().c_str(),
-                         MOVEFILE_REPLACE_EXISTING)) {
-        restored = false;
-      }
-    }
-    for (auto it = created_directories.rbegin();
-         it != created_directories.rend(); ++it) {
-      // Remove only empty directories created by this transaction.
-      base::DeleteFile(*it);
-    }
-    if (installed_new_version && restored) {
-      base::DeletePathRecursively(installed_version);
-    }
-    if (!restored) {
-      // Preserve all recovery material if an OS lock prevents rollback.
-      LOG(ERROR) << "Update rollback needs recovery from "
-                 << transaction.GetPath().value();
-      transaction.Take();
-    }
-  };
-  for (auto& replacement : replacements) {
-    base::FilePath relative;
-    if (!target_install_dir.AppendRelativePath(replacement.target, &relative) ||
-        !HasNoReparsePoints(target_install_dir, relative)) {
-      rollback();
-      return false;
-    }
-    base::FilePath parent = target_install_dir;
-    const auto components = relative.GetComponents();
-    for (size_t index = 0; index + 1 < components.size(); ++index) {
-      parent = parent.Append(components[index]);
-      if (!base::DirectoryExists(parent)) {
-        if (!base::CreateDirectory(parent)) {
-          rollback();
-          return false;
-        }
-        created_directories.push_back(parent);
-      }
-    }
-    if (base::PathExists(replacement.target)) {
-      if (base::DirectoryExists(replacement.target) ||
-          !::MoveFileExW(replacement.target.value().c_str(),
-                         replacement.backup.value().c_str(), 0)) {
-        rollback();
-        return false;
-      }
-      replacement.had_original = true;
-    }
-    if (replacement.delete_only) {
-      continue;
-    }
-    if (!::MoveFileExW(replacement.ready.value().c_str(),
-                       replacement.target.value().c_str(), 0)) {
-      rollback();
-      return false;
-    }
-    replacement.committed = true;
+  if (!IsPlainFile(target_exe) ||
+      base::PathExists(target_install_dir.AppendASCII("new_chrome.exe")) ||
+      (directory_source &&
+       (!IsPlainDirectory(target_install_dir.Append(version_name)) ||
+        !HasNoReparsePoints(
+            target_install_dir,
+            version_name.AppendASCII("Installer").AppendASCII("setup.exe")) ||
+        !IsPlainFile(target_install_dir.Append(version_name)
+                         .AppendASCII("Installer")
+                         .AppendASCII("setup.exe"))))) {
+    return fail(
+        "Setup exited successfully but the installed version or "
+        "launcher is not ready.");
   }
 
-  // 4. If relaunch was requested, launch target executable using Chromium's
-  // native wait-for-parent mechanism.
   if (!relaunch_executable.empty()) {
-    if (!base::PathExists(target_exe)) {
-      rollback();
-      return false;
-    }
     base::CommandLine relaunch_cmd = *base::CommandLine::ForCurrentProcess();
     relaunch_cmd.SetProgram(target_exe);
     base::LaunchOptions launch_options;
     launch_options.current_directory = target_install_dir;
     launch_options.grant_foreground_privilege = true;
 
-    // Pass parent process handle so the new process waits for this instance to
-    // exit cleanly
     HANDLE raw_handle = nullptr;
-    if (::DuplicateHandle(::GetCurrentProcess(), ::GetCurrentProcess(),
-                          ::GetCurrentProcess(), &raw_handle, SYNCHRONIZE,
-                          /*bInheritHandle=*/TRUE, 0)) {
-      base::win::ScopedHandle parent_handle(raw_handle);
-      relaunch_cmd.AppendSwitchASCII(
-          switches::kWaitForParentHandle,
-          base::NumberToString(base::win::HandleToUint32(parent_handle.get())));
-      launch_options.handles_to_inherit.push_back(parent_handle.get());
-      base::Process proc = base::LaunchProcess(relaunch_cmd, launch_options);
-      if (!proc.IsValid()) {
-        LOG(ERROR) << "[XenonUpdateInstaller] Failed to relaunch application";
-        rollback();
-        return false;
-      }
-    } else {
-      LOG(ERROR) << "Failed to create parent wait handle";
-      rollback();
-      return false;
+    if (!::DuplicateHandle(::GetCurrentProcess(), ::GetCurrentProcess(),
+                           ::GetCurrentProcess(), &raw_handle, SYNCHRONIZE,
+                           /*bInheritHandle=*/TRUE, 0)) {
+      return fail(
+          "Update installed, but the restart handoff failed. Restart "
+          "the browser manually.");
+    }
+    base::win::ScopedHandle parent_handle(raw_handle);
+    relaunch_cmd.AppendSwitchASCII(
+        switches::kWaitForParentHandle,
+        base::NumberToString(base::win::HandleToUint32(parent_handle.get())));
+    launch_options.handles_to_inherit.push_back(parent_handle.get());
+    base::Process process = base::LaunchProcess(relaunch_cmd, launch_options);
+    if (!process.IsValid()) {
+      return fail(
+          "Update installed, but the browser could not restart. Restart "
+          "the browser manually.");
     }
   }
-
-  // Publish registration only after the file transaction and any relaunch
-  // handoff succeed. Older target releases may not synchronize it at startup.
-  const base::FilePath committed_version =
-      version_staged ? staged_path : installed_version;
-  UpdateRegistryVersion(target_install_dir, target_exe,
-                        committed_version.BaseName().MaybeAsASCII());
-
-  // Locked backup images may remain until browser exit. Keep this private
-  // recovery directory; it is safe to clean on a subsequent successful start.
-  transaction.Take();
   return true;
 }
 

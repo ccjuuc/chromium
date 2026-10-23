@@ -7,6 +7,8 @@
 
 #include <stdint.h>
 
+#include "base/containers/span.h"
+#include "base/files/file_path.h"
 #include "base/memory/raw_ref.h"
 #include "modify_params.h"
 
@@ -35,6 +37,11 @@ struct InstallParams : public ModifyParams {
   const raw_ref<const base::Version> new_version;
   // Estimated size (kb) of the unpacked chrome package
   const uint32_t estimated_size;
+
+  // Validated root-file removals carried by a directory update package. These
+  // are executed by the same rollback-capable work list as the installation.
+  // The caller retains the storage until InstallOrUpdateProduct returns.
+  base::span<const base::FilePath> root_deletions = {};
 
   InstallParams(InstallerState& installer_state,
                 InstallationState& installation_state,

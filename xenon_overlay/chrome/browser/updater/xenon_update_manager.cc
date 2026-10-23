@@ -1546,6 +1546,12 @@ void XenonUpdateManager::DoCleanupOldVersions(base::FilePath install_dir,
                     "version or missing install dir";
     return;
   }
+#if BUILDFLAG(IS_WIN)
+  XenonUpdateInstaller::CleanupRecoveryDirectories(install_dir,
+                                                   current_ver_str);
+  // setup.exe owns version retention and pending in-use updates. Only clean
+  // transactions left by the previous directory installer here.
+#else
   // 1. Clean up older version directories
   base::FileEnumerator enumerator(install_dir, /*recursive=*/false,
                                   base::FileEnumerator::DIRECTORIES);
@@ -1586,17 +1592,17 @@ void XenonUpdateManager::DoCleanupOldVersions(base::FilePath install_dir,
 #endif
     }
   }
+#endif
 }
 
 void XenonUpdateManager::OnVersionStartup() {
   if (system_updater_) {
     return;
   }
-  base::FilePath install_dir = GetDefaultInstallDir();
-  std::string current_ver = GetCurrentVersion();
-  UpdateRegistryVersion(install_dir, current_ver);
   CleanupOldVersions();
 #if BUILDFLAG(IS_MAC)
+  base::FilePath install_dir = GetDefaultInstallDir();
+  std::string current_ver = GetCurrentVersion();
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
       base::BindOnce(&XenonUpdateInstaller::ReadLastInstallError, install_dir,
@@ -1612,17 +1618,6 @@ void XenonUpdateManager::OnLastInstallErrorRead(std::string error) {
   if (!error.empty() && state_ == UpdateState::kIdle) {
     NotifyError(error);
   }
-}
-
-// static
-void XenonUpdateManager::UpdateRegistryVersion(base::FilePath install_dir,
-                                               const std::string& version) {
-#if BUILDFLAG(IS_WIN)
-  base::FilePath executable;
-  if (base::PathService::Get(base::FILE_EXE, &executable)) {
-    XenonUpdateInstaller::UpdateRegistryVersion(install_dir, executable, version);
-  }
-#endif
 }
 
 void XenonUpdateManager::InstallOnExit() {

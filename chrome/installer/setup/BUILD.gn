@@ -24,6 +24,7 @@ if (is_win) {
       "//build/config/win:console",
     ]
     configs += [ "//build/config/win:windowed" ]
+    configs += [ "//xenon_overlay/buildflags:custom_install_identity" ]
 
     deps = [
       ":lib",
@@ -64,6 +65,8 @@ if (is_win) {
       "install.cc",
       "install.h",
       "install_params.h",
+      "install_source_directory.cc",
+      "install_source_directory.h",
       "install_worker.cc",
       "install_worker.h",
       "installer_crash_reporter_client.cc",
@@ -147,10 +150,12 @@ if (is_win) {
 
   # This test covers the mini installer and setup tests.
   test("setup_unittests") {
+    configs += [ "//xenon_overlay/buildflags:custom_install_identity" ]
     sources = [
       "configure_app_container_sandbox_unittest.cc",
       "downgrade_cleanup_unittest.cc",
       "generate_visual_elements_manifest_work_item_unittest.cc",
+      "install_source_directory_unittest.cc",
       "install_unittest.cc",
       "install_worker_unittest.cc",
       "installer_state_unittest.cc",

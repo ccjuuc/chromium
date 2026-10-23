@@ -10,6 +10,10 @@
 #include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
 
+namespace base {
+class CommandLine;
+}  // namespace base
+
 namespace xenon::updater {
 
 class XenonUpdateInstaller {
@@ -60,6 +64,8 @@ class XenonUpdateInstaller {
   // Prepares the platform-specific installation and returns whether the caller
   // can request normal application shutdown. On macOS the native helper waits
   // for this process to exit before atomically replacing the application.
+  // Windows directory updates wait for the new setup.exe to install and
+  // finalize any in-use launcher before handing off an optional relaunch.
   // |staged_path| can be either a staged directory with new files, or an
   // installer binary. |target_install_dir| is the root directory of the
   // currently running application. |relaunch_executable| is the path to the
@@ -69,12 +75,18 @@ class XenonUpdateInstaller {
                                  const base::FilePath& relaunch_executable,
                                  std::string* error = nullptr);
 
-  // Windows only. Updates existing registrations belonging to |install_dir|
-  // after a directory installation commits, or when that version starts.
-  // Does not create registrations or finalize an asynchronous installer EXE.
-  static void UpdateRegistryVersion(const base::FilePath& install_dir,
-                                    const base::FilePath& executable,
-                                    const std::string& version);
+  // Windows only. Replaces setup execution in tests. The runner returns the
+  // setup exit code, or -1 when the process could not start or be waited on.
+  // Pass an empty callback to restore normal execution.
+  static void SetSetupRunnerForTesting(
+      base::RepeatingCallback<int(const base::CommandLine&)> runner);
+
+  // Windows only; MayBlock. Retries cleanup of committed installation
+  // transactions from the legacy directory installer no newer than
+  // |current_version|. Preserves uncommitted data and shares the legacy lock;
+  // setup.exe owns its own installation transactions and their cleanup.
+  static void CleanupRecoveryDirectories(const base::FilePath& install_dir,
+                                         const std::string& current_version);
 
   // CFBundleShortVersionString of a macOS app bundle, then CFBundleVersion.
   // Empty when |bundle_path| has no Info.plist. Only implemented on macOS.

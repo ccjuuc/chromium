@@ -4,6 +4,8 @@
 
 #include "xenon_overlay/chrome/browser/updater/xenon_update_installer.h"
 
+#include <windows.h>
+
 #include <memory>
 #include <string>
 #include <string_view>
@@ -11,11 +13,16 @@
 #include "base/base_paths.h"
 #include "base/command_line.h"
 #include "base/files/file.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/bind.h"
 #include "base/test/scoped_path_override.h"
 #include "base/test/test_reg_util_win.h"
+#include "base/win/access_token.h"
 #include "base/win/registry.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -35,13 +42,19 @@ class XenonUpdateInstallerWinTest : public testing::Test {
         registry_overrides_.OverrideRegistry(HKEY_CURRENT_USER));
     ASSERT_TRUE(temporary_.CreateUniqueTempDir());
     installation_ = temporary_.GetPath().AppendASCII("installed browser");
-    staged_ = installation_.AppendASCII("2.0.0.0");
+    staged_ = temporary_.GetPath().AppendASCII("download/versions/2.0.0.0");
     root_files_ = staged_.AppendASCII(".xenon-root");
     launcher_ = installation_.AppendASCII("browser.exe");
     ASSERT_TRUE(base::CreateDirectory(root_files_));
     Write(launcher_, "old launcher");
     file_exe_override_ = std::make_unique<base::ScopedPathOverride>(
         base::FILE_EXE, launcher_, /*is_absolute=*/true, /*create=*/false);
+    XenonUpdateInstaller::SetSetupRunnerForTesting(base::BindRepeating(
+        &XenonUpdateInstallerWinTest::RunSetup, base::Unretained(this)));
+  }
+
+  void TearDown() override {
+    XenonUpdateInstaller::SetSetupRunnerForTesting({});
   }
 
   void Write(const base::FilePath& path, std::string_view contents) {
@@ -57,6 +70,35 @@ class XenonUpdateInstallerWinTest : public testing::Test {
 
   void StageLauncher() {
     Write(root_files_.AppendASCII("browser.exe"), "new launcher");
+  }
+
+  void StageUpdate() {
+    StageLauncher();
+    Write(staged_.AppendASCII("browser.dll"), "new DLL");
+    Write(staged_.AppendASCII("Installer/setup.exe"), "new setup");
+  }
+
+  // Deliberately write distinguishable results: this fake models setup's
+  // completion contract, not Chromium's real installation transaction.
+  int RunSetup(const base::CommandLine& command) {
+    ++setup_runs_;
+    if (setup_observer_) {
+      setup_observer_.Run(command);
+    }
+    if (setup_result_ != 0 || !produce_setup_output_) {
+      return setup_result_;
+    }
+    Write(installation_.AppendASCII("2.0.0.0/browser.dll"),
+          "setup-installed DLL");
+    Write(launcher_, "setup-installed launcher");
+    if (!omit_installed_setup_) {
+      Write(installation_.AppendASCII("2.0.0.0/Installer/setup.exe"),
+            "setup-installed setup");
+    }
+    if (leave_pending_launcher_) {
+      Write(installation_.AppendASCII("new_chrome.exe"), "pending launcher");
+    }
+    return 0;
   }
 
   bool InstallWithoutRelaunch() {
@@ -149,384 +191,407 @@ class XenonUpdateInstallerWinTest : public testing::Test {
   base::FilePath root_files_;
   base::FilePath launcher_;
   std::unique_ptr<base::ScopedPathOverride> file_exe_override_;
+  base::RepeatingCallback<void(const base::CommandLine&)> setup_observer_;
+  int setup_runs_ = 0;
+  int setup_result_ = 0;
+  bool produce_setup_output_ = true;
+  bool omit_installed_setup_ = false;
+  bool leave_pending_launcher_ = false;
 };
 
-TEST_F(XenonUpdateInstallerWinTest, CommitsRootChangesAndDeletesObsoleteFiles) {
+TEST_F(XenonUpdateInstallerWinTest,
+       DifferentialHandoffUsesNewSetupAndLeavesRegistrationToSetup) {
   ASSERT_NO_FATAL_FAILURE(
       RegisterInstallation(HKEY_CURRENT_USER, installation_, "1.0.0.0"));
-  StageLauncher();
-  Write(staged_.AppendASCII("Installer/setup.exe"), "new setup");
-  Write(installation_.AppendASCII("resource.dat"), "old resource");
+  StageUpdate();
+  Write(root_files_.AppendASCII("nested/resource.dat"), "new resource");
   Write(installation_.AppendASCII("obsolete.dat"), "old obsolete");
-  Write(root_files_.AppendASCII("resource.dat"), "new resource");
-  Write(root_files_.AppendASCII("nested/addition.dat"), "new addition");
   Write(staged_.AppendASCII(".xenon-deletions.json"), "[\"obsolete.dat\"]");
+  base::FilePath source;
+  base::FilePath setup;
+  setup_observer_ = base::BindLambdaForTesting([&](const base::CommandLine&
+                                                       command) {
+    source = command.GetSwitchValuePath("install-source-dir");
+    setup = command.GetProgram();
+    EXPECT_EQ(source.BaseName().MaybeAsASCII(), "Chrome-bin");
+    EXPECT_NE(source, staged_);
+    EXPECT_FALSE(installation_.IsParent(source));
+    EXPECT_EQ(command.GetSwitchValuePath("install-directory"), installation_);
+    EXPECT_TRUE(command.HasSwitch("silent"));
+    EXPECT_TRUE(command.HasSwitch("do-not-launch-chrome"));
+    EXPECT_TRUE(command.HasSwitch("do-not-register-for-update-launch"));
+    EXPECT_FALSE(command.HasSwitch("system-level"));
+    EXPECT_FALSE(command.HasSwitch("uninstall"));
+    EXPECT_FALSE(source.IsParent(setup));
+    EXPECT_EQ(Read(setup), "new setup");
+    EXPECT_EQ(Read(source.AppendASCII("browser.exe")), "new launcher");
+    EXPECT_EQ(Read(source.AppendASCII("2.0.0.0/browser.dll")), "new DLL");
+    EXPECT_EQ(Read(source.AppendASCII("2.0.0.0/Installer/setup.exe")),
+              "new setup");
+    EXPECT_EQ(Read(source.AppendASCII("nested/resource.dat")), "new resource");
+    EXPECT_EQ(Read(source.AppendASCII(".xenon-deletions.json")),
+              "[\"obsolete.dat\"]");
+    EXPECT_FALSE(base::PathExists(source.AppendASCII("2.0.0.0/.xenon-root")));
+    EXPECT_EQ(Read(launcher_), "old launcher");
+    EXPECT_EQ(Read(installation_.AppendASCII("obsolete.dat")), "old obsolete");
+    EXPECT_FALSE(base::PathExists(installation_.AppendASCII("2.0.0.0")));
+  });
 
   ASSERT_TRUE(InstallWithoutRelaunch());
-  EXPECT_EQ(Read(launcher_), "new launcher");
-  EXPECT_EQ(Read(installation_.AppendASCII("resource.dat")), "new resource");
-  EXPECT_EQ(Read(installation_.AppendASCII("nested/addition.dat")),
-            "new addition");
-  EXPECT_FALSE(base::PathExists(installation_.AppendASCII("obsolete.dat")));
-  ExpectRegistration(HKEY_CURRENT_USER, installation_, "2.0.0.0");
+  EXPECT_EQ(setup_runs_, 1);
+  EXPECT_EQ(Read(launcher_), "setup-installed launcher");
+  EXPECT_EQ(Read(installation_.AppendASCII("2.0.0.0/browser.dll")),
+            "setup-installed DLL");
+  // The updater must not perform setup's deletion or registration work itself.
+  EXPECT_EQ(Read(installation_.AppendASCII("obsolete.dat")), "old obsolete");
+  ExpectRegistration(HKEY_CURRENT_USER, installation_, "1.0.0.0");
+  EXPECT_EQ(Read(staged_.AppendASCII("browser.dll")), "new DLL");
+  EXPECT_EQ(Read(staged_.AppendASCII("Installer/setup.exe")), "new setup");
+  EXPECT_EQ(Read(root_files_.AppendASCII("nested/resource.dat")),
+            "new resource");
+  EXPECT_EQ(Read(staged_.AppendASCII(".xenon-deletions.json")),
+            "[\"obsolete.dat\"]");
+  EXPECT_FALSE(base::PathExists(source));
+  EXPECT_FALSE(base::PathExists(setup));
+  base::FileEnumerator recoveries(installation_, false,
+                                  base::FileEnumerator::DIRECTORIES,
+                                  FILE_PATH_LITERAL(".xenon-recovery-*"));
+  EXPECT_TRUE(recoveries.Next().empty());
 }
 
-TEST_F(XenonUpdateInstallerWinTest, LockedLauncherRollsBackOtherRootChanges) {
+TEST_F(XenonUpdateInstallerWinTest,
+       FullPackageHandoffUsesCompleteApplicationTree) {
   ASSERT_NO_FATAL_FAILURE(
       RegisterInstallation(HKEY_CURRENT_USER, installation_, "1.0.0.0"));
-  StageLauncher();
-  Write(staged_.AppendASCII("Installer/setup.exe"), "new setup");
-  Write(installation_.AppendASCII("resource.dat"), "old resource");
-  Write(installation_.AppendASCII("obsolete.dat"), "old obsolete");
-  Write(root_files_.AppendASCII("resource.dat"), "new resource");
-  Write(root_files_.AppendASCII("nested/addition.dat"), "new addition");
-  Write(staged_.AppendASCII(".xenon-deletions.json"), "[\"obsolete.dat\"]");
-  // No FLAG_WIN_SHARE_DELETE: moving this final commit item must fail after
-  // earlier replacements, additions and deletions have already happened.
-  base::File held_launcher(launcher_,
-                           base::File::FLAG_OPEN | base::File::FLAG_READ);
-  ASSERT_TRUE(held_launcher.IsValid());
+  const base::FilePath full = temporary_.GetPath().AppendASCII("full");
+  Write(full.AppendASCII("browser.exe"), "full launcher");
+  Write(full.AppendASCII("2.0.0.0/browser.dll"), "full DLL");
+  Write(full.AppendASCII("2.0.0.0/Installer/setup.exe"), "full setup");
+  Write(full.AppendASCII("assets/plugin.js"), "full plugin");
+  setup_observer_ =
+      base::BindLambdaForTesting([&](const base::CommandLine& command) {
+        const auto source = command.GetSwitchValuePath("install-source-dir");
+        EXPECT_EQ(Read(command.GetProgram()), "full setup");
+        EXPECT_EQ(Read(source.AppendASCII("browser.exe")), "full launcher");
+        EXPECT_EQ(Read(source.AppendASCII("2.0.0.0/browser.dll")), "full DLL");
+        EXPECT_EQ(Read(source.AppendASCII("assets/plugin.js")), "full plugin");
+      });
+
+  EXPECT_TRUE(
+      XenonUpdateInstaller::InstallAndRelaunch(full, installation_, {}));
+  EXPECT_EQ(setup_runs_, 1);
+  EXPECT_EQ(Read(full.AppendASCII("assets/plugin.js")), "full plugin");
+  ExpectRegistration(HKEY_CURRENT_USER, installation_, "1.0.0.0");
+}
+
+TEST_F(XenonUpdateInstallerWinTest, FullPackageAcceptsChromeBinContainer) {
+  ASSERT_NO_FATAL_FAILURE(
+      RegisterInstallation(HKEY_CURRENT_USER, installation_, "1.0.0.0"));
+  const base::FilePath full = temporary_.GetPath().AppendASCII("full");
+  Write(full.AppendASCII("Chrome-bin/browser.exe"), "full launcher");
+  Write(full.AppendASCII("Chrome-bin/2.0.0.0/browser.dll"), "full DLL");
+  Write(full.AppendASCII("Chrome-bin/2.0.0.0/Installer/setup.exe"),
+        "full setup");
+  setup_observer_ =
+      base::BindLambdaForTesting([&](const base::CommandLine& command) {
+        const auto source = command.GetSwitchValuePath("install-source-dir");
+        EXPECT_EQ(Read(source.AppendASCII("browser.exe")), "full launcher");
+        EXPECT_FALSE(base::PathExists(source.AppendASCII("Chrome-bin")));
+      });
+
+  EXPECT_TRUE(
+      XenonUpdateInstaller::InstallAndRelaunch(full, installation_, {}));
+  EXPECT_EQ(setup_runs_, 1);
+}
+
+TEST_F(XenonUpdateInstallerWinTest, RejectsInPlaceStagingWithoutChangingInput) {
+  ASSERT_NO_FATAL_FAILURE(
+      RegisterInstallation(HKEY_CURRENT_USER, installation_, "1.0.0.0"));
+  staged_ = installation_.AppendASCII("2.0.0.0");
+  root_files_ = staged_.AppendASCII(".xenon-root");
+  StageUpdate();
 
   EXPECT_FALSE(InstallWithoutRelaunch());
+  EXPECT_EQ(setup_runs_, 0);
+  EXPECT_EQ(Read(staged_.AppendASCII("browser.dll")), "new DLL");
+  EXPECT_EQ(Read(staged_.AppendASCII("Installer/setup.exe")), "new setup");
+  EXPECT_EQ(Read(root_files_.AppendASCII("browser.exe")), "new launcher");
   EXPECT_EQ(Read(launcher_), "old launcher");
-  EXPECT_EQ(Read(installation_.AppendASCII("resource.dat")), "old resource");
-  EXPECT_EQ(Read(installation_.AppendASCII("obsolete.dat")), "old obsolete");
-  EXPECT_FALSE(base::PathExists(installation_.AppendASCII("nested")));
-  ExpectRegistration(HKEY_CURRENT_USER, installation_, "1.0.0.0");
-}
-
-TEST_F(XenonUpdateInstallerWinTest, FailedRelaunchRollsBackCommittedFiles) {
-  ASSERT_NO_FATAL_FAILURE(
-      RegisterInstallation(HKEY_CURRENT_USER, installation_, "1.0.0.0"));
-  StageLauncher();  // Deliberately not a PE image; CreateProcess must fail.
-  Write(staged_.AppendASCII("Installer/setup.exe"), "new setup");
-  Write(installation_.AppendASCII("obsolete.dat"), "old obsolete");
-  Write(staged_.AppendASCII(".xenon-deletions.json"), "[\"obsolete.dat\"]");
-
-  EXPECT_FALSE(XenonUpdateInstaller::InstallAndRelaunch(staged_, installation_,
-                                                        launcher_));
-  EXPECT_EQ(Read(launcher_), "old launcher");
-  EXPECT_EQ(Read(installation_.AppendASCII("obsolete.dat")), "old obsolete");
-  ExpectRegistration(HKEY_CURRENT_USER, installation_, "1.0.0.0");
-}
-
-TEST_F(XenonUpdateInstallerWinTest, FullPackageRollbackRemovesOnlyNewVersion) {
-  ASSERT_NO_FATAL_FAILURE(
-      RegisterInstallation(HKEY_CURRENT_USER, installation_, "1.0.0.0"));
-  const base::FilePath full = temporary_.GetPath().AppendASCII("full");
-  Write(full.AppendASCII("3.0.0.0/browser.dll"), "new DLL");
-  Write(full.AppendASCII("3.0.0.0/Installer/setup.exe"), "new setup");
-  Write(full.AppendASCII("browser.exe"), "invalid PE image");
-  Write(installation_.AppendASCII("1.0.0.0/browser.dll"), "old DLL");
-
-  EXPECT_FALSE(
-      XenonUpdateInstaller::InstallAndRelaunch(full, installation_, launcher_));
-  EXPECT_EQ(Read(launcher_), "old launcher");
-  EXPECT_EQ(Read(installation_.AppendASCII("1.0.0.0/browser.dll")), "old DLL");
-  EXPECT_FALSE(base::PathExists(installation_.AppendASCII("3.0.0.0")));
   ExpectRegistration(HKEY_CURRENT_USER, installation_, "1.0.0.0");
 }
 
 TEST_F(XenonUpdateInstallerWinTest,
-       ExternalVersionPackageCommitsWithoutChangingInput) {
+       MachineHandoffPreservesOnlySupportedInstallationArguments) {
   ASSERT_NO_FATAL_FAILURE(
       RegisterInstallation(HKEY_LOCAL_MACHINE, installation_, "1.0.0.0"));
-  const base::FilePath external =
-      temporary_.GetPath().AppendASCII("download/versions/3.0.0.0");
-  Write(external.AppendASCII("browser.dll"), "new DLL");
-  Write(external.AppendASCII("Installer/setup.exe"), "new setup");
-  Write(external.AppendASCII(".xenon-root/browser.exe"), "new launcher");
-  Write(external.AppendASCII(".xenon-root/resource.dat"), "new resource");
-  Write(external.AppendASCII(".xenon-deletions.json"), "[\"obsolete.dat\"]");
-  Write(installation_.AppendASCII("obsolete.dat"), "old obsolete");
-
-  ASSERT_TRUE(XenonUpdateInstaller::InstallAndRelaunch(external, installation_,
-                                                       base::FilePath()));
-  EXPECT_EQ(Read(launcher_), "new launcher");
-  EXPECT_EQ(Read(installation_.AppendASCII("resource.dat")), "new resource");
-  EXPECT_EQ(Read(installation_.AppendASCII("3.0.0.0/browser.dll")), "new DLL");
-  EXPECT_FALSE(base::PathExists(installation_.AppendASCII("obsolete.dat")));
-  EXPECT_FALSE(
-      base::PathExists(installation_.AppendASCII("3.0.0.0/.xenon-root")));
-  EXPECT_FALSE(base::PathExists(
-      installation_.AppendASCII("3.0.0.0/.xenon-deletions.json")));
-  EXPECT_EQ(Read(external.AppendASCII("browser.dll")), "new DLL");
-  EXPECT_EQ(Read(external.AppendASCII(".xenon-root/browser.exe")),
-            "new launcher");
-  EXPECT_EQ(Read(external.AppendASCII(".xenon-root/resource.dat")),
-            "new resource");
-  EXPECT_EQ(Read(external.AppendASCII(".xenon-deletions.json")),
-            "[\"obsolete.dat\"]");
-  EXPECT_EQ(Read(external.AppendASCII("Installer/setup.exe")), "new setup");
-  ExpectRegistration(HKEY_LOCAL_MACHINE, installation_, "3.0.0.0");
-}
-
-TEST_F(XenonUpdateInstallerWinTest,
-       FullPackageCommitUpdatesOnlyMatchingInstallation) {
-  const base::FilePath other_installation =
-      temporary_.GetPath().AppendASCII("other-installation");
-  ASSERT_NO_FATAL_FAILURE(
-      RegisterInstallation(HKEY_CURRENT_USER, installation_, "1.0.0.0"));
-  ASSERT_NO_FATAL_FAILURE(
-      RegisterInstallation(HKEY_LOCAL_MACHINE, other_installation, "4.0.0.0"));
-  const base::FilePath full = temporary_.GetPath().AppendASCII("full");
-  Write(full.AppendASCII("3.0.0.0/browser.dll"), "new DLL");
-  Write(full.AppendASCII("3.0.0.0/Installer/setup.exe"), "new setup");
-  Write(full.AppendASCII("browser.exe"), "new launcher");
-
-  ASSERT_TRUE(XenonUpdateInstaller::InstallAndRelaunch(full, installation_,
-                                                       base::FilePath()));
-  EXPECT_EQ(Read(launcher_), "new launcher");
-  EXPECT_EQ(Read(installation_.AppendASCII("3.0.0.0/Installer/setup.exe")),
-            "new setup");
-  ExpectRegistration(HKEY_CURRENT_USER, installation_, "3.0.0.0");
-  ExpectRegistration(HKEY_LOCAL_MACHINE, other_installation, "4.0.0.0");
-}
-
-TEST_F(XenonUpdateInstallerWinTest,
-       MachineInstallationPreservesUninstallAndCleanupArguments) {
-  ASSERT_NO_FATAL_FAILURE(
-      RegisterInstallation(HKEY_LOCAL_MACHINE, installation_, "1.0.0.0"));
-  const base::FilePath old_setup = installation_.AppendASCII("1.0.0.0")
-                                       .AppendASCII("Installer")
-                                       .AppendASCII("setup.exe");
-  const base::FilePath new_setup =
-      staged_.AppendASCII("Installer").AppendASCII("setup.exe");
-  constexpr wchar_t kUninstallArguments[] =
-      L" --uninstall --system-level --msi --verbose-logging --chrome-beta "
-      L"--channel=beta";
+  StageUpdate();
   const std::wstring uninstall_command =
-      L"\"" + old_setup.value() + L"\"" + kUninstallArguments;
-  const std::wstring cleanup_command =
-      L"\"" + old_setup.value() +
-      L"\" --cleanup-for-downgrade-version=$1 "
-      L"--cleanup-for-downgrade-operation=$2 --system-level "
-      L"--verbose-logging --chrome-beta --channel=beta";
-  base::win::RegKey product;
-  ASSERT_EQ(ERROR_SUCCESS,
-            product.Open(HKEY_LOCAL_MACHINE, kProductKey,
-                         KEY_READ | KEY_WRITE | KEY_WOW64_32KEY));
-  ASSERT_EQ(ERROR_SUCCESS,
-            product.WriteValue(L"UninstallArguments", kUninstallArguments));
-  ASSERT_EQ(ERROR_SUCCESS, product.WriteValue(L"DowngradeCleanupCommand",
-                                              cleanup_command.c_str()));
-  base::win::RegKey uninstall;
-  ASSERT_EQ(ERROR_SUCCESS,
-            uninstall.Open(HKEY_LOCAL_MACHINE, kUninstallKey,
-                           KEY_READ | KEY_WRITE | KEY_WOW64_32KEY));
+      L"\"" + installation_.AppendASCII("1.0.0.0/Installer/setup.exe").value() +
+      L"\" --uninstall --system-level --msi --chrome-beta --channel=beta "
+      L"--delete-profile --arbitrary-option=ignored";
+  base::win::RegKey uninstall(HKEY_LOCAL_MACHINE, kUninstallKey,
+                              KEY_READ | KEY_WRITE | KEY_WOW64_32KEY);
   ASSERT_EQ(ERROR_SUCCESS, uninstall.WriteValue(L"UninstallString",
                                                 uninstall_command.c_str()));
-  StageLauncher();
-  Write(new_setup, "new setup");
-
-  ASSERT_TRUE(InstallWithoutRelaunch());
-  ExpectRegistryString(HKEY_LOCAL_MACHINE, kProductKey, L"pv", L"2.0.0.0");
-  ExpectRegistryString(HKEY_LOCAL_MACHINE, kUninstallKey, L"Version",
-                       L"2.0.0.0");
-  ExpectRegistryString(HKEY_LOCAL_MACHINE, kUninstallKey, L"DisplayVersion",
-                       L"2.0.0.0");
-  ExpectRegistryString(HKEY_LOCAL_MACHINE, kProductKey, L"UninstallString",
-                       new_setup.value());
-  ExpectRegistryString(HKEY_LOCAL_MACHINE, kProductKey, L"UninstallArguments",
-                       kUninstallArguments);
-
-  std::wstring updated_uninstall;
-  ASSERT_EQ(ERROR_SUCCESS,
-            uninstall.ReadValue(L"UninstallString", &updated_uninstall));
-  const base::CommandLine parsed_uninstall =
-      base::CommandLine::FromString(updated_uninstall);
-  EXPECT_EQ(parsed_uninstall.GetProgram(), new_setup);
-  EXPECT_EQ(parsed_uninstall.GetSwitches(),
-            base::CommandLine::FromString(uninstall_command).GetSwitches());
-
-  std::wstring updated_cleanup;
-  ASSERT_EQ(ERROR_SUCCESS,
-            product.ReadValue(L"DowngradeCleanupCommand", &updated_cleanup));
-  const base::CommandLine parsed_cleanup =
-      base::CommandLine::FromString(updated_cleanup);
-  EXPECT_EQ(parsed_cleanup.GetProgram(), new_setup);
-  EXPECT_EQ(parsed_cleanup.GetSwitches(),
-            base::CommandLine::FromString(cleanup_command).GetSwitches());
-}
-
-TEST_F(XenonUpdateInstallerWinTest,
-       UnregisteredInstallationDoesNotCreateProductKeys) {
-  StageLauncher();
-  Write(staged_.AppendASCII("Installer/setup.exe"), "new setup");
-
-  ASSERT_TRUE(InstallWithoutRelaunch());
-  for (HKEY hive : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
-    for (REGSAM view : {KEY_WOW64_32KEY, KEY_WOW64_64KEY}) {
-      base::win::RegKey key;
-      EXPECT_EQ(ERROR_FILE_NOT_FOUND,
-                key.Open(hive, kProductKey, KEY_READ | view));
-      EXPECT_EQ(ERROR_FILE_NOT_FOUND,
-                key.Open(hive, kUninstallKey, KEY_READ | view));
-    }
+  const auto token = base::win::AccessToken::FromCurrentProcess();
+  ASSERT_TRUE(token);
+  if (!token->IsElevated()) {
+    // Exit-time installation cannot show a UAC prompt. It must refuse before
+    // handing a machine installation to even the injected setup runner.
+    std::string error;
+    EXPECT_FALSE(XenonUpdateInstaller::InstallAndRelaunch(
+        staged_, installation_, {}, &error));
+    EXPECT_EQ(setup_runs_, 0);
+    EXPECT_FALSE(error.empty());
+    EXPECT_EQ(Read(launcher_), "old launcher");
+    ExpectRegistryString(HKEY_LOCAL_MACHINE, kProductKey, L"pv", L"1.0.0.0");
+    return;
   }
+  setup_observer_ =
+      base::BindLambdaForTesting([&](const base::CommandLine& command) {
+        EXPECT_TRUE(command.HasSwitch("system-level"));
+        EXPECT_TRUE(command.HasSwitch("msi"));
+        EXPECT_TRUE(command.HasSwitch("chrome-beta"));
+        EXPECT_EQ(command.GetSwitchValueASCII("channel"), "beta");
+        EXPECT_FALSE(command.HasSwitch("uninstall"));
+        EXPECT_FALSE(command.HasSwitch("delete-profile"));
+        EXPECT_FALSE(command.HasSwitch("arbitrary-option"));
+      });
+
+  EXPECT_TRUE(InstallWithoutRelaunch());
+  EXPECT_EQ(setup_runs_, 1);
+  ExpectRegistryString(HKEY_LOCAL_MACHINE, kProductKey, L"pv", L"1.0.0.0");
+  ExpectRegistryString(HKEY_LOCAL_MACHINE, kUninstallKey, L"UninstallString",
+                       uninstall_command);
 }
 
-TEST_F(XenonUpdateInstallerWinTest,
-       RegistrationWithoutInstallationPathIsNotOverwritten) {
-  base::win::RegKey product;
-  ASSERT_EQ(ERROR_SUCCESS,
-            product.Create(HKEY_CURRENT_USER, kProductKey,
-                           KEY_READ | KEY_WRITE | KEY_WOW64_32KEY));
-  ASSERT_EQ(ERROR_SUCCESS, product.WriteValue(L"pv", L"4.0.0.0"));
-  base::win::RegKey uninstall;
-  ASSERT_EQ(ERROR_SUCCESS,
-            uninstall.Create(HKEY_CURRENT_USER, kUninstallKey,
-                             KEY_READ | KEY_WRITE | KEY_WOW64_32KEY));
-  ASSERT_EQ(ERROR_SUCCESS, uninstall.WriteValue(L"Version", L"4.0.0.0"));
-  ASSERT_EQ(ERROR_SUCCESS, uninstall.WriteValue(L"DisplayVersion", L"4.0.0.0"));
-  StageLauncher();
-  Write(staged_.AppendASCII("Installer/setup.exe"), "new setup");
-
-  ASSERT_TRUE(InstallWithoutRelaunch());
-  ExpectRegistryString(HKEY_CURRENT_USER, kProductKey, L"pv", L"4.0.0.0");
-  ExpectRegistryString(HKEY_CURRENT_USER, kUninstallKey, L"Version",
-                       L"4.0.0.0");
-  ExpectRegistryString(HKEY_CURRENT_USER, kUninstallKey, L"DisplayVersion",
-                       L"4.0.0.0");
-  EXPECT_FALSE(product.HasValue(L"UninstallString"));
-  EXPECT_FALSE(product.HasValue(L"DowngradeCleanupCommand"));
-  EXPECT_FALSE(uninstall.HasValue(L"UninstallString"));
-}
-
-TEST_F(XenonUpdateInstallerWinTest,
-       UninstallEntryForAnotherInstallationIsNotOverwritten) {
+TEST_F(XenonUpdateInstallerWinTest, PreservesDevAndSxsInstallModes) {
   ASSERT_NO_FATAL_FAILURE(
       RegisterInstallation(HKEY_CURRENT_USER, installation_, "1.0.0.0"));
-  const base::FilePath other_installation =
-      temporary_.GetPath().AppendASCII("other browser");
-  const std::wstring other_uninstall =
-      L"\"" +
-      other_installation.AppendASCII("4.0.0.0/Installer/setup.exe").value() +
-      L"\" --uninstall";
-  base::win::RegKey uninstall;
-  ASSERT_EQ(ERROR_SUCCESS,
-            uninstall.Open(HKEY_CURRENT_USER, kUninstallKey,
-                           KEY_READ | KEY_WRITE | KEY_WOW64_32KEY));
-  ASSERT_EQ(ERROR_SUCCESS,
-            uninstall.WriteValue(L"InstallLocation",
-                                 other_installation.value().c_str()));
-  ASSERT_EQ(ERROR_SUCCESS,
-            uninstall.WriteValue(L"UninstallString", other_uninstall.c_str()));
-  ASSERT_EQ(ERROR_SUCCESS, uninstall.WriteValue(L"Version", L"4.0.0.0"));
-  ASSERT_EQ(ERROR_SUCCESS, uninstall.WriteValue(L"DisplayVersion", L"4.0.0.0"));
-  StageLauncher();
-  Write(staged_.AppendASCII("Installer/setup.exe"), "new setup");
-
-  ASSERT_TRUE(InstallWithoutRelaunch());
-  ExpectRegistryString(HKEY_CURRENT_USER, kProductKey, L"pv", L"2.0.0.0");
-  ExpectRegistryString(HKEY_CURRENT_USER, kUninstallKey, L"Version",
-                       L"4.0.0.0");
-  ExpectRegistryString(HKEY_CURRENT_USER, kUninstallKey, L"DisplayVersion",
-                       L"4.0.0.0");
-  ExpectRegistryString(HKEY_CURRENT_USER, kUninstallKey, L"UninstallString",
-                       other_uninstall);
-  ExpectRegistryString(HKEY_CURRENT_USER, kUninstallKey, L"InstallLocation",
-                       other_installation.value());
+  StageUpdate();
+  setup_result_ = 7;
+  for (const char* mode : {"chrome-dev", "chrome-sxs"}) {
+    const std::wstring uninstall_command =
+        L"\"" +
+        installation_.AppendASCII("1.0.0.0/Installer/setup.exe").value() +
+        L"\" --uninstall --" + base::ASCIIToWide(mode);
+    base::win::RegKey uninstall(HKEY_CURRENT_USER, kUninstallKey,
+                                KEY_READ | KEY_WRITE | KEY_WOW64_32KEY);
+    ASSERT_EQ(ERROR_SUCCESS, uninstall.WriteValue(L"UninstallString",
+                                                  uninstall_command.c_str()));
+    setup_observer_ =
+        base::BindLambdaForTesting([&](const base::CommandLine& command) {
+          EXPECT_TRUE(command.HasSwitch(mode));
+          EXPECT_FALSE(command.HasSwitch("system-level"));
+        });
+    EXPECT_FALSE(InstallWithoutRelaunch());
+  }
+  EXPECT_EQ(setup_runs_, 2);
 }
 
 TEST_F(XenonUpdateInstallerWinTest,
-       ExternalVersionFailurePreservesInputForRetry) {
-  const base::FilePath external =
-      temporary_.GetPath().AppendASCII("download/versions/3.0.0.0");
-  Write(external.AppendASCII("browser.dll"), "new DLL");
-  Write(external.AppendASCII(".xenon-root/browser.exe"), "new launcher");
-  Write(external.AppendASCII(".xenon-root/nested/addition.dat"),
-        "new addition");
-  Write(external.AppendASCII(".xenon-deletions.json"), "[\"obsolete.dat\"]");
-  Write(installation_.AppendASCII("obsolete.dat"), "old obsolete");
-  base::File held_launcher(launcher_,
-                           base::File::FLAG_OPEN | base::File::FLAG_READ);
-  ASSERT_TRUE(held_launcher.IsValid());
+       UserHandoffIgnoresOtherMachineInstallation) {
+  ASSERT_NO_FATAL_FAILURE(
+      RegisterInstallation(HKEY_CURRENT_USER, installation_, "1.0.0.0"));
+  ASSERT_NO_FATAL_FAILURE(RegisterInstallation(
+      HKEY_LOCAL_MACHINE, temporary_.GetPath().AppendASCII("other"),
+      "4.0.0.0"));
+  StageUpdate();
+  setup_observer_ =
+      base::BindLambdaForTesting([&](const base::CommandLine& command) {
+        EXPECT_FALSE(command.HasSwitch("system-level"));
+      });
 
-  EXPECT_FALSE(XenonUpdateInstaller::InstallAndRelaunch(external, installation_,
-                                                        base::FilePath()));
+  EXPECT_TRUE(InstallWithoutRelaunch());
+  EXPECT_EQ(setup_runs_, 1);
+}
+
+TEST_F(XenonUpdateInstallerWinTest, RequiresMatchingInstallationRegistration) {
+  ASSERT_NO_FATAL_FAILURE(RegisterInstallation(
+      HKEY_CURRENT_USER, temporary_.GetPath().AppendASCII("other"), "1.0.0.0"));
+  StageUpdate();
+
+  EXPECT_FALSE(InstallWithoutRelaunch());
+  EXPECT_EQ(setup_runs_, 0);
   EXPECT_EQ(Read(launcher_), "old launcher");
-  EXPECT_EQ(Read(installation_.AppendASCII("obsolete.dat")), "old obsolete");
-  EXPECT_FALSE(base::PathExists(installation_.AppendASCII("3.0.0.0")));
-  EXPECT_FALSE(base::PathExists(installation_.AppendASCII("nested")));
-  EXPECT_EQ(Read(external.AppendASCII("browser.dll")), "new DLL");
-  EXPECT_EQ(Read(external.AppendASCII(".xenon-root/browser.exe")),
-            "new launcher");
-  EXPECT_EQ(Read(external.AppendASCII(".xenon-root/nested/addition.dat")),
-            "new addition");
-  EXPECT_EQ(Read(external.AppendASCII(".xenon-deletions.json")),
-            "[\"obsolete.dat\"]");
-  held_launcher.Close();
-  EXPECT_TRUE(XenonUpdateInstaller::InstallAndRelaunch(external, installation_,
-                                                       base::FilePath()));
-  EXPECT_EQ(Read(installation_.AppendASCII("3.0.0.0/browser.dll")), "new DLL");
+}
+
+TEST_F(XenonUpdateInstallerWinTest, RejectsAmbiguousUserAndMachineScopes) {
+  ASSERT_NO_FATAL_FAILURE(
+      RegisterInstallation(HKEY_CURRENT_USER, installation_, "1.0.0.0"));
+  ASSERT_NO_FATAL_FAILURE(
+      RegisterInstallation(HKEY_LOCAL_MACHINE, installation_, "1.0.0.0"));
+  StageUpdate();
+
+  EXPECT_FALSE(InstallWithoutRelaunch());
+  EXPECT_EQ(setup_runs_, 0);
+}
+
+TEST_F(XenonUpdateInstallerWinTest, MissingNewSetupNeverRunsOldSetup) {
+  ASSERT_NO_FATAL_FAILURE(
+      RegisterInstallation(HKEY_CURRENT_USER, installation_, "1.0.0.0"));
+  StageUpdate();
+  ASSERT_TRUE(base::DeleteFile(staged_.AppendASCII("Installer/setup.exe")));
+
+  EXPECT_FALSE(InstallWithoutRelaunch());
+  EXPECT_EQ(setup_runs_, 0);
+  EXPECT_EQ(Read(launcher_), "old launcher");
 }
 
 TEST_F(XenonUpdateInstallerWinTest,
-       ExternalVersionNeverOverwritesExistingVersion) {
-  const base::FilePath external =
-      temporary_.GetPath().AppendASCII("download/versions/3.0.0.0");
-  Write(external.AppendASCII("browser.dll"), "new DLL");
-  Write(external.AppendASCII(".xenon-root/browser.exe"), "new launcher");
-  Write(installation_.AppendASCII("3.0.0.0/browser.dll"), "existing DLL");
+       MissingSourceLauncherDoesNotUseInstalledOne) {
+  ASSERT_NO_FATAL_FAILURE(
+      RegisterInstallation(HKEY_CURRENT_USER, installation_, "1.0.0.0"));
+  StageUpdate();
+  ASSERT_TRUE(base::DeleteFile(root_files_.AppendASCII("browser.exe")));
 
-  EXPECT_FALSE(XenonUpdateInstaller::InstallAndRelaunch(external, installation_,
-                                                        base::FilePath()));
+  EXPECT_FALSE(InstallWithoutRelaunch());
+  EXPECT_EQ(setup_runs_, 0);
   EXPECT_EQ(Read(launcher_), "old launcher");
-  EXPECT_EQ(Read(installation_.AppendASCII("3.0.0.0/browser.dll")),
-            "existing DLL");
-  EXPECT_EQ(Read(external.AppendASCII("browser.dll")), "new DLL");
-  EXPECT_EQ(Read(external.AppendASCII(".xenon-root/browser.exe")),
-            "new launcher");
+}
+
+TEST_F(XenonUpdateInstallerWinTest, SetupFailuresAreRetryableAndPreserveInput) {
+  ASSERT_NO_FATAL_FAILURE(
+      RegisterInstallation(HKEY_CURRENT_USER, installation_, "1.0.0.0"));
+  StageUpdate();
+  for (const int result : {-1, 7}) {
+    setup_result_ = result;
+    std::string error;
+    EXPECT_FALSE(XenonUpdateInstaller::InstallAndRelaunch(
+        staged_, installation_, {}, &error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_EQ(Read(launcher_), "old launcher");
+    EXPECT_EQ(Read(root_files_.AppendASCII("browser.exe")), "new launcher");
+    EXPECT_EQ(Read(staged_.AppendASCII("Installer/setup.exe")), "new setup");
+    ExpectRegistration(HKEY_CURRENT_USER, installation_, "1.0.0.0");
+  }
+  EXPECT_EQ(setup_runs_, 2);
+  setup_result_ = 0;
+  EXPECT_TRUE(InstallWithoutRelaunch());
+  EXPECT_EQ(setup_runs_, 3);
+}
+
+TEST_F(XenonUpdateInstallerWinTest, ZeroSetupExitRequiresInstalledVersion) {
+  ASSERT_NO_FATAL_FAILURE(
+      RegisterInstallation(HKEY_CURRENT_USER, installation_, "1.0.0.0"));
+  StageUpdate();
+  produce_setup_output_ = false;
+
+  EXPECT_FALSE(InstallWithoutRelaunch());
+  EXPECT_EQ(setup_runs_, 1);
+  EXPECT_EQ(Read(launcher_), "old launcher");
+}
+
+TEST_F(XenonUpdateInstallerWinTest, ZeroSetupExitRequiresInstalledSetup) {
+  ASSERT_NO_FATAL_FAILURE(
+      RegisterInstallation(HKEY_CURRENT_USER, installation_, "1.0.0.0"));
+  StageUpdate();
+  omit_installed_setup_ = true;
+
+  EXPECT_FALSE(InstallWithoutRelaunch());
+  EXPECT_EQ(setup_runs_, 1);
+  EXPECT_TRUE(base::DirectoryExists(installation_.AppendASCII("2.0.0.0")));
+}
+
+TEST_F(XenonUpdateInstallerWinTest, PendingLauncherAfterSetupPreventsRelaunch) {
+  ASSERT_NO_FATAL_FAILURE(
+      RegisterInstallation(HKEY_CURRENT_USER, installation_, "1.0.0.0"));
+  StageUpdate();
+  leave_pending_launcher_ = true;
+
+  EXPECT_FALSE(InstallWithoutRelaunch());
+  EXPECT_EQ(setup_runs_, 1);
+  EXPECT_TRUE(base::PathExists(installation_.AppendASCII("new_chrome.exe")));
 }
 
 TEST_F(XenonUpdateInstallerWinTest,
-       MissingLauncherDoesNotConsumeStaleNewFiles) {
-  Write(installation_.AppendASCII("new_browser.exe"), "stale launcher");
-  Write(root_files_.AppendASCII("resource.dat"), "new resource");
-
-  EXPECT_FALSE(InstallWithoutRelaunch());
-  EXPECT_EQ(Read(launcher_), "old launcher");
-  EXPECT_EQ(Read(installation_.AppendASCII("new_browser.exe")),
-            "stale launcher");
-  EXPECT_FALSE(base::PathExists(installation_.AppendASCII("resource.dat")));
-}
-
-TEST_F(XenonUpdateInstallerWinTest, RejectsDeletionOutsideInstallation) {
-  StageLauncher();
-  Write(temporary_.GetPath().AppendASCII("outside.dat"), "keep outside");
-  Write(staged_.AppendASCII(".xenon-deletions.json"), "[\"../outside.dat\"]");
-
-  EXPECT_FALSE(InstallWithoutRelaunch());
-  EXPECT_EQ(Read(launcher_), "old launcher");
-  EXPECT_EQ(Read(temporary_.GetPath().AppendASCII("outside.dat")),
-            "keep outside");
-}
-
-TEST_F(XenonUpdateInstallerWinTest, RejectsDeletionOfVersionTreeOrDirectory) {
-  StageLauncher();
-  Write(installation_.AppendASCII("1.0.0.0/browser.dll"), "old DLL");
-  Write(staged_.AppendASCII(".xenon-deletions.json"),
-        "[\"1.0.0.0/browser.dll\"]");
-  EXPECT_FALSE(InstallWithoutRelaunch());
-  EXPECT_EQ(Read(installation_.AppendASCII("1.0.0.0/browser.dll")), "old DLL");
-
-  Write(installation_.AppendASCII("assets/keep.dat"), "keep");
-  Write(staged_.AppendASCII(".xenon-deletions.json"), "[\"assets\"]");
-  EXPECT_FALSE(InstallWithoutRelaunch());
-  EXPECT_EQ(Read(installation_.AppendASCII("assets/keep.dat")), "keep");
+       FailedRelaunchDoesNotUndoSetupInstallation) {
+  ASSERT_NO_FATAL_FAILURE(
+      RegisterInstallation(HKEY_CURRENT_USER, installation_, "1.0.0.0"));
+  StageUpdate();
+  std::string error;
+  // Fake setup's launcher is not a PE image, so CreateProcess must fail.
+  EXPECT_FALSE(XenonUpdateInstaller::InstallAndRelaunch(staged_, installation_,
+                                                        launcher_, &error));
+  EXPECT_EQ(setup_runs_, 1);
+  EXPECT_EQ(Read(launcher_), "setup-installed launcher");
+  EXPECT_EQ(Read(installation_.AppendASCII("2.0.0.0/browser.dll")),
+            "setup-installed DLL");
+  EXPECT_FALSE(error.empty());
 }
 
 TEST_F(XenonUpdateInstallerWinTest,
-       RejectsConflictingDeletionCaseInsensitively) {
-  StageLauncher();
-  Write(staged_.AppendASCII(".xenon-deletions.json"), "[\"BROWSER.EXE\"]");
-  EXPECT_FALSE(InstallWithoutRelaunch());
+       RecoveryCleanupKeepsCommitMarkerUntilLockedBackupCanBeDeleted) {
+  ASSERT_TRUE(base::CreateDirectory(installation_.AppendASCII("2.0.0.0")));
+  const base::FilePath recovery =
+      installation_.AppendASCII(".xenon-recovery-locked");
+  const base::FilePath marker = recovery.AppendASCII("committed");
+  const base::FilePath backup = recovery.AppendASCII("backup/browser.exe");
+  Write(marker, "2.0.0.0");
+  Write(backup, "old launcher");
+  Write(recovery.AppendASCII("backup/resource.dat"), "old resource");
+  // Model an image still held by the old browser: cleanup must be retryable
+  // even if other files in this transaction can already be removed.
+  base::File held_backup(backup, base::File::FLAG_OPEN | base::File::FLAG_READ);
+  ASSERT_TRUE(held_backup.IsValid());
+
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    XenonUpdateInstaller::CleanupRecoveryDirectories(installation_, "2.0.0.0");
+    EXPECT_EQ(Read(marker), "2.0.0.0");
+    EXPECT_EQ(Read(backup), "old launcher");
+  }
+
+  held_backup.Close();
+  XenonUpdateInstaller::CleanupRecoveryDirectories(installation_, "2.0.0.0");
+  EXPECT_FALSE(base::PathExists(recovery));
   EXPECT_EQ(Read(launcher_), "old launcher");
 }
 
-TEST_F(XenonUpdateInstallerWinTest, AnotherTransactionHoldsExclusiveLock) {
-  StageLauncher();
+TEST_F(XenonUpdateInstallerWinTest,
+       RecoveryCleanupPreservesUncommittedInvalidAndFutureTransactions) {
+  ASSERT_TRUE(base::CreateDirectory(installation_.AppendASCII("2.0.0.0")));
+  const base::FilePath uncommitted =
+      installation_.AppendASCII(".xenon-recovery-uncommitted");
+  const base::FilePath invalid =
+      installation_.AppendASCII(".xenon-recovery-invalid");
+  const base::FilePath future =
+      installation_.AppendASCII(".xenon-recovery-future");
+  const base::FilePath older =
+      installation_.AppendASCII(".xenon-recovery-older");
+  const base::FilePath unrelated =
+      installation_.AppendASCII("unrelated-backup");
+  // Failed rollback and interrupted installation deliberately have no marker.
+  Write(uncommitted.AppendASCII("backup/browser.exe"), "recovery launcher");
+  Write(invalid.AppendASCII("committed"), "not a version");
+  Write(invalid.AppendASCII("backup/browser.exe"), "invalid launcher");
+  Write(future.AppendASCII("committed"), "3.0.0.0");
+  Write(future.AppendASCII("backup/browser.exe"), "future launcher");
+  Write(older.AppendASCII("committed"), "1.0.0.0");
+  Write(older.AppendASCII("backup/browser.exe"), "older launcher");
+  Write(unrelated.AppendASCII("committed"), "1.0.0.0");
+  Write(unrelated.AppendASCII("backup/browser.exe"), "unrelated launcher");
+
+  XenonUpdateInstaller::CleanupRecoveryDirectories(installation_, "2.0.0.0");
+
+  EXPECT_EQ(Read(uncommitted.AppendASCII("backup/browser.exe")),
+            "recovery launcher");
+  EXPECT_EQ(Read(invalid.AppendASCII("committed")), "not a version");
+  EXPECT_EQ(Read(invalid.AppendASCII("backup/browser.exe")),
+            "invalid launcher");
+  EXPECT_EQ(Read(future.AppendASCII("committed")), "3.0.0.0");
+  EXPECT_EQ(Read(future.AppendASCII("backup/browser.exe")), "future launcher");
+  EXPECT_FALSE(base::PathExists(older));
+  EXPECT_EQ(Read(unrelated.AppendASCII("backup/browser.exe")),
+            "unrelated launcher");
+}
+
+TEST_F(XenonUpdateInstallerWinTest,
+       RecoveryCleanupWaitsForActiveInstallationTransaction) {
+  ASSERT_TRUE(base::CreateDirectory(installation_.AppendASCII("2.0.0.0")));
+  const base::FilePath recovery =
+      installation_.AppendASCII(".xenon-recovery-committed");
+  Write(recovery.AppendASCII("committed"), "2.0.0.0");
+  Write(recovery.AppendASCII("backup/browser.exe"), "old launcher");
   base::File held_lock(installation_.AppendASCII(".xenon-install.lock"),
                        base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_READ |
                            base::File::FLAG_WRITE |
@@ -534,8 +599,85 @@ TEST_F(XenonUpdateInstallerWinTest, AnotherTransactionHoldsExclusiveLock) {
                            base::File::FLAG_WIN_EXCLUSIVE_WRITE);
   ASSERT_TRUE(held_lock.IsValid());
 
-  EXPECT_FALSE(InstallWithoutRelaunch());
-  EXPECT_EQ(Read(launcher_), "old launcher");
+  XenonUpdateInstaller::CleanupRecoveryDirectories(installation_, "2.0.0.0");
+  EXPECT_EQ(Read(recovery.AppendASCII("committed")), "2.0.0.0");
+  EXPECT_EQ(Read(recovery.AppendASCII("backup/browser.exe")), "old launcher");
+
+  held_lock.Close();
+  XenonUpdateInstaller::CleanupRecoveryDirectories(installation_, "2.0.0.0");
+  EXPECT_FALSE(base::PathExists(recovery));
+}
+
+TEST_F(XenonUpdateInstallerWinTest,
+       RecoveryCleanupRequiresValidRunningVersion) {
+  ASSERT_TRUE(base::CreateDirectory(installation_.AppendASCII("2.0.0.0")));
+  const base::FilePath recovery =
+      installation_.AppendASCII(".xenon-recovery-committed");
+  Write(recovery.AppendASCII("committed"), "2.0.0.0");
+  Write(recovery.AppendASCII("backup/browser.exe"), "old launcher");
+
+  XenonUpdateInstaller::CleanupRecoveryDirectories(installation_, "");
+  XenonUpdateInstaller::CleanupRecoveryDirectories(installation_, "invalid");
+
+  EXPECT_EQ(Read(recovery.AppendASCII("committed")), "2.0.0.0");
+  EXPECT_EQ(Read(recovery.AppendASCII("backup/browser.exe")), "old launcher");
+}
+
+TEST_F(XenonUpdateInstallerWinTest,
+       RecoveryCleanupDoesNotFollowRecoveryDirectoryLink) {
+  ASSERT_TRUE(base::CreateDirectory(installation_.AppendASCII("2.0.0.0")));
+  const base::FilePath outside = temporary_.GetPath().AppendASCII("outside");
+  const base::FilePath link =
+      installation_.AppendASCII(".xenon-recovery-linked");
+  Write(outside.AppendASCII("committed"), "2.0.0.0");
+  Write(outside.AppendASCII("backup/browser.exe"), "outside launcher");
+  if (!::CreateSymbolicLinkW(
+          link.value().c_str(), outside.value().c_str(),
+          SYMBOLIC_LINK_FLAG_DIRECTORY |
+              SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE)) {
+    const DWORD error = ::GetLastError();
+    if (error == ERROR_PRIVILEGE_NOT_HELD) {
+      GTEST_SKIP() << "Creating symbolic links requires developer mode or "
+                      "SeCreateSymbolicLinkPrivilege";
+    }
+    FAIL() << "CreateSymbolicLinkW failed: " << error;
+  }
+
+  XenonUpdateInstaller::CleanupRecoveryDirectories(installation_, "2.0.0.0");
+
+  EXPECT_TRUE(base::DirectoryExists(link));
+  EXPECT_EQ(Read(outside.AppendASCII("committed")), "2.0.0.0");
+  EXPECT_EQ(Read(outside.AppendASCII("backup/browser.exe")),
+            "outside launcher");
+  EXPECT_TRUE(::RemoveDirectoryW(link.value().c_str()));
+}
+
+TEST_F(XenonUpdateInstallerWinTest,
+       RecoveryCleanupDoesNotFollowCommitMarkerLink) {
+  ASSERT_TRUE(base::CreateDirectory(installation_.AppendASCII("2.0.0.0")));
+  const base::FilePath outside =
+      temporary_.GetPath().AppendASCII("outside-marker");
+  const base::FilePath recovery =
+      installation_.AppendASCII(".xenon-recovery-linked-marker");
+  const base::FilePath marker = recovery.AppendASCII("committed");
+  Write(outside, "2.0.0.0");
+  Write(recovery.AppendASCII("backup/browser.exe"), "old launcher");
+  if (!::CreateSymbolicLinkW(marker.value().c_str(), outside.value().c_str(),
+                             SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE)) {
+    const DWORD error = ::GetLastError();
+    if (error == ERROR_PRIVILEGE_NOT_HELD) {
+      GTEST_SKIP() << "Creating symbolic links requires developer mode or "
+                      "SeCreateSymbolicLinkPrivilege";
+    }
+    FAIL() << "CreateSymbolicLinkW failed: " << error;
+  }
+
+  XenonUpdateInstaller::CleanupRecoveryDirectories(installation_, "2.0.0.0");
+
+  EXPECT_TRUE(base::PathExists(marker));
+  EXPECT_EQ(Read(outside), "2.0.0.0");
+  EXPECT_EQ(Read(recovery.AppendASCII("backup/browser.exe")), "old launcher");
+  EXPECT_TRUE(::DeleteFileW(marker.value().c_str()));
 }
 
 }  // namespace

@@ -49,6 +49,7 @@
 #include "chrome/installer/setup/downgrade_cleanup.h"
 #include "chrome/installer/setup/generate_visual_elements_manifest_work_item.h"
 #include "chrome/installer/setup/install_params.h"
+#include "chrome/installer/setup/install_source_directory.h"
 #include "chrome/installer/setup/installer_state.h"
 #include "chrome/installer/setup/last_breaking_installer_version.h"
 #include "chrome/installer/setup/setup_constants.h"
@@ -971,6 +972,23 @@ bool AppendPostInstallTasks(const InstallParams& install_params,
   return true;
 }
 
+void AddRootDeletionWorkItems(const base::FilePath& target_path,
+                              const base::FilePath& temp_path,
+                              base::span<const base::FilePath> deletions,
+                              WorkItemList* install_list) {
+  for (const auto& relative : deletions) {
+    install_list->AddCallbackWorkItem(
+        base::BindOnce(
+            [](const base::FilePath& target, const base::FilePath& path,
+               const CallbackWorkItem&) {
+              return IsSafeInstallSourceDeletion(target, path);
+            },
+            target_path, relative),
+        base::DoNothing());
+    install_list->AddDeleteTreeWorkItem(target_path.Append(relative), temp_path);
+  }
+}
+
 void AddInstallWorkItems(const InstallParams& install_params,
                          WorkItemList* install_list) {
   DCHECK(install_list);
@@ -1030,6 +1048,8 @@ void AddInstallWorkItems(const InstallParams& install_params,
   // termination doesn't result in a broken browser. Additionally, the version
   // key must only be updated once it is no longer necessary for the same
   // version to be installed in case of failure.
+  AddRootDeletionWorkItems(target_path, temp_path,
+                           install_params.root_deletions, install_list);
   AddChromeWorkItems(install_params, install_list);
 
   AddUninstallShortcutWorkItems(install_params, install_list);

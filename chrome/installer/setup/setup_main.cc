@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "base/at_exit.h"
 #include "base/byte_size.h"
@@ -76,6 +77,7 @@
 #include "chrome/installer/setup/downgrade_cleanup.h"
 #include "chrome/installer/setup/install.h"
 #include "chrome/installer/setup/install_params.h"
+#include "chrome/installer/setup/install_source_directory.h"
 #include "chrome/installer/setup/install_worker.h"
 #include "chrome/installer/setup/installer_crash_reporting.h"
 #include "chrome/installer/setup/installer_state.h"
@@ -528,7 +530,8 @@ installer::InstallStatus RepeatDeleteOldVersions(
 // registry. This function will move new_chrome.exe to chrome.exe,
 // new_chrome_proxy.exe to chrome_proxy.exe and delete 'opv' key in one atomic
 // operation. This function also deletes elevation policies associated with the
-// old version if they exist. |setup_exe| is the path to the current executable.
+// old version if they exist. |setup_exe| is the installed version's setup,
+// which is also used for registered and asynchronous cleanup commands.
 installer::InstallStatus RenameChromeExecutables(
     const base::FilePath& setup_exe,
     const InstallationState& original_state,
@@ -1342,8 +1345,22 @@ InstallStatus InstallProductsHelper(InstallationState& original_state,
     return TEMP_DIR_FAILED;
   }
 
-  RETURN_IF_ERROR(UnpackChromeArchive(unpack_path, original_state, setup_exe,
-                                      cmd_line, installer_state));
+  const bool directory_source =
+      cmd_line.HasSwitch(switches::kInstallSourceDir);
+  std::vector<base::FilePath> root_deletions;
+  if (directory_source) {
+    auto prepared = PrepareInstallSourceDirectory(
+        cmd_line, installer_state.target_path(), unpack_path);
+    if (!prepared.has_value()) {
+      installer_state.WriteInstallerResult(
+          prepared.error(), IDS_INSTALL_INVALID_ARCHIVE_BASE, nullptr);
+      return prepared.error();
+    }
+    root_deletions = std::move(prepared).value();
+  } else {
+    RETURN_IF_ERROR(UnpackChromeArchive(unpack_path, original_state, setup_exe,
+                                        cmd_line, installer_state));
+  }
 
   VLOG(1) << "unpacked to " << unpack_path.value();
 
@@ -1388,16 +1405,38 @@ InstallStatus InstallProductsHelper(InstallationState& original_state,
                                       setup_exe,          current_version,
                                       src_path,           temp_path.path(),
                                       *installer_version, *src_size_kb};
+      install_params.root_deletions = root_deletions;
 
       install_status =
           InstallOrUpdateProduct(install_params, prefs_source_path, prefs);
+
+      // Directory updates have no external updater service to finalize an
+      // in-use launcher. Reuse setup's native rename transaction while this
+      // process still owns the setup singleton and any required elevation.
+      // Installation has already committed; rename failure rolls back only
+      // the rename transaction and may be retried by reinstalling this source.
+      if (directory_source &&
+          InstallUtil::GetInstallReturnCode(install_status) == 0 &&
+          base::PathExists(installer_state.target_path().Append(kChromeNewExe))) {
+        // Cleanup registration and the background old-version cleanup process
+        // must use the installed setup, so they do not retain the updater's
+        // temporary source directory after this setup process exits.
+        const base::FilePath installed_setup =
+            installer_state.GetInstallerDirectory(*installer_version)
+                .Append(kSetupExe);
+        if (!base::PathExists(installed_setup) ||
+            RenameChromeExecutables(installed_setup, original_state,
+                                     &installer_state) != RENAME_SUCCESSFUL) {
+          install_status = RENAME_FAILED;
+        }
+      }
 
       int install_msg_base = IDS_INSTALL_FAILED_BASE;
       base::FilePath chrome_exe;
       std::wstring quoted_chrome_exe;
       if (install_status == SAME_VERSION_REPAIR_FAILED) {
         install_msg_base = IDS_SAME_VERSION_REPAIR_FAILED_BASE;
-      } else if (install_status != INSTALL_FAILED) {
+      } else if (InstallUtil::GetInstallReturnCode(install_status) == 0) {
         if (installer_state.target_path().empty()) {
           // If we failed to construct install path, it means the OS call to
           // get %ProgramFiles% or %AppData% failed. Report this as failure.
@@ -1431,7 +1470,7 @@ InstallStatus InstallProductsHelper(InstallationState& original_state,
         bool do_not_launch_chrome = false;
         prefs.GetBool(initial_preferences::kDoNotLaunchChrome,
                       &do_not_launch_chrome);
-        if (!system_install && !do_not_launch_chrome) {
+        if (!system_install && !do_not_launch_chrome && !directory_source) {
           LaunchChromeBrowser(installer_state.target_path());
         }
       } else if ((install_status == NEW_VERSION_UPDATED) ||
@@ -1562,6 +1601,15 @@ int SetupMain() {
   if (installer_state.target_path().empty()) {
     LOG(ERROR) << "No valid installation directory was provided.";
     return installer::UNSUPPORTED_OPTION;
+  }
+  if (cmd_line.HasSwitch(installer::switches::kInstallSourceDir)) {
+    const auto validation =
+        installer::ValidateInstallSourceDirectoryCommandLine(
+            cmd_line, installer_state.target_path());
+    if (!validation.has_value()) {
+      LOG(ERROR) << "Invalid install-source-dir or mismatched install-directory";
+      return validation.error();
+    }
   }
 
   persistent_histogram_storage.set_storage_base_dir(

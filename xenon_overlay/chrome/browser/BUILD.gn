@@ -807,10 +807,9 @@ test("xenon_updater_unittests") {
     "//url",
   ]
   if (enable_xenon_updater) {
-    deps += [
-      "//chrome/updater:branding_header",
-      "//chrome/updater:browser_sources",
-    ]
+    # Manager tests inject their backend; never start the macOS system service.
+    sources -= [ "updater/xenon_system_updater.cc" ]
+    sources += [ "updater/xenon_system_updater_stub.cc" ]
   }
   if (is_win) {
     sources += [ "updater/xenon_update_installer_win_unittest.cc" ]

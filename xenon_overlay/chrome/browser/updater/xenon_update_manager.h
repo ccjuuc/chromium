@@ -101,11 +101,7 @@ class XenonUpdateManager {
   // Applies staged update upon normal exit without relaunching.
   void InstallOnExit();
 
-  // Synchronizes product version in Windows registry.
-  static void UpdateRegistryVersion(base::FilePath install_dir,
-                                    const std::string& version);
-
-  // Called on browser startup to perform cleanup and registry synchronization.
+  // Called on browser startup to perform cleanup and check installation results.
   void OnVersionStartup();
 
   // Cleans up version-isolated directories older than the current version.

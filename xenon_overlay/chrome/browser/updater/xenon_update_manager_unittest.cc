@@ -38,11 +38,16 @@
 #include <map>
 
 #include "base/base_paths.h"
+#include "base/command_line.h"
 #include "base/environment.h"
 #include "base/files/file.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_path_override.h"
 #include "base/test/test_reg_util_win.h"
 #include "base/version.h"
+#include "base/win/registry.h"
 #include "crypto/hash.h"
 #endif
 
@@ -561,14 +566,45 @@ TEST_F(XenonUpdateManagerTest, PlanBCleanupOldVersions) {
   // Call cleanup with current version 1.1.0.0
   XenonUpdateManager::DoCleanupOldVersions(install_dir, "1.1.0.0");
 
-  // Old versions 0.9 and 1.0 should be removed
+#if BUILDFLAG(IS_WIN)
+  // Chromium setup owns version removal on Windows. Browser startup only
+  // retries cleanup of committed recovery directories from older updaters.
+  EXPECT_TRUE(base::DirectoryExists(ver_0_9));
+  EXPECT_TRUE(base::DirectoryExists(ver_1_0));
+#else
+  // Old versions 0.9 and 1.0 should be removed.
   EXPECT_FALSE(base::DirectoryExists(ver_0_9));
   EXPECT_FALSE(base::DirectoryExists(ver_1_0));
+#endif
 
   // Current version 1.1 and non-version directory should be preserved
   EXPECT_TRUE(base::DirectoryExists(ver_1_1));
   EXPECT_TRUE(base::DirectoryExists(non_ver_dir));
 }
+
+#if BUILDFLAG(IS_WIN)
+TEST_F(XenonUpdateManagerTest, StartupCleanupRemovesOnlyCommittedRecovery) {
+  const base::FilePath installation =
+      temp_dir_.GetPath().AppendASCII("app_cleanup");
+  ASSERT_TRUE(base::CreateDirectory(installation.AppendASCII("1.1.0.0")));
+  const base::FilePath committed =
+      installation.AppendASCII(".xenon-recovery-committed");
+  const base::FilePath incomplete =
+      installation.AppendASCII(".xenon-recovery-incomplete");
+  for (const auto& recovery : {committed, incomplete}) {
+    ASSERT_TRUE(base::CreateDirectory(recovery.AppendASCII("backup")));
+    ASSERT_TRUE(base::WriteFile(
+        recovery.AppendASCII("backup").AppendASCII("browser.exe"), "old"));
+  }
+  ASSERT_TRUE(base::WriteFile(committed.AppendASCII("committed"), "1.1.0.0"));
+
+  XenonUpdateManager::DoCleanupOldVersions(installation, "1.1.0.0");
+
+  EXPECT_FALSE(base::PathExists(committed));
+  EXPECT_TRUE(base::PathExists(
+      incomplete.AppendASCII("backup").AppendASCII("browser.exe")));
+}
+#endif
 
 TEST_F(XenonUpdateManagerTest, BundleManifestStagesFromAppNotTempParent) {
   base::FilePath app = temp_dir_.GetPath().AppendASCII("Old.app");
@@ -963,13 +999,16 @@ TEST_F(XenonUpdateManagerTest, WindowsFailedDiffApplicationFallsBackToFullZip) {
   VerifyWindowsDiffFallback(/*corrupt_download=*/false);
 }
 
-// Opt-in release validation: all inputs remain read-only, and both staging and
-// installation operate on a private copy. No process is launched and no browser
-// registry entries are changed. Supply all three XENON_WIN_DIFF_* variables.
-TEST_F(XenonUpdateManagerTest, WindowsRealPackageStagesAndInstallsExactTree) {
+// Opt-in release validation: inspect every file handed to a fake setup runner.
+// The runner deliberately fails without installing. This tests reconstruction
+// and handoff, not native setup execution or browser relaunch. All inputs and
+// the private installation stay unchanged. Supply all XENON_WIN_DIFF_* paths.
+TEST_F(XenonUpdateManagerTest, WindowsRealPackageStagesAndHandsOffExactTree) {
   registry_util::RegistryOverrideManager registry_override;
-  ASSERT_NO_FATAL_FAILURE(registry_override.OverrideRegistry(HKEY_CURRENT_USER));
-  ASSERT_NO_FATAL_FAILURE(registry_override.OverrideRegistry(HKEY_LOCAL_MACHINE));
+  ASSERT_NO_FATAL_FAILURE(
+      registry_override.OverrideRegistry(HKEY_CURRENT_USER));
+  ASSERT_NO_FATAL_FAILURE(
+      registry_override.OverrideRegistry(HKEY_LOCAL_MACHINE));
   base::Environment environment;
   const auto old_value = environment.GetVar("XENON_WIN_DIFF_OLD_ROOT");
   const auto new_value = environment.GetVar("XENON_WIN_DIFF_NEW_ROOT");
@@ -1044,6 +1083,31 @@ TEST_F(XenonUpdateManagerTest, WindowsRealPackageStagesAndInstallsExactTree) {
     ASSERT_TRUE(AddFileHash(new_root.DirName().AppendASCII("setup.exe"),
                             setup_relative, &expected));
   }
+  // Registration is private to this test process. The injected runner must
+  // never spawn setup.exe, which would not inherit the registry overrides.
+  constexpr wchar_t kProductKey[] = L"Software\\xlb153";
+  constexpr wchar_t kUninstallKey[] =
+      L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\xlb153";
+  const auto installed_setup = installation.Append(old_setup_relative);
+  const auto installed_version = base::UTF8ToWide(*base_version);
+  const std::wstring uninstall_command =
+      L"\"" + installed_setup.value() + L"\" --uninstall";
+  base::win::RegKey product;
+  ASSERT_EQ(ERROR_SUCCESS,
+            product.Create(HKEY_CURRENT_USER, kProductKey,
+                           KEY_READ | KEY_WRITE | KEY_WOW64_32KEY));
+  ASSERT_EQ(ERROR_SUCCESS,
+            product.WriteValue(L"pv", installed_version.c_str()));
+  ASSERT_EQ(ERROR_SUCCESS, product.WriteValue(L"UninstallString",
+                                              installed_setup.value().c_str()));
+  base::win::RegKey uninstall;
+  ASSERT_EQ(ERROR_SUCCESS,
+            uninstall.Create(HKEY_CURRENT_USER, kUninstallKey,
+                             KEY_READ | KEY_WRITE | KEY_WOW64_32KEY));
+  ASSERT_EQ(ERROR_SUCCESS, uninstall.WriteValue(L"InstallLocation",
+                                                installation.value().c_str()));
+  ASSERT_EQ(ERROR_SUCCESS, uninstall.WriteValue(L"UninstallString",
+                                                uninstall_command.c_str()));
   FileHashes before;
   ASSERT_TRUE(SnapshotTree(installation, &before));
   const base::ScopedPathOverride executable_override(
@@ -1059,58 +1123,56 @@ TEST_F(XenonUpdateManagerTest, WindowsRealPackageStagesAndInstallsExactTree) {
   ASSERT_TRUE(SnapshotTree(installation, &after_staging));
   EXPECT_EQ(before, after_staging)
       << "Staging changed the running installation";
-  ASSERT_TRUE(XenonUpdateInstaller::InstallAndRelaunch(
+  int setup_calls = 0;
+  base::FilePath setup_source;
+  XenonUpdateInstaller::SetSetupRunnerForTesting(
+      base::BindLambdaForTesting([&](const base::CommandLine& command) {
+        ++setup_calls;
+        setup_source = command.GetSwitchValuePath("install-source-dir");
+        EXPECT_EQ(setup_source.BaseName().MaybeAsASCII(), "Chrome-bin");
+        EXPECT_FALSE(installation.IsParent(setup_source));
+        EXPECT_EQ(command.GetSwitchValuePath("install-directory"),
+                  installation);
+        EXPECT_TRUE(command.HasSwitch("silent"));
+        EXPECT_TRUE(command.HasSwitch("do-not-launch-chrome"));
+        EXPECT_TRUE(command.HasSwitch("do-not-register-for-update-launch"));
+        EXPECT_FALSE(command.HasSwitch("system-level"));
+        EXPECT_FALSE(setup_source.IsParent(command.GetProgram()));
+        FileHashes source_files;
+        EXPECT_TRUE(SnapshotTree(setup_source, &source_files));
+        const auto metadata =
+            base::FilePath::FromASCII(".xenon-deletions.json");
+        if (source_files.erase(metadata) != 0) {
+          std::string deletions;
+          EXPECT_TRUE(base::ReadFileToString(setup_source.Append(metadata),
+                                             &deletions));
+          const auto parsed =
+              base::JSONReader::ReadList(deletions, base::JSON_PARSE_RFC);
+          EXPECT_TRUE(parsed);
+        }
+        EXPECT_EQ(expected, source_files)
+            << "The normalized setup payload differs from the target release";
+        FileHashes copied_setup;
+        EXPECT_TRUE(
+            AddFileHash(command.GetProgram(), setup_relative, &copied_setup));
+        const FileHashes expected_setup = {
+            {setup_relative, expected.at(setup_relative)}};
+        EXPECT_EQ(expected_setup, copied_setup);
+        FileHashes current_installation;
+        EXPECT_TRUE(SnapshotTree(installation, &current_installation));
+        EXPECT_EQ(before, current_installation);
+        return 7;  // Stop at the handoff boundary; never pretend we installed.
+      }));
+  base::ScopedClosureRunner reset_setup_runner(base::BindOnce(
+      [] { XenonUpdateInstaller::SetSetupRunnerForTesting({}); }));
+  EXPECT_FALSE(XenonUpdateInstaller::InstallAndRelaunch(
       staged.staged_dir, installation,
       /*relaunch_executable=*/base::FilePath()));
-
-  EXPECT_FALSE(
-      base::PathExists(installation.AppendASCII(".xenon-install.lock")));
-  // Successful Windows transactions retain root-file backups until the old
-  // process exits. Verify that precise recovery content before excluding it
-  // from the release tree comparison; unknown internal files must still fail.
-  base::FileEnumerator recoveries(installation, false,
-                                  base::FileEnumerator::DIRECTORIES,
-                                  FILE_PATH_LITERAL(".xenon-recovery-*"));
-  const base::FilePath recovery = recoveries.Next();
-  ASSERT_FALSE(recovery.empty());
-  EXPECT_TRUE(recoveries.Next().empty());
-  const base::FilePath previous_version =
-      base::FilePath::FromASCII(*base_version);
-  FileHashes expected_recovery;
-  for (const auto& [relative, hash] : before) {
-    if (!previous_version.IsParent(relative)) {
-      expected_recovery.emplace(
-          base::FilePath(FILE_PATH_LITERAL("backup")).Append(relative), hash);
-    }
-  }
-  FileHashes recovery_files;
-  ASSERT_TRUE(SnapshotTree(recovery, &recovery_files));
-  EXPECT_EQ(expected_recovery, recovery_files);
-  FileHashes installed;
-  ASSERT_TRUE(SnapshotTree(installation, &installed));
-  size_t retained = 0;
-  for (auto it = installed.begin(); it != installed.end();) {
-    if (previous_version.IsParent(it->first)) {
-      const auto original = before.find(it->first);
-      ASSERT_NE(before.end(), original);
-      EXPECT_EQ(original->second, it->second) << it->first;
-      ++retained;
-      it = installed.erase(it);
-    } else if (recovery.BaseName().IsParent(it->first)) {
-      it = installed.erase(it);
-    } else {
-      ++it;
-    }
-  }
-  size_t old_version_files = 0;
-  for (const auto& [relative, hash] : before) {
-    if (previous_version.IsParent(relative)) {
-      ++old_version_files;
-    }
-  }
-  EXPECT_EQ(old_version_files, retained);
-  EXPECT_EQ(expected, installed)
-      << "Installed files differ from the new release";
+  EXPECT_EQ(setup_calls, 1);
+  EXPECT_FALSE(base::PathExists(setup_source));
+  FileHashes after_handoff;
+  ASSERT_TRUE(SnapshotTree(installation, &after_handoff));
+  EXPECT_EQ(before, after_handoff);
   FileHashes unchanged;
   ASSERT_TRUE(SnapshotTree(old_root, &unchanged));
   EXPECT_EQ(old_input, unchanged);
@@ -1120,7 +1182,7 @@ TEST_F(XenonUpdateManagerTest, WindowsRealPackageStagesAndInstallsExactTree) {
   ASSERT_TRUE(AddFileHash(patch_input, patch_input.BaseName(), &unchanged));
   EXPECT_EQ(patch_hash, unchanged);
   RecordProperty("verified_target_files", static_cast<int>(expected.size()));
-  RecordProperty("preserved_previous_files", static_cast<int>(retained));
+  RecordProperty("setup_execution", "injected-runner-no-installation");
 }
 #endif
 
