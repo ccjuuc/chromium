@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -31,6 +32,7 @@
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/shadow_value.h"
 #include "ui/views/animation/animation_builder.h"
 #include "ui/views/animation/animation_sequence_block.h"
@@ -70,6 +72,7 @@ constexpr int kCloseButtonSize = 32;
 constexpr int kCloseButtonCornerRadius = 8;
 
 int GetDialogShadowMargin() {
+#if !BUILDFLAG(IS_MAC)
   static const int margin = [] {
     const gfx::ShadowValues values =
         gfx::ShadowValue::MakeMdShadowValues(kDialogShadowElevation);
@@ -78,6 +81,9 @@ int GetDialogShadowMargin() {
         {-insets.left(), -insets.top(), -insets.right(), -insets.bottom()});
   }();
   return margin;
+#else
+  return 0;
+#endif
 }
 
 #if BUILDFLAG(IS_WIN)
@@ -265,10 +271,12 @@ class XenonCommonDialogView : public views::View {
     body_spacer->SetPreferredSize(gfx::Size(1, 12));
 
     // 2. Body Text (contained in a ScrollView)
-    auto* scroll_view = AddChildView(std::make_unique<views::ScrollView>());
+    auto* scroll_view = AddChildView(std::make_unique<views::ScrollView>(
+        views::ScrollView::ScrollWithLayers::kDisabled));
     scroll_view->SetHorizontalScrollBarMode(
         views::ScrollView::ScrollBarMode::kDisabled);
     scroll_view->SetBorder(nullptr);
+    scroll_view->SetBackgroundColor(std::nullopt);
 
     auto* body_label = scroll_view->SetContents(std::make_unique<views::Label>(
         body_text, views::style::CONTEXT_DIALOG_BODY_TEXT,
@@ -280,6 +288,7 @@ class XenonCommonDialogView : public views::View {
     body_label->SetFontList(views::Label::GetDefaultFontList().Derive(
         0, gfx::Font::NORMAL, gfx::Font::Weight::NORMAL));
     body_label->SetEnabledColor(SkColorSetRGB(0x4E, 0x59, 0x69));
+    body_label->SetAutoColorReadabilityEnabled(false);
 
     // Allow ScrollView to calculate height based on content height.
     scroll_view->ClipHeightTo(0, 9999);
@@ -418,10 +427,17 @@ class XenonCommonDialogView : public views::View {
     // White body is painted only inside the content area (see
     // DialogBodyBackground); the surrounding margin stays transparent so the
     // ui::Shadow layer below remains visible.
-    SetBackground(std::make_unique<DialogBodyBackground>(SK_ColorWHITE,
-                                                         kDialogCornerRadius));
+    bool native_sheet = false;
+#if BUILDFLAG(IS_MAC)
+    native_sheet = GetWidget()->widget_delegate()->GetModalType() ==
+                   ui::mojom::ModalType::kWindow;
+#endif
+    // AppKit owns modal sheet corners. Fill the entire content area so an
+    // opaque sheet never exposes transparent pixels as black corners.
+    SetBackground(std::make_unique<DialogBodyBackground>(
+        SK_ColorWHITE, native_sheet ? 0 : kDialogCornerRadius));
     SetPaintToLayer();
-    layer()->SetFillsBoundsOpaquely(false);
+    layer()->SetFillsBoundsOpaquely(native_sheet);
     SetupCompositorShadow();
 
     auto* widget_layer = GetWidget()->GetLayer();
@@ -473,13 +489,21 @@ class XenonCommonDialogDelegate : public views::DialogDelegate {
   // Self-drawn shell: transparent frame, 24px mask for HWND clip.
   std::unique_ptr<views::FrameView> CreateFrameView(
       views::Widget* widget) override {
+#if BUILDFLAG(IS_MAC)
+    if (GetModalType() == ui::mojom::ModalType::kWindow) {
+      return views::DialogDelegate::CreateFrameView(widget);
+    }
+#endif
     auto frame =
         std::make_unique<views::BubbleFrameView>(gfx::Insets(), gfx::Insets());
     auto border = std::make_unique<views::BubbleBorder>(
         views::BubbleBorder::FLOAT, views::BubbleBorder::NO_SHADOW);
-    // Square HWND mask. Visual 24px round + shadow come from content layer.
+    // Square HWND mask on Windows; 24px rounded corners on Mac.
     border->set_draw_border_stroke(false);
     border->SetColor(SK_ColorTRANSPARENT);
+#if BUILDFLAG(IS_MAC)
+    border->set_rounded_corners(gfx::RoundedCornersF(kDialogCornerRadius));
+#endif
     frame->SetBubbleBorder(std::move(border));
     return frame;
   }
@@ -545,7 +569,8 @@ void XenonCommonDialog::Show(gfx::NativeWindow parent,
           style, title, body_text, checkbox_text, checkbox_checked, cancel_text,
           confirm_text, std::move(callback)));
 
-  // Center on parent window.
+  // On Mac, window modality requires an AppKit sheet with a native frame.
+  // Keep the transparent floating frame for explicitly nonmodal dialogs.
   delegate->SetModalType(show_mask ? ui::mojom::ModalType::kWindow
                                    : ui::mojom::ModalType::kNone);
 
@@ -554,6 +579,9 @@ void XenonCommonDialog::Show(gfx::NativeWindow parent,
   delegate->set_margins(gfx::Insets());
   delegate->SetShowCloseButton(false);
   delegate->set_use_custom_frame(true);
+#if BUILDFLAG(IS_MAC)
+  delegate->set_use_custom_frame(!show_mask);
+#endif
   delegate->set_corner_radius(kDialogCornerRadius);
 
   views::Widget* widget = nullptr;
@@ -572,7 +600,17 @@ void XenonCommonDialog::Show(gfx::NativeWindow parent,
 
   // Preferred size already includes the shadow margin (the content view carries
   // an empty border of that size), so do not enlarge again.
-  widget->CenterWindow(widget->GetRootView()->GetPreferredSize({}));
+  const gfx::Size preferred_size = widget->GetRootView()->GetPreferredSize({});
+#if BUILDFLAG(IS_MAC)
+  if (show_mask) {
+    // AppKit positions sheets relative to their parent when shown.
+    widget->SetSize(preferred_size);
+  } else {
+    widget->CenterWindow(preferred_size);
+  }
+#else
+  widget->CenterWindow(preferred_size);
+#endif
 #if BUILDFLAG(IS_WIN)
   DisableNativeWindowChrome(widget);
 #endif
