@@ -39,6 +39,10 @@ class ChromeCrashReporterClient : public crash_reporter::CrashReporterClient {
 
   bool GetCollectStatsConsent() override;
 
+  std::string GetUploadUrl() override;
+  bool GetCrashUploadConsent(bool metrics_consent) override;
+  bool ShouldUploadDumpAsBinary() override;
+
   bool GetCollectStatsInSample() override;
 
   bool ReportingIsEnforcedByPolicy(bool* breakpad_enabled) override;

@@ -90,6 +90,7 @@ if (is_win) {
       "//base/test:test_support",
       "//chrome/chrome_elf:crash",
       "//testing/gtest",
+      "//xenon_overlay/buildflags:crash_buildflags",
     ]
   }
 }

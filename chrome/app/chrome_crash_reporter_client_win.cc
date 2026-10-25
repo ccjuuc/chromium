@@ -25,6 +25,7 @@
 #include "chrome/install_static/user_data_dir.h"
 #include "components/crash/core/app/crashpad.h"
 #include "components/version_info/channel.h"
+#include "xenon_overlay/buildflags/crash_buildflags.h"
 
 ChromeCrashReporterClient::ChromeCrashReporterClient() = default;
 
@@ -143,6 +144,42 @@ bool ChromeCrashReporterClient::IsRunningUnattended() {
 
 bool ChromeCrashReporterClient::GetCollectStatsConsent() {
   return install_static::GetCollectStatsConsent();
+}
+
+bool ChromeCrashReporterClient::GetCrashUploadConsent(bool metrics_consent) {
+  // Crash reporting starts in chrome_elf before browser preferences exist.
+  // An explicit product setting is independent of Google Update's usagestats.
+  // SetUploadConsent() applies enterprise policy and unattended/sample gates.
+  const std::wstring enabled =
+      install_static::GetEnvironmentString(L"XENON_CRASH_UPLOAD_ENABLED");
+  if (enabled == L"0") {
+    return false;
+  }
+  if (enabled == L"1") {
+    return true;
+  }
+#if BUILDFLAG(XENON_CRASH_UPLOAD_ENABLED)
+  return true;
+#else
+  return metrics_consent;
+#endif
+}
+
+std::string ChromeCrashReporterClient::GetUploadUrl() {
+  const std::string url = BUILDFLAG(XENON_CRASH_UPLOAD_URL);
+  return url.empty() ? CrashReporterClient::GetUploadUrl() : url;
+}
+
+bool ChromeCrashReporterClient::ShouldUploadDumpAsBinary() {
+  const std::wstring format =
+      install_static::GetEnvironmentString(L"XENON_CRASH_UPLOAD_FORMAT");
+  if (format == L"binary") {
+    return true;
+  }
+  if (format == L"multipart") {
+    return false;
+  }
+  return BUILDFLAG(XENON_CRASH_UPLOAD_BINARY);
 }
 
 bool ChromeCrashReporterClient::GetCollectStatsInSample() {

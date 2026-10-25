@@ -57,6 +57,10 @@ class CrashReportUploadThread : public WorkerThread::Delegate,
     //! Whether uploads should use `gzip` compression.
     bool upload_gzip;
 
+    //! Send an uncompressed application/octet-stream dump instead of multipart.
+    //! Separate attachments and form fields are omitted in this mode.
+    bool upload_raw = false;
+
     //! Whether to periodically check for new pending reports not already known
     //! to exist. When `false`, only an initial upload attempt will be made for
     //! reports known to exist by having been added by the ReportPending()
@@ -198,13 +202,13 @@ class CrashReportUploadThread : public WorkerThread::Delegate,
   //!
   //! This currently implements very simplistic rate-limiting, compatible with
   //! the Breakpad client, where the strategy is to permit one upload attempt
-  //! per hour, and retire reports that would exceed this limit or for which the
-  //! upload fails on the first attempt.
+  //! per hour. Windows leaves throttled reports pending and retries failed
+  //! uploads with a bounded, persistent per-report backoff. Other platforms
+  //! retain their existing report retirement behavior.
   //! If upload was requested explicitly (i.e. by user action), do not throttle
   //! the upload.
   //!
-  //! TODO(mark): Provide a proper rate-limiting strategy and allow for failed
-  //! upload attempts to be retried.
+  //! TODO(mark): Provide a proper rate-limiting strategy on other platforms.
   bool ShouldRateLimitUpload(const CrashReportDatabase::Report& report);
 
 #if BUILDFLAG(IS_IOS)

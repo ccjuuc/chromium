@@ -2,6 +2,7 @@
 
 `xenon-update` 在同一服务中提供 macOS 和 Windows 两个发布面板：macOS 使用 PKG → CRX3、Puffin 差分和 Omaha 4.0；
 Windows 使用 EXE / 安装目录 ZIP 导入、Zucchini 目录差分和 JSON + ZIP 更新接口。
+同一服务还提供 Crashpad 崩溃接收接口，支持二进制直传和 multipart 表单上传。
 发布服务本身可以运行在 Windows/Linux；服务宿主平台与更新目标平台是两回事。
 Windows 客户端保持原有 JSON + ZIP 方案，不接入 Omaha，也不新增客户端后台服务。
 单独制差分仍可使用 [make_directory_diff.js](../README.md)。
@@ -33,7 +34,7 @@ xenon-update --config /ABS/state/xenon-update.json init
 xenon-update --config /ABS/state/xenon-update.json serve
 ```
 
-配置中的相对路径以配置文件所在目录为基准。将配置、`releases`、`publisher/history` 和 `publisher/windows` 放在持久目录；
+配置中的相对路径以配置文件所在目录为基准。将配置、`releases`、`publisher/history`、`publisher/windows` 和 `crashes` 放在持久目录；
 只提供已有制品的更新服务不需要制包工具，网页制包需要下一节对应平台的依赖。
 
 ## 在浏览器中发布安装包
@@ -157,6 +158,11 @@ Puffin 可从 `--puffin`、`--build-dir`、`XENON_PUFFIN_TOOL`、程序旁边、
   "public_origin": "https://updates.example.com",
   "puffin": "/opt/xenon/tools/puffin",
   "crx_public_key_sha256": "BASE64_OF_SHA256_SPKI_DER",
+  "crashes": {
+    "enabled": true,
+    "directory": "crashes",
+    "max_upload_bytes": 67108864
+  },
   "packaging": {
     "key_path": "/srv/xenon/private/release-key.pk8",
     "tools_dir": "/opt/xenon/tools",
@@ -179,6 +185,81 @@ Puffin 可从 `--puffin`、`--build-dir`、`XENON_PUFFIN_TOOL`、程序旁边、
 `public_origin` 只接受 HTTPS origin，不能带路径、尾部 `/`、查询串或账号；它控制客户端所见的更新及下载 URL，不开启 TLS。
 省略时使用本机 HTTP 地址。网页保存的制包配置立即生效；手工修改配置文件或端口后需重启。
 发布清单约每 2 秒重新加载，校验失败继续提供上一份有效清单；网页发布成功后也会立即加载。
+
+## 接收 Crashpad 崩溃报告
+
+启动 `serve` 后，更新监听器提供 `POST /api/v1/crashes`，本地默认地址为
+`http://127.0.0.1:9001/api/v1/crashes`。`crashes` 配置缺省时（包括旧配置文件）默认启用，
+保存到配置文件旁的 `crashes` 目录，单次上传上限为 64 MiB。设置 `enabled: false` 可关闭接口；
+修改配置后需重启服务。
+
+| 请求格式 | 内容 |
+| --- | --- |
+| `application/octet-stream` | 请求体为完整 `.dmp` 文件 |
+| `multipart/form-data` | `upload_file_minidump` 为 dump 文件；其他文本字段保存为注解，其他文件字段保存为附件 |
+
+两种格式均支持 `Content-Encoding: gzip`，服务先解压再解析。`max_upload_bytes` 分别限制传输的
+请求体大小和解压后的总大小，multipart 的字段、附件和边界也计入总量。附件的客户端文件名只记录在
+元数据中，不用作服务器路径。接口要求 dump 至少 32 字节且以 `MDMP` 开头；这只是基本格式检查，
+不代表 dump 内部结构已经完整验证。每个文本注解最多 64 KiB；每份报告最多保存 4096 个文本注解和
+128 个附件，超出数量的辅助字段会忽略，并在元数据的 `dropped_fields` 中记录数量，dump 仍会保存。
+Crashpad 按字节截断产生的非完整 UTF-8 注解会在 `annotations` 中以替换字符显示，
+其原始字节另存为 `annotations_base64` 对应字段，避免因此丢弃报告。
+
+每份报告保存到随机生成的 32 位十六进制报告 ID 目录，例如：
+
+```text
+crashes/
+  <报告 ID>/
+    minidump.dmp
+    metadata.json
+    attachment-000.bin
+    ...
+```
+
+成功响应为 **HTTP 200、`text/plain`，正文直接为报告 ID**，兼容 Crashpad 保存远端报告 ID 的方式。
+服务同时接收最多两份报告，忙时返回 503；接收请求的超时时间为 120 秒。
+接口不提供报告公开下载、自动清理或独立鉴权。报告需要自行安排归档和清理。
+Unix 系统的新报告目录和文件分别以 `0700` 和 `0600` 权限创建（仍受 umask 限制），仅服务账号可访问。
+这里的“表单上传”指原生客户端的 multipart HTTP 请求；接口拒绝含 `Origin` 头的请求，
+不提供网页上传表单。
+
+用已有的真实 dump 在 PowerShell 中验证：
+
+```powershell
+# 二进制直传。
+curl.exe --fail-with-body -H 'Content-Type: application/octet-stream' --data-binary '@C:/dumps/example.dmp' 'http://127.0.0.1:9001/api/v1/crashes'
+
+# multipart：curl 自动生成 Content-Type 和 boundary。
+curl.exe --fail-with-body -F 'upload_file_minidump=@C:/dumps/example.dmp;type=application/octet-stream' -F 'prod=Xenon' -F 'ver=1.0.0.1' 'http://127.0.0.1:9001/api/v1/crashes'
+```
+
+Windows 浏览器启动前设置：
+
+```powershell
+$env:CHROME_CRASHPAD_SERVER_URL = 'http://127.0.0.1:9001/api/v1/crashes'
+$env:XENON_CRASH_UPLOAD_ENABLED = '1'
+$env:XENON_CRASH_UPLOAD_FORMAT = 'multipart' # 或 'binary'
+```
+
+然后启动实际产品 EXE，确保没有复用已有浏览器进程。发布构建的 GN 配置、客户端重试行为及
+完整协议见 [Crashpad 上传接入](../../../docs/Crashpad上传接入.md)。服务器启用接口不会自动开启客户端上传。
+
+远程接收需通过 HTTPS 反向代理转发更新端口。以下 Nginx 配置放在已有 HTTPS `server` 中，
+保留上游的回环 Host，以通过服务的 Host 校验：
+
+```nginx
+location = /api/v1/crashes {
+    client_max_body_size 64m;
+    proxy_set_header Host 127.0.0.1:9001;
+    proxy_read_timeout 130s;
+    proxy_pass http://127.0.0.1:9001;
+}
+```
+
+修改端口或上传大小时同步修改反代配置。将浏览器上传 URL 设置为实际 HTTPS 地址，例如
+`https://updates.example.com/api/v1/crashes`；如需访问控制或额外限流，在反代层配置与原生
+客户端兼容的方案，当前客户端没有 token/签名配置。
 
 ## CLI 发布与单独生成差分
 
@@ -268,12 +349,13 @@ Windows 目录差分所需的 Zucchini 另行构建 `zucchini` 目标，例如 `
 | 配置 | 更新监听器 | 管理页面 |
 | --- | --- | --- |
 | 未配置 `public_origin` | 默认 `9001` | 同一端口 `http://127.0.0.1:9001/` |
-| 配置了 `public_origin` | 默认 `9001`，只提供更新和只读状态 | 独立 `http://127.0.0.1:9002/` |
+| 配置了 `public_origin` | 默认 `9001`，提供更新、崩溃接收和只读状态 | 独立 `http://127.0.0.1:9002/` |
 
 管理端口可用配置文件的 `admin_port` 调整；默认是更新端口加一（更新端口为 65535 时使用 65534）。
 管理接口校验会话令牌、Host 和请求来源，只供本机访问；不要反向代理管理端口。
 HTTPS 反代按需转发更新端口的 `/service/update2/json`、`/artifacts/`（macOS），
-以及 `/api/v1/update/check`、`/windows/artifacts/`（Windows），配置见
+以及 `/api/v1/update/check`、`/windows/artifacts/`（Windows）；崩溃上传按需转发 `/api/v1/crashes`，示例见上文。
+更新接口的反代配置见
 [UPDATE_SERVICE.md](../UPDATE_SERVICE.md#6-对外部署与常驻运行)。
 
 在另一台电脑上，通过 SSH 隧道访问远程管理页面：
@@ -326,7 +408,8 @@ XENON_PUFFIN_TOOL=/ABS/tools/puffin cargo test --locked \
 # HTTP 管理端和旧 Node 服务兼容测试；Windows 网页制包需要 Node.js
 XENON_UPDATE_TOOL=/ABS/xenon-update XENON_VERIFY_TOOL=/ABS/xenon_updater_verify \
   node --test xenon_overlay/tools/updater/xenon_update_tool/tests/compatibility.mjs \
-  xenon_overlay/tools/updater/xenon_update_tool/tests/admin.test.mjs
+  xenon_overlay/tools/updater/xenon_update_tool/tests/admin.test.mjs \
+  xenon_overlay/tools/updater/xenon_update_tool/tests/crashes.test.mjs
 ```
 
 Windows 制包单测：

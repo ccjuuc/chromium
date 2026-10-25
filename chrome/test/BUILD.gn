@@ -673,6 +673,7 @@ static_library("test_support") {
     deps += [
       "//chrome/browser/webshare:test_support",
       "//chrome/chrome_elf:constants",
+      "//xenon_overlay/buildflags:crash_buildflags",
     ]
     public_deps += [
       "//chrome/chrome_elf:crash",

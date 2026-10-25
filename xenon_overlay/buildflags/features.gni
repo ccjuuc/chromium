@@ -5,6 +5,15 @@
 declare_args() {
   for_xl = true
 
+  # Windows Crashpad endpoint. Empty keeps the upstream endpoint behavior.
+  xenon_crash_upload_url = ""
+
+  # Product consent default; enterprise policy still takes precedence.
+  xenon_crash_upload_enabled = false
+
+  # "multipart" sends form fields and attachments; "binary" sends only the dump.
+  xenon_crash_upload_format = "multipart"
+
   # Xenon Overlay Service is enabled on Windows, Linux, and Mac.
   # ChromeOS and Android are not currently supported targets for this overlay.
   enable_xenon_service = is_win || is_linux || is_mac

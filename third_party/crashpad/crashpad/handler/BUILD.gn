@@ -139,7 +139,10 @@ if (!crashpad_is_ios) {
     }
 
     if (crashpad_is_win) {
-      sources += [ "crashpad_handler_test.cc" ]
+      sources += [
+        "crash_report_upload_thread_win_test.cc",
+        "crashpad_handler_test.cc",
+      ]
     }
 
     deps = [
@@ -163,6 +166,7 @@ if (!crashpad_is_ios) {
       data_deps = [
         ":crashpad_handler_test_extended_handler",
         ":fake_handler_that_crashes_at_startup",
+        "../util:http_transport_test_server",
       ]
     }
   }

@@ -174,6 +174,15 @@ class CrashReporterClient {
   // Returns the URL target for crash report uploads.
   virtual std::string GetUploadUrl();
 
+  // Resolves product-specific crash consent when metrics services update their
+  // consent at runtime. Enterprise policy, unattended mode and sampling still
+  // apply. The default preserves the metrics consent supplied by the caller.
+  virtual bool GetCrashUploadConsent(bool metrics_consent);
+
+  // Upload only the dump as application/octet-stream instead of a multipart
+  // form. Binary uploads do not include separate attachments or form fields.
+  virtual bool ShouldUploadDumpAsBinary();
+
   // This method should return true to configure a crash reporter capable of
   // monitoring itself for its own crashes to do so, even if self-monitoring
   // would be expensive. "Expensive" self-monitoring dedicates an additional

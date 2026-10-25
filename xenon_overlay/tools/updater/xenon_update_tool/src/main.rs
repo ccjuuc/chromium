@@ -2,6 +2,7 @@
 mod admin;
 mod catalog;
 mod config;
+mod crashes;
 mod delta;
 mod history;
 mod homepage;
@@ -106,8 +107,15 @@ async fn main() -> Result<()> {
         Commands::Serve => {
             let cfg = config::load(&cli.config)?;
             let admin = admin::Admin::new(&cli.config, cfg.clone())?;
-            server::run(cfg.manifest, cfg.port, cfg.public_origin, Some(admin), cfg.admin_port)
-                .await?;
+            server::run(
+                cfg.manifest,
+                cfg.port,
+                cfg.public_origin,
+                Some(admin),
+                cfg.admin_port,
+                cfg.crashes,
+            )
+            .await?;
         }
         Commands::Publish { release, full_only, puffin } => {
             let cfg = config::load(&cli.config)?;

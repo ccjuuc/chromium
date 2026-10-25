@@ -59,6 +59,10 @@ base::FilePath* g_database_path;
 
 crashpad::CrashReportDatabase* g_database;
 
+#if BUILDFLAG(IS_WIN)
+bool g_upload_configured = false;
+#endif
+
 void InitializeDatabasePath(const base::FilePath& database_path) {
   DCHECK(!g_database_path);
 
@@ -254,7 +258,8 @@ void SetUploadConsent(bool consent) {
     // unconditionally and uploading is gated on consent, which tests/bots
     // shouldn't have. As a precaution, uploading is also disabled on bots even
     // if consent is present.
-    enable_uploads = consent && !crash_reporter_client->IsRunningUnattended();
+    enable_uploads = crash_reporter_client->GetCrashUploadConsent(consent) &&
+                     !crash_reporter_client->IsRunningUnattended();
   }
 
   crashpad::Settings* settings = g_database->GetSettings();
@@ -263,6 +268,27 @@ void SetUploadConsent(bool consent) {
 }
 
 #endif  // !BUILDFLAG(IS_CHROMEOS)
+
+bool IsCrashUploadEnabled() {
+#if BUILDFLAG(IS_WIN)
+  return IsCrashUploadEnabled_ExportThunk();
+#else
+  return IsCrashUploadEnabledImpl();
+#endif
+}
+
+bool IsCrashUploadEnabledImpl() {
+  if (!g_database) {
+    return false;
+  }
+#if BUILDFLAG(IS_WIN)
+  if (!g_upload_configured) {
+    return false;
+  }
+#endif
+  bool enabled = false;
+  return g_database->GetSettings()->GetUploadsEnabled(&enabled) && enabled;
+}
 
 #if !BUILDFLAG(IS_ANDROID)
 void DumpWithoutCrashing() {
@@ -466,6 +492,12 @@ void ClearReportsBetweenImpl(time_t begin, time_t end) {
 }
 
 namespace internal {
+
+#if BUILDFLAG(IS_WIN)
+void SetCrashpadUploadConfigured(bool configured) {
+  g_upload_configured = configured;
+}
+#endif
 
 crashpad::CrashReportDatabase* GetCrashReportDatabase() {
   return g_database;

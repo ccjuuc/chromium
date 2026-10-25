@@ -13,7 +13,9 @@
 #include "base/functional/bind.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/system/sys_info.h"
+#include "base/task/thread_pool.h"
 #include "base/values.h"
 #include "base/version_info/version_info.h"
 #include "build/build_config.h"
@@ -43,7 +45,7 @@
 #include "chromeos/ash/components/dbus/debug_daemon/debug_daemon_client.h"
 #endif
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "components/crash/core/app/crashpad.h"
 #endif
 
@@ -102,12 +104,16 @@ class CrashesDOMHandler : public WebUIMessageHandler {
   // Sends the recent crashes list JS.
   void UpdateUI();
 
+  void UpdateUIWithUploadState(bool crash_reporting_enabled);
+
   // Asynchronously requests a user triggered upload. Called from JS.
   void HandleRequestSingleCrashUpload(const base::ListValue& args);
 
   scoped_refptr<UploadList> upload_list_;
   bool list_available_ = false;
   bool first_load_ = true;
+
+  base::WeakPtrFactory<CrashesDOMHandler> weak_factory_{this};
 };
 
 CrashesDOMHandler::CrashesDOMHandler() {
@@ -141,6 +147,7 @@ void CrashesDOMHandler::RegisterMessages() {
 
 void CrashesDOMHandler::OnJavascriptDisallowed() {
   upload_list_->CancelLoadCallback();
+  weak_factory_.InvalidateWeakPtrs();
 }
 
 void CrashesDOMHandler::HandleRequestCrashes(const base::ListValue& args) {
@@ -178,9 +185,22 @@ void CrashesDOMHandler::OnUploadListAvailable() {
 }
 
 void CrashesDOMHandler::UpdateUI() {
-  bool crash_reporting_enabled =
-      ChromeMetricsServiceAccessor::IsMetricsAndCrashReportingEnabled();
+#if BUILDFLAG(IS_WIN)
+  weak_factory_.InvalidateWeakPtrs();
+  // Crash uploads can have independent product consent. Read the effective
+  // database setting after policy, sampling and unattended-mode checks.
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock()},
+      base::BindOnce(&crash_reporter::IsCrashUploadEnabled),
+      base::BindOnce(&CrashesDOMHandler::UpdateUIWithUploadState,
+                     weak_factory_.GetWeakPtr()));
+#else
+  UpdateUIWithUploadState(
+      ChromeMetricsServiceAccessor::IsMetricsAndCrashReportingEnabled());
+#endif
+}
 
+void CrashesDOMHandler::UpdateUIWithUploadState(bool crash_reporting_enabled) {
   bool system_crash_reporter = false;
 #if BUILDFLAG(IS_CHROMEOS)
   // Chrome OS has a system crash reporter.
@@ -203,7 +223,8 @@ void CrashesDOMHandler::UpdateUI() {
 #endif
   bool allow_manual_uploads =
       manual_uploads_supported &&
-      (crash_reporting_enabled || !metrics::IsMetricsReportingPolicyManaged());
+      (ChromeMetricsServiceAccessor::IsMetricsAndCrashReportingEnabled() ||
+       !metrics::IsMetricsReportingPolicyManaged());
 
   // Show crash reports regardless of |crash_reporting_enabled| when it is
   // possible to manually upload reports.

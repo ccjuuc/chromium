@@ -102,6 +102,15 @@ int HttpTransportTestServerMain(int argc, char* argv[]) {
                                   part.first + "\"\r\n\r\n";
                      to_stdout += part.second.content + "\r\n";
                    }
+                   for (const auto& part : req.form.files) {
+                     to_stdout += "--" + boundary + "\r\n";
+                     to_stdout += "Content-Disposition: form-data; name=\"" +
+                                  part.first + "\"; filename=\"" +
+                                  part.second.filename + "\"\r\n";
+                     to_stdout += "Content-Type: " + part.second.content_type +
+                                  "\r\n\r\n";
+                     to_stdout += part.second.content + "\r\n";
+                   }
                    to_stdout += "--" + boundary + "--\r\n";
                  }
 

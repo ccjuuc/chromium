@@ -57,6 +57,9 @@ void SetUploadConsent_ExportThunk(bool consent);
 // This function is used by JS Error reporting which lives in chrome.dll.
 bool GetUploadConsent_ExportThunk();
 
+// Returns the effective automatic Crashpad upload state. May block on disk I/O.
+bool IsCrashUploadEnabled_ExportThunk();
+
 // Returns a textual description of the product info (product name, version,
 // etc.) to include in the crash report.
 // This function is used by JS Error reporting which lives in chrome.dll.

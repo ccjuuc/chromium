@@ -8,6 +8,19 @@ import("//xenon_overlay/buildflags/features.gni")
 
 xenon_extension_source_zip = xenon_extension_source == "zip"
 
+assert(xenon_crash_upload_format == "multipart" ||
+       xenon_crash_upload_format == "binary")
+xenon_crash_upload_binary = xenon_crash_upload_format == "binary"
+
+buildflag_header("crash_buildflags") {
+  header = "crash_buildflags.h"
+  flags = [
+    "XENON_CRASH_UPLOAD_URL=\"$xenon_crash_upload_url\"",
+    "XENON_CRASH_UPLOAD_ENABLED=$xenon_crash_upload_enabled",
+    "XENON_CRASH_UPLOAD_BINARY=$xenon_crash_upload_binary",
+  ]
+}
+
 buildflag_header("buildflags") {
   header = "buildflags.h"
   flags = [

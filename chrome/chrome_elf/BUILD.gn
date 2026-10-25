@@ -110,6 +110,7 @@ static_library("crash") {
     "//components/version_info:channel",
     "//sandbox/policy:win_hook_util",
     "//third_party/crashpad/crashpad/client",  # DumpWithoutCrash
+    "//xenon_overlay/buildflags:crash_buildflags",
   ]
 }
 
@@ -235,7 +236,9 @@ source_set("third_party_shared_defines") {
 test("chrome_elf_unittests") {
   output_name = "chrome_elf_unittests"
   sources = [
+    "../app/chrome_crash_reporter_client_win_unittest.cc",
     "chrome_elf_util_unittest.cc",
+    "crash/crash_upload_state_unittest.cc",
     "hook_util/test/hook_util_test.cc",
     "nt_registry/nt_registry_unittest.cc",
     "pe_image_safe/pe_image_safe_unittest.cc",
@@ -264,9 +267,12 @@ test("chrome_elf_unittests") {
     "//chrome/common:version_header",
     "//chrome/install_static:install_static_util",
     "//chrome/install_static/test:test_support",
+    "//components/crash/core/app",
     "//components/crash/core/app:test_support",
     "//sandbox/policy:win_hook_util",
     "//testing/gtest",
+    "//third_party/crashpad/crashpad/client",
+    "//xenon_overlay/buildflags:crash_buildflags",
   ]
   data_deps = [
     ":chrome_elf",

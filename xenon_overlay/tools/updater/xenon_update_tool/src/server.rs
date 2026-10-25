@@ -33,6 +33,7 @@ pub struct ServerState {
     port: u16,
     origin: String,
     admin: Option<Arc<crate::admin::Admin>>,
+    crashes: Option<Arc<crate::crashes::Store>>,
 }
 
 pub fn validate_public_origin(value: &str) -> Result<()> {
@@ -64,6 +65,7 @@ impl ServerState {
             port,
             origin: public_origin.unwrap_or_else(|| format!("http://127.0.0.1:{port}")),
             admin: None,
+            crashes: None,
         })
     }
 
@@ -220,6 +222,12 @@ async fn handle_inner(state: ServerState, request: Request) -> Response {
     }
     if request.headers().contains_key(header::ORIGIN) {
         return error(StatusCode::FORBIDDEN, "Loopback native clients only");
+    }
+    if request.uri().path() == crate::crashes::ENDPOINT {
+        let Some(store) = state.crashes else {
+            return error(StatusCode::NOT_FOUND, "Crash uploads are disabled");
+        };
+        return crate::crashes::handle(store, request).await;
     }
     if request.uri().path() == "/assets/home.js" && request.method() == Method::GET {
         return response(StatusCode::OK, include_str!("home.js"), "text/javascript; charset=utf-8");
@@ -557,6 +565,7 @@ pub async fn run(
     public_origin: Option<String>,
     admin: Option<Arc<crate::admin::Admin>>,
     admin_port: Option<u16>,
+    crashes: crate::crashes::Settings,
 ) -> Result<()> {
     if let Some(origin) = &public_origin {
         validate_public_origin(origin)?;
@@ -568,6 +577,9 @@ pub async fn run(
     let port = listener.local_addr()?.port();
     let separate_management = public_origin.is_some() && admin.is_some();
     let mut state = ServerState::new(catalog, port, public_origin)?;
+    if crashes.enabled {
+        state.crashes = Some(Arc::new(crate::crashes::Store::new(crashes)?));
+    }
     let windows_root = admin.as_ref().map(|admin| admin.windows_root());
     if let Some(admin) = &admin {
         let root = admin.windows_root();
@@ -630,6 +642,53 @@ mod tests {
         let catalog = catalog::load(&dir.path().join("release.json")).unwrap();
         let state = ServerState::new(catalog, 9001, None).unwrap();
         (dir, state, full)
+    }
+
+    #[tokio::test]
+    async fn crash_endpoint_obeys_host_origin_and_enabled_settings() {
+        let (dir, mut state, _) = setup();
+        let path = dir.path().join("reports");
+        let req = || {
+            Request::builder()
+                .method(Method::POST)
+                .uri(crate::crashes::ENDPOINT)
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+        };
+        let mut dump = vec![0; 32];
+        dump[..4].copy_from_slice(b"MDMP");
+        let response = router(state.clone())
+            .oneshot(req().header("host", "127.0.0.1:9001").body(Body::from(dump.clone())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        state.crashes = Some(Arc::new(
+            crate::crashes::Store::new(crate::crashes::Settings {
+                directory: path.clone(),
+                ..Default::default()
+            })
+            .unwrap(),
+        ));
+        for builder in [
+            req().header("host", "other.example"),
+            req().header("host", "127.0.0.1:9001").header("origin", "https://other.example"),
+        ] {
+            let response = router(state.clone())
+                .oneshot(builder.body(Body::from(dump.clone())).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
+        let response = router(state)
+            .oneshot(req().header("host", "127.0.0.1:9001").body(Body::from(dump.clone())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let id = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            fs::read(path.join(std::str::from_utf8(&id).unwrap()).join("minidump.dmp")).unwrap(),
+            dump
+        );
     }
 
     #[tokio::test]

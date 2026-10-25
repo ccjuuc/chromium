@@ -128,15 +128,22 @@ void DestroyCrashpadClient();
 
 // Enables or disables crash report upload, taking the given consent to upload
 // into account. Consent may be ignored, uploads may not be enabled even with
-// consent, but will only be enabled without consent when policy enforces crash
-// reporting. Whether reports upload is a property of the Crashpad database. In
-// a newly-created database, uploads will be disabled. This function only has an
+// consent. Product-specific consent and enterprise policy may enable uploads
+// independently of metrics consent. Whether reports upload is a property of
+// the Crashpad database. In a newly-created database, uploads will be disabled.
+// This function only has an
 // effect when called in the browser process. Its effect is immediate and
 // applies to all other process types, including processes that are already
 // running.
 void SetUploadConsent(bool consent);
 
 #endif  // !BUILDFLAG(IS_CHROMEOS)
+
+// Returns whether automatic crash uploads are enabled in the database. On
+// Windows, also requires a successfully started handler with an upload URL.
+// Returns false if Crashpad is unavailable or the settings cannot be read.
+// This reads the database and must run on a sequence that allows blocking.
+bool IsCrashUploadEnabled();
 
 enum class ReportUploadState {
   NotUploaded,
@@ -221,6 +228,9 @@ void GetReportsImpl(std::vector<Report>* reports);
 // The implementation function for RequestSingleCrashUpload.
 void RequestSingleCrashUploadImpl(const std::string& local_id);
 
+// The implementation function for IsCrashUploadEnabled.
+bool IsCrashUploadEnabledImpl();
+
 // The implementation function for GetCrashpadDatabasePath.
 base::FilePath::StringType::const_pointer GetCrashpadDatabasePathImpl();
 
@@ -289,6 +299,10 @@ bool GetHandlerSocket(int* sock, pid_t* pid);
 namespace internal {
 
 #if BUILDFLAG(IS_WIN)
+// Records whether the initial client's handler was started with an upload URL.
+// Set during initialization, before other threads can query the upload state.
+void SetCrashpadUploadConfigured(bool configured);
+
 // Returns platform specific annotations. This is broken out on Windows only so
 // that it may be reused by GetCrashKeysForKasko.
 void GetPlatformCrashpadAnnotations(

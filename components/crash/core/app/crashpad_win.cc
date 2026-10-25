@@ -134,6 +134,10 @@ bool PlatformCrashpadInitialization(
 
     std::vector<std::string> arguments(start_arguments);
 
+    if (crash_reporter_client->ShouldUploadDumpAsBinary()) {
+      arguments.push_back("--upload-raw");
+    }
+
     if (crash_reporter_client->ShouldMonitorCrashHandlerExpensively()) {
       arguments.push_back("--monitor-self");
       for (const std::string& start_argument : start_arguments) {
@@ -152,6 +156,7 @@ bool PlatformCrashpadInitialization(
         exe_file, *database_path, metrics_path, url, process_annotations,
         arguments, /*restartable=*/false, /*asynchronous_start=*/false,
         attachments);
+    SetCrashpadUploadConfigured(initialized && !url.empty());
 
     if (initialized) {
       // If we're the browser, push the pipe name into the environment so child

@@ -29,6 +29,32 @@ using Metrics::CrashSkippedReason::kUploadThrottled;
 
 constexpr time_t kOneHour = 60 * 60;
 
+TEST(CrashReportUploadRateLimitTest, PersistentRetryBackoff) {
+  constexpr time_t last = 1000000;
+  EXPECT_EQ(GetUploadRetryDecision(last, last, 0),
+            UploadRetryDecision::kAttempt);
+  for (int attempts = 1; attempts < 5; ++attempts) {
+    const time_t delay = (15 * 60) << (attempts - 1);
+    EXPECT_EQ(GetUploadRetryDecision(last + delay - 1, last, attempts),
+              UploadRetryDecision::kWait);
+    EXPECT_EQ(GetUploadRetryDecision(last + delay, last, attempts),
+              UploadRetryDecision::kAttempt);
+  }
+  EXPECT_EQ(GetUploadRetryDecision(last + 86400, last, 5),
+            UploadRetryDecision::kExhausted);
+  EXPECT_EQ(GetUploadRetryDecision(last + 86400, last, 100),
+            UploadRetryDecision::kExhausted);
+}
+
+TEST(CrashReportUploadRateLimitTest, RetryClockRollback) {
+  constexpr time_t last = 1000000;
+  EXPECT_EQ(GetUploadRetryDecision(last - 1, last, 1),
+            UploadRetryDecision::kWait);
+  EXPECT_EQ(
+      GetUploadRetryDecision(last - kBackwardsClockTolerance, last, 1),
+      UploadRetryDecision::kAttempt);
+}
+
 TEST(CrashReportUploadRateLimitTest, ShouldRateLimit_OnePerHour) {
   const time_t now = time(nullptr);
 

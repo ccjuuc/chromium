@@ -206,6 +206,24 @@ void CrashReportUploadThread::ProcessPendingReport(
     return;
   }
 
+#if BUILDFLAG(IS_WIN)
+  // A new user request gets an attempt even if automatic retries were
+  // exhausted. RequestUpload() deliberately preserves the attempt history.
+  if (!report.upload_explicitly_requested) {
+    switch (GetUploadRetryDecision(time(nullptr), report.last_upload_attempt_time,
+                                  report.upload_attempts)) {
+      case UploadRetryDecision::kExhausted:
+        database_->SkipReportUpload(report.uuid,
+                                    Metrics::CrashSkippedReason::kUploadFailed);
+        return;
+      case UploadRetryDecision::kWait:
+        return;
+      case UploadRetryDecision::kAttempt:
+        break;
+    }
+  }
+#endif
+
   if (ShouldRateLimitUpload(report))
     return;
 
@@ -265,6 +283,23 @@ void CrashReportUploadThread::ProcessPendingReport(
             time(nullptr) +
             (1 << upload_report->upload_attempts) * kRetryWorkIntervalSeconds;
       }
+#elif BUILDFLAG(IS_WIN)
+    {
+      // Destruction records the failed attempt and restores the pending state.
+      // The next scan (including after a restart) applies persisted backoff.
+      // Use the acquired report: a user may have requested an upload after
+      // the pending report list was read.
+      const bool explicitly_requested =
+          upload_report->upload_explicitly_requested;
+      upload_report.reset();
+      if (explicitly_requested) {
+        // Consume this user request. Leaving its flag pending would bypass
+        // backoff and the retry limit on every subsequent automatic scan.
+        // The user may explicitly request another attempt later.
+        database_->SkipReportUpload(report.uuid,
+                                    Metrics::CrashSkippedReason::kUploadFailed);
+      }
+    }
 #else
       upload_report.reset();
 
@@ -332,12 +367,18 @@ CrashReportUploadThread::UploadResult CrashReportUploadThread::UploadReport(
     return UploadResult::kPermanentFailure;
   }
 
-  HTTPHeaders content_headers;
-  http_multipart_builder.PopulateContentHeaders(&content_headers);
-  for (const auto& content_header : content_headers) {
-    http_transport->SetHeader(content_header.first, content_header.second);
+  if (options_.upload_raw) {
+    http_transport->SetHeader("Content-Type", "application/octet-stream");
+    http_transport->SetBodyStream(
+        std::make_unique<FileReaderHTTPBodyStream>(reader));
+  } else {
+    HTTPHeaders content_headers;
+    http_multipart_builder.PopulateContentHeaders(&content_headers);
+    for (const auto& content_header : content_headers) {
+      http_transport->SetHeader(content_header.first, content_header.second);
+    }
+    http_transport->SetBodyStream(http_multipart_builder.GetBodyStream());
   }
-  http_transport->SetBodyStream(http_multipart_builder.GetBodyStream());
   // TODO(mark): The timeout should be configurable by the client.
   http_transport->SetTimeout(internal::kUploadReportTimeoutSeconds);
 
@@ -390,7 +431,9 @@ bool CrashReportUploadThread::ShouldRateLimitUpload(
     const auto should_rate_limit = ShouldRateLimit(
         now, last_upload_attempt_time, kUploadAttemptIntervalSeconds);
     if (should_rate_limit.skip_reason.has_value()) {
+#if !BUILDFLAG(IS_WIN)
       database_->SkipReportUpload(report.uuid, *should_rate_limit.skip_reason);
+#endif
       return true;
     }
   }

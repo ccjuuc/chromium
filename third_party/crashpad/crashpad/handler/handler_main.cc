@@ -158,6 +158,7 @@ void Usage(const base::FilePath& me) {
 "      --no-periodic-tasks     don't scan for new reports or prune the database\n"
 "      --no-rate-limit         don't rate limit crash uploads\n"
 "      --no-upload-gzip        don't use gzip compression when uploading\n"
+"      --upload-raw            POST only the uncompressed minidump binary\n"
   // clang-format on
 #if BUILDFLAG(IS_ANDROID)
       // clang-format off
@@ -248,6 +249,7 @@ struct Options {
   bool periodic_tasks;
   bool rate_limit;
   bool upload_gzip;
+  bool upload_raw = false;
 #if BUILDFLAG(IS_CHROMEOS)
   bool use_cros_crash_reporter = false;
   base::FilePath minidump_dir_for_tests;
@@ -490,6 +492,9 @@ void MonitorSelf(const Options& options) {
   if (!options.upload_gzip) {
     extra_arguments.push_back("--no-upload-gzip");
   }
+  if (options.upload_raw) {
+    extra_arguments.push_back("--upload-raw");
+  }
   for (const auto& iterator : options.monitor_self_annotations) {
     extra_arguments.push_back(
         base::StringPrintf("--monitor-self-annotation=%s=%s",
@@ -606,6 +611,7 @@ int HandlerMain(int argc,
     kOptionNoPeriodicTasks,
     kOptionNoRateLimit,
     kOptionNoUploadGzip,
+    kOptionUploadRaw,
 #if BUILDFLAG(IS_ANDROID)
     kOptionNoWriteMinidumpToDatabase,
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -674,6 +680,7 @@ int HandlerMain(int argc,
     {"no-periodic-tasks", no_argument, nullptr, kOptionNoPeriodicTasks},
     {"no-rate-limit", no_argument, nullptr, kOptionNoRateLimit},
     {"no-upload-gzip", no_argument, nullptr, kOptionNoUploadGzip},
+    {"upload-raw", no_argument, nullptr, kOptionUploadRaw},
 #if BUILDFLAG(IS_ANDROID)
     {"no-write-minidump-to-database",
      no_argument,
@@ -830,6 +837,10 @@ int HandlerMain(int argc,
       }
       case kOptionNoUploadGzip: {
         options.upload_gzip = false;
+        break;
+      }
+      case kOptionUploadRaw: {
+        options.upload_raw = true;
         break;
       }
 #if BUILDFLAG(IS_ANDROID)
@@ -1025,6 +1036,7 @@ int HandlerMain(int argc,
         options.identify_client_via_url;
     upload_thread_options.rate_limit = options.rate_limit;
     upload_thread_options.upload_gzip = options.upload_gzip;
+    upload_thread_options.upload_raw = options.upload_raw;
     upload_thread_options.watch_pending_reports = options.periodic_tasks;
 
     upload_thread.Reset(new CrashReportUploadThread(

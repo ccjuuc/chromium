@@ -22,6 +22,26 @@
 
 namespace crashpad {
 
+UploadRetryDecision GetUploadRetryDecision(time_t now,
+                                         time_t last_upload_attempt_time,
+                                         int upload_attempts) {
+  constexpr int kMaxUploadAttempts = 5;
+  constexpr int kInitialRetrySeconds = 15 * 60;
+  if (upload_attempts >= kMaxUploadAttempts) {
+    return UploadRetryDecision::kExhausted;
+  }
+  if (upload_attempts <= 0) {
+    return UploadRetryDecision::kAttempt;
+  }
+  // The bounded attempt count makes the shift safe. Reuse clock rollback
+  // handling and persist the delay across restarts through database metadata.
+  const time_t interval = kInitialRetrySeconds << (upload_attempts - 1);
+  return ShouldRateLimit(now, last_upload_attempt_time, interval)
+                 .skip_reason.has_value()
+             ? UploadRetryDecision::kWait
+             : UploadRetryDecision::kAttempt;
+}
+
 ShouldRateLimitResult ShouldRateLimit(time_t now,
                                       time_t last_upload_attempt_time,
                                       time_t interval_seconds) {

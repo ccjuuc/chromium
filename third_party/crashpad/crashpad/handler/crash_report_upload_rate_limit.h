@@ -23,6 +23,13 @@
 
 namespace crashpad {
 
+//! Persistent per-report retry policy, independent of the handler lifetime.
+enum class UploadRetryDecision { kAttempt, kWait, kExhausted };
+
+UploadRetryDecision GetUploadRetryDecision(time_t now,
+                                         time_t last_upload_attempt_time,
+                                         int upload_attempts);
+
 //! \brief How far into the future an upload-attempt timestamp can be and still
 //!     be treated as valid. Beyond this tolerance, timestamps are disregarded.
 //!     Exposed for testing.

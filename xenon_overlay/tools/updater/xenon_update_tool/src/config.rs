@@ -40,6 +40,8 @@ pub struct Config {
     pub packaging: Packaging,
     #[serde(default)]
     pub windows: crate::windows::Settings,
+    #[serde(default)]
+    pub crashes: crate::crashes::Settings,
 }
 
 pub struct InitOptions {
@@ -126,6 +128,10 @@ pub fn load(path: &Path) -> Result<Config> {
     }
     config.windows.validate()?;
     let root = absolute(path)?.parent().context("Config has no parent directory")?.to_owned();
+    config.crashes.validate()?;
+    if config.crashes.directory.is_relative() {
+        config.crashes.directory = root.join(&config.crashes.directory);
+    }
     if config.manifest.is_relative() {
         config.manifest = root.join(config.manifest);
     }
@@ -316,6 +322,7 @@ pub fn initialize(path: &Path, options: InitOptions) -> Result<Value> {
         crx_public_key_sha256: key,
         packaging: Packaging::default(),
         windows: crate::windows::Settings::default(),
+        crashes: crate::crashes::Settings::default(),
     };
     let settings = gn_settings(&config);
     fs::create_dir_all(catalog.parent().unwrap())?;
@@ -422,6 +429,8 @@ mod tests {
         initialize(&path, options()).unwrap();
         let config = load(&path).unwrap();
         assert_eq!(config.manifest, path.parent().unwrap().join("releases/catalog.json"));
+        assert_eq!(config.crashes.directory, path.parent().unwrap().join("crashes"));
+        assert!(config.crashes.enabled);
         assert!(gn_settings(&config)
             .unwrap()
             .contains("xenon_updater_allow_insecure_localhost = true"));

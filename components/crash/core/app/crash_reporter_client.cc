@@ -153,6 +153,14 @@ std::string CrashReporterClient::GetUploadUrl() {
 #endif
 }
 
+bool CrashReporterClient::ShouldUploadDumpAsBinary() {
+  return false;
+}
+
+bool CrashReporterClient::GetCrashUploadConsent(bool metrics_consent) {
+  return metrics_consent;
+}
+
 bool CrashReporterClient::ShouldMonitorCrashHandlerExpensively() {
   return false;
 }

@@ -60,6 +60,10 @@ bool GetUploadConsent_ExportThunk() {
   return crash_reporter::GetCrashReporterClient()->GetCollectStatsConsent();
 }
 
+bool IsCrashUploadEnabled_ExportThunk() {
+  return crash_reporter::IsCrashUploadEnabledImpl();
+}
+
 void GetProductInfo_ExportThunk(crash_reporter::ProductInfo* product_info) {
   return crash_reporter::GetCrashReporterClient()->GetProductInfo(product_info);
 }
