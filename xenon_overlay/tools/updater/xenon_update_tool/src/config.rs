@@ -42,6 +42,8 @@ pub struct Config {
     pub windows: crate::windows::Settings,
     #[serde(default)]
     pub crashes: crate::crashes::Settings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_certificates: Option<crate::managed_certificates::Settings>,
 }
 
 pub struct InitOptions {
@@ -51,6 +53,19 @@ pub struct InitOptions {
     pub puffin: Option<PathBuf>,
     pub key_hash: Option<String>,
     pub artifacts: Option<PathBuf>,
+}
+
+impl Default for InitOptions {
+    fn default() -> Self {
+        Self {
+            public_origin: None,
+            port: 9001,
+            build_dir: None,
+            puffin: None,
+            key_hash: None,
+            artifacts: None,
+        }
+    }
 }
 
 pub fn validate_origin(origin: &str) -> Result<()> {
@@ -128,6 +143,30 @@ pub fn load(path: &Path) -> Result<Config> {
     }
     config.windows.validate()?;
     let root = absolute(path)?.parent().context("Config has no parent directory")?.to_owned();
+    if let Some(settings) = &mut config.managed_certificates {
+        settings.validate()?;
+        if settings.snapshot_file.is_relative() {
+            settings.snapshot_file = root.join(&settings.snapshot_file);
+        }
+        if let Some(https) = &mut settings.https {
+            let management_port = config.public_origin.as_ref().map(|_| {
+                config.admin_port.unwrap_or(if config.port == 65535 {
+                    65534
+                } else {
+                    config.port + 1
+                })
+            });
+            ensure!(
+                https.port != config.port && Some(https.port) != management_port,
+                "managed_certificates.https.port must differ from HTTP and management ports"
+            );
+            for path in [&mut https.certificate_file, &mut https.private_key_file] {
+                if path.is_relative() {
+                    *path = root.join(&*path);
+                }
+            }
+        }
+    }
     config.crashes.validate()?;
     if config.crashes.directory.is_relative() {
         config.crashes.directory = root.join(&config.crashes.directory);
@@ -312,6 +351,8 @@ pub fn initialize(path: &Path, options: InitOptions) -> Result<Value> {
         key = options.build_dir.as_deref().and_then(gn_key_from_build);
     }
     let puffin = find_puffin(options.puffin.as_deref(), None, options.build_dir.as_deref())?;
+    let managed_certificates = crate::managed_certificates::Settings::default();
+    let snapshot = root.join(&managed_certificates.snapshot_file);
     let config = Config {
         schema_version: 1,
         port: options.port,
@@ -323,8 +364,10 @@ pub fn initialize(path: &Path, options: InitOptions) -> Result<Value> {
         packaging: Packaging::default(),
         windows: crate::windows::Settings::default(),
         crashes: crate::crashes::Settings::default(),
+        managed_certificates: Some(managed_certificates),
     };
     let settings = gn_settings(&config);
+    fs::create_dir_all(snapshot.parent().unwrap())?;
     fs::create_dir_all(catalog.parent().unwrap())?;
     create_file(&catalog, b"{\n  \"schema_version\": 1,\n  \"apps\": []\n}\n")?;
     if let Some(settings) = &settings {
@@ -431,12 +474,53 @@ mod tests {
         assert_eq!(config.manifest, path.parent().unwrap().join("releases/catalog.json"));
         assert_eq!(config.crashes.directory, path.parent().unwrap().join("crashes"));
         assert!(config.crashes.enabled);
+        let certificates = config.managed_certificates.as_ref().unwrap();
+        assert_eq!(
+            certificates.snapshot_file,
+            path.parent().unwrap().join("managed-ca/current.json")
+        );
+        assert!(certificates.bearer_token_env.is_none());
         assert!(gn_settings(&config)
             .unwrap()
             .contains("xenon_updater_allow_insecure_localhost = true"));
         let before = fs::read(&path).unwrap();
         assert!(initialize(&path, options()).is_err());
         assert_eq!(before, fs::read(path).unwrap());
+    }
+    #[test]
+    fn default_initialization_prepares_managed_certificate_directory_without_a_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("state/config.json");
+        let options = InitOptions::default();
+        assert_eq!(options.port, 9001);
+        assert!(options.public_origin.is_none());
+        assert!(options.build_dir.is_none());
+        assert!(options.puffin.is_none());
+        assert!(options.key_hash.is_none());
+        assert!(options.artifacts.is_none());
+        initialize(&path, options).unwrap();
+        let config = load(&path).unwrap();
+        assert_eq!(config.port, 9001);
+        let snapshot = config.managed_certificates.unwrap().snapshot_file;
+        assert_eq!(snapshot, path.parent().unwrap().join("managed-ca/current.json"));
+        assert!(snapshot.parent().unwrap().is_dir());
+        assert!(!snapshot.exists());
+        let serialized: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            serialized["managed_certificates"],
+            json!({"snapshot_file": "managed-ca/current.json"})
+        );
+    }
+    #[test]
+    fn initialization_preserves_existing_managed_certificate_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        let snapshot = temp.path().join("managed-ca/current.json");
+        fs::create_dir(snapshot.parent().unwrap()).unwrap();
+        let existing = b"existing certificate snapshot";
+        fs::write(&snapshot, existing).unwrap();
+        initialize(&path, InitOptions::default()).unwrap();
+        assert_eq!(fs::read(&snapshot).unwrap(), existing);
     }
     #[test]
     fn trusted_packaging_metadata_generates_production_gn() {
@@ -472,5 +556,98 @@ mod tests {
         )
         .unwrap();
         assert!(load(&path).is_err());
+    }
+
+    #[test]
+    fn managed_certificate_config_resolves_relative_path_and_validates_names() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        let mut value = json!({"schema_version":1, "port":9001, "manifest":"catalog.json",
+            "managed_certificates":{"snapshot_file":"managed-ca/current.json", "bearer_token_env":"XENON_CA_TOKEN"}});
+        fs::write(&path, value.to_string()).unwrap();
+        let config = load(&path).unwrap().managed_certificates.unwrap();
+        assert_eq!(config.snapshot_file, temp.path().join("managed-ca/current.json"));
+        assert_eq!(config.bearer_token_env.as_deref(), Some("XENON_CA_TOKEN"));
+        for invalid in [
+            json!({"snapshot_file":""}),
+            json!({"snapshot_file":null}),
+            json!({"snapshot_file":9001}),
+            json!({"snapshot_file":"ca.json", "bearer_token":"secret"}),
+            json!({"bearer_token":"secret"}),
+            json!({"bearer_token_env":""}),
+            json!({"snapshot_file":"ca.json", "bearer_token_env":"1TOKEN"}),
+            json!({"snapshot_file":"ca.json", "bearer_token_env":"XENON=TOKEN"}),
+        ] {
+            value["managed_certificates"] = invalid;
+            fs::write(&path, value.to_string()).unwrap();
+            assert!(load(&path).is_err());
+        }
+    }
+
+    #[test]
+    fn managed_certificate_https_paths_and_ports_are_validated() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        let mut value = json!({"schema_version":1, "port":9001, "manifest":"catalog.json",
+            "managed_certificates":{"https":{"port":9443,
+                "certificate_file":"tls/localhost.pem", "private_key_file":"tls/localhost-key.pem"}}});
+        fs::write(&path, value.to_string()).unwrap();
+        let https = load(&path).unwrap().managed_certificates.unwrap().https.unwrap();
+        assert_eq!(https.port, 9443);
+        assert_eq!(https.certificate_file, temp.path().join("tls/localhost.pem"));
+        assert_eq!(https.private_key_file, temp.path().join("tls/localhost-key.pem"));
+        for invalid in [
+            json!({"port":0,"certificate_file":"cert.pem","private_key_file":"key.pem"}),
+            json!({"port":9001,"certificate_file":"cert.pem","private_key_file":"key.pem"}),
+            json!({"port":9443,"certificate_file":"","private_key_file":"key.pem"}),
+            json!({"port":9443,"certificate_file":"cert.pem","private_key_file":""}),
+            json!({"port":9443,"certificate_file":"cert.pem"}),
+            json!({"port":9443,"certificate_file":"cert.pem","private_key_file":"key.pem","host":"0.0.0.0"}),
+        ] {
+            value["managed_certificates"]["https"] = invalid;
+            fs::write(&path, value.to_string()).unwrap();
+            assert!(load(&path).is_err());
+        }
+        value["managed_certificates"]["https"] =
+            json!({"port":9002,"certificate_file":"cert.pem","private_key_file":"key.pem"});
+        value["public_origin"] = json!("https://updates.example.com");
+        fs::write(&path, value.to_string()).unwrap();
+        assert!(load(&path).is_err());
+        value["admin_port"] = json!(9003);
+        fs::write(&path, value.to_string()).unwrap();
+        assert!(load(&path).is_ok());
+        value["managed_certificates"]["https"]["port"] = json!(9003);
+        fs::write(&path, value.to_string()).unwrap();
+        assert!(load(&path).is_err());
+    }
+
+    #[test]
+    fn omitted_managed_certificate_config_keeps_existing_service_disabled() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        fs::write(
+            &path,
+            json!({"schema_version":1, "port":9001, "manifest":"catalog.json"}).to_string(),
+        )
+        .unwrap();
+        assert!(load(&path).unwrap().managed_certificates.is_none());
+        assert!(!temp.path().join("managed-ca").exists());
+    }
+
+    #[test]
+    fn empty_managed_certificate_config_uses_default_snapshot_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        fs::write(
+            &path,
+            json!({"schema_version":1, "port":9001, "manifest":"catalog.json",
+                "managed_certificates":{}})
+            .to_string(),
+        )
+        .unwrap();
+        let settings = load(&path).unwrap().managed_certificates.unwrap();
+        assert_eq!(settings.snapshot_file, temp.path().join("managed-ca/current.json"));
+        assert!(settings.bearer_token_env.is_none());
+        assert!(!temp.path().join("managed-ca").exists());
     }
 }

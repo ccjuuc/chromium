@@ -32,6 +32,9 @@
       <include name="IDR_SIMPLE_WEBUI_INDEX_JS" file="webui/simple_webui/index.js" type="BINDATA" />
 
       <!-- Dev smoke-test pages (packaged; no machine-local file://) -->
+      <include name="IDR_XENON_CERTIFICATES_HTML" file="webui/xenon_certificates/index.html" type="BINDATA" />
+      <include name="IDR_XENON_CERTIFICATES_CSS" file="webui/xenon_certificates/index.css" type="BINDATA" />
+      <include name="IDR_XENON_CERTIFICATES_JS" file="webui/xenon_certificates/index.js" type="BINDATA" />
       <include name="IDR_LOCAL_VIDEO_TEST_HTML" file="webui/local_video_test/index.html" type="BINDATA" />
       <include name="IDR_RENDER_DLL_TEST_HTML" file="webui/render_dll_test/index.html" type="BINDATA" />
       

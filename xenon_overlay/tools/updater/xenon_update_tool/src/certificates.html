@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="xenon-admin-token" content="{{ADMIN_TOKEN}}">
+  <title>证书管理 · Xenon</title>
+  <script src="/assets/certificates.js" defer></script>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; color: #172c25; background: #f5f7f6; font-synthesis: none; }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; }
+    a { color: #23674e; text-underline-offset: 3px; }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: default; opacity: .55; }
+    input:disabled, select:disabled { background: #f5f7f6; color: #77817c; }
+    a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid #70bfa0; outline-offset: 3px; }
+    input[type="checkbox"], input[type="radio"] { accent-color: #27664f; width: 16px; height: 16px; flex: 0 0 auto; }
+    .shell { max-width: 1240px; padding: 0 36px; margin: auto; }
+    .topbar { background: #fff; border-bottom: 1px solid #e0e7e2; }
+    .topbar .shell { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .brand { display: flex; align-items: center; gap: 12px; font-size: 17px; font-weight: 650; }
+    .brand-mark { width: 32px; height: 32px; border-radius: 9px; background: #173d33; color: white; display: grid; place-items: center; font-size: 19px; }
+    nav { display: flex; align-items: center; gap: 20px; font-size: 13px; }
+    nav a { text-decoration: none; }
+    nav [aria-current] { color: #1d4838; font-weight: 650; }
+    main.shell { padding-top: 36px; padding-bottom: 40px; }
+    .heading, .panel-heading, .action-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+    .heading { align-items: flex-start; margin-bottom: 25px; }
+    h1 { font-size: 28px; font-weight: 650; letter-spacing: -.6px; line-height: 1.3; margin: 0 0 10px; }
+    h2 { margin: 0 0 8px; font-size: 17px; font-weight: 650; }
+    h3 { margin: 0; font-size: 14px; font-weight: 600; }
+    p { margin: 0; line-height: 1.7; }
+    .muted { color: #6c7b73; font-size: 13px; }
+    .small { font-size: 12px; }
+    .button { border: 1px solid #27664f; border-radius: 7px; padding: 10px 16px; background: #27664f; color: #fff; font-size: 13px; font-weight: 550; white-space: nowrap; }
+    .button:hover:not(:disabled) { background: #1c533f; }
+    .button.secondary { color: #32624e; background: #fff; border-color: #cbd9d0; }
+    .button.secondary:hover:not(:disabled) { background: #f0f6f3; }
+    .button.danger { background: #9e4c39; border-color: #9e4c39; }
+    .button.danger:hover:not(:disabled) { background: #813c2c; }
+    .text-button { color: #32624e; border: 0; padding: 4px 0; background: none; font-size: 12px; }
+    .notice { margin: 0 0 20px; padding: 13px 16px; border: 1px solid #dde7e0; border-radius: 8px; background: #edf4ef; color: #456650; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+    .notice[data-kind="error"] { background: #fff5f0; border-color: #efd9cc; color: #9a5038; }
+    .notice[data-kind="success"] { background: #eaf5ec; border-color: #cfe5d4; color: #2a6841; }
+    .overview { border: 1px solid #dce5df; background: #fff; border-radius: 11px; margin-bottom: 24px; overflow: hidden; }
+    .overview-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; padding: 23px 24px 20px; }
+    .status { display: inline-flex; align-items: center; gap: 7px; background: #edf1ee; color: #617269; border-radius: 100px; padding: 6px 11px; font-size: 12px; white-space: nowrap; }
+    .status::before { content: ""; width: 7px; height: 7px; background: currentColor; border-radius: 50%; }
+    .status[data-status="active"] { background: #e6f3e9; color: #317446; }
+    .status[data-status="missing"], .status[data-status="fallback"] { background: #fff2df; color: #926827; }
+    .status[data-status="error"] { background: #fbeae3; color: #a4563d; }
+    .stats { display: grid; grid-template-columns: 1.15fr .85fr .55fr 1.45fr; border-top: 1px solid #e8ede9; }
+    .stat { padding: 20px 24px; min-width: 0; }
+    .stat + .stat { border-left: 1px solid #e8ede9; }
+    .label { color: #738078; font-size: 11px; margin-bottom: 10px; }
+    .value { color: #2e493b; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; line-height: 1.5; }
+    #snapshot-generation { font-size: 17px; }
+    #snapshot-issued-at { font-size: 15px; }
+    .overview-foot { padding: 13px 24px; border-top: 1px solid #e8ede9; background: #fafcfb; }
+    .overview-foot p + p { margin-top: 5px; }
+    code { font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace; font-size: .95em; overflow-wrap: anywhere; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(290px, 1fr); align-items: start; gap: 24px; }
+    .panel { background: #fff; border: 1px solid #e0e6e2; border-radius: 10px; overflow: hidden; }
+    .panel-head { padding: 22px 23px 18px; border-bottom: 1px solid #e8ede9; }
+    .panel-body { padding: 22px 23px; }
+    .panel-heading { align-items: flex-start; }
+    fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+    legend { padding: 0; font-size: 12px; font-weight: 550; color: #53685b; margin-bottom: 10px; }
+    .mode-options { display: flex; flex-wrap: wrap; gap: 8px; }
+    .mode-options label { display: flex; align-items: center; gap: 7px; padding: 10px 12px; border: 1px solid #dfe6e0; border-radius: 7px; color: #596d60; font-size: 12px; cursor: pointer; }
+    .mode-options label:has(input:checked) { background: #edf5ef; color: #2b6045; border-color: #a5c3af; }
+    .field { display: flex; flex-direction: column; gap: 7px; margin-bottom: 18px; min-width: 0; }
+    .field > label { color: #53685b; font-size: 12px; font-weight: 550; }
+    .field input, .field select { width: 100%; border: 1px solid #cdd8d0; border-radius: 6px; padding: 10px 11px; font-size: 13px; color: #2f4638; min-width: 0; }
+    .field small { font-size: 11px; line-height: 1.6; color: #7a887f; }
+    .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .divider { margin: 21px 0; border: 0; border-top: 1px solid #e7ede8; }
+    .selection-tools { display: flex; gap: 16px; align-items: center; padding: 16px 23px 13px; border-bottom: 1px solid #edf1ed; }
+    .selection-count { color: #6a7c6f; font-size: 12px; margin-right: auto; }
+    .catalog-empty { padding: 32px 23px; color: #7c8980; font-size: 13px; }
+    .certificate { padding: 17px 23px; border-bottom: 1px solid #edf1ed; }
+    .certificate:last-child { border-bottom: 0; }
+    .certificate-label { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; }
+    .certificate-label input { margin: 3px 0 0; }
+    .certificate-name { display: block; font-size: 13px; font-weight: 600; color: #294735; line-height: 1.6; overflow-wrap: anywhere; }
+    .certificate-validity { display: block; color: #839087; font-size: 11px; line-height: 1.6; margin-top: 4px; }
+    .certificate details { margin: 10px 0 0 28px; }
+    details summary { cursor: pointer; color: #63806b; font-size: 11px; width: fit-content; }
+    .certificate dl { background: #f7faf8; border-radius: 5px; padding: 11px 12px; margin: 10px 0 0; }
+    dt { font-size: 10px; color: #839087; margin-bottom: 4px; }
+    dd { font-family: "Cascadia Code", Consolas, monospace; margin: 0 0 10px; font-size: 11px; line-height: 1.6; color: #526d59; overflow-wrap: anywhere; }
+    dd:last-child { margin-bottom: 0; }
+    .help { margin-top: 20px; padding: 19px 22px; background: #eff3ef; border: 1px solid #e0e7e0; border-radius: 9px; }
+    .help h3 { margin-bottom: 9px; }
+    .help p { font-size: 12px; color: #728075; }
+    .help p + p { margin-top: 8px; }
+    #publish-result { margin: 17px 0 0; }
+    #withdrawal-notice { margin: 16px 0 0; }
+    .form-note { font-size: 11px; color: #7b897e; margin-top: 11px; }
+    #published-details { margin-top: 15px; }
+    #published-list { font-size: 12px; color: #61766a; padding-left: 18px; line-height: 1.8; margin-bottom: 0; }
+    footer { margin-top: 26px; font-size: 11px; color: #8a968d; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    @media (max-width: 900px) { .workspace { grid-template-columns: 1fr; } .stats { grid-template-columns: 1fr 1fr; } .stat:nth-child(3) { border-left: 0; } .stat:nth-child(n+3) { border-top: 1px solid #e8ede9; } }
+    @media (max-width: 550px) { .shell { padding: 0 18px; } .topbar .shell { min-height: 68px; } .brand { font-size: 14px; } nav { gap: 12px; font-size: 12px; } .brand-mark { width: 28px; height: 28px; } h1 { font-size: 24px; } .heading { gap: 12px; } .heading .button { padding: 9px 11px; } .overview-head, .stat, .panel-head, .panel-body { padding: 19px; } .overview-head { flex-wrap: wrap; gap: 12px; } .certificate, .selection-tools { padding-left: 19px; padding-right: 19px; } .field-row { grid-template-columns: 1fr; gap: 0; } .value { font-size: 16px; } #snapshot-generation { font-size: 15px; } }
+  </style>
+</head>
+<body data-admin-enabled="{{ADMIN_ENABLED}}">
+  <header class="topbar"><div class="shell">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">X</span>Xenon 服务</div>
+    <nav aria-label="服务管理"><a href="/">更新管理</a><a href="/certificates" aria-current="page">证书管理</a></nav>
+  </div></header>
+  <main class="shell">
+    <div class="heading"><div><h1>证书管理</h1><p class="muted">选择需要下发的 CA，发布版本并查看当前服务状态。</p></div><button id="refresh-state" type="button" class="button secondary" disabled>刷新状态</button></div>
+    <p id="read-only-message" class="notice" hidden>证书管理仅在服务所在电脑的本机管理页面开放。请在该电脑访问本机服务地址。</p>
+    <p id="service-notice" class="notice" role="status" aria-live="polite" hidden></p>
+    <noscript><p class="notice">请启用 JavaScript，以查看证书状态并发布证书。</p></noscript>
+    <section class="overview" aria-labelledby="snapshot-title">
+      <div class="overview-head"><div><h2 id="snapshot-title">当前下发</h2><p id="snapshot-summary" class="muted">正在读取服务状态…</p></div><span id="snapshot-status" class="status" data-status="loading" role="status" aria-live="polite">读取中</span></div>
+      <div class="stats">
+        <div class="stat"><div class="label">证书来源</div><div id="snapshot-source" class="value">—</div></div>
+        <div class="stat"><div class="label">发布版本</div><div id="snapshot-generation" class="value">—</div></div>
+        <div class="stat"><div class="label">证书数量</div><div id="snapshot-count" class="value">—</div></div>
+        <div class="stat"><div class="label">发布时间（本地时间）</div><div id="snapshot-issued-at" class="value">—</div></div>
+      </div>
+      <div class="overview-foot"><p class="muted small">浏览器 HTTPS 下发接口：<code id="delivery-endpoint">正在读取…</code></p><p id="delivery-endpoint-note" class="muted small"></p><p id="snapshot-file-state" class="muted small"></p><p id="delivery-auth" class="muted small"></p><details id="published-details" hidden><summary>查看已发布证书</summary><ul id="published-list"></ul></details></div>
+    </section>
+    <div id="admin-workspace" hidden>
+      <form id="publish-form" novalidate>
+        <div class="workspace">
+          <section class="panel" aria-labelledby="catalog-title">
+            <div class="panel-head"><h2 id="catalog-title">可发布证书</h2><p class="muted">从内置证书中选择本次下发集合。新版本会替换同一来源的上一版。</p></div>
+            <div class="selection-tools"><span id="selection-count" class="selection-count" aria-live="polite">已选择 0 张</span><button type="button" id="select-all" class="text-button" disabled>全选</button><button type="button" id="clear-selection" class="text-button" disabled>清空选择</button></div>
+            <fieldset id="catalog-fields" aria-label="选择本次下发的证书" disabled><legend class="catalog-empty" id="catalog-loading">正在读取证书目录…</legend><div id="certificate-catalog"></div></fieldset>
+          </section>
+          <div>
+            <section class="panel" aria-labelledby="publish-title">
+              <div class="panel-head"><h2 id="publish-title">发布新版本</h2><p class="muted">发布后服务自动加载，客户端按刷新周期获取。</p></div>
+              <div class="panel-body">
+                <fieldset id="publish-fields" disabled>
+                  <div class="field"><label for="source-id">证书来源</label><input id="source-id" type="text" value="company-ca" maxlength="64" pattern="[A-Za-z0-9._-]+" autocomplete="off" spellcheck="false" required><small>与浏览器配置中的 source_id 一致；已发布来源不可更改。</small></div>
+                  <div class="field"><label for="generation">发布版本</label><input id="generation" type="text" value="1" inputmode="numeric" pattern="[1-9][0-9]*" maxlength="20" autocomplete="off" spellcheck="false" required><small>每次发布递增，包括更新与撤回。</small></div>
+                  <div class="field"><label for="encoding">证书格式</label><select id="encoding"><option value="der_base64">DER / Base64</option><option value="pem">PEM</option></select><small>两种格式信任效果相同。</small></div>
+                  <fieldset><legend>发布内容</legend><div class="mode-options"><label><input type="radio" name="publication-mode" id="mode-include" value="include" checked>所选证书</label><label><input type="radio" name="publication-mode" id="mode-empty" value="empty">撤回全部</label></div></fieldset>
+                  <p id="withdrawal-notice" class="notice" data-kind="error" hidden>将发布空集合。客户端获取该版本后，会移除此来源下发的全部证书。</p>
+                  <hr class="divider">
+                  <div class="action-row"><button type="submit" id="publish-button" class="button" disabled>发布所选证书</button><span id="publish-selection-summary" class="muted small">请先选择证书</span></div>
+                  <p id="publish-availability" class="form-note"></p>
+                </fieldset>
+                <p id="publish-result" class="notice" role="status" aria-live="polite" hidden></p>
+              </div>
+            </section>
+            <aside class="help"><h3>在浏览器中验证</h3><p>浏览器需配置 HTTPS 下发地址及相同的证书来源。页面显示“下发中”表示服务端已就绪。</p><p>在 Xenon 打开 <code>chrome://xenon-certificates/</code> 查看客户端获取状态，并测试目标 HTTPS 地址。</p></aside>
+          </div>
+        </div>
+      </form>
+    </div>
+    <footer><span>Xenon · 证书下发服务</span><a href="/">返回更新管理</a></footer>
+  </main>
+</body>
+</html>

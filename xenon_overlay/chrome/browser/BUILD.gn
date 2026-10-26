@@ -5,6 +5,87 @@ import("//testing/test.gni")
 import("//third_party/skia/modules/svg/svg.gni")
 import("//xenon_overlay/buildflags/features.gni")
 
+source_set("managed_certificate_types") {
+  sources = [
+    "managed_certificates/managed_certificate_types.cc",
+    "managed_certificates/managed_certificate_types.h",
+  ]
+  public_deps = [
+    "//base",
+    "//net",
+    "//url",
+  ]
+  deps = [
+    "//crypto",
+    "//third_party/boringssl",
+  ]
+}
+
+source_set("managed_certificates") {
+  sources = [
+    "managed_certificates/managed_certificate_merger.cc",
+    "managed_certificates/managed_certificate_merger.h",
+    "managed_certificates/managed_certificate_service.cc",
+    "managed_certificates/managed_certificate_service.h",
+  ]
+  public_deps = [
+    ":managed_certificate_types",
+    "//base",
+    "//mojo/public/cpp/bindings",
+    "//services/network/public/cpp",
+    "//services/network/public/mojom",
+  ]
+  deps = [
+    "//content/public/browser",
+    "//net",
+  ]
+  if (is_win) {
+    libs = [ "advapi32.lib" ]
+  }
+}
+
+test("managed_certificate_unittests") {
+  sources = [
+    "managed_certificates/managed_certificate_merger_unittest.cc",
+    "managed_certificates/managed_certificate_service_unittest.cc",
+    "managed_certificates/managed_certificate_types_unittest.cc",
+  ]
+  deps = [
+    ":managed_certificates",
+    "//base/test:run_all_unittests",
+    "//base/test:test_support",
+    "//crypto",
+    "//mojo/core/embedder",
+    "//services/network:test_support",
+    "//testing/gtest",
+  ]
+  data = [ "//xenon_overlay/tools/updater/xenon_update_tool/managed_certificates/certificates/" ]
+}
+
+# Reuse the native verifier fixture without building every net unit test.
+test("managed_certificate_verifier_unittests") {
+  sources = [
+    "//net/cert/cert_verify_proc_builtin_unittest.cc",
+    "//net/test/run_all_unittests.cc",
+  ]
+  deps = [
+    "//base",
+    "//base:build_time",
+    "//base/test:test_support",
+    "//base/version_info",
+    "//components/network_time/time_tracker",
+    "//crypto",
+    "//net",
+    "//net:test_support",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//third_party/boringssl",
+    "//url",
+    "//url:buildflags",
+  ]
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+}
+
 source_set("xenon_prefs") {
   sources = [
     "xenon_prefs.cc",
@@ -376,6 +457,8 @@ source_set("browser") {
     "ui/webui/simple_webui_controller.h",
     "ui/webui/video_sniffer_webui_controller.cc",
     "ui/webui/video_sniffer_webui_controller.h",
+    "ui/webui/xenon_certificates_ui_controller.cc",
+    "ui/webui/xenon_certificates_ui_controller.h",
     "ui/webui/xenon_node_controller.cc",
     "ui/webui/xenon_node_controller.h",
     "ui/webui/xenon_page_handler.cc",
@@ -450,6 +533,7 @@ source_set("browser") {
     ":electron_api_bridge",
     ":electron_app_config",
     ":filesystem_bridge",
+    ":managed_certificates",
     ":napi",
     ":network_request_bridge",
     ":os_bridge",
@@ -459,10 +543,12 @@ source_set("browser") {
     ":xenon_prefs",
     ":xenon_updater",
     "//base",
+    "//base:i18n",
     "//chrome/browser:browser_process",
     "//chrome/browser/background/extensions",
     "//chrome/browser/extensions",
     "//chrome/browser/lifetime:termination_notification",
+    "//chrome/browser/net",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui",
     "//chrome/browser/ui/startup",

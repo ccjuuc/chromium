@@ -56,6 +56,12 @@ pub fn render(catalog: &Catalog, origin: &str, token: Option<&str>) -> String {
         .replace("{{RELEASE_ROWS}}", &rows)
 }
 
+pub fn render_certificates(token: Option<&str>) -> String {
+    include_str!("certificates.html")
+        .replace("{{ADMIN_ENABLED}}", if token.is_some() { "true" } else { "false" })
+        .replace("{{ADMIN_TOKEN}}", &escape(token.unwrap_or("")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

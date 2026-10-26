@@ -260,6 +260,7 @@ class ProfileNetworkContextService
   StringPrefMember pref_accept_language_;
   BooleanPrefMember enable_referrers_;
   PrefChangeRegistrar pref_change_registrar_;
+  base::CallbackListSubscription managed_certificates_observer_;
 #if BUILDFLAG(IS_CHROMEOS)
   // These prefs are only used on ChromeOS in the login screen profile.
   StringPrefMember profile_key_exchange_compliance_;

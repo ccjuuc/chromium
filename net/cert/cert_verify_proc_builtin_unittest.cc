@@ -5,6 +5,7 @@
 #include "net/cert/cert_verify_proc_builtin.h"
 
 #include <algorithm>
+#include <array>
 #include <optional>
 #include <string_view>
 
@@ -474,9 +475,15 @@ class CertVerifyProcBuiltinTest : public ::testing::Test {
 
   void InitializeVerifyProc(
       const CertVerifyProc::InstanceParams& instance_params,
-      std::optional<base::Time> current_time = std::nullopt) {
+      std::optional<base::Time> current_time = std::nullopt,
+      std::unique_ptr<SystemTrustStore> system_trust_store = nullptr) {
     auto mock_system_trust_store = std::make_unique<MockSystemTrustStore>();
     mock_system_trust_store_ = mock_system_trust_store.get();
+    if (system_trust_store) {
+      mock_system_trust_store_ = nullptr;
+    } else {
+      system_trust_store = std::move(mock_system_trust_store);
+    }
     auto mock_ct_verifier = std::make_unique<MockCTVerifier>();
     mock_ct_verifier_ = mock_ct_verifier.get();
     mock_ct_policy_enforcer_ = base::MakeRefCounted<MockCTPolicyEnforcer>();
@@ -489,7 +496,7 @@ class CertVerifyProcBuiltinTest : public ::testing::Test {
     verify_proc_ = CreateCertVerifyProcBuiltin(
         cert_net_fetcher_, CRLSet::EmptyCRLSetForTesting(),
         std::move(mock_ct_verifier), mock_ct_policy_enforcer_,
-        std::move(mock_system_trust_store), instance_params, time_tracker);
+        std::move(system_trust_store), instance_params, time_tracker);
   }
 
   void Verify(scoped_refptr<X509Certificate> cert,
@@ -2335,6 +2342,180 @@ TEST_F(CertVerifyProcBuiltinTest, DistrustedIntermediate) {
   EXPECT_THAT(error, IsError(ERR_CERT_AUTHORITY_INVALID));
   EXPECT_EQ(1u, verify_result.verified_cert->intermediate_buffers().size());
 }
+
+TEST_F(CertVerifyProcBuiltinTest, XenonManagedAnchorEnforcesItsDnsConstraints) {
+  auto [leaf, intermediate, root] = CertBuilder::CreateSimpleChain3();
+  for (bool allowed : {false, true}) {
+    CertVerifyProc::InstanceParams params;
+    CertVerifyProc::CertificateWithConstraints managed;
+    managed.certificate =
+        x509_util::ParseAllValidCerts({root->GetX509Certificate()})[0];
+    managed.permitted_dns_names = {allowed ? "example.com" : "restricted.example"};
+    params.xenon_managed_trust_anchors.push_back(managed);
+    InitializeVerifyProc(params);
+    CertVerifyResult result;
+    NetLogSource source;
+    TestCompletionCallback callback;
+    Verify(leaf->GetX509CertificateChain(), "www.example.com", 0, &result,
+           &source, callback.callback());
+    EXPECT_EQ(callback.WaitForResult() == OK, allowed);
+  }
+}
+
+TEST_F(CertVerifyProcBuiltinTest,
+       XenonManagedAnchorEnforcesCertificateValidity) {
+  // Persistent managed trust must never bypass the actual certificate dates.
+  // Check leaf, intermediate and managed anchor with the ordinary verifier.
+  for (int invalid_certificate : {-1, 0, 1, 2}) {
+    SCOPED_TRACE(invalid_certificate);
+    for (bool not_yet_valid : {false, true}) {
+      SCOPED_TRACE(not_yet_valid);
+      auto [leaf, intermediate, root] = CertBuilder::CreateSimpleChain3();
+      if (invalid_certificate >= 0) {
+        const auto certificates = std::to_array<CertBuilder*>(
+            {leaf.get(), intermediate.get(), root.get()});
+        const auto now = base::Time::Now();
+        certificates[invalid_certificate]->SetValidity(
+            now + (not_yet_valid ? base::Days(1) : -base::Days(10)),
+            now + (not_yet_valid ? base::Days(10) : -base::Days(1)));
+      }
+      CertVerifyProc::InstanceParams params;
+      CertVerifyProc::CertificateWithConstraints managed;
+      managed.certificate =
+          x509_util::ParseAllValidCerts({root->GetX509Certificate()})[0];
+      params.xenon_managed_trust_anchors.push_back(managed);
+      InitializeVerifyProc(params);
+      CertVerifyResult result;
+      NetLogSource source;
+      TestCompletionCallback callback;
+      Verify(leaf->GetX509CertificateChain(), "www.example.com", 0, &result,
+             &source, callback.callback());
+      EXPECT_EQ(callback.WaitForResult(),
+                invalid_certificate < 0 ? OK : ERR_CERT_DATE_INVALID);
+      EXPECT_EQ(!!(result.cert_status & CERT_STATUS_DATE_INVALID),
+                invalid_certificate >= 0);
+    }
+  }
+}
+
+TEST_F(CertVerifyProcBuiltinTest, XenonManagedAnchorRespectsNativeConstraints) {
+  auto [leaf, intermediate, root] = CertBuilder::CreateSimpleChain3();
+  CertVerifyProc::InstanceParams params;
+  CertVerifyProc::CertificateWithConstraints native;
+  native.certificate =
+      x509_util::ParseAllValidCerts({root->GetX509Certificate()})[0];
+  native.permitted_dns_names = {"native.example"};
+  params.additional_trust_anchors_with_constraints.push_back(native);
+  native.permitted_dns_names.clear();
+  params.xenon_managed_trust_anchors.push_back(native);
+  InitializeVerifyProc(params);
+  CertVerifyResult result;
+  NetLogSource source;
+  TestCompletionCallback callback;
+  Verify(leaf->GetX509CertificateChain(), "www.example.com", 0, &result,
+         &source, callback.callback());
+  EXPECT_NE(callback.WaitForResult(), OK);
+}
+
+TEST_F(CertVerifyProcBuiltinTest, XenonManagedAnchorRespectsSpkiDistrust) {
+  auto [leaf, intermediate, root] = CertBuilder::CreateSimpleChain3();
+  auto params = CreateParams({}, {}, {root->GetX509Certificate()});
+  CertVerifyProc::CertificateWithConstraints managed;
+  managed.certificate =
+      x509_util::ParseAllValidCerts({root->GetX509Certificate()})[0];
+  params.xenon_managed_trust_anchors.push_back(managed);
+  InitializeVerifyProc(params);
+  CertVerifyResult result;
+  NetLogSource source;
+  TestCompletionCallback callback;
+  Verify(leaf->GetX509CertificateChain(), "www.example.com", 0, &result,
+         &source, callback.callback());
+  EXPECT_THAT(callback.WaitForResult(), IsError(ERR_CERT_AUTHORITY_INVALID));
+}
+
+TEST_F(CertVerifyProcBuiltinTest, XenonManagedAnchorPreservesPlatformTrust) {
+  auto [leaf, intermediate, root] = CertBuilder::CreateSimpleChain3();
+  for (bool distrusted : {false, true}) {
+    SCOPED_TRACE(distrusted);
+    CertVerifyProc::InstanceParams params;
+    CertVerifyProc::CertificateWithConstraints managed;
+    managed.certificate =
+        x509_util::ParseAllValidCerts({root->GetX509Certificate()})[0];
+    managed.permitted_dns_names = {"managed.example"};
+    params.xenon_managed_trust_anchors.push_back(managed);
+    InitializeVerifyProc(params);
+    // Model an existing platform choice. Its trust and constraints take
+    // precedence, and platform access stays on the verification worker.
+    bssl::TrustStoreInMemory platform_store;
+    platform_store.AddCertificate(
+        managed.certificate, distrusted
+                                 ? bssl::CertificateTrust::ForDistrusted()
+                                 : bssl::CertificateTrust::ForTrustAnchor());
+    AddTrustStore(&platform_store);
+    CertVerifyResult result;
+    NetLogSource source;
+    TestCompletionCallback callback;
+    Verify(leaf->GetX509CertificateChain(), "www.example.com", 0, &result,
+           &source, callback.callback());
+    EXPECT_EQ(callback.WaitForResult() == OK, !distrusted);
+  }
+}
+
+#if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+TEST_F(CertVerifyProcBuiltinTest, XenonManagedAnchorCannotBypassUpdatedCrs) {
+  for (bool reissued : {false, true}) {
+    SCOPED_TRACE(reissued);
+    auto [leaf, intermediate, root] = CertBuilder::CreateSimpleChain3();
+    root->SetSerialNumber(1);
+    auto public_root = root->GetX509Certificate();
+    if (reissued) {
+      // Same key, distinct DER: removing only exact duplicate certificates
+      // would still allow this anchor to bypass public-root constraints.
+      root->SetSerialNumber(42);
+    }
+    auto managed_root = root->GetX509Certificate();
+    CertVerifyProc::InstanceParams params;
+    CertVerifyProc::CertificateWithConstraints managed;
+    managed.certificate = x509_util::ParseAllValidCerts({managed_root})[0];
+    params.xenon_managed_trust_anchors.push_back(managed);
+    auto empty_store = TrustStoreChrome::CreateTrustStoreForTesting({}, {}, 1);
+    InitializeVerifyProc(
+        params, std::nullopt,
+        CreateChromeOnlySystemTrustStore(std::move(empty_store)));
+    {
+      CertVerifyResult result;
+      NetLogSource source;
+      TestCompletionCallback callback;
+      Verify(leaf->GetX509CertificateChain(), "www.example.com", 0, &result,
+             &source, callback.callback());
+      EXPECT_THAT(callback.WaitForResult(), IsOk());
+    }
+    constexpr std::string_view kPermittedNames[] = {"public.example"};
+    const StaticChromeRootCertConstraints constraint = {
+        .permitted_dns_names = kPermittedNames};
+    ChromeRootCertInfo root_info = {
+        .root_cert_der = public_root->cert_span(),
+        .constraints = base::span_from_ref(constraint),
+        .enforce_anchor_expiry = true,
+        .enforce_anchor_constraints = true,
+        .trust_anchor_id = {},
+        .crs_root_id = std::nullopt};
+    auto updated_store = TrustStoreChrome::CreateTrustStoreForTesting(
+        base::span_from_ref(root_info), {}, 2);
+    EXPECT_TRUE(updated_store->ContainsSpki(managed.certificate.get()));
+    EXPECT_EQ(updated_store->Contains(managed.certificate.get()), !reissued);
+    InitializeVerifyProc(
+        params, std::nullopt,
+        CreateChromeOnlySystemTrustStore(std::move(updated_store)));
+    CertVerifyResult result;
+    NetLogSource source;
+    TestCompletionCallback callback;
+    Verify(leaf->GetX509CertificateChain(), "www.example.com", 0, &result,
+           &source, callback.callback());
+    EXPECT_THAT(callback.WaitForResult(), IsError(ERR_CERT_AUTHORITY_INVALID));
+  }
+}
+#endif
 
 TEST_F(CertVerifyProcBuiltinTest, AddedRootWithConstraints) {
   auto [leaf, intermediate, root] = CertBuilder::CreateSimpleChain3();

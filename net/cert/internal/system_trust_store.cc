@@ -51,6 +51,10 @@
 
 namespace net {
 
+bool SystemTrustStore::IsKnownRootOrSpki(const bssl::ParsedCertificate* cert) const {
+  return IsKnownRoot(cert);
+}
+
 #if BUILDFLAG(IS_CHROMEOS)
 namespace internal {
 class PemFileCertStore {
@@ -147,6 +151,12 @@ class SystemTrustStoreChromeWithUnOwnedSystemStore : public SystemTrustStore {
   // opposed to a user-installed root)
   bool IsKnownRoot(const bssl::ParsedCertificate* trust_anchor) const override {
     return trust_store_chrome_->Contains(trust_anchor);
+  }
+
+  bool IsKnownRootOrSpki(
+      const bssl::ParsedCertificate* trust_anchor) const override {
+    return trust_store_chrome_->Contains(trust_anchor) ||
+           trust_store_chrome_->ContainsSpki(trust_anchor);
   }
 
   bool IsKnownMtcAnchor(const bssl::MTCAnchor* anchor) const override {

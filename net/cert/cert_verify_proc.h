@@ -122,6 +122,10 @@ class NET_EXPORT CertVerifyProc
     std::vector<std::string> permitted_dns_names;
 
     std::vector<CIDR> permitted_cidrs;
+
+    // Set internally for Xenon constraints. Platform trust takes precedence;
+    // check it on the verification worker, where platform I/O is permitted.
+    bool skip_if_system_trusted = false;
   };
 
   // The set of parameters that are variable over time and can differ between
@@ -157,6 +161,10 @@ class NET_EXPORT CertVerifyProc
     // Additional trust anchors/leafs to consider during path validation,
     // possibly with name constraints specified outside of the certificate.
     std::vector<CertificateWithConstraints> additional_trust_anchors_and_leafs;
+
+    // Managed anchors that must not override explicit local trust settings or
+    // the constraints of a current Chrome Root Store certificate/key.
+    std::vector<CertificateWithConstraints> xenon_managed_trust_anchors;
 
     // Additional temporary certs to consider as intermediates during path
     // validation. Ordinarily, implementations of CertVerifier use intermediate

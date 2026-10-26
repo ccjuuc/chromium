@@ -91,6 +91,8 @@
 #include "services/proxy_resolver/public/mojom/proxy_resolver.mojom.h"
 #include "third_party/blink/public/common/features.h"
 #include "url/gurl.h"
+#include "xenon_overlay/chrome/browser/managed_certificates/managed_certificate_merger.h"
+#include "xenon_overlay/chrome/browser/managed_certificates/managed_certificate_service.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_pref_names.h"
@@ -629,6 +631,11 @@ SystemNetworkContextManager::SystemNetworkContextManager(
   }
 #endif  // !BUILDFLAG(IS_ANDROID)
   shared_url_loader_factory_ = new URLLoaderFactoryForSystem(this);
+  managed_certificates_observer_ =
+      xenon::certificates::XenonManagedCertificateService::Get()->AddObserver(
+          base::BindRepeating(
+              &SystemNetworkContextManager::UpdateManagedCertificates,
+              base::Unretained(this)));
 
   pref_change_registrar_.Init(local_state_);
 
@@ -1015,19 +1022,58 @@ void SystemNetworkContextManager::ConfigureDefaultNetworkContextParams(
 
 network::mojom::NetworkContextParamsPtr
 SystemNetworkContextManager::CreateDefaultNetworkContextParams() {
+  // Default parameters are also used by dedicated control-plane contexts.
+  // Only this manager's own system context receives the downloaded CA source.
+  return CreateDefaultNetworkContextParams(false);
+}
+
+network::mojom::NetworkContextParamsPtr
+SystemNetworkContextManager::CreateDefaultNetworkContextParams(
+    bool include_managed_certificates) {
   network::mojom::NetworkContextParamsPtr network_context_params =
       network::mojom::NetworkContextParams::New();
   cert_verifier::mojom::CertVerifierCreationParamsPtr
       cert_verifier_creation_params =
           cert_verifier::mojom::CertVerifierCreationParams::New();
   ConfigureDefaultNetworkContextParams(network_context_params.get());
-  // The system network context doesn't update the CertVerifyProc
-  // InstanceParams while running, so it does not attach a
-  // CertVerifierServiceUpdater.
-  network_context_params->cert_verifier_params =
-      content::GetCertVerifierParams(std::move(cert_verifier_creation_params));
+  if (include_managed_certificates) {
+    auto* managed = xenon::certificates::XenonManagedCertificateService::Get();
+    cert_verifier_creation_params->wait_for_update = !managed->ready();
+    auto certs = cert_verifier::mojom::AdditionalCertificates::New();
+    xenon::certificates::MergeManagedCertificates(managed->snapshot(),
+                                                 certs.get());
+    cert_verifier_creation_params->initial_additional_certificates =
+        std::move(certs);
+    // A network-service restart replaces both verifier and update pipe.
+    managed_certificates_updater_.reset();
+    mojo::PendingRemote<cert_verifier::mojom::CertVerifierService> verifier;
+    mojo::PendingReceiver<cert_verifier::mojom::CertVerifierServiceClient> client;
+    content::GetCertVerifierServiceFactory()->GetNewCertVerifier(
+        verifier.InitWithNewPipeAndPassReceiver(),
+        managed_certificates_updater_.BindNewPipeAndPassReceiver(),
+        client.InitWithNewPipeAndPassRemote(),
+        std::move(cert_verifier_creation_params));
+    network_context_params->cert_verifier_params =
+        network::mojom::CertVerifierServiceRemoteParams::New(
+            std::move(verifier), std::move(client));
+  } else {
+    network_context_params->cert_verifier_params =
+        content::GetCertVerifierParams(std::move(cert_verifier_creation_params));
+  }
   network_context_params->acam_preflight_spec_conformant = true;
   return network_context_params;
+}
+
+void SystemNetworkContextManager::UpdateManagedCertificates() {
+  auto* managed = xenon::certificates::XenonManagedCertificateService::Get();
+  if (!managed->ready() || !managed_certificates_updater_.is_bound()) {
+    return;
+  }
+  auto certificates = cert_verifier::mojom::AdditionalCertificates::New();
+  xenon::certificates::MergeManagedCertificates(managed->snapshot(),
+                                               certificates.get());
+  managed_certificates_updater_->UpdateAdditionalCertificates(
+      std::move(certificates));
 }
 
 net_log::NetExportFileWriter*
@@ -1145,7 +1191,7 @@ network::mojom::NetworkContextParamsPtr
 SystemNetworkContextManager::CreateNetworkContextParams() {
   // TODO(mmenke): Set up parameters here (in memory cookie store, etc).
   network::mojom::NetworkContextParamsPtr network_context_params =
-      CreateDefaultNetworkContextParams();
+      CreateDefaultNetworkContextParams(true);
 
   network_context_params->enable_referrers = enable_referrers_.GetValue();
 

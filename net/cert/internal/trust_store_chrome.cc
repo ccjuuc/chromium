@@ -410,6 +410,8 @@ TrustStoreChrome::TrustStoreChrome(
     : override_constraints_(std::move(override_constraints)) {
 
   for (const auto& anchor : root_store_data.trust_anchors()) {
+    anchor_spkis_.insert(
+        std::string(base::as_string_view(anchor.certificate->tbs().spki_tlv)));
     if (anchor.crs_root_id || !anchor.constraints.empty()) {
       TrustStoreChrome::AnchorExtraData trust_store_anchor_data;
       trust_store_anchor_data.crs_root_id = anchor.crs_root_id;
@@ -591,6 +593,11 @@ std::shared_ptr<const bssl::MTCAnchor> TrustStoreChrome::GetTrustedMTCIssuerOf(
 
 bool TrustStoreChrome::Contains(const bssl::ParsedCertificate* cert) const {
   return trust_store_.Contains(cert);
+}
+
+bool TrustStoreChrome::ContainsSpki(const bssl::ParsedCertificate* cert) const {
+  return anchor_spkis_.contains(
+      std::string(base::as_string_view(cert->tbs().spki_tlv)));
 }
 
 bool TrustStoreChrome::ContainsMTCAnchor(const bssl::MTCAnchor* anchor) const {

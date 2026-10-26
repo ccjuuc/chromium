@@ -7,6 +7,7 @@
 #include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/xenon_login_startup_registration.h"
 
+#include "base/base_paths.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -16,7 +17,9 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/common/chrome_paths.h"
 #include "components/embedder_support/user_agent_utils.h"
 #include "content/public/browser/webui_config_map.h"
 #include "net/base/filename_util.h"
@@ -25,12 +28,14 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_app_config.h"
+#include "xenon_overlay/chrome/browser/managed_certificates/managed_certificate_service.h"
 #include "xenon_overlay/chrome/browser/reminder/xenon_reminder_notification_manager.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_reminder_browser_observer.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 #include "xenon_overlay/chrome/browser/ui/webui/dev_test_pages_webui.h"
 #include "xenon_overlay/chrome/browser/ui/webui/simple_webui_controller.h"
+#include "xenon_overlay/chrome/browser/ui/webui/xenon_certificates_ui_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_player_by_elec_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_player_electron_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_thunder_2025_controller.h"
@@ -116,6 +121,7 @@ void XenonBrowserMainExtraParts::PostEarlyInitialization() {
 }
 
 void XenonBrowserMainExtraParts::PostMainMessageLoopRun() {
+  xenon::certificates::XenonManagedCertificateService::Get()->Shutdown();
   // Hosted BrowserWindows own WebContents associated with a Profile. They must
   // be destroyed before BrowserProcessImpl tears down ProfileManager.
   xenon::XenonElectronWindowHost::GetInstance()->ShutdownForProcessExit();
@@ -139,6 +145,29 @@ void XenonBrowserMainExtraParts::PostMainMessageLoopRun() {
 
 void XenonBrowserMainExtraParts::PreProfileInit() {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  constexpr char kManagedCaConfig[] = "xenon-managed-ca-config";
+  base::FilePath config;
+  if (command_line->HasSwitch(kManagedCaConfig)) {
+    config = command_line->GetSwitchValuePath(kManagedCaConfig);
+  } else {
+    base::FilePath executable_dir;
+    if (base::PathService::Get(base::DIR_EXE, &executable_dir)) {
+      config = executable_dir.AppendASCII("xenon-managed-ca.json");
+    }
+  }
+  base::FilePath user_data_dir;
+  if (config.IsAbsolute() &&
+      base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir)) {
+    auto* managed = xenon::certificates::XenonManagedCertificateService::Get();
+    managed->SetNetworkContextParamsFactory(base::BindRepeating([] {
+      return SystemNetworkContextManager::GetInstance()
+          ->CreateDefaultNetworkContextParams();
+    }));
+    managed->Start(config, user_data_dir);
+  } else {
+    LOG(ERROR) << "Managed CA configuration requires an absolute path and "
+                  "an available user data directory";
+  }
   EnableBuiltInIpcOrigins(command_line);
   const bool has_configured_main =
       command_line->HasSwitch(xenon::ipc::switches::kMainScript) ||
@@ -242,6 +271,9 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<xenon::SimpleWebUIConfig>());
   LOG(INFO) << "XenonBrowserMainExtraParts: Registered SimpleWebUIConfig";
+
+  content::WebUIConfigMap::GetInstance().AddWebUIConfig(
+      std::make_unique<xenon::XenonCertificatesUIConfig>());
 
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<xenon::LocalVideoTestWebUIConfig>());

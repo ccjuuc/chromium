@@ -100,6 +100,8 @@
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "third_party/blink/public/common/features.h"
+#include "xenon_overlay/chrome/browser/managed_certificates/managed_certificate_merger.h"
+#include "xenon_overlay/chrome/browser/managed_certificates/managed_certificate_service.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
@@ -555,6 +557,11 @@ ProfileNetworkContextService::ProfileNetworkContextService(Profile* profile)
   HostContentSettingsMapFactory::GetForProfile(profile_)->AddObserver(this);
 
   pref_change_registrar_.Init(profile_prefs);
+  managed_certificates_observer_ =
+      xenon::certificates::XenonManagedCertificateService::Get()->AddObserver(
+          base::BindRepeating(
+              &ProfileNetworkContextService::UpdateAdditionalCertificates,
+              weak_factory_.GetWeakPtr()));
 
   // When any of the following CT preferences change, we schedule an update
   // to aggregate the actual update using a |ct_policy_update_timer_|.
@@ -932,6 +939,9 @@ ProfileNetworkContextService::GetCertificatePolicy(
 
 void ProfileNetworkContextService::UpdateAdditionalCertificates() {
   CHECK(!is_shutting_down_);
+  if (!xenon::certificates::XenonManagedCertificateService::Get()->ready()) {
+    return;
+  }
 
 #if BUILDFLAG(CHROME_ROOT_STORE_CERT_MANAGEMENT_UI)
   net::ServerCertificateDatabaseService* cert_db_service =
@@ -947,12 +957,15 @@ void ProfileNetworkContextService::UpdateAdditionalCertificates() {
     return;
   }
 #endif
-  profile_->ForEachLoadedStoragePartition(
-      [&](content::StoragePartition* storage_partition) {
-        storage_partition->GetCertVerifierServiceUpdater()
-            ->UpdateAdditionalCertificates(
-                GetCertificatePolicy(storage_partition->GetPath()));
-      });
+  profile_->ForEachLoadedStoragePartition([&](content::StoragePartition*
+                                                  storage_partition) {
+    auto additional_certs = GetCertificatePolicy(storage_partition->GetPath());
+    xenon::certificates::MergeManagedCertificates(
+        xenon::certificates::XenonManagedCertificateService::Get()->snapshot(),
+        additional_certs.get());
+    storage_partition->GetCertVerifierServiceUpdater()
+        ->UpdateAdditionalCertificates(std::move(additional_certs));
+  });
 }
 
 #if BUILDFLAG(CHROME_ROOT_STORE_CERT_MANAGEMENT_UI)
@@ -960,6 +973,10 @@ void ProfileNetworkContextService::
     UpdateAdditionalCertificatesWithUserAddedCerts(
         std::vector<net::ServerCertificateDatabase::CertInformation>
             cert_infos) {
+  if (is_shutting_down_ ||
+      !xenon::certificates::XenonManagedCertificateService::Get()->ready()) {
+    return;
+  }
   profile_->ForEachLoadedStoragePartition([&](content::StoragePartition*
                                                   storage_partition) {
     cert_verifier::mojom::AdditionalCertificatesPtr additional_certs =
@@ -1010,6 +1027,9 @@ void ProfileNetworkContextService::
           break;
       }
     }
+    xenon::certificates::MergeManagedCertificates(
+        xenon::certificates::XenonManagedCertificateService::Get()->snapshot(),
+        additional_certs.get());
     storage_partition->GetCertVerifierServiceUpdater()
         ->UpdateAdditionalCertificates(std::move(additional_certs));
   });
@@ -1539,19 +1559,23 @@ void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
   // isn't set in user profiles, or if that does something else. If that's true,
   // add an isManaged() check here.
 
+  bool wait_for_certificates =
+      !xenon::certificates::XenonManagedCertificateService::Get()->ready();
 #if BUILDFLAG(CHROME_ROOT_STORE_CERT_MANAGEMENT_UI)
-  if (net::ServerCertificateDatabaseServiceFactory::GetForBrowserContext(
-          profile_)) {
+  wait_for_certificates |=
+      net::ServerCertificateDatabaseServiceFactory::GetForBrowserContext(
+          profile_) != nullptr;
+#endif
+  if (wait_for_certificates) {
     cert_verifier_creation_params->wait_for_update = true;
     UpdateAdditionalCertificates();
   } else {
     cert_verifier_creation_params->initial_additional_certificates =
         GetCertificatePolicy(GetPartitionPath(relative_partition_path));
+    xenon::certificates::MergeManagedCertificates(
+        xenon::certificates::XenonManagedCertificateService::Get()->snapshot(),
+        cert_verifier_creation_params->initial_additional_certificates.get());
   }
-#else
-  cert_verifier_creation_params->initial_additional_certificates =
-      GetCertificatePolicy(GetPartitionPath(relative_partition_path));
-#endif  // BUILDFLAG(CHROME_ROOT_STORE_CERT_MANAGEMENT_UI)
 
   network_context_params->reset_http_cache_backend =
       GetHttpCacheBackendResetParam(profile_, relative_partition_path);
@@ -1679,6 +1703,7 @@ void ProfileNetworkContextService::OnContentSettingChanged(
 
 void ProfileNetworkContextService::Shutdown() {
   is_shutting_down_ = true;
+  managed_certificates_observer_ = {};
 
 #if BUILDFLAG(CHROME_ROOT_STORE_CERT_MANAGEMENT_UI)
   server_cert_database_observer_ = {};

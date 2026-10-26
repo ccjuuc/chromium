@@ -31,7 +31,7 @@ struct ChromeRootCertConstraints;
 //
 // This is primarily used to abstract out the platform-specific bits that
 // relate to configuring the bssl::TrustStore needed for path building.
-class SystemTrustStore {
+class NET_EXPORT SystemTrustStore {
  public:
   virtual ~SystemTrustStore() = default;
 
@@ -47,6 +47,9 @@ class SystemTrustStore {
   // that it is one of default trust anchors for the system, as opposed to a
   // user-installed one. (It may *also* be trusted as a user-installed root.)
   virtual bool IsKnownRoot(const bssl::ParsedCertificate* cert) const = 0;
+  // The Chrome Root Store implementation also checks SPKI, so a reissued
+  // managed anchor cannot bypass the constraints on a public root's key.
+  virtual bool IsKnownRootOrSpki(const bssl::ParsedCertificate* cert) const;
   virtual bool IsKnownMtcAnchor(const bssl::MTCAnchor* anchor) const = 0;
 
 #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)

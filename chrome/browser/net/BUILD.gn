@@ -171,6 +171,7 @@ source_set("impl") {
 
   deps = [
     ":key_pinning_proto",
+    "//xenon_overlay/chrome/browser:managed_certificates",
     "//base:build_time",
     "//chrome/browser:browser_features",
     "//chrome/browser:browser_process",

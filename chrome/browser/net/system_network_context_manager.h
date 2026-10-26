@@ -9,6 +9,7 @@
 #include <optional>
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/feature_list.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
@@ -24,6 +25,7 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom-forward.h"
 #include "services/network/public/cpp/cookie_encryption_provider_impl.h"
+#include "services/network/public/mojom/cert_verifier_service_updater.mojom.h"
 #include "services/network/public/mojom/host_resolver.mojom-forward.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
@@ -246,6 +248,9 @@ class SystemNetworkContextManager {
   // Creates parameters for the NetworkContext. May only be called once, since
   // it initializes some class members.
   network::mojom::NetworkContextParamsPtr CreateNetworkContextParams();
+  network::mojom::NetworkContextParamsPtr CreateDefaultNetworkContextParams(
+      bool include_managed_certificates);
+  void UpdateManagedCertificates();
 
   // Send the current value of the net.explicitly_allowed_network_ports pref to
   // the network process.
@@ -268,6 +273,9 @@ class SystemNetworkContextManager {
   // NetworkContext using the network service, if the network service is
   // enabled. mojo::NullRemote(), otherwise.
   mojo::Remote<network::mojom::NetworkContext> network_service_network_context_;
+  mojo::Remote<cert_verifier::mojom::CertVerifierServiceUpdater>
+      managed_certificates_updater_;
+  base::CallbackListSubscription managed_certificates_observer_;
 
   // URLLoaderFactory backed by the NetworkContext returned by GetContext(), so
   // consumers don't all need to create their own factory.

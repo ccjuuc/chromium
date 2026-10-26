@@ -1,0 +1,12 @@
+{
+  "xenon_managed_ca": {
+    "enabled": true,
+    "source_id": "company-ca",
+    "endpoint": "https://config.example.com/api/v1/browser/ca-certificates",
+    "auth": {
+      "mode": "none"
+    },
+    "refresh_interval_seconds": 21600,
+    "request_timeout_seconds": 30
+  }
+}

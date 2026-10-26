@@ -15,6 +15,7 @@
     a:hover { color: #104b3c; }
     a:focus-visible, summary:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #69bca5; outline-offset: 3px; }
     [hidden] { display: none !important; }
+    body[data-admin-enabled="false"] #certificate-management-link { display: none; }
     .shell { max-width: 1240px; margin: 0 auto; padding: 0 36px; }
     .topbar { background: #fff; border-bottom: 1px solid #e1e7e9; }
     .topbar .shell { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
@@ -132,7 +133,7 @@
   <header class="topbar">
     <div class="shell">
       <div class="brand"><span class="brand-mark" aria-hidden="true">X</span>Xenon 更新服务</div>
-      <span class="status">服务运行中</span>
+      <div class="action-row"><a class="refresh" id="certificate-management-link" href="/certificates">证书管理</a><span class="status">服务运行中</span></div>
     </div>
   </header>
   <main class="shell">

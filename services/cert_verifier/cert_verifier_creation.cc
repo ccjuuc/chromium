@@ -254,6 +254,8 @@ void UpdateCertVerifierInstanceParams(
           additional_certificates->trust_anchors_and_leafs);
   instance_params->additional_trust_leafs =
       ConvertMojoListToInternalList(additional_certificates->trust_leafs);
+  instance_params->xenon_managed_trust_anchors = ConvertMojoListToInternalList(
+      additional_certificates->xenon_managed_trust_anchors);
 }
 
 }  // namespace cert_verifier

@@ -1,5 +1,5 @@
 // Copyright 2026 The Xenon Overlay Authors. All rights reserved.
-//! Loopback Omaha endpoint. TLS is terminated by the deployment proxy.
+//! Loopback Omaha endpoint and optional dedicated managed-CA HTTPS listener.
 use crate::catalog::{self, Artifact, Catalog};
 use anyhow::{ensure, Context, Result};
 use axum::{
@@ -34,6 +34,7 @@ pub struct ServerState {
     origin: String,
     admin: Option<Arc<crate::admin::Admin>>,
     crashes: Option<Arc<crate::crashes::Store>>,
+    managed_certificates: Option<Arc<crate::managed_certificates::Store>>,
 }
 
 pub fn validate_public_origin(value: &str) -> Result<()> {
@@ -66,6 +67,7 @@ impl ServerState {
             origin: public_origin.unwrap_or_else(|| format!("http://127.0.0.1:{port}")),
             admin: None,
             crashes: None,
+            managed_certificates: None,
         })
     }
 
@@ -75,6 +77,10 @@ impl ServerState {
 
     pub fn origin(&self) -> &str {
         &self.origin
+    }
+
+    pub fn managed_certificate_store(&self) -> Option<Arc<crate::managed_certificates::Store>> {
+        self.managed_certificates.clone()
     }
 
     pub async fn windows_summary(&self) -> Value {
@@ -165,6 +171,22 @@ fn error(status: StatusCode, message: &str) -> Response {
     response(status, json!({ "error": message }).to_string(), "application/json; charset=utf-8")
 }
 
+fn html_response(html: String, head: bool) -> Response {
+    let length = html.len();
+    let body = if head { String::new() } else { html };
+    let mut result = response(StatusCode::OK, body, "text/html; charset=utf-8");
+    result.headers_mut().insert(header::CONTENT_LENGTH, length.to_string().parse().unwrap());
+    result.headers_mut().insert("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'".parse().unwrap());
+    result.headers_mut().insert("referrer-policy", "no-referrer".parse().unwrap());
+    result
+}
+
+fn is_forwarded(headers: &HeaderMap) -> bool {
+    ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip"]
+        .iter()
+        .any(|name| headers.contains_key(*name))
+}
+
 fn header_text<'a>(headers: &'a HeaderMap, key: &str) -> Option<&'a str> {
     headers.get(key).and_then(|value| value.to_str().ok())
 }
@@ -223,6 +245,12 @@ async fn handle_inner(state: ServerState, request: Request) -> Response {
     if request.headers().contains_key(header::ORIGIN) {
         return error(StatusCode::FORBIDDEN, "Loopback native clients only");
     }
+    if request.uri().path() == crate::managed_certificates::ENDPOINT {
+        let Some(store) = state.managed_certificates else {
+            return error(StatusCode::NOT_FOUND, "Managed certificates are disabled");
+        };
+        return crate::managed_certificates::handle(store, request).await;
+    }
     if request.uri().path() == crate::crashes::ENDPOINT {
         let Some(store) = state.crashes else {
             return error(StatusCode::NOT_FOUND, "Crash uploads are disabled");
@@ -232,24 +260,40 @@ async fn handle_inner(state: ServerState, request: Request) -> Response {
     if request.uri().path() == "/assets/home.js" && request.method() == Method::GET {
         return response(StatusCode::OK, include_str!("home.js"), "text/javascript; charset=utf-8");
     }
+    if request.uri().path() == "/assets/certificates.js" && request.method() == Method::GET {
+        return response(
+            StatusCode::OK,
+            include_str!("certificates.js"),
+            "text/javascript; charset=utf-8",
+        );
+    }
+    if matches!(request.uri().path(), "/certificates" | "/certificates/") {
+        let Some(admin) = state.admin.as_ref() else {
+            return error(StatusCode::NOT_FOUND, "Management is unavailable");
+        };
+        if is_forwarded(request.headers()) {
+            return error(StatusCode::FORBIDDEN, "Local management only");
+        }
+        if request.method() != Method::GET && request.method() != Method::HEAD {
+            return error(StatusCode::METHOD_NOT_ALLOWED, "GET or HEAD required");
+        }
+        return html_response(
+            crate::homepage::render_certificates(Some(admin.token())),
+            request.method() == Method::HEAD,
+        );
+    }
     if request.uri().path() == "/" {
         if request.method() != Method::GET && request.method() != Method::HEAD {
             return error(StatusCode::METHOD_NOT_ALLOWED, "GET or HEAD required");
         }
         let catalog = state.active.read().await.catalog.clone();
-        let forwarded =
-            ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip"]
-                .iter()
-                .any(|name| request.headers().contains_key(*name));
-        let token = if forwarded { None } else { state.admin.as_ref().map(|admin| admin.token()) };
+        let token = if is_forwarded(request.headers()) {
+            None
+        } else {
+            state.admin.as_ref().map(|admin| admin.token())
+        };
         let html = crate::homepage::render(&catalog, &state.origin, token);
-        let length = html.len();
-        let body = if request.method() == Method::HEAD { String::new() } else { html };
-        let mut result = response(StatusCode::OK, body, "text/html; charset=utf-8");
-        result.headers_mut().insert(header::CONTENT_LENGTH, length.to_string().parse().unwrap());
-        result.headers_mut().insert("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'".parse().unwrap());
-        result.headers_mut().insert("referrer-policy", "no-referrer".parse().unwrap());
-        return result;
+        return html_response(html, request.method() == Method::HEAD);
     }
     if request.uri().path() == ENDPOINT {
         if request.method() != Method::POST {
@@ -566,6 +610,7 @@ pub async fn run(
     admin: Option<Arc<crate::admin::Admin>>,
     admin_port: Option<u16>,
     crashes: crate::crashes::Settings,
+    managed_certificates: Option<crate::managed_certificates::Settings>,
 ) -> Result<()> {
     if let Some(origin) = &public_origin {
         validate_public_origin(origin)?;
@@ -580,6 +625,26 @@ pub async fn run(
     if crashes.enabled {
         state.crashes = Some(Arc::new(crate::crashes::Store::new(crashes)?));
     }
+    let mut managed_https_settings = None;
+    if let Some(settings) = managed_certificates {
+        let https_settings = settings.https.clone();
+        state.managed_certificates = Some(Arc::new(
+            tokio::task::spawn_blocking(move || crate::managed_certificates::Store::new(settings))
+                .await??,
+        ));
+        // TLS is prepared below after the shared store has been created.
+        managed_https_settings = https_settings;
+    }
+    let managed_https = match managed_https_settings {
+        Some(settings) => Some(
+            crate::managed_certificates::https::Listener::prepare(
+                settings,
+                state.managed_certificates.clone().expect("HTTPS requires the shared CA store"),
+            )
+            .await?,
+        ),
+        None => None,
+    };
     let windows_root = admin.as_ref().map(|admin| admin.windows_root());
     if let Some(admin) = &admin {
         let root = admin.windows_root();
@@ -614,7 +679,24 @@ pub async fn run(
     let reload = tokio::spawn(reload_loop(state.clone(), manifest, initial));
     let windows_reload =
         windows_root.map(|root| tokio::spawn(reload_windows_loop(state.clone(), root)));
-    let result = axum::serve(listener, router(state)).with_graceful_shutdown(shutdown()).await;
+    let https_handle = axum_server::Handle::new();
+    let mut https_task =
+        managed_https.map(|listener| tokio::spawn(listener.serve(https_handle.clone())));
+    let result = tokio::select! {
+        result = axum::serve(listener, router(state)).with_graceful_shutdown(shutdown()) => {
+            result.context("Serve Omaha updates")
+        }
+        result = async {
+            match &mut https_task {
+                Some(task) => task.await.context("Managed CA HTTPS task failed")?,
+                None => std::future::pending::<Result<()>>().await,
+            }
+        } => result,
+    };
+    https_handle.shutdown();
+    if let Some(task) = https_task {
+        task.abort();
+    }
     reload.abort();
     if let Some(task) = windows_reload {
         task.abort();
@@ -622,7 +704,7 @@ pub async fn run(
     if let Some(task) = management {
         task.abort();
     }
-    result.context("Serve Omaha updates")
+    result
 }
 
 #[cfg(test)]
@@ -642,6 +724,55 @@ mod tests {
         let catalog = catalog::load(&dir.path().join("release.json")).unwrap();
         let state = ServerState::new(catalog, 9001, None).unwrap();
         (dir, state, full)
+    }
+
+    #[tokio::test]
+    async fn managed_ca_endpoint_obeys_host_origin_and_enabled_settings() {
+        let (dir, mut state, _) = setup();
+        let endpoint = crate::managed_certificates::ENDPOINT;
+        let request = || Request::builder().uri(endpoint);
+        let response = router(state.clone())
+            .oneshot(request().header("host", "127.0.0.1:9001").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let now = time::OffsetDateTime::now_utc();
+        let date = |value: time::OffsetDateTime| {
+            value
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap()
+        };
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "schema_version":1, "source_id":"route-test", "generation":"1",
+            "issued_at":date(now), "certificates":[]
+        }))
+        .unwrap();
+        let path = dir.path().join("managed-ca.json");
+        fs::write(&path, &bytes).unwrap();
+        state.managed_certificates = Some(Arc::new(
+            crate::managed_certificates::Store::new(crate::managed_certificates::Settings {
+                snapshot_file: path.clone(),
+                ..Default::default()
+            })
+            .unwrap(),
+        ));
+        for builder in [
+            request().header("host", "other.example"),
+            request().header("host", "127.0.0.1:9001").header("origin", "https://other.example"),
+        ] {
+            let response =
+                router(state.clone()).oneshot(builder.body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        assert!(!dir.path().join("managed-ca.json.accepted.json").exists());
+        let response = router(state)
+            .oneshot(request().header("host", "127.0.0.1:9001").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.into_body().collect().await.unwrap().to_bytes(), bytes);
     }
 
     #[tokio::test]
@@ -785,6 +916,57 @@ mod tests {
             .unwrap();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         assert!(std::str::from_utf8(&bytes).unwrap().contains("还没有发布版本"));
+    }
+
+    #[tokio::test]
+    async fn certificate_page_requires_local_management_and_uses_document_guards() {
+        let (dir, mut state, _) = setup();
+        let request = |method, path| req(method, path, Body::empty()).body(Body::empty()).unwrap();
+        let unavailable =
+            router(state.clone()).oneshot(request(Method::GET, "/certificates")).await.unwrap();
+        assert_eq!(unavailable.status(), StatusCode::NOT_FOUND);
+
+        let config_path = dir.path().join("management.json");
+        fs::write(&config_path, r#"{"schema_version":1,"port":9001,"manifest":"release.json"}"#)
+            .unwrap();
+        let admin =
+            crate::admin::Admin::new(&config_path, crate::config::load(&config_path).unwrap())
+                .unwrap();
+        let token = admin.token().to_owned();
+        state.admin = Some(admin);
+        let app = router(state);
+        let response = app.clone().oneshot(request(Method::GET, "/certificates")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert!(response.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("frame-ancestors 'none'"));
+        let length = response.headers()[header::CONTENT_LENGTH].clone();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let html = std::str::from_utf8(&bytes).unwrap();
+        assert!(html.contains(&token));
+        assert!(!html.contains("{{ADMIN_"));
+        let head = app.clone().oneshot(request(Method::HEAD, "/certificates/")).await.unwrap();
+        assert_eq!(head.headers()[header::CONTENT_LENGTH], length);
+        assert!(head.into_body().collect().await.unwrap().to_bytes().is_empty());
+        let forwarded = app
+            .clone()
+            .oneshot(
+                req(Method::GET, "/certificates", Body::empty())
+                    .header("x-forwarded-for", "127.0.0.1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(forwarded.status(), StatusCode::FORBIDDEN);
+        assert!(!String::from_utf8_lossy(
+            &forwarded.into_body().collect().await.unwrap().to_bytes()
+        )
+        .contains(&token));
+        let wrong_method = app.oneshot(request(Method::POST, "/certificates")).await.unwrap();
+        assert_eq!(wrong_method.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
     #[tokio::test]

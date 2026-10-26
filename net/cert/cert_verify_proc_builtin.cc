@@ -363,6 +363,11 @@ class CertVerifyProcTrustStore {
     return system_trust_store_->IsKnownRoot(trust_anchor);
   }
 
+  bool IsSystemTrustExplicit(const bssl::ParsedCertificate* cert) const {
+    return !system_trust_store_->GetTrustStore()->GetTrust(cert)
+                .HasUnspecifiedTrust();
+  }
+
   bool IsKnownMtcAnchor(const bssl::MTCAnchor* anchor) const {
     return system_trust_store_->IsKnownMtcAnchor(anchor);
   }
@@ -957,6 +962,10 @@ class PathBuilderDelegateImpl : public bssl::SimplePathBuilderDelegate {
               cert_with_constraints.certificate->cert_buffer())) {
         continue;
       }
+      if (cert_with_constraints.skip_if_system_trusted &&
+          trust_store_->IsSystemTrustExplicit(root_cert.get())) {
+        continue;
+      }
       // Found the cert, check constraints
       if (cert_with_constraints.permitted_dns_names.empty() &&
           cert_with_constraints.permitted_cidrs.empty()) {
@@ -1362,6 +1371,25 @@ CertVerifyProcBuiltin::CertVerifyProcBuiltin(
                                   bssl::CertificateTrust::ForTrustAnchor(),
                                   parsing_errors);
     });
+  }
+
+  // Preserve native policy/user trust, including explicit distrust. Evaluate
+  // against this verifier's root store, not the compiled-in store: a component
+  // root store update rebuilds the verifier and repeats this filtering.
+  for (const auto& managed : instance_params.xenon_managed_trust_anchors) {
+    const auto& cert = managed.certificate;
+    if (additional_trust_store_.Contains(cert.get()) ||
+        additional_trust_store_.GetTrust(cert.get()).IsDistrusted() ||
+        system_trust_store_->IsKnownRootOrSpki(cert.get())) {
+      continue;
+    }
+    additional_trust_store_.AddCertificate(cert, anchor_trust_enforcement);
+    if (!managed.permitted_dns_names.empty() ||
+        !managed.permitted_cidrs.empty()) {
+      auto constraints = managed;
+      constraints.skip_if_system_trusted = true;
+      additional_constraints_.push_back(std::move(constraints));
+    }
   }
 
   for (const auto& cert : instance_params.additional_untrusted_authorities) {

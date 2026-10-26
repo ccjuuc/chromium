@@ -48,6 +48,11 @@ struct AdditionalCertificates {
   // List of SPKIs that are explicitly distrusted.
   array<array<uint8>> distrusted_spkis;
 
+  // Xenon-managed anchors have lower precedence than existing local trust and
+  // must not turn a current Chrome Root Store key into a local trust anchor.
+  // Keep this source separate so a root store update can re-evaluate it.
+  array<CertWithConstraints> xenon_managed_trust_anchors;
+
   // If true, use user-added certs in the system trust store.
   [EnableIfNot=is_chromeos]
   bool include_system_trust_store = true;

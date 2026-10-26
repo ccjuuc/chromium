@@ -3,38 +3,49 @@
 `xenon-update` 在同一服务中提供 macOS 和 Windows 两个发布面板：macOS 使用 PKG → CRX3、Puffin 差分和 Omaha 4.0；
 Windows 使用 EXE / 安装目录 ZIP 导入、Zucchini 目录差分和 JSON + ZIP 更新接口。
 同一服务还提供 Crashpad 崩溃接收接口，支持二进制直传和 multipart 表单上传。
+可选的企业 CA 下发接口使用版本化 JSON 快照，为浏览器提供受控的 TLS CA 配置。
 发布服务本身可以运行在 Windows/Linux；服务宿主平台与更新目标平台是两回事。
 Windows 客户端保持原有 JSON + ZIP 方案，不接入 Omaha，也不新增客户端后台服务。
 单独制差分仍可使用 [make_directory_diff.js](../README.md)。
 
 ## 构建与首次启动
 
-从 Chromium 源码根目录执行，需要 Rust 和宿主平台的 C/C++ 链接工具：
+需要 Rust 和宿主平台的 C/C++ 链接工具。在
+`H:/chromium_142/src/xenon_overlay/tools/updater/xenon_update_tool` 目录执行即可首次启动：
 
 ```sh
-cargo build --release --locked --manifest-path xenon_overlay/tools/updater/xenon_update_tool/Cargo.toml
+cargo run --locked -- serve
 ```
 
-Windows 输出为 `xenon_overlay/tools/updater/xenon_update_tool/target/release/xenon-update.exe`。
-在该目录打开 PowerShell，首次运行：
+未传 `--config` 时，固定读取可执行文件所在目录下的 `xenon-update/xenon-update.json`，
+与启动时的工作目录无关。该文件不存在时，`serve` 自动按
+默认参数初始化配置，再监听 `127.0.0.1:9001`。已有默认配置直接读取；损坏配置会报错，
+不会重建或覆盖。新配置包含企业 CA 快照路径并创建 `managed-ca` 目录，但不会自动发布证书。
+
+需要 release 可执行文件时，在同一目录执行：
 
 ```powershell
-.\xenon-update.exe init
-.\xenon-update.exe serve
+cargo build --release --locked
+.\target\release\xenon-update.exe serve
 ```
 
 浏览器打开 `http://127.0.0.1:9001/`。启动命令是子命令 **`serve`**，不是 `--serve`。
 前台进程需保持运行，Ctrl+C 停止。已有配置时直接 `serve`，不要再次 `init`。
-macOS/Linux 可执行文件名为 `xenon-update`，使用 `./xenon-update`。
+macOS/Linux 使用 `./target/release/xenon-update serve`。
+迁移已有服务时，将可执行文件及旁边的 `xenon-update/` 配置、状态目录一起复制。
+显式指定的 `--config` 相对路径仍按启动时的工作目录解析；配置内部路径按配置文件所在目录解析。
+从旧版升级时，将原工作目录中的配置和证书文件复制到运行目录，保留已接受的版本状态，
+不要覆盖运行目录中已有的发布记录或制品。
 
-默认配置为当前目录下的 `xenon-update/xenon-update.json`。也可在所有命令中指定：
+也可在所有命令中显式指定配置路径。显式 `--config` 指向不存在的文件时，`serve` 会报错，
+需先执行 `init`；即使显式指定的路径与默认路径相同，也不会自动初始化：
 
 ```sh
 xenon-update --config /ABS/state/xenon-update.json init
 xenon-update --config /ABS/state/xenon-update.json serve
 ```
 
-配置中的相对路径以配置文件所在目录为基准。将配置、`releases`、`publisher/history`、`publisher/windows` 和 `crashes` 放在持久目录；
+配置中的相对路径以配置文件所在目录为基准。将配置、`releases`、`publisher/history`、`publisher/windows`、`crashes` 和 `managed-ca` 放在持久目录；
 只提供已有制品的更新服务不需要制包工具，网页制包需要下一节对应平台的依赖。
 
 ## 在浏览器中发布安装包
@@ -127,7 +138,7 @@ Windows 客户端仍直接使用已安装文件重建更新，不需要缓存旧
 
 ## 初始化配置与客户端设置
 
-`init` 创建服务配置和空清单，不安装客户端服务，不修改浏览器构建。
+`init` 创建服务配置、空清单及 `managed-ca` 目录，不发布证书，不安装客户端服务，不修改浏览器构建。
 可以读取已签名制包结果的公钥摘要并查找原生工具：
 
 ```sh
@@ -162,6 +173,9 @@ Puffin 可从 `--puffin`、`--build-dir`、`XENON_PUFFIN_TOOL`、程序旁边、
     "enabled": true,
     "directory": "crashes",
     "max_upload_bytes": 67108864
+  },
+  "managed_certificates": {
+    "snapshot_file": "managed-ca/current.json"
   },
   "packaging": {
     "key_path": "/srv/xenon/private/release-key.pk8",
@@ -260,6 +274,107 @@ location = /api/v1/crashes {
 修改端口或上传大小时同步修改反代配置。将浏览器上传 URL 设置为实际 HTTPS 地址，例如
 `https://updates.example.com/api/v1/crashes`；如需访问控制或额外限流，在反代层配置与原生
 客户端兼容的方案，当前客户端没有 token/签名配置。
+
+## 下发企业 CA
+
+正式证书 HTTP 服务使用本项目的 Rust + Axum，与更新、崩溃上传接口共用
+`xenon-update serve` 进程和监听端口；证书接口为 `GET /api/v1/browser/ca-certificates`。
+同一个可执行文件的 `publish-certificates` 子命令使用 Rust 生成快照，无需 Node.js。
+`managed_certificates/smoke-browser.mjs` 的 Node HTTPS 服务仅用于浏览器自动测试。
+
+默认启动后，可在服务所在电脑打开 `http://127.0.0.1:9001/certificates`，
+或点击首页的“证书管理”。页面展示当前下发版本、证书数量、发布日期与六张候选证书的指纹，
+可勾选证书、填写来源与版本后直接发布，也支持更新与显式“撤回全部”。
+首次发布不默认勾选证书；已有集合会用于填充发布表单，刷新状态保留未提交的选择。
+证书页面复用本机管理权限；拆分公共监听与管理监听时，请使用管理端口打开页面。
+网页发布与 CLI 使用同一个 Rust 发布器、快照路径及版本校验，不需要另外部署页面服务。
+
+首次默认启动或显式 `init` 创建的配置已包含以下片段，不需要另外填写服务端快照路径：
+
+```json
+{
+  "managed_certificates": {
+    "snapshot_file": "managed-ca/current.json"
+  }
+}
+```
+
+相对路径以配置文件目录为基准；默认文件位于可执行文件旁的 `xenon-update/managed-ca/current.json`。
+新配置不启用 Bearer，未发布快照时接口返回 503。已有配置省略 `managed_certificates` 时仍保持
+关闭并返回 404；添加 `"managed_certificates": {}` 即使用上述默认快照路径。
+服务启动时自动创建快照父目录，服务账号需具有创建目录和持久写入状态文件的权限。
+需要 Bearer 时在该对象增加 `"bearer_token_env": "XENON_CA_BEARER_TOKEN"`，
+通过指定的环境变量向服务启动进程注入非空 token，不能把 token 直接写进 JSON。
+配置变化或 token 轮换需要重启服务。
+浏览器端配置、凭据和 bootstrap CA 在启动时加载，变化后也需重启浏览器。客户端 Bearer
+安全存储目前仅支持 Windows；非 Windows 配置 Bearer 会报错，不会降级到明文或无鉴权请求。
+
+在本目录使用默认配置启动 Axum 服务；启用 Bearer 时先完成凭据注入：
+
+```powershell
+cargo run --locked -- serve
+```
+
+`GET /api/v1/browser/ca-certificates` 每次已认证请求检查快照，合法高版本持久化后热更新；
+HTTPS 可由反代终止，或使用下面的本机专用 HTTPS 监听；两者保留原始 JSON 字节和 SHA-256 ETag。非法新文件、同版不同内容或回滚不会覆盖
+旧快照。缓存 CA 保留至更高版本替换或撤回，证书自身有效期仍由浏览器正常校验。
+新快照不输出 `expires_at`；旧字段兼容读取但不控制有效性。旧版客户端仍要求该字段并执行
+到期撤回，新服务端发布器与新客户端须配套升级。新版本的空 `certificates` 表示撤回。
+浏览器控制面的 `endpoint` 仍需配置为实际 HTTPS 地址；本地 Axum 的
+`http://127.0.0.1:9001` 不能直接作为浏览器控制面地址。
+证书管理页优先展示 `public_origin` 对应的 HTTPS 下发地址，未配置时展示本机 HTTPS
+监听地址；两者均未配置时会提示先配置 HTTPS，并将 HTTP 地址标为接口调试用途。
+
+### 本机 HTTPS 证书下发
+
+本机联调可在 `managed_certificates` 中增加以下配置，由同一个 Axum 进程直接提供 TLS：
+
+```json
+{
+  "managed_certificates": {
+    "snapshot_file": "managed-ca/current.json",
+    "https": {
+      "port": 9443,
+      "certificate_file": "managed-ca/tls/localhost.pem",
+      "private_key_file": "managed-ca/tls/localhost-key.pem"
+    }
+  }
+}
+```
+
+证书链和私钥使用 PEM，相对路径以服务配置目录为基准；证书应包含访问地址的 SAN，
+例如 `127.0.0.1` 和 `localhost`。证书或私钥无法解析、不匹配或端口不可用时整个 `serve` 启动失败。
+该监听固定绑定 `127.0.0.1`，只提供 `https://127.0.0.1:9443/api/v1/browser/ca-certificates`，
+管理页面仍使用 `http://127.0.0.1:9001/certificates`。HTTPS 与 HTTP 使用同一份快照和鉴权设置，
+网页发布后立即供 HTTPS 请求读取；HTTPS 端口不开放管理、发布、更新和崩溃上传接口。
+端口必须与 HTTP 端口和实际管理端口不同，TLS 证书更换后重启服务。
+本机私有 CA 仅通过浏览器客户端配置的 `bootstrap_ca_file` 信任，用于下发控制连接，
+不安装到操作系统、不加入六张网站信任根证书的发布集合。应使用独立的本机根 CA 签发带上述 SAN
+的服务器证书，浏览器仅保存该 CA 的公开 PEM；服务器私钥只留在服务目录并限制文件读取权限。
+正式部署可继续使用已有 HTTPS 反代。
+
+六张可选证书资产、客户端配置示例和验证脚本统一放在本目录的 `managed_certificates/` 下。
+证书资产随程序内嵌。发布默认使用服务端配置中的快照路径，无需手填 `--out`；从
+`xenon_overlay/tools/updater/xenon_update_tool` 目录执行：
+
+```powershell
+cargo run --locked -- publish-certificates --source company-ca --generation 1 --all
+```
+
+预编译程序可直接运行 `xenon-update publish-certificates ...`。未指定 `--config` 且默认配置不存在时
+自动初始化；已有配置保持原样，显式 `--config` 指向缺失文件时报错。关闭 CA 接口的配置不能用于发布。
+需要自定义配置时传全局 `--config`；显式 `--out FILE.json` 则仅生成离线文件，不读取或创建配置。
+发布新快照不需要重启正在运行的 Axum 服务。
+
+快照无独立有效期，不再提供 `--valid-days`；`--include FILE.pem` 可以选子集，`--empty` 用于显式撤回。
+`--all`、`--include`、`--empty` 三选一；`--source` 和 `--generation` 没有默认值。
+轮换或更改任何正文都必须增加 generation。持久目录同时保存
+`current.json`、`current.json.accepted.json` 和锁文件，不删除 accepted 状态来重置版本。
+客户端缓存及服务端快照、状态、配置和 TLS 私钥目录须按所属用户/服务账号最小权限部署，
+管理员与 SYSTEM 按运维需要授权，其他普通账号不得读取或写入；当前代码不自动设置 Windows
+专用 ACL。哈希不能代替本地访问控制，详见[目录权限说明](managed_certificates/README.md#目录权限与本地状态)。
+发布、HTTPS 反代、隐藏输入凭据、恢复和资产来源说明见
+[托管 CA 发布工具](managed_certificates/README.md)。
 
 ## CLI 发布与单独生成差分
 

@@ -7,10 +7,12 @@
 
 #include <map>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/flat_map.h"
+#include "base/containers/flat_set.h"
 #include "base/containers/span.h"
 #include "base/containers/transparent_hash.h"
 #include "base/time/time.h"
@@ -493,6 +495,8 @@ class NET_EXPORT TrustStoreChrome : public bssl::TrustStore {
   // Returns true if the trust store contains the given bssl::ParsedCertificate
   // (matches by DER).
   bool Contains(const bssl::ParsedCertificate* cert) const;
+  // Matches the key even when a cross-signed/reissued certificate has new DER.
+  bool ContainsSpki(const bssl::ParsedCertificate* cert) const;
   bool ContainsMTCAnchor(const bssl::MTCAnchor* anchor) const;
 
   // Returns the crs_root_id for `path`, or nullopt if unknown.
@@ -563,6 +567,7 @@ class NET_EXPORT TrustStoreChrome : public bssl::TrustStore {
       const bssl::ParsedCertificate* cert) const;
 
   bssl::TrustStoreInMemory trust_store_;
+  base::flat_set<std::string> anchor_spkis_;
 
   // Map from log_id to additional data for the MTC anchor with the
   // matching log id. This stores data that isn't handled in bssl:MTCAnchor.

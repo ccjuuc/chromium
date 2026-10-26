@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "certificates": [
+    {
+      "name": "GDCA TrustAUTH E5 ROOT",
+      "file": "gdca-trustauth-e5-root.pem",
+      "sha256": "ea152fd132de4f4e71930a9760517a81dacbbb5f1014d8bd7782ac0cc37e9431",
+      "spki_sha256": "d4dbac993a99c87fc5bd0dd8280d34173454c9e3cac23b36593a34eace84dd8b",
+      "source_url": "https://www.gdca.com.cn/customer_service/knowledge_universe/ca_cq/attachments/GDCA_TrustAUTH_E5_ROOT.p7b",
+      "not_before": "2016-03-23T07:40:10Z",
+      "not_after": "2040-12-31T15:59:59Z"
+    },
+    {
+      "name": "数安时代 R5 根 CA",
+      "file": "gdca-chinese-r5-root.pem",
+      "sha256": "71a1a38ff485137002dd5cd780b3873dde146723ee28080ecf3738c7c4feb1ae",
+      "spki_sha256": "acca845dfc5dc9b1e20e6d17521bba6e687d4355cc79bf09ec69f5666742035a",
+      "source_url": "https://www.gdca.com.cn/customer_service/knowledge_universe/ca_cq/attachments/_R5_Root_CA.p7b",
+      "not_before": "2016-03-31T02:29:54Z",
+      "not_after": "2040-12-31T15:59:59Z"
+    },
+    {
+      "name": "BJCA Global Root CA1",
+      "file": "bjca-global-root-ca1.pem",
+      "sha256": "f3896f88fe7c0a882766a7fa6ad2749fb57a7f3e98fb769c1fa7b09c2c44d5ae",
+      "spki_sha256": "ebc55f21e88d49ede81c0075ab08b3c73b81f0f33e37d7641a1d01b6e602dc9d",
+      "source_url": "https://repo.bjca.cn/global/cert/BJCA_Global_Root_CA1.crt",
+      "not_before": "2019-12-19T03:16:17Z",
+      "not_after": "2044-12-12T03:16:17Z"
+    },
+    {
+      "name": "BJCA Global Root CA2",
+      "file": "bjca-global-root-ca2.pem",
+      "sha256": "574df6931e278039667b720afdc1600fc27eb66dd3092979fb73856487212882",
+      "spki_sha256": "cc94a5a0319ff77a4ccadd821c4c59674e44d52816cbd1dfe2c761370ad4d21c",
+      "source_url": "https://repo.bjca.cn/global/cert/BJCA_Global_Root_CA2.crt",
+      "not_before": "2019-12-19T03:18:21Z",
+      "not_after": "2044-12-12T03:18:21Z"
+    },
+    {
+      "name": "TrustAsia Global Root CA G3",
+      "file": "trustasia-global-root-ca-g3.pem",
+      "sha256": "e0d3226aeb1163c2e48ff9be3b50b4c6431be7bb1eacc5c36b5d5ec509039a08",
+      "spki_sha256": "8685ad850f7f56cd16943bcb70b434e7356e1b8bdc613406e2ea8de46092b636",
+      "source_url": "https://repository.trustasia.com/repo/certs/rsa-g3/TrustAsiaGlobalRootCAG3.cer",
+      "not_before": "2021-05-20T02:10:19Z",
+      "not_after": "2046-05-19T02:10:19Z"
+    },
+    {
+      "name": "TrustAsia Global Root CA G4",
+      "file": "trustasia-global-root-ca-g4.pem",
+      "sha256": "be4b56cb5056c0136a526df444508daa36a0b54f42e4ac38f72af470e479654c",
+      "spki_sha256": "07a2904d4bff9604ea1331ae990e9ffe331232e69ecb8a08cd49d8e34757db41",
+      "source_url": "https://repository.trustasia.com/repo/certs/ecc-g4/TrustAsiaGlobalRootCAG4.cer",
+      "not_before": "2021-05-20T02:10:22Z",
+      "not_after": "2046-05-19T02:10:22Z"
+    }
+  ]
+}

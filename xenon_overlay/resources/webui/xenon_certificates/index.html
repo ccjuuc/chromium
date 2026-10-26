@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>证书诊断 - Xenon</title>
+  <link rel="stylesheet" href="index.css">
+  <script type="module" src="index.js"></script>
+</head>
+<body>
+  <main class="page">
+    <header class="page-header">
+      <div class="page-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+          <path d="M12 3 4 6v6c0 4.2 4.8 7.6 8 9 3.2-1.4 8-4.8 8-9V6l-8-3Z"/>
+          <path d="m8.5 11.5 2.3 2.3 4.7-4.7"/>
+        </svg>
+      </div>
+      <div>
+        <p class="eyebrow">XENON · 网络与安全</p>
+        <h1>证书诊断</h1>
+        <p class="intro">查看托管证书快照，测试当前浏览器的 HTTPS 连接与证书校验。</p>
+      </div>
+    </header>
+
+    <section class="card" id="snapshot-section" aria-labelledby="snapshot-heading">
+      <div class="section-heading">
+        <div>
+          <h2 id="snapshot-heading">证书下发状态</h2>
+          <p class="section-description">查看本地诊断；刷新状态不会触发远程下载</p>
+        </div>
+        <button id="refresh-status" type="button" class="button secondary">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+            <path d="M16 8a6.2 6.2 0 0 0-10.6-2L3 8m0-5v5h5M4 12a6.2 6.2 0 0 0 10.6 2L17 12m0 5v-5h-5"/>
+          </svg>
+          <span id="refresh-label">刷新状态</span>
+        </button>
+      </div>
+
+      <div class="snapshot-status-line">
+        <span class="badge neutral" id="status-badge" role="status">读取中</span>
+        <span class="subtle" id="status-checked-at"></span>
+      </div>
+      <p id="download-status-description" class="delivery-description">正在读取证书下发服务状态。</p>
+      <p id="status-error" class="message error-message" role="alert" hidden></p>
+      <dl class="delivery-metadata" id="delivery-metadata" hidden>
+        <div><dt>配置来源</dt><dd id="configured-source" class="monospace"></dd></div>
+        <div><dt>最近尝试（本次运行）</dt><dd id="last-attempt"></dd></div>
+        <div><dt>最近拉取成功（本次运行）</dt><dd id="last-success"></dd></div>
+        <div id="configuration-error-row" class="diagnostic-reason" hidden><dt>配置错误代码</dt><dd id="configuration-error-code" class="monospace error-message"></dd></div>
+        <div id="refresh-error-row" class="diagnostic-reason" hidden><dt>最近拉取错误代码</dt><dd id="refresh-error-code" class="monospace error-message"></dd></div>
+      </dl>
+      <div id="snapshot-empty" class="empty-state">
+        <strong id="snapshot-empty-title">正在读取快照</strong>
+        <p id="snapshot-empty-description">稍后将显示浏览器返回的状态。</p>
+      </div>
+
+      <div id="snapshot-details" hidden>
+        <h3 class="snapshot-subheading">已接受的快照</h3>
+        <dl class="snapshot-metadata">
+          <div><dt>来源</dt><dd id="snapshot-source" class="monospace"></dd></div>
+          <div><dt>发布序号</dt><dd id="snapshot-generation" class="monospace"></dd></div>
+          <div><dt>签发时间</dt><dd id="snapshot-issued"></dd></div>
+        </dl>
+        <div class="table-heading">
+          <h3>快照中的证书</h3>
+          <span id="certificate-count" class="subtle"></span>
+        </div>
+        <p id="snapshot-revoked" class="message" hidden>此快照的证书集合为空，表示撤回本来源提供的证书。</p>
+        <div id="certificate-table-container" class="table-container" tabindex="0" aria-label="托管证书列表，可横向滚动">
+          <table>
+            <caption class="visually-hidden">当前已接受快照中的证书及其额外约束</caption>
+            <thead><tr><th scope="col">证书名称</th><th scope="col">用途</th><th scope="col">额外约束</th><th scope="col">SHA-256 指纹</th></tr></thead>
+            <tbody id="certificate-table-body"></tbody>
+          </table>
+        </div>
+      </div>
+      <p class="notice">缓存证书保留至服务端更新或撤回。快照条目不代表每张证书均已生效；证书自身有效期、现有策略、公共根及约束仍会影响验证。下方测试展示本次连接的实际结果。</p>
+    </section>
+
+    <section class="card" aria-labelledby="test-heading">
+      <div class="section-heading">
+        <div>
+          <h2 id="test-heading">测试 HTTPS 连接</h2>
+          <p class="section-description">使用当前 Profile 的网络与证书配置，执行正常证书校验</p>
+        </div>
+      </div>
+      <form id="test-form" novalidate>
+        <label for="test-preset">证书测试页面</label>
+        <select id="test-preset" aria-describedby="preset-hint">
+          <option value="">自定义 HTTPS 地址</option>
+          <option value="https://ev-rsag3-valid.trustasia.com/">TrustAsia G3 · 有效证书</option>
+          <option value="https://ev-eccg4-valid.trustasia.com/">TrustAsia G4 · 有效证书</option>
+          <option value="https://demossl-rsa-valid.bjca.org.cn/">BJCA CA1 · 有效证书</option>
+          <option value="https://demossl-ecc-valid.bjca.org.cn/">BJCA CA2 · 有效证书</option>
+          <option value="https://ev-rsag3-expired.trustasia.com/">TrustAsia G3 · 过期证书（预期校验失败）</option>
+        </select>
+        <p id="preset-hint" class="hint preset-hint">选择后填入下方地址，点击“测试连接”执行校验。</p>
+        <label for="test-url">HTTPS 地址</label>
+        <div class="test-controls">
+          <input id="test-url" type="url" inputmode="url" placeholder="https://example.com/" autocomplete="off" spellcheck="false" dir="ltr" required aria-describedby="test-hint url-error">
+          <button id="test-button" type="submit" class="button primary">测试连接</button>
+        </div>
+        <p id="url-error" class="error-message field-error" role="alert" hidden></p>
+        <p id="test-hint" class="hint">发送 HEAD 请求，不跟随重定向，超时约 15 秒。不发送 Cookie 或网站登录凭据。</p>
+      </form>
+
+      <section id="test-result" class="test-result" aria-labelledby="result-heading" hidden>
+        <div class="result-heading">
+          <h3 id="result-heading">本次测试结果</h3>
+          <span id="test-summary" class="badge neutral" role="status" aria-live="polite"></span>
+        </div>
+        <p id="tested-url" class="tested-url monospace"></p>
+        <p id="test-error" class="message error-message" role="alert" hidden></p>
+        <div id="result-details" hidden>
+          <div class="checks">
+            <div class="check-card" id="tls-card">
+              <span class="check-label">TLS 连接与证书校验</span>
+              <strong id="tls-status"></strong>
+              <p id="tls-description"></p>
+            </div>
+            <div class="check-card" id="http-card">
+              <span class="check-label">HTTP 响应</span>
+              <strong id="http-status"></strong>
+              <p id="http-description"></p>
+            </div>
+          </div>
+          <dl class="network-result"><dt>网络结果</dt><dd id="network-error" class="monospace"></dd></dl>
+          <div id="peer-certificate" class="peer-certificate" hidden>
+            <h3>服务器证书</h3>
+            <p class="hint">由本次连接返回；可用于核对站点证书，与上方托管 CA 列表分别展示。</p>
+            <dl class="certificate-metadata">
+              <div><dt>主题（Subject）</dt><dd id="peer-subject"></dd></div>
+              <div><dt>签发者（Issuer）</dt><dd id="peer-issuer"></dd></div>
+              <div><dt>有效期起始</dt><dd id="peer-valid-from"></dd></div>
+              <div><dt>有效期截止</dt><dd id="peer-valid-to"></dd></div>
+              <div class="wide"><dt>SHA-256 指纹</dt><dd id="peer-sha256" class="monospace fingerprint"></dd></div>
+              <div><dt>验证器已知根</dt><dd id="peer-known-root"></dd></div>
+              <div><dt>证书状态码</dt><dd id="peer-cert-status" class="monospace"></dd></div>
+            </dl>
+          </div>
+          <p id="peer-unavailable" class="hint" hidden>本次连接未返回可展示的服务器证书。</p>
+        </div>
+      </section>
+    </section>
+    <footer>此页面用于诊断，不会导入证书、更改信任配置或忽略证书错误。</footer>
+  </main>
+</body>
+</html>
