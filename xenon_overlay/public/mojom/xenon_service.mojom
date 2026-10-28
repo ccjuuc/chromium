@@ -37,7 +37,11 @@ interface XenonBrowserObserver {
   // Generic synchronous BrowserWindow operation bridge. The Electron main
   // isolate lives in Utility, while native Widgets must be controlled on the
   // Browser UI thread. Commands map to BrowserWindow primitives (bounds,
-  // focus, show state, etc.), never to application/addon function names.
+  // focus, show state, etc.). Window zero also carries main-only session and
+  // platform capabilities. The mac-player capability validates the observer's
+  // container/generation, the fixed bundled SDK and owned windows; it is not a
+  // general Browser-process native-addon loader. Native view addresses must
+  // never cross this interface.
   [Sync]
   ElectronWindowCall(int32 window_id,
                      string command,

@@ -196,6 +196,33 @@
     execPath: hostedExecPath,
     resourcesPath: String(globalThis.__xenonResourcesPath || ''),
     pid: __xenonPid,
+    kill(pid, signal = 'SIGTERM') {
+      if (typeof pid !== 'number') {
+        throw Object.assign(new TypeError('The "pid" argument must be a number'),
+                            {code: 'ERR_INVALID_ARG_TYPE'});
+      }
+      if (!Number.isInteger(pid) || pid < -2147483648 || pid > 2147483647) {
+        throw Object.assign(new RangeError('The "pid" argument must be a 32-bit integer'),
+                            {code: 'ERR_OUT_OF_RANGE'});
+      }
+      if (signal !== 0) {
+        throw Object.assign(new Error('Only process.kill(pid, 0) is supported'),
+                            {code: 'ERR_NOT_SUPPORTED', syscall: 'kill'});
+      }
+      if (typeof __xenonChildProcessCall !== 'function') {
+        throw Object.assign(new Error('Native process status transport is unavailable'),
+                            {code: 'ERR_NOT_SUPPORTED', syscall: 'kill'});
+      }
+      const result = __xenonChildProcessCall({
+        id: '@process', op: 'processProbe', pid, signal: 0,
+      });
+      if (!result || result.ok !== true) {
+        const code = result && result.code || 'ERR_SYSTEM_ERROR';
+        throw Object.assign(new Error(`kill ${code}: ${result && result.message || 'Process status check failed'}`),
+                            {code, errno: result && result.errno, syscall: 'kill'});
+      }
+      return true;
+    },
     platform: __xenonPlatform,
     arch: __xenonArch,
     env: __xenonEnv,

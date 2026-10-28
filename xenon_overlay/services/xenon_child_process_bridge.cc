@@ -468,6 +468,23 @@ base::DictValue XenonChildProcessBridge::Call(
   if (!id || id->empty() || !operation) {
     return Failure(UV_EINVAL);
   }
+  if (*operation == "processProbe") {
+    // Only the hosted main process may check an existing application's PID.
+    // This operation never sends a signal or grants access to child handles.
+    if (endpoint_id != "@main") {
+      return Failure(UV_EPERM);
+    }
+    const auto signal = request.FindInt("signal");
+    if (!signal || *signal != 0) {
+      return Failure(UV_ENOTSUP);
+    }
+    const auto pid = request.FindInt("pid");
+    if (!pid) {
+      return Failure(UV_EINVAL);
+    }
+    const int status = uv_kill(*pid, 0);
+    return status ? Failure(status) : Success();
+  }
   const Key key(container_id, endpoint_id, *id);
   if (*operation == "spawn") {
     return Spawn(key, request);

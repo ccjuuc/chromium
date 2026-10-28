@@ -9,6 +9,7 @@
 from __future__ import print_function
 
 import argparse
+import fnmatch
 import os.path
 import re
 import sys
@@ -34,9 +35,17 @@ def parse_order_file(filename):
   return symbols
 
 
-def check_symbol_table(binary, allowed_symbols, nm, symbol_file):
+def check_symbol_table(binary, allowed_symbols, nm, symbol_file,
+                       additional_exports=()):
   actual_symbols = subprocess.check_output([nm, '-jUng', binary]).decode('utf8')
   actual_symbols = [s.rstrip() for s in actual_symbols.splitlines()]
+  # Optional addon APIs may be exported without constraining their placement.
+  # Keep all ordered symbols in the check, even if a pattern also matches them.
+  actual_symbols = [
+      s for s in actual_symbols
+      if s in allowed_symbols or not any(
+          fnmatch.fnmatchcase(s, pattern) for pattern in additional_exports)
+  ]
   def print_syms(syms):
     print('\n'.join(['  ' + s for s in syms]), file=sys.stderr)
   try:
@@ -75,11 +84,17 @@ def main():
   parser.add_argument('--nm-path', required=True, help='Path to nm')
   parser.add_argument('--symbol-file', required=True,
     help='Order file listing expected public symbols.')
+  parser.add_argument('--additional-export-file', action='append', default=[],
+    help='Allow additional unordered exports (ld64 symbol patterns).')
   args = parser.parse_args()
 
   allowed_symbols = parse_order_file(args.symbol_file)
+  additional_exports = []
+  for filename in args.additional_export_file:
+    additional_exports.extend(parse_order_file(filename))
   check_symbol_table(
-      args.binary, allowed_symbols, args.nm_path, args.symbol_file)
+      args.binary, allowed_symbols, args.nm_path, args.symbol_file,
+      additional_exports)
   # TODO(thakis): Also verify global symbols in the binary's export trie.
 
   open(args.stamp, 'w').close()  # Update mtime on stamp file.

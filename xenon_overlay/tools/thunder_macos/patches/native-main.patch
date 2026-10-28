@@ -1,0 +1,378 @@
+diff --git a/cppsrc/link_hub/src/Biz/Protocol/LinkProtocol.cpp b/cppsrc/link_hub/src/Biz/Protocol/LinkProtocol.cpp
+index 808e29f66ac77cc343973dfedac769bb710d9324..5a90d7b2c44a138bac969094ef7a92e125ef045f 100644
+--- a/cppsrc/link_hub/src/Biz/Protocol/LinkProtocol.cpp
++++ b/cppsrc/link_hub/src/Biz/Protocol/LinkProtocol.cpp
+@@ -7,6 +7,11 @@
+ 
+ #if !defined(CLOSE_LOG) && defined(WIN32)
+ std::shared_ptr<spdlog::logger> g_xl_logger = nullptr;
++#elif !defined(CLOSE_LOG) && defined(__APPLE__) && defined(__MACH__)
++// The addon owns the logger initialized by InitAddon on macOS as well.
++// Keep its state local; another independently loaded addon is not a provider.
++__attribute__((visibility("hidden")))
++std::shared_ptr<spdlog::logger> g_xl_logger = nullptr;
+ #endif
+ 
+ namespace xl::lkhb {
+@@ -658,4 +663,4 @@ namespace xl::lkhb {
+ 		co_await threadAffinity->SwitchToAffinityThread();
+ 		co_return std::move(r);
+ 	}
+-}
+\ No newline at end of file
++}
+diff --git a/cppsrc/thunder_helper/src/WeakReferences/object_life_monitor.cpp b/cppsrc/thunder_helper/src/WeakReferences/object_life_monitor.cpp
+index 89d19e4da49e69ed203260d9364d716bdb580f0c..5d19ad2164bfc4e5b7e41ec434fa3834115d00b0 100644
+--- a/cppsrc/thunder_helper/src/WeakReferences/object_life_monitor.cpp
++++ b/cppsrc/thunder_helper/src/WeakReferences/object_life_monitor.cpp
+@@ -5,6 +5,264 @@
+ 
+ #include "./object_life_monitor.h"
+ 
++#if defined(__APPLE__) && defined(__MACH__)
++
++#include <algorithm>
++#include <cstdio>
++#include <map>
++#include <vector>
++
++namespace {
++
++struct MonitorEnvironment;
++
++struct ObjectFinalizer {
++    MonitorEnvironment* context;
++    napi_ref callback_values = nullptr;
++};
++
++struct MonitorEnvironment {
++    napi_env env;
++    uv_timer_t timer{};
++    napi_async_context async_context = nullptr;
++    napi_ref async_resource = nullptr;
++    napi_ref dispatch_callback = nullptr;
++    bool closing = false;
++    bool timer_closed = false;
++    std::vector<ObjectFinalizer*> monitors;
++    std::vector<ObjectFinalizer*> pending;
++};
++
++// 每个 env 仅在所属 JS 线程使用，避免多个 Node Worker 共享可变队列。
++thread_local std::map<napi_env, MonitorEnvironment*> monitor_environments;
++
++void DeleteClosedEnvironment(MonitorEnvironment* context) {
++    if (context->closing && context->timer_closed && context->monitors.empty()) {
++        delete context;
++    }
++}
++
++void ReleaseCallbackValues(ObjectFinalizer* monitor) {
++    if (monitor->callback_values) {
++        napi_delete_reference(monitor->context->env, monitor->callback_values);
++        monitor->callback_values = nullptr;
++    }
++}
++
++void DeleteObjectFinalizer(ObjectFinalizer* monitor) {
++    MonitorEnvironment* context = monitor->context;
++    ReleaseCallbackValues(monitor);
++    auto& monitors = context->monitors;
++    monitors.erase(std::find(monitors.begin(), monitors.end(), monitor));
++    delete monitor;
++    DeleteClosedEnvironment(context);
++}
++
++void CloseMonitorTimer(uv_handle_t* handle) {
++    auto* context = static_cast<MonitorEnvironment*>(handle->data);
++    context->timer_closed = true;
++    DeleteClosedEnvironment(context);
++}
++
++void CleanupMonitorEnvironment(void* argument) {
++    auto* context = static_cast<MonitorEnvironment*>(argument);
++    // cleanup hook 先于剩余 target 的 finalizer；关停阶段绝不再执行 JS。
++    context->closing = true;
++    monitor_environments.erase(context->env);
++    uv_timer_stop(&context->timer);
++    napi_async_destroy(context->env, context->async_context);
++    napi_delete_reference(context->env, context->async_resource);
++    napi_delete_reference(context->env, context->dispatch_callback);
++    context->dispatch_callback = nullptr;
++    context->async_context = nullptr;
++    context->async_resource = nullptr;
++    for (ObjectFinalizer* monitor : context->monitors) {
++        ReleaseCallbackValues(monitor);
++    }
++    // 已完成 GC 的记录不会再收到 target finalizer，必须在此释放。
++    auto pending = std::move(context->pending);
++    for (ObjectFinalizer* monitor : pending) {
++        DeleteObjectFinalizer(monitor);
++    }
++    context->env = nullptr;
++    uv_close(reinterpret_cast<uv_handle_t*>(&context->timer), CloseMonitorTimer);
++}
++
++napi_value InvokeDestructorCallback(napi_env env, napi_callback_info info) {
++    size_t argc = 2;
++    napi_value arguments[2] = {nullptr, nullptr};
++    napi_value receiver = nullptr;
++    napi_value result = nullptr;
++    if (napi_get_cb_info(env, info, &argc, arguments, nullptr, nullptr) != napi_ok ||
++        argc != 2 || napi_get_null(env, &receiver) != napi_ok) {
++        return nullptr;
++    }
++    // napi_make_callback requires an object receiver. This native callback
++    // preserves the freer's original null receiver and one-userData contract.
++    // A thrown exception returns through the normal N-API callback boundary.
++    napi_call_function(env, receiver, arguments[0], 1, &arguments[1], &result);
++    return result;
++}
++
++void RunDestructorCallbacks(uv_timer_t* timer) {
++    auto* context = static_cast<MonitorEnvironment*>(timer->data);
++    auto pending = std::move(context->pending);
++    context->pending.clear();
++    napi_handle_scope scope = nullptr;
++    const bool can_call = !context->closing &&
++        napi_open_handle_scope(context->env, &scope) == napi_ok;
++    for (ObjectFinalizer* monitor : pending) {
++        if (can_call) {
++            napi_value values = nullptr;
++            napi_value callback = nullptr;
++            napi_value user_data = nullptr;
++            napi_value receiver = nullptr;
++            napi_value dispatcher = nullptr;
++            if (napi_get_reference_value(context->env, monitor->callback_values, &values) == napi_ok &&
++                napi_get_element(context->env, values, 0, &callback) == napi_ok &&
++                napi_get_element(context->env, values, 1, &user_data) == napi_ok &&
++                napi_get_reference_value(context->env, context->async_resource, &receiver) == napi_ok &&
++                napi_get_reference_value(context->env, context->dispatch_callback, &dispatcher) == napi_ok) {
++                // Establish the host's asynchronous callback boundary; a raw
++                // napi_call_function from a uv callback has no such boundary.
++                const napi_value arguments[] = {callback, user_data};
++                const napi_status status = napi_make_callback(
++                    context->env, context->async_context, receiver, dispatcher,
++                    2, arguments, nullptr);
++                if (status != napi_ok && status != napi_pending_exception) {
++                    std::fprintf(stderr, "setObjectFreer: callback failed with N-API status %d\n",
++                                 static_cast<int>(status));
++                }
++            }
++        }
++        DeleteObjectFinalizer(monitor);
++        // A callback may throw. Clear the env before reporting the exception so
++        // a continuing uncaughtException handler cannot poison the next freer.
++        // Without a handler, the host applies its normal fatal-error policy.
++        bool exception_pending = false;
++        if (can_call && napi_is_exception_pending(context->env, &exception_pending) == napi_ok &&
++            exception_pending) {
++            napi_value exception = nullptr;
++            if (napi_get_and_clear_last_exception(context->env, &exception) == napi_ok) {
++                napi_fatal_exception(context->env, exception);
++            }
++        }
++    }
++    if (scope) {
++        napi_close_handle_scope(context->env, scope);
++    }
++    // GC during a callback queues the next batch on its own 1000ms timer.
++    if (context->pending.empty()) {
++        uv_unref(reinterpret_cast<uv_handle_t*>(timer));
++    }
++}
++
++void FinalizeMonitoredObject(napi_env env, void* argument, void*) {
++    auto* monitor = static_cast<ObjectFinalizer*>(argument);
++    MonitorEnvironment* context = monitor->context;
++    if (context->closing || !env) {
++        DeleteObjectFinalizer(monitor);
++        return;
++    }
++    // GC finalizer 只排队；N-API 调用及 JS 回调延后到所属 env 的 uv loop。
++    context->pending.push_back(monitor);
++    if (!uv_is_active(reinterpret_cast<uv_handle_t*>(&context->timer))) {
++        uv_ref(reinterpret_cast<uv_handle_t*>(&context->timer));
++        const int status = uv_timer_start(&context->timer, RunDestructorCallbacks, 1000, 0);
++        if (status != 0) {
++            std::fprintf(stderr, "setObjectFreer: uv_timer_start failed: %s\n", uv_strerror(status));
++        }
++    }
++}
++
++MonitorEnvironment* GetMonitorEnvironment(napi_env env) {
++    auto found = monitor_environments.find(env);
++    if (found != monitor_environments.end()) {
++        return found->second;
++    }
++    uv_loop_t* loop = nullptr;
++    if (napi_get_uv_event_loop(env, &loop) != napi_ok) {
++        return nullptr;
++    }
++    napi_value resource = nullptr;
++    napi_value resource_name = nullptr;
++    napi_value dispatcher = nullptr;
++    if (napi_create_function(env, "objectFreer", NAPI_AUTO_LENGTH,
++                             InvokeDestructorCallback, nullptr, &dispatcher) != napi_ok ||
++        napi_create_object(env, &resource) != napi_ok ||
++        napi_create_string_utf8(env, "ObjectLifeMonitor", NAPI_AUTO_LENGTH,
++                                &resource_name) != napi_ok) {
++        return nullptr;
++    }
++    auto* context = new MonitorEnvironment{env};
++    if (napi_create_reference(env, dispatcher, 1, &context->dispatch_callback) != napi_ok ||
++        napi_create_reference(env, resource, 1, &context->async_resource) != napi_ok ||
++        napi_async_init(env, resource, resource_name, &context->async_context) != napi_ok) {
++        if (context->async_resource) napi_delete_reference(env, context->async_resource);
++        if (context->dispatch_callback) napi_delete_reference(env, context->dispatch_callback);
++        delete context;
++        return nullptr;
++    }
++    if (uv_timer_init(loop, &context->timer) != 0) {
++        napi_async_destroy(env, context->async_context);
++        napi_delete_reference(env, context->async_resource);
++        napi_delete_reference(env, context->dispatch_callback);
++        delete context;
++        return nullptr;
++    }
++    context->timer.data = context;
++    uv_unref(reinterpret_cast<uv_handle_t*>(&context->timer));
++    if (napi_add_env_cleanup_hook(env, CleanupMonitorEnvironment, context) != napi_ok) {
++        napi_async_destroy(env, context->async_context);
++        napi_delete_reference(env, context->async_resource);
++        napi_delete_reference(env, context->dispatch_callback);
++        context->closing = true;
++        uv_close(reinterpret_cast<uv_handle_t*>(&context->timer), CloseMonitorTimer);
++        return nullptr;
++    }
++    monitor_environments.emplace(env, context);
++    return context;
++}
++
++}  // namespace
++
++napi_value ObjectLifeMonitor::BindTo1(napi_env env, napi_callback_info info) {
++    size_t argc = 3;
++    napi_value arguments[3] = {nullptr, nullptr, nullptr};
++    napi_valuetype callback_type = napi_undefined;
++    if (napi_get_cb_info(env, info, &argc, arguments, nullptr, nullptr) != napi_ok ||
++        argc < 3 || napi_typeof(env, arguments[2], &callback_type) != napi_ok ||
++        callback_type != napi_function) {
++        napi_throw_type_error(env, nullptr, "setObjectFreer requires target, userData and callback");
++        return nullptr;
++    }
++    MonitorEnvironment* context = GetMonitorEnvironment(env);
++    if (!context) {
++        napi_throw_error(env, nullptr, "setObjectFreer could not initialize its event loop");
++        return nullptr;
++    }
++    auto* monitor = new ObjectFinalizer{context};
++    napi_value values = nullptr;
++    // 只保活 callback/userData；target 不放入强引用，避免阻止其被 GC。
++    if (napi_create_array_with_length(env, 2, &values) != napi_ok ||
++        napi_set_element(env, values, 0, arguments[2]) != napi_ok ||
++        napi_set_element(env, values, 1, arguments[1]) != napi_ok ||
++        napi_create_reference(env, values, 1, &monitor->callback_values) != napi_ok) {
++        delete monitor;
++        napi_throw_error(env, nullptr, "setObjectFreer could not retain callback values");
++        return nullptr;
++    }
++    context->monitors.push_back(monitor);
++    if (napi_add_finalizer(env, arguments[0], monitor, FinalizeMonitoredObject, nullptr, nullptr) != napi_ok) {
++        DeleteObjectFinalizer(monitor);
++        napi_throw_type_error(env, nullptr, "setObjectFreer target must be an object");
++    }
++    return nullptr;
++}
++
++#else
++
++
+ // static
+ std::map< uv_timer_t*, std::vector<ObjectLifeMonitor*>>  ObjectLifeMonitor::objects_;
+ 
+@@ -143,3 +401,5 @@ void ObjectLifeMonitor::Free(const v8::WeakCallbackInfo<ObjectLifeMonitor>& data
+ 		it->second.push_back(self);
+ 	}
+ }
++
++#endif
+diff --git a/cppsrc/thunder_helper/src/WeakReferences/object_life_monitor.h b/cppsrc/thunder_helper/src/WeakReferences/object_life_monitor.h
+index b4275b5bf42e5bcb81e5449a889d992d6cd88c53..e3479a2900318d523b8bae4c62515b12f303894f 100644
+--- a/cppsrc/thunder_helper/src/WeakReferences/object_life_monitor.h
++++ b/cppsrc/thunder_helper/src/WeakReferences/object_life_monitor.h
+@@ -1,6 +1,15 @@
+ #ifndef OBJECT_LIFE_MONITOR_H_
+ #define OBJECT_LIFE_MONITOR_H_
+ 
++#if defined(__APPLE__) && defined(__MACH__)
++#include <node_api.h>
++#include <uv.h>
++
++class ObjectLifeMonitor {
++public:
++    static napi_value BindTo1(napi_env env, napi_callback_info info);
++};
++#else
+ #include <map>
+ #include <v8.h>
+ #include <node.h>
+@@ -39,4 +48,6 @@ private:
+ 	static MapObjects objects_;
+ };
+ 
++#endif
++
+ #endif  // OBJECT_LIFE_MONITOR_H_
+diff --git a/cppsrc/thunder_helper/src/mac/init.h b/cppsrc/thunder_helper/src/mac/init.h
+index a8e3aac27a0c849b24021e33c95f5b33a8a1caf9..7afde66cdad243052997566cf4ebf356270f784d 100644
+--- a/cppsrc/thunder_helper/src/mac/init.h
++++ b/cppsrc/thunder_helper/src/mac/init.h
+@@ -2,8 +2,6 @@
+ #include <string>
+ #include <vector>
+ #include <node_api.h>
+-#include <node.h>
+-#include <v8.h>
+ #include <AddonOpt.h>
+ #include "mac_native.h"
+ #include <stdio.h>
+@@ -247,8 +245,6 @@ static napi_value SetForegroundWindow(napi_env env, napi_callback_info info) {
+ }
+ 
+ static napi_value GetFileVersion(napi_env env, napi_callback_info info) {
+-    v8::Isolate* isolate = v8::Isolate::GetCurrent();
+-    v8::HandleScope scope(isolate);
+ 
+     std::string str_version = "";
+ 
+diff --git a/cppsrc/thunder_helper/src/xmp_helper.cpp b/cppsrc/thunder_helper/src/xmp_helper.cpp
+index 0f95ce506ca08136f0c50f62d5c83a742ce7383d..69e872601ff3be7c9cc68d4423d1a35eebcb7155 100644
+--- a/cppsrc/thunder_helper/src/xmp_helper.cpp
++++ b/cppsrc/thunder_helper/src/xmp_helper.cpp
+@@ -11,8 +11,10 @@
+ #endif // WIN32
+ 
+ #include <node_api.h>
++#if !defined(__APPLE__) || !defined(__MACH__)
+ #include <node.h>
+ #include <v8.h>
++#endif
+ 
+ #include <AddonOpt.h>
+ #include "./WeakReferences/object_life_monitor.h"
+@@ -29,12 +31,15 @@ std::shared_ptr<spdlog::logger> g_xl_logger = nullptr;
+ #endif
+ 
+ 
++// Mac addon 只使用 N-API；未注册的 V8 GC 测试函数不进入 Mac 产物。
++#if !defined(__APPLE__) || !defined(__MACH__)
+ void RequestGarbageCollectionForTesting(const v8::FunctionCallbackInfo<v8::Value>& args)
+ {
+     v8::V8::SetFlagsFromString("--expose-gc", 11);
+     v8::Isolate* isolate = args.GetIsolate();
+     isolate->RequestGarbageCollectionForTesting(v8::Isolate::kFullGarbageCollection);
+ }
++#endif
+ 
+ EXTERN_C_START
+ static napi_value Init(napi_env env, napi_value exports) {

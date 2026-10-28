@@ -8,6 +8,7 @@
 #include <string_view>
 #include <utility>
 
+#include "base/callback_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
@@ -18,6 +19,7 @@
 #include "base/supports_user_data.h"
 #include "base/task/thread_pool.h"
 #include "base/uuid.h"
+#include "components/keyed_service/core/keyed_service_shutdown_notifier.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/service_worker_context.h"
@@ -25,11 +27,13 @@
 #include "content/public/browser/service_worker_running_info.h"
 #include "content/public/browser/storage_partition.h"
 #include "crypto/hash.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_session_shutdown_notifier_factory.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_file_system_bridge.h"
 
 namespace xenon::ipc {
 namespace {
 const char kRegistryKey[] = "xenon-electron-sessions";
+
 class SessionState;
 auto& PartitionSessions() {
   static base::NoDestructor<std::map<content::StoragePartition*, SessionState*>>
@@ -239,11 +243,25 @@ class SessionState : public content::ServiceWorkerContextObserver {
 
 class SessionRegistry : public base::SupportsUserData::Data {
  public:
-  SessionRegistry();
+  explicit SessionRegistry(content::BrowserContext* context);
   ~SessionRegistry() override;
+
+  bool shutting_down() const { return shutting_down_; }
 
   std::map<std::pair<std::string, std::string>, std::unique_ptr<SessionState>>
       sessions;
+
+ private:
+  void Shutdown() {
+    // Profile user data outlives ShutdownStoragePartitions(). Its service
+    // worker contexts can outlive the partitions too, so their OnDestruct
+    // notification is not an adequate partition lifetime boundary.
+    shutting_down_ = true;
+    sessions.clear();
+  }
+
+  bool shutting_down_ = false;
+  base::CallbackListSubscription shutdown_subscription_;
 };
 
 // BrowserContexts own the registries. This UI-sequence index permits revoking a
@@ -253,8 +271,16 @@ auto& SessionRegistries() {
   return *registries;
 }
 
-SessionRegistry::SessionRegistry() {
+SessionRegistry::SessionRegistry(content::BrowserContext* context) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  // KeyedService shutdown runs before the Profile destroys storage partitions.
+  // Observe each context independently; the manager may have switched profiles
+  // while these sessions still belong to the original one.
+  shutdown_subscription_ =
+      ElectronSessionShutdownNotifierFactory::GetInstance()
+          ->Get(context)
+          ->Subscribe(base::BindOnce(&SessionRegistry::Shutdown,
+                                     base::Unretained(this)));
   SessionRegistries().insert(this);
 }
 
@@ -267,7 +293,7 @@ SessionRegistry* Registry(content::BrowserContext* context) {
   auto* registry =
       static_cast<SessionRegistry*>(context->GetUserData(kRegistryKey));
   if (!registry) {
-    auto owned = std::make_unique<SessionRegistry>();
+    auto owned = std::make_unique<SessionRegistry>(context);
     registry = owned.get();
     context->SetUserData(kRegistryKey, std::move(owned));
   }
@@ -290,9 +316,17 @@ content::StoragePartition* ResolveElectronSessionPartition(
     content::BrowserContext* context,
     const std::string& container_id,
     const std::string& partition) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!context || context->ShutdownStarted()) {
+    return nullptr;
+  }
+  auto* registry = Registry(context);
+  if (registry->shutting_down()) {
+    return nullptr;
+  }
   auto* storage = context->GetStoragePartition(
       GetElectronSessionPartitionConfig(context, container_id, partition));
-  auto& sessions = Registry(context)->sessions;
+  auto& sessions = registry->sessions;
   const auto key = std::make_pair(container_id, partition);
   if (!sessions.contains(key)) {
     sessions.emplace(
@@ -337,6 +371,11 @@ void CallElectronSession(content::BrowserContext* context,
   }
   auto* partition = ResolveElectronSessionPartition(
       context, container_id, *arguments.GetDict().FindString("partition"));
+  if (!partition) {
+    std::move(callback).Run(base::Value(),
+                            "Electron session context is shutting down");
+    return;
+  }
   auto* state = PartitionSessions().at(partition);
   state->SetEventCallback(std::move(event_callback));
   state->Call(arguments.GetDict(), std::move(callback));

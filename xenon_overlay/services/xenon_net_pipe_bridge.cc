@@ -19,6 +19,10 @@
 #include "build/build_config.h"
 #include "uv.h"
 
+#if BUILDFLAG(IS_POSIX)
+#include <sys/un.h>
+#endif
+
 namespace xenon {
 
 namespace {
@@ -29,6 +33,24 @@ constexpr int kPipeBacklog = 64;
 std::string UvError(int status) {
   const char* text = uv_err_name(status);
   return text ? text : "unknown libuv error";
+}
+
+bool CheckPipePath(const std::string& path, std::string* error) {
+  if (path.find('\0') != std::string::npos) {
+    *error = "EINVAL";
+    return false;
+  }
+#if BUILDFLAG(IS_POSIX)
+  // The bundled libuv truncates sockaddr_un paths. Reject them before bind or
+  // connect so a request never opens a different filesystem endpoint, and
+  // uv_close can unlink the same path that uv_pipe_bind created.
+  sockaddr_un address{};
+  if (path.size() >= sizeof(address.sun_path)) {
+    *error = "ENAMETOOLONG";
+    return false;
+  }
+#endif
+  return true;
 }
 
 std::string ServerKey(const std::string& container_id,
@@ -399,6 +421,9 @@ bool XenonNetPipeBridge::Listen(const std::string& container_id,
     *error = "named-pipe server id and path are required";
     return false;
   }
+  if (!CheckPipePath(path, error)) {
+    return false;
+  }
   if (servers_.contains(ServerKey(container_id, endpoint_id, server_id))) {
     *error = "named-pipe server id is already listening";
     return false;
@@ -450,6 +475,9 @@ bool XenonNetPipeBridge::Connect(const std::string& container_id,
                                  std::string* error) {
   if (client_socket_id.empty() || path.empty()) {
     *error = "named-pipe client id and path are required";
+    return false;
+  }
+  if (!CheckPipePath(path, error)) {
     return false;
   }
 

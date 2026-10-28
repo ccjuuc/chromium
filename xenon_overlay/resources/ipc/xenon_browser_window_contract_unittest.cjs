@@ -51,6 +51,115 @@ function createRuntime(onWindowCall = () => null, metadata = {}) {
   return {context, calls, BrowserWindow: context.__xenonElectron.BrowserWindow};
 }
 
+test('Mac BrowserWindow forwards shadow, transparency and frame constructor options', () => {
+  const {BrowserWindow, calls} = createRuntime((id, command) => {
+    if (command === 'has-shadow') {
+      return calls.find(call => call.id === id && call.command === 'create').options.hasShadow;
+    }
+  }, {__xenonPlatform: 'darwin'});
+  const ordinary = new BrowserWindow({frame: false, transparent: false, hasShadow: true,
+    titleBarStyle: 'hidden'});
+  const transparent = new BrowserWindow({frame: false, transparent: true, hasShadow: false,
+    titleBarStyle: 'hiddenInset'});
+  const defaults = new BrowserWindow();
+  const created = calls.filter(call => call.command === 'create');
+  assert.deepEqual(created.map(call => ({frame: call.options.frame,
+    transparent: call.options.transparent, hasShadow: call.options.hasShadow})), [
+    {frame: false, transparent: false, hasShadow: true},
+    {frame: false, transparent: true, hasShadow: false},
+    {frame: true, transparent: false, hasShadow: true},
+  ]);
+  assert.equal(ordinary.hasShadow(), true);
+  assert.equal(transparent.hasShadow(), false);
+  assert.equal(defaults.hasShadow(), true);
+  assert.deepEqual(created.map(call => call.options.titleBarStyle), ['hidden', 'hiddenInset', 'default']);
+});
+
+test('Mac title bar validation runs before creating native window resources', () => {
+  const {BrowserWindow, calls} = createRuntime(undefined, {__xenonPlatform: 'darwin'});
+  assert.throws(() => new BrowserWindow({titleBarStyle: 'customButtonsOnHover'}),
+    {code: 'ERR_NOT_SUPPORTED'});
+  assert.equal(calls.length, 0);
+});
+
+test('native traffic light visibility reaches the host and preserves failures', () => {
+  let visible = true;
+  let fail = false;
+  const {BrowserWindow, calls} = createRuntime((_id, command, details) => {
+    if (command === 'set-window-button-visibility') {
+      if (fail) throw new Error('native button update failed');
+      visible = details.visible;
+    }
+  }, {__xenonPlatform: 'darwin'});
+  const window = new BrowserWindow({frame: false, titleBarStyle: 'hidden'});
+  window.setWindowButtonVisibility(false);
+  assert.equal(visible, false);
+  window.setWindowButtonVisibility(true);
+  assert.equal(visible, true);
+  fail = true;
+  assert.throws(() => window.setWindowButtonVisibility(false), /native button update failed/);
+  assert.equal(visible, true);
+  const updates = calls.filter(call => call.command === 'set-window-button-visibility').length;
+  assert.throws(() => window.setWindowButtonVisibility('false'), /boolean/);
+  assert.equal(calls.filter(call => call.command === 'set-window-button-visibility').length, updates);
+  window.destroy();
+  assert.throws(() => window.setWindowButtonVisibility(false), /destroyed/);
+});
+
+test('Mac shadow updates and queries use native state and preserve native failures', () => {
+  let shadow = true;
+  let fail = false;
+  const {BrowserWindow, calls} = createRuntime((_id, command, details) => {
+    if (command === 'has-shadow') return shadow;
+    if (command === 'set-has-shadow') {
+      if (fail) throw new Error('native shadow update failed');
+      shadow = details.value;
+    }
+  }, {__xenonPlatform: 'darwin'});
+  const window = new BrowserWindow();
+  window.setHasShadow(false);
+  assert.equal(shadow, false);
+  assert.equal(window.hasShadow(), false);
+  shadow = true;
+  assert.equal(window.hasShadow(), true);
+  fail = true;
+  assert.throws(() => window.setHasShadow(false), /native shadow update failed/);
+  assert.equal(window.hasShadow(), true);
+  const updates = calls.filter(call => call.command === 'set-has-shadow').length;
+  assert.throws(() => window.setHasShadow('false'), /boolean/);
+  assert.equal(calls.filter(call => call.command === 'set-has-shadow').length, updates);
+  window.destroy();
+  assert.throws(() => window.setHasShadow(true), /destroyed/);
+  assert.throws(() => window.hasShadow(), /destroyed/);
+});
+
+test('unavailable native shadow support never reports a cached setter success', () => {
+  const {BrowserWindow} = createRuntime((_id, command) => {
+    if (command === 'set-has-shadow' || command === 'has-shadow') {
+      throw Object.assign(new Error('native shadow unavailable'), {code: 'ERR_NOT_SUPPORTED'});
+    }
+  }, {__xenonPlatform: 'darwin'});
+  const window = new BrowserWindow({hasShadow: true});
+  assert.throws(() => window.setHasShadow(false), {code: 'ERR_NOT_SUPPORTED'});
+  assert.throws(() => window.hasShadow(), {code: 'ERR_NOT_SUPPORTED'});
+});
+
+test('Windows shadow cache and window button no-op retain their existing behavior', () => {
+  const {BrowserWindow} = createRuntime((_id, command) => {
+    if (['set-has-shadow', 'has-shadow', 'set-window-button-visibility'].includes(command)) {
+      assert.fail('Mac window commands must not be sent on Windows');
+    }
+  });
+  const window = new BrowserWindow({hasShadow: false});
+  assert.equal(window.hasShadow(), false);
+  window.setHasShadow(true);
+  assert.equal(window.hasShadow(), true);
+  window.setHasShadow(0);
+  assert.equal(window.hasShadow(), false);
+  window.setWindowButtonVisibility(false);
+  window.setWindowButtonVisibility(true);
+});
+
 test('background throttling changes reach the host and only commit after success', () => {
   let allowed = true;
   let fail = false;
@@ -122,6 +231,75 @@ test('BrowserWindow selects its real session before creation and explicit sessio
   assert.equal(prefs.partition, 'persist:browser');
   assert.equal('session' in prefs, false);
   assert.throws(() => new BrowserWindow({webPreferences: {session: {}}}), /must be a Session/);
+});
+
+test('app fallback and Session user agents reach native windows before navigation', async () => {
+  const nativeUserAgents = new Map();
+  const {context, calls, BrowserWindow} = createRuntime((id, command, details) => {
+    if (command === 'set-user-agent') nativeUserAgents.set(id, details.value);
+    if (command === 'get-user-agent') return nativeUserAgents.get(id);
+  }, {__xenonPlatform: 'darwin', __xenonUserAgent: 'Host/153 Electron/22'});
+  const {app, session} = context.__xenonElectron;
+  assert.equal(app.userAgentFallback, 'Host/153 Electron/22');
+  const first = new BrowserWindow();
+  assert.equal(first.webContents.getUserAgent(), 'Host/153 Electron/22');
+
+  // TH changes this property during its Mac main-process startup.
+  app.userAgentFallback = app.userAgentFallback.replace('Electron', 'XDASKernel');
+  assert.equal(session.defaultSession.getUserAgent(), 'Host/153 XDASKernel/22');
+  const inherited = new BrowserWindow();
+  await inherited.loadURL('https://fixture.invalid/');
+  assert.equal(nativeUserAgents.get(inherited.id), 'Host/153 XDASKernel/22');
+  const ordered = calls.filter(call => call.id === inherited.id &&
+    ['create', 'set-web-preferences', 'set-user-agent', 'load-url'].includes(call.command));
+  assert.deepEqual(ordered.map(call => call.command),
+      ['create', 'set-web-preferences', 'set-user-agent', 'load-url']);
+  assert.equal(first.webContents.getUserAgent(), 'Host/153 Electron/22');
+
+  const selected = session.fromPartition('persist:explicit');
+  selected.setUserAgent('Session/1');
+  app.userAgentFallback = 'App/2';
+  const explicit = new BrowserWindow({webPreferences: {session: selected, partition: 'ignored'}});
+  assert.equal(nativeUserAgents.get(explicit.id), 'Session/1');
+  const other = new BrowserWindow({webPreferences: {partition: 'persist:other'}});
+  assert.equal(nativeUserAgents.get(other.id), 'App/2');
+  assert.throws(() => { app.userAgentFallback = undefined; }, /user agent string/);
+  assert.equal(app.userAgentFallback, 'App/2');
+});
+
+test('WebContents and loadURL user agent overrides do not change their shared Session', async () => {
+  const nativeUserAgents = new Map();
+  let fail = false;
+  const {context, BrowserWindow} = createRuntime((id, command, details) => {
+    if (command === 'set-user-agent') {
+      if (fail) throw new Error('native UA update failed');
+      nativeUserAgents.set(id, details.value);
+    }
+    if (command === 'get-user-agent') return nativeUserAgents.get(id);
+  }, {__xenonUserAgent: 'Host/153'});
+  const {app, session} = context.__xenonElectron;
+  const selected = session.fromPartition('persist:shared');
+  selected.setUserAgent('Session/1');
+  const first = new BrowserWindow({webPreferences: {session: selected}});
+  const sibling = new BrowserWindow({webPreferences: {session: selected}});
+  first.webContents.setUserAgent('Window/2');
+  assert.equal(first.webContents.getUserAgent(), 'Window/2');
+  assert.equal(selected.getUserAgent(), 'Session/1');
+  assert.equal(sibling.webContents.getUserAgent(), 'Session/1');
+  const future = new BrowserWindow({webPreferences: {session: selected}});
+  assert.equal(future.webContents.getUserAgent(), 'Session/1');
+
+  await first.loadURL('https://fixture.invalid/', {userAgent: 'Navigation/3'});
+  assert.equal(first.webContents.getUserAgent(), 'Navigation/3');
+  assert.equal(selected.getUserAgent(), 'Session/1');
+  app.userAgentFallback = 'App/4';
+  assert.equal(first.webContents.getUserAgent(), 'Navigation/3');
+  assert.equal(new BrowserWindow().webContents.getUserAgent(), 'App/4');
+
+  fail = true;
+  assert.throws(() => first.webContents.setUserAgent('Rejected/5'), /native UA update failed/);
+  assert.equal(first.webContents.getUserAgent(), 'Navigation/3');
+  assert.equal(selected.getUserAgent(), 'Session/1');
 });
 
 test('Session identity cannot change independently of its native consumers', () => {

@@ -129,7 +129,7 @@
       callElectronSession(this.partition, 'unregister-preload', {id});
     }
     getUserAgent() {
-      return this._userAgent || String(__xenonUserAgent || '');
+      return this._userAgent || app.userAgentFallback;
     }
     setUserAgent(userAgent) {
       this._userAgent = String(userAgent || '');
@@ -452,14 +452,13 @@
       webContentsState.get(this).windowOpenHandler = handler;
     }
     setUserAgent(userAgent) {
-      this._userAgent = String(userAgent || '');
-      if (!this._guest && this.session && typeof this.session.setUserAgent === 'function') {
-        this.session.setUserAgent(this._userAgent);
-      }
+      const value = String(userAgent || '');
       if (this._owner || this._guest) {
         callBrowserWindow(
-            this._owner || {id: this._guest.nativeId}, 'set-user-agent', {value: this._userAgent});
+            this._owner || {id: this._guest.nativeId}, 'set-user-agent', {value});
       }
+      // A WebContents override must not change its shared Session.
+      this._userAgent = value;
     }
     getUserAgent() {
       if (this._owner || this._guest) {
@@ -700,6 +699,11 @@
         throw new TypeError('BrowserWindow preload must be an absolute path');
       }
       const title = options.title === undefined ? 'Electron' : String(options.title);
+      const titleBarStyle = options.titleBarStyle ?? 'default';
+      if (__xenonPlatform === 'darwin' &&
+          !['default', 'hidden', 'hiddenInset'].includes(titleBarStyle)) {
+        return electronUnsupported('BrowserWindow titleBarStyle ' + titleBarStyle);
+      }
       if (typeof __xenonCreateBrowserWindow !== 'function') {
         return electronUnsupported('BrowserWindow creation');
       }
@@ -710,6 +714,8 @@
                   show: options.show !== false,
                   frame: options.frame !== false,
                   transparent: Boolean(options.transparent),
+                  hasShadow: options.hasShadow !== false,
+                  titleBarStyle,
                   parentId: options.parent && options.parent.id
                       ? options.parent.id
                       : 0,
@@ -721,6 +727,10 @@
         this._hwnd = created.hwnd || '0';
         this._parent = options.parent || null;
         this.webContents = new WebContents(this);
+        // Apply the selected Session's explicit UA or the app fallback through
+        // the native bridge before the caller can start its first navigation.
+        const userAgent = this.webContents.session.getUserAgent();
+        if (userAgent) this.webContents.setUserAgent(userAgent);
         this._visible = options.show !== false;
         this._minimized = false;
         this._maximized = false;
@@ -734,7 +744,7 @@
         this._focusable = options.focusable !== false;
         this._enabled = true;
         this._opacity = 1;
-        this._hasShadow = options.hasShadow !== false;
+        if (__xenonPlatform !== 'darwin') this._hasShadow = options.hasShadow !== false;
         this._bounds = {
           x: options.x != null ? Number(options.x) : 0,
           y: options.y != null ? Number(options.y) : 0,
@@ -995,8 +1005,22 @@
       callBrowserWindow(this, 'set-opacity', {value: this._opacity});
     }
     getOpacity() { return this._opacity; }
-    setHasShadow(value) { this._hasShadow = Boolean(value); }
-    hasShadow() { return this._hasShadow; }
+    setHasShadow(value) {
+      if (__xenonPlatform !== 'darwin') {
+        this._hasShadow = Boolean(value);
+        return;
+      }
+      if (this._destroyed) throw new Error('Object has been destroyed');
+      if (typeof value !== 'boolean') throw new TypeError('hasShadow must be a boolean');
+      callBrowserWindow(this, 'set-has-shadow', {value});
+    }
+    hasShadow() {
+      if (__xenonPlatform !== 'darwin') return this._hasShadow;
+      if (this._destroyed) throw new Error('Object has been destroyed');
+      const value = callBrowserWindow(this, 'has-shadow');
+      if (typeof value !== 'boolean') return electronUnsupported('BrowserWindow.hasShadow');
+      return value;
+    }
     setBackgroundColor(color) {
       if (typeof __xenonBrowserWindowCall !== 'function') {
         const error = new Error('BrowserWindow background color host is unavailable');
@@ -1017,7 +1041,12 @@
     setFullScreenable() {}
     setVisibleOnAllWorkspaces() {}
     isVisibleOnAllWorkspaces() { return false; }
-    setWindowButtonVisibility() {}
+    setWindowButtonVisibility(visible) {
+      if (__xenonPlatform !== 'darwin') return;
+      if (this._destroyed) throw new Error('Object has been destroyed');
+      if (typeof visible !== 'boolean') throw new TypeError('visible must be a boolean');
+      callBrowserWindow(this, 'set-window-button-visibility', {visible});
+    }
     setDocumentEdited() {}
     isDocumentEdited() { return false; }
     setRepresentedFilename() {}
@@ -1087,6 +1116,10 @@
       (windowId, eventName, details = null) => {
     if (windowId === 0 && eventName === '__xenon-session-event') {
       handleElectronSessionEvent(details);
+      return;
+    }
+    if (windowId === 0 && eventName === '__xenon-mac-player-event') {
+      globalThis.__xenonDispatchMacPlayerEvent?.(details);
       return;
     }
     if (windowId === 0 && eventName === 'auto-updater') {

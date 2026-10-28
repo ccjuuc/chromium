@@ -289,6 +289,7 @@
 #include "chrome/browser/webid/federated_identity_api_permission_context_factory.h"
 #include "xenon_overlay/buildflags/buildflags.h"
 #if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_session_shutdown_notifier_factory.h"
 #include "xenon_overlay/chrome/browser/sidebar/xenon_sidebar_service_factory.h"
 #endif
 #if BUILDFLAG(ENABLE_XENON_SERVICE) && BUILDFLAG(ENABLE_XENON_AI)
@@ -708,6 +709,7 @@ void ChromeBrowserMainExtraPartsProfiles::
 #endif
 
 #if BUILDFLAG(ENABLE_XENON_SERVICE)
+  xenon::ipc::ElectronSessionShutdownNotifierFactory::GetInstance();
   xenon::XenonSidebarServiceFactory::GetInstance();
 #endif
 

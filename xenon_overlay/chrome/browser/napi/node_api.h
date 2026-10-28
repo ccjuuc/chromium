@@ -9,6 +9,7 @@
 
 // Node.js specific types
 typedef struct napi_async_work__* napi_async_work;
+typedef struct napi_async_context__* napi_async_context;
 typedef struct napi_threadsafe_function__* napi_threadsafe_function;
 typedef struct napi_async_cleanup_hook_handle__* napi_async_cleanup_hook_handle;
 typedef struct uv_loop_s uv_loop_t;
@@ -30,13 +31,29 @@ typedef enum {
 typedef void (*napi_threadsafe_function_call_js)(napi_env env, napi_value js_callback, void* context, void* data);
 
 // Node.js specific functions (stubs/custom implementations)
-NAPI_EXTERN napi_status napi_create_async_work(napi_env env,
-                                               napi_value resource,
-                                               napi_value resource_name,
-                                               napi_async_execute_callback execute,
-                                               napi_async_complete_callback complete,
-                                               void* data,
-                                               napi_async_work* result);
+NAPI_EXTERN napi_status napi_async_init(napi_env env,
+                                        napi_value async_resource,
+                                        napi_value async_resource_name,
+                                        napi_async_context* result);
+NAPI_EXTERN napi_status napi_async_destroy(napi_env env,
+                                           napi_async_context async_context);
+NAPI_EXTERN napi_status napi_make_callback(napi_env env,
+                                           napi_async_context async_context,
+                                           napi_value recv,
+                                           napi_value func,
+                                           size_t argc,
+                                           const napi_value* argv,
+                                           napi_value* result);
+NAPI_EXTERN napi_status napi_fatal_exception(napi_env env, napi_value error);
+
+NAPI_EXTERN napi_status
+napi_create_async_work(napi_env env,
+                       napi_value resource,
+                       napi_value resource_name,
+                       napi_async_execute_callback execute,
+                       napi_async_complete_callback complete,
+                       void* data,
+                       napi_async_work* result);
 NAPI_EXTERN napi_status napi_delete_async_work(napi_env env, napi_async_work work);
 NAPI_EXTERN napi_status napi_queue_async_work(napi_env env, napi_async_work work);
 NAPI_EXTERN napi_status napi_cancel_async_work(napi_env env, napi_async_work work);

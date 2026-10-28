@@ -16,7 +16,13 @@
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/multiprocess_func_list.h"
+#include "xenon_overlay/common/ipc/xenon_app_descriptor_paths.h"
 #include "xenon_overlay/public/xenon_ipc_switches.h"
+
+#if BUILDFLAG(IS_MAC)
+#include "base/apple/bundle_locations.h"
+#include "base/apple/foundation_util.h"
+#endif
 
 namespace xenon::ipc {
 namespace {
@@ -159,14 +165,14 @@ TEST(PrivilegedSchemesTest, LoadsOnlyHostDescriptorsAndExplicitJson) {
   ]})"));
   PrivilegedSchemes parsed;
   std::string error;
-  ASSERT_TRUE(LoadPrivilegedSchemeDeclarations(host.GetPath(), explicit_path,
+  ASSERT_TRUE(LoadPrivilegedSchemeDeclarations({host.GetPath()}, explicit_path,
                                                &parsed, &error))
       << error;
   ASSERT_EQ(parsed.size(), 2u);
   EXPECT_EQ(parsed[0].scheme, "sample-app");
   EXPECT_EQ(parsed[1].scheme, "second-app");
   EXPECT_TRUE(LoadPrivilegedSchemeDeclarations(
-      host.GetPath(), external.GetPath(), &parsed, &error));
+      {host.GetPath()}, external.GetPath(), &parsed, &error));
   EXPECT_EQ(parsed.size(), 1u);
 }
 
@@ -182,15 +188,41 @@ TEST(PrivilegedSchemesTest,
   PrivilegedSchemes parsed = {{.scheme = "unchanged"}};
   std::string error;
   EXPECT_FALSE(
-      LoadPrivilegedSchemeDeclarations(host.GetPath(), {}, &parsed, &error));
+      LoadPrivilegedSchemeDeclarations({host.GetPath()}, {}, &parsed, &error));
   EXPECT_NE(error.find("Conflicting"), std::string::npos);
   EXPECT_EQ(parsed[0].scheme, "unchanged");
   ASSERT_TRUE(base::WriteFile(conflict, R"({"privilegedSchemes":{}})"));
   EXPECT_FALSE(
-      LoadPrivilegedSchemeDeclarations(host.GetPath(), {}, &parsed, &error));
+      LoadPrivilegedSchemeDeclarations({host.GetPath()}, {}, &parsed, &error));
   EXPECT_NE(error.find("b.xenon.json"), std::string::npos);
   EXPECT_FALSE(LoadPrivilegedSchemeDeclarations(
       {}, base::FilePath(FILE_PATH_LITERAL("relative.json")), &parsed, &error));
+}
+
+TEST(PrivilegedSchemesTest, ResourceDescriptorWinsWithoutDroppingLegacyApps) {
+  base::ScopedTempDir resources;
+  base::ScopedTempDir legacy;
+  ASSERT_TRUE(resources.CreateUniqueTempDir());
+  ASSERT_TRUE(legacy.CreateUniqueTempDir());
+  ASSERT_TRUE(base::WriteFile(
+      resources.GetPath().AppendASCII("application.xenon.json"), kDescriptor));
+  ASSERT_TRUE(base::WriteFile(
+      legacy.GetPath().AppendASCII("application.xenon.json"), "stale invalid"));
+  ASSERT_TRUE(
+      base::WriteFile(legacy.GetPath().AppendASCII("other.xenon.json"),
+                      R"({"privilegedSchemes":[{"scheme":"legacy-app"}]})"));
+  PrivilegedSchemes parsed;
+  std::string error;
+  ASSERT_TRUE(LoadPrivilegedSchemeDeclarations(
+      {resources.GetPath(), legacy.GetPath()}, {}, &parsed, &error))
+      << error;
+  ASSERT_EQ(parsed.size(), 2u);
+  EXPECT_EQ(parsed[0].scheme, "legacy-app");
+  EXPECT_EQ(parsed[1].scheme, "sample-app");
+  // A broken preferred descriptor must fail, not silently reuse an older
+  // policy.
+  EXPECT_FALSE(LoadPrivilegedSchemeDeclarations(
+      {legacy.GetPath(), resources.GetPath()}, {}, &parsed, &error));
 }
 
 int RunChild(const char* name, const base::CommandLine& command_line) {
@@ -206,6 +238,101 @@ int RunChild(const char* name, const base::CommandLine& command_line) {
   return exit_code;
 }
 
+MULTIPROCESS_TEST_MAIN(ElectronDescriptorUnbundledPaths) {
+  base::ScopedTempDir host;
+  CHECK(host.CreateUniqueTempDir());
+  base::FilePath host_directory;
+  CHECK(base::NormalizeFilePath(host.GetPath(), &host_directory));
+  base::ScopedPathOverride override(base::DIR_EXE, host_directory);
+#if BUILDFLAG(IS_MAC)
+  base::apple::SetOverrideAmIBundled(false);
+#endif
+  EXPECT_EQ(GetElectronAppDescriptorDirectories(),
+            std::vector<base::FilePath>({host_directory}));
+  const auto descriptor = host_directory.AppendASCII("application.xenon.json");
+  CHECK(base::WriteFile(descriptor, kDescriptor));
+  EXPECT_EQ(FindElectronAppDescriptor("application.xenon.json"), descriptor);
+  EXPECT_TRUE(FindElectronAppDescriptor("missing.xenon.json").empty());
+  EXPECT_TRUE(FindElectronAppDescriptor("../application.xenon.json").empty());
+  return testing::Test::HasFailure() ? 1 : 0;
+}
+
+TEST(PrivilegedSchemesTest, UnbundledHostsKeepExecutableDirectoryDiscovery) {
+  auto command_line = base::GetMultiProcessTestChildBaseCommandLine();
+  EXPECT_EQ(RunChild("ElectronDescriptorUnbundledPaths", command_line), 0);
+}
+
+#if BUILDFLAG(IS_MAC)
+MULTIPROCESS_TEST_MAIN(ElectronDescriptorBundledPaths) {
+  base::ScopedTempDir host;
+  CHECK(host.CreateUniqueTempDir());
+  base::FilePath host_directory;
+  CHECK(base::NormalizeFilePath(host.GetPath(), &host_directory));
+  const auto bundle = host_directory.AppendASCII("Host.app");
+  const auto contents = bundle.AppendASCII("Contents");
+  const auto executable_directory = contents.AppendASCII("MacOS");
+  const auto resources =
+      contents.AppendASCII("Resources").AppendASCII("xenon-apps");
+  CHECK(base::CreateDirectory(executable_directory));
+  CHECK(base::CreateDirectory(resources));
+  CHECK(base::WriteFile(contents.AppendASCII("Info.plist"), R"(
+    <plist version="1.0"><dict>
+      <key>CFBundleIdentifier</key><string>org.xenon.test-host</string>
+      <key>CFBundlePackageType</key><string>APPL</string>
+    </dict></plist>)"));
+  base::ScopedPathOverride override(base::DIR_EXE, executable_directory);
+  base::apple::SetOverrideOuterBundlePath(bundle);
+  base::apple::SetOverrideAmIBundled(true);
+  const auto normalize = [](const base::FilePath& path) {
+    base::FilePath normalized;
+    CHECK(base::NormalizeFilePath(path, &normalized));
+    return normalized;
+  };
+  auto directories = GetElectronAppDescriptorDirectories();
+  for (auto& directory : directories) {
+    directory = normalize(directory);
+  }
+  EXPECT_EQ(directories,
+            std::vector<base::FilePath>(
+                {normalize(resources), normalize(executable_directory)}));
+  const auto preferred = resources.AppendASCII("application.xenon.json");
+  CHECK(base::WriteFile(preferred, kSnapshotDescriptor));
+  CHECK(base::WriteFile(
+      executable_directory.AppendASCII("application.xenon.json"),
+      "ignored stale policy"));
+  const auto legacy = executable_directory.AppendASCII("legacy.xenon.json");
+  CHECK(base::WriteFile(legacy,
+                        R"({"privilegedSchemes":[{"scheme":"legacy-app"}]})"));
+  EXPECT_EQ(normalize(FindElectronAppDescriptor("application.xenon.json")),
+            normalize(preferred));
+  EXPECT_EQ(normalize(FindElectronAppDescriptor("legacy.xenon.json")),
+            normalize(legacy));
+  const auto explicit_descriptor = host_directory.AppendASCII("selected.json");
+  CHECK(
+      base::WriteFile(explicit_descriptor,
+                      R"({"privilegedSchemes":[{"scheme":"explicit-app"}]})"));
+  auto* command_line = base::CommandLine::ForCurrentProcess();
+  command_line->RemoveSwitch("type");
+  command_line->AppendSwitchPath(switches::kElectronApp, explicit_descriptor);
+  InitializeStartupPrivilegedSchemes();
+  std::string error;
+  EXPECT_TRUE(ValidatePrivilegedSchemesAgainstStartup(
+      Json(kDeclaration).GetList(), &error))
+      << error;
+  EXPECT_TRUE(ValidatePrivilegedSchemesAgainstStartup(
+      Json(kCspDeclaration).GetList(), &error))
+      << error;
+  EXPECT_EQ(GetStartupPrivilegedSchemes().size(), 4u);
+  return testing::Test::HasFailure() ? 1 : 0;
+}
+
+TEST(PrivilegedSchemesTest,
+     BundledMacHostsRegisterResourcesLegacyAndExplicitDescriptors) {
+  auto command_line = base::GetMultiProcessTestChildBaseCommandLine();
+  EXPECT_EQ(RunChild("ElectronDescriptorBundledPaths", command_line), 0);
+}
+#endif
+
 MULTIPROCESS_TEST_MAIN(PrivilegedSchemeSnapshotChild) {
   InitializeStartupPrivilegedSchemes();
   std::string error;
@@ -216,8 +343,7 @@ MULTIPROCESS_TEST_MAIN(PrivilegedSchemeSnapshotChild) {
       Json(kCspDeclaration).GetList(), &error))
       << error;
   EXPECT_FALSE(ValidatePrivilegedSchemesAgainstStartup(
-      Json(R"([{"scheme":"crx","privileges":{"bypassCSP":false}}])")
-          .GetList(),
+      Json(R"([{"scheme":"crx","privileges":{"bypassCSP":false}}])").GetList(),
       &error));
   EXPECT_FALSE(ValidatePrivilegedSchemesAgainstStartup(
       Json(R"([{"scheme":"sample-app","privileges":{

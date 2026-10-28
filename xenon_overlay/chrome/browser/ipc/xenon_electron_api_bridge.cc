@@ -12,12 +12,17 @@
 #include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "build/build_config.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "url/gurl.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_shell.h"
 #include "xenon_overlay/chrome/browser/updater/xenon_update_manager.h"
 #include "xenon_overlay/chrome/browser/updater/xenon_update_types.h"
+
+#if BUILDFLAG(IS_MAC)
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_app_mac.h"
+#endif
 
 namespace xenon::ipc {
 namespace {
@@ -272,6 +277,12 @@ void CallElectronApi(base::Value arguments, ElectronApiCallback callback) {
     CallClipboard(arguments.GetDict(), *operation, std::move(callback));
     return;
   }
+#if BUILDFLAG(IS_MAC)
+  if (*operation == "app.getLoginItemSettings") {
+    GetElectronLoginItemSettings(arguments.GetDict(), std::move(callback));
+    return;
+  }
+#endif
   if (base::StartsWith(*operation, "autoUpdater.")) {
     CallAutoUpdater(arguments.GetDict(), *operation, std::move(callback));
     return;

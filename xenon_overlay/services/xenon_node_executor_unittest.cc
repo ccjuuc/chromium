@@ -20,6 +20,7 @@
 #include "base/test/scoped_path_override.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
+#include "build/build_config.h"
 #include "gin/function_template.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "xenon_overlay/chrome/browser/napi/napi_switches.h"
@@ -30,12 +31,18 @@ namespace xenon {
 
 class XenonNodeExecutorTestPeer {
  public:
+  static void SetOuterBundlePath(XenonNodeExecutor& executor,
+                                 const base::FilePath& path) {
+    executor.outer_bundle_path_ = path;
+  }
+
   static size_t ModuleCount(const XenonNodeExecutor& executor) {
     return executor.addon_modules_.size();
   }
   static void RegisterCollectibleCallback(XenonNodeExecutor& executor,
                                           int32_t client_id,
-                                          int32_t callback_id) {
+                                          int32_t callback_id,
+                                          uint64_t owner = 0) {
     v8::Locker locker(executor.addon_isolate_);
     v8::Isolate::Scope isolate_scope(executor.addon_isolate_);
     v8::HandleScope handle_scope(executor.addon_isolate_);
@@ -43,7 +50,8 @@ class XenonNodeExecutorTestPeer {
     // short-lived context lets real V8 GC collect the registered function.
     auto context = v8::Context::New(executor.addon_isolate_);
     v8::Context::Scope context_scope(context);
-    executor.GetOrCreateNativeCallback(context, client_id, callback_id, "");
+    executor.GetOrCreateNativeCallback(context, client_id, callback_id, "",
+                                       owner);
   }
 
   static void ForceGarbageCollection(XenonNodeExecutor& executor) {
@@ -112,6 +120,19 @@ class XenonNodeExecutorTestPeer {
         Object.defineProperty(exports, 'OwnerClosingConstructor', {
           get() { closeOwner(); return function() { ++constructors; }; }
         });
+        let constructorFieldReads = 0;
+        exports.OwnerClosingConstructorFields = class {
+          constructor() {
+            this.details = {
+              get value() {
+                ++constructorFieldReads;
+                closeOwner();
+                return 42;
+              }
+            };
+          }
+        };
+        exports.OwnerConstructorFieldReads = () => constructorFieldReads;
         exports.OwnerConstructorCalls = () => constructors;
         exports.OwnerChainCalls = () => secondCalls;
         exports.MakeOwnerClosingChain = () => ({ first() {
@@ -175,6 +196,41 @@ class XenonNodeExecutorTestPeer {
         exports.MetadataFunction = function() {}.bind(null);
         Object.defineProperty(exports.MetadataFunction, 'prototype', descriptor);
         exports.MetadataGetterReads = () => reads;
+      })
+    )JS";
+    v8::Local<v8::Script> script;
+    v8::Local<v8::Value> install;
+    if (!v8::Script::Compile(
+             context, v8::String::NewFromUtf8(executor.addon_isolate_, source)
+                          .ToLocalChecked())
+             .ToLocal(&script) ||
+        !script->Run(context).ToLocal(&install)) {
+      return false;
+    }
+    v8::Local<v8::Value> args[] = {
+        executor.FindModule(module_path)->exports.Get(executor.addon_isolate_)};
+    return !install.As<v8::Function>()
+                ->Call(context, v8::Undefined(executor.addon_isolate_), 1, args)
+                .IsEmpty();
+  }
+
+  static bool InstallLegacyConstructorFixture(XenonNodeExecutor& executor,
+                                              const std::string& module_path) {
+    v8::Locker locker(executor.addon_isolate_);
+    v8::Isolate::Scope isolate_scope(executor.addon_isolate_);
+    v8::HandleScope handle_scope(executor.addon_isolate_);
+    auto context = executor.addon_context_.Get(executor.addon_isolate_);
+    v8::Context::Scope context_scope(context);
+    static constexpr char source[] = R"JS(
+      (function(exports) {
+        exports.LegacyDataConstructor = class {
+          constructor() {
+            this.closed = undefined;
+            this.then = 42;
+            this.big = 7n;
+          }
+        };
+        exports.LegacyDataConstructor.prototype.inherited = 99;
       })
     )JS";
     v8::Local<v8::Script> script;
@@ -461,6 +517,92 @@ TEST_F(XenonNodeArchiveTest, UnpackedResolutionPreservesNativeDirectoryPolicy) {
   EXPECT_FALSE(executor_->LoadAddonFromCurrentThread(virtual_path_, &error));
   EXPECT_NE(std::string::npos, error.find("outside the executable directory"));
 }
+
+#if BUILDFLAG(IS_MAC)
+class XenonNodeBundledAddonTest : public XenonNodePromiseTest {
+ protected:
+  void SetUp() override {
+    XenonNodePromiseTest::SetUp();
+    command_line_.GetProcessCommandLine()->RemoveSwitch(
+        napi_switches::kAllowExternalNodeAddons);
+    ASSERT_TRUE(temporary_.CreateUniqueTempDir());
+    bundle_ = temporary_.GetPath().AppendASCII("Host.app");
+    bundled_apps_ = bundle_.AppendASCII("Contents")
+                        .AppendASCII("Resources")
+                        .AppendASCII("xenon-apps");
+    ASSERT_TRUE(base::CreateDirectory(bundled_apps_));
+    XenonNodeExecutorTestPeer::SetOuterBundlePath(*executor_, bundle_);
+  }
+
+  base::FilePath CopyAddon(const base::FilePath& directory) {
+    EXPECT_TRUE(base::CreateDirectory(directory));
+    const auto destination = directory.AppendASCII("test_addon.node");
+    EXPECT_TRUE(base::CopyFile(base::FilePath::FromUTF8Unsafe(addon_path_),
+                               destination));
+    return destination;
+  }
+
+  void ExpectBlocked(const base::FilePath& path) {
+    std::string error;
+    EXPECT_FALSE(executor_->LoadAddonFromCurrentThread(path.AsUTF8Unsafe(),
+                                                       &error));
+    EXPECT_NE(std::string::npos,
+              error.find("outside the executable directory"));
+  }
+
+  base::test::ScopedCommandLine command_line_;
+  base::ScopedTempDir temporary_;
+  base::FilePath bundle_;
+  base::FilePath bundled_apps_;
+};
+
+TEST_F(XenonNodeBundledAddonTest, LoadsBundledAddonSynchronously) {
+  const auto addon = CopyAddon(bundled_apps_.AppendASCII("thunder"));
+  std::string error;
+  EXPECT_TRUE(executor_->LoadAddonFromCurrentThread(addon.AsUTF8Unsafe(),
+                                                    &error)) << error;
+}
+
+TEST_F(XenonNodeBundledAddonTest, LoadsBundledAddonOnBlockingWorker) {
+  const auto addon = CopyAddon(bundled_apps_.AppendASCII("thunder"));
+  LoadFuture loaded;
+  executor_->LoadAddon(addon.AsUTF8Unsafe(), loaded.GetCallback(), false);
+  EXPECT_TRUE(loaded.Get<0>()) << loaded.Get<1>();
+}
+
+TEST_F(XenonNodeBundledAddonTest, RejectsOtherBundleAndResourceDirectories) {
+  ExpectBlocked(CopyAddon(bundled_apps_.DirName().AppendASCII("other")));
+  ExpectBlocked(CopyAddon(temporary_.GetPath().AppendASCII("Other.app")
+                              .AppendASCII("Contents")
+                              .AppendASCII("Resources")
+                              .AppendASCII("xenon-apps")));
+}
+
+TEST_F(XenonNodeBundledAddonTest, RejectsAddonSymlinkEscapingBundle) {
+  const auto outside = CopyAddon(temporary_.GetPath().AppendASCII("external"));
+  const auto link = bundled_apps_.AppendASCII("linked.node");
+  ASSERT_TRUE(base::CreateSymbolicLink(outside, link));
+  ExpectBlocked(link);
+}
+
+TEST_F(XenonNodeBundledAddonTest, RejectsTrustedRootSymlinkEscapingBundle) {
+  const auto outside = temporary_.GetPath().AppendASCII("external");
+  CopyAddon(outside);
+  ASSERT_TRUE(base::DeletePathRecursively(bundled_apps_));
+  ASSERT_TRUE(base::CreateSymbolicLink(outside, bundled_apps_));
+  ExpectBlocked(bundled_apps_.AppendASCII("test_addon.node"));
+}
+
+TEST_F(XenonNodeBundledAddonTest, AllowsAliasOfCurrentOuterBundle) {
+  const auto addon = CopyAddon(bundled_apps_.AppendASCII("thunder"));
+  const auto alias = temporary_.GetPath().AppendASCII("HostAlias.app");
+  ASSERT_TRUE(base::CreateSymbolicLink(bundle_, alias));
+  XenonNodeExecutorTestPeer::SetOuterBundlePath(*executor_, alias);
+  std::string error;
+  EXPECT_TRUE(executor_->LoadAddonFromCurrentThread(addon.AsUTF8Unsafe(),
+                                                    &error)) << error;
+}
+#endif  // BUILDFLAG(IS_MAC)
 
 TEST_F(XenonNodePromiseTest, BinaryWirePreservesEveryViewKindAndEmptyValues) {
   const char* kinds[] = {
@@ -906,6 +1048,257 @@ TEST_F(XenonNodePromiseTest,
   EXPECT_EQ((std::vector<int32_t>{-11, 22, 22, -11, 22}), delivered_clients);
 }
 
+TEST_F(XenonNodePromiseTest,
+       ScopedSynchronousCallsRoundTripCallbacksAndNativeFunctions) {
+  std::vector<base::Value> delivered;
+  base::Value receiver;
+  executor_->SetCallbackHandlers(
+      base::BindRepeating(
+          [](std::vector<base::Value>* output, base::Value* receiver,
+             int32_t client, int32_t callback, std::vector<base::Value> args,
+             base::Value value) {
+            EXPECT_EQ(31, client);
+            EXPECT_EQ(7, callback);
+            *output = std::move(args);
+            *receiver = std::move(value);
+          },
+          &delivered, &receiver),
+      {});
+  const base::Value callback(base::DictValue()
+                                 .Set("__xenon_node_wire_type__", "callback")
+                                 .Set("callback_id", 7));
+  base::ListValue handlers;
+  handlers.Append(base::DictValue().Set("onValue", callback.Clone()));
+  base::ListValue nested;
+  nested.Append(base::DictValue().Set("handlers", std::move(handlers)));
+  base::Value result;
+  std::string error;
+  ASSERT_TRUE(executor_->InvokeExportFromCurrentThread(
+      addon_path_, "InvokeNestedCallback", base::Value(std::move(nested)),
+      &result, &error, 31, 1))
+      << error;
+  ASSERT_EQ(1u, delivered.size());
+  EXPECT_EQ("nested callback payload", delivered[0].GetString());
+  EXPECT_EQ("global",
+            *receiver.GetDict().FindString("__xenon_node_wire_type__"));
+
+  base::ListValue callback_args;
+  callback_args.Append(callback.Clone());
+  ASSERT_TRUE(executor_->InvokeExportFromCurrentThread(
+      addon_path_, "InvokeCallbackWithFunction",
+      base::Value(std::move(callback_args)), &result, &error, 31, 1))
+      << error;
+  ASSERT_EQ(1u, delivered.size());
+  ASSERT_TRUE(delivered[0].is_dict());
+  const auto& function = delivered[0].GetDict();
+  EXPECT_EQ("native_function",
+            *function.FindString("__xenon_node_wire_type__"));
+  EXPECT_EQ(addon_path_, *function.FindString("module_path"));
+  EXPECT_EQ(executor_->GetInstanceOwnerToken(1),
+            *function.FindString("owner_token"));
+  const int id = function.FindInt("instance_id").value_or(0);
+  ASSERT_NE(0, id);
+  base::ListValue invocation;
+  invocation.Append(
+      base::DictValue().Set("__xenon_node_wire_type__", "undefined"));
+  invocation.Append(41);
+  ASSERT_TRUE(executor_->InvokeInstanceFromCurrentThread(
+      addon_path_, id, "call", base::Value(invocation.Clone()), &result, &error,
+      31, 1))
+      << error;
+  ASSERT_TRUE(result.is_int());
+  EXPECT_EQ(42, result.GetInt());
+  EXPECT_FALSE(executor_->InvokeInstanceFromCurrentThread(
+      addon_path_, id, "call", base::Value(std::move(invocation)), &result,
+      &error, 32, 2));
+  EXPECT_NE(std::string::npos, error.find("owner"));
+}
+
+TEST_F(XenonNodePromiseTest,
+       ScopedSynchronousConstructorPreservesReceiverAndOwnerToken) {
+  base::Value receiver;
+  executor_->SetCallbackHandlers(
+      base::BindRepeating(
+          [](base::Value* receiver, int32_t client, int32_t callback,
+             std::vector<base::Value> args, base::Value value) {
+            EXPECT_EQ(31, client);
+            EXPECT_EQ(7, callback);
+            ASSERT_EQ(1u, args.size());
+            EXPECT_EQ(value, args[0]);
+            *receiver = std::move(value);
+          },
+          &receiver),
+      {});
+  base::ListValue constructor_args;
+  constructor_args.Append(base::DictValue()
+                              .Set("__xenon_node_wire_type__", "callback")
+                              .Set("callback_id", 7));
+  base::Value instance;
+  std::string error;
+  ASSERT_TRUE(executor_->ConstructExportFromCurrentThread(
+      addon_path_, "OwnedHandle", base::Value(std::move(constructor_args)),
+      &instance, &error, 31, 1))
+      << error;
+  ASSERT_TRUE(instance.is_dict());
+  EXPECT_EQ(receiver, instance);
+  const auto& wire = instance.GetDict();
+  EXPECT_EQ(addon_path_, *wire.FindString("module_path"));
+  EXPECT_EQ(executor_->GetInstanceOwnerToken(1),
+            *wire.FindString("owner_token"));
+  const int id = wire.FindInt("instance_id").value_or(0);
+  ASSERT_NE(0, id);
+  ASSERT_TRUE(wire.FindDict("fields"));
+  EXPECT_EQ(42, wire.FindDict("fields")->FindInt("value"));
+  base::Value result;
+  ASSERT_TRUE(executor_->InvokeInstanceFromCurrentThread(
+      addon_path_, id, "read", base::Value(base::ListValue()), &result, &error,
+      31, 1))
+      << error;
+  EXPECT_EQ(42, result.GetInt());
+  base::ListValue echo;
+  echo.Append(instance.Clone());
+  ASSERT_TRUE(executor_->InvokeExportFromCurrentThread(
+      addon_path_, "EchoOwnedHandle", base::Value(echo.Clone()), &result,
+      &error, 31, 1))
+      << error;
+  EXPECT_EQ(instance, result);
+  EXPECT_FALSE(executor_->InvokeExportFromCurrentThread(
+      addon_path_, "EchoOwnedHandle", base::Value(echo.Clone()), &result,
+      &error, 32, 2));
+  EXPECT_NE(std::string::npos, error.find("owner"));
+  for (const bool remove_token : {false, true}) {
+    base::Value invalid = instance.Clone();
+    if (remove_token) {
+      invalid.GetDict().Remove("owner_token");
+    } else {
+      invalid.GetDict().Set("owner_token", "stale-token");
+    }
+    base::ListValue invalid_args;
+    invalid_args.Append(std::move(invalid));
+    EXPECT_FALSE(executor_->InvokeExportFromCurrentThread(
+        addon_path_, "EchoOwnedHandle", base::Value(std::move(invalid_args)),
+        &result, &error, 31, 1));
+    EXPECT_NE(std::string::npos, error.find("token"));
+  }
+  EXPECT_FALSE(executor_->InvokeInstanceFromCurrentThread(
+      addon_path_, id, "read", base::Value(base::ListValue()), &result, &error,
+      32, 2));
+  executor_->ReleaseInstanceOwner(1);
+  EXPECT_FALSE(executor_->InvokeInstanceFromCurrentThread(
+      addon_path_, id, "read", base::Value(base::ListValue()), &result, &error,
+      31, 1));
+  EXPECT_FALSE(executor_->ConstructExportFromCurrentThread(
+      addon_path_, "OwnedHandle", base::Value(base::ListValue()), &instance,
+      &error, 31, 1));
+  EXPECT_EQ(0u, XenonNodeExecutorTestPeer::InstanceCount(*executor_, 1));
+}
+
+TEST_F(XenonNodePromiseTest,
+       ScopedSynchronousConstructorRejectsOwnerClosedDuringFieldSerialization) {
+  ASSERT_TRUE(XenonNodeExecutorTestPeer::InstallOwnerReentryFixture(
+      *executor_, addon_path_));
+  base::Value instance("unchanged");
+  std::string error;
+  EXPECT_FALSE(executor_->ConstructExportFromCurrentThread(
+      addon_path_, "OwnerClosingConstructorFields", base::Value(base::ListValue()),
+      &instance, &error, 31, 1));
+  EXPECT_EQ("Native instance owner was closed", error);
+  EXPECT_EQ(base::Value("unchanged"), instance);
+  EXPECT_EQ(1, CallSync("OwnerConstructorFieldReads").GetInt());
+  EXPECT_TRUE(executor_->GetInstanceOwnerToken(1).empty());
+  EXPECT_EQ(0u, XenonNodeExecutorTestPeer::InstanceCount(*executor_, 1));
+  EXPECT_EQ(0u, XenonNodeExecutorTestPeer::InstanceIndexSize(*executor_));
+
+  // Releasing this owner must not disrupt another live owner's construction.
+  ASSERT_TRUE(executor_->ConstructExportFromCurrentThread(
+      addon_path_, "OwnedHandle", base::Value(base::ListValue()), &instance,
+      &error, 32, 2))
+      << error;
+  ASSERT_TRUE(instance.is_dict());
+  EXPECT_EQ(executor_->GetInstanceOwnerToken(2),
+            *instance.GetDict().FindString("owner_token"));
+}
+
+TEST_F(
+    XenonNodePromiseTest,
+    ScopedSynchronousCallbacksStopAfterOwnerReleaseAndLegacyCallsRemainValid) {
+  int delivered = 0;
+  executor_->SetCallbackHandlers(
+      base::BindRepeating(
+          [](int* count, int32_t client, int32_t callback,
+             std::vector<base::Value>, base::Value) {
+            EXPECT_EQ(31, client);
+            EXPECT_EQ(7, callback);
+            ++*count;
+          },
+          &delivered),
+      {});
+  base::ListValue retain;
+  retain.Append(17);
+  retain.Append(base::DictValue()
+                    .Set("__xenon_node_wire_type__", "callback")
+                    .Set("callback_id", 7));
+  base::Value result;
+  std::string error;
+  ASSERT_TRUE(executor_->InvokeExportFromCurrentThread(
+      addon_path_, "RetainCallback", base::Value(std::move(retain)), &result,
+      &error, 31, 1))
+      << error;
+  base::ListValue invoke;
+  invoke.Append(17);
+  ASSERT_TRUE(executor_->InvokeExportFromCurrentThread(
+      addon_path_, "CallRetainedCallback", base::Value(invoke.Clone()), &result,
+      &error, 31, 1))
+      << error;
+  EXPECT_EQ(1, delivered);
+  executor_->ReleaseInstanceOwner(1);
+  // The real addon still holds its N-API function reference. Another live
+  // owner may invoke the fixture, but cannot revive the closed owner's
+  // callback.
+  ASSERT_TRUE(executor_->InvokeExportFromCurrentThread(
+      addon_path_, "CallRetainedCallback", base::Value(std::move(invoke)),
+      &result, &error, 32, 2))
+      << error;
+  EXPECT_EQ(1, delivered);
+  base::Value legacy;
+  ASSERT_TRUE(executor_->ConstructExportFromCurrentThread(
+      addon_path_, "OwnedHandle", base::Value(base::ListValue()), &legacy,
+      &error))
+      << error;
+  ASSERT_TRUE(legacy.is_dict());
+  EXPECT_FALSE(legacy.GetDict().Find("owner_token"));
+  const int id = legacy.GetDict().FindInt("instance_id").value_or(0);
+  ASSERT_TRUE(executor_->InvokeInstanceFromCurrentThread(
+      addon_path_, id, "read", base::Value(base::ListValue()), &result, &error))
+      << error;
+  EXPECT_EQ(42, result.GetInt());
+}
+
+TEST_F(XenonNodePromiseTest,
+       LegacySynchronousConstructorRetainsOwnUndefinedAndThenFields) {
+  ASSERT_TRUE(XenonNodeExecutorTestPeer::InstallLegacyConstructorFixture(
+      *executor_, addon_path_));
+  base::Value instance;
+  std::string error;
+  ASSERT_TRUE(executor_->ConstructExportFromCurrentThread(
+      addon_path_, "LegacyDataConstructor", base::Value(base::ListValue()),
+      &instance, &error))
+      << error;
+  ASSERT_TRUE(instance.is_dict());
+  const auto* fields = instance.GetDict().FindDict("fields");
+  ASSERT_TRUE(fields);
+  const auto* closed = fields->FindDict("closed");
+  ASSERT_TRUE(closed);
+  EXPECT_EQ("undefined", *closed->FindString("__xenon_node_wire_type__"));
+  EXPECT_EQ(42, fields->FindInt("then"));
+  EXPECT_FALSE(fields->Find("inherited"));
+  const auto* bigint = fields->FindDict("big");
+  ASSERT_TRUE(bigint);
+  EXPECT_EQ("bigint", *bigint->FindString("__xenon_node_wire_type__"));
+  EXPECT_EQ("7", *bigint->FindString("value"));
+  EXPECT_FALSE(instance.GetDict().Find("owner_token"));
+}
+
 TEST_F(XenonNodePromiseTest, CallbackReceiverKeepsConstructedInstanceIdentity) {
   base::Value received_receiver;
   std::vector<base::Value> received_args;
@@ -1115,6 +1508,28 @@ TEST_F(XenonNodePromiseTest, SynchronousLoadCanStillReturnLegacyExportTree) {
   EXPECT_EQ("function", add->kind);
   EXPECT_TRUE(FindExportChild(legacy.Get<2>(), "BeginControlledPromise"));
   EXPECT_EQ(0, Calls());
+}
+
+TEST_F(XenonNodePromiseTest,
+       CallbackAcknowledgementExcludesMissingClosedAndCollectedCallbacks) {
+  EXPECT_FALSE(executor_->HasNativeCallback(-11, 7));
+  executor_->RegisterInstanceOwner(1);
+  XenonNodeExecutorTestPeer::RegisterCollectibleCallback(*executor_, -11, 7, 1);
+  EXPECT_TRUE(executor_->HasNativeCallback(-11, 7));
+  EXPECT_FALSE(executor_->HasNativeCallback(-12, 7));
+  EXPECT_FALSE(executor_->HasNativeCallback(-11, 8));
+
+  // The GC cleanup task has not run yet, but its empty function can no longer
+  // be acknowledged as a live native callback.
+  XenonNodeExecutorTestPeer::ForceGarbageCollection(*executor_);
+  ASSERT_TRUE(XenonNodeExecutorTestPeer::IsCollected(*executor_, -11, 7));
+  EXPECT_FALSE(executor_->HasNativeCallback(-11, 7));
+  task_environment_.RunUntilIdle();
+
+  XenonNodeExecutorTestPeer::RegisterCollectibleCallback(*executor_, -11, 8, 1);
+  EXPECT_TRUE(executor_->HasNativeCallback(-11, 8));
+  executor_->ReleaseInstanceOwner(1);
+  EXPECT_FALSE(executor_->HasNativeCallback(-11, 8));
 }
 
 TEST_F(XenonNodePromiseTest,

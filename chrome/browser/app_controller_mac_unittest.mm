@@ -30,6 +30,7 @@
 #include "content/public/test/browser_task_environment.h"
 #include "testing/platform_test.h"
 #include "ui/base/l10n/l10n_util_mac.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 namespace {
 
@@ -268,6 +269,25 @@ TEST_F(AppControllerTest, DockMenu) {
     EXPECT_EQ(@selector(commandFromDock:), [item action]);
   }
 }
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+TEST_F(AppControllerTest, HostedDockItemRejectsMissingOrInvalidWindowIdentity) {
+  AppController* controller = AppController.sharedController;
+  NSMenuItem* item = [[NSMenuItem alloc]
+      initWithTitle:@"Closed application window"
+             action:NSSelectorFromString(@"activateHostedWindowFromDock:")
+      keyEquivalent:@""];
+  item.target = controller;
+  EXPECT_FALSE([controller validateUserInterfaceItem:item]);
+  for (id identity in @[ @"1", @(-1), @(0), @(2147483648LL), @(2147483647) ]) {
+    item.representedObject = identity;
+    EXPECT_FALSE([controller validateUserInterfaceItem:item]);
+    // A queued menu action can outlive its window; bypassing AppKit's disabled
+    // state must still be a harmless no-op at the action boundary.
+    EXPECT_TRUE([NSApp sendAction:item.action to:controller from:item]);
+  }
+}
+#endif
 
 TEST_F(AppControllerTest, LastProfileIfLoaded) {
   // Create a second profile.

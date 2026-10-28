@@ -354,3 +354,16 @@ third_party/rust/target/
 
 # Trace files created when using --trace-startup.
 **/chrometrace.log
+
+# Local TH macOS build products (including archives) are never committed.
+# Reproduce with xenon_overlay/tools/build_thunder_macos.py.
+/xenon_overlay/resources/thunder-2025-mac/
+/xenon_overlay/resources/thunder-2025-mac.tar.xz*
+/xenon_overlay/resources/thunder-2025-mac.sha256*
+/xenon_overlay/resources/thunder-2025-mac.previous-*/
+/xenon_overlay/resources/.thunder-2025-mac.build.lock
+/xenon_overlay/resources/.thunder-build-*/
+/xenon_overlay/resources/.thunder-archive-*/
+
+# Local TH integration snapshots, packages and runtime diagnostics.
+/test_packages/thunder-mac-20261028/

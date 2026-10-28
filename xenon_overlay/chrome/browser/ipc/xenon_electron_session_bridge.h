@@ -35,6 +35,8 @@ content::StoragePartitionConfig GetElectronSessionPartitionConfig(
     content::BrowserContext* context,
     const std::string& container_id,
     const std::string& partition);
+// Returns null after BrowserContext shutdown has begun; shutdown must not
+// recreate sessions or retain storage partitions that are about to be freed.
 content::StoragePartition* ResolveElectronSessionPartition(
     content::BrowserContext* context,
     const std::string& container_id,

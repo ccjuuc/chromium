@@ -38,6 +38,10 @@
 #include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
 #include "xenon_overlay/public/xenon_ipc_switches.h"
 
+#if BUILDFLAG(IS_MAC)
+#include "xenon_overlay/chrome/browser/ui/xenon_mac_player_host.h"
+#endif
+
 #if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
 #include "content/public/browser/browser_thread.h"
 #endif
@@ -1093,6 +1097,9 @@ void XenonManager::OnContainerServiceDisconnected(
 }
 
 void XenonManager::CloseContainerService(const std::string& container_id) {
+#if BUILDFLAG(IS_MAC)
+  XenonMacPlayerHost::GetInstance()->CloseContainer(container_id);
+#endif
   ipc::RemoveElectronProtocolHandlers(container_id);
   ipc::RemoveElectronSessionsForContainer(container_id);
   CloseRendererAddonServicesForContainer(container_id);
@@ -1128,6 +1135,9 @@ void XenonManager::ShutdownForProcessExit() {
     return;
   }
   shutting_down_for_process_exit_ = true;
+#if BUILDFLAG(IS_MAC)
+  XenonMacPlayerHost::GetInstance()->Shutdown();
+#endif
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
   browser_observer_receivers_.Clear();
 #endif
@@ -1223,6 +1233,38 @@ void XenonManager::ElectronWindowCall(int32_t window_id,
                                       const std::string& command,
                                       base::Value arguments,
                                       ElectronWindowCallCallback callback) {
+  if (window_id == 0 && command == "mac-player") {
+#if BUILDFLAG(IS_MAC)
+    const std::string container = browser_observer_receivers_.current_context();
+    auto* connection = FindContainerService(container);
+    auto config = last_ipc_configs_.find(container);
+    if (!connection || connection->observer_receiver_id !=
+            browser_observer_receivers_.current_receiver() ||
+        connection->generation != service_generation(container) ||
+        config == last_ipc_configs_.end() || !config->second) {
+      std::move(callback).Run(
+          MakeMacPlayerReply({}, "ERR_ACCESS_DENIED: stale player owner"), "");
+      return;
+    }
+    XenonMacPlayerHost::GetInstance()->Call(container, connection->generation,
+        base::FilePath::FromUTF8Unsafe(config->second->resources_directory),
+        base::FilePath::FromUTF8Unsafe(config->second->runtime_directory),
+        std::move(arguments), base::BindRepeating(
+          [](XenonManager* manager, std::string container, uint64_t generation,
+              base::Value event) {
+            auto* connection = manager->FindContainerService(container);
+            if (connection && connection->generation == generation &&
+                connection->remote.is_bound()) {
+              connection->remote->DispatchElectronWindowEvent(
+                  0, "__xenon-mac-player-event", std::move(event));
+            }
+          }, base::Unretained(this), container, connection->generation),
+        std::move(callback));
+#else
+    std::move(callback).Run(base::Value(), "Mac player is unavailable on this platform");
+#endif
+    return;
+  }
   if (window_id == 0 && command == "electron-session") {
     const std::string container_id = browser_observer_receivers_.current_context();
     auto* connection = FindContainerService(container_id);
@@ -1246,6 +1288,7 @@ void XenonManager::ElectronWindowCall(int32_t window_id,
       uint64_t hwnd = 0;
       std::string error;
       const std::string* title = options->FindString("title");
+      const std::string* title_bar_style = options->FindString("titleBarStyle");
       XenonElectronWindowHost::GetInstance()->CreateHostedWindow(
           last_browser_context_, options->FindInt("width").value_or(800),
           options->FindInt("height").value_or(600),
@@ -1254,7 +1297,8 @@ void XenonManager::ElectronWindowCall(int32_t window_id,
           options->FindBool("transparent").value_or(false),
           options->FindInt("parentId").value_or(0),
           title ? *title : "Electron", container_id, &id, &hwnd, &error,
-          *partition);
+          *partition, options->FindBool("hasShadow").value_or(true),
+          title_bar_style ? *title_bar_style : "default");
       std::move(callback).Run(base::Value(base::DictValue()
           .Set("id", id).Set("hwnd", base::NumberToString(hwnd))), error);
       return;

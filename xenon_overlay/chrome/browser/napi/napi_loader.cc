@@ -19,6 +19,8 @@
 
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
+#elif BUILDFLAG(IS_MAC)
+#include <dlfcn.h>
 #endif
 
 namespace xenon {
@@ -186,7 +188,50 @@ size_t GetRegisteredModuleCountAcrossHosts() {
          GetRegisteredModuleCount(GetCurrentProcessExeModule()) +
          GetRegisteredModuleCount(GetLoadedNodeExeModule());
 }
+#elif BUILDFLAG(IS_MAC) && BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+bool IsRegisteredModuleOwnedByAddon(napi_module* registered_module,
+                                    base::NativeLibrary addon_library) {
+  if (!registered_module || !addon_library ||
+      addon_library->type != base::DYNAMIC_LIB) {
+    return false;
+  }
 
+  // 注册表可能保留已卸载模块的地址，先询问 dyld，不能先解引用记录。
+  Dl_info info = {};
+  if (!dladdr(registered_module, &info) || !info.dli_fname) {
+    return false;
+  }
+  // 仅查找现有 image，避免误加载同名文件或触发其他 addon 的构造函数。
+  void* owner = dlopen(info.dli_fname, RTLD_LAZY | RTLD_LOCAL | RTLD_NOLOAD);
+  if (!owner) {
+    return false;
+  }
+  const bool matches = owner == addon_library->dylib;
+  dlclose(owner);
+  return matches;
+}
+
+napi_module* FindRegisteredModuleAcrossHosts(
+    base::NativeLibrary addon_library,
+    const char** registered_host_name) {
+  const size_t count = xenon_napi_get_registered_module_count();
+  for (size_t index = 0; index < count; ++index) {
+    napi_module* module = xenon_napi_get_registered_module(index);
+    if (IsRegisteredModuleOwnedByAddon(module, addon_library)) {
+      *registered_host_name = "xenon host";
+      return module;
+    }
+  }
+  return nullptr;
+}
+
+size_t GetRegisteredModuleCountAcrossHosts() {
+  return xenon_napi_get_registered_module_count();
+}
+#endif
+
+#if (BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)) && \
+    BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
 bool IsNodeStaticRegistrationEnabled() {
   const base::CommandLine* command_line =
       base::CommandLine::ForCurrentProcess();
@@ -197,6 +242,39 @@ bool IsNodeStaticRegistrationEnabled() {
 
 }  // namespace
 
+base::ScopedNativeLibrary LoadNodeAddonLibrary(
+    const base::FilePath& addon_path,
+    base::NativeLibraryLoadError* error) {
+  base::ScopedNativeLibrary library(base::LoadNativeLibrary(addon_path, error));
+  if (!library.is_valid()) {
+    return {};
+  }
+#if BUILDFLAG(IS_MAC)
+  // env 的同步清理可能排队 uv_close 回调。保留 image，而非延长 env 寿命，
+  // 确保后续正常 loop 泵执行 native-only close 时仍有有效代码和静态注册记录。
+  void* retained = dlopen(addon_path.value().c_str(),
+                          RTLD_LAZY | RTLD_LOCAL | RTLD_NOLOAD | RTLD_NODELETE);
+  if (!retained) {
+    if (error) {
+      const char* message = dlerror();
+      error->message =
+          message ? message : "Failed to retain native addon image";
+    }
+    return {};
+  }
+  const bool matches = library.get()->type == base::DYNAMIC_LIB &&
+                       retained == library.get()->dylib;
+  dlclose(retained);
+  if (!matches) {
+    if (error) {
+      error->message = "Native addon image changed during loading";
+    }
+    return {};
+  }
+#endif
+  return library;
+}
+
 v8::Local<v8::Value> LoadAndInitializeNodeAddon(
     v8::Isolate* isolate,
     v8::Local<v8::Context> context,
@@ -206,11 +284,11 @@ v8::Local<v8::Value> LoadAndInitializeNodeAddon(
 #if BUILDFLAG(IS_WIN)
   EnsureNodeHostLibraryLoaded();
 #endif
-  base::ScopedNativeLibrary library(addon_path);
+  base::NativeLibraryLoadError error;
+  base::ScopedNativeLibrary library = LoadNodeAddonLibrary(addon_path, &error);
   if (!library.is_valid()) {
-    const base::NativeLibraryLoadError* error = library.GetError();
     LOG(ERROR) << "[NapiLoader] Failed to load Node-API addon: "
-               << (error ? error->ToString() : "unknown error");
+               << error.ToString();
     return {};
   }
   return InitializeLoadedNodeAddon(isolate, context, std::move(library),
@@ -237,11 +315,12 @@ v8::Local<v8::Value> InitializeLoadedNodeAddon(
                                                   "node_register_module_v1"));
   }
 
-#if BUILDFLAG(IS_WIN) && BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+#if (BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)) && \
+    BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
   if (!register_func) {
     const char* registered_host_name = nullptr;
-    napi_module* registered_module = FindRegisteredModuleAcrossHosts(
-        library_handle, &registered_host_name);
+    napi_module* registered_module =
+        FindRegisteredModuleAcrossHosts(library_handle, &registered_host_name);
 
     if (registered_module) {
       RegisterFunc registered_func = registered_module->nm_register_func;
@@ -260,7 +339,7 @@ v8::Local<v8::Value> InitializeLoadedNodeAddon(
       }
     }
   }
-#elif BUILDFLAG(IS_WIN)
+#elif BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   if (!register_func) {
     LOG(ERROR) << "[NapiLoader] Node/uv compatibility is disabled by GN arg "
                   "enable_xenon_node_uv_compat.";
@@ -268,12 +347,12 @@ v8::Local<v8::Value> InitializeLoadedNodeAddon(
 #endif
 
   if (!register_func) {
-#if BUILDFLAG(IS_WIN) && BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
-    LOG(ERROR)
-        << "[NapiLoader] Addon does not export napi_register_module_v1/"
-           "node_register_module_v1, and no napi_module_register record "
-           "belongs to this image. registered_count="
-        << GetRegisteredModuleCountAcrossHosts();
+#if (BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)) && \
+    BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+    LOG(ERROR) << "[NapiLoader] Addon does not export napi_register_module_v1/"
+                  "node_register_module_v1, and no napi_module_register record "
+                  "belongs to this image. registered_count="
+               << GetRegisteredModuleCountAcrossHosts();
 #else
     LOG(ERROR) << "[NapiLoader] Addon does not export entry point.";
 #endif

@@ -444,14 +444,14 @@ class XenonWebDialogView : public views::WebDialogView,
                            public views::ViewTargeterDelegate {
  public:
   XenonWebDialogView(content::BrowserContext* context,
-                     ui::WebDialogDelegate* delegate,
+                     base::WeakPtr<XenonWebDialog> delegate,
                      std::unique_ptr<WebContentsHandler> handler,
                      std::unique_ptr<content::WebContents> contents = nullptr)
       : views::WebDialogView(context,
-                             delegate,
+                             delegate.get(),
                              std::move(handler),
                              contents.get()),
-        xenon_delegate_(static_cast<XenonWebDialog*>(delegate)) {
+        xenon_delegate_(std::move(delegate)) {
     if (contents) {
       // WebView must own the pre-created, partition-bound contents before
       // InitDialog performs the first navigation.
@@ -470,14 +470,26 @@ class XenonWebDialogView : public views::WebDialogView,
   }
 
   void SetCloseRequestHandler(base::RepeatingCallback<bool()> handler) {
-    xenon_delegate_->SetCloseRequestHandler(std::move(handler));
+    if (xenon_delegate_) {
+      xenon_delegate_->SetCloseRequestHandler(std::move(handler));
+    }
+  }
+
+  void OnDialogClosed(const std::string& json_retval) override {
+    if (!xenon_delegate_) {
+      return;
+    }
+    // The delegate destroys itself before Widget destroys this view. Cancel
+    // deferred initialization and ignore close notifications during teardown.
+    weak_ptr_factory_.InvalidateWeakPtrs();
+    views::WebDialogView::OnDialogClosed(json_retval);
   }
 
   void CloseContents(content::WebContents* source) override {
     // WebDialogView sets close_contents_called_ before consulting its delegate.
     // A veto at that point would make the next native close ignore the veto.
     // Ask the same delegate before entering the base close state machine.
-    if (!xenon_delegate_->RequestClose()) {
+    if (!xenon_delegate_ || !xenon_delegate_->RequestClose()) {
       return;
     }
     views::WebDialogView::CloseContents(source);
@@ -504,12 +516,15 @@ class XenonWebDialogView : public views::WebDialogView,
   }
 
   void SetHostedMinimumSize(const gfx::Size& minimum_size) {
+    if (!xenon_delegate_ || !GetWidget()) {
+      return;
+    }
     xenon_delegate_->set_minimum_dialog_size(minimum_size);
     GetWidget()->OnSizeConstraintsChanged();
   }
 
   bool SetHostedContentBackgroundColor(SkColor color) {
-    if (!web_contents()) {
+    if (!xenon_delegate_ || !web_contents()) {
       return false;
     }
     xenon_delegate_->SetContentBackgroundColor(color);
@@ -539,7 +554,7 @@ class XenonWebDialogView : public views::WebDialogView,
   void ViewHierarchyChanged(
       const views::ViewHierarchyChangedDetails& details) override {
     views::WebDialogView::ViewHierarchyChanged(details);
-    if (!details.is_add || !GetWidget()) {
+    if (!xenon_delegate_ || !details.is_add || !GetWidget()) {
       return;
     }
     content::WebContents* wc = web_contents();
@@ -596,7 +611,7 @@ class XenonWebDialogView : public views::WebDialogView,
 
   void OnThemeChanged() override {
     views::WebDialogView::OnThemeChanged();
-    if (!xenon_delegate_->UseNativeFrame()) {
+    if (xenon_delegate_ && !xenon_delegate_->UseNativeFrame()) {
       SetBackground(nullptr);
     }
   }
@@ -606,9 +621,14 @@ class XenonWebDialogView : public views::WebDialogView,
     UpdateFramelessCompositorShadowBounds();
   }
 
-  bool CanResize() const override { return xenon_delegate_->can_resize(); }
+  bool CanResize() const override {
+    return xenon_delegate_ && xenon_delegate_->can_resize();
+  }
 
   int NonClientHitTest(const gfx::Point& point) override {
+    if (!xenon_delegate_) {
+      return HTNOWHERE;
+    }
     if (!xenon_delegate_->UseNativeFrame() && CanResizeFrame(GetWidget())) {
       const int hit = GetCurrentResizeHitTest(point);
       if (hit != HTNOWHERE) {
@@ -657,7 +677,7 @@ class XenonWebDialogView : public views::WebDialogView,
 
   std::unique_ptr<views::FrameView> CreateFrameView(
       views::Widget* widget) override {
-    if (xenon_delegate_->UseNativeFrame()) {
+    if (xenon_delegate_ && xenon_delegate_->UseNativeFrame()) {
       return views::WebDialogView::CreateFrameView(widget);
     }
     return std::make_unique<FrameView>();
@@ -666,7 +686,8 @@ class XenonWebDialogView : public views::WebDialogView,
   bool ShouldDescendIntoChildForEventHandling(
       gfx::NativeView child,
       const gfx::Point& location) override {
-    if (!xenon_delegate_->UseNativeFrame() && CanResizeFrame(GetWidget()) &&
+    if (xenon_delegate_ && !xenon_delegate_->UseNativeFrame() &&
+        CanResizeFrame(GetWidget()) &&
         IsInResizeBorder(location, GetCurrentResizeHitTestBounds())) {
       return false;
     }
@@ -723,11 +744,14 @@ class XenonWebDialogView : public views::WebDialogView,
   // cannot work there even if hit-test returns HT*. Handle resize in Views;
   // this is independent of whether the window paints a shadow.
   bool UseManualResize() const {
-    return !xenon_delegate_->UseNativeFrame() &&
+    return xenon_delegate_ && !xenon_delegate_->UseNativeFrame() &&
            !UseDwmRoundedCorners(xenon_delegate_->UseDwm());
   }
 
   gfx::Rect GetCurrentResizeHitTestBounds() const {
+    if (!xenon_delegate_) {
+      return gfx::Rect();
+    }
     return GetResizeHitTestBounds(size(), xenon_delegate_->UseNativeFrame(),
                                   xenon_delegate_->UseDwm(),
                                   xenon_delegate_->ShouldShowShadow());
@@ -752,7 +776,7 @@ class XenonWebDialogView : public views::WebDialogView,
 
   void UpdateManualResize(const gfx::Point& screen_location) {
     views::Widget* widget = GetWidget();
-    if (!widget || manual_resize_hit_test_ == HTNOWHERE) {
+    if (!xenon_delegate_ || !widget || manual_resize_hit_test_ == HTNOWHERE) {
       return;
     }
 
@@ -809,7 +833,7 @@ class XenonWebDialogView : public views::WebDialogView,
   }
 
   void FinishAddedToWidget() {
-    if (!GetWidget()) {
+    if (!xenon_delegate_ || !GetWidget()) {
       return;
     }
 
@@ -954,7 +978,9 @@ class XenonWebDialogView : public views::WebDialogView,
     }
   };
 
-  const raw_ptr<XenonWebDialog> xenon_delegate_;
+  // WebDialogView::OnDialogClosed lets the delegate delete itself while this
+  // view remains alive until the native Widget finishes closing.
+  const base::WeakPtr<XenonWebDialog> xenon_delegate_;
   std::unique_ptr<SkRegion> draggable_region_;
   std::unique_ptr<XenonDraggableRegionsEnabler> draggable_regions_enabler_;
   std::unique_ptr<ui::Shadow> compositor_shadow_;
@@ -1243,17 +1269,13 @@ void XenonWebDialog::ShowInternal(
   views::Widget* widget = nullptr;
   if (modal_type == ui::mojom::ModalType::kChild && web_contents) {
     widget = constrained_window::ShowWebModalDialogViews(
-        new XenonWebDialogView(context, delegate,
-                               std::make_unique<ChromeWebContentsHandler>(),
-                               std::move(contents)),
+        delegate->CreateView(context, std::move(contents)).release(),
         web_contents);
   } else {
     widget = new views::Widget;
     views::Widget::InitParams params(
         views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
-    params.delegate = new XenonWebDialogView(
-        context, delegate, std::make_unique<ChromeWebContentsHandler>(),
-        std::move(contents));
+    params.delegate = delegate->CreateView(context, std::move(contents)).release();
     params.remove_standard_frame = !frame;
 #if BUILDFLAG(IS_WIN)
     params.dont_show_in_taskbar = skip_taskbar;
@@ -1572,6 +1594,14 @@ XenonWebDialog::XenonWebDialog(const GURL& url,
 
 XenonWebDialog::~XenonWebDialog() = default;
 
+std::unique_ptr<views::WebDialogView> XenonWebDialog::CreateView(
+    content::BrowserContext* context,
+    std::unique_ptr<content::WebContents> contents) {
+  return std::make_unique<XenonWebDialogView>(
+      context, weak_ptr_factory_.GetWeakPtr(),
+      std::make_unique<ChromeWebContentsHandler>(), std::move(contents));
+}
+
 ui::mojom::ModalType XenonWebDialog::GetDialogModalType() const {
   return modal_type_;
 }
@@ -1597,6 +1627,9 @@ std::string XenonWebDialog::GetDialogArgs() const {
 }
 
 void XenonWebDialog::OnDialogClosed(const std::string& json_retval) {
+  // A close callback can reenter the host before the view is destroyed.
+  // Stop further view access as soon as closing becomes final.
+  weak_ptr_factory_.InvalidateWeakPtrs();
   if (on_dialog_closed_) {
     std::move(on_dialog_closed_).Run();
   }

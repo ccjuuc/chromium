@@ -12,7 +12,6 @@
 #include <utility>
 
 #include "base/base64.h"
-#include "base/base_paths.h"
 #include "base/command_line.h"
 #include "base/containers/span.h"
 #include "base/files/file_enumerator.h"
@@ -21,8 +20,8 @@
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
-#include "base/path_service.h"
 #include "base/strings/string_util.h"
+#include "xenon_overlay/common/ipc/xenon_app_descriptor_paths.h"
 #include "xenon_overlay/public/xenon_ipc_switches.h"
 
 namespace xenon::ipc {
@@ -188,7 +187,7 @@ bool ParsePrivilegedSchemes(const base::Value& value,
 }
 
 bool LoadPrivilegedSchemeDeclarations(
-    const base::FilePath& host_directory,
+    const std::vector<base::FilePath>& host_directories,
     const base::FilePath& explicit_application,
     PrivilegedSchemes* schemes,
     std::string* error) {
@@ -196,12 +195,19 @@ bool LoadPrivilegedSchemeDeclarations(
     return false;
   }
   std::set<base::FilePath> descriptors;
-  if (!host_directory.empty()) {
+  std::set<base::FilePath> discovered_names;
+  for (const auto& host_directory : host_directories) {
+    if (host_directory.empty()) {
+      continue;
+    }
     base::FileEnumerator files(host_directory, false,
                                base::FileEnumerator::FILES,
                                FILE_PATH_LITERAL("*.xenon.json"));
     for (auto path = files.Next(); !path.empty(); path = files.Next()) {
-      descriptors.insert(std::move(path));
+      // Prefer the resource copy while retaining unrelated legacy descriptors.
+      if (discovered_names.insert(path.BaseName()).second) {
+        descriptors.insert(std::move(path));
+      }
     }
   }
   if (explicit_application.MatchesExtension(FILE_PATH_LITERAL(".json"))) {
@@ -268,14 +274,10 @@ void InitializeStartupPrivilegedSchemes() {
       }
     }
   } else {
-    base::FilePath host_directory;
-    base::PathService::Get(base::DIR_EXE, &host_directory);
-    // Match the existing host descriptor lookup on every platform. In a macOS
-    // bundle this is Contents/MacOS; a descriptor in Resources can be selected
-    // explicitly with --xenon-electron-app, just like any external descriptor.
     LoadPrivilegedSchemeDeclarations(
-        host_directory, command_line.GetSwitchValuePath(switches::kElectronApp),
-        &state.schemes, &state.error);
+        GetElectronAppDescriptorDirectories(),
+        command_line.GetSwitchValuePath(switches::kElectronApp), &state.schemes,
+        &state.error);
   }
   if (!state.error.empty()) {
     state.schemes.clear();

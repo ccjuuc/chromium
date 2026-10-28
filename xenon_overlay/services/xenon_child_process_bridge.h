@@ -18,7 +18,8 @@
 namespace xenon {
 
 // Owns OS child processes for one service. Handles are scoped to their creating
-// renderer (or main endpoint); no caller can address an arbitrary system PID.
+// renderer (or main endpoint); no caller can signal an arbitrary system PID.
+// The main endpoint may perform a signal-0 existence/permission check by PID.
 class XenonChildProcessBridge {
  public:
   using EventCallback = base::RepeatingCallback<void(

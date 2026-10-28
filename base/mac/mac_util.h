@@ -9,6 +9,7 @@
 #include <CoreGraphics/CoreGraphics.h>
 #include <stdint.h>
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -36,6 +37,17 @@ BASE_EXPORT void AddToLoginItems(const FilePath& app_bundle_file_path,
 
 // Removes the specified application from the list of Login Items.
 BASE_EXPORT void RemoveFromLoginItems(const FilePath& app_bundle_file_path);
+
+struct LoginItemSettings {
+  bool open_at_login = false;
+  bool open_as_hidden = false;
+};
+
+// Reads the legacy Login Items list for the specified application without
+// changing it or mounting volumes. Returns nullopt when the list cannot be
+// read; an absent item is a successful result with both fields false.
+BASE_EXPORT std::optional<LoginItemSettings> GetLoginItemSettings(
+    const FilePath& app_bundle_file_path);
 
 // Returns true if the current process was automatically launched as a
 // 'Login Item' or via Lion's Resume. Used to suppress opening windows.

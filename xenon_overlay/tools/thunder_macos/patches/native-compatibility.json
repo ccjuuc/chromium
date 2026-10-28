@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "patches": [
+    {
+      "path": "native-main.patch",
+      "repository": ".",
+      "base_revision": "3104cda9955185bc3538af79667ff19e017a1d96",
+      "sha256": "7d41be17b352940bf48243bba1f29bec36b1ab1646ee15344a9a375cbfb94dcb",
+      "files": [
+        {
+          "path": "cppsrc/link_hub/src/Biz/Protocol/LinkProtocol.cpp",
+          "before_sha256": "578b90d8b48b9825def7b8b745e7930cb93d8847bdaf46d0e31a5a7ca3f14205",
+          "after_sha256": "c6dd3c7124276eab8fe7cf9ac7d0e528c8d565a9ba29a185ebe4cef767846631"
+        },
+        {
+          "path": "cppsrc/thunder_helper/src/WeakReferences/object_life_monitor.cpp",
+          "before_sha256": "e57a6cf30534fcc7bcf68600e30830e29bbe4c9f7a11240479ffe7f481ee5f1e",
+          "after_sha256": "2e379118bfe77a24364363aee693c9b6dd2dc39606c6c9728c5dd3cfb2e3def3"
+        },
+        {
+          "path": "cppsrc/thunder_helper/src/WeakReferences/object_life_monitor.h",
+          "before_sha256": "e2c4013eb8180392625537cda9304e52189340e5f22544ebe43ff53e610ab3c3",
+          "after_sha256": "36e9cdfc9251af9a12a5a3c5967547ad5f26c26164e4c72ad952ac44d1473e6a"
+        },
+        {
+          "path": "cppsrc/thunder_helper/src/mac/init.h",
+          "before_sha256": "6c5b490b0bd1a27767f87e7aaba7755382a25b1e031de00cc8259274311a71e6",
+          "after_sha256": "2d179f8b006166e1262875f5cb72188437e45c516304a55a0fb599443158cc7c"
+        },
+        {
+          "path": "cppsrc/thunder_helper/src/xmp_helper.cpp",
+          "before_sha256": "76f82313ff4491f725785d14a9098df92473660981098444e31ed459733e3812",
+          "after_sha256": "c7713e0d5e5b07ca28de3855fa71324203b8c29c10e1eeef52c3a97e8c1491a4"
+        }
+      ]
+    },
+    {
+      "path": "native-player.patch",
+      "repository": "cppsrc/player_comp_native",
+      "base_revision": "3e9fb34273a7956a1de171b2d7f6c0634fafe7e5",
+      "sha256": "f8e1c782239d9eea4118115736033868ea2b1fb40686bfad563d0059b09cd4c4",
+      "files": [
+        {
+          "path": "src/main/cpp/player_helper/src/WeakReferences/object_life_monitor.cpp",
+          "before_sha256": "e57a6cf30534fcc7bcf68600e30830e29bbe4c9f7a11240479ffe7f481ee5f1e",
+          "after_sha256": "2e379118bfe77a24364363aee693c9b6dd2dc39606c6c9728c5dd3cfb2e3def3"
+        },
+        {
+          "path": "src/main/cpp/player_helper/src/WeakReferences/object_life_monitor.h",
+          "before_sha256": "e2c4013eb8180392625537cda9304e52189340e5f22544ebe43ff53e610ab3c3",
+          "after_sha256": "36e9cdfc9251af9a12a5a3c5967547ad5f26c26164e4c72ad952ac44d1473e6a"
+        },
+        {
+          "path": "src/main/cpp/player_helper/src/mac/init.h",
+          "before_sha256": "a43792488a7ce897ad66ae68079c2601d8a4114dd50cd56376741121cddbf37d",
+          "after_sha256": "f525ef3459eef3b2a334ad050d2157f3fa51ec35d5ffeee6cf3d09a3c713afe8"
+        },
+        {
+          "path": "src/main/cpp/player_helper/src/player_helper.cpp",
+          "before_sha256": "22528aa1a8349a1885c2d2306cd98d25b1df88d2d9dfcc6683d20d8cd93f82ac",
+          "after_sha256": "0feacfeb0a22d8259cfcdca4e7135c7373c0983e89a0477ac1c969dda6fcabde"
+        }
+      ]
+    }
+  ]
+}

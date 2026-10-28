@@ -25,6 +25,7 @@
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/common/chrome_version.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 #if defined(HELPER_EXECUTABLE)
 #include "sandbox/mac/seatbelt_exec.h"  // nogncheck
@@ -213,8 +214,14 @@ __attribute__((visibility("default"))) int main(int argc, char* argv[]) {
   UNSAFE_TODO(snprintf(framework_path.get(), framework_path_size, "%s/%s",
                        parent_dir, rel_path));
 
+  // 原生 Node-API 模块以 dynamic_lookup 链接，需从全局作用域解析宿主接口。
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+  constexpr int framework_scope = RTLD_GLOBAL;
+#else
+  constexpr int framework_scope = RTLD_LOCAL;
+#endif
   void* library =
-      dlopen(framework_path.get(), RTLD_LAZY | RTLD_LOCAL | RTLD_FIRST);
+      dlopen(framework_path.get(), RTLD_LAZY | framework_scope | RTLD_FIRST);
   if (!library) {
     FatalError("dlopen %s: %s.", framework_path.get(), dlerror());
   }

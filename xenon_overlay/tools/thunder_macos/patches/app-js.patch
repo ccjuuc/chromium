@@ -1,0 +1,97 @@
+diff --git a/app/src/common/require-node-file.ts b/app/src/common/require-node-file.ts
+index 277a696e6342d9176ea21469b85c8c26262e4e15..c947cbf26e2020fd0d8c72dbd4ed5a0fe5d86054 100644
+--- a/app/src/common/require-node-file.ts
++++ b/app/src/common/require-node-file.ts
+@@ -1,3 +1,5 @@
++import { requireMacPlayerAddon } from '@root/player-comp/mac/main/mac-player-capability'
++
+ export default function requireNodeFile(id: string): any {
+-  return __non_webpack_require__(id);
++  return requireMacPlayerAddon(id, __non_webpack_require__)
+ }
+diff --git a/app/src/main/mac-player-host.ts b/app/src/main/mac-player-host.ts
+index 8adf850f3e66aa3559f0bb623fe834bbe2cbfff4..a6560eb67febf8ce6b5c30f075f10155ad637765 100644
+--- a/app/src/main/mac-player-host.ts
++++ b/app/src/main/mac-player-host.ts
+@@ -10,6 +10,7 @@ import {
+   GetXxxNodePath,
+ } from '@root/common/xxx-node-path'
+ import { createMacPlayerHost as createComponentMacPlayerHost } from '@root/player-comp/mac/main'
++import { getXenonMacPlayer } from '@root/player-comp/mac/main/mac-player-capability'
+ 
+ import { appendBootLog } from './boot-log'
+ 
+@@ -27,10 +28,15 @@ export function createMacPlayerHost() {
+       configPath,
+       cachePath,
+     },
+-    loadNative: () => ({
+-      addon: requireNodeFile(path.join(GetXxxNodePath(), GetPlayerControlAddonNodeName())),
+-      helper: requireNodeFile(path.join(GetXxxNodePath(), 'player_helper.node')),
+-    }),
++    loadNative: () => {
++      const host = getXenonMacPlayer()
++      return {
++        addon: requireNodeFile(path.join(GetXxxNodePath(), GetPlayerControlAddonNodeName())),
++        ...(host
++          ? { host }
++          : { helper: requireNodeFile(path.join(GetXxxNodePath(), 'player_helper.node')) }),
++      }
++    },
+     taskManager: TaskManager.GetInstance(),
+     log: appendBootLog,
+   })
+diff --git a/app/src/common/single-promise.ts b/app/src/common/single-promise.ts
+index 43d37748e9fd050fd93905f93021b7437a7ab38e..a28b4c4aae0240d3aa089b5cc4e9ea111a0e0643 100644
+--- a/app/src/common/single-promise.ts
++++ b/app/src/common/single-promise.ts
+@@ -1,27 +1,29 @@
+ /**
+- * Single Promise: 注意这个是指异步过程只产生一个Promise对象，
++ * 同一 key 的并发操作共享结果或错误，完成后允许重新发起。
+  */
+ export class SinglePromise {
+-  private named_cbs: { [name: string]: ((result: any) => void)[] } = {};
+-  
+-  public async run<T>(key: string, fn: () => Promise<T>): Promise<T> {
+-    return await new Promise<T>(async (v) => {
+-      if (this.named_cbs[key]) {
+-        this.named_cbs[key].push((result: T) => {
+-          v(result)
+-        })
+-      } else {
+-        this.named_cbs[key] = [(result: T) => {
+-          v(result);
+-        }];
++  private pendingByKey = new Map<string, Promise<unknown>>();
+ 
+-        const result = await fn();
+-        let temp = this.named_cbs[key];
+-        delete this.named_cbs[key];
+-        temp.forEach((cb) => {
+-          cb(result);
+-        });
+-      }
++  public run<T>(key: string, fn: () => Promise<T>): Promise<T> {
++    const existing = this.pendingByKey.get(key);
++    if (existing) return existing as Promise<T>;
++
++    let resolveOperation!: (value: T | PromiseLike<T>) => void;
++    let rejectOperation!: (reason: unknown) => void;
++    const operation = new Promise<T>((resolve, reject) => {
++      resolveOperation = resolve;
++      rejectOperation = reject;
++    });
++    const pending = operation.finally(() => {
++      this.pendingByKey.delete(key);
+     });
++    // 先登记再调用，保持原有同步启动时序，并让同步重入复用同一请求。
++    this.pendingByKey.set(key, pending);
++    try {
++      resolveOperation(fn());
++    } catch (error) {
++      rejectOperation(error);
++    }
++    return pending;
+   }
+ }

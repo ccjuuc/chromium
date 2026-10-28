@@ -1317,7 +1317,13 @@ bool XenonIpcMainContainer::MaybeLoadConfiguredMainScript() {
           : LoadCommonJsModule(main_script_path_, &error);
   if (!loaded.ToLocal(&ignored)) {
     if (try_catch.HasCaught()) {
-      v8::String::Utf8Value message(isolate_, try_catch.Exception());
+      v8::Local<v8::Value> details = try_catch.Exception();
+      v8::Local<v8::Value> stack;
+      if (try_catch.StackTrace(scope.context()).ToLocal(&stack) &&
+          stack->IsString()) {
+        details = stack;
+      }
+      v8::String::Utf8Value message(isolate_, details);
       if (*message) {
         error.assign(*message, message.length());
       }
@@ -3375,7 +3381,10 @@ void XenonIpcMainContainer::NativeBrowserWindowCall(gin::Arguments* args) {
   v8::Local<v8::Value> value = args->PeekNext();
   std::string error;
   if (!value.IsEmpty() && !value->IsUndefined() &&
-      !V8ToValue(value, &arguments, &error)) {
+      !(command == "mac-player"
+            ? ConvertV8ToValue(isolate_, context_.Get(isolate_), value,
+                               &arguments, &error, 0, true)
+            : V8ToValue(value, &arguments, &error))) {
     args->ThrowTypeError(error.empty() ? "Invalid BrowserWindow arguments"
                                        : error);
     return;

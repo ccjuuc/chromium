@@ -64,6 +64,11 @@ REMOTE_COCOA_APP_SHIM_EXPORT
 // Clear the hosted view. For example, if it is about to be destroyed.
 - (void)clearView;
 
+// Hit-tests a mouse event for a tracking-area recipient. Unlike -hitTest:,
+// hover events may reach subviews in a draggable background. Mouse buttons and
+// dragging retain the native window-dragging behavior of -hitTest:.
+- (NSView*)hitTest:(NSPoint)point forMouseEvent:(NSEvent*)event;
+
 // Process a mouse event captured while the widget had global mouse capture.
 - (void)processCapturedMouseEvent:(NSEvent*)theEvent;
 

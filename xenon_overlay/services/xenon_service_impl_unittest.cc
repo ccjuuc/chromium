@@ -1350,7 +1350,12 @@ ipcMain.handle('pipe:stop-server', () => new Promise(resolve => {
 class XenonServiceMainNetTest : public XenonServiceOwnerTest {
  protected:
   void InitializeEmbeddedMain() {
+#if BUILDFLAG(IS_MAC)
+    // Keep generated Unix socket endpoints within Darwin's sun_path capacity.
+    ASSERT_TRUE(temp_dir_.CreateUniqueTempDirUnderPath(base::FilePath("/tmp")));
+#else
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+#endif
     // The virtual module has no disk file to canonicalize. Derive it from the
     // same canonical directory as app_path (Windows may return an 8.3 temp
     // directory spelling), so the production ancestry check compares peers.

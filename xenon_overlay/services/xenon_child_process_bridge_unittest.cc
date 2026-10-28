@@ -166,13 +166,74 @@ TEST_F(XenonChildProcessBridgeTest, WindowsHideAlsoHidesGuiStartupWindow) {
 }
 #endif
 
+TEST_F(XenonChildProcessBridgeTest, MainProcessProbeChecksCurrentPid) {
+  const auto result = bridge_.Call(
+      "container", "@main", base::DictValue()
+                                .Set("id", "@process")
+                                .Set("op", "processProbe")
+                                .Set("pid", uv_os_getpid())
+                                .Set("signal", 0));
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+}
+
+TEST_F(XenonChildProcessBridgeTest, MainProcessProbeObservesRealChildExit) {
+  const auto spawned = bridge_.Call("container", "renderer", SpawnRequest());
+  ASSERT_TRUE(spawned.FindBool("ok").value_or(false));
+  const auto pid = spawned.FindInt("pid");
+  ASSERT_TRUE(pid);
+  EXPECT_TRUE(Call("resume", 1).FindBool("ok").value_or(false));
+  EXPECT_TRUE(Call("resume", 2).FindBool("ok").value_or(false));
+  const auto probe = base::DictValue()
+                         .Set("id", "@process")
+                         .Set("op", "processProbe")
+                         .Set("pid", *pid)
+                         .Set("signal", 0);
+  EXPECT_TRUE(bridge_.Call("container", "@main", probe)
+                  .FindBool("ok").value_or(false));
+  EXPECT_TRUE(bridge_.Call("container", "renderer",
+                          base::DictValue().Set("id", "fixture")
+                              .Set("op", "kill").Set("signal", "SIGTERM"))
+                  .FindBool("ok").value_or(false));
+  ASSERT_TRUE(base::test::RunUntil([&] { return closed_; }));
+  const auto exited = bridge_.Call("container", "@main", probe);
+  EXPECT_FALSE(exited.FindBool("ok").value_or(true));
+  ASSERT_TRUE(exited.FindString("code"));
+  EXPECT_EQ("ESRCH", *exited.FindString("code"));
+}
+
+TEST_F(XenonChildProcessBridgeTest, ProcessProbeRejectsSignalsAndRenderers) {
+  auto request = base::DictValue()
+                     .Set("id", "@process")
+                     .Set("op", "processProbe")
+                     .Set("pid", uv_os_getpid())
+                     .Set("signal", 0);
+  auto result = bridge_.Call("container", "renderer", request);
+  ASSERT_TRUE(result.FindString("code"));
+  EXPECT_EQ("EPERM", *result.FindString("code"));
+  request.Set("pid", 2147483647);
+  request.Set("signal", 9);
+  result = bridge_.Call("container", "@main", request);
+  ASSERT_TRUE(result.FindString("code"));
+  EXPECT_EQ("ENOTSUP", *result.FindString("code"));
+  request.Set("signal", 0);
+  request.Set("pid", "not-a-pid");
+  result = bridge_.Call("container", "@main", request);
+  ASSERT_TRUE(result.FindString("code"));
+  EXPECT_EQ("EINVAL", *result.FindString("code"));
+}
+
 TEST_F(XenonChildProcessBridgeTest, RealPipesEnvironmentCwdAndExitOrdering) {
   base::ScopedTempDir directory;
   ASSERT_TRUE(directory.CreateUniqueTempDir());
+  // macOS getcwd resolves /var to /private/var. Compare the same directory
+  // spelling in the child rather than failing on that system symlink.
+  base::FilePath canonical_directory;
+  ASSERT_TRUE(base::NormalizeFilePath(directory.GetPath(),
+                                      &canonical_directory));
   auto request = SpawnRequest();
-  request.Set("cwd", directory.GetPath().AsUTF8Unsafe());
+  request.Set("cwd", canonical_directory.AsUTF8Unsafe());
   request.Set("env", base::DictValue()
-                         .Set("XENON_CHILD_TEST_CWD", directory.GetPath().AsUTF8Unsafe())
+                         .Set("XENON_CHILD_TEST_CWD", canonical_directory.AsUTF8Unsafe())
                          .Set("XENON_CHILD_TEST_MARKER", "child-fixture"));
   auto result = bridge_.Call("container", "renderer", request);
   ASSERT_TRUE(result.FindBool("ok").value_or(false));

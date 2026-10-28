@@ -22,7 +22,8 @@ using AutoUpdaterEventCallback =
     base::RepeatingCallback<void(const std::string&, base::ListValue)>;
 void SetAutoUpdaterEventCallback(AutoUpdaterEventCallback callback);
 
-// Calls clipboard/shell APIs for an already-authorized Electron endpoint.
+// Calls clipboard/shell/updater APIs and read-only app settings for an
+// already-authorized Electron endpoint.
 // Accepts a direct main-process request or the renderer's one-argument list.
 // Call on the Browser UI sequence. Replies run on that same sequence. Shell
 // operations are delegated to the selected platform backend.

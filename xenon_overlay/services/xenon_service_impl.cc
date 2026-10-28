@@ -357,15 +357,24 @@ void XenonServiceImpl::InitializeElectronIpc(
         return true;
       },
       base::Unretained(executor));
-  hooks.invoke =
-      base::BindRepeating(&XenonNodeExecutor::InvokeExportFromCurrentThread,
-                          base::Unretained(executor));
-  hooks.construct =
-      base::BindRepeating(&XenonNodeExecutor::ConstructExportFromCurrentThread,
-                          base::Unretained(executor));
+  hooks.invoke = base::BindRepeating(
+      [](XenonNodeExecutor* executor, const std::string& path,
+         const std::string& name, const base::Value& args, base::Value* result,
+         std::string* error) {
+        return executor->InvokeExportFromCurrentThread(path, name, args, result, error);
+      }, base::Unretained(executor));
+  hooks.construct = base::BindRepeating(
+      [](XenonNodeExecutor* executor, const std::string& path,
+         const std::string& name, const base::Value& args, base::Value* result,
+         std::string* error) {
+        return executor->ConstructExportFromCurrentThread(path, name, args, result, error);
+      }, base::Unretained(executor));
   hooks.invoke_instance = base::BindRepeating(
-      &XenonNodeExecutor::InvokeInstanceFromCurrentThread,
-      base::Unretained(executor));
+      [](XenonNodeExecutor* executor, const std::string& path, int32_t id,
+         const std::string& name, const base::Value& args, base::Value* result,
+         std::string* error) {
+        return executor->InvokeInstanceFromCurrentThread(path, id, name, args, result, error);
+      }, base::Unretained(executor));
   container->SetNativeAddonHooks(std::move(hooks));
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
   ipc::XenonIpcMainContainer::WindowHooks window_hooks;

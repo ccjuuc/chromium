@@ -5,6 +5,7 @@
 #include "xenon_overlay/chrome/browser/ipc/xenon_file_system_bridge.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -15,9 +16,13 @@
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/pickle.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/thread_pool.h"
+#include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -112,6 +117,185 @@ class XenonFileSystemRangeTest : public testing::Test {
   base::ScopedTempDir temp_dir_;
   base::FilePath archive_path_;
 };
+
+class XenonFileSystemSymlinkTest : public testing::Test {
+ protected:
+  void SetUp() override { ASSERT_TRUE(temp_dir_.CreateUniqueTempDir()); }
+
+  static mojom::IpcResultPtr Call(const std::string& operation,
+                                  const base::FilePath& path,
+                                  base::DictValue options = {}) {
+    options.Set("operation", operation);
+    options.Set("path", path.AsUTF8Unsafe());
+    return PerformFileSystemCall(
+        base::Value(base::ListValue().Append(std::move(options))));
+  }
+
+  base::ScopedTempDir temp_dir_;
+};
+
+#if BUILDFLAG(IS_POSIX)
+TEST_F(XenonFileSystemSymlinkTest,
+       DanglingPayloadRoundTripsAndExistingLinkCannotBeReplaced) {
+  const auto link = temp_dir_.GetPath().AppendASCII("single-instance.lock");
+  const std::string payload = "12345\tWed Oct 28 12:00:00 2026";
+  auto created =
+      Call("symlink", link, base::DictValue().Set("target", payload));
+  ASSERT_TRUE(created->success) << created->error;
+  EXPECT_FALSE(base::PathExists(link));
+  EXPECT_TRUE(base::IsLink(link));
+  auto read =
+      Call("readlink", link, base::DictValue().Set("returnBytes", true));
+  ASSERT_TRUE(read->success) << read->error;
+  ASSERT_TRUE(read->value.is_blob());
+  EXPECT_EQ(payload, std::string(read->value.GetBlob().begin(),
+                                 read->value.GetBlob().end()));
+
+  auto duplicate =
+      Call("symlink", link, base::DictValue().Set("target", "replacement"));
+  ASSERT_FALSE(duplicate->success);
+  EXPECT_TRUE(duplicate->error.starts_with("EEXIST:")) << duplicate->error;
+  base::FilePath actual;
+  ASSERT_TRUE(base::ReadSymbolicLink(link, &actual));
+  EXPECT_EQ(payload, actual.value());
+  ASSERT_TRUE(Call("unlink", link)->success);
+  EXPECT_FALSE(base::IsLink(link));
+  auto missing = Call("readlink", link);
+  ASSERT_FALSE(missing->success);
+  EXPECT_TRUE(missing->error.starts_with("ENOENT:")) << missing->error;
+
+  // Relative paths and parent components are also opaque target bytes.
+  const std::string relative = "./missing/../peer-token";
+  ASSERT_TRUE(Call("symlink", link, base::DictValue().Set("target", relative))
+                  ->success);
+  auto legacy = Call("readlink", link);
+  ASSERT_TRUE(legacy->success) << legacy->error;
+  EXPECT_EQ(base::Base64Encode(relative), legacy->value.GetString());
+}
+
+TEST_F(XenonFileSystemSymlinkTest, ConcurrentCreatorsHaveExactlyOneWinner) {
+  base::test::TaskEnvironment task_environment;
+  const auto link = temp_dir_.GetPath().AppendASCII("exclusive.lock");
+  using Future = base::test::TestFuture<mojom::IpcResultPtr>;
+  std::vector<std::unique_ptr<Future>> futures;
+  constexpr int kCreators = 8;
+  for (int i = 0; i < kCreators; ++i) {
+    auto future = std::make_unique<Future>();
+    ASSERT_TRUE(base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, {base::MayBlock()},
+        base::BindOnce(
+            &XenonFileSystemSymlinkTest::Call, "symlink", link,
+            base::DictValue().Set("target", base::NumberToString(i))),
+        future->GetCallback()));
+    futures.push_back(std::move(future));
+  }
+  int winners = 0;
+  for (int i = 0; i < kCreators; ++i) {
+    auto result = futures[i]->Take();
+    if (result->success) {
+      ++winners;
+      base::FilePath target;
+      ASSERT_TRUE(base::ReadSymbolicLink(link, &target));
+      EXPECT_EQ(base::NumberToString(i), target.value());
+    } else {
+      EXPECT_TRUE(result->error.starts_with("EEXIST:")) << result->error;
+    }
+  }
+  EXPECT_EQ(winners, 1);
+}
+
+TEST_F(XenonFileSystemSymlinkTest, UnlinkNeverDeletesTheLinkTarget) {
+  const auto file = temp_dir_.GetPath().AppendASCII("kept.txt");
+  const auto directory = temp_dir_.GetPath().AppendASCII("kept-directory");
+  const auto link = temp_dir_.GetPath().AppendASCII("link");
+  ASSERT_TRUE(base::WriteFile(file, "keep me"));
+  ASSERT_TRUE(base::CreateDirectory(directory));
+  for (const auto& target : {file, directory}) {
+    auto created = Call("symlink", link,
+                        base::DictValue().Set("target", target.AsUTF8Unsafe()));
+    ASSERT_TRUE(created->success) << created->error;
+    auto removed = Call("unlink", link);
+    ASSERT_TRUE(removed->success) << removed->error;
+    EXPECT_FALSE(base::IsLink(link));
+    EXPECT_TRUE(base::PathExists(target));
+    auto duplicate = Call("symlink", target,
+                          base::DictValue().Set("target", "must-not-replace"));
+    ASSERT_FALSE(duplicate->success);
+    EXPECT_TRUE(duplicate->error.starts_with("EEXIST:")) << duplicate->error;
+  }
+  std::string bytes;
+  ASSERT_TRUE(base::ReadFileToString(file, &bytes));
+  EXPECT_EQ(bytes, "keep me");
+}
+
+TEST_F(XenonFileSystemSymlinkTest, ErrorsAndEmbeddedNullsNeverCreateALink) {
+  const auto file = temp_dir_.GetPath().AppendASCII("regular");
+  const auto link = temp_dir_.GetPath().AppendASCII("lock");
+  ASSERT_TRUE(base::WriteFile(file, "regular file"));
+  auto regular = Call("readlink", file);
+  ASSERT_FALSE(regular->success);
+  EXPECT_TRUE(regular->error.starts_with("EINVAL:")) << regular->error;
+  auto missing_parent =
+      Call("symlink", temp_dir_.GetPath().AppendASCII("missing/lock"),
+           base::DictValue().Set("target", "payload"));
+  ASSERT_FALSE(missing_parent->success);
+  EXPECT_TRUE(missing_parent->error.starts_with("ENOENT:"))
+      << missing_parent->error;
+  auto file_parent = Call("symlink", file.AppendASCII("lock"),
+                          base::DictValue().Set("target", "payload"));
+  ASSERT_FALSE(file_parent->success);
+  EXPECT_TRUE(file_parent->error.starts_with("ENOTDIR:")) << file_parent->error;
+  std::vector<base::DictValue> invalid_requests;
+  invalid_requests.emplace_back();
+  invalid_requests.push_back(
+      base::DictValue().Set("target", std::string("token\0suffix", 12)));
+  invalid_requests.push_back(
+      base::DictValue().Set("target", "payload").Set("type", "invalid"));
+  for (auto& options : invalid_requests) {
+    auto invalid = Call("symlink", link, std::move(options));
+    ASSERT_FALSE(invalid->success);
+    EXPECT_TRUE(invalid->error.starts_with("EINVAL:")) << invalid->error;
+    EXPECT_FALSE(base::IsLink(link));
+  }
+  base::DictValue request;
+  request.Set("operation", "symlink");
+  request.Set("path", link.AsUTF8Unsafe() + std::string("\0suffix", 7));
+  request.Set("target", "payload");
+  auto invalid_path = PerformFileSystemCall(
+      base::Value(base::ListValue().Append(std::move(request))));
+  ASSERT_FALSE(invalid_path->success);
+  EXPECT_TRUE(invalid_path->error.starts_with("EINVAL:"))
+      << invalid_path->error;
+  EXPECT_FALSE(base::IsLink(link));
+}
+
+TEST_F(XenonFileSystemSymlinkTest, LinkCallsRetainTheReadOnlyAsarPolicy) {
+  xenon::asar::TestArchiveBuilder builder;
+  const auto archive = temp_dir_.GetPath().AppendASCII("readonly.asar");
+  ASSERT_TRUE(builder.Write(archive, {{"packed.txt", "original"}}, false));
+  const auto entry = archive.AppendASCII("packed.txt");
+  for (const char* operation : {"symlink", "readlink"}) {
+    auto denied = Call(operation, entry,
+                       base::DictValue().Set("target", "must-not-replace"));
+    ASSERT_FALSE(denied->success);
+    EXPECT_TRUE(denied->error.starts_with("EACCES:")) << denied->error;
+  }
+  auto packed = Call("read_file", entry);
+  ASSERT_TRUE(packed->success) << packed->error;
+  EXPECT_EQ(base::Base64Encode("original"), packed->value.GetString());
+}
+#else
+TEST_F(XenonFileSystemSymlinkTest, UnsupportedPlatformsDoNotCreateFakeLocks) {
+  const auto link = temp_dir_.GetPath().AppendASCII("lock");
+  for (const char* operation : {"symlink", "readlink"}) {
+    auto result =
+        Call(operation, link, base::DictValue().Set("target", "payload"));
+    ASSERT_FALSE(result->success);
+    EXPECT_TRUE(result->error.starts_with("ENOSYS:")) << result->error;
+    EXPECT_FALSE(base::PathExists(link));
+  }
+}
+#endif
 
 TEST_F(XenonFileSystemRangeTest, LargeFileReturnsOnlyRequested64KiB) {
   const auto path = temp_dir_.GetPath().AppendASCII("large.bin");

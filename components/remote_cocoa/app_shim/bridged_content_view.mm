@@ -287,6 +287,10 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
 // mouse up and down events. The default implementation recursively calls
 // hitTest: on each subview until it finds a non-nil target.
 - (NSView*)hitTest:(NSPoint)point {
+  return [self hitTest:point forMouseEvent:nil];
+}
+
+- (NSView*)hitTest:(NSPoint)point forMouseEvent:(NSEvent*)event {
   // `point` is in superview's coordinate. Convert it to local coordinate.
   // This is important when the window has a native titlebar, in which case the
   // superview is taller than the contentView.
@@ -302,6 +306,14 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   // https://crbug.com/830962).
   if (hitTestResult ==
       remote_cocoa::mojom::HitTestResult::kDraggableBackground) {
+    // Tracking areas also deliver hover events over draggable regions. Let
+    // their recipients hit-test the actual subtree so that web content can
+    // reveal controls without changing native window dragging or double-click.
+    if (event && (event.type == NSEventTypeMouseMoved ||
+                  event.type == NSEventTypeMouseEntered ||
+                  event.type == NSEventTypeMouseExited)) {
+      return [super hitTest:point];
+    }
     return nil;
   }
 

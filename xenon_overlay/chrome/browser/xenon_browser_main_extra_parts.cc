@@ -4,9 +4,6 @@
 #include <utility>
 #include <vector>
 
-#include "xenon_overlay/buildflags/buildflags.h"
-#include "xenon_overlay/chrome/browser/xenon_login_startup_registration.h"
-
 #include "base/base_paths.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
@@ -19,34 +16,37 @@
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/common/chrome_paths.h"
 #include "components/embedder_support/user_agent_utils.h"
 #include "content/public/browser/webui_config_map.h"
 #include "net/base/filename_util.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_app_config.h"
 #include "xenon_overlay/chrome/browser/managed_certificates/managed_certificate_service.h"
 #include "xenon_overlay/chrome/browser/reminder/xenon_reminder_notification_manager.h"
-#include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
-#include "xenon_overlay/chrome/browser/ui/xenon_reminder_browser_observer.h"
-#include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 #include "xenon_overlay/chrome/browser/ui/webui/dev_test_pages_webui.h"
 #include "xenon_overlay/chrome/browser/ui/webui/simple_webui_controller.h"
+#include "xenon_overlay/chrome/browser/ui/webui/video_sniffer_webui_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_certificates_ui_controller.h"
+#include "xenon_overlay/chrome/browser/ui/webui/xenon_node_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_player_by_elec_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_player_electron_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_thunder_2025_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_ui_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_update_ui_controller.h"
-#include "xenon_overlay/chrome/browser/updater/xenon_update_manager.h"
-#include "xenon_overlay/chrome/browser/ui/webui/xenon_node_controller.h"
-#include "xenon_overlay/chrome/browser/ui/webui/video_sniffer_webui_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_webui_controller.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_reminder_browser_observer.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
+#include "xenon_overlay/chrome/browser/updater/xenon_update_manager.h"
 #include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
+#include "xenon_overlay/chrome/browser/xenon_login_startup_registration.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
+#include "xenon_overlay/common/ipc/xenon_app_descriptor_paths.h"
 #include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
 #include "xenon_overlay/public/xenon_ipc_switches.h"
 #include "xenon_overlay/resources/grit/xenon_resources.h"
@@ -234,13 +234,14 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
     }
   }
 
-  base::FilePath executable_dir;
-  if (base::PathService::Get(base::DIR_EXE, &executable_dir)) {
+  const auto thunder_descriptor =
+      xenon::ipc::FindElectronAppDescriptor("thunder_2025.xenon.json");
+  if (!thunder_descriptor.empty()) {
     xenon::ipc::mojom::IpcMainConfigPtr thunder_config;
     std::string error;
-    if (xenon::ipc::LoadElectronAppConfig(
-            executable_dir.AppendASCII("thunder_2025.xenon.json"),
-            kThunder2025ContainerId, &thunder_config, &error)) {
+    if (xenon::ipc::LoadElectronAppConfig(thunder_descriptor,
+                                          kThunder2025ContainerId,
+                                          &thunder_config, &error)) {
       // This product's service identity remains an embedder declaration.
       const auto& version = thunder_config->app_version;
       thunder_config->default_user_agent = base::StringPrintf(

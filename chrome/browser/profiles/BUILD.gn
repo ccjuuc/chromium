@@ -888,7 +888,10 @@ source_set("profiles_extra_parts_impl") {
   ]
 
   if (enable_xenon_service) {
-    deps += [ "//xenon_overlay/chrome/browser:sidebar" ]
+    deps += [
+      "//xenon_overlay/chrome/browser:electron_session_shutdown_notifier",
+      "//xenon_overlay/chrome/browser:sidebar",
+    ]
   }
 
   if (enable_xenon_ai) {

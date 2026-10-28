@@ -9,6 +9,7 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -151,6 +152,11 @@
 #include "ui/menus/cocoa/menu_controller.h"
 #include "ui/native_theme/native_theme.h"
 #include "url/gurl.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
+#endif
 
 namespace {
 
@@ -1587,6 +1593,17 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
 // browser).
 - (BOOL)validateUserInterfaceItem:(id<NSValidatedUserInterfaceItem>)item {
   SEL action = [item action];
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (action == @selector(activateHostedWindowFromDock:)) {
+    NSMenuItem* menu_item = base::apple::ObjCCast<NSMenuItem>(item);
+    NSNumber* window_id =
+        base::apple::ObjCCast<NSNumber>(menu_item.representedObject);
+    return window_id && window_id.longLongValue > 0 &&
+           window_id.longLongValue <= std::numeric_limits<int32_t>::max() &&
+           xenon::XenonElectronWindowHost::GetInstance()
+               ->CanActivateWindowFromMenu(window_id.intValue);
+  }
+#endif
   BOOL enable = NO;
   // Whether the profile is loaded and opening a new browser window is allowed.
   BOOL canOpenNewBrowser = [self canOpenNewBrowser];
@@ -2143,6 +2160,19 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
   [self commandDispatch:sender];
 }
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+- (void)activateHostedWindowFromDock:(NSMenuItem*)sender {
+  if (![self validateUserInterfaceItem:sender]) {
+    return;
+  }
+  NSNumber* window_id =
+      base::apple::ObjCCastStrict<NSNumber>(sender.representedObject);
+  [NSApp activateIgnoringOtherApps:YES];
+  xenon::XenonElectronWindowHost::GetInstance()->ActivateWindowFromMenu(
+      window_id.intValue);
+}
+#endif
+
 - (NSMenu*)applicationDockMenu:(NSApplication*)sender {
   NSMenu* dockMenu = [[NSMenu alloc] initWithTitle:@""];
 
@@ -2152,6 +2182,30 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
   if (profilesAdded) {
     [dockMenu addItem:[NSMenuItem separatorItem]];
   }
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // AppKit does not reliably list embedded frameless BrowserWindows in the
+  // Dock. Add only hosted application windows; native browser windows remain
+  // managed by AppKit. Menu items retain an ID, never a window or Widget.
+  const auto hosted_windows =
+      xenon::XenonElectronWindowHost::GetInstance()->GetWindowMenuEntries();
+  for (const auto& window : hosted_windows) {
+    NSString* title =
+        window.title.empty()
+            ? l10n_util::GetNSString(IDS_BROWSER_WINDOW_MAC_TAB_UNTITLED)
+            : base::SysUTF16ToNSString(window.title);
+    NSMenuItem* item = [[NSMenuItem alloc]
+        initWithTitle:title
+               action:@selector(activateHostedWindowFromDock:)
+        keyEquivalent:@""];
+    item.target = self;
+    item.representedObject = @(window.window_id);
+    [dockMenu addItem:item];
+  }
+  if (!hosted_windows.empty()) {
+    [dockMenu addItem:NSMenuItem.separatorItem];
+  }
+#endif
 
   NSString* titleStr = l10n_util::GetNSStringWithFixup(IDS_NEW_WINDOW_MAC);
   NSMenuItem* item =
@@ -2201,7 +2255,6 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
 
   return dockMenu;
 }
-
 
 - (BookmarkMenuBridge*)bookmarkMenuBridge {
   return _bookmarkMenuBridge;

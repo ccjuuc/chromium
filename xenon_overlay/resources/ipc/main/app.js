@@ -2,6 +2,16 @@
   let resolveAppReady;
   const appReadyPromise = new Promise(resolve => { resolveAppReady = resolve; });
   const app = new EventEmitter();
+  let appUserAgentFallback = String(globalThis.__xenonUserAgent || '');
+  Object.defineProperty(app, 'userAgentFallback', {
+    enumerable: true,
+    configurable: true,
+    get: () => appUserAgentFallback,
+    set(value) {
+      if (typeof value !== 'string') throw new TypeError('Expected a user agent string');
+      appUserAgentFallback = value;
+    },
+  });
   let appExitState = 'running';
   let appQuitPhase = '';
   let appQuitAdvancing = false;
@@ -124,6 +134,8 @@
   app.getPath = name => __xenonGetPath(String(name));
   app.getVersion = () => __xenonAppVersion;
   app.getName = () => __xenonAppName;
+  app.getLoginItemSettings = options =>
+      callElectronApi('app.getLoginItemSettings', {options});
   app.whenReady = () => appReadyPromise;
   app.isReady = () => appReady;
   app.disableHardwareAcceleration = () => {};

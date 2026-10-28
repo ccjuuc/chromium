@@ -52,6 +52,80 @@
     const encoding = fsEncoding(options);
     return encoding ? buffer.toString(encoding) : buffer;
   };
+  const fsLinkPath = (value, name) => {
+    if (Buffer.isBuffer(value)) {
+      const decoded = value.toString();
+      const encoded = Buffer.from(decoded);
+      // Requests carry strings, so do not silently replace non-UTF-8 bytes in
+      // a Buffer target or accidentally address a different link pathname.
+      if (encoded.length !== value.length || encoded.some((byte, index) => byte !== value[index])) {
+        return fsUnsupported('symlink/readlink with a non-UTF-8 ' + name);
+      }
+      value = decoded;
+    }
+    else if (value instanceof URL) value = urlModule.fileURLToPath(value);
+    if (typeof value !== 'string') {
+      throw Object.assign(new TypeError(`${name} must be a string, Buffer, or file URL`),
+          {code: 'ERR_INVALID_ARG_TYPE'});
+    }
+    if (value.includes('\0')) {
+      throw Object.assign(new TypeError(`${name} must not contain null bytes`),
+          {code: 'ERR_INVALID_ARG_VALUE'});
+    }
+    return value;
+  };
+  const fsSymlinkRequest = (target, path, type) => {
+    target = fsLinkPath(target, 'target');
+    path = fsLinkPath(path, 'path');
+    if (type != null && !['file', 'dir', 'junction'].includes(type)) {
+      throw Object.assign(new TypeError('type must be file, dir, or junction'),
+          {code: 'ERR_INVALID_ARG_VALUE'});
+    }
+    // A lock's target can be literal metadata or a missing relative pathname.
+    // Only the link pathname is resolved by the native filesystem bridge.
+    return fsRequest('symlink', path, {target, ...(type == null ? {} : {type})});
+  };
+  const fsReadlinkEncoding = options => {
+    if (options != null && typeof options !== 'string' && typeof options !== 'object') {
+      throw Object.assign(new TypeError('options must be a string or object'),
+          {code: 'ERR_INVALID_ARG_TYPE'});
+    }
+    const selected = fsEncoding(options);
+    const encoding = selected == null || selected === '' ? 'utf8' : selected;
+    if (encoding === 'buffer') return encoding;
+    if (typeof encoding !== 'string' || ![
+      'utf8', 'utf-8', 'hex', 'base64', 'base64url', 'ascii', 'latin1', 'binary',
+      'ucs2', 'ucs-2', 'utf16le', 'utf-16le',
+    ].includes(encoding.toLowerCase())) {
+      throw Object.assign(new TypeError('Invalid readlink encoding'),
+          {code: 'ERR_INVALID_ARG_VALUE'});
+    }
+    return encoding.toLowerCase();
+  };
+  const fsReadlinkRequest = path =>
+    fsRequest('readlink', fsLinkPath(path, 'path'), {returnBytes: true});
+  const fsReadlinkResult = (bytes, encoding) => {
+    const buffer = fsReadResult(bytes);
+    if (encoding === 'buffer') return buffer;
+    // The main-process Buffer shim only decodes UTF-8/base64/hex itself.
+    if (['ascii', 'latin1', 'binary'].includes(encoding)) {
+      const mask = encoding === 'ascii' ? 0x7f : 0xff;
+      let result = '';
+      for (let offset = 0; offset < buffer.length; offset += 8192) {
+        result += String.fromCharCode(...buffer.subarray(offset, offset + 8192)
+            .map(byte => byte & mask));
+      }
+      return result;
+    }
+    if (['ucs2', 'ucs-2', 'utf16le', 'utf-16le'].includes(encoding)) {
+      let result = '';
+      for (let offset = 0; offset + 1 < buffer.length; offset += 2) {
+        result += String.fromCharCode(buffer[offset] | (buffer[offset + 1] << 8));
+      }
+      return result;
+    }
+    return fsReadResult(buffer, {encoding});
+  };
   const fsWriteData = (data, options) => {
     if (typeof data === 'string') return Buffer.from(data, fsEncoding(options));
     if (ArrayBuffer.isView(data)) {
@@ -104,6 +178,13 @@
       return fsCallAsync(fsRequest('mkdir', path, {recursive: Boolean(options?.recursive)}));
     },
     async unlink(path) { return fsCallAsync(fsRequest('unlink', path)); },
+    async symlink(target, path, type) {
+      return fsCallAsync(fsSymlinkRequest(target, path, type));
+    },
+    async readlink(path, options) {
+      const encoding = fsReadlinkEncoding(options);
+      return fsReadlinkResult(await fsCallAsync(fsReadlinkRequest(path)), encoding);
+    },
     async rm(path, options) {
       return fsCallAsync(fsRequest('rm', path, {
         recursive: Boolean(options?.recursive), force: Boolean(options?.force),
@@ -147,6 +228,13 @@
       return fsCallSync(fsRequest('mkdir', path, {recursive: Boolean(options?.recursive)}));
     },
     unlinkSync(path) { return fsCallSync(fsRequest('unlink', path)); },
+    symlinkSync(target, path, type) {
+      return fsCallSync(fsSymlinkRequest(target, path, type));
+    },
+    readlinkSync(path, options) {
+      const encoding = fsReadlinkEncoding(options);
+      return fsReadlinkResult(fsCallSync(fsReadlinkRequest(path)), encoding);
+    },
     rmdirSync(path, options) {
       return fsCallSync(fsRequest('rmdir', path, {recursive: Boolean(options?.recursive)}));
     },
@@ -175,6 +263,14 @@
       fsCallback(callback, () => fsPromises.mkdir(path, options));
     },
     unlink(path, callback) { fsCallback(callback, () => fsPromises.unlink(path)); },
+    symlink(target, path, type, callback) {
+      if (typeof type === 'function') { callback = type; type = undefined; }
+      fsCallback(callback, () => fsPromises.symlink(target, path, type));
+    },
+    readlink(path, options, callback) {
+      if (typeof options === 'function') { callback = options; options = undefined; }
+      fsCallback(callback, () => fsPromises.readlink(path, options));
+    },
     rm(path, options, callback) {
       if (typeof options === 'function') { callback = options; options = undefined; }
       fsCallback(callback, () => fsPromises.rm(path, options));

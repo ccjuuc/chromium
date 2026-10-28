@@ -197,11 +197,33 @@ for (const kind of ['main', 'renderer']) {
       assert.throws(() => net.connect({port: 1234, ...options}),
         {code: 'ERR_NOT_SUPPORTED'}, JSON.stringify(Object.keys(options)));
     }
-    for (const options of [{pauseOnConnect: true}, {highWaterMark: 1024},
+    for (const options of [{highWaterMark: 1024},
       {noDelay: true}, {keepAlive: true}]) {
       assert.throws(() => net.createServer(options), {code: 'ERR_NOT_SUPPORTED'});
     }
     assert.deepEqual(sent, []);
+  });
+
+  test(`${kind} pauseOnConnect holds native TCP data until explicit resume`, async () => {
+    const {net, sent, deliver} = fixture(kind);
+    let incoming;
+    const received = [];
+    const server = net.createServer({pauseOnConnect: true}, socket => {
+      incoming = socket;
+      assert.equal(socket.isPaused(), true);
+      socket.on('data', bytes => received.push(bytes.toString()));
+    }).listen(0, '127.0.0.1');
+    const serverId = sent[0].payload.serverId;
+    deliver('listening', {serverId,
+      address: {address: '127.0.0.1', port: 41000, family: 'IPv4'}});
+    deliver('connection', {serverId, socketId: 'paused-tcp'});
+    deliver('data', {toId: 'paused-tcp', wire: {t: 's', d: 'first frame'}});
+    assert.deepEqual(received, []);
+    incoming.resume();
+    await Promise.resolve();
+    assert.deepEqual(received, ['first frame']);
+    incoming.destroy();
+    server.close();
   });
 
   test(`${kind} pipe listener permissions reach native while TCP ignores them`, () => {

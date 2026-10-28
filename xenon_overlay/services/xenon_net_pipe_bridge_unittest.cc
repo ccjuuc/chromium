@@ -4,7 +4,9 @@
 
 #include "xenon_overlay/services/xenon_net_pipe_bridge.h"
 
+#include <array>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/base64.h"
@@ -80,8 +82,16 @@ class XenonNetTcpTest : public testing::Test {
   }
 
   std::string PipePath(const std::string& name) {
-    if (!pipe_directory_.IsValid() && !pipe_directory_.CreateUniqueTempDir()) {
-      return "";
+    if (!pipe_directory_.IsValid()) {
+#if BUILDFLAG(IS_MAC)
+      // macOS's per-user temporary directory plus a generated directory and
+      // socket name can exceed sockaddr_un::sun_path (104 bytes).
+      if (!pipe_directory_.CreateUniqueTempDirUnderPath(base::FilePath("/tmp"))) {
+#else
+      if (!pipe_directory_.CreateUniqueTempDir()) {
+#endif
+        return "";
+      }
     }
 #if BUILDFLAG(IS_WIN)
     return "\\\\.\\pipe\\xenon-" + name + "-" +
@@ -98,6 +108,31 @@ class XenonNetTcpTest : public testing::Test {
       event_hook_;
   XenonNetPipeBridge bridge_;
 };
+
+#if BUILDFLAG(IS_POSIX)
+TEST_F(XenonNetTcpTest, PipeRejectsLongAndNulPathsBeforeOpeningAnEndpoint) {
+  const std::string valid_path = PipePath("invalid-path");
+  ASSERT_FALSE(valid_path.empty());
+  const std::array cases = {
+      std::pair{valid_path + std::string(256, 'x'), "ENAMETOOLONG"},
+      std::pair{valid_path + std::string("\0suffix", 7), "EINVAL"}};
+  for (const auto& [path, expected_error] : cases) {
+    std::string error;
+    EXPECT_FALSE(bridge_.Listen("container", "server", "listener", path,
+                               &error));
+    EXPECT_EQ(error, expected_error);
+    EXPECT_FALSE(bridge_.HasServer("listener"));
+    EXPECT_FALSE(bridge_.Connect("container", "client", "client-js", path,
+                                &error));
+    EXPECT_EQ(error, expected_error);
+    EXPECT_TRUE(events_.empty());
+  }
+  std::string error;
+  EXPECT_TRUE(bridge_.Listen("container", "server", "listener", valid_path,
+                            &error))
+      << error;
+}
+#endif
 
 TEST_F(XenonNetTcpTest, PipePermissionsSupportReadWriteAndCombinedModes) {
   const int permission_flags[] = {UV_READABLE, UV_WRITABLE,

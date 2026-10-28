@@ -72,14 +72,24 @@ class LoginItemsFileList {
   // retained reference to it. Caller is responsible for releasing the
   // reference.
   apple::ScopedCFTypeRef<LSSharedFileListItemRef> GetLoginItemForApp(
-      NSURL* url) {
+      NSURL* url,
+      bool* read_success = nullptr) {
     DCHECK(login_items_) << "Initialize() failed or not called.";
+    if (read_success) {
+      *read_success = false;
+    }
 
 #pragma clang diagnostic push  // https://crbug.com/1154377
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     apple::ScopedCFTypeRef<CFArrayRef> login_items_array(
         LSSharedFileListCopySnapshot(login_items_.get(), /*inList=*/nullptr));
 #pragma clang diagnostic pop
+    if (!login_items_array) {
+      return apple::ScopedCFTypeRef<LSSharedFileListItemRef>();
+    }
+    if (read_success) {
+      *read_success = true;
+    }
 
     for (CFIndex i = 0; i < CFArrayGetCount(login_items_array.get()); ++i) {
       LSSharedFileListItemRef item =
@@ -193,6 +203,25 @@ void RemoveFromLoginItems(const FilePath& app_bundle_file_path) {
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
   LSSharedFileListItemRemove(login_items.GetLoginFileList(), item.get());
 #pragma clang diagnostic pop
+}
+
+std::optional<LoginItemSettings> GetLoginItemSettings(
+    const FilePath& app_bundle_file_path) {
+  if (app_bundle_file_path.empty() || !app_bundle_file_path.IsAbsolute()) {
+    return std::nullopt;
+  }
+  LoginItemsFileList login_items;
+  if (!login_items.Initialize()) {
+    return std::nullopt;
+  }
+  bool read_success = false;
+  const auto item = login_items.GetLoginItemForApp(
+      apple::FilePathToNSURL(app_bundle_file_path), &read_success);
+  if (!read_success) {
+    return std::nullopt;
+  }
+  return LoginItemSettings{.open_at_login = static_cast<bool>(item),
+                           .open_as_hidden = item && IsHiddenLoginItem(item.get())};
 }
 
 bool WasLaunchedAsLoginOrResumeItem() {

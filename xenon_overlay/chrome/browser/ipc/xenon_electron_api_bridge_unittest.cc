@@ -19,6 +19,11 @@
 #include "ui/base/clipboard/test/test_clipboard.h"
 #include "xenon_overlay/chrome/browser/updater/xenon_update_manager.h"
 
+#if BUILDFLAG(IS_MAC)
+#include "base/apple/foundation_util.h"
+#include "base/mac/mac_util.h"
+#endif
+
 namespace xenon::ipc {
 namespace {
 
@@ -117,6 +122,51 @@ TEST_F(XenonElectronApiBridgeTest, InvalidRequestsAndUnknownApisFail) {
   EXPECT_FALSE(unknown->success);
   EXPECT_TRUE(unknown->error.starts_with("ERR_NOT_SUPPORTED:"));
 }
+
+#if BUILDFLAG(IS_MAC)
+TEST_F(XenonElectronApiBridgeTest, LoginItemQueryRejectsCallerSelectedPaths) {
+  auto invalid = Call(base::DictValue()
+                          .Set("operation", "app.getLoginItemSettings")
+                          .Set("options", "invalid"));
+  EXPECT_FALSE(invalid->success);
+  EXPECT_TRUE(invalid->error.starts_with("ERR_INVALID_ARG_TYPE:"));
+  auto path = Call(base::DictValue()
+                       .Set("operation", "app.getLoginItemSettings")
+                       .Set("options", base::DictValue().Set(
+                                           "path", "/Applications/Other.app")));
+  EXPECT_FALSE(path->success);
+  EXPECT_TRUE(path->error.starts_with("ERR_NOT_SUPPORTED:"));
+}
+
+TEST_F(XenonElectronApiBridgeTest, LoginItemQueryNeverSucceedsWithoutBundle) {
+  if (base::apple::AmIBundled()) {
+    GTEST_SKIP() << "This check requires the standalone unbundled test host";
+  }
+  auto result = Call(base::DictValue().Set("operation", "app.getLoginItemSettings"));
+  EXPECT_FALSE(result->success);
+  EXPECT_TRUE(result->error.starts_with("ERR_NOT_SUPPORTED:"));
+}
+
+TEST_F(XenonElectronApiBridgeTest, LoginItemQueryReadsAbsentItemWithoutRegistering) {
+  base::ScopedTempDir directory;
+  ASSERT_TRUE(directory.CreateUniqueTempDir());
+  const auto path = directory.GetPath().AppendASCII("UnregisteredFixture.app");
+  const auto result = base::mac::GetLoginItemSettings(path);
+  if (!result) {
+    GTEST_SKIP() << "System Login Items list is unavailable in this test session";
+  }
+  EXPECT_FALSE(result->open_at_login);
+  EXPECT_FALSE(result->open_as_hidden);
+  EXPECT_FALSE(base::mac::GetLoginItemSettings(base::FilePath()));
+  EXPECT_FALSE(base::mac::GetLoginItemSettings(base::FilePath("relative.app")));
+}
+#else
+TEST_F(XenonElectronApiBridgeTest, LoginItemQueryIsExplicitlyUnsupported) {
+  auto result = Call(base::DictValue().Set("operation", "app.getLoginItemSettings"));
+  EXPECT_FALSE(result->success);
+  EXPECT_TRUE(result->error.starts_with("ERR_NOT_SUPPORTED:"));
+}
+#endif
 
 TEST_F(XenonElectronApiBridgeTest, AutoUpdaterConfigurationUsesNativeState) {
   auto* manager = updater::XenonUpdateManager::GetInstance();

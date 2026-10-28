@@ -11,10 +11,10 @@ const asyncScope = readBootstrapPart('main/async_context.js');
 const pipe = '\\\\.\\pipe\\xenon-main-routing-test';
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-function fixture(onSend = () => {}) {
+function fixture(onSend = () => {}, platform = 'win32') {
   const sent = [];
   const context = vm.createContext({EventEmitter, Buffer, Uint8Array, queueMicrotask,
-    __xenonPlatform: 'win32', console: {info() {}},
+    __xenonPlatform: platform, console: {info() {}},
     __xenonSendToRenderer() { assert.fail('net operations must never broadcast to renderers'); },
     __xenonNetSend(channel, payload) {
       sent.push({channel, payload});
@@ -26,6 +26,53 @@ function fixture(onSend = () => {}) {
       '\nglobalThis.net = netModule; globalThis.deliver = (channel, payload) => dispatchXenonNet(channel, payload, {endpointId:"@main"});', context);
   return {context, net: context.net, sent};
 }
+
+test('main Darwin Unix socket routes retain their exact filesystem path', () => {
+  const {net, sent, context} = fixture(undefined, 'darwin');
+  const endpoint = '/tmp/MixedCase.sock';
+  let listening = 0, connected = 0;
+  const server = net.createServer().listen(endpoint, () => ++listening);
+  const bind = sent[0];
+  assert.equal(bind.channel, '__xenon:net:listen');
+  assert.equal(bind.payload.path, endpoint);
+  assert.equal(bind.payload.port, undefined);
+  assert.equal(server.address(), null);
+  const socket = net.connect(endpoint, () => ++connected);
+  const connect = sent.at(-1);
+  assert.equal(connect.channel, '__xenon:net:connect');
+  assert.equal(connect.payload.path, endpoint);
+  assert.equal(connect.payload.port, undefined);
+  context.deliver('__xenon:net:listening', {serverId: bind.payload.serverId, address: endpoint});
+  assert.equal(listening, 1);
+  assert.equal(server.address(), endpoint);
+  context.deliver('__xenon:net:connected', {toId: connect.payload.fromId, peerId: 'native-unix'});
+  assert.equal(connected, 1);
+  socket.destroy();
+  server.close();
+});
+
+test('main Darwin pauseOnConnect retains accepted bytes until resume', async () => {
+  const {net, sent, context} = fixture(undefined, 'darwin');
+  let incoming;
+  const received = [];
+  const server = net.createServer({pauseOnConnect: true}, socket => {
+    incoming = socket;
+    assert.equal(socket.isPaused(), true);
+    socket.on('data', bytes => received.push(Array.from(bytes)));
+  }).listen('/tmp/Paused.sock');
+  const serverId = sent[0].payload.serverId;
+  context.deliver('__xenon:net:listening', {serverId});
+  context.deliver('__xenon:net:connection', {serverId, socketId: 'native-paused'});
+  assert.equal(sent.at(-1).channel, '__xenon:net:pause');
+  context.deliver('__xenon:net:data', {toId: 'native-paused', wire: {t: 'b64', d: 'AP+A'}});
+  assert.deepEqual(received, []);
+  incoming.resume();
+  await settle();
+  assert.deepEqual(received, [[0, 255, 128]]);
+  assert.equal(sent.at(-1).channel, '__xenon:net:resume');
+  incoming.destroy();
+  server.close();
+});
 
 test('main connect uses one native route with unrelated renderer listeners present', async () => {
   const pages = [{path: 'other-a', calls: 0}, {path: pipe, calls: 0},

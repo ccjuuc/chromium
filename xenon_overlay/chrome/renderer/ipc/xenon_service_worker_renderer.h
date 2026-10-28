@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "gin/arguments.h"
@@ -59,7 +60,7 @@ class XenonServiceWorkerRenderer final
   void ThrowError(const std::string& message);
   v8::Local<v8::Function> BindFunction(auto method, auto... bound_args);
 
-  v8::Isolate* const isolate_;
+  const raw_ptr<v8::Isolate> isolate_;
   v8::Global<v8::Context> main_context_;
   v8::Global<v8::Context> preload_context_;
   mojo::AssociatedRemote<mojom::ServiceWorkerIpcHost> host_;

@@ -65,6 +65,11 @@
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
 
+#if BUILDFLAG(IS_MAC)
+#include "xenon_overlay/chrome/browser/ui/xenon_electron_window_mac.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_mac_player_host.h"
+#endif
+
 #if BUILDFLAG(IS_WIN)
 #include <shobjidl.h>
 #include <windows.h>
@@ -779,6 +784,59 @@ views::Widget* XenonElectronWindowHost::FindWidget(int32_t window_id) const {
   return it == windows_.end() ? nullptr : it->second.widget.get();
 }
 
+bool XenonElectronWindowHost::CanActivateWindowFromMenu(
+    int32_t window_id) const {
+  if (shutting_down_ || browser_shutdown::IsTryingToQuit()) {
+    return false;
+  }
+  auto it = windows_.find(window_id);
+  if (it == windows_.end()) {
+    return false;
+  }
+  const Entry& entry = it->second;
+  return entry.widget && !entry.widget->IsClosed() && entry.has_loaded_url &&
+         entry.ever_shown && entry.parent_id == 0 &&
+         !entry.sync_bounds_with_parent && !entry.close_authorized &&
+         !entry.close_prepared &&
+         !closing_containers_.contains(entry.container_id);
+}
+
+std::vector<XenonElectronWindowHost::WindowMenuEntry>
+XenonElectronWindowHost::GetWindowMenuEntries() const {
+  std::vector<WindowMenuEntry> entries;
+  for (const auto& [id, entry] : windows_) {
+    if (!CanActivateWindowFromMenu(id)) {
+      continue;
+    }
+    // The delegate is the source of the native title, including explicit
+    // BrowserWindow.setTitle() and accepted page-title updates.
+    auto* delegate = entry.widget->widget_delegate();
+    entries.push_back(
+        {id, delegate ? delegate->GetWindowTitle() : std::u16string()});
+  }
+  return entries;
+}
+
+bool XenonElectronWindowHost::ActivateWindowFromMenu(int32_t window_id) {
+  if (!CanActivateWindowFromMenu(window_id)) {
+    return false;
+  }
+  if (FindWidget(window_id)->IsMinimized()) {
+    FindWidget(window_id)->Restore();
+  }
+  // Each native operation can run observers which close or replace windows.
+  // Keep only the monotonically allocated ID across those calls.
+  if (!CanActivateWindowFromMenu(window_id)) {
+    return false;
+  }
+  FindWidget(window_id)->Show();
+  if (!CanActivateWindowFromMenu(window_id)) {
+    return false;
+  }
+  FindWidget(window_id)->Activate();
+  return true;
+}
+
 int32_t XenonElectronWindowHost::FindEntryWindowForContainer(
     const std::string& container_id) const {
   int32_t owned_entry = 0;
@@ -851,7 +909,9 @@ bool XenonElectronWindowHost::CreateHostedWindow(
     int32_t* window_id,
     uint64_t* hwnd,
     std::string* error,
-    const std::string& partition) {
+    const std::string& partition,
+    bool has_shadow,
+    const std::string& title_bar_style) {
   if (shutting_down_ || browser_shutdown::IsTryingToQuit()) {
     *error = "Electron window host is shutting down";
     return false;
@@ -860,6 +920,13 @@ bool XenonElectronWindowHost::CreateHostedWindow(
     *error = "No browser context for Electron BrowserWindow";
     return false;
   }
+#if BUILDFLAG(IS_MAC)
+  if (title_bar_style != "default" && title_bar_style != "hidden" &&
+      title_bar_style != "hiddenInset") {
+    *error = "ERR_NOT_SUPPORTED: unsupported Mac BrowserWindow titleBarStyle";
+    return false;
+  }
+#endif
 
   gfx::NativeView parent_view = gfx::NativeView();
   if (parent_id > 0) {
@@ -895,7 +962,13 @@ bool XenonElectronWindowHost::CreateHostedWindow(
   options.Set("minimizable", true);
   options.Set("maximizable", true);
   options.Set("showCloseButton", true);
+#if BUILDFLAG(IS_MAC)
+  // Views enables WindowServer shadows for TYPE_WINDOW, including frameless
+  // windows. Preserve Electron's explicit hasShadow option and true default.
+  options.Set("shadow", has_shadow);
+#else
   options.Set("shadow", false);
+#endif
   // Construct the final Widget and WebContents now, but do not paint the
   // initial about:blank surface. This keeps the HWND stable for native addons
   // and avoids replacing a live Views client tree during loadURL/loadFile.
@@ -935,6 +1008,13 @@ bool XenonElectronWindowHost::CreateHostedWindow(
   XenonWebDialog::SetHostedCloseRequestHandler(
       entry.widget, base::BindRepeating(&XenonElectronWindowHost::RequestClose,
                                         base::Unretained(this), id));
+#if BUILDFLAG(IS_MAC)
+  if (!ConfigureMacWindowTitleBar(entry.widget, title_bar_style, error)) {
+    entry.widget->CloseNow();
+    windows_.erase(id);
+    return false;
+  }
+#endif
   // WebDialog's default is its initial size; Electron defaults to no minimum.
   XenonWebDialog::SetHostedMinimumSize(entry.widget, gfx::Size());
   ObserveWebContents(id, dialog_view->web_contents());
@@ -1025,7 +1105,10 @@ bool XenonElectronWindowHost::CreateHostedWindow(
   *hwnd = entry.hwnd;
   *error = std::string();
   LOG(INFO) << "Electron BrowserWindow id=" << id << " hwnd=" << entry.hwnd
-            << " container=" << container_id << " webdialog-pending";
+            << " container=" << container_id << " webdialog-pending"
+            << " frame=" << frame << " transparent=" << transparent
+            << " hasShadow=" << options.FindBool("shadow").value_or(true)
+            << " titleBarStyle=" << title_bar_style;
   return true;
 }
 
@@ -1526,6 +1609,40 @@ bool XenonElectronWindowHost::CallImpl(int32_t window_id,
     widget->SetOpacity(static_cast<float>(std::clamp(value, 0.0, 1.0)));
     return true;
   }
+  if (command == "set-has-shadow" || command == "has-shadow") {
+#if BUILDFLAG(IS_MAC)
+    if (command == "set-has-shadow") {
+      const auto value = options ? options->FindBool("value") : std::nullopt;
+      if (!value) {
+        *error = "set-has-shadow expects a boolean value";
+        return false;
+      }
+      return SetMacWindowShadow(widget, *value, error);
+    }
+    bool enabled = false;
+    if (!GetMacWindowShadow(widget, &enabled, error)) {
+      return false;
+    }
+    *result = base::Value(enabled);
+    return true;
+#else
+    *error = "ERR_NOT_SUPPORTED: native BrowserWindow shadow control is unavailable";
+    return false;
+#endif
+  }
+  if (command == "set-window-button-visibility") {
+#if BUILDFLAG(IS_MAC)
+    const auto visible = options ? options->FindBool("visible") : std::nullopt;
+    if (!visible) {
+      *error = "set-window-button-visibility expects a boolean visible";
+      return false;
+    }
+    return SetMacWindowButtonVisibility(widget, *visible, error);
+#else
+    *error = "ERR_NOT_SUPPORTED: native window button visibility requires macOS";
+    return false;
+#endif
+  }
   if (command == "set-parent-window") {
     const std::optional<int> parent_id =
         options ? options->FindInt("parentId") : std::nullopt;
@@ -1785,6 +1902,52 @@ const base::DictValue* XenonElectronWindowHost::GetWebPreferencesForWebContents(
   return it == windows_.end() ? nullptr : &it->second.web_preferences;
 }
 
+bool XenonElectronWindowHost::GetOwnedPlaybackTarget(
+    const std::string& container_id,
+    int32_t window_id,
+    views::Widget** widget,
+    content::WebContents** web_contents,
+    std::string* error) const {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (widget) {
+    *widget = nullptr;
+  }
+  if (web_contents) {
+    *web_contents = nullptr;
+  }
+  auto fail = [error](const char* message) {
+    if (error) {
+      *error = message;
+    }
+    return false;
+  };
+  if (!widget || !web_contents) {
+    return fail("Playback target output parameters are required");
+  }
+  const auto it = windows_.find(window_id);
+  if (container_id.empty() || it == windows_.end() ||
+      it->second.container_id != container_id) {
+    return fail("Playback target is not owned by this container");
+  }
+  if (shutting_down_ || closing_containers_.contains(container_id) ||
+      it->second.close_prepared) {
+    return fail("Playback target is closing");
+  }
+  if (!it->second.widget || !it->second.web_contents_observer) {
+    return fail("Playback target window is unavailable");
+  }
+  auto* contents = it->second.web_contents_observer->web_contents();
+  if (!contents || contents->IsBeingDestroyed()) {
+    return fail("Playback target WebContents is unavailable");
+  }
+  *widget = it->second.widget;
+  *web_contents = contents;
+  if (error) {
+    error->clear();
+  }
+  return true;
+}
+
 void XenonElectronWindowHost::Close(int32_t window_id) {
   views::Widget* widget = FindWidget(window_id);
   LOG(INFO) << "Electron BrowserWindow Close id=" << window_id
@@ -1829,6 +1992,15 @@ void XenonElectronWindowHost::PrepareForClose(int32_t window_id) {
       continue;
     }
     it->second.close_prepared = true;
+#if BUILDFLAG(IS_MAC)
+    // Detach the SDK's local NSView before hiding or destroying its owner.
+    XenonMacPlayerHost::GetInstance()->CloseWindow(*id);
+    // Native media callbacks may reenter the window host during shutdown.
+    it = windows_.find(*id);
+    if (it == windows_.end()) {
+      continue;
+    }
+#endif
     base::WeakPtr<content::WebContents> contents;
     if (it->second.web_contents_observer) {
       if (auto* observed = it->second.web_contents_observer->web_contents()) {

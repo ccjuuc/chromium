@@ -74,6 +74,9 @@ class XenonNodeExecutor {
 
   void SetCallbackHandlers(NodeCallback callback,
                            NodeCallbackReleased callback_released);
+  // A synchronous caller can acknowledge only callbacks actually converted by
+  // this executor. A native exception may still leave such callbacks retained.
+  bool HasNativeCallback(int32_t client_id, int32_t callback_id) const;
   void ReleaseCallbacksForClient(int32_t client_id);
   // Owner zero belongs to main/legacy callers and is never released as a
   // renderer connection. Nonzero owners must be registered before use.
@@ -167,18 +170,24 @@ class XenonNodeExecutor {
                                      const std::string& function_name,
                                      const base::Value& args,
                                      base::Value* result,
-                                     std::string* error);
+                                     std::string* error,
+                                     int32_t client_id = 0,
+                                     uint64_t owner = 0);
   bool ConstructExportFromCurrentThread(const std::string& path,
                                         const std::string& export_path,
                                         const base::Value& args,
                                         base::Value* instance,
-                                        std::string* error);
+                                        std::string* error,
+                                     int32_t client_id = 0,
+                                     uint64_t owner = 0);
   bool InvokeInstanceFromCurrentThread(const std::string& path,
                                        int32_t instance_id,
                                        const std::string& method_name,
                                        const base::Value& args,
                                        base::Value* result,
-                                       std::string* error);
+                                       std::string* error,
+                                     int32_t client_id = 0,
+                                     uint64_t owner = 0);
 
   bool HasModule(const std::string& module_path) const;
 
@@ -269,7 +278,8 @@ class XenonNodeExecutor {
       const std::string& module_path,
       v8::Local<v8::Value> result,
       int depth,
-      uint64_t owner);
+      uint64_t owner,
+      bool force_instance = false);
   int32_t RegisterNativeInstance(const std::string& module_path,
                                  v8::Local<v8::Object> object,
                                  uint64_t owner);
@@ -318,6 +328,9 @@ class XenonNodeExecutor {
   std::map<std::pair<int32_t, int32_t>, std::unique_ptr<AddonCallback>>
       addon_callbacks_;
   base::FilePath runtime_directory_;
+  // Captured from macOS bundle overrides on the main thread, never from an
+  // application-provided runtime path. Empty on other platforms/unbundled tests.
+  base::FilePath outer_bundle_path_;
   int32_t next_instance_id_ = 1;
   uint64_t next_callback_generation_ = 1;
   NodeCallback callback_handler_;

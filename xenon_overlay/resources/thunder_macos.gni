@@ -1,0 +1,28 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//xenon_overlay/buildflags/features.gni")
+
+_thunder_macos_archive = "//xenon_overlay/resources/thunder-2025-mac.tar.xz"
+_thunder_macos_checksum = "//xenon_overlay/resources/thunder-2025-mac.sha256"
+
+declare_args() {
+  # The local compatibility export is optional. Run gn gen after first
+  # publishing it; subsequent archive/checksum changes rebuild the staged
+  # bundle.
+  xenon_bundle_thunder_macos =
+      is_mac && enable_xenon_service && path_exists(_thunder_macos_archive) &&
+      path_exists(_thunder_macos_checksum)
+}
+
+assert(
+    !xenon_bundle_thunder_macos || (is_mac && enable_xenon_service),
+    "Bundling the Mac Thunder payload requires macOS and enable_xenon_service.")
+
+if (xenon_bundle_thunder_macos) {
+  assert(
+      path_exists(_thunder_macos_archive) &&
+          path_exists(_thunder_macos_checksum),
+      "Missing Mac Thunder resources. Run xenon_overlay/tools/build_thunder_macos.py first, or set xenon_bundle_thunder_macos=false.")
+}

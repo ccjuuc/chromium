@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "patches": [
+    {
+      "path": "patches/app-js.patch",
+      "repository": ".",
+      "base_revision": "3104cda9955185bc3538af79667ff19e017a1d96",
+      "sha256": "d342bb5cd65272b235ac5368038ce7ec6ecfb483c552d9fee12dc4a84e0ff35e",
+      "files": [
+        {
+          "path": "app/src/common/require-node-file.ts",
+          "before_sha256": "6dfed502f2b9b4738e3601ee1dfbb8e077cad9c76fc43a53c51f070336dbd2a7",
+          "after_sha256": "82ec94f86e3b8717419b2d40ecae49c74dd55a5cfda2d855b0f528805b192928"
+        },
+        {
+          "path": "app/src/common/single-promise.ts",
+          "before_sha256": "f78ecf37df46ab8206783601e6e404a1c7939a1ec46d92f8ab220db687f9a39b",
+          "after_sha256": "18d292a4da15592147e108c7169faca56a931e29dfa2c81cda8c1f59cff31090"
+        },
+        {
+          "path": "app/src/main/mac-player-host.ts",
+          "before_sha256": "b834a0e0addb6f4a13f9c8b345fe0cb102dcc73f22dc6ab24f9ca0c4de0cfa90",
+          "after_sha256": "b73ea493e230da6d25b11a534e0077be002b4d4f2b0df6c22c877a932dba823c"
+        }
+      ]
+    },
+    {
+      "path": "patches/player-js.patch",
+      "repository": "app/src/player-comp",
+      "base_revision": "8a256318dd8cb688415459c5929613153664f05f",
+      "sha256": "31696af26e205aaf17b7b813b921877eb4ed7954799d764ce973dd3efb80b596",
+      "files": [
+        {
+          "path": "common/require-node-file.ts",
+          "before_sha256": "6dfed502f2b9b4738e3601ee1dfbb8e077cad9c76fc43a53c51f070336dbd2a7",
+          "after_sha256": "2eacacb93d5faef8340a213ec5b0169fa9f5be2f5fdbc03ca914c0a44f95c6bf"
+        },
+        {
+          "path": "mac/main/mac-player-capability.ts",
+          "before_sha256": null,
+          "after_sha256": "a0556169cccea8555c99df1c46c5dc6e0451d292fa4b0eb17ee52dd4b68add9f"
+        },
+        {
+          "path": "mac/main/mac-player-host.ts",
+          "before_sha256": "cdb6ff0b2a59e885ae73078c09cf623ce75ad0612693bf858115a56d5ee964d6",
+          "after_sha256": "2800029cc74e8352136b542b9dc4a753c9f0f0ae6f3d04b5d1011b13908f34e4"
+        },
+        {
+          "path": "mac/main/mac-player-runtime.ts",
+          "before_sha256": "65aaf638207d0b47a20553b0c6b92c172743b0afee2da6ae3e68618bcfdb4dad",
+          "after_sha256": "d242afa13bf94c36dc61d3d5cc2bf0e6eb027026f5f5af8fa974fc5a9ad40173"
+        },
+        {
+          "path": "process-common/initial/initialWindow.ts",
+          "before_sha256": "2b40c99d7e6c80ef901204699d88d321cb2e066257d9a72a9d7da1efd211ea13",
+          "after_sha256": "9766c3ad6238400bf74b0a8f4a0d108ecb6d067894bcf4d80f2042066d878a99"
+        }
+      ]
+    }
+  ]
+}

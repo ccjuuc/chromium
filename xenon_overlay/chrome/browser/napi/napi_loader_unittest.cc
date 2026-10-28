@@ -4,17 +4,31 @@
 
 #include "napi_loader.h"
 
+#include <optional>
 #include <vector>
 
 #include "base/base_paths.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
+#include "base/test/scoped_command_line.h"
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
 #include "js_native_api_v8.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "v8/include/libplatform/libplatform.h"
 #include "v8/include/v8.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+#include "xenon_overlay/chrome/browser/napi/napi_switches.h"
+
+#if BUILDFLAG(IS_MAC) && BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+#include <dlfcn.h>
+
+#include "xenon_overlay/third_party/libuv/include/uv.h"
+#endif
 
 namespace xenon {
 
@@ -167,6 +181,38 @@ void CountThreadsafeCall(napi_env env,
                          void* context,
                          void* data) {
   ++*static_cast<int*>(context);
+}
+
+napi_value EvaluateNapiFixture(napi_env env, const char* source) {
+  return env->CreateValue(
+      v8::Script::Compile(
+          env->GetContext(),
+          v8::String::NewFromUtf8(env->isolate, source).ToLocalChecked())
+          .ToLocalChecked()
+          ->Run(env->GetContext())
+          .ToLocalChecked());
+}
+
+// The real native lifetime monitor uses this standard callback boundary: the
+// async receiver is an object, while the user freer retains a null `this`.
+napi_value DispatchAsyncFreer(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value args[2];
+  if (napi_get_cb_info(env, info, &argc, args, nullptr, nullptr) != napi_ok ||
+      argc != 2) {
+    return nullptr;
+  }
+  napi_value receiver;
+  napi_get_null(env, &receiver);
+  napi_value result = nullptr;
+  return napi_call_function(env, receiver, args[0], 1, &args[1], &result) ==
+                 napi_ok
+             ? result
+             : nullptr;
+}
+
+void ReportFatalAsyncMessage(v8::Local<v8::Message>, v8::Local<v8::Value>) {
+  LOG(ERROR) << "NAPI_V8_UNCAUGHT_REPORT";
 }
 
 }  // namespace
@@ -680,6 +726,283 @@ TEST_F(NapiLoaderTest, CallbackMissingArgumentsAreUndefined) {
   EXPECT_EQ(env->allocated_values.size(), value_count);
 }
 
+TEST_F(NapiLoaderTest, AsyncContextRetainsResourceUntilDestroyed) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  napi_async_context async_context = nullptr;
+  napi_ref weak = nullptr;
+  napi_handle_scope scope;
+  ASSERT_EQ(napi_open_handle_scope(env.get(), &scope), napi_ok);
+  napi_value resource;
+  napi_value name;
+  ASSERT_EQ(napi_create_object(env.get(), &resource), napi_ok);
+  ASSERT_EQ(napi_create_string_utf8(env.get(), "lifetime-monitor",
+                                    NAPI_AUTO_LENGTH, &name),
+            napi_ok);
+  ASSERT_EQ(napi_create_reference(env.get(), resource, 0, &weak), napi_ok);
+  ASSERT_EQ(napi_async_init(env.get(), resource, name, &async_context),
+            napi_ok);
+  ASSERT_EQ(napi_close_handle_scope(env.get(), scope), napi_ok);
+  isolate()->LowMemoryNotification();
+  ASSERT_EQ(napi_open_handle_scope(env.get(), &scope), napi_ok);
+  napi_value retained = nullptr;
+  ASSERT_EQ(napi_get_reference_value(env.get(), weak, &retained), napi_ok);
+  EXPECT_NE(nullptr, retained);
+  ASSERT_EQ(napi_close_handle_scope(env.get(), scope), napi_ok);
+
+  EXPECT_EQ(napi_async_destroy(env.get(), async_context), napi_ok);
+  EXPECT_TRUE(env->async_contexts.empty());
+  isolate()->LowMemoryNotification();
+  EXPECT_EQ(napi_get_reference_value(env.get(), weak, &retained), napi_ok);
+  EXPECT_EQ(nullptr, retained);
+  EXPECT_EQ(napi_delete_reference(env.get(), weak), napi_ok);
+  EXPECT_EQ(napi_async_destroy(env.get(), async_context), napi_invalid_arg);
+}
+
+TEST_F(NapiLoaderTest, EnvironmentTeardownReleasesRemainingAsyncResources) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  v8::Global<v8::Object> resource_monitor;
+  struct Monitor {
+    raw_ptr<v8::Global<v8::Object>> handle;
+    bool collected = false;
+  } monitor{&resource_monitor};
+  napi_env expired_env = nullptr;
+  napi_async_context expired_context = nullptr;
+  {
+    v8::HandleScope nested_scope(isolate());
+    auto env = std::make_unique<napi_env__>(isolate(), context());
+    expired_env = env.get();
+    napi_value resource;
+    napi_value name;
+    ASSERT_EQ(napi_create_object(env.get(), &resource), napi_ok);
+    ASSERT_EQ(napi_create_int32(env.get(), 42, &name), napi_ok);
+    // Node-API coerces the resource name to string rather than requiring a
+    // string napi_value, and permits a null optional resource pointer.
+    ASSERT_EQ(napi_async_init(env.get(), resource, name, &expired_context),
+              napi_ok);
+    napi_async_context anonymous_context;
+    ASSERT_EQ(napi_async_init(env.get(), nullptr, name, &anonymous_context),
+              napi_ok);
+    resource_monitor.Reset(isolate(), resource->Get().As<v8::Object>());
+    resource_monitor.SetWeak(
+        &monitor,
+        [](const v8::WeakCallbackInfo<Monitor>& info) {
+          info.GetParameter()->handle->Reset();
+          info.GetParameter()->collected = true;
+        },
+        v8::WeakCallbackType::kParameter);
+    env.reset();
+  }
+  isolate()->LowMemoryNotification();
+  EXPECT_TRUE(monitor.collected);
+  EXPECT_EQ(napi_async_destroy(expired_env, expired_context), napi_invalid_arg);
+}
+
+TEST_F(NapiLoaderTest, AsyncCallbackRejectsForeignValuesAndContexts) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  auto foreign = std::make_unique<napi_env__>(isolate(), context());
+  napi_value receiver = EvaluateNapiFixture(env.get(), "({})");
+  napi_value foreign_receiver = EvaluateNapiFixture(foreign.get(), "({})");
+  napi_value function = EvaluateNapiFixture(env.get(), "(() => 42)");
+  napi_value foreign_function =
+      EvaluateNapiFixture(foreign.get(), "(() => 42)");
+  napi_value name = EvaluateNapiFixture(env.get(), "'resource'");
+  napi_async_context async_context = nullptr;
+  EXPECT_EQ(napi_async_init(env.get(), foreign_receiver, name, &async_context),
+            napi_invalid_arg);
+  EXPECT_EQ(nullptr, async_context);
+  ASSERT_EQ(napi_async_init(env.get(), receiver, name, &async_context),
+            napi_ok);
+  EXPECT_EQ(napi_async_destroy(foreign.get(), async_context), napi_invalid_arg);
+  EXPECT_EQ(napi_make_callback(foreign.get(), async_context, foreign_receiver,
+                               foreign_function, 0, nullptr, nullptr),
+            napi_invalid_arg);
+  EXPECT_EQ(napi_make_callback(env.get(), async_context, receiver,
+                               foreign_function, 0, nullptr, nullptr),
+            napi_invalid_arg);
+  EXPECT_EQ(napi_make_callback(env.get(), async_context, receiver, function, 1,
+                               &foreign_receiver, nullptr),
+            napi_invalid_arg);
+  EXPECT_EQ(napi_make_callback(env.get(), async_context, nullptr, function, 0,
+                               nullptr, nullptr),
+            napi_invalid_arg);
+  EXPECT_EQ(napi_fatal_exception(env.get(), foreign_receiver),
+            napi_invalid_arg);
+  ASSERT_EQ(napi_async_destroy(env.get(), async_context), napi_ok);
+  EXPECT_EQ(napi_make_callback(env.get(), async_context, receiver, function, 0,
+                               nullptr, nullptr),
+            napi_invalid_arg);
+  napi_async_context replacement = nullptr;
+  ASSERT_EQ(napi_async_init(env.get(), receiver, name, &replacement), napi_ok);
+  EXPECT_NE(async_context, replacement);
+}
+
+TEST_F(NapiLoaderTest, AsyncFreerExceptionIsHandledAtItsOwnCallbackBoundary) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  napi_value resource = EvaluateNapiFixture(env.get(), "({})");
+  napi_value name = EvaluateNapiFixture(env.get(), "'freer'");
+  napi_async_context async_context;
+  ASSERT_EQ(napi_async_init(env.get(), resource, name, &async_context),
+            napi_ok);
+  napi_value dispatcher;
+  ASSERT_EQ(napi_create_function(env.get(), "dispatchFreer", NAPI_AUTO_LENGTH,
+                                 DispatchAsyncFreer, nullptr, &dispatcher),
+            napi_ok);
+  napi_value throwing =
+      EvaluateNapiFixture(env.get(),
+                          "(function() { 'use strict'; if (this !== null) "
+                          "throw new Error('wrong receiver'); "
+                          "throw new Error('freer failure'); })");
+  napi_value argument = EvaluateNapiFixture(env.get(), "42");
+  napi_value args[] = {throwing, argument};
+  napi_value result = argument;
+  EXPECT_EQ(napi_make_callback(env.get(), async_context, resource, dispatcher,
+                               2, args, &result),
+            napi_pending_exception);
+  EXPECT_EQ(argument, result);
+  bool pending = false;
+  EXPECT_EQ(napi_is_exception_pending(env.get(), &pending), napi_ok);
+  EXPECT_TRUE(pending);
+  // An uncleared exception must not be overwritten by another callback.
+  EXPECT_EQ(napi_make_callback(env.get(), async_context, resource, dispatcher,
+                               2, args, &result),
+            napi_pending_exception);
+  napi_value exception;
+  ASSERT_EQ(napi_get_and_clear_last_exception(env.get(), &exception), napi_ok);
+  int reported = 0;
+  env->uncaught_exception_handler = base::BindRepeating(
+      [](napi_env expected_env, int* reported, v8::Local<v8::Context> context,
+         v8::Local<v8::Value> error) {
+        EXPECT_EQ(expected_env->GetContext(), context);
+        v8::String::Utf8Value text(expected_env->isolate, error);
+        EXPECT_STREQ("Error: freer failure", *text);
+        ++*reported;
+        return true;
+      },
+      env.get(), &reported);
+  EXPECT_EQ(napi_fatal_exception(env.get(), exception), napi_ok);
+  EXPECT_EQ(1, reported);
+  EXPECT_EQ(napi_is_exception_pending(env.get(), &pending), napi_ok);
+  EXPECT_FALSE(pending);
+  args[0] = EvaluateNapiFixture(
+      env.get(),
+      "(function(value) { 'use strict'; if (this !== null) "
+      "throw new Error('wrong receiver'); return value; })");
+  ASSERT_EQ(napi_make_callback(env.get(), async_context, resource, dispatcher,
+                               2, args, &result),
+            napi_ok);
+  int32_t value;
+  EXPECT_EQ(napi_get_value_int32(env.get(), result, &value), napi_ok);
+  EXPECT_EQ(42, value);
+  EXPECT_EQ(0u, env->async_callback_depth);
+  EXPECT_EQ(nullptr, env->active_async_context);
+}
+
+TEST_F(NapiLoaderTest, AsyncCallbackDrainsMicrotasksOnlyAtOutermostBoundary) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  isolate()->SetMicrotasksPolicy(v8::MicrotasksPolicy::kExplicit);
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  napi_value resource = EvaluateNapiFixture(env.get(), "({})");
+  napi_value name = EvaluateNapiFixture(env.get(), "'resource'");
+  napi_async_context async_context;
+  ASSERT_EQ(napi_async_init(env.get(), resource, name, &async_context),
+            napi_ok);
+  napi_value inner = EvaluateNapiFixture(
+      env.get(),
+      "(() => { trace.push('inner'); Promise.resolve().then("
+      "() => trace.push('microtask')); })");
+  struct Nested {
+    napi_async_context context;
+    napi_value receiver;
+    napi_value function;
+  } nested{async_context, resource, inner};
+  napi_value nested_callback;
+  ASSERT_EQ(napi_create_function(
+                env.get(), "nested", NAPI_AUTO_LENGTH,
+                [](napi_env env, napi_callback_info info) -> napi_value {
+                  void* data;
+                  napi_get_cb_info(env, info, nullptr, nullptr, nullptr, &data);
+                  auto* nested = static_cast<Nested*>(data);
+                  EXPECT_EQ(1u, env->async_callback_depth);
+                  EXPECT_EQ(nested->context, env->active_async_context);
+                  napi_value result = nullptr;
+                  EXPECT_EQ(
+                      napi_make_callback(env, nested->context, nested->receiver,
+                                         nested->function, 0, nullptr, &result),
+                      napi_ok);
+                  EXPECT_EQ(1u, env->async_callback_depth);
+                  return result;
+                },
+                &nested, &nested_callback),
+            napi_ok);
+  napi_value outer =
+      EvaluateNapiFixture(env.get(),
+                          "(function(nested) { globalThis.trace = ['outer']; "
+                          "nested(); trace.push('after'); })");
+  EXPECT_EQ(napi_make_callback(env.get(), async_context, resource, outer, 1,
+                               &nested_callback, nullptr),
+            napi_ok);
+  auto trace = EvaluateNapiFixture(env.get(), "trace.join(',')");
+  v8::String::Utf8Value text(isolate(), trace->Get());
+  EXPECT_STREQ("outer,inner,after,microtask", *text);
+  EXPECT_EQ(0u, env->async_callback_depth);
+  EXPECT_EQ(nullptr, env->active_async_context);
+}
+
+TEST_F(NapiLoaderTest, AsyncCallbackNullReceiverPreservesConversionException) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  napi_value receiver = EvaluateNapiFixture(env.get(), "null");
+  napi_value callback = EvaluateNapiFixture(env.get(), "(() => 42)");
+  EXPECT_EQ(napi_make_callback(env.get(), nullptr, receiver, callback, 0,
+                               nullptr, nullptr),
+            napi_object_expected);
+  bool pending = false;
+  EXPECT_EQ(napi_is_exception_pending(env.get(), &pending), napi_ok);
+  EXPECT_TRUE(pending);
+  napi_value exception;
+  ASSERT_EQ(napi_get_and_clear_last_exception(env.get(), &exception), napi_ok);
+  EXPECT_TRUE(exception->Get()->IsNativeError());
+  receiver = EvaluateNapiFixture(env.get(), "({})");
+  EXPECT_EQ(napi_make_callback(env.get(), nullptr, receiver, callback, 0,
+                               nullptr, nullptr),
+            napi_ok);
+}
+
+TEST_F(NapiLoaderTest, FatalAsyncExceptionReportsToV8AndTerminatesByDefault) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  napi_value error =
+      EvaluateNapiFixture(env.get(), "new Error('native failure')");
+  ASSERT_TRUE(isolate()->AddMessageListener(ReportFatalAsyncMessage));
+  EXPECT_DEATH_IF_SUPPORTED(napi_fatal_exception(env.get(), error),
+                            "NAPI_V8_UNCAUGHT_REPORT");
+  isolate()->RemoveMessageListeners(ReportFatalAsyncMessage);
+}
+
 TEST_F(NapiLoaderTest, ReferenceTransitionsBetweenWeakAndStrong) {
   v8::Locker locker(isolate());
   v8::Isolate::Scope isolate_scope(isolate());
@@ -687,20 +1010,171 @@ TEST_F(NapiLoaderTest, ReferenceTransitionsBetweenWeakAndStrong) {
   v8::Context::Scope context_scope(context());
 
   auto env = std::make_unique<napi_env__>(isolate(), context());
+  napi_handle_scope scope;
+  ASSERT_EQ(napi_open_handle_scope(env.get(), &scope), napi_ok);
   napi_value object;
   ASSERT_EQ(napi_create_object(env.get(), &object), napi_ok);
   napi_ref reference;
   ASSERT_EQ(napi_create_reference(env.get(), object, 0, &reference), napi_ok);
-  EXPECT_TRUE(reference->is_weak);
 
   uint32_t ref_count = 0;
   EXPECT_EQ(napi_reference_ref(env.get(), reference, &ref_count), napi_ok);
   EXPECT_EQ(ref_count, 1u);
-  EXPECT_FALSE(reference->is_weak);
+  ASSERT_EQ(napi_close_handle_scope(env.get(), scope), napi_ok);
+  isolate()->LowMemoryNotification();
+  ASSERT_EQ(napi_open_handle_scope(env.get(), &scope), napi_ok);
+  napi_value retained = nullptr;
+  EXPECT_EQ(napi_get_reference_value(env.get(), reference, &retained), napi_ok);
+  EXPECT_NE(retained, nullptr);
+  ASSERT_EQ(napi_close_handle_scope(env.get(), scope), napi_ok);
   EXPECT_EQ(napi_reference_unref(env.get(), reference, &ref_count), napi_ok);
   EXPECT_EQ(ref_count, 0u);
-  EXPECT_TRUE(reference->is_weak);
+  isolate()->LowMemoryNotification();
+  EXPECT_EQ(napi_get_reference_value(env.get(), reference, &retained), napi_ok);
+  EXPECT_EQ(retained, nullptr);
   EXPECT_EQ(napi_delete_reference(env.get(), reference), napi_ok);
+  EXPECT_TRUE(env->references.empty());
+}
+
+TEST_F(NapiLoaderTest,
+       LateReferenceOperationsAfterEnvironmentAndIsolateDispose) {
+  auto allocator = std::unique_ptr<v8::ArrayBuffer::Allocator>(
+      v8::ArrayBuffer::Allocator::NewDefaultAllocator());
+  v8::Isolate::CreateParams create_params;
+  create_params.array_buffer_allocator = allocator.get();
+  v8::Isolate* native_isolate = v8::Isolate::New(create_params);
+  napi_env expired_env = nullptr;
+  napi_ref strong = nullptr;
+  napi_ref weak = nullptr;
+  {
+    v8::Locker locker(native_isolate);
+    v8::Isolate::Scope isolate_scope(native_isolate);
+    v8::HandleScope handle_scope(native_isolate);
+    auto local_context = v8::Context::New(native_isolate);
+    v8::Context::Scope context_scope(local_context);
+    auto env = std::make_unique<napi_env__>(native_isolate, local_context);
+    expired_env = env.get();
+    napi_value object = nullptr;
+    EXPECT_EQ(napi_create_object(env.get(), &object), napi_ok);
+    EXPECT_EQ(napi_create_reference(env.get(), object, 1, &strong), napi_ok);
+    EXPECT_EQ(napi_create_reference(env.get(), object, 0, &weak), napi_ok);
+    EXPECT_EQ(env->references.size(), 2u);
+    env.reset();
+  }
+  native_isolate->Dispose();
+  allocator.reset();
+
+  // Models a dlopen-retained addon's static destructor at process exit. Both
+  // the env and its isolate are gone; neither pointer may be dereferenced.
+  for (napi_ref reference : {strong, weak}) {
+    EXPECT_EQ(napi_delete_reference(expired_env, reference), napi_invalid_arg);
+    uint32_t count = 99;
+    EXPECT_EQ(napi_reference_ref(expired_env, reference, &count),
+              napi_invalid_arg);
+    EXPECT_EQ(napi_reference_unref(expired_env, reference, &count),
+              napi_invalid_arg);
+    EXPECT_EQ(count, 99u);
+    napi_value value = nullptr;
+    EXPECT_EQ(napi_get_reference_value(expired_env, reference, &value),
+              napi_invalid_arg);
+    EXPECT_EQ(value, nullptr);
+  }
+}
+
+TEST_F(NapiLoaderTest, ReferenceTokensCannotDeleteAnotherOrReusedEnvironment) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  std::optional<napi_env__> reused;
+  reused.emplace(isolate(), context());
+  napi_env old_address = &*reused;
+  napi_value object = nullptr;
+  ASSERT_EQ(napi_create_object(&*reused, &object), napi_ok);
+  napi_ref expired = nullptr;
+  ASSERT_EQ(napi_create_reference(&*reused, object, 1, &expired), napi_ok);
+  reused.reset();
+  reused.emplace(isolate(), context());
+  ASSERT_EQ(&*reused, old_address);
+  ASSERT_EQ(napi_create_object(&*reused, &object), napi_ok);
+  napi_ref current = nullptr;
+  ASSERT_EQ(napi_create_reference(&*reused, object, 1, &current), napi_ok);
+  EXPECT_NE(current, expired);
+  EXPECT_EQ(napi_delete_reference(old_address, expired), napi_invalid_arg);
+  auto foreign = std::make_unique<napi_env__>(isolate(), context());
+  EXPECT_EQ(napi_delete_reference(foreign.get(), current), napi_invalid_arg);
+  uint32_t count = 99;
+  napi_value value = nullptr;
+  EXPECT_EQ(napi_reference_ref(foreign.get(), current, &count),
+            napi_invalid_arg);
+  EXPECT_EQ(napi_reference_unref(foreign.get(), current, &count),
+            napi_invalid_arg);
+  EXPECT_EQ(napi_get_reference_value(foreign.get(), current, &value),
+            napi_invalid_arg);
+  EXPECT_EQ(count, 99u);
+  ASSERT_EQ(napi_get_reference_value(&*reused, current, &value), napi_ok);
+  EXPECT_TRUE(value->Get()->StrictEquals(object->Get()));
+  EXPECT_EQ(napi_delete_reference(&*reused, current), napi_ok);
+  EXPECT_EQ(napi_delete_reference(&*reused, current), napi_invalid_arg);
+  EXPECT_TRUE(reused->references.empty());
+}
+
+TEST_F(NapiLoaderTest, ReferencesRemainUsableThroughCleanupAndFinalizers) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  struct Capture {
+    napi_env env;
+    napi_ref ref;
+    std::vector<int> calls;
+  } capture{env.get(), nullptr, {}};
+  napi_value object = nullptr;
+  ASSERT_EQ(napi_create_object(env.get(), &object), napi_ok);
+  ASSERT_EQ(napi_create_reference(env.get(), object, 1, &capture.ref), napi_ok);
+  ASSERT_EQ(napi_add_env_cleanup_hook(
+                env.get(),
+                [](void* data) {
+                  auto* capture = static_cast<Capture*>(data);
+                  napi_value value = nullptr;
+                  EXPECT_EQ(napi_get_reference_value(capture->env, capture->ref,
+                                                     &value),
+                            napi_ok);
+                  EXPECT_NE(value, nullptr);
+                  capture->calls.push_back(1);
+                },
+                &capture),
+            napi_ok);
+  napi_value external = nullptr;
+  ASSERT_EQ(napi_create_external(
+                env.get(), &capture,
+                [](napi_env env, void* data, void*) {
+                  auto* capture = static_cast<Capture*>(data);
+                  EXPECT_EQ(napi_delete_reference(env, capture->ref), napi_ok);
+                  napi_value value = nullptr;
+                  EXPECT_EQ(napi_create_object(env, &value), napi_ok);
+                  EXPECT_EQ(napi_create_reference(env, value, 1, &capture->ref),
+                            napi_ok);
+                  capture->calls.push_back(2);
+                },
+                nullptr, &external),
+            napi_ok);
+  ASSERT_EQ(napi_set_instance_data(
+                env.get(), &capture,
+                [](napi_env env, void* data, void*) {
+                  auto* capture = static_cast<Capture*>(data);
+                  napi_value value = nullptr;
+                  EXPECT_EQ(napi_get_reference_value(env, capture->ref, &value),
+                            napi_ok);
+                  EXPECT_NE(value, nullptr);
+                  capture->calls.push_back(3);
+                },
+                nullptr),
+            napi_ok);
+  env.reset();
+  EXPECT_EQ(capture.calls, std::vector<int>({1, 2, 3}));
+  EXPECT_EQ(napi_delete_reference(capture.env, capture.ref), napi_invalid_arg);
 }
 
 TEST_F(NapiLoaderTest, CreateReferenceRejectsForeignNapiValue) {
@@ -1121,6 +1595,152 @@ TEST_F(NapiLoaderTest, AsyncWorkExecution) {
   delete env;
 }
 
+#if BUILDFLAG(IS_MAC) && BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+TEST_F(NapiLoaderTest, StaticRegistrationUsesRecordFromLoadedImage) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  LoadedNodeAddon loaded_addon;
+
+  // 模拟已卸载的地址和另一个 image 的记录，二者都不能成为该 addon 入口。
+  napi_module_register(reinterpret_cast<napi_module*>(1));
+  static napi_module unrelated = {};
+  unrelated.nm_register_func = [](napi_env, napi_value) -> napi_value {
+    ADD_FAILURE() << "Selected a registration from another image";
+    return nullptr;
+  };
+  napi_module_register(&unrelated);
+  base::ScopedClosureRunner remove_test_registrations(base::BindOnce([] {
+    xenon_napi_remove_registered_module(reinterpret_cast<napi_module*>(1));
+    xenon_napi_remove_registered_module(&unrelated);
+  }));
+
+  base::FilePath exe_dir;
+  ASSERT_TRUE(base::PathService::Get(base::DIR_EXE, &exe_dir));
+  auto exports = LoadAndInitializeNodeAddon(
+      isolate(), context(), exe_dir.AppendASCII("test_static_addon.node"),
+      &loaded_addon);
+  ASSERT_FALSE(exports.IsEmpty());
+  ASSERT_TRUE(exports->IsObject());
+  v8::Local<v8::Value> answer;
+  ASSERT_TRUE(
+      exports.As<v8::Object>()
+          ->Get(context(), v8::String::NewFromUtf8Literal(isolate(), "answer"))
+          .ToLocal(&answer));
+  ASSERT_TRUE(answer->IsInt32());
+  EXPECT_EQ(answer.As<v8::Int32>()->Value(), 42);
+}
+
+TEST_F(NapiLoaderTest, StaticRegistrationCanBeDisabled) {
+  base::test::ScopedCommandLine command_line;
+  command_line.GetProcessCommandLine()->AppendSwitch(
+      napi_switches::kDisableNodeStaticRegistration);
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  LoadedNodeAddon loaded_addon;
+
+  base::FilePath exe_dir;
+  ASSERT_TRUE(base::PathService::Get(base::DIR_EXE, &exe_dir));
+  base::NativeLibraryLoadError error;
+  auto library = LoadNodeAddonLibrary(
+      exe_dir.AppendASCII("test_static_addon.node"), &error);
+  ASSERT_TRUE(library.is_valid());
+  ASSERT_GT(xenon_napi_get_registered_module_count(), 0u);
+  auto exports = InitializeLoadedNodeAddon(isolate(), context(),
+                                           std::move(library), &loaded_addon);
+  EXPECT_TRUE(exports.IsEmpty());
+  EXPECT_FALSE(loaded_addon.library.is_valid());
+}
+
+TEST_F(NapiLoaderTest,
+       NativeCloseCallbackOutlivesEnvironmentAndImageReference) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  base::FilePath exe_dir;
+  ASSERT_TRUE(base::PathService::Get(base::DIR_EXE, &exe_dir));
+  const auto path = exe_dir.AppendASCII("test_static_addon.node");
+  auto loaded_addon = std::make_unique<LoadedNodeAddon>();
+  ASSERT_FALSE(
+      LoadAndInitializeNodeAddon(isolate(), context(), path, loaded_addon.get())
+          .IsEmpty());
+
+  using StartTimer = int (*)(napi_env, uv_loop_t*, int*, int*);
+  using GetCloseCallback = uv_close_cb (*)();
+  auto start_timer = reinterpret_cast<StartTimer>(
+      loaded_addon->library.GetFunctionPointer("XenonTestStartCloseTimer"));
+  auto get_close_callback = reinterpret_cast<GetCloseCallback>(
+      loaded_addon->library.GetFunctionPointer("XenonTestGetCloseCallback"));
+  ASSERT_TRUE(start_timer);
+  ASSERT_TRUE(get_close_callback);
+  uv_close_cb close_callback = get_close_callback();
+  uv_loop_t loop;
+  ASSERT_EQ(uv_loop_init(&loop), 0);
+  int closed = 0;
+  int ticks = 0;
+  ASSERT_EQ(start_timer(loaded_addon->env.get(), &loop, &closed, &ticks), 0);
+
+  loaded_addon.reset();
+  EXPECT_EQ(closed, 0);
+  Dl_info info = {};
+  ASSERT_NE(dladdr(reinterpret_cast<void*>(close_callback), &info), 0);
+  // 仅测试驱动该独立 loop；宿主析构不运行共享 loop 或未知 JS 回调。
+  uv_run(&loop, UV_RUN_NOWAIT);
+  EXPECT_EQ(closed, 1);
+  EXPECT_EQ(ticks, 0);
+  EXPECT_EQ(uv_loop_close(&loop), 0);
+
+  // image 不再重跑 constructor，第二个 env 必须复用仍有效的静态注册记录。
+  LoadedNodeAddon second_environment;
+  EXPECT_FALSE(LoadAndInitializeNodeAddon(isolate(), context(), path,
+                                          &second_environment)
+                   .IsEmpty());
+}
+
+TEST_F(NapiLoaderTest, NativeCloseCallbackOutlivesFailedInitialization) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  base::FilePath exe_dir;
+  ASSERT_TRUE(base::PathService::Get(base::DIR_EXE, &exe_dir));
+  base::NativeLibraryLoadError error;
+  auto library = LoadNodeAddonLibrary(
+      exe_dir.AppendASCII("test_static_addon.node"), &error);
+  ASSERT_TRUE(library.is_valid());
+  using PrepareFailure = void (*)(uv_loop_t*, int*, int*);
+  using GetCloseCallback = uv_close_cb (*)();
+  auto prepare_failure = reinterpret_cast<PrepareFailure>(
+      library.GetFunctionPointer("XenonTestPrepareInitializationFailure"));
+  auto get_close_callback = reinterpret_cast<GetCloseCallback>(
+      library.GetFunctionPointer("XenonTestGetCloseCallback"));
+  ASSERT_TRUE(prepare_failure);
+  ASSERT_TRUE(get_close_callback);
+  uv_close_cb close_callback = get_close_callback();
+  uv_loop_t loop;
+  ASSERT_EQ(uv_loop_init(&loop), 0);
+  int closed = 0;
+  int ticks = 0;
+  prepare_failure(&loop, &closed, &ticks);
+  LoadedNodeAddon loaded_addon;
+  EXPECT_TRUE(InitializeLoadedNodeAddon(isolate(), context(),
+                                        std::move(library), &loaded_addon)
+                  .IsEmpty());
+  EXPECT_EQ(loaded_addon.env, nullptr);
+  EXPECT_EQ(closed, 0);
+  Dl_info info = {};
+  ASSERT_NE(dladdr(reinterpret_cast<void*>(close_callback), &info), 0);
+  uv_run(&loop, UV_RUN_NOWAIT);
+  EXPECT_EQ(closed, 1);
+  EXPECT_EQ(ticks, 0);
+  EXPECT_EQ(uv_loop_close(&loop), 0);
+}
+#endif
+
 TEST_F(NapiLoaderTest, LoadAndRunTestAddon) {
   v8::Locker locker(isolate());
   v8::Isolate::Scope isolate_scope(isolate());
@@ -1147,15 +1767,18 @@ TEST_F(NapiLoaderTest, LoadAndRunTestAddon) {
   // --- Test Case 1: Synchronous Add ---
   {
     v8::Local<v8::Value> add_val;
-    ASSERT_TRUE(exports->Get(context(), v8::String::NewFromUtf8(isolate(), "Add", v8::NewStringType::kNormal).ToLocalChecked()).ToLocal(&add_val));
+    ASSERT_TRUE(
+        exports
+            ->Get(context(), v8::String::NewFromUtf8(isolate(), "Add",
+                                                     v8::NewStringType::kNormal)
+                                 .ToLocalChecked())
+            .ToLocal(&add_val));
     ASSERT_TRUE(add_val->IsFunction());
 
     v8::Local<v8::Function> add_fn = add_val.As<v8::Function>();
-    v8::Local<v8::Value> argv[2] = {
-        v8::Number::New(isolate(), 15.0),
-        v8::Number::New(isolate(), 27.0)
-    };
-    
+    v8::Local<v8::Value> argv[2] = {v8::Number::New(isolate(), 15.0),
+                                    v8::Number::New(isolate(), 27.0)};
+
     v8::Local<v8::Value> result;
     ASSERT_TRUE(add_fn->Call(context(), exports, 2, argv).ToLocal(&result));
     ASSERT_TRUE(result->IsNumber());

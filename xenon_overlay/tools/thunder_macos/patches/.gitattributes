@@ -1,0 +1,3 @@
+# Unified-diff context must retain upstream whitespace. Pin LF because the
+# compatibility manifests validate the exact patch bytes.
+*.patch text eol=lf -whitespace

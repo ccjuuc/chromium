@@ -26,6 +26,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "base/auto_reset.h"
 #include "base/check.h"
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
@@ -55,7 +56,71 @@ struct NapiFinalizerData {
   v8::Global<v8::Value> persistent;
 };
 
+struct napi_async_context__ {
+  NAPI_RAW_PTR_EXCLUSION napi_env env;
+  v8::Global<v8::Object> resource;
+  v8::Global<v8::String> name;
+};
+
 namespace {
+
+struct NapiAsyncContextRegistry {
+  std::mutex mutex;
+  uintptr_t next_token = 1;
+  std::unordered_map<napi_async_context, std::unique_ptr<napi_async_context__>>
+      contexts;
+};
+
+NapiAsyncContextRegistry& GetAsyncContextRegistry() {
+  static base::NoDestructor<NapiAsyncContextRegistry> registry;
+  return *registry;
+}
+
+napi_async_context__* FindAsyncContext(NapiAsyncContextRegistry& registry,
+                                       napi_env env,
+                                       napi_async_context context) {
+  const auto it = registry.contexts.find(context);
+  return it != registry.contexts.end() && it->second->env == env
+             ? it->second.get()
+             : nullptr;
+}
+
+napi_status FinishAsyncApi(napi_env env,
+                           napi_status status,
+                           const char* message = nullptr) {
+  if (env) {
+    env->last_error_info = {message, nullptr, 0, status};
+  }
+  return status;
+}
+
+void CaptureAsyncException(napi_env env, const v8::TryCatch& caught) {
+  if (caught.HasCaught() && !caught.Exception().IsEmpty()) {
+    env->last_exception.Reset(env->isolate, caught.Exception());
+  }
+}
+
+struct NapiReferenceRegistry {
+  std::mutex mutex;
+  uintptr_t next_token = 1;
+  std::unordered_map<napi_ref, std::unique_ptr<napi_ref__>> references;
+};
+
+NapiReferenceRegistry& GetReferenceRegistry() {
+  // Addon static destructors can call napi_delete_reference after ordinary
+  // process teardown. Keep only the registry alive, not expired references.
+  static base::NoDestructor<NapiReferenceRegistry> registry;
+  return *registry;
+}
+
+napi_ref__* FindReference(NapiReferenceRegistry& registry,
+                          napi_env env,
+                          napi_ref reference) {
+  const auto it = registry.references.find(reference);
+  return it != registry.references.end() && it->second->env == env
+             ? it->second.get()
+             : nullptr;
+}
 
 class NapiValueScope {
  public:
@@ -133,7 +198,7 @@ void OnNapiFinalizerFirstPass(
 }
 
 void OnReferenceCollected(const v8::WeakCallbackInfo<napi_ref__>& info) {
-  napi_ref ref = info.GetParameter();
+  napi_ref__* ref = info.GetParameter();
   ref->global_value.Reset();
   ref->is_weak = false;
 }
@@ -218,6 +283,26 @@ napi_env__::~napi_env__() {
   instance_data = nullptr;
   instance_data_finalize = nullptr;
   instance_data_finalize_hint = nullptr;
+  {
+    auto& registry = GetAsyncContextRegistry();
+    std::lock_guard lock(registry.mutex);
+    for (napi_async_context async_context : async_contexts) {
+      registry.contexts.erase(async_context);
+    }
+    async_contexts.clear();
+  }
+  uncaught_exception_handler.Reset();
+  {
+    // Cleanup hooks and finalizers may still read/delete/create references.
+    // Release the survivors only after all of those callbacks have finished,
+    // while V8 is entered and the isolate is still valid.
+    auto& registry = GetReferenceRegistry();
+    std::lock_guard lock(registry.mutex);
+    for (napi_ref reference : references) {
+      registry.references.erase(reference);
+    }
+    references.clear();
+  }
   callbacks.clear();
   live_values.clear();
   allocated_values.clear();
@@ -248,7 +333,7 @@ bool napi_env__::IsLiveValue(napi_value v) const {
   return v && live_values.contains(v);
 }
 
-napi_ref__::napi_ref__(v8::Isolate* isolate) : isolate(isolate) {}
+napi_ref__::napi_ref__(napi_env env) : isolate(env->isolate), env(env) {}
 
 napi_ref__::~napi_ref__() {
   global_value.Reset();
@@ -1418,6 +1503,155 @@ napi_status napi_call_function(napi_env env, napi_value recv, napi_value func, s
   return napi_ok;
 }
 
+napi_status napi_async_init(napi_env env,
+                            napi_value async_resource,
+                            napi_value async_resource_name,
+                            napi_async_context* result) {
+  if (!env || !result || !env->IsLiveValue(async_resource_name) ||
+      (async_resource && !env->IsLiveValue(async_resource))) {
+    return FinishAsyncApi(env, napi_invalid_arg, "Invalid async resource");
+  }
+  if (!env->last_exception.IsEmpty()) {
+    return FinishAsyncApi(env, napi_pending_exception, "Exception pending");
+  }
+  v8::HandleScope handle_scope(env->isolate);
+  v8::Local<v8::Context> context = env->GetContext();
+  v8::Context::Scope context_scope(context);
+  v8::TryCatch caught(env->isolate);
+  v8::Local<v8::Object> resource;
+  if (async_resource) {
+    if (!async_resource->Get()->ToObject(context).ToLocal(&resource)) {
+      CaptureAsyncException(env, caught);
+      return FinishAsyncApi(env, napi_object_expected,
+                            "Async resource cannot be converted to an object");
+    }
+  } else {
+    resource = v8::Object::New(env->isolate);
+  }
+  v8::Local<v8::String> name;
+  if (!async_resource_name->Get()->ToString(context).ToLocal(&name)) {
+    CaptureAsyncException(env, caught);
+    return FinishAsyncApi(
+        env, napi_string_expected,
+        "Async resource name cannot be converted to a string");
+  }
+  auto owned = std::make_unique<napi_async_context__>();
+  owned->env = env;
+  owned->resource.Reset(env->isolate, resource);
+  owned->name.Reset(env->isolate, name);
+  auto& registry = GetAsyncContextRegistry();
+  std::lock_guard lock(registry.mutex);
+  CHECK_LT(registry.next_token, std::numeric_limits<uintptr_t>::max());
+  auto token = reinterpret_cast<napi_async_context>(registry.next_token++);
+  registry.contexts.emplace(token, std::move(owned));
+  env->async_contexts.insert(token);
+  *result = token;
+  return FinishAsyncApi(env, napi_ok);
+}
+
+napi_status napi_async_destroy(napi_env env, napi_async_context async_context) {
+  if (!env || !async_context) {
+    return napi_invalid_arg;
+  }
+  auto& registry = GetAsyncContextRegistry();
+  std::lock_guard lock(registry.mutex);
+  if (!FindAsyncContext(registry, env, async_context)) {
+    // As with references, a late cleanup must not dereference an expired env.
+    return napi_invalid_arg;
+  }
+  env->async_contexts.erase(async_context);
+  registry.contexts.erase(async_context);
+  return FinishAsyncApi(env, napi_ok);
+}
+
+napi_status napi_make_callback(napi_env env,
+                               napi_async_context async_context,
+                               napi_value recv,
+                               napi_value func,
+                               size_t argc,
+                               const napi_value* argv,
+                               napi_value* result) {
+  if (!env || !env->IsLiveValue(recv) || !env->IsLiveValue(func) ||
+      (argc > 0 && !argv) ||
+      argc > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    return FinishAsyncApi(env, napi_invalid_arg, "Invalid callback arguments");
+  }
+  if (!env->last_exception.IsEmpty()) {
+    return FinishAsyncApi(env, napi_pending_exception, "Exception pending");
+  }
+  for (size_t i = 0; i < argc; ++i) {
+    if (!env->IsLiveValue(argv[i])) {
+      return FinishAsyncApi(env, napi_invalid_arg, "Foreign callback argument");
+    }
+  }
+  v8::HandleScope handle_scope(env->isolate);
+  v8::Local<v8::Context> context = env->GetContext();
+  v8::Context::Scope context_scope(context);
+  // Hold the resource through this call, even if the callback destroys its
+  // async context. Never keep a registry pointer/lock across JavaScript.
+  [[maybe_unused]] v8::Local<v8::Object> resource;
+  if (async_context) {
+    auto& registry = GetAsyncContextRegistry();
+    std::lock_guard lock(registry.mutex);
+    auto* owned = FindAsyncContext(registry, env, async_context);
+    if (!owned) {
+      return FinishAsyncApi(env, napi_invalid_arg, "Unknown async context");
+    }
+    resource = owned->resource.Get(env->isolate);
+  }
+  if (!func->Get()->IsFunction()) {
+    return FinishAsyncApi(env, napi_function_expected,
+                          "Callback must be a function");
+  }
+  v8::TryCatch caught(env->isolate);
+  v8::Local<v8::Object> receiver;
+  if (!recv->Get()->ToObject(context).ToLocal(&receiver)) {
+    CaptureAsyncException(env, caught);
+    return FinishAsyncApi(env, napi_object_expected,
+                          "Callback receiver must be convertible to an object");
+  }
+  std::vector<v8::Local<v8::Value>> arguments;
+  arguments.reserve(argc);
+  for (size_t i = 0; i < argc; ++i) {
+    arguments.push_back(argv[i]->Get());
+  }
+  v8::Local<v8::Value> value;
+  bool called = false;
+  {
+    base::AutoReset<size_t> depth(&env->async_callback_depth,
+                                  env->async_callback_depth + 1);
+    base::AutoReset<napi_async_context> active(&env->active_async_context,
+                                               async_context);
+    {
+      v8::Isolate::SuppressMicrotaskExecutionScope suppress(
+          env->isolate, context->GetMicrotaskQueue());
+      v8::MicrotasksScope microtasks(context,
+                                     v8::MicrotasksScope::kDoNotRunMicrotasks);
+      called = func->Get()
+                   .As<v8::Function>()
+                   ->Call(context, receiver, static_cast<int>(argc),
+                          arguments.data())
+                   .ToLocal(&value);
+    }
+    // This is the outer native-to-JavaScript boundary. Nested callbacks must
+    // not run Promise continuations while their caller is still executing.
+    if (called && env->async_callback_depth == 1) {
+      context->GetMicrotaskQueue()->PerformCheckpoint(env->isolate);
+    }
+  }
+  if (!called || caught.HasCaught()) {
+    CaptureAsyncException(env, caught);
+    return FinishAsyncApi(env, napi_pending_exception, "Callback threw");
+  }
+  if (!env->last_exception.IsEmpty()) {
+    return FinishAsyncApi(env, napi_pending_exception, "Exception pending");
+  }
+  if (result) {
+    *result = env->CreateValue(value);
+  }
+  return FinishAsyncApi(env, napi_ok);
+}
+
 napi_status napi_strict_equals(napi_env env,
                                napi_value lhs,
                                napi_value rhs,
@@ -1530,7 +1764,10 @@ napi_status napi_new_instance(napi_env env, napi_value constructor, size_t argc,
 
 // --- References ---
 
-napi_status napi_create_reference(napi_env env, napi_value value, uint32_t initial_refcount, napi_ref* result) {
+napi_status napi_create_reference(napi_env env,
+                                  napi_value value,
+                                  uint32_t initial_refcount,
+                                  napi_ref* result) {
   if (!env || !result ||
       RejectDeadNapiValue(env, value, "napi_create_reference")) {
     if (env) {
@@ -1549,54 +1786,102 @@ napi_status napi_create_reference(napi_env env, napi_value value, uint32_t initi
     env->last_error_info = {"Invalid argument", nullptr, 0, napi_invalid_arg};
     return napi_invalid_arg;
   }
-  auto ref = std::make_unique<napi_ref__>(env->isolate);
+  auto ref = std::make_unique<napi_ref__>(env);
   ref->global_value.Reset(env->isolate, local_value);
   ref->ref_count = initial_refcount;
   if (initial_refcount == 0) {
     ref->SetWeak();
   }
-  *result = ref.release();
+  {
+    auto& registry = GetReferenceRegistry();
+    std::lock_guard lock(registry.mutex);
+    // napi_ref is opaque. Non-reused tokens prevent a late native destructor
+    // from deleting a new ref at a recycled heap address, even if its env's
+    // address was recycled too. No tombstone/reference storage is retained.
+    CHECK_LT(registry.next_token, std::numeric_limits<uintptr_t>::max());
+    napi_ref token = reinterpret_cast<napi_ref>(registry.next_token++);
+    registry.references.emplace(token, std::move(ref));
+    env->references.insert(token);
+    *result = token;
+  }
   env->last_error_info = {nullptr, nullptr, 0, napi_ok};
   return napi_ok;
 }
 
 napi_status napi_delete_reference(napi_env env, napi_ref ref) {
-  if (!env || !ref) return napi_invalid_arg;
-  ref->global_value.Reset();
-  delete ref;
+  if (!env || !ref) {
+    return napi_invalid_arg;
+  }
+  auto& registry = GetReferenceRegistry();
+  std::lock_guard lock(registry.mutex);
+  if (!FindReference(registry, env, ref)) {
+    return napi_invalid_arg;
+  }
+  env->references.erase(ref);
+  registry.references.erase(ref);
   return napi_ok;
 }
 
 napi_status napi_reference_ref(napi_env env, napi_ref ref, uint32_t* result) {
-  if (!env || !ref) return napi_invalid_arg;
-  if (!ref->global_value.IsEmpty()) {
-    if (ref->ref_count == 0) {
-      ref->ClearWeak();
-    }
-    ++ref->ref_count;
+  if (!env || !ref) {
+    return napi_invalid_arg;
   }
-  if (result) *result = ref->ref_count;
+  auto& registry = GetReferenceRegistry();
+  std::lock_guard lock(registry.mutex);
+  auto* reference = FindReference(registry, env, ref);
+  if (!reference) {
+    return napi_invalid_arg;
+  }
+  if (!reference->global_value.IsEmpty()) {
+    if (reference->ref_count == 0) {
+      reference->ClearWeak();
+    }
+    ++reference->ref_count;
+  }
+  if (result) {
+    *result = reference->ref_count;
+  }
   return napi_ok;
 }
 
 napi_status napi_reference_unref(napi_env env, napi_ref ref, uint32_t* result) {
-  if (!env || !ref) return napi_invalid_arg;
-  if (ref->ref_count > 0) {
-    --ref->ref_count;
-    if (ref->ref_count == 0) {
-      ref->SetWeak();
+  if (!env || !ref) {
+    return napi_invalid_arg;
+  }
+  auto& registry = GetReferenceRegistry();
+  std::lock_guard lock(registry.mutex);
+  auto* reference = FindReference(registry, env, ref);
+  if (!reference) {
+    return napi_invalid_arg;
+  }
+  if (reference->ref_count > 0) {
+    --reference->ref_count;
+    if (reference->ref_count == 0) {
+      reference->SetWeak();
     }
   }
-  if (result) *result = ref->ref_count;
+  if (result) {
+    *result = reference->ref_count;
+  }
   return napi_ok;
 }
 
-napi_status napi_get_reference_value(napi_env env, napi_ref ref, napi_value* result) {
-  if (!env || !ref || !result) return napi_invalid_arg;
-  if (ref->global_value.IsEmpty()) {
+napi_status napi_get_reference_value(napi_env env,
+                                     napi_ref ref,
+                                     napi_value* result) {
+  if (!env || !ref || !result) {
+    return napi_invalid_arg;
+  }
+  auto& registry = GetReferenceRegistry();
+  std::lock_guard lock(registry.mutex);
+  auto* reference = FindReference(registry, env, ref);
+  if (!reference) {
+    return napi_invalid_arg;
+  }
+  if (reference->global_value.IsEmpty()) {
     *result = nullptr;
   } else {
-    *result = env->CreateValue(ref->global_value.Get(env->isolate));
+    *result = env->CreateValue(reference->global_value.Get(env->isolate));
   }
   return napi_ok;
 }
@@ -1739,6 +2024,52 @@ napi_status napi_fatal_error(const char* location,
   LOG(FATAL) << "Fatal error in Node addon: "
              << diagnostic(message, message_len) << " at "
              << diagnostic(location, location_len);
+}
+
+napi_status napi_fatal_exception(napi_env env, napi_value error) {
+  if (!env || !env->IsLiveValue(error)) {
+    return FinishAsyncApi(env, napi_invalid_arg, "Invalid exception value");
+  }
+  if (!env->last_exception.IsEmpty()) {
+    return FinishAsyncApi(env, napi_pending_exception, "Exception pending");
+  }
+  v8::HandleScope handle_scope(env->isolate);
+  v8::Local<v8::Context> context = env->GetContext();
+  v8::Context::Scope context_scope(context);
+  v8::Local<v8::Value> exception = error->Get();
+  if (auto handler = env->uncaught_exception_handler) {
+    v8::TryCatch caught(env->isolate);
+    const bool handled = handler.Run(context, exception);
+    if (handled && !caught.HasCaught() && env->last_exception.IsEmpty()) {
+      return FinishAsyncApi(env, napi_ok);
+    }
+    if (caught.HasCaught()) {
+      exception = caught.Exception();
+    } else if (!env->last_exception.IsEmpty()) {
+      exception = env->last_exception.Get(env->isolate);
+    }
+    env->last_exception.Reset();
+  }
+
+  // A bare native executor has no Node process 'uncaughtException' handler.
+  // Report through V8's actual uncaught message boundary, then terminate. An
+  // optional host handler above must explicitly accept the exception to resume.
+  v8::Local<v8::Message> message =
+      v8::Exception::CreateMessage(env->isolate, exception);
+  v8::String::Utf8Value text(env->isolate, message->Get());
+  {
+    v8::TryCatch report(env->isolate);
+    report.SetVerbose(true);
+    auto thrower =
+        v8::Function::New(context,
+                          [](const v8::FunctionCallbackInfo<v8::Value>& info) {
+                            info.GetIsolate()->ThrowException(info[0]);
+                          })
+            .ToLocalChecked();
+    v8::Local<v8::Value> arguments[] = {exception};
+    thrower->Call(context, v8::Undefined(env->isolate), 1, arguments).IsEmpty();
+  }
+  LOG(FATAL) << "Uncaught exception in Node addon: " << (*text ? *text : "");
 }
 
 // --- Class Creation ---

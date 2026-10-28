@@ -6,6 +6,8 @@ import("//testing/test.gni")
 
 source_set("privileged_schemes") {
   sources = [
+    "xenon_app_descriptor_paths.cc",
+    "xenon_app_descriptor_paths.h",
     "xenon_privileged_schemes.cc",
     "xenon_privileged_schemes.h",
   ]

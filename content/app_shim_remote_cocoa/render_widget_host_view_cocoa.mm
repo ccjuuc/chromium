@@ -23,6 +23,7 @@
 #include "base/strings/sys_string_conversions.h"
 #include "base/trace_event/trace_event.h"
 #include "components/input/web_input_event_builders_mac.h"
+#import "components/remote_cocoa/app_shim/bridged_content_view.h"
 #include "components/remote_cocoa/app_shim/ns_view_ids.h"
 #import "content/browser/cocoa/system_hotkey_helper_mac.h"
 #import "content/browser/cocoa/system_hotkey_map.h"
@@ -1025,7 +1026,12 @@ static NSWindow* __weak _deferredResignKeyWindow;
   NSPoint pointForHitTestInContentView =
       [contentView.superview convertPoint:theEvent.locationInWindow
                                  fromView:nil];
-  NSView* view = [contentView hitTest:pointForHitTestInContentView];
+  BridgedContentView* bridgedContentView =
+      base::apple::ObjCCast<BridgedContentView>(contentView);
+  NSView* view = bridgedContentView
+                     ? [bridgedContentView hitTest:pointForHitTestInContentView
+                                    forMouseEvent:theEvent]
+                     : [contentView hitTest:pointForHitTestInContentView];
   // Traverse the superview hierarchy as the hitTest will return the frontmost
   // view, such as an NSTextView, while nonWebContentView may be specified by
   // its parent view.

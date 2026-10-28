@@ -1,12 +1,12 @@
   const netModule = (() => {
-  // Node `net` Windows named pipes. Local pairing is available only after a
-  // successful native bind; other endpoints use the reserved IPC channels.
+  // Node `net` OS pipes (Windows named pipes and Unix domain sockets).
+  // Local pairing is available only after a successful native bind; other
+  // endpoints use the reserved IPC channels.
   // TCP endpoints always use the native OS transport.
   function normalizeNetPath(value) {
     let path = String(value || '');
-    path = path.replace(/\//g, '\\');
     if (__xenonPlatform === 'win32') {
-      path = path.toLowerCase();
+      path = path.replace(/\//g, '\\').toLowerCase();
     }
     return path;
   }
@@ -25,7 +25,7 @@
     // but never silently discard a requested transport/stream configuration.
     const disabled = operation === 'listen' ?
       ['ipv6Only', 'reusePort', 'exclusive'] :
-      ['noDelay', 'keepAlive', 'pauseOnConnect'];
+      ['noDelay', 'keepAlive', ...(operation === 'createServer' ? [] : ['pauseOnConnect'])];
     for (const name of disabled) {
       if (options[name] != null && options[name] !== false) unsupportedNetOption(operation, name);
     }
@@ -171,8 +171,9 @@
   let nextNetSocketId = 1;
   let nextNetServerId = 1;
 
-  function isNamedPipePath(path) {
-    return __xenonPlatform === 'win32' && /^\\\\\.\\pipe\\.+/i.test(String(path || ''));
+  function isNetPipePath(path) {
+    return __xenonPlatform === 'win32' ? /^\\\\\.\\pipe\\.+/i.test(String(path || '')) :
+        typeof path === 'string' && path.length > 0;
   }
 
   function sendXenonNet(channel, payload) {
@@ -389,7 +390,7 @@
         this.connecting = true;
         const path = endpoint.path === undefined ? undefined : normalizeNetPath(endpoint.path);
         this._tcp = endpoint.port !== undefined;
-        if (!this._tcp && !isNamedPipePath(path)) {
+        if (!this._tcp && !isNetPipePath(path)) {
           queueMicrotask(() => {
             if (this._closed) return;
             this._hadError = true;
@@ -410,6 +411,7 @@
           incoming._connected = true;
           incoming._peer = this;
           allocNetSocket(incoming);
+          if (server._pauseOnConnect) incoming.pause();
           this._peer = incoming;
           this._connected = true;
           this.connecting = false;
@@ -555,6 +557,7 @@
         this._path = null;
         this._address = null;
         this._allowHalfOpen = Boolean(options?.allowHalfOpen);
+        this._pauseOnConnect = Boolean(options?.pauseOnConnect);
         const listener = typeof options === 'function' ? options : connectionListener;
         if (listener !== undefined) this.on('connection', listener);
       }
@@ -571,7 +574,7 @@
         this._tcp = endpoint.port !== undefined;
         this._listeningPending = true;
         this._closing = false;
-        if (this._tcp || isNamedPipePath(this._path)) {
+        if (this._tcp || isNetPipePath(this._path)) {
           this._nativeId = 'server-m-' + (nextNetServerId++);
           this._listenCb = cb;
           nativeNetServers.set(this._nativeId, this);
@@ -659,6 +662,7 @@
       incoming._tcp = server._tcp;
       applySocketAddress(incoming, msg);
       netSockets.set(incoming._id, incoming);
+      if (server._pauseOnConnect) incoming.pause();
       emitNetEvent(server, 'connection', incoming);
       return true;
     }
@@ -695,6 +699,7 @@
       incoming._connected = true;
       incoming._peerId = msg.fromId;
       allocNetSocket(incoming);
+      if (server._pauseOnConnect) incoming.pause();
       // Match net.Server ordering: install connection/data listeners before
       // the peer observes its connect event.
       emitNetEvent(server, 'connection', incoming);

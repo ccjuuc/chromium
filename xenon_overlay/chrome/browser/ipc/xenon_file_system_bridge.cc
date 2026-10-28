@@ -5,6 +5,7 @@
 #include "xenon_overlay/chrome/browser/ipc/xenon_file_system_bridge.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -22,7 +23,14 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "xenon_overlay/common/asar/archive.h"
+
+#if BUILDFLAG(IS_POSIX)
+#include <unistd.h>
+
+#include "base/posix/safe_strerror.h"
+#endif
 
 namespace xenon::ipc {
 
@@ -41,6 +49,43 @@ xenon::ipc::mojom::IpcResultPtr Failure(const std::string& error) {
   result->error = error;
   return result;
 }
+
+#if BUILDFLAG(IS_POSIX)
+const char* PosixFileSystemErrorCode(int error) {
+  switch (error) {
+    case EACCES:
+      return "EACCES";
+    case EEXIST:
+      return "EEXIST";
+    case EFAULT:
+      return "EFAULT";
+    case EINTR:
+      return "EINTR";
+    case EINVAL:
+      return "EINVAL";
+    case EIO:
+      return "EIO";
+    case ELOOP:
+      return "ELOOP";
+    case ENAMETOOLONG:
+      return "ENAMETOOLONG";
+    case ENOENT:
+      return "ENOENT";
+    case ENOMEM:
+      return "ENOMEM";
+    case ENOSPC:
+      return "ENOSPC";
+    case ENOTDIR:
+      return "ENOTDIR";
+    case EPERM:
+      return "EPERM";
+    case EROFS:
+      return "EROFS";
+    default:
+      return "EIO";
+  }
+}
+#endif
 
 xenon::ipc::mojom::IpcResultPtr FileContentsResult(
     const base::DictValue& request,
@@ -228,6 +273,19 @@ xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
     return Failure(std::string(code) + ": " + description + ", " + syscall +
                    " '" + *path_string + "'");
   };
+#if BUILDFLAG(IS_POSIX)
+  auto posix_error = [&](int error_number, const char* syscall) {
+    const std::string description = base::safe_strerror(error_number);
+    return error(PosixFileSystemErrorCode(error_number), description.c_str(),
+                 syscall);
+  };
+#endif
+
+  if ((*operation == "symlink" || *operation == "readlink") &&
+      path_string->find('\0') != std::string::npos) {
+    return error("EINVAL", "path must not contain null bytes",
+                 operation->c_str());
+  }
 
   std::optional<FileReadRange> read_range;
   if (*operation == "read_file" && !ParseReadRange(request, &read_range)) {
@@ -285,6 +343,46 @@ xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
 
   if (*operation == "exists") {
     return Success(base::Value(base::PathExists(path)));
+  }
+  if (*operation == "symlink" || *operation == "readlink") {
+#if BUILDFLAG(IS_POSIX)
+    if (path.empty()) {
+      return error("ENOENT", "no such file or directory", operation->c_str());
+    }
+    if (*operation == "symlink") {
+      const std::string* target = request.FindString("target");
+      const base::Value* type = request.Find("type");
+      if (!target || target->find('\0') != std::string::npos ||
+          (type && (!type->is_string() || (type->GetString() != "file" &&
+                                           type->GetString() != "dir" &&
+                                           type->GetString() != "junction")))) {
+        return error("EINVAL", "invalid symlink target or type", "symlink");
+      }
+      if (target->empty()) {
+        return error("ENOENT", "no such file or directory", "symlink");
+      }
+      // The target is opaque link content, including TH's pid/start-token
+      // payload. Do not resolve it, require it to exist, or preflight the link
+      // with PathExists: symlink(2) atomically rejects an existing dangling
+      // link.
+      if (!base::CreateSymbolicLink(base::FilePath::FromUTF8Unsafe(*target),
+                                    path)) {
+        const int os_error = errno;
+        return posix_error(os_error, "symlink");
+      }
+      return Success();
+    }
+    base::FilePath target;
+    if (!base::ReadSymbolicLink(path, &target)) {
+      const int os_error = errno;
+      return posix_error(os_error, "readlink");
+    }
+    return FileContentsResult(request, target.value());
+#else
+    // Windows link creation needs separate reparse-point/privilege handling.
+    // Never substitute a regular file or claim that the lock was acquired.
+    return error("ENOSYS", "operation not supported", operation->c_str());
+#endif
   }
   if (*operation == "stat" || *operation == "lstat") {
     base::File::Info info;
@@ -381,6 +479,12 @@ xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
                : error("EACCES", "permission denied", "mkdir");
   }
   if (*operation == "unlink") {
+#if BUILDFLAG(IS_POSIX)
+    // PathExists follows links and misses dangling lock links. unlink(2)
+    // removes only the link itself, including links to directories.
+    return ::unlink(path.value().c_str()) == 0 ? Success()
+                                               : posix_error(errno, "unlink");
+#else
     if (!base::PathExists(path)) {
       return error("ENOENT", "no such file or directory", "unlink");
     }
@@ -390,6 +494,7 @@ xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
     return base::DeleteFile(path)
                ? Success()
                : error("EACCES", "permission denied", "unlink");
+#endif
   }
   if (*operation == "rm" || *operation == "rmdir") {
     const bool force = request.FindBool("force").value_or(false);

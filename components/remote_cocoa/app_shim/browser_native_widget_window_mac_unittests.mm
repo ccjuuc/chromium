@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/test/scoped_feature_list.h"
+#import "components/remote_cocoa/app_shim/bridged_content_view.h"
 #import "components/remote_cocoa/app_shim/features.h"
 #import "components/remote_cocoa/app_shim/native_widget_mac_nswindow.h"
 #import "components/remote_cocoa/app_shim/native_widget_ns_window_bridge.h"
@@ -131,6 +132,10 @@ class DummyNativeWidgetNSWindowHost
   DummyNativeWidgetNSWindowHost() = default;
   ~DummyNativeWidgetNSWindowHost() override = default;
 
+  void set_hit_test_result(remote_cocoa::mojom::HitTestResult result) {
+    hit_test_result_ = result;
+  }
+
  private:
   void OnVisibilityChanged(bool visible) override {}
   void OnSpaceActivationChanged(bool is_space_active) override {}
@@ -197,7 +202,7 @@ class DummyNativeWidgetNSWindowHost
   }
   void GetHitTestResult(const gfx::Point& location_in_content,
                         GetHitTestResultCallback callback) override {
-    std::move(callback).Run(remote_cocoa::mojom::HitTestResult::kOther);
+    std::move(callback).Run(hit_test_result_);
   }
   void GetTooltipTextAt(const gfx::Point& location_in_content,
                         GetTooltipTextAtCallback callback) override {
@@ -264,6 +269,9 @@ class DummyNativeWidgetNSWindowHost
                          HandleAcceleratorCallback callback) override {
     std::move(callback).Run(false);
   }
+
+  remote_cocoa::mojom::HitTestResult hit_test_result_ =
+      remote_cocoa::mojom::HitTestResult::kOther;
 };
 
 class DummyNativeWidgetNSWindowHostHelper
@@ -289,6 +297,93 @@ class DummyNativeWidgetNSWindowHostHelper
 };
 
 }  // namespace
+
+TEST(NativeWidgetMacNSWindowTest, DraggableRegionPreservesHoverHitTesting) {
+  display::ScopedNativeScreen screen;
+  @autoreleasepool {
+    NativeWidgetMacNSWindow* window = [[NativeWidgetMacNSWindow alloc]
+        initWithContentRect:NSMakeRect(0, 0, 100, 100)
+                  styleMask:NSWindowStyleMaskBorderless
+                    backing:NSBackingStoreBuffered
+                      defer:NO];
+    DummyNativeWidgetNSWindowHost dummy_host;
+    DummyNativeWidgetNSWindowHostHelper dummy_helper;
+    auto bridge = std::make_unique<remote_cocoa::NativeWidgetNSWindowBridge>(
+        4, &dummy_host, &dummy_helper, nullptr);
+    bridge->SetWindow(window);
+    bridge->CreateContentView(4, gfx::Rect(0, 0, 100, 100), std::nullopt);
+    BridgedContentView* view = bridge->ns_view();
+    NSView* child = [[NSView alloc] initWithFrame:view.bounds];
+    [view addSubview:child];
+    NSView* overlay = [[NSView alloc] initWithFrame:NSMakeRect(10, 10, 20, 20)];
+    [view addSubview:overlay];
+    NSPoint child_point = [view.superview convertPoint:NSMakePoint(50, 50)
+                                              fromView:view];
+    NSPoint overlay_point = [view.superview convertPoint:NSMakePoint(20, 20)
+                                                fromView:view];
+    NSPoint outside_point = [view.superview convertPoint:NSMakePoint(-10, -10)
+                                                fromView:view];
+
+    auto make_event = [window](NSEventType type) {
+      if (type == NSEventTypeMouseEntered || type == NSEventTypeMouseExited) {
+        return [NSEvent enterExitEventWithType:type
+                                      location:NSZeroPoint
+                                 modifierFlags:0
+                                     timestamp:0
+                                  windowNumber:window.windowNumber
+                                       context:nil
+                                   eventNumber:0
+                                trackingNumber:0
+                                      userData:nullptr];
+      }
+      return [NSEvent mouseEventWithType:type
+                                location:NSZeroPoint
+                           modifierFlags:0
+                               timestamp:0
+                            windowNumber:window.windowNumber
+                                 context:nil
+                             eventNumber:0
+                              clickCount:1
+                                pressure:0];
+    };
+
+    dummy_host.set_hit_test_result(
+        remote_cocoa::mojom::HitTestResult::kDraggableBackground);
+    EXPECT_EQ(nil, [view hitTest:child_point]);
+    EXPECT_EQ(nil, [view hitTest:child_point forMouseEvent:nil]);
+    for (NSEventType type : {NSEventTypeMouseMoved, NSEventTypeMouseEntered,
+                             NSEventTypeMouseExited}) {
+      SCOPED_TRACE(type);
+      NSEvent* event = make_event(type);
+      ASSERT_TRUE(event);
+      EXPECT_EQ(child, [view hitTest:child_point forMouseEvent:event]);
+      // Preserve normal frontmost-subview and out-of-bounds filtering.
+      EXPECT_EQ(overlay, [view hitTest:overlay_point forMouseEvent:event]);
+      EXPECT_EQ(nil, [view hitTest:outside_point forMouseEvent:event]);
+    }
+    for (NSEventType type :
+         {NSEventTypeLeftMouseDown, NSEventTypeLeftMouseUp,
+          NSEventTypeLeftMouseDragged, NSEventTypeRightMouseDown,
+          NSEventTypeRightMouseUp, NSEventTypeRightMouseDragged,
+          NSEventTypeOtherMouseDown, NSEventTypeOtherMouseUp,
+          NSEventTypeOtherMouseDragged}) {
+      SCOPED_TRACE(type);
+      NSEvent* event = make_event(type);
+      ASSERT_TRUE(event);
+      EXPECT_EQ(nil, [view hitTest:child_point forMouseEvent:event]);
+    }
+
+    // RootView and non-draggable content keep their original dispatch targets.
+    NSEvent* mouse_moved = make_event(NSEventTypeMouseMoved);
+    dummy_host.set_hit_test_result(
+        remote_cocoa::mojom::HitTestResult::kRootView);
+    EXPECT_EQ(view, [view hitTest:child_point forMouseEvent:mouse_moved]);
+    dummy_host.set_hit_test_result(remote_cocoa::mojom::HitTestResult::kOther);
+    EXPECT_EQ(child, [view hitTest:child_point]);
+    EXPECT_EQ(child, [view hitTest:child_point forMouseEvent:mouse_moved]);
+    [window close];
+  }
+}
 
 // Tests that AppKit frame adjustments (such as clamping window position to
 // screen boundaries) are suppressed when a window move loop is active, allowing

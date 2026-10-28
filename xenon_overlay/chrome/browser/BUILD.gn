@@ -408,6 +408,13 @@ source_set("electron_api_bridge") {
   } else {
     sources += [ "ipc/xenon_electron_shell_stub.cc" ]
   }
+  if (is_mac) {
+    sources += [
+      "ipc/xenon_electron_app_mac.h",
+      "ipc/xenon_electron_app_mac.mm",
+    ]
+    frameworks = [ "ServiceManagement.framework" ]
+  }
 }
 
 source_set("zlib_bridge") {
@@ -433,6 +440,19 @@ source_set("network_request_bridge") {
     "//services/network/public/cpp",
     "//services/network/public/mojom",
     "//xenon_overlay/public/mojom",
+  ]
+}
+
+# Chrome's startup registration depends on this factory without importing the
+# Browser UI implementation and its profile dependencies.
+source_set("electron_session_shutdown_notifier") {
+  sources = [
+    "ipc/xenon_electron_session_shutdown_notifier_factory.cc",
+    "ipc/xenon_electron_session_shutdown_notifier_factory.h",
+  ]
+  public_deps = [
+    "//base",
+    "//components/keyed_service/content",
   ]
 }
 
@@ -539,6 +559,7 @@ source_set("browser") {
     ":app_runtime",
     ":electron_api_bridge",
     ":electron_app_config",
+    ":electron_session_shutdown_notifier",
     ":filesystem_bridge",
     ":managed_certificates",
     ":napi",
@@ -565,6 +586,8 @@ source_set("browser") {
     "//components/download/public/common:public",
     "//components/embedder_support",
     "//components/keep_alive_registry",
+    "//components/keyed_service/content",
+    "//components/keyed_service/core",
     "//components/services/unzip/content",
     "//components/services/unzip/public/cpp",
     "//components/xl_media_controls/public/mojom",
@@ -610,6 +633,31 @@ source_set("browser") {
 
   if (use_aura) {
     deps += [ "//ui/wm" ]
+  }
+
+  if (is_mac) {
+    sources += [
+      "ui/adapters/xunlei_mac_player_adapter.cc",
+      "ui/adapters/xunlei_mac_player_adapter.h",
+      "ui/xenon_electron_window_mac.h",
+      "ui/xenon_electron_window_mac.mm",
+      "ui/xenon_mac_player_adapter.cc",
+      "ui/xenon_mac_player_adapter.h",
+      "ui/xenon_mac_player_callbacks.cc",
+      "ui/xenon_mac_player_callbacks.h",
+      "ui/xenon_mac_player_host.cc",
+      "ui/xenon_mac_player_host.h",
+      "ui/xenon_mac_player_view.h",
+      "ui/xenon_mac_player_view.mm",
+    ]
+    frameworks = [
+      "AppKit.framework",
+      "QuartzCore.framework",
+    ]
+    deps += [
+      "//components/remote_cocoa/app_shim",
+      "//xenon_overlay/services:node_executor",
+    ]
   }
 
   if (enable_xenon_service) {
@@ -749,6 +797,21 @@ shared_library("test_addon") {
   }
 }
 
+if (is_mac && enable_xenon_node_uv_compat) {
+  shared_library("test_static_addon") {
+    testonly = true
+    output_extension = "node"
+    output_prefix_override = true
+    sources = [ "napi/test_addon/test_static_addon.cc" ]
+    include_dirs = [
+      "napi",
+      "//xenon_overlay/third_party/libuv/include",
+    ]
+    configs -= [ "//build/config/compiler:no_unresolved_symbols" ]
+    ldflags = [ "-Wl,-undefined,dynamic_lookup" ]
+  }
+}
+
 test("napi_host_unittests") {
   testonly = true
   sources = [
@@ -771,6 +834,16 @@ test("napi_host_unittests") {
     deps += [ "//xenon_overlay/third_party:libuv" ]
   }
   data_deps = [ ":test_addon" ]
+  if (is_mac && enable_xenon_node_uv_compat) {
+    data_deps += [ ":test_static_addon" ]
+
+    # The standalone test executable hosts addons through dynamic_lookup too.
+    inputs = [ "napi/framework_node.exports" ]
+    ldflags = [
+      "-Wl,-exported_symbols_list",
+      "-Wl," + rebase_path("napi/framework_node.exports", root_build_dir),
+    ]
+  }
 }
 
 test("xenon_extension_package_unittests") {
@@ -892,11 +965,33 @@ test("ipc_main_container_unittests") {
     sources += [ "ipc/xenon_electron_shell_stub.cc" ]
   }
   if (is_mac) {
+    sources += [
+      "ipc/xenon_electron_app_mac.h",
+      "ipc/xenon_electron_app_mac.mm",
+      "ui/adapters/xunlei_mac_player_adapter.cc",
+      "ui/adapters/xunlei_mac_player_adapter.h",
+      "ui/xenon_mac_player_adapter.cc",
+      "ui/xenon_mac_player_adapter.h",
+      "ui/xenon_mac_player_adapter_unittest.cc",
+      "ui/xenon_mac_player_callbacks.cc",
+      "ui/xenon_mac_player_callbacks.h",
+      "ui/xenon_mac_player_callbacks_unittest.cc",
+    ]
     deps += [
       ":xenon_update_mac_privileged_client",
       ":xenon_update_mac_util",
     ]
-    frameworks = [ "AppKit.framework" ]
+    frameworks = [
+      "AppKit.framework",
+      "ServiceManagement.framework",
+    ]
+    if (enable_xenon_node_uv_compat) {
+      inputs = [ "napi/framework_node.exports" ]
+      ldflags = [
+        "-Wl,-exported_symbols_list",
+        "-Wl," + rebase_path("napi/framework_node.exports", root_build_dir),
+      ]
+    }
   }
   if (enable_xenon_node_uv_compat) {
     deps += [ "//xenon_overlay/third_party:libuv" ]
@@ -912,8 +1007,11 @@ test("xenon_session_unittests") {
     "ipc/xenon_file_system_bridge.cc",
   ]
   deps = [
+    ":electron_session_shutdown_notifier",
     "//base",
     "//base/test:test_support",
+    "//components/keyed_service/content",
+    "//components/keyed_service/core",
     "//content/public/browser",
     "//content/test:test_support",
     "//crypto",

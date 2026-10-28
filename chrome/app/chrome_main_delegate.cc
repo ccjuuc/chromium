@@ -4,6 +4,10 @@
 
 #include "chrome/app/chrome_main_delegate.h"
 
+#if BUILDFLAG(IS_MAC)
+#include "xenon_overlay/buildflags/buildflags.h"
+#endif
+
 #include <stddef.h>
 
 #include <string>
@@ -1889,3 +1893,17 @@ bool ChromeMainDelegate::IsInitFeatureListEarly() {
   return false;
 #endif
 }
+
+#if BUILDFLAG(IS_MAC)
+bool ChromeMainDelegate::ShouldLoadV8Snapshot(const std::string& process_type) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // The Cocoa player lazily creates a Browser UI isolate. Use Content's normal
+  // startup loader so the snapshot matches this build (including context
+  // snapshots) and is mapped before UI blocking becomes disallowed.
+  if (process_type.empty()) {
+    return true;
+  }
+#endif
+  return content::ContentMainDelegate::ShouldLoadV8Snapshot(process_type);
+}
+#endif

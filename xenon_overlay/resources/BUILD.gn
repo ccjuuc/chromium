@@ -3,6 +3,7 @@ import("//tools/grit/grit_rule.gni")
 import("//xenon_overlay/buildflags/features.gni")
 import("electron_apps.gni")
 import("ipc/bootstrap_sources.gni")
+import("thunder_macos.gni")
 
 node("ipc_bootstrap") {
   script = "//third_party/node/node.py"
@@ -70,6 +71,62 @@ copy("copy_video_controls_extension") {
 }
 
 if (is_mac) {
+  if (xenon_bundle_thunder_macos) {
+    _thunder_archive = "//xenon_overlay/resources/thunder-2025-mac.tar.xz"
+    _thunder_checksum = "//xenon_overlay/resources/thunder-2025-mac.sha256"
+    _thunder_stage = "$target_gen_dir/thunder_macos"
+    action("stage_thunder_macos") {
+      script = "//xenon_overlay/tools/stage_thunder_macos_resources.py"
+      inputs = [
+        "//build/action_helpers.py",
+        "//build/gn_helpers.py",
+        _thunder_archive,
+        _thunder_checksum,
+      ]
+      outputs = [
+        "$target_gen_dir/thunder_macos.stamp",
+        "$_thunder_stage/Thunder.app",
+        "$_thunder_stage/thunder_2025.xenon.json",
+      ]
+      depfile = "$target_gen_dir/thunder_macos.d"
+      args = [
+        "--archive",
+        rebase_path(_thunder_archive, root_build_dir),
+        "--checksum",
+        rebase_path(_thunder_checksum, root_build_dir),
+        "--destination",
+        rebase_path(_thunder_stage, root_build_dir),
+        "--stamp",
+        rebase_path(outputs[0], root_build_dir),
+        "--depfile",
+        rebase_path(depfile, root_build_dir),
+      ]
+    }
+
+    bundle_data("thunder_macos_payload") {
+      sources = [ "$_thunder_stage/Thunder.app" ]
+      outputs = [ "{{bundle_resources_dir}}/xenon-apps/{{source_file_part}}" ]
+      public_deps = [ ":stage_thunder_macos" ]
+    }
+
+    bundle_data("thunder_macos_descriptor") {
+      sources = [ "$_thunder_stage/thunder_2025.xenon.json" ]
+      outputs = [ "{{bundle_resources_dir}}/xenon-apps/{{source_file_part}}" ]
+      public_deps = [ ":stage_thunder_macos" ]
+    }
+  }
+
+  # Only chrome_app depends on these resources; putting them in the generic
+  # resources group would also collect the payload inside the framework.
+  group("thunder_macos_bundle_data") {
+    if (xenon_bundle_thunder_macos) {
+      public_deps = [
+        ":thunder_macos_descriptor",
+        ":thunder_macos_payload",
+      ]
+    }
+  }
+
   bundle_data("copy_video_controls_extension_mac") {
     sources = video_controls_extension_files
     outputs = [ "{{bundle_resources_dir}}/resources/video_controls_extension/{{source_file_part}}" ]

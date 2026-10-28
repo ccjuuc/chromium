@@ -62,6 +62,7 @@ if (is_android) {
   import("//media/cdm/library_cdm/cdm_paths.gni")
   import("//services/on_device_model/on_device_model.gni")
   import("//third_party/icu/config.gni")
+  import("//xenon_overlay/resources/thunder_macos.gni")
 }
 
 # b/365489014: CrOS' chrome.sections_embedded target breaks on component builds;
@@ -566,6 +567,20 @@ if (is_win) {
     }
   }
 
+  action("configure_thunder_macos_resources") {
+    script = "//xenon_overlay/tools/configure_thunder_macos_resources.py"
+    outputs = [ "$target_gen_dir/thunder_macos_configuration.stamp" ]
+    args = [
+      "--bundle",
+      rebase_path("$root_out_dir/${chrome_product_full_name}.app",
+                  root_build_dir),
+      "--enabled",
+      "$xenon_bundle_thunder_macos",
+      "--stamp",
+      rebase_path(outputs[0], root_build_dir),
+    ]
+  }
+
   mac_app_bundle("chrome_app") {
     output_name = chrome_product_full_name
 
@@ -589,14 +604,17 @@ if (is_win) {
       ":chrome_app_strings_bundle_data",
       ":chrome_resources",
       ":chrome_versioned_bundle_data",
+      ":configure_thunder_macos_resources",
       "//base:compiler_specific",
       "//base/allocator:early_zone_registration_apple",
       "//build:branding_buildflags",
       "//chrome/common:buildflags",
       "//chrome/common:version_header",
+      "//xenon_overlay/buildflags",
       "//xenon_overlay/chrome/browser:xenon_privileged_update_helper_bundle_data",
       "//xenon_overlay/chrome/browser:xenon_privileged_update_launchd_bundle_data",
       "//xenon_overlay/chrome/browser:xenon_update_helper_bundle_data",
+      "//xenon_overlay/resources:thunder_macos_bundle_data",
     ]
 
     if (enable_updater) {
@@ -840,6 +858,7 @@ if (is_win) {
         "//build:branding_buildflags",
         "//chrome/common:version_header",
         "//sandbox/mac:seatbelt",
+        "//xenon_overlay/buildflags",
       ]
 
       if (defined(invoker.deps)) {
@@ -1195,6 +1214,16 @@ if (is_win) {
       "-Wl,-exported_symbols_list",
       "-Wl," + rebase_path("app/framework.exports", root_build_dir),
     ]
+    if (enable_xenon_node_uv_compat) {
+      # Native addons resolve their Node-API/libuv imports from this framework.
+      _node_exports =
+          "//xenon_overlay/chrome/browser/napi/framework_node.exports"
+      inputs += [ rebase_path(_node_exports) ]
+      ldflags += [
+        "-Wl,-exported_symbols_list",
+        "-Wl," + rebase_path(_node_exports, root_build_dir),
+      ]
+    }
   }
 
   # Control the order of exported symbols in the framework library.
@@ -1375,6 +1404,13 @@ if (is_win) {
         "--binary=" + rebase_path(_framework_binary_path, root_out_dir),
         "--symbol-file=" + rebase_path("app/framework.order", root_build_dir),
       ]
+      if (enable_xenon_node_uv_compat) {
+        _node_exports =
+            "//xenon_overlay/chrome/browser/napi/framework_node.exports"
+        inputs += [ _node_exports ]
+        args += [ "--additional-export-file=" +
+                  rebase_path(_node_exports, root_build_dir) ]
+      }
       if (host_os == "mac") {
         args += [ "--nm-path=$mac_bin_path/nm" ]
       } else {

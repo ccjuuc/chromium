@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
@@ -25,6 +27,8 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+#include "ui/base/hit_test.h"
+#include "ui/views/controls/webview/web_dialog_view.h"
 #include "ui/views/widget/widget.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
 
@@ -47,8 +51,12 @@ class XenonHostedWindowCloseTest : public testing::Test {
   void TearDown() override {
     // The fixture identities were never registered as Widget observers.
     host_->windows_.clear();
-    delete host_;
-    delete dialog_;
+    auto* host = host_.get();
+    host_ = nullptr;
+    delete host;
+    auto* dialog = dialog_.get();
+    dialog_ = nullptr;
+    delete dialog;
     widget_.reset();
   }
 
@@ -58,7 +66,9 @@ class XenonHostedWindowCloseTest : public testing::Test {
   }
 
   void RecreateDialog(bool transparent) {
-    delete dialog_;
+    auto* dialog = dialog_.get();
+    dialog_ = nullptr;
+    delete dialog;
     dialog_ = new XenonWebDialog(
         GURL("about:blank"), 320, 200, u"fixture",
         ui::mojom::ModalType::kNone, base::OnceClosure(), true, false, false,
@@ -111,11 +121,22 @@ class XenonHostedWindowCloseTest : public testing::Test {
   bool RequestWindowClose(int32_t id) { return host_->RequestClose(id); }
   void BeginContainerFailure() { host_->closing_containers_.insert("fixture"); }
   void BeginShutdown() { host_->shutting_down_ = true; }
+  void PrepareWindowClose(int32_t id) {
+    host_->windows_.at(id).close_prepared = true;
+  }
+  void RemoveWindow(int32_t id) { host_->windows_.erase(id); }
+  std::vector<int32_t> MenuWindowIds() const {
+    std::vector<int32_t> ids;
+    for (const auto& entry : host_->GetWindowMenuEntries()) {
+      ids.push_back(entry.window_id);
+    }
+    return ids;
+  }
 
   base::test::TaskEnvironment task_environment_;
   std::unique_ptr<views::Widget> widget_;
-  XenonWebDialog* dialog_ = nullptr;
-  XenonElectronWindowHost* host_ = nullptr;
+  raw_ptr<XenonWebDialog> dialog_ = nullptr;
+  raw_ptr<XenonElectronWindowHost> host_ = nullptr;
   bool authorized_ = false;
   int close_requests_ = 0;
 };
@@ -218,6 +239,119 @@ TEST_F(XenonHostedWindowCloseTest, EntryPrefersTopLevelButSupportsOwnedContent) 
   EXPECT_EQ(3, EntryWindow());
 }
 
+TEST_F(XenonHostedWindowCloseTest,
+       WindowMenuKeepsHiddenMainWindowsButNotHelpers) {
+  AddWindow(1, true, false);    // Preloaded helper, never shown.
+  AddWindow(2, false, true);    // Blank native host.
+  AddWindow(3, true, true, 1);  // Owned control surface.
+  AddWindow(4, true, true);     // Previously shown main, currently hidden.
+  AddWindow(5, true, true, 0, "other");
+  AddWindow(6, true, true);
+  PrepareWindowClose(6);
+  AddWindow(7, true, true);
+  AuthorizeWindow(7);
+
+  EXPECT_EQ((std::vector<int32_t>{4, 5}), MenuWindowIds());
+  EXPECT_FALSE(host_->ActivateWindowFromMenu(1));
+  EXPECT_FALSE(host_->ActivateWindowFromMenu(2));
+  EXPECT_FALSE(host_->ActivateWindowFromMenu(3));
+  EXPECT_FALSE(host_->ActivateWindowFromMenu(6));
+  EXPECT_FALSE(host_->ActivateWindowFromMenu(7));
+
+  BeginContainerFailure();
+  EXPECT_EQ((std::vector<int32_t>{5}), MenuWindowIds());
+  EXPECT_FALSE(host_->ActivateWindowFromMenu(4));
+}
+
+TEST_F(XenonHostedWindowCloseTest,
+       WindowMenuSnapshotCannotRestoreClosedWindow) {
+  AddWindow(1, true, true);
+  const auto snapshot = host_->GetWindowMenuEntries();
+  ASSERT_EQ(1u, snapshot.size());
+  EXPECT_TRUE(host_->CanActivateWindowFromMenu(snapshot.front().window_id));
+  RemoveWindow(1);
+  widget_.reset();
+
+  EXPECT_TRUE(MenuWindowIds().empty());
+  EXPECT_FALSE(host_->ActivateWindowFromMenu(snapshot.front().window_id));
+}
+
+TEST_F(XenonHostedWindowCloseTest, WindowMenuDoesNotReopenDuringShutdown) {
+  AddWindow(1, true, true);
+  browser_shutdown::SetTryingToQuit(true);
+  EXPECT_TRUE(MenuWindowIds().empty());
+  EXPECT_FALSE(host_->ActivateWindowFromMenu(1));
+  browser_shutdown::SetTryingToQuit(false);
+  EXPECT_EQ((std::vector<int32_t>{1}), MenuWindowIds());
+
+  BeginShutdown();
+  EXPECT_TRUE(MenuWindowIds().empty());
+  EXPECT_FALSE(host_->ActivateWindowFromMenu(1));
+}
+
+// Exercise the production view with its self-deleting delegate. Native Widgets
+// destroy the view only after WebDialogView has notified the delegate of close.
+class XenonWebDialogLifetimeTest : public content::RenderViewHostTestHarness {
+ protected:
+  void SetUp() override {
+    content::RenderViewHostTestHarness::SetUp();
+    auto* dialog = new XenonWebDialog(
+        GURL("about:blank"), 320, 200, u"fixture",
+        ui::mojom::ModalType::kNone,
+        base::BindOnce(&XenonWebDialogLifetimeTest::OnClosed,
+                       base::Unretained(this)),
+        true, false, false, false, false, false);
+    dialog->set_can_resize(true);
+    dialog_ = dialog->weak_ptr_factory_.GetWeakPtr();
+    view_ = dialog->CreateView(browser_context(), nullptr);
+  }
+
+  void TearDown() override {
+    view_->WindowClosing();
+    view_.reset();
+    EXPECT_FALSE(dialog_);
+    content::RenderViewHostTestHarness::TearDown();
+  }
+
+  void OnClosed() {
+    ++closed_count_;
+    EXPECT_FALSE(dialog_);
+    EXPECT_FALSE(view_->CanResize());
+    // A host close callback can synchronously deliver another close event.
+    view_->WindowClosing();
+    view_->CloseContents(nullptr);
+  }
+
+  void ExpectClosedViewIsSafe() {
+    EXPECT_EQ(1, closed_count_);
+    EXPECT_FALSE(dialog_);
+    EXPECT_FALSE(view_->CanResize());
+    EXPECT_EQ(HTNOWHERE, view_->NonClientHitTest(gfx::Point(1, 1)));
+    view_->WindowClosing();
+    view_->CloseContents(nullptr);
+    view_->OnDialogClosed("");
+    EXPECT_EQ(1, closed_count_);
+    // Destruction of the real XenonWebDialogView must release no dangling
+    // raw_ptr after the self-deleting close callback has completed.
+  }
+
+  base::WeakPtr<XenonWebDialog> dialog_;
+  std::unique_ptr<views::WebDialogView> view_;
+  int closed_count_ = 0;
+};
+
+TEST_F(XenonWebDialogLifetimeTest, NativeCloseOutlivesDelegateSafely) {
+  ASSERT_TRUE(view_->CanResize());
+  view_->WindowClosing();
+  ExpectClosedViewIsSafe();
+}
+
+TEST_F(XenonWebDialogLifetimeTest, DomCloseOutlivesDelegateSafely) {
+  ASSERT_TRUE(view_->CanResize());
+  view_->CloseContents(nullptr);
+  ExpectClosedViewIsSafe();
+}
+
 // Exercise transaction recording without platform windows. Real Widget bounds
 // callbacks use the same recorder; the JavaScript contract tests verify reply
 // delivery, listener reentrancy, and late asynchronous events.
@@ -232,7 +366,9 @@ class XenonHostedWindowBoundsTest : public testing::Test {
     host_->bounds_transaction_ = nullptr;
     host_->bounds_transaction_container_.reset();
     host_->windows_.clear();
-    delete host_;
+    auto* host = host_.get();
+    host_ = nullptr;
+    delete host;
     widgets_.clear();
   }
 
@@ -279,7 +415,7 @@ class XenonHostedWindowBoundsTest : public testing::Test {
   base::test::TaskEnvironment task_environment_;
   std::vector<std::unique_ptr<views::Widget>> widgets_;
   std::vector<XenonElectronWindowHost::BoundsChange> changes_;
-  XenonElectronWindowHost* host_ = nullptr;
+  raw_ptr<XenonElectronWindowHost> host_ = nullptr;
 };
 
 TEST_F(XenonHostedWindowBoundsTest, CoalescesCorrectionsWithoutFalseResize) {
@@ -449,7 +585,9 @@ class XenonHostedWindowPairingTest : public testing::Test {
   void TearDown() override {
     // These fixture Widgets were never registered with the host as observers.
     host_->windows_.clear();
-    delete host_;
+    auto* host = host_.get();
+    host_ = nullptr;
+    delete host;
     widgets_.clear();
   }
 
@@ -480,7 +618,7 @@ class XenonHostedWindowPairingTest : public testing::Test {
 
   base::test::TaskEnvironment task_environment_;
   std::vector<std::unique_ptr<views::Widget>> widgets_;
-  XenonElectronWindowHost* host_ = nullptr;
+  raw_ptr<XenonElectronWindowHost> host_ = nullptr;
 };
 
 TEST_F(XenonHostedWindowPairingTest, ExplicitOpaquePairWorksInBothDirections) {
@@ -566,13 +704,13 @@ class XenonHostedWindowRenderingTest
 
     void OnVisibilityChanged(content::Visibility visibility) override {
       if (visibility == content::Visibility::HIDDEN) {
-        hidden_order_.push_back(id_);
+        hidden_order_->push_back(id_);
       }
     }
 
    private:
     const int32_t id_;
-    std::vector<int32_t>& hidden_order_;
+    raw_ref<std::vector<int32_t>> hidden_order_;
   };
 
   void SetUp() override {
@@ -583,7 +721,9 @@ class XenonHostedWindowRenderingTest
 
   void TearDown() override {
     observers_.clear();
-    delete host_;
+    auto* host = host_.get();
+    host_ = nullptr;
+    delete host;
     contents_.clear();
     content::RenderViewHostTestHarness::TearDown();
   }
@@ -620,7 +760,7 @@ class XenonHostedWindowRenderingTest
     return close;
   }
 
-  XenonElectronWindowHost* host_ = nullptr;
+  raw_ptr<XenonElectronWindowHost> host_ = nullptr;
   std::vector<std::unique_ptr<content::WebContents>> contents_;
   std::vector<int32_t> hidden_order_;
   std::vector<std::unique_ptr<VisibilityObserver>> observers_;
@@ -717,7 +857,9 @@ class XenonHostedWindowUserAgentTest
   }
 
   void TearDown() override {
-    delete host_;
+    auto* host = host_.get();
+    host_ = nullptr;
+    delete host;
     content::RenderViewHostTestHarness::TearDown();
   }
 
@@ -749,7 +891,7 @@ class XenonHostedWindowUserAgentTest
     host_->windows_.at(1).has_loaded_url = loaded;
   }
 
-  XenonElectronWindowHost* host_ = nullptr;
+  raw_ptr<XenonElectronWindowHost> host_ = nullptr;
 };
 
 TEST_F(XenonHostedWindowUserAgentTest,

@@ -1,0 +1,335 @@
+diff --git a/common/require-node-file.ts b/common/require-node-file.ts
+index 277a696e6342d9176ea21469b85c8c26262e4e15..7caec9737939ce6fddf5864052fff6b79b8c3740 100644
+--- a/common/require-node-file.ts
++++ b/common/require-node-file.ts
+@@ -1,3 +1,5 @@
++import { requireMacPlayerAddon } from '../mac/main/mac-player-capability'
++
+ export default function requireNodeFile(id: string): any {
+-  return __non_webpack_require__(id);
++  return requireMacPlayerAddon(id, __non_webpack_require__)
+ }
+diff --git a/mac/main/mac-player-capability.ts b/mac/main/mac-player-capability.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..98ccd88f1123459356eef1e4b79f67b6d18fe3fe
+--- /dev/null
++++ b/mac/main/mac-player-capability.ts
+@@ -0,0 +1,60 @@
++import * as electron from 'electron'
++import path from 'path'
++
++import type { MacPlayerNativeAddon } from './mac-player-runtime'
++
++/** Optional host extension. Electron itself continues to own the native SDK. */
++export interface XenonMacPlayer {
++  version: 1
++  adapterId: 'xunlei.mac-player'
++  adapterVersion: 1
++  getAddon(addonPath: string): MacPlayerNativeAddon
++  attachWindow(windowId: number): void
++  detachWindow(windowId: number): void
++}
++
++type CapabilityEnvironment = {
++  platform: string
++  processType: string | undefined
++  electron: unknown
++}
++
++function currentEnvironment(): CapabilityEnvironment {
++  return { platform: process.platform, processType: process.type, electron }
++}
++
++export function getXenonMacPlayer(
++  environment: CapabilityEnvironment = currentEnvironment()
++): XenonMacPlayer | undefined {
++  if (environment.platform !== 'darwin' || environment.processType !== 'browser') return
++  const candidate = (environment.electron as { xenonMacPlayer?: XenonMacPlayer } | undefined)
++    ?.xenonMacPlayer
++  if (candidate === undefined) return
++  if (
++    candidate?.version === 1 &&
++    candidate.adapterId === 'xunlei.mac-player' &&
++    candidate.adapterVersion === 1 &&
++    typeof candidate.getAddon === 'function' &&
++    typeof candidate.attachWindow === 'function' &&
++    typeof candidate.detachWindow === 'function'
++  ) {
++    return candidate
++  }
++  throw new Error(
++    'Unsupported Mac player host contract: requires xunlei.mac-player adapter version 1'
++  )
++}
++
++export function requireMacPlayerAddon(
++  id: string,
++  requireNative: (id: string) => any,
++  environment: CapabilityEnvironment = currentEnvironment()
++): any {
++  if (path.basename(id) === 'playercontrol.node') {
++    const capability = getXenonMacPlayer(environment)
++    // The Browser validates the full trusted addon path. A rejected request
++    // must not silently create a second SDK in the application's Utility.
++    if (capability) return capability.getAddon(id)
++  }
++  return requireNative(id)
++}
+diff --git a/mac/main/mac-player-host.ts b/mac/main/mac-player-host.ts
+index a2d4ed4f5d5f5be0573b1bb6b4dc0cfc90518594..ae68ff8d41b3fdb1cf1680beaae2350b64e1546f 100644
+--- a/mac/main/mac-player-host.ts
++++ b/mac/main/mac-player-host.ts
+@@ -20,19 +20,15 @@ import { AplayerServer } from '../../server/server'
+ import { createMacPlayerBridge } from './mac-player-bridge'
+ import { createMacPlayerRecovery } from './mac-player-recovery'
+ import {
+-  type MacPlayerNativeAddon,
++  type MacPlayerNativeResources,
+   type MacPlayerTransportConfiguration,
+-  type MacPlayerViewHelper,
+   createMacPlayerRuntime,
+ } from './mac-player-runtime'
+ import { configureMacPlayerStackContext } from './mac-player-stack-context'
+ 
+ /** 同一套迅雷服务的项目仅提供部署路径、任务服务实例和日志；播放生命周期由组件持有。 */
+ export interface MacPlayerHostOptions {
+-  loadNative(): {
+-    addon: MacPlayerNativeAddon
+-    helper: MacPlayerViewHelper
+-  }
++  loadNative(): MacPlayerNativeResources
+   taskManager: TaskManager
+   transport: MacPlayerTransportConfiguration
+   log(message: string): void
+@@ -110,7 +106,7 @@ export function createMacPlayerHost(options: MacPlayerHostOptions) {
+         appendBootLog(`Mac SDK initialized pid=${process.pid}`)
+       }
+       if (!window || window.isDestroyed()) throw new Error('Mac playback window is unavailable')
+-      runtime.attachView(window.getNativeWindowHandle())
++      runtime.attachWindow(window)
+       appendBootLog(`Mac NSView attached pid=${process.pid}`)
+     },
+     onReady: () => {
+@@ -193,6 +189,7 @@ export function createMacPlayerHost(options: MacPlayerHostOptions) {
+       minHeight: configuration.wndMinHeight,
+       show: false,
+       frame: false,
++      titleBarStyle: 'hidden',
+       transparent: true,
+       backgroundColor: '#00000000',
+       title: configuration.title,
+@@ -206,6 +203,9 @@ export function createMacPlayerHost(options: MacPlayerHostOptions) {
+       },
+     })
+     const created = window
++    // Keep the caller's window title for Dock/window menus; the shared player
++    // page title does not distinguish this window from the main application.
++    created.on('page-title-updated', event => event.preventDefault())
+     appendBootLog(`Mac player window created webContents=${created.webContents.id}`)
+     created.webContents.on('console-message', (_event, level, message) => {
+       if (level >= 3) appendBootLog(`Mac player renderer error: ${message}`)
+@@ -217,6 +217,7 @@ export function createMacPlayerHost(options: MacPlayerHostOptions) {
+     XLStat.GetInstance().setAppMetaDataIns(configuration.AppMetaDataManagerIns)
+     RendererProcessBrowserWindow_MainProcess_Handler.shared.prepare()
+     void initialPlayerWindow(created).then(status => {
++      if (created.isDestroyed()) return
+       processGlobalData.playerControlWindow = created
+       processGlobalData.getPlayerControlWindowStatus = status
+     })
+diff --git a/mac/main/mac-player-runtime.ts b/mac/main/mac-player-runtime.ts
+index 7d9107e302e34d0b070be76c05ad8a516c3c0f40..7d42ffcc9f3c7dbabc715c2e6a50cc5ee168aa95 100644
+--- a/mac/main/mac-player-runtime.ts
++++ b/mac/main/mac-player-runtime.ts
+@@ -17,6 +17,16 @@ export interface MacPlayerViewHelper {
+   destroyMacPlayerView(view: bigint): void
+ }
+ 
++export interface MacPlayerWindowHost {
++  attachWindow(windowId: number): void
++  detachWindow(windowId: number): void
++}
++
++export type MacPlayerNativeResources = { addon: MacPlayerNativeAddon } & (
++  | { helper: MacPlayerViewHelper; host?: undefined }
++  | { host: MacPlayerWindowHost; helper?: undefined }
++)
++
+ export interface MacPlayerTransportConfiguration {
+   appName: string
+   appKey: string
+@@ -30,7 +40,7 @@ type MacPlayerEnvironment = {
+   processType: string | undefined
+   isAppReady(): boolean
+   transport: MacPlayerTransportConfiguration
+-  loadNative(): { addon: MacPlayerNativeAddon; helper: MacPlayerViewHelper }
++  loadNative(): MacPlayerNativeResources
+ }
+ 
+ /**
+@@ -43,6 +53,7 @@ export function createMacPlayerRuntime(environment: MacPlayerEnvironment) {
+   let initializationFailed = false
+   let videoView: bigint | undefined
+   let parentView: bigint | undefined
++  let hostedWindowId: number | undefined
+   let disposed = false
+   let addonInitialized = false
+ 
+@@ -84,10 +95,18 @@ export function createMacPlayerRuntime(environment: MacPlayerEnvironment) {
+   }
+ 
+   function detachView() {
++    if (native?.host) {
++      if (hostedWindowId === undefined) return
++      // The Browser unbinds its SDK target before releasing its own NSView.
++      // Keep the id for a retry if detaching fails.
++      native.host.detachWindow(hostedWindowId)
++      hostedWindowId = undefined
++      return
++    }
+     if (videoView === undefined) return
+     // closePlayWindow 在原生端解除 SDK 的视图引用；解除失败时绝不能释放视图。
+     stack!.closePlayWindow()
+-    native!.helper.destroyMacPlayerView(videoView)
++    native!.helper!.destroyMacPlayerView(videoView)
+     videoView = undefined
+     parentView = undefined
+   }
+@@ -95,6 +114,7 @@ export function createMacPlayerRuntime(environment: MacPlayerEnvironment) {
+   function attachView(windowHandle: Buffer) {
+     assertBrowserProcess()
+     if (!stack || !native) throw new Error('Initialize the Mac SDK before attaching its view')
++    if (native.host) throw new Error('Hosted Mac playback requires a window id')
+     if (windowHandle.length !== 8) throw new Error('Invalid macOS native window handle')
+     const nextParent = windowHandle.readBigUInt64LE()
+     if (nextParent === 0n) throw new Error('The Electron NSView is null')
+@@ -110,6 +130,22 @@ export function createMacPlayerRuntime(environment: MacPlayerEnvironment) {
+     parentView = nextParent
+   }
+ 
++  function attachWindow(window: { id: number; getNativeWindowHandle(): Buffer }) {
++    assertBrowserProcess()
++    if (!stack || !native) throw new Error('Initialize the Mac SDK before attaching its view')
++    if (!native.host) {
++      attachView(window.getNativeWindowHandle())
++      return
++    }
++    if (!Number.isSafeInteger(window.id) || window.id <= 0) {
++      throw new Error('Invalid hosted Mac player window id')
++    }
++    if (window.id === hostedWindowId) return
++    detachView()
++    native.host.attachWindow(window.id)
++    hostedWindowId = window.id
++  }
++
+   function pause() {
+     assertBrowserProcess()
+     stack?.pauseMedia()
+@@ -132,5 +168,5 @@ export function createMacPlayerRuntime(environment: MacPlayerEnvironment) {
+     disposed = true
+   }
+ 
+-  return { initialize, attachView, detachView, pause, closeSession, dispose }
++  return { initialize, attachWindow, attachView, detachView, pause, closeSession, dispose }
+ }
+diff --git a/process-common/initial/initialWindow.ts b/process-common/initial/initialWindow.ts
+index d82fc464b59ba82775afd49969203fbda34894f5..4a9570cb176f91c39ffd82587987cb2e2f5410bc 100644
+--- a/process-common/initial/initialWindow.ts
++++ b/process-common/initial/initialWindow.ts
+@@ -114,17 +114,20 @@ export async function initialPlayerWindow(browserWindow: BrowserWindow) {
+ 
+   const waitLeaveFullScreen = new WaitSomeThing()
+ 
+-  browserWindow.webContents.setUserAgent(
+-    `${await CreatePlayerHelper.getInstance().playerCreateParam?.AppMetaDataManagerIns.genUserAgent()} ${browserWindow.webContents.getUserAgent()}`
+-  )
+-
+-  devtoolsGlobal.get('isShowLogger').then((isShowLogger) => {
+-    console.log('isShowLogger', isShowLogger)
+-    if (isShowLogger) {
+-      browserWindow.webContents.openDevTools()
+-    }
+-  })
++  if (!platform.isMacOS) {
++    browserWindow.webContents.setUserAgent(
++      `${await CreatePlayerHelper.getInstance().playerCreateParam?.AppMetaDataManagerIns.genUserAgent()} ${browserWindow.webContents.getUserAgent()}`
++    )
++
++    devtoolsGlobal.get('isShowLogger').then((isShowLogger) => {
++      console.log('isShowLogger', isShowLogger)
++      if (isShowLogger) {
++        browserWindow.webContents.openDevTools()
++      }
++    })
++  }
+   const webContents = browserWindow.webContents
++  const isWindowAlive = () => !browserWindow.isDestroyed() && !webContents.isDestroyed()
+   if (platform.isWindows) {
+     // ? mac 里这段代码没作用
+     webContents.on('before-input-event', async (event, input) => {
+@@ -147,9 +150,23 @@ export async function initialPlayerWindow(browserWindow: BrowserWindow) {
+   }
+ 
+   let isDidFinishLoad = false
+-  browserWindow.webContents.once('did-finish-load', () => {
+-    isDidFinishLoad = true
+-  });
++  if (platform.isMacOS) {
++    webContents.on('did-finish-load', () => {
++      if (!isWindowAlive()) return
++      isDidFinishLoad = true
++      // A newly loaded Mac player page needs the current focus state even if
++      // the native window was already focused before navigation completed.
++      webContents.send(
++        browserWindow.isFocused()
++          ? MainToRenderer_Window_Channel.onFocus
++          : MainToRenderer_Window_Channel.onBlur
++      )
++    })
++  } else {
++    browserWindow.webContents.once('did-finish-load', () => {
++      isDidFinishLoad = true
++    });
++  }
+   browserWindow.on('focus', () => {
+     if (isDidFinishLoad) {
+       browserWindow.webContents.send(MainToRenderer_Window_Channel.onFocus)
+@@ -256,7 +273,7 @@ export async function initialPlayerWindow(browserWindow: BrowserWindow) {
+     }
+   })
+   browserWindow.on('hide', (e) => {
+-    console.log('player browserWindow hide', e.returnValue)
++    console.log('player browserWindow hide', platform.isMacOS ? e?.returnValue : e.returnValue)
+     if (isDidFinishLoad) {
+       browserWindow.webContents.send(MainToRenderer_Window_Channel.onHide)
+     }
+@@ -286,6 +303,29 @@ export async function initialPlayerWindow(browserWindow: BrowserWindow) {
+     // makeWindowFullyDraggable(browserWindow)
+   }
+ 
++  if (platform.isMacOS) {
++    // The Mac host starts navigation without awaiting initialization. Register
++    // all window/page listeners before asynchronous settings or UA generation.
++    void devtoolsGlobal.get('isShowLogger').then((isShowLogger) => {
++      console.log('isShowLogger', isShowLogger)
++      if (isShowLogger && isWindowAlive()) {
++        webContents.openDevTools()
++      }
++    }).catch((error) => {
++      console.error('Failed to read player devtools setting', error)
++    })
++
++    try {
++      const userAgent =
++        await CreatePlayerHelper.getInstance().playerCreateParam?.AppMetaDataManagerIns.genUserAgent()
++      if (userAgent && isWindowAlive()) {
++        webContents.setUserAgent(`${userAgent} ${webContents.getUserAgent()}`)
++      }
++    } catch (error) {
++      console.error('Failed to set player user agent', error)
++    }
++  }
++
+   return () => {
+     return {
+       isShow: _isShow,

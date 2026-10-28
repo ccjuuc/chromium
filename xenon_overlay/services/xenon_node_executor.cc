@@ -51,6 +51,13 @@
 #include "xenon_overlay/common/asar/archive.h"
 #include "xenon_overlay/public/mojom/xenon_service.mojom.h"
 
+#if BUILDFLAG(IS_MAC)
+#include <pthread.h>
+
+#include "base/apple/bundle_locations.h"
+#include "base/apple/foundation_util.h"
+#endif
+
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
 
@@ -337,8 +344,33 @@ struct PreparedAddon {
   std::string error;
 };
 
+bool IsBundledAddonPath(const base::FilePath& addon_path,
+                        const base::FilePath& outer_bundle_path) {
+#if BUILDFLAG(IS_MAC)
+  if (outer_bundle_path.empty()) {
+    return false;
+  }
+  base::FilePath canonical_bundle;
+  if (!base::NormalizeFilePath(outer_bundle_path, &canonical_bundle)) {
+    return false;
+  }
+  const base::FilePath bundled_apps = canonical_bundle.AppendASCII("Contents")
+                                         .AppendASCII("Resources")
+                                         .AppendASCII("xenon-apps");
+  base::FilePath canonical_apps;
+  // Checking only the canonical root's descendants would trust a root symlink
+  // pointing outside the app. The fixed resource directory must itself remain
+  // at its expected location inside the canonical outer bundle.
+  return base::NormalizeFilePath(bundled_apps, &canonical_apps) &&
+         canonical_apps == bundled_apps && canonical_apps.IsParent(addon_path);
+#else
+  return false;
+#endif
+}
+
 PreparedAddon PrepareAddon(const base::FilePath& requested_path,
-                           bool allow_external_addons) {
+                           bool allow_external_addons,
+                           const base::FilePath& outer_bundle_path) {
   PreparedAddon prepared;
   if (!base::FilePath::CompareEqualIgnoreCase(requested_path.Extension(),
                                               FILE_PATH_LITERAL(".node"))) {
@@ -382,9 +414,11 @@ PreparedAddon PrepareAddon(const base::FilePath& requested_path,
       prepared.error = "Failed to resolve executable directory";
       return prepared;
     }
-    if (!normalized_executable_directory.IsParent(prepared.path)) {
+    if (!normalized_executable_directory.IsParent(prepared.path) &&
+        !IsBundledAddonPath(prepared.path, outer_bundle_path)) {
       prepared.error =
-          "Native addon is outside the executable directory; start with --" +
+          "Native addon is outside the executable directory and trusted "
+          "bundled app directory; start with --" +
           std::string(napi_switches::kAllowExternalNodeAddons) +
           " to allow external development modules";
       return prepared;
@@ -396,15 +430,15 @@ PreparedAddon PrepareAddon(const base::FilePath& requested_path,
   PVOID delay_load_handler =
       AddVectoredExceptionHandler(/*First=*/1, &LogDelayLoadFailure);
 #endif
-  prepared.library = base::ScopedNativeLibrary(prepared.path);
+  base::NativeLibraryLoadError load_error;
+  prepared.library = LoadNodeAddonLibrary(prepared.path, &load_error);
 #if BUILDFLAG(IS_WIN)
   if (delay_load_handler) {
     RemoveVectoredExceptionHandler(delay_load_handler);
   }
 #endif
   if (!prepared.library.is_valid()) {
-    const base::NativeLibraryLoadError* error = prepared.library.GetError();
-    prepared.error = error ? error->ToString() : "Failed to load native addon";
+    prepared.error = load_error.ToString();
   }
   return prepared;
 }
@@ -1990,13 +2024,31 @@ XenonNodeExecutor::AddonInstance& XenonNodeExecutor::AddonInstance::operator=(
 XenonNodeExecutor::AddonCallback::AddonCallback() = default;
 XenonNodeExecutor::AddonCallback::~AddonCallback() = default;
 
-XenonNodeExecutor::XenonNodeExecutor() = default;
+XenonNodeExecutor::XenonNodeExecutor() {
+#if BUILDFLAG(IS_MAC)
+  // Bundle overrides are initialized before Utility main-thread services.
+  // Their accessors are not thread-safe: capture once here and pass plain
+  // paths to PrepareAddon's blocking tasks instead of querying NSBundle there.
+  CHECK(pthread_main_np());
+  if (base::apple::AmIBundled()) {
+    outer_bundle_path_ = base::apple::OuterBundlePath();
+  }
+#endif
+}
 
 void XenonNodeExecutor::SetCallbackHandlers(
     NodeCallback callback,
     NodeCallbackReleased callback_released) {
   callback_handler_ = std::move(callback);
   callback_released_handler_ = std::move(callback_released);
+}
+
+bool XenonNodeExecutor::HasNativeCallback(int32_t client_id,
+                                         int32_t callback_id) const {
+  const auto callback = addon_callbacks_.find({client_id, callback_id});
+  return callback != addon_callbacks_.end() &&
+         !callback->second->function.IsEmpty() &&
+         IsInstanceOwnerActive(callback->second->owner);
 }
 
 void XenonNodeExecutor::SetRuntimeDirectory(
@@ -2433,9 +2485,10 @@ std::optional<base::Value> XenonNodeExecutor::MaybeAdoptNativeReturn(
     const std::string& module_path,
     v8::Local<v8::Value> result,
     int depth,
-    uint64_t owner) {
+    uint64_t owner,
+    bool force_instance) {
   const bool is_function = result->IsFunction();
-  if (!is_function &&
+  if (!force_instance && !is_function &&
       !LooksLikeNativeHandle(addon_isolate_, context, result)) {
     return std::nullopt;
   }
@@ -2987,7 +3040,8 @@ bool XenonNodeExecutor::LoadAddonFromCurrentThread(const std::string& path,
       base::CommandLine::ForCurrentProcess()->HasSwitch(
           napi_switches::kAllowExternalNodeAddons);
   const base::FilePath requested_path = ResolveAddonPath(path);
-  PreparedAddon prepared = PrepareAddon(requested_path, allow_external_addons);
+  PreparedAddon prepared =
+      PrepareAddon(requested_path, allow_external_addons, outer_bundle_path_);
   if (!prepared.error.empty()) {
     if (error) {
       *error = prepared.error;
@@ -3075,7 +3129,9 @@ bool XenonNodeExecutor::InvokeExportFromCurrentThread(
     const std::string& function_name,
     const base::Value& args,
     base::Value* result,
-    std::string* error) {
+    std::string* error,
+    int32_t client_id,
+    uint64_t owner) {
   std::string load_error;
   if (!LoadAddonFromCurrentThread(path, &load_error)) {
     if (error) {
@@ -3086,7 +3142,7 @@ bool XenonNodeExecutor::InvokeExportFromCurrentThread(
 
   bool ok = false;
   InvokeFunction(
-      path, function_name, /*client_id=*/0, ListValueToInvokeArgs(args),
+      path, function_name, client_id, ListValueToInvokeArgs(args),
       base::BindOnce(
           [](bool* ok, base::Value* result, std::string* error, bool success,
              base::Value value,
@@ -3103,7 +3159,7 @@ bool XenonNodeExecutor::InvokeExportFromCurrentThread(
             }
           },
           &ok, result, error),
-      /*allow_pending_promise=*/false);
+      /*allow_pending_promise=*/false, {}, owner);
   return ok;
 }
 
@@ -3112,7 +3168,9 @@ bool XenonNodeExecutor::ConstructExportFromCurrentThread(
     const std::string& export_path,
     const base::Value& args,
     base::Value* instance,
-    std::string* error) {
+    std::string* error,
+    int32_t client_id,
+    uint64_t owner) {
   std::string load_error;
   if (!LoadAddonFromCurrentThread(path, &load_error)) {
     if (error) {
@@ -3124,7 +3182,7 @@ bool XenonNodeExecutor::ConstructExportFromCurrentThread(
   bool ok = false;
   int32_t instance_id = 0;
   ConstructExport(
-      path, export_path, /*client_id=*/0, ListValueToInvokeArgs(args),
+      path, export_path, client_id, ListValueToInvokeArgs(args),
       base::BindOnce(
           [](bool* ok, int32_t* instance_id, std::string* error, bool success,
              int32_t id, const std::string& error_msg) {
@@ -3138,7 +3196,7 @@ bool XenonNodeExecutor::ConstructExportFromCurrentThread(
                                          : error_msg;
             }
           },
-          &ok, &instance_id, error));
+          &ok, &instance_id, error), owner);
   if (!ok) {
     return false;
   }
@@ -3146,13 +3204,37 @@ bool XenonNodeExecutor::ConstructExportFromCurrentThread(
   v8::Local<v8::Context> context = v8_scope.context;
   v8::Local<v8::Object> object =
       addon_instances_.at(instance_id).object.Get(addon_isolate_);
+  if (client_id != 0 || owner != 0) {
+    auto wire = MaybeAdoptNativeReturn(context, path, object, 0, owner,
+                                       /*force_instance=*/true);
+    // Nested field serialization can invoke JavaScript accessors, which may
+    // synchronously close the owner and remove the instance we just created.
+    // Do not report a successful construction with an already invalid handle.
+    if (!IsInstanceOwnerActive(owner)) {
+      if (error) {
+        *error = "Native instance owner was closed";
+      }
+      return false;
+    }
+    if (!wire) {
+      if (error) {
+        *error = "Failed to describe constructed native instance";
+      }
+      return false;
+    }
+    *instance = std::move(*wire);
+    return true;
+  }
+
+  // Legacy main-process callers retain their original own-property snapshot.
+  // The scoped native-handle serializer also snapshots inherited data and
+  // omits undefined/then, which would change these callers on every platform.
   base::DictValue wire;
   wire.Set(kWireTypeKey, kNativeInstanceWireType);
   wire.Set("instance_id", instance_id);
   wire.Set("prototype",
            NativePrototypeMembersToWire(addon_isolate_, context, object));
-  // Snapshot data descriptors only: constructing a wrapper must not call
-  // unrelated native getters just to discover an instance's fields.
+  // Inspect data descriptors without evaluating unrelated native getters.
   auto description =
       DescribeExactExportValue(addon_isolate_, context, "", object);
   if (!description) {
@@ -3181,7 +3263,9 @@ bool XenonNodeExecutor::InvokeInstanceFromCurrentThread(
     const std::string& method_name,
     const base::Value& args,
     base::Value* result,
-    std::string* error) {
+    std::string* error,
+    int32_t client_id,
+    uint64_t owner) {
   if (!addon_isolate_) {
     if (error) {
       *error = "No Node addon has been loaded";
@@ -3191,7 +3275,7 @@ bool XenonNodeExecutor::InvokeInstanceFromCurrentThread(
 
   bool ok = false;
   InvokeInstance(
-      path, instance_id, method_name, /*client_id=*/0,
+      path, instance_id, method_name, client_id,
       ListValueToInvokeArgs(args),
       base::BindOnce(
           [](bool* ok, base::Value* result, std::string* error, bool success,
@@ -3209,7 +3293,7 @@ bool XenonNodeExecutor::InvokeInstanceFromCurrentThread(
             }
           },
           &ok, result, error),
-      /*allow_pending_promise=*/false);
+      /*allow_pending_promise=*/false, {}, owner);
   return ok;
 }
 
@@ -3250,7 +3334,8 @@ void XenonNodeExecutor::LoadAddon(const std::string& path,
   const base::FilePath addon_path = ResolveAddonPath(path);
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-      base::BindOnce(&PrepareAddon, addon_path, allow_external_addons),
+      base::BindOnce(&PrepareAddon, addon_path, allow_external_addons,
+                     outer_bundle_path_),
       base::BindOnce(
           [](base::WeakPtr<XenonNodeExecutor> self, base::FilePath addon_path,
              bool include_export_tree, LoadAddonCallback callback,

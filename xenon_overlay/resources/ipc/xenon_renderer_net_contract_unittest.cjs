@@ -91,38 +91,122 @@ test('renderer IP classifiers match Node for full, compressed, mapped, zoned and
   }
 });
 
-test('Unix endpoints report asynchronous unsupported errors without synthetic binds or connects', async () => {
-  for (const platform of ['win32', 'linux']) {
-    for (const endpoint of ['/tmp/net-fixture.sock',
-      {path: '/tmp/net-fixture.sock'}, ...(platform === 'linux' ? [pipePath] : [])]) {
-      const {net, sent} = fixture(platform);
-      const events = [];
-      const server = net.createServer(() => assert.fail('unsupported connection'));
-      assert.equal(server.address(), null);
-      assert.equal(server.listening, false);
-      server.on('error', error => events.push(['server', error.code, error.syscall]));
-      server.on('listening', () => assert.fail('unsupported bind emitted listening'));
-      assert.equal(server.listen(endpoint, () => assert.fail('unsupported listen callback')), server);
-      const connectEndpoint = endpoint && typeof endpoint === 'object' && 'port' in endpoint &&
-          (endpoint.port == null || endpoint.path) ? 80 : endpoint;
-      const socket = net.connect(connectEndpoint, () => assert.fail('unsupported connect callback'));
-      socket.on('error', error => events.push(['socket', error.code, error.syscall]));
-      socket.on('end', () => assert.fail('failed connect emitted end'));
-      socket.on('close', hadError => events.push(['close', hadError]));
-      assert.deepEqual(events, []);
-      assert.equal(server.address(), null);
-      assert.equal(socket.write('queued'), true);
-      await settle();
-      assert.deepEqual(events, [['server', 'ERR_NOT_SUPPORTED', 'listen'],
-        ['socket', 'ERR_NOT_SUPPORTED', 'connect'], ['close', true]]);
-      assert.equal(server.address(), null);
-      assert.equal(server.listening, false);
-      assert.equal(socket.connecting, false);
-      assert.equal(socket.destroyed, true);
-      assert.equal(socket.write('after failure'), false);
-      assert.deepEqual(sent, []);
-    }
+test('Windows rejects Unix endpoints without synthetic binds or connects', async () => {
+  for (const endpoint of ['/tmp/net-fixture.sock',
+    {path: '/tmp/net-fixture.sock'}]) {
+    const {net, sent} = fixture();
+    const events = [];
+    const server = net.createServer(() => assert.fail('unsupported connection'));
+    assert.equal(server.address(), null);
+    assert.equal(server.listening, false);
+    server.on('error', error => events.push(['server', error.code, error.syscall]));
+    server.on('listening', () => assert.fail('unsupported bind emitted listening'));
+    assert.equal(server.listen(endpoint, () => assert.fail('unsupported listen callback')), server);
+    const connectEndpoint = endpoint && typeof endpoint === 'object' && 'port' in endpoint &&
+        (endpoint.port == null || endpoint.path) ? 80 : endpoint;
+    const socket = net.connect(connectEndpoint, () => assert.fail('unsupported connect callback'));
+    socket.on('error', error => events.push(['socket', error.code, error.syscall]));
+    socket.on('end', () => assert.fail('failed connect emitted end'));
+    socket.on('close', hadError => events.push(['close', hadError]));
+    assert.deepEqual(events, []);
+    assert.equal(server.address(), null);
+    assert.equal(socket.write('queued'), true);
+    await settle();
+    assert.deepEqual(events, [['server', 'ERR_NOT_SUPPORTED', 'listen'],
+      ['socket', 'ERR_NOT_SUPPORTED', 'connect'], ['close', true]]);
+    assert.equal(server.address(), null);
+    assert.equal(server.listening, false);
+    assert.equal(socket.connecting, false);
+    assert.equal(socket.destroyed, true);
+    assert.equal(socket.write('after failure'), false);
+    assert.deepEqual(sent, []);
   }
+});
+
+for (const platform of ['darwin', 'linux']) {
+  test(`${platform} Unix endpoints retain their exact path and wait for native readiness`, () => {
+    for (const endpoint of ['/tmp/MixedCase.sock', 'relative.sock', String.raw`relative\socket.sock`]) {
+      const {net, sent, deliver} = fixture(platform);
+      let listening = 0, connected = 0;
+      const server = net.createServer().listen({path: endpoint}, () => ++listening);
+      const bind = sent[0];
+      assert.equal(bind.channel, '__xenon:net:listen');
+      assert.equal(bind.value.path, endpoint);
+      assert.equal(bind.value.port, undefined);
+      assert.equal(server.listening, false);
+      assert.equal(server.address(), null);
+      const socket = net.connect(endpoint, () => ++connected);
+      const connect = sent.at(-1);
+      assert.equal(connect.channel, '__xenon:net:connect');
+      assert.equal(connect.value.path, endpoint);
+      assert.equal(connect.value.port, undefined);
+      assert.equal(connected, 0);
+      deliver('listening', {serverId: bind.value.serverId, address: endpoint});
+      assert.equal(listening, 1);
+      assert.equal(server.address(), endpoint);
+      deliver('connected', {toId: connect.value.fromId, peerId: 'native-unix'});
+      assert.equal(connected, 1);
+      socket.destroy();
+      server.close();
+    }
+  });
+
+  test(`${platform} native Unix bind failures do not publish a listening endpoint`, () => {
+    const {net, sent, deliver} = fixture(platform);
+    let failure;
+    const server = net.createServer().listen('/tmp/Occupied.sock',
+      () => assert.fail('failed bind callback'));
+    server.on('error', error => { failure = error; });
+    deliver('error', {serverId: sent[0].value.serverId, code: 'EADDRINUSE'});
+    assert.equal(failure.code, 'EADDRINUSE');
+    assert.equal(server.address(), null);
+    assert.equal(server.listening, false);
+  });
+}
+
+test('native pauseOnConnect buffers accepted Unix socket data until resume', async () => {
+  const {net, sent, deliver} = fixture('darwin');
+  let incoming;
+  const received = [];
+  const server = net.createServer({pauseOnConnect: true}, socket => {
+    incoming = socket;
+    assert.equal(socket.isPaused(), true);
+    assert.equal(socket.readableFlowing, false);
+    socket.on('data', bytes => received.push(Array.from(bytes)));
+  }).listen('/tmp/Paused.sock');
+  const serverId = sent[0].value.serverId;
+  deliver('listening', {serverId});
+  deliver('connection', {serverId, socketId: 'native-paused'});
+  assert.equal(sent.at(-1).channel, '__xenon:net:pause');
+  assert.equal(sent.at(-1).value.toId, 'native-paused');
+  deliver('data', {toId: 'native-paused', wire: {t: 'b64', d: 'AP+A'}});
+  assert.deepEqual(received, []);
+  incoming.resume();
+  await settle();
+  assert.deepEqual(received, [[0, 255, 128]]);
+  assert.equal(sent.at(-1).channel, '__xenon:net:resume');
+  incoming.destroy();
+  server.close();
+});
+
+test('local pauseOnConnect retains the first frame until the accepted socket resumes', async () => {
+  const {net, sent, deliver} = fixture('darwin');
+  let incoming;
+  const received = [];
+  const server = net.createServer({pauseOnConnect: true}, socket => {
+    incoming = socket;
+    assert.equal(socket.isPaused(), true);
+    socket.on('data', bytes => received.push(bytes.toString()));
+  }).listen('/tmp/LocalPaused.sock');
+  deliver('listening', {serverId: sent[0].value.serverId});
+  const socket = net.connect('/tmp/LocalPaused.sock', function() { this.write('first frame'); });
+  await settle();
+  assert.deepEqual(received, []);
+  incoming.resume();
+  await settle();
+  assert.deepEqual(received, ['first frame']);
+  socket.destroy();
+  server.close();
 });
 
 test('invalid endpoints throw before allocating native resources', () => {

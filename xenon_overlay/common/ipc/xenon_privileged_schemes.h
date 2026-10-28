@@ -37,10 +37,11 @@ bool ParsePrivilegedSchemes(const base::Value& value,
                             PrivilegedSchemes* schemes,
                             std::string* error);
 
-// Reads only host-level descriptors and an explicitly selected JSON descriptor.
+// Reads host-level descriptors and an explicitly selected JSON descriptor.
+// Directories are ordered: the first copy of a descriptor basename wins.
 // A release directory passed as explicit_application has no implicit metadata.
 bool LoadPrivilegedSchemeDeclarations(
-    const base::FilePath& host_directory,
+    const std::vector<base::FilePath>& host_directories,
     const base::FilePath& explicit_application,
     PrivilegedSchemes* schemes,
     std::string* error);

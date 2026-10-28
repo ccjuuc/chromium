@@ -64,5 +64,6 @@
   // Non-terminal readline consumes real stream data and preserves UTF-8 and
   // CRLF boundaries across chunks. Interactive terminal editing is separate.
   // @include "common/readline.js"
+  // @include "main/mac_player.js"
   // @include "main/install.js"
 })();

@@ -9,6 +9,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "base/functional/callback.h"
 #include "node_api.h"
 #include "v8/include/v8.h"
 
@@ -42,13 +43,14 @@ struct napi_escapable_handle_scope__ {
 };
 
 struct napi_ref__ {
-  explicit napi_ref__(v8::Isolate* isolate);
+  explicit napi_ref__(napi_env env);
   ~napi_ref__();
 
   void SetWeak();
   void ClearWeak();
 
   NAPI_RAW_PTR_EXCLUSION v8::Isolate* isolate;
+  NAPI_RAW_PTR_EXCLUSION napi_env env;
   v8::Global<v8::Value> global_value;
   uint32_t ref_count = 0;
   bool is_weak = false;
@@ -98,7 +100,21 @@ struct napi_env__ {
   // env (env itself is intentionally not torn down by the weak context hook).
   std::vector<std::unique_ptr<CallbackData>> callbacks;
   std::vector<std::unique_ptr<NapiFinalizerData>> finalizers;
-  // 宿主按 addon 管理独立 env；钩子须在该 addon 的 finalizer 和 DLL 卸载前运行。
+  // Opaque tokens owned by this env. The reference registry releases their V8
+  // handles after cleanup hooks/finalizers, before the isolate can disappear.
+  std::unordered_set<napi_ref> references;
+  // Custom async resources are scoped to this environment. Their opaque IDs
+  // cannot be reused after napi_async_destroy or environment teardown.
+  std::unordered_set<napi_async_context> async_contexts;
+  napi_async_context active_async_context = nullptr;
+  size_t async_callback_depth = 0;
+  // A host may explicitly handle an uncaught native callback exception in
+  // this environment's realm. Returning false (or no handler) is fatal; no
+  // exception is forwarded to an unrelated Electron/renderer context.
+  base::RepeatingCallback<bool(v8::Local<v8::Context>, v8::Local<v8::Value>)>
+      uncaught_exception_handler;
+  // 宿主按 addon 管理独立 env；钩子须在该 addon 的 finalizer 和 DLL
+  // 卸载前运行。
   std::vector<CleanupHook> cleanup_hooks;
   NAPI_RAW_PTR_EXCLUSION void* instance_data = nullptr;
   napi_finalize instance_data_finalize = nullptr;

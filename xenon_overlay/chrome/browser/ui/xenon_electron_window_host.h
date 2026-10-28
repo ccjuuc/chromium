@@ -52,7 +52,9 @@ class XenonElectronWindowHost : public views::WidgetObserver {
                     int32_t* window_id,
                     uint64_t* hwnd,
                     std::string* error,
-                    const std::string& partition = "");
+                    const std::string& partition = "",
+                    bool has_shadow = true,
+                    const std::string& title_bar_style = "default");
   void LoadURL(int32_t window_id, const std::string& url);
   void SetVisible(int32_t window_id, bool visible);
   bool Call(int32_t window_id,
@@ -66,6 +68,14 @@ class XenonElectronWindowHost : public views::WidgetObserver {
       content::WebContents* web_contents) const;
   const base::DictValue* GetWebPreferencesForWebContents(
       content::WebContents* web_contents) const;
+  // Resolves only a live BrowserWindow owned by the requesting container.
+  // Native playback services use these local objects without exposing their
+  // native view addresses to the application's Utility process.
+  bool GetOwnedPlaybackTarget(const std::string& container_id,
+                              int32_t window_id,
+                              views::Widget** widget,
+                              content::WebContents** web_contents,
+                              std::string* error) const;
   void Close(int32_t window_id);
   // Synchronously destroys the windows of a disconnected ipcMain container.
   // Their events cannot be delivered to the old process or a later restart.
@@ -79,6 +89,16 @@ class XenonElectronWindowHost : public views::WidgetObserver {
   bool ActivateForContainer(const std::string& container_id);
   bool HasWindows() const { return !windows_.empty(); }
   bool HasWindowsForContainer(const std::string& container_id) const;
+
+  struct WindowMenuEntry {
+    int32_t window_id;
+    std::u16string title;
+  };
+  // Snapshot user-facing top-level windows, including windows hidden to a tray.
+  // Never-shown helpers and closing windows cannot be restored from a menu.
+  std::vector<WindowMenuEntry> GetWindowMenuEntries() const;
+  bool CanActivateWindowFromMenu(int32_t window_id) const;
+  bool ActivateWindowFromMenu(int32_t window_id);
 
   // Electron `dialog.showOpenDialog`. Runs on the Browser UI thread with an
   // owner HWND from a hosted BrowserWindow. Empty result means cancel.

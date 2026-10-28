@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "gin/arguments.h"
 #include "v8/include/v8-persistent-handle.h"
@@ -62,7 +63,7 @@ class XenonContextBridge final : public base::RefCounted<XenonContextBridge> {
     bool target_is_main;
     v8::Global<v8::Promise::Resolver> resolver;
   };
-  v8::Isolate* const isolate_;
+  const raw_ptr<v8::Isolate> isolate_;
   v8::Global<v8::Context> main_context_;
   v8::Global<v8::Context> preload_context_;
   v8::Global<v8::Private> original_function_key_;

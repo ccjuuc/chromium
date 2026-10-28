@@ -92,6 +92,7 @@ class ChromeMainDelegate : public content::ContentMainDelegate {
   void SetupTracing();
 
 #if BUILDFLAG(IS_MAC)
+  bool ShouldLoadV8Snapshot(const std::string& process_type) override;
   void InitMacCrashReporter(const base::CommandLine& command_line,
                             const std::string& process_type);
   void SetUpInstallerPreferences(const base::CommandLine& command_line);

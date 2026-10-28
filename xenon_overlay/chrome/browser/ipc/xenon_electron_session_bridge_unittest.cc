@@ -1,12 +1,15 @@
 // Copyright 2026 The Xenon Overlay Authors. All rights reserved.
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_session_bridge.h"
 
+#include <memory>
+
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/mock_log.h"
 #include "base/test/test_future.h"
+#include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/storage_partition.h"
@@ -15,12 +18,47 @@
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_session_shutdown_notifier_factory.h"
 #include "xenon_overlay/common/asar/test_support.h"
 
 namespace xenon::ipc {
 namespace {
 
+// TestBrowserContext does not own KeyedServices. Match Profile's real shutdown
+// order explicitly, including keeping its user data until after partitions.
+class SessionTestBrowserContext : public content::TestBrowserContext {
+ public:
+  SessionTestBrowserContext() {
+    BrowserContextDependencyManager::GetInstance()->MarkBrowserContextLive(
+        this);
+  }
+  ~SessionTestBrowserContext() override { ShutdownServices(); }
+
+  void ShutdownServices() {
+    if (services_shutdown_) {
+      return;
+    }
+    services_shutdown_ = true;
+    NotifyWillBeDestroyed();
+    BrowserContextDependencyManager::GetInstance()
+        ->DestroyBrowserContextServices(this);
+  }
+
+ private:
+  bool services_shutdown_ = false;
+};
+
 class ElectronSessionBridgeTest : public testing::Test {
+ public:
+  static void SetUpTestSuite() {
+    // Match Chrome startup: factories must be registered before any Profile
+    // exists and before the first TH/Electron session is requested.
+    ElectronSessionShutdownNotifierFactory::GetInstance();
+    BrowserContextDependencyManager::GetInstance()
+        ->DisallowKeyedServiceFactoryRegistration(
+            "EnsureBrowserContextKeyedServiceFactoriesBuilt");
+  }
+
  protected:
   void SetUp() override {
     EXPECT_CALL(log_,
@@ -71,7 +109,7 @@ class ElectronSessionBridgeTest : public testing::Test {
   // currently log a dump instead of terminating, so an exit code alone misses
   // a teardown regression.
   base::test::MockLog log_;
-  content::TestBrowserContext context_;
+  SessionTestBrowserContext context_;
 };
 
 TEST_F(ElectronSessionBridgeTest, PartitionIdentityAndPersistenceAreReal) {
@@ -175,7 +213,7 @@ TEST_F(ElectronSessionBridgeTest,
   ASSERT_TRUE(directory.CreateUniqueTempDir());
   const auto preload = directory.GetPath().AppendASCII("preload.js");
   ASSERT_TRUE(base::WriteFile(preload, "void 0;"));
-  content::TestBrowserContext second_context;
+  SessionTestBrowserContext second_context;
   for (auto* context : {&context_, &second_context}) {
     for (const char* container : {"app", "other"}) {
       ASSERT_TRUE(CallOn(context, container, "browser", "register-preload",
@@ -187,7 +225,7 @@ TEST_F(ElectronSessionBridgeTest,
   // A destroyed BrowserContext must leave no dangling entry in the index used
   // to revoke an owner. The remaining contexts continue to own their states.
   {
-    content::TestBrowserContext transient_context;
+    SessionTestBrowserContext transient_context;
     ASSERT_TRUE(CallOn(&transient_context, "app", "browser", "register-preload",
                        Script("frame", "frame", preload))
                     .error.empty());
@@ -242,6 +280,62 @@ TEST_F(ElectronSessionBridgeTest,
     ASSERT_EQ(scripts.size(), 1u);
     EXPECT_EQ(scripts.front().source, "globalThis.sessionPreload = true;");
   }
+}
+
+TEST_F(ElectronSessionBridgeTest,
+       ProfileShutdownDetachesSessionsBeforeStoragePartitionsAreDestroyed) {
+  auto closing_context = std::make_unique<SessionTestBrowserContext>();
+  SessionTestBrowserContext other_context;
+  auto* closing =
+      ResolveElectronSessionPartition(closing_context.get(), "app", "browser");
+  auto* surviving =
+      ResolveElectronSessionPartition(&other_context, "app", "browser");
+  ASSERT_TRUE(FindElectronSessionIdentity(closing));
+  ASSERT_TRUE(FindElectronSessionIdentity(surviving));
+
+  closing_context->ShutdownServices();
+  // The real partition is still alive here. The registry and its observer must
+  // already be gone, without relying on a later ServiceWorkerContext
+  // destructor.
+  EXPECT_EQ(closing, closing_context->GetStoragePartition(
+                         GetElectronSessionPartitionConfig(
+                             closing_context.get(), "app", "browser"),
+                         false));
+  EXPECT_FALSE(FindElectronSessionIdentity(closing));
+  EXPECT_TRUE(FindElectronSessionIdentity(surviving));
+  EXPECT_EQ(nullptr, ResolveElectronSessionPartition(closing_context.get(),
+                                                     "app", "browser"));
+  EXPECT_EQ(
+      "Electron session context is shutting down",
+      CallOn(closing_context.get(), "app", "browser", "get-running-workers")
+          .error);
+  // Match ProfileImpl: storage partitions are destroyed before user data. Any
+  // retained raw_ptr or worker observer in the registry would fail this order.
+  closing_context.reset();
+  RemoveElectronSessionsForContainer("app");
+  EXPECT_FALSE(FindElectronSessionIdentity(surviving));
+}
+
+TEST_F(ElectronSessionBridgeTest,
+       ProfileShutdownCancelsInFlightPreloadBeforePartitionTeardown) {
+  auto closing_context = std::make_unique<SessionTestBrowserContext>();
+  base::ScopedTempDir directory;
+  ASSERT_TRUE(directory.CreateUniqueTempDir());
+  const auto preload = directory.GetPath().AppendASCII("preload.js");
+  ASSERT_TRUE(base::WriteFile(preload, "void 0;"));
+  auto args = Script("frame", "frame", preload);
+  args.Set("partition", "browser");
+  args.Set("method", "register-preload");
+  base::test::TestFuture<base::Value, std::string> future;
+  CallElectronSession(closing_context.get(), "app",
+                      base::Value(std::move(args)),
+                      future.GetCallback<base::Value, const std::string&>());
+  closing_context->ShutdownServices();
+  EXPECT_EQ(
+      "Electron session context is shutting down",
+      CallOn(closing_context.get(), "app", "browser", "get-preloads").error);
+  closing_context.reset();
+  EXPECT_EQ("Session owner disconnected", future.Get<1>());
 }
 
 }  // namespace

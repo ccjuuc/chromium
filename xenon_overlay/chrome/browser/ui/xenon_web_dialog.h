@@ -6,6 +6,7 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
@@ -19,6 +20,7 @@
 #endif
 
 namespace views {
+class WebDialogView;
 class Widget;
 }  // namespace views
 
@@ -153,6 +155,7 @@ class XenonWebDialog : public ui::WebDialogDelegate {
 
  private:
   friend class XenonHostedWindowCloseTest;
+  friend class XenonWebDialogLifetimeTest;
   XenonWebDialog(const GURL& url,
                  int width,
                  int height,
@@ -166,6 +169,10 @@ class XenonWebDialog : public ui::WebDialogDelegate {
                  bool system_rounded_corners,
                  bool show_shadow);
   ~XenonWebDialog() override;
+
+  std::unique_ptr<views::WebDialogView> CreateView(
+      content::BrowserContext* context,
+      std::unique_ptr<content::WebContents> contents);
 
   static void ShowInternal(content::BrowserContext* context,
                            const GURL& url,
@@ -227,6 +234,7 @@ class XenonWebDialog : public ui::WebDialogDelegate {
 #if BUILDFLAG(IS_WIN)
   std::unique_ptr<ui::EventHandler> event_blocker_;
 #endif
+  base::WeakPtrFactory<XenonWebDialog> weak_ptr_factory_{this};
 };
 
 }  // namespace xenon
