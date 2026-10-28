@@ -9,9 +9,11 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_protocol.h"
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "build/buildflag.h"
 #include "chrome/browser/profiles/profile.h"
@@ -28,9 +30,11 @@
 #include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_app_runtime.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_api_bridge.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_session_bridge.h"
 #include "xenon_overlay/chrome/browser/napi/napi_switches.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
 #include "xenon_overlay/common/asar/archive.h"
+#include "xenon_overlay/common/ipc/xenon_privileged_schemes.h"
 #include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
 #include "xenon_overlay/public/xenon_ipc_switches.h"
 
@@ -74,6 +78,13 @@ GetXenonServiceExtraSwitchValues() {
       switches.emplace_back(
           name, command_line->GetSwitchValuePath(name).AsUTF8Unsafe());
     }
+  }
+  // ServiceProcessHost may have its own command-line allowlist. Forward the
+  // same frozen snapshot used by all other Chromium children explicitly.
+  base::CommandLine snapshot(base::CommandLine::NO_PROGRAM);
+  ipc::AppendStartupPrivilegedSchemes(&snapshot);
+  for (const auto& [name, value] : snapshot.GetSwitches()) {
+    switches.emplace_back(name, snapshot.GetSwitchValueASCII(name));
   }
   return switches;
 }
@@ -160,6 +171,9 @@ void XenonManager::OnProfileWillBeDestroyed(Profile* profile) {
 }
 
 void XenonManager::EnsureServiceStarted(content::BrowserContext* context) {
+  if (shutting_down_for_process_exit_) {
+    return;
+  }
   SetBrowserContext(context);
   if (service_remote_.is_bound()) {
     return;
@@ -237,6 +251,9 @@ void XenonManager::InitializeServiceConnection(
 XenonManager::ContainerServiceConnection*
 XenonManager::EnsureContainerServiceStarted(const std::string& container_id,
                                             bool explicit_restart) {
+  if (shutting_down_for_process_exit_) {
+    return nullptr;
+  }
   const std::string normalized_id =
       container_id.empty() ? "default" : container_id;
   if (ContainerServiceConnection* existing =
@@ -310,6 +327,14 @@ uint64_t XenonManager::service_generation(
       container_id.empty() ? "default" : container_id;
   const auto it = container_service_generations_.find(normalized_id);
   return it == container_service_generations_.end() ? 0 : it->second;
+}
+
+bool XenonManager::IsElectronIpcGenerationCurrent(
+    const std::string& container_id,
+    uint64_t generation) {
+  auto* connection = FindContainerService(container_id);
+  return generation != 0 && connection && connection->remote.is_bound() &&
+         connection->generation == generation;
 }
 
 #if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
@@ -685,7 +710,9 @@ void XenonManager::RegisterElectronIpcRenderer(
     mojo::PendingRemote<ipc::mojom::IpcRenderer> renderer,
     int32_t process_id,
     int32_t frame_id,
-    int32_t window_id) {
+    int32_t window_id,
+    const std::string& document_url,
+    bool is_main_frame) {
   if (ContainerServiceConnection* connection =
           EnsureContainerServiceStarted(container_id)) {
     if (!endpoint_id.empty()) {
@@ -699,7 +726,30 @@ void XenonManager::RegisterElectronIpcRenderer(
     }
     connection->remote->RegisterElectronIpcRenderer(
         container_id, endpoint_id, std::move(renderer), process_id, frame_id,
-        window_id);
+        window_id, document_url, is_main_frame);
+  }
+}
+
+void XenonManager::UpdateElectronIpcRendererFrame(
+    const std::string& container_id,
+    const std::string& endpoint_id,
+    const std::string& document_url) {
+  if (auto* connection = FindContainerService(container_id)) {
+    connection->remote->UpdateElectronIpcRendererFrame(
+        container_id, endpoint_id, document_url);
+  }
+}
+
+void XenonManager::RegisterElectronIpcServiceWorker(
+    const std::string& container_id,
+    const std::string& endpoint_id,
+    mojo::PendingRemote<ipc::mojom::IpcRenderer> renderer,
+    int32_t process_id,
+    ipc::mojom::IpcServiceWorkerInfoPtr identity) {
+  if (auto* connection = FindContainerService(container_id)) {
+    connection->remote->RegisterElectronIpcServiceWorker(
+        container_id, endpoint_id, std::move(renderer), process_id,
+        std::move(identity));
   }
 }
 
@@ -843,9 +893,13 @@ void XenonManager::CloseRendererAddonServicesForContainer(
 void XenonManager::ElectronIpcSend(const std::string& container_id,
                                    const std::string& endpoint_id,
                                    const std::string& channel,
-                                   base::Value arguments) {
-  if (ContainerServiceConnection* connection =
-          EnsureContainerServiceStarted(container_id)) {
+                                   base::Value arguments,
+                                   uint64_t expected_generation) {
+  auto* connection = expected_generation
+                         ? FindContainerService(container_id)
+                         : EnsureContainerServiceStarted(container_id);
+  if (connection && connection->remote.is_bound() &&
+      (!expected_generation || connection->generation == expected_generation)) {
     connection->remote->ElectronIpcSend(container_id, endpoint_id, channel,
                                         std::move(arguments));
   }
@@ -855,7 +909,14 @@ void XenonManager::ElectronIpcInvoke(const std::string& container_id,
                                      const std::string& endpoint_id,
                                      const std::string& channel,
                                      base::Value arguments,
-                                     ElectronIpcInvokeCallback callback) {
+                                     ElectronIpcInvokeCallback callback,
+                                     uint64_t expected_generation) {
+  if (expected_generation &&
+      !IsElectronIpcGenerationCurrent(container_id, expected_generation)) {
+    std::move(callback).Run(
+        MakeElectronIpcFailure("Utility ipcMain service is unavailable"));
+    return;
+  }
   if (IsRendererNodeAddonInvokeChannel(channel)) {
     const RendererAddonKey key{container_id.empty() ? "default" : container_id,
                                endpoint_id};
@@ -871,9 +932,11 @@ void XenonManager::ElectronIpcInvoke(const std::string& container_id,
                                      std::move(arguments), std::move(callback));
     return;
   }
-  ContainerServiceConnection* connection =
-      EnsureContainerServiceStarted(container_id);
-  if (!connection) {
+  auto* connection = expected_generation
+                         ? FindContainerService(container_id)
+                         : EnsureContainerServiceStarted(container_id);
+  if (!connection || !connection->remote.is_bound() ||
+      (expected_generation && connection->generation != expected_generation)) {
     std::move(callback).Run(
         MakeElectronIpcFailure("Utility ipcMain service is unavailable"));
     return;
@@ -883,14 +946,42 @@ void XenonManager::ElectronIpcInvoke(const std::string& container_id,
                                         std::move(callback));
 }
 
+void XenonManager::RequestElectronProtocol(
+    const std::string& container_id,
+    const std::string& partition,
+    uint64_t generation,
+    const std::string& request_id,
+    base::Value request,
+    ElectronIpcInvokeCallback callback) {
+  auto* connection = FindContainerService(container_id);
+  if (!connection || !connection->remote.is_bound() ||
+      connection->generation != generation) {
+    std::move(callback).Run(MakeElectronIpcFailure("Protocol service is unavailable"));
+    return;
+  }
+  connection->remote->HandleElectronProtocol(container_id, partition, request_id,
+                                               std::move(request), std::move(callback));
+}
+
+void XenonManager::CancelElectronProtocol(const std::string& container_id,
+                                         uint64_t generation,
+                                         const std::string& request_id) {
+  auto* connection = FindContainerService(container_id);
+  if (connection && connection->remote.is_bound() && connection->generation == generation)
+    connection->remote->CancelElectronProtocol(container_id, request_id);
+}
+
 void XenonManager::ElectronIpcSendSync(const std::string& container_id,
                                        const std::string& endpoint_id,
                                        const std::string& channel,
                                        base::Value arguments,
-                                       ElectronIpcSendSyncCallback callback) {
-  ContainerServiceConnection* connection =
-      EnsureContainerServiceStarted(container_id);
-  if (!connection) {
+                                       ElectronIpcSendSyncCallback callback,
+                                       uint64_t expected_generation) {
+  auto* connection = expected_generation
+                         ? FindContainerService(container_id)
+                         : EnsureContainerServiceStarted(container_id);
+  if (!connection || !connection->remote.is_bound() ||
+      (expected_generation && connection->generation != expected_generation)) {
     std::move(callback).Run(
         MakeElectronIpcFailure("Utility ipcMain service is unavailable"));
     return;
@@ -1002,6 +1093,8 @@ void XenonManager::OnContainerServiceDisconnected(
 }
 
 void XenonManager::CloseContainerService(const std::string& container_id) {
+  ipc::RemoveElectronProtocolHandlers(container_id);
+  ipc::RemoveElectronSessionsForContainer(container_id);
   CloseRendererAddonServicesForContainer(container_id);
   auto it = container_services_.find(container_id);
   if (it == container_services_.end()) {
@@ -1031,9 +1124,32 @@ void XenonManager::CloseContainerService(const std::string& container_id) {
 }
 
 void XenonManager::ShutdownForProcessExit() {
-  container_services_.clear();
+  if (shutting_down_for_process_exit_) {
+    return;
+  }
+  shutting_down_for_process_exit_ = true;
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
   browser_observer_receivers_.Clear();
+#endif
+  // Remove routable identities before disconnecting. Retained SharedRemote
+  // copies must lose the actual pipe, rather than just this manager's
+  // reference.
+  auto services = std::exchange(container_services_, {});
+  for (const auto& [id, connection] : services) {
+    ipc::RemoveElectronProtocolHandlers(id);
+    ipc::RemoveElectronSessionsForContainer(id);
+    if (connection->remote.is_bound()) {
+#if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
+      connection->remote.Disconnect();
+#else
+      connection->remote.reset();
+#endif
+    }
+  }
+#if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
+  if (service_remote_.is_bound()) {
+    service_remote_.Disconnect();
+  }
 #endif
   ResetServiceConnection();
 }
@@ -1107,6 +1223,65 @@ void XenonManager::ElectronWindowCall(int32_t window_id,
                                       const std::string& command,
                                       base::Value arguments,
                                       ElectronWindowCallCallback callback) {
+  if (window_id == 0 && command == "electron-session") {
+    const std::string container_id = browser_observer_receivers_.current_context();
+    auto* connection = FindContainerService(container_id);
+    if (!connection || connection->observer_receiver_id !=
+            browser_observer_receivers_.current_receiver() ||
+        connection->generation != service_generation(container_id)) {
+      std::move(callback).Run(base::Value(), "ERR_ACCESS_DENIED: stale session owner");
+      return;
+    }
+    if (arguments.is_dict() &&
+        arguments.GetDict().FindString("method") &&
+        *arguments.GetDict().FindString("method") == "create-window") {
+      const auto& args = arguments.GetDict();
+      const auto* options = args.FindDict("options");
+      const auto* partition = args.FindString("partition");
+      if (!options || !partition) {
+        std::move(callback).Run(base::Value(), "Invalid session window options");
+        return;
+      }
+      int32_t id = 0;
+      uint64_t hwnd = 0;
+      std::string error;
+      const std::string* title = options->FindString("title");
+      XenonElectronWindowHost::GetInstance()->CreateHostedWindow(
+          last_browser_context_, options->FindInt("width").value_or(800),
+          options->FindInt("height").value_or(600),
+          options->FindBool("show").value_or(true),
+          options->FindBool("frame").value_or(true),
+          options->FindBool("transparent").value_or(false),
+          options->FindInt("parentId").value_or(0),
+          title ? *title : "Electron", container_id, &id, &hwnd, &error,
+          *partition);
+      std::move(callback).Run(base::Value(base::DictValue()
+          .Set("id", id).Set("hwnd", base::NumberToString(hwnd))), error);
+      return;
+    }
+    ipc::CallElectronSession(last_browser_context_, container_id,
+        std::move(arguments), std::move(callback), base::BindRepeating(
+            [](const std::string& owner, base::Value event) {
+              XenonManager::GetInstance()->DispatchElectronSessionEvent(
+                  owner, std::move(event));
+            }, container_id));
+    return;
+  }
+  if (window_id == 0 && command == "protocol-handler") {
+    const std::string container_id = browser_observer_receivers_.current_context();
+    auto* connection = FindContainerService(container_id);
+    std::string error;
+    if (!connection || connection->observer_receiver_id !=
+            browser_observer_receivers_.current_receiver() ||
+        connection->generation != service_generation(container_id)) {
+      error = "ERR_ACCESS_DENIED: stale protocol registration owner";
+    } else {
+      ipc::SetElectronProtocolHandler(last_browser_context_, container_id,
+          connection->generation, arguments, &error);
+    }
+    std::move(callback).Run(base::Value(), error);
+    return;
+  }
   if (window_id == 0 && command == "electron-api") {
     ipc::CallElectronApi(std::move(arguments),
                          base::BindOnce(
@@ -1159,6 +1334,15 @@ void XenonManager::ShowElectronOpenDialog(
   std::move(callback).Run(std::move(paths));
 }
 #endif
+
+void XenonManager::DispatchElectronSessionEvent(const std::string& container_id,
+                                                base::Value arguments) {
+  auto* connection = FindContainerService(container_id);
+  if (connection && connection->remote.is_bound()) {
+    connection->remote->DispatchElectronWindowEvent(
+        0, "__xenon-session-event", std::move(arguments));
+  }
+}
 
 void XenonManager::DispatchElectronWindowEvent(int32_t window_id,
                                                const std::string& event_name,

@@ -64,11 +64,15 @@ class XenonIpcDocumentHost final
                 base::Value arguments,
                 SendSyncCallback callback) override;
   bool IsAllowedDocument() const;
+  bool IsCurrentRenderer() const;
   std::string ResolveContainerId() const;
+  void UpdateRendererFrameUrl();
   xenon::ipc::mojom::IpcResultPtr UnavailableResult() const;
 
   std::string endpoint_id_;
   std::string container_id_;
+  std::string renderer_frame_url_;
+  uint64_t service_generation_ = 0;
   base::SequenceBound<XenonSqliteBridge> sqlite_bridge_;
   base::WeakPtrFactory<XenonIpcDocumentHost> weak_factory_{this};
 };

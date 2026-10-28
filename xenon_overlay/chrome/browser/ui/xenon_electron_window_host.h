@@ -51,7 +51,8 @@ class XenonElectronWindowHost : public views::WidgetObserver {
                     const std::string& container_id,
                     int32_t* window_id,
                     uint64_t* hwnd,
-                    std::string* error);
+                    std::string* error,
+                    const std::string& partition = "");
   void LoadURL(int32_t window_id, const std::string& url);
   void SetVisible(int32_t window_id, bool visible);
   bool Call(int32_t window_id,
@@ -91,6 +92,7 @@ class XenonElectronWindowHost : public views::WidgetObserver {
   void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
   void OnWidgetBoundsChanged(views::Widget* widget,
                              const gfx::Rect& new_bounds) override;
+  void OnWidgetClosing(views::Widget* widget) override;
   void OnWidgetDestroying(views::Widget* widget) override;
   void OnWidgetShowStateChanged(views::Widget* widget) override;
   void OnWidgetVisibilityChanged(views::Widget* widget,
@@ -113,6 +115,7 @@ class XenonElectronWindowHost : public views::WidgetObserver {
   friend class base::NoDestructor<XenonElectronWindowHost>;
   friend class XenonHostedWindowBoundsTest;
   friend class XenonHostedWindowCloseTest;
+  friend class XenonHostedWindowRenderingTest;
   friend class XenonHostedWindowPairingTest;
   friend class XenonHostedWindowUserAgentTest;
   XenonElectronWindowHost();
@@ -132,6 +135,8 @@ class XenonElectronWindowHost : public views::WidgetObserver {
     bool ever_shown = false;
     // ipcMain already emitted cancellable close and authorized destruction.
     bool close_authorized = false;
+    // Rendering has been quiesced after an irreversible close decision.
+    bool close_prepared = false;
     bool ready_to_show_emitted = false;
     bool frameless = false;
     bool transparent = false;
@@ -185,7 +190,9 @@ class XenonElectronWindowHost : public views::WidgetObserver {
   int32_t FindEntryWindowForContainer(const std::string& container_id) const;
   bool ActivateEntryWindow(int32_t window_id);
   bool RequestClose(int32_t window_id);
+  void PrepareForClose(int32_t window_id);
   void ObserveWebContents(int32_t window_id, content::WebContents* contents);
+  void ApplyBackgroundThrottling(int32_t window_id);
   void UpdateUserAgent(int32_t window_id,
                        content::WebContents* contents,
                        const std::string& user_agent);

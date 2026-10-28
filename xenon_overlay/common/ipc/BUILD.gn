@@ -2,6 +2,26 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//testing/test.gni")
+
+source_set("privileged_schemes") {
+  sources = [
+    "xenon_privileged_schemes.cc",
+    "xenon_privileged_schemes.h",
+  ]
+  public_deps = [ "//base" ]
+}
+
+test("privileged_schemes_unittests") {
+  sources = [ "xenon_privileged_schemes_unittest.cc" ]
+  deps = [
+    ":privileged_schemes",
+    "//base/test:run_all_unittests",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
 source_set("runtime_platform") {
   sources = [ "xenon_runtime_platform.h" ]
 }

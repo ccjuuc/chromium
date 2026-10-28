@@ -1,0 +1,17 @@
+{
+  "application": ".",
+  "name": "Xenon Host Smoke",
+  "version": "1.0.0",
+  "main": "main.cjs",
+  "privilegedSchemes": [
+    {
+      "scheme": "xenonsmoke",
+      "privileges": {
+        "standard": true,
+        "secure": true,
+        "supportFetchAPI": true,
+        "corsEnabled": true
+      }
+    }
+  ]
+}

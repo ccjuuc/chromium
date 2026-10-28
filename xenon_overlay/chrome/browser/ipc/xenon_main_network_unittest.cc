@@ -11,6 +11,7 @@
 #include "base/test/test_future.h"
 #include "gin/test/v8_test.h"
 #include "mojo/core/embedder/embedder.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "net/http/http_status_code.h"
 #include "net/url_request/redirect_info.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -34,9 +35,18 @@ base::Value RequestArguments(const std::string& url) {
   return base::Value(std::move(arguments));
 }
 
-class XenonMainNetworkTest : public gin::V8Test {
+class XenonMainNetworkTest : public gin::V8Test, public mojom::IpcRenderer {
  protected:
   static void SetUpTestSuite() { mojo::core::Init(); }
+
+  void TearDown() override {
+    renderer_receiver_.reset();
+    gin::V8Test::TearDown();
+  }
+
+  void Dispatch(const std::string& channel, base::Value arguments) override {}
+
+  mojo::Receiver<mojom::IpcRenderer> renderer_receiver_{this};
   network::TestURLLoaderFactory factory_;
 };
 
@@ -182,6 +192,9 @@ TEST_F(XenonMainNetworkTest, FetchAndHttpUseRealV8AndNetworkLoader) {
   ASSERT_TRUE(container.Initialize(std::move(module)))
       << container.startup_error();
   base::test::TestFuture<mojom::IpcResultPtr> future;
+  container.AddRenderer("renderer",
+                        renderer_receiver_.BindNewPipeAndPassRemote(), 1, 1, 0,
+                        "about:blank", true);
   container.Invoke("renderer", "test:network", base::Value(base::ListValue()),
                    future.GetCallback());
   auto result = future.Take();

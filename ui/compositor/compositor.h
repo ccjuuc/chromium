@@ -492,6 +492,9 @@ class COMPOSITOR_EXPORT Compositor
 
   const cc::LayerTreeSettings& GetLayerTreeSettings() const;
 
+  // Keep drawing for application windows that disable background throttling.
+  void SetBackgroundThrottling(bool allowed);
+
   size_t saved_events_metrics_count_for_testing() const {
     return host_->saved_events_metrics_count_for_testing();
   }
@@ -703,6 +706,9 @@ class COMPOSITOR_EXPORT Compositor
   // Cleared in BeginMainFrame when there are no animation observers.
   // See go/report-ux-metrics-at-painting for details.
   bool animation_started_ = false;
+  bool background_throttling_allowed_ = true;
+  // Native visibility remains observable while the layer tree keeps drawing.
+  bool requested_visibility_ = true;
 
   TrackerId next_compositor_metrics_tracker_id_ = 1u;
   struct TrackerState {

@@ -54,6 +54,11 @@
 #include "printing/buildflags/buildflags.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 #include "third_party/widevine/cdm/buildflags.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/chrome/browser/ipc/xenon_service_worker_ipc_host.h"
+#endif
 
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/plugins/plugin_observer_android.h"
@@ -391,6 +396,15 @@ void ChromeContentBrowserClient::
         const content::ServiceWorkerVersionBaseInfo&
             service_worker_version_info,
         blink::AssociatedInterfaceRegistry& associated_registry) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (auto* process = content::RenderProcessHost::FromID(
+          service_worker_version_info.process_id)) {
+    associated_registry.AddInterface<xenon::ipc::mojom::ServiceWorkerIpcHost>(
+        base::BindRepeating(&xenon::ipc::XenonServiceWorkerIpcHost::Create,
+                            base::Unretained(process->GetBrowserContext()),
+                            service_worker_version_info));
+  }
+#endif
   for (auto& ep : extra_parts_) {
     ep->ExposeInterfacesToRendererForServiceWorker(service_worker_version_info,
                                                    associated_registry);

@@ -133,7 +133,6 @@
         if (source && source.bodyUsed) throw new TypeError('Request body has already been consumed');
         this.url = String(source ? source.url : input);
         const parsed = new URL(this.url);
-        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new TypeError('fetch requires an HTTP(S) URL');
         this.url = parsed.href;
         this.method = String(init.method || (source && source.method) || 'GET').toUpperCase();
         if (!/^[!#$%&'*+.^_\x60|~0-9a-z-]+$/i.test(this.method)) throw new TypeError('Invalid HTTP method');
@@ -178,6 +177,7 @@
       let request;
       try { request = new Request(input, init); }
       catch (failure) { return Promise.reject(failure); }
+      if (!/^https?:/.test(request.url)) return Promise.reject(new TypeError('fetch requires an HTTP(S) URL'));
       const signal = request.signal;
       if (signal && signal.aborted) return Promise.reject(signal.reason || error('ABORT_ERR', 'The operation was aborted', 'AbortError'));
       if (input instanceof Request) input.bodyUsed = true;

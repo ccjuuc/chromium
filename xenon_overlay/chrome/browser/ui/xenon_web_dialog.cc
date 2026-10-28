@@ -445,9 +445,20 @@ class XenonWebDialogView : public views::WebDialogView,
  public:
   XenonWebDialogView(content::BrowserContext* context,
                      ui::WebDialogDelegate* delegate,
-                     std::unique_ptr<WebContentsHandler> handler)
-      : views::WebDialogView(context, delegate, std::move(handler)),
+                     std::unique_ptr<WebContentsHandler> handler,
+                     std::unique_ptr<content::WebContents> contents = nullptr)
+      : views::WebDialogView(context,
+                             delegate,
+                             std::move(handler),
+                             contents.get()),
         xenon_delegate_(static_cast<XenonWebDialog*>(delegate)) {
+    if (contents) {
+      // WebView must own the pre-created, partition-bound contents before
+      // InitDialog performs the first navigation.
+      auto* web_view = views::AsViewClass<views::WebView>(contents_view());
+      CHECK(web_view);
+      web_view->SetOwnedWebContents(std::move(contents));
+    }
     SetEventTargeter(std::make_unique<views::ViewTargeter>(this));
   }
   ~XenonWebDialogView() override = default;
@@ -1059,9 +1070,12 @@ void XenonWebDialog::ShowForLogin(content::BrowserContext* context,
                /*transparent=*/false,
                /*system_rounded_corners=*/false,
                /*resizable=*/XenonWebDialog::kDefaultResizable,
-                /*minimizable=*/true, /*maximizable=*/true,
-                /*always_on_top=*/false, /*skip_taskbar=*/false,
-                /*show=*/true, /*show_shadow=*/true);
+               /*minimizable=*/true, /*maximizable=*/true,
+               /*always_on_top=*/false, /*skip_taskbar=*/false,
+               /*show=*/true, /*show_shadow=*/true,
+               /*use_custom_modal=*/false,
+               /*preserve_native_child_content=*/false,
+               /*origin=*/std::nullopt, /*contents=*/nullptr);
 }
 
 void XenonWebDialog::ShowWithOptions(content::BrowserContext* context,
@@ -1070,6 +1084,18 @@ void XenonWebDialog::ShowWithOptions(content::BrowserContext* context,
                                      raw_ptr<views::Widget>* out_widget,
                                      gfx::NativeView parent,
                                      base::OnceClosure on_dialog_closed) {
+  ShowWithOptions(context, url, options, out_widget, parent,
+                  std::move(on_dialog_closed), nullptr);
+}
+
+void XenonWebDialog::ShowWithOptions(
+    content::BrowserContext* context,
+    const GURL& url,
+    const base::DictValue& options,
+    raw_ptr<views::Widget>* out_widget,
+    gfx::NativeView parent,
+    base::OnceClosure on_dialog_closed,
+    std::unique_ptr<content::WebContents> contents) {
   const std::string* title_str = options.FindString("title");
   const std::u16string title =
       title_str ? base::UTF8ToUTF16(*title_str) : u"Xenon Web Dialog";
@@ -1098,25 +1124,21 @@ void XenonWebDialog::ShowWithOptions(content::BrowserContext* context,
 
   ShowInternal(
       context, url, width > 0 ? width : 800, height > 0 ? height : 600, title,
-      out_widget, parent,
-      modal_type,
-      std::move(on_dialog_closed),
+      out_widget, parent, modal_type, std::move(on_dialog_closed),
       options.FindBool("showCloseButton").value_or(true),
       options.FindBool("frame").value_or(false),
       options.FindBool("dwm").value_or(XenonWebDialog::kDefaultUseDwm),
       options.FindBool("transparent").value_or(false),
       options.FindBool("systemRoundedCorners").value_or(false),
-      options.FindBool("resizable").value_or(
-          XenonWebDialog::kDefaultResizable),
+      options.FindBool("resizable").value_or(XenonWebDialog::kDefaultResizable),
       options.FindBool("minimizable").value_or(true),
       options.FindBool("maximizable").value_or(true),
       options.FindBool("alwaysOnTop").value_or(false),
       options.FindBool("skipTaskbar").value_or(false),
       options.FindBool("show").value_or(true),
-      options.FindBool("shadow").value_or(true),
-      use_custom_modal,
-      options.FindBool("preserveNativeChildContent").value_or(false),
-      origin);
+      options.FindBool("shadow").value_or(true), use_custom_modal,
+      options.FindBool("preserveNativeChildContent").value_or(false), origin,
+      std::move(contents));
 }
 
 gfx::Rect CalculateInitialBounds(const gfx::Size& initial_size,
@@ -1154,30 +1176,32 @@ gfx::Rect CalculateInitialBounds(const gfx::Size& initial_size,
   return bounds;
 }
 
-void XenonWebDialog::ShowInternal(content::BrowserContext* context,
-                                  const GURL& url,
-                                  int width,
-                                  int height,
-                                  const std::u16string& title,
-                                  raw_ptr<views::Widget>* out_widget,
-                                  gfx::NativeView parent,
-                                  ui::mojom::ModalType modal_type,
-                                  base::OnceClosure on_dialog_closed,
-                                  bool show_close_button,
-                                  bool frame,
-                                  bool dwm,
-                                  bool transparent,
-                                  bool system_rounded_corners,
-                                  bool resizable,
-                                  bool minimizable,
-                                  bool maximizable,
-                                  bool always_on_top,
-                                  bool skip_taskbar,
-                                  bool show,
-                                  bool show_shadow,
-                                  bool use_custom_modal,
-                                  bool preserve_native_child_content,
-                                  std::optional<gfx::Point> origin) {
+void XenonWebDialog::ShowInternal(
+    content::BrowserContext* context,
+    const GURL& url,
+    int width,
+    int height,
+    const std::u16string& title,
+    raw_ptr<views::Widget>* out_widget,
+    gfx::NativeView parent,
+    ui::mojom::ModalType modal_type,
+    base::OnceClosure on_dialog_closed,
+    bool show_close_button,
+    bool frame,
+    bool dwm,
+    bool transparent,
+    bool system_rounded_corners,
+    bool resizable,
+    bool minimizable,
+    bool maximizable,
+    bool always_on_top,
+    bool skip_taskbar,
+    bool show,
+    bool show_shadow,
+    bool use_custom_modal,
+    bool preserve_native_child_content,
+    std::optional<gfx::Point> origin,
+    std::unique_ptr<content::WebContents> contents) {
   content::WebContents* web_contents = nullptr;
   if (modal_type == ui::mojom::ModalType::kChild && parent) {
     GlobalBrowserCollection* browsers = GlobalBrowserCollection::GetInstance();
@@ -1220,14 +1244,16 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
   if (modal_type == ui::mojom::ModalType::kChild && web_contents) {
     widget = constrained_window::ShowWebModalDialogViews(
         new XenonWebDialogView(context, delegate,
-                               std::make_unique<ChromeWebContentsHandler>()),
+                               std::make_unique<ChromeWebContentsHandler>(),
+                               std::move(contents)),
         web_contents);
   } else {
     widget = new views::Widget;
     views::Widget::InitParams params(
         views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
     params.delegate = new XenonWebDialogView(
-        context, delegate, std::make_unique<ChromeWebContentsHandler>());
+        context, delegate, std::make_unique<ChromeWebContentsHandler>(),
+        std::move(contents));
     params.remove_standard_frame = !frame;
 #if BUILDFLAG(IS_WIN)
     params.dont_show_in_taskbar = skip_taskbar;

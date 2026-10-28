@@ -25,6 +25,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "chrome/browser/lifetime/browser_shutdown.h"
 #include "components/embedder_support/user_agent_utils.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
@@ -32,6 +33,8 @@
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/render_widget_host.h"
+#include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/color_parser.h"
@@ -41,6 +44,7 @@
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/compositor/compositor.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/codec/png_codec.h"
@@ -56,6 +60,7 @@
 #include "url/gurl.h"
 #include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_guest.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_session_bridge.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_menu_runner.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
@@ -419,6 +424,11 @@ class XenonElectronWindowHost::HostedWebContentsObserver
 
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override {
+    // A speculative main frame or OOPIF must not be resumed until commit has
+    // attached its local main frame and bound its browser host.
+    if (navigation_handle && navigation_handle->HasCommitted()) {
+      owner_->ApplyBackgroundThrottling(window_id_);
+    }
     if (navigation_handle && navigation_handle->IsInPrimaryMainFrame() &&
         navigation_handle->HasCommitted() && web_contents()) {
       blink::web_pref::WebPreferences prefs =
@@ -444,6 +454,16 @@ class XenonElectronWindowHost::HostedWebContentsObserver
   }
 
   void DidStopLoading() override { SchedulePendingUserAgent(); }
+
+  void RenderFrameCreated(content::RenderFrameHost* frame) override {
+    auto entry = owner_->windows_.find(window_id_);
+    if (entry != owner_->windows_.end() && frame->IsActive()) {
+      frame->GetRenderWidgetHost()->SetBackgroundThrottling(
+          entry->second.close_prepared ||
+          entry->second.web_preferences.FindBool("backgroundThrottling")
+              .value_or(true));
+    }
+  }
 
   void DOMContentLoaded(content::RenderFrameHost* render_frame_host) override {
     if (!IsLoadedPrimaryMainFrame(render_frame_host)) {
@@ -691,6 +711,31 @@ void XenonElectronWindowHost::ObserveWebContents(
       std::make_unique<HostedWebContentsObserver>(this, window_id, contents);
 }
 
+void XenonElectronWindowHost::ApplyBackgroundThrottling(int32_t window_id) {
+  auto it = windows_.find(window_id);
+  if (it == windows_.end() || !it->second.web_contents_observer) {
+    return;
+  }
+  const bool allowed =
+      it->second.close_prepared ||
+      it->second.web_preferences.FindBool("backgroundThrottling")
+          .value_or(true);
+  auto* contents = it->second.web_contents_observer->web_contents();
+  if (contents && contents->GetPrimaryMainFrame()) {
+    contents->GetPrimaryMainFrame()->ForEachRenderFrameHost(
+        [allowed](content::RenderFrameHost* frame) {
+          if (frame->IsActive()) {
+            frame->GetRenderWidgetHost()->SetBackgroundThrottling(allowed);
+          }
+        });
+  }
+  if (it->second.widget) {
+    if (auto* compositor = it->second.widget->GetCompositor()) {
+      compositor->SetBackgroundThrottling(allowed);
+    }
+  }
+}
+
 void XenonElectronWindowHost::UpdateUserAgent(int32_t window_id,
                                               content::WebContents* contents,
                                               const std::string& user_agent) {
@@ -805,8 +850,9 @@ bool XenonElectronWindowHost::CreateHostedWindow(
     const std::string& container_id,
     int32_t* window_id,
     uint64_t* hwnd,
-    std::string* error) {
-  if (shutting_down_) {
+    std::string* error,
+    const std::string& partition) {
+  if (shutting_down_ || browser_shutdown::IsTryingToQuit()) {
     *error = "Electron window host is shutting down";
     return false;
   }
@@ -859,9 +905,20 @@ bool XenonElectronWindowHost::CreateHostedWindow(
   // Retain their backing bitmap while the web surface stays GPU accelerated.
   options.Set("preserveNativeChildContent", true);
 
+  ipc::ResolveElectronSessionPartition(context, container_id, partition);
+  content::WebContents::CreateParams contents_params(context);
+  // The Widget is constructed hidden below. Preserve that requested state
+  // even when background rendering temporarily makes the page visible.
+  contents_params.initially_hidden = true;
+  contents_params.site_instance =
+      content::SiteInstance::CreateForFixedStoragePartition(
+          context, GURL("about:blank"),
+          ipc::GetElectronSessionPartitionConfig(context, container_id,
+                                                 partition));
+  auto contents = content::WebContents::Create(contents_params);
   XenonWebDialog::ShowWithOptions(context, GURL("about:blank"), options,
                                   &entry.widget, parent_view,
-                                  base::OnceClosure());
+                                  base::OnceClosure(), std::move(contents));
   if (!entry.widget) {
     windows_.erase(id);
     *error = "Failed to create Electron BrowserWindow widget";
@@ -1129,7 +1186,9 @@ bool XenonElectronWindowHost::CallImpl(int32_t window_id,
   error->clear();
 
   if (command == "set-user-agent" || command == "get-user-agent" ||
-      command == "get-os-process-id" || command == "set-web-preferences") {
+      command == "get-os-process-id" || command == "set-web-preferences" ||
+      command == "set-background-throttling" ||
+      command == "get-background-throttling") {
     auto* dialog_view =
         static_cast<views::WebDialogView*>(widget->widget_delegate());
     content::WebContents* web_contents =
@@ -1138,12 +1197,31 @@ bool XenonElectronWindowHost::CallImpl(int32_t window_id,
       *error = "BrowserWindow WebContents is unavailable";
       return false;
     }
+    if (command == "get-background-throttling") {
+      *result =
+          base::Value(entry.web_preferences.FindBool("backgroundThrottling")
+                          .value_or(true));
+      return true;
+    }
+    if (command == "set-background-throttling") {
+      const auto allowed =
+          options ? options->FindBool("allowed") : std::nullopt;
+      if (!allowed) {
+        *error = "set-background-throttling expects a boolean allowed";
+        return false;
+      }
+      entry.web_preferences.Set("backgroundThrottling", *allowed);
+      web_contents->OnWebPreferencesChanged();
+      ApplyBackgroundThrottling(window_id);
+      return true;
+    }
     if (command == "set-web-preferences") {
       if (!options) {
         *error = "set-web-preferences expects an object";
         return false;
       }
-      for (const char* key : {"webSecurity", "allowRunningInsecureContent"}) {
+      for (const char* key : {"webSecurity", "allowRunningInsecureContent",
+                              "backgroundThrottling"}) {
         if (const base::Value* value = options->Find(key);
             value && !value->is_bool()) {
           *error = std::string("set-web-preferences expects a boolean ") + key;
@@ -1152,6 +1230,7 @@ bool XenonElectronWindowHost::CallImpl(int32_t window_id,
       }
       entry.web_preferences = options->Clone();
       web_contents->OnWebPreferencesChanged();
+      ApplyBackgroundThrottling(window_id);
       return true;
     }
     if (command == "get-os-process-id") {
@@ -1714,15 +1793,81 @@ void XenonElectronWindowHost::Close(int32_t window_id) {
     return;
   }
   windows_.at(window_id).close_authorized = true;
-  widget->Hide();
+  PrepareForClose(window_id);
+  if ((widget = FindWidget(window_id))) {
+    widget->Hide();
+  }
   // ipcMain has already completed its cancellable close decision and marked
   // BrowserWindow destroyed. Do not ask it again or run a second DOM veto.
-  widget->CloseNow();
+  if ((widget = FindWidget(window_id))) {
+    widget->CloseNow();
+  }
+}
+
+void XenonElectronWindowHost::PrepareForClose(int32_t window_id) {
+  // Destroying an owner also destroys its native children. Quiesce the whole
+  // ownership tree before touching the owner's Widget, including unpaired
+  // children whose geometry is independent of their parent.
+  std::vector<int32_t> window_ids{window_id};
+  std::set<int32_t> visited{window_id};
+  for (size_t index = 0; index < window_ids.size(); ++index) {
+    const int32_t parent_id = window_ids[index];
+    for (auto& [id, entry] : windows_) {
+      if (entry.parent_id == parent_id && visited.insert(id).second) {
+        window_ids.push_back(id);
+      }
+    }
+  }
+  for (int32_t id : window_ids) {
+    if (auto it = windows_.find(id); it != windows_.end()) {
+      it->second.web_preferences.Set("backgroundThrottling", true);
+    }
+  }
+  for (auto id = window_ids.rbegin(); id != window_ids.rend(); ++id) {
+    auto it = windows_.find(*id);
+    if (it == windows_.end() || it->second.close_prepared) {
+      continue;
+    }
+    it->second.close_prepared = true;
+    base::WeakPtr<content::WebContents> contents;
+    if (it->second.web_contents_observer) {
+      if (auto* observed = it->second.web_contents_observer->web_contents()) {
+        contents = observed->GetWeakPtr();
+      }
+    }
+    if (contents && !contents->IsBeingDestroyed()) {
+      auto prefs = contents->GetOrCreateWebPreferences();
+      prefs.background_throttling = true;
+      contents->SetWebPreferences(prefs);
+      // Include inactive pages, and snapshot frame IDs because restoring
+      // native view visibility can run a nested Windows message loop.
+      std::vector<content::GlobalRenderFrameHostId> frames;
+      contents->ForEachRenderFrameHost(
+          [&frames](content::RenderFrameHost* frame) {
+            frames.push_back(frame->GetGlobalId());
+          });
+      for (const auto& frame_id : frames) {
+        if (auto* frame = content::RenderFrameHost::FromID(frame_id)) {
+          frame->GetRenderWidgetHost()->SetBackgroundThrottling(true);
+        }
+      }
+      if (contents && !contents->IsBeingDestroyed()) {
+        contents->WasHidden();
+      }
+    }
+    // Re-find the Widget after the native-view callbacks above.
+    if (auto* widget = FindWidget(*id)) {
+      if (auto* compositor = widget->GetCompositor()) {
+        compositor->SetBackgroundThrottling(true);
+      }
+    }
+  }
 }
 
 bool XenonElectronWindowHost::RequestClose(int32_t window_id) {
   const auto it = windows_.find(window_id);
   if (it == windows_.end() || it->second.close_authorized || shutting_down_ ||
+      browser_shutdown::IsTryingToQuit() ||
       closing_containers_.contains(it->second.container_id)) {
     return true;
   }
@@ -1754,7 +1899,7 @@ void XenonElectronWindowHost::CloseForContainer(
       windows_.erase(it);
       continue;
     }
-    widget->CloseNow();
+    Close(it->first);
   }
   closing_containers_.erase(container_id);
 }
@@ -1777,14 +1922,14 @@ void XenonElectronWindowHost::ShutdownForProcessExit() {
       windows_.erase(it);
       continue;
     }
-    widget->CloseNow();
+    Close(it->first);
   }
 }
 
 void XenonElectronWindowHost::NotifyEvent(int32_t window_id,
                                           const std::string& event_name,
                                           base::Value arguments) {
-  if (shutting_down_) {
+  if (shutting_down_ || browser_shutdown::IsTryingToQuit()) {
     return;
   }
   auto it = windows_.find(window_id);
@@ -2346,6 +2491,13 @@ std::vector<std::string> XenonElectronWindowHost::ShowOpenDialog(
 }
 
 void XenonElectronWindowHost::OnWidgetDestroying(views::Widget* widget) {
+  auto entry = FindEntry(widget);
+  if (entry == windows_.end()) {
+    return;
+  }
+  // Native destruction can bypass Close(). Normal closes prepare earlier,
+  // before the platform starts destroying any owned children.
+  PrepareForClose(entry->first);
   for (auto it = windows_.begin(); it != windows_.end(); ++it) {
     if (it->second.widget == widget) {
 #if BUILDFLAG(IS_WIN)
@@ -2367,6 +2519,14 @@ void XenonElectronWindowHost::OnWidgetDestroying(views::Widget* widget) {
       windows_.erase(it);
       return;
     }
+  }
+}
+
+void XenonElectronWindowHost::OnWidgetClosing(views::Widget* widget) {
+  if (auto entry = FindEntry(widget); entry != windows_.end()) {
+    // This notification follows Widget's irreversible close decision and
+    // precedes native destruction, including destruction of owned windows.
+    PrepareForClose(entry->first);
   }
 }
 

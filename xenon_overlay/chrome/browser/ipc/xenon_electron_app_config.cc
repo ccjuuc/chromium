@@ -17,6 +17,7 @@
 #include "url/gurl.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_app_runtime.h"
 #include "xenon_overlay/common/asar/archive.h"
+#include "xenon_overlay/common/ipc/xenon_privileged_schemes.h"
 
 namespace xenon::ipc {
 namespace {
@@ -73,6 +74,12 @@ bool LoadElectronAppConfig(const base::FilePath& path,
       } else if (key == "versionFromExecutable" && value.is_bool()) {
         continue;
       } else if (key == "parentWindowPairing" && value.is_list()) {
+        continue;
+      } else if (key == "privilegedSchemes") {
+        PrivilegedSchemes parsed;
+        if (!ParsePrivilegedSchemes(value, &parsed, error)) {
+          return false;
+        }
         continue;
       }
       *error = "Invalid Electron host configuration field: " + key;

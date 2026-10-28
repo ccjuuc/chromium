@@ -75,7 +75,9 @@
 #include "chrome/renderer/webui_browser/webui_browser_renderer_extension.h"
 #include "chrome/renderer/worker_content_settings_client.h"
 #if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/chrome/renderer/ipc/xenon_service_worker_renderer.h"
 #include "xenon_overlay/chrome/renderer/xenon_render_frame_observer.h"
+#include "xenon_overlay/common/ipc/xenon_privileged_schemes.h"
 #endif
 #include "chrome/renderer/beijing/beijing_render_frame_observer.h"
 #include "chrome/services/speech/buildflags/buildflags.h"
@@ -387,6 +389,14 @@ ChromeContentRendererClient::ChromeContentRendererClient()
 ChromeContentRendererClient::~ChromeContentRendererClient() = default;
 
 void ChromeContentRendererClient::RenderThreadStarted() {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  for (const auto& scheme : xenon::ipc::GetStartupPrivilegedSchemes()) {
+    if (scheme.support_fetch_api) {
+      blink::WebSecurityPolicy::RegisterURLSchemeAsSupportingFetchAPI(
+          blink::WebString::FromUtf8(scheme.scheme));
+    }
+  }
+#endif
   RenderThread* thread = RenderThread::Get();
 
   main_thread_profiler_->SetAuxUnwinderFactory(base::BindRepeating(
@@ -1534,6 +1544,9 @@ void ChromeContentRendererClient::WillEvaluateServiceWorkerOnWorkerThread(
     LoadTimesBindings::Install(v8_context);
   }
 #endif
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  xenon::ipc::XenonServiceWorkerRenderer::Install(context_proxy, v8_context);
+#endif
 }
 
 void ChromeContentRendererClient::DidStartServiceWorkerContextOnWorkerThread(
@@ -1556,6 +1569,9 @@ void ChromeContentRendererClient::WillDestroyServiceWorkerContextOnWorkerThread(
     const GURL& service_worker_scope,
     const GURL& script_url,
     const blink::ServiceWorkerToken& service_worker_token) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  xenon::ipc::XenonServiceWorkerRenderer::Destroy();
+#endif
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   extensions::ExtensionsRendererClient::Get()
       ->dispatcher()

@@ -453,6 +453,38 @@ ipcMain.handle('test:sender-window', event => {
   const window = BrowserWindow.fromWebContents(event.sender);
   return window ? window.id : 0;
 });
+const observedFrames = [];
+ipcMain.handle('test:install-worker-handler', (_event, partition, versionId) => {
+  const session = require('electron').session.fromPartition(partition);
+  const worker = session.serviceWorkers.getWorkerFromVersionID(versionId);
+  worker.ipc.handle('test:worker-identity', event => ({
+    type: event.type,
+    partition: event.session.partition,
+    sameSession: event.session === session,
+    sameWorker: event.serviceWorker === worker,
+    scope: event.serviceWorker.scope,
+    versionId: event.serviceWorker.versionId,
+    workerToken: event.serviceWorker.workerToken,
+    hasFrame: event.senderFrame !== undefined || event.sender !== undefined,
+  }));
+  worker.ipc.on('test:worker-reply', (event, value) =>
+      event.reply('test:worker-response', value + 1));
+  return true;
+});
+ipcMain.handle('test:sender-frame', event => {
+  const previous = observedFrames.at(-1);
+  observedFrames.push(event.senderFrame);
+  return {
+    main: event.senderFrame === event.sender.mainFrame,
+    owned: BrowserWindow.getAllWindows().some(
+        window => window.webContents === event.sender),
+    sameAsPrevious: event.senderFrame === previous,
+    previousDetached: previous?.detached ?? false,
+    processId: event.senderFrame.processId,
+    routingId: event.senderFrame.routingId,
+    url: event.senderFrame.url,
+  };
+});
 ipcMain.handle('test:guest-info', (event, id) => {
   const contents = require('electron').webContents.fromId(id);
   return contents ? {sameSender: contents === event.sender,
@@ -671,6 +703,14 @@ class XenonIpcMainContainerTest : public gin::V8Test {
  protected:
   static void SetUpTestSuite() { mojo::core::Init(); }
 
+  std::unique_ptr<XenonIpcMainContainer> CreateContainer() {
+    auto container = std::make_unique<XenonIpcMainContainer>();
+    fixture_renderer_ = std::make_unique<FakeIpcRenderer>();
+    container->AddRenderer("renderer-1", fixture_renderer_->BindNewRemote(), 1,
+                           1, 0, "about:blank", true);
+    return container;
+  }
+
   void SetUp() override {
     gin::V8Test::SetUp();
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
@@ -678,7 +718,7 @@ class XenonIpcMainContainerTest : public gin::V8Test {
     ASSERT_TRUE(base::WriteFile(main_script_, kTestMainSource));
     base::CommandLine::ForCurrentProcess()->AppendSwitchPath("xenon-main-js",
                                                              main_script_);
-    container_ = std::make_unique<XenonIpcMainContainer>();
+    container_ = CreateContainer();
     XenonIpcMainContainer::WindowHooks window_hooks;
     window_hooks.create = base::BindRepeating(
         [](int width, int height, bool show, bool frame, bool transparent,
@@ -698,6 +738,22 @@ class XenonIpcMainContainerTest : public gin::V8Test {
            base::Value* result, std::string* error) {
           self->last_window_command_ = command;
           self->last_window_arguments_ = arguments.Clone();
+          if (window_id == 0 && command == "electron-session") {
+            const auto* details = arguments.GetIfDict();
+            const auto* method =
+                details ? details->FindString("method") : nullptr;
+            if (!method || *method != "create-window" ||
+                !details->FindString("partition") ||
+                !details->FindDict("options")) {
+              *error = "unsupported test session command";
+              return false;
+            }
+            // The native Session route creates the window in its partition
+            // before WebContents navigation; match the old fixture's identity.
+            *result =
+                base::Value(base::DictValue().Set("id", 1).Set("hwnd", "1"));
+            return true;
+          }
           if (window_id != 1) {
             *error = "unknown test window";
             return false;
@@ -779,6 +835,7 @@ class XenonIpcMainContainerTest : public gin::V8Test {
   std::string user_agent_ = "DefaultAgent/1.0";
   std::string last_window_command_;
   base::Value last_window_arguments_;
+  std::unique_ptr<FakeIpcRenderer> fixture_renderer_;
   std::unique_ptr<XenonIpcMainContainer> container_;
 };
 
@@ -1329,6 +1386,12 @@ TEST_F(XenonIpcMainContainerTest, MainUnsupportedFileApisFailExplicitly) {
 }
 
 TEST_F(XenonIpcMainContainerTest, MainStateSurvivesIndependentMessages) {
+  FakeIpcRenderer second_renderer;
+  FakeIpcRenderer third_renderer;
+  container_->AddRenderer("renderer-2", second_renderer.BindNewRemote(), 2, 2,
+                          0, "about:blank", true);
+  container_->AddRenderer("renderer-3", third_renderer.BindNewRemote(), 3, 3, 0,
+                          "about:blank", true);
   container_->Send("renderer-1", "test:increment", Arguments({base::Value(2)}));
   container_->Send("renderer-2", "test:increment", Arguments({base::Value(3)}));
 
@@ -1339,6 +1402,32 @@ TEST_F(XenonIpcMainContainerTest, MainStateSurvivesIndependentMessages) {
   ASSERT_TRUE(result->success) << result->error;
   ASSERT_TRUE(result->value.is_int());
   EXPECT_EQ(5, result->value.GetInt());
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       UnknownAndDetachedEndpointsCannotRunHandlers) {
+  container_->RemoveRenderer("renderer-1");
+  for (const char* endpoint : {"never-registered", "renderer-1", "@main"}) {
+    SCOPED_TRACE(endpoint);
+    container_->Send(endpoint, "test:increment", Arguments({base::Value(99)}));
+    base::test::TestFuture<mojom::IpcResultPtr> future;
+    container_->Invoke(endpoint, "test:get", Arguments({}),
+                       future.GetCallback());
+    ASSERT_TRUE(future.IsReady());
+    auto result = future.Take();
+    EXPECT_FALSE(result->success);
+    EXPECT_EQ("Renderer IPC endpoint is unavailable", result->error);
+    result = container_->SendSync(endpoint, "test:get-sync", Arguments({}));
+    EXPECT_FALSE(result->success);
+    EXPECT_EQ("Renderer IPC endpoint is unavailable", result->error);
+  }
+
+  FakeIpcRenderer replacement;
+  const auto endpoint =
+      container_->AddRenderer(replacement.BindNewRemote(), 2, 2);
+  auto result = container_->SendSync(endpoint, "test:get-sync", Arguments({}));
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ(0, result->value.GetInt());
 }
 
 TEST_F(XenonIpcMainContainerTest, BrowserWindowBoundsUseNativeBridge) {
@@ -1877,7 +1966,7 @@ TEST_F(XenonIpcMainContainerTest,
   base::CommandLine::ForCurrentProcess()->AppendSwitchPath("xenon-electron-app",
                                                            app_dir);
 
-  container_ = std::make_unique<XenonIpcMainContainer>();
+  container_ = CreateContainer();
   ASSERT_TRUE(container_->Initialize()) << container_->startup_error();
   base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
   container_->Invoke("renderer-1", "package:main", Arguments({}),
@@ -1948,7 +2037,7 @@ ipcMain.handle('application:metadata', () => ({
     XenonIpcMainContainer::AppMainModule module;
     module.app_path = release;
     module.working_directory = root;
-    container_ = std::make_unique<XenonIpcMainContainer>();
+    container_ = CreateContainer();
     ASSERT_TRUE(container_->Initialize(std::move(module)))
         << container_->startup_error();
     base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
@@ -1989,7 +2078,7 @@ ipcMain.handle('application:override', () => ({
 )JS"));
   XenonIpcMainContainer::AppMainModule module;
   module.app_path = app;
-  container_ = std::make_unique<XenonIpcMainContainer>();
+  container_ = CreateContainer();
   EXPECT_FALSE(container_->Initialize(module));
   container_.reset();
   module.main_script_path = main;
@@ -1997,7 +2086,7 @@ ipcMain.handle('application:override', () => ({
   module.app_version = "3.1";
   module.resources_directory = root;
   module.is_packaged = true;
-  container_ = std::make_unique<XenonIpcMainContainer>();
+  container_ = CreateContainer();
   ASSERT_TRUE(container_->Initialize(module)) << container_->startup_error();
   base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
   container_->Invoke("renderer-1", "application:override", Arguments({}),
@@ -2012,7 +2101,7 @@ ipcMain.handle('application:override', () => ({
   EXPECT_EQ(main.AsUTF8Unsafe(), *value.FindString("filename"));
   container_.reset();
   module.main_script_path = main_script_;
-  container_ = std::make_unique<XenonIpcMainContainer>();
+  container_ = CreateContainer();
   EXPECT_FALSE(container_->Initialize(std::move(module)));
   EXPECT_NE(std::string::npos, container_->startup_error().find("outside"));
 }
@@ -2097,7 +2186,7 @@ module.exports = {loads: globalThis.counterLoads,
         encrypted));
     base::CommandLine::ForCurrentProcess()->AppendSwitchPath(
         "xenon-electron-app", app);
-    container_ = std::make_unique<XenonIpcMainContainer>();
+    container_ = CreateContainer();
     ASSERT_TRUE(container_->Initialize()) << container_->startup_error();
     base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
     container_->Invoke("renderer-1", "asar:modules", Arguments({}),
@@ -2150,12 +2239,12 @@ TEST_F(XenonIpcMainContainerTest, LoadsConfiguredMainFromEncryptedAsar) {
                           {"value.js", "module.exports = 42;", true}}));
   base::CommandLine::ForCurrentProcess()->AppendSwitchPath(
       "xenon-main-js", app.AppendASCII("main.js"));
-  container_ = std::make_unique<XenonIpcMainContainer>();
+  container_ = CreateContainer();
   EXPECT_FALSE(container_->Initialize());
   container_.reset();
   ASSERT_TRUE(asar::SetArchivePublicKeys("main-container-test",
                                          {{app, builder.public_key_pem()}}));
-  container_ = std::make_unique<XenonIpcMainContainer>();
+  container_ = CreateContainer();
   ASSERT_TRUE(container_->Initialize()) << container_->startup_error();
   base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
   container_->Invoke("renderer-1", "asar:value", Arguments({}),
@@ -2180,7 +2269,7 @@ TEST_F(XenonIpcMainContainerTest,
       .virtual_path = app.AppendASCII("main.js"),
       .app_path = app,
   };
-  container_ = std::make_unique<XenonIpcMainContainer>();
+  container_ = CreateContainer();
   ASSERT_TRUE(container_->Initialize(std::move(main_module)))
       << container_->startup_error();
   base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
@@ -2221,7 +2310,7 @@ ipcMain.handle('asar:native', () => {
                                          {{app, builder.public_key_pem()}}));
   base::CommandLine::ForCurrentProcess()->AppendSwitchPath("xenon-electron-app",
                                                            app);
-  container_ = std::make_unique<XenonIpcMainContainer>();
+  container_ = CreateContainer();
   ASSERT_TRUE(container_->Initialize()) << container_->startup_error();
   base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
   container_->Invoke("renderer-1", "asar:native", Arguments({}),
@@ -2239,6 +2328,135 @@ ipcMain.handle('asar:native', () => {
   ASSERT_TRUE(value.FindString("resolved"));
   EXPECT_EQ(normalized_app.AppendASCII("test_addon.node").AsUTF8Unsafe(),
             *value.FindString("resolved"));
+}
+
+TEST_F(XenonIpcMainContainerTest, CreateRequireUsesParentAndSharedModuleCache) {
+  container_.reset();
+  const auto nested = temp_dir_.GetPath().AppendASCII("nested#percent%20");
+  ASSERT_TRUE(base::CreateDirectory(nested));
+  ASSERT_TRUE(base::WriteFile(nested.AppendASCII("value.js"),
+                              "module.exports = {answer: 42};"));
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+const {createRequire} = require('node:module');
+const {pathToFileURL} = require('url');
+const parent = require('path').join(__dirname, 'nested#percent%20', 'absent.js');
+const fromPath = createRequire(parent);
+const fromUrl = createRequire(pathToFileURL(parent));
+const fromRoot = process.platform === 'win32' ? createRequire(parent.slice(2)) : fromPath;
+const fromSlashRoot = process.platform === 'win32' ?
+    createRequire(parent.slice(2).replace(/\\/g, '/')) : fromPath;
+require('electron').ipcMain.handle('created:require', () => {
+  const value = fromPath('./value');
+  let missing;
+  try { fromPath.resolve('./missing'); } catch (e) { missing = e.code; }
+  return {answer: value.answer, same: value === fromUrl('./value') &&
+      value === require('./nested#percent%20/value') &&
+      value === fromRoot('./value') && value === fromSlashRoot('./value'),
+    builtin: fromPath('module') === require('node:module'),
+    resolved: fromPath.resolve('./value'), missing};
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+      .working_directory = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "created:require", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& value = result->value.GetDict();
+  EXPECT_EQ(42, value.FindInt("answer"));
+  EXPECT_EQ(true, value.FindBool("same"));
+  EXPECT_EQ(true, value.FindBool("builtin"));
+  ASSERT_TRUE(value.FindString("missing"));
+  EXPECT_EQ("MODULE_NOT_FOUND", *value.FindString("missing"));
+  base::FilePath normalized;
+  ASSERT_TRUE(
+      base::NormalizeFilePath(nested.AppendASCII("value.js"), &normalized));
+  ASSERT_TRUE(value.FindString("resolved"));
+  EXPECT_EQ(normalized.AsUTF8Unsafe(), *value.FindString("resolved"));
+}
+
+TEST_F(XenonIpcMainContainerTest, V8SerializeMatchesNodeAndLimitsViews) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+const {serialize} = require('node:v8');
+require('electron').ipcMain.handle('v8:serialize', () => {
+  const backing = new ArrayBuffer(1024 * 1024);
+  const buffer = Buffer.from(backing, 4096, 3);
+  buffer.set([1, 2, 255]);
+  const cycle = {x: 1};
+  cycle.self = cycle;
+  let failures = 0;
+  for (const value of [() => {}, Symbol('uncloneable')]) {
+    try { serialize(value); } catch (_) { ++failures; }
+  }
+  const detached = new Uint8Array(8);
+  detached.buffer.transfer();
+  let detachedError;
+  try { serialize(detached); } catch (error) { detachedError = error.name; }
+  const resizable = new ArrayBuffer(8, {maxByteLength: 16});
+  const invalidView = new DataView(resizable, 4, 4);
+  resizable.resize(2);
+  let resizedError;
+  try { serialize(invalidView); } catch (error) { resizedError = error.name; }
+  const RuntimeBuffer = Buffer;
+  globalThis.Buffer = Uint8Array;
+  const stableBufferTag = serialize(buffer).toString('hex');
+  globalThis.Buffer = RuntimeBuffer;
+  return {buffer: serialize(buffer).toString('hex'),
+    view: serialize(new Uint16Array(backing, 4096, 2)).toString('hex'),
+    dataView: serialize(new DataView(backing, 4097, 2)).toString('hex'),
+    cycle: serialize(cycle).toString('hex'),
+    map: serialize(new Map([['key', new Set([7])]])).toString('hex'),
+    undef: serialize().toString('hex'),
+    isBuffer: Buffer.isBuffer(serialize(cycle)),
+    aliases: require('v8') === require('node:v8'), failures,
+    detachedError, resizedError, stableBufferTag};
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "v8:serialize", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& value = result->value.GetDict();
+  // Node 24 payload fixtures with the bundled V8's wire-format-16 header.
+  // Node 24 uses format 15; payloads here keep its view tags and bytes. A
+  // three-byte pooled view must not serialize its 1 MiB allocation. V8 handles
+  // cycles, Map and Set rather than a JSON substitute.
+  for (const auto& [key, expected] :
+       {std::pair{"buffer", "ff105c0a030102ff"},
+        {"view", "ff105c04040102ff00"},
+        {"dataView", "ff105c090202ff"},
+        {"cycle", "ff106f2201784902220473656c665e007b02"},
+        {"map", "ff103b22036b657927490e2c013a02"},
+        {"undef", "ff105f"}}) {
+    ASSERT_TRUE(value.FindString(key)) << key;
+    EXPECT_EQ(expected, *value.FindString(key)) << key;
+  }
+  ASSERT_TRUE(value.FindString("stableBufferTag"));
+  EXPECT_EQ("ff105c0a030102ff", *value.FindString("stableBufferTag"));
+  ASSERT_TRUE(value.FindString("detachedError"));
+  // This V8 rejects detached typed arrays before calling the host delegate.
+  EXPECT_EQ("Error", *value.FindString("detachedError"));
+  ASSERT_TRUE(value.FindString("resizedError"));
+  EXPECT_EQ("TypeError", *value.FindString("resizedError"));
+  EXPECT_EQ(true, value.FindBool("isBuffer"));
+  EXPECT_EQ(true, value.FindBool("aliases"));
+  EXPECT_EQ(2, value.FindInt("failures"));
 }
 
 TEST_F(XenonIpcMainContainerTest, LoadsPackagedMainModuleWithoutDiskFile) {
@@ -2259,7 +2477,7 @@ TEST_F(XenonIpcMainContainerTest, LoadsPackagedMainModuleWithoutDiskFile) {
       .app_name = "Packaged Test",
       .app_version = "1.0.0",
   };
-  container_ = std::make_unique<XenonIpcMainContainer>();
+  container_ = CreateContainer();
   ASSERT_TRUE(container_->Initialize(std::move(main_module)))
       << container_->startup_error();
 
@@ -2294,7 +2512,7 @@ TEST_F(XenonIpcMainContainerTest, UsesExplicitExecutableWithoutRenamingIt) {
       .app_name = "DifferentDisplayName",
       .app_version = "3.2.1",
   };
-  container_ = std::make_unique<XenonIpcMainContainer>();
+  container_ = CreateContainer();
   ASSERT_TRUE(container_->Initialize(std::move(module)))
       << container_->startup_error();
   base::test::TestFuture<mojom::IpcResultPtr> future;
@@ -2343,7 +2561,7 @@ TEST_F(XenonIpcMainContainerTest,
       .app_path = app_dir,
       .executable_path = executable,
   };
-  container_ = std::make_unique<XenonIpcMainContainer>();
+  container_ = CreateContainer();
   ASSERT_TRUE(container_->Initialize(std::move(module)))
       << container_->startup_error();
 
@@ -2366,7 +2584,7 @@ TEST_F(XenonIpcMainContainerTest,
       .app_path = temp_dir_.GetPath(),
       .executable_path = temp_dir_.GetPath().AppendASCII("missing.exe"),
   };
-  container_ = std::make_unique<XenonIpcMainContainer>();
+  container_ = CreateContainer();
   EXPECT_FALSE(container_->Initialize(std::move(module)));
   EXPECT_NE(std::string::npos, container_->startup_error().find("executable"));
 }
@@ -2494,6 +2712,114 @@ TEST_F(XenonIpcMainContainerTest, ResolvesBrowserWindowFromRendererSender) {
   ASSERT_TRUE(result->success) << result->error;
   ASSERT_TRUE(result->value.is_int());
   EXPECT_EQ(1, result->value.GetInt());
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       SenderFrameUsesTrustedDocumentIdentityAndLifecycle) {
+  container_->MarkAppReady();
+  FakeIpcRenderer renderer;
+  const auto endpoint = container_->AddRenderer(
+      renderer.BindNewRemote(), 17, 23, 1, "file:///client.html", true);
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke(endpoint, "test:sender-frame", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ(true, result->value.GetDict().FindBool("main"));
+  EXPECT_EQ(true, result->value.GetDict().FindBool("owned"));
+  EXPECT_EQ(17, result->value.GetDict().FindInt("processId"));
+  EXPECT_EQ(23, result->value.GetDict().FindInt("routingId"));
+  ASSERT_TRUE(result->value.GetDict().FindString("url"));
+  EXPECT_EQ("file:///client.html", *result->value.GetDict().FindString("url"));
+
+  container_->UpdateRendererFrameUrl(endpoint, "file:///client.html#next");
+  container_->Invoke(endpoint, "test:sender-frame", Arguments({}),
+                     future.GetCallback());
+  result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ(true, result->value.GetDict().FindBool("sameAsPrevious"));
+  ASSERT_TRUE(result->value.GetDict().FindString("url"));
+  EXPECT_EQ("file:///client.html#next",
+            *result->value.GetDict().FindString("url"));
+
+  FakeIpcRenderer child;
+  const auto child_endpoint = container_->AddRenderer(
+      child.BindNewRemote(), 17, 24, 1, "https://child.test/", false);
+  // A renderer preference argument cannot promote a child into mainFrame.
+  auto prefs =
+      container_->SendSync(child_endpoint, "__xenon:renderer-web-preferences",
+                           Arguments({base::Value(true)}));
+  ASSERT_TRUE(prefs->success) << prefs->error;
+  container_->Invoke(child_endpoint, "test:sender-frame", Arguments({}),
+                     future.GetCallback());
+  result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ(false, result->value.GetDict().FindBool("main"));
+  EXPECT_EQ(true, result->value.GetDict().FindBool("owned"));
+  container_->Invoke(endpoint, "test:sender-frame", Arguments({}),
+                     future.GetCallback());
+  ASSERT_TRUE(future.Take()->success);
+
+  container_->RemoveRenderer(child_endpoint);
+  container_->RemoveRenderer(endpoint);
+  FakeIpcRenderer replacement;
+  const auto replacement_endpoint = container_->AddRenderer(
+      replacement.BindNewRemote(), 18, 25, 1, "file:///replacement.html", true);
+  container_->Invoke(replacement_endpoint, "test:sender-frame", Arguments({}),
+                     future.GetCallback());
+  result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ(true, result->value.GetDict().FindBool("main"));
+  EXPECT_EQ(true, result->value.GetDict().FindBool("owned"));
+  EXPECT_EQ(false, result->value.GetDict().FindBool("sameAsPrevious"));
+  EXPECT_EQ(true, result->value.GetDict().FindBool("previousDetached"));
+}
+
+TEST_F(XenonIpcMainContainerTest, ServiceWorkerIpcUsesTrustedSessionIdentity) {
+  FakeIpcRenderer renderer;
+  auto worker = mojom::IpcServiceWorkerInfo::New();
+  worker->version_id = 42;
+  worker->scope = "chrome-extension://fixture/";
+  worker->script_url = "chrome-extension://fixture/worker.js";
+  worker->partition = "persist:worker-fixture";
+  container_->AddRenderer("worker-one", renderer.BindNewRemote(), 17, 0, 0,
+                          worker->script_url, false, worker.Clone());
+  FakeIpcRenderer driver;
+  const auto driver_endpoint =
+      container_->AddRenderer(driver.BindNewRemote(), 18, 24);
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke(
+      driver_endpoint, "test:install-worker-handler",
+      Arguments({base::Value(worker->partition), base::Value(42)}),
+      future.GetCallback());
+  ASSERT_TRUE(future.Take()->success);
+  container_->Invoke("worker-one", "test:worker-identity", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& identity = result->value.GetDict();
+  EXPECT_EQ(true, identity.FindBool("sameSession"));
+  EXPECT_EQ(true, identity.FindBool("sameWorker"));
+  EXPECT_EQ(false, identity.FindBool("hasFrame"));
+  EXPECT_EQ(42, identity.FindInt("versionId"));
+  ASSERT_TRUE(identity.FindString("type"));
+  EXPECT_EQ("service-worker", *identity.FindString("type"));
+  ASSERT_TRUE(identity.FindString("scope"));
+  EXPECT_EQ(worker->scope, *identity.FindString("scope"));
+  ASSERT_TRUE(identity.FindString("workerToken"));
+  EXPECT_EQ("worker-one", *identity.FindString("workerToken"));
+  container_->Send("worker-one", "test:worker-reply",
+                   Arguments({base::Value(41)}));
+  EXPECT_EQ("test:worker-response", renderer.dispatch_future().Get<0>());
+
+  FakeIpcRenderer other;
+  worker->partition = "persist:another-worker";
+  const std::string script_url = worker->script_url;
+  container_->AddRenderer("worker-other", other.BindNewRemote(), 17, 0, 0,
+                          script_url, false, std::move(worker));
+  container_->Invoke("worker-other", "test:worker-identity", Arguments({}),
+                     future.GetCallback());
+  EXPECT_FALSE(future.Take()->success);
 }
 
 TEST_F(XenonIpcMainContainerTest, MainCanReplyToOriginatingRenderer) {
@@ -2663,7 +2989,8 @@ TEST_F(XenonIpcMainContainerTest, SenderUsesStableWindowWebContents) {
 
   container_->DispatchWindowEvent(1, "closed", base::Value());
   container_->DispatchWindowEvent(1, "closed", base::Value());
-  result = container_->SendSync("observer", "test:sender-state", Arguments({}));
+  result =
+      container_->SendSync("renderer-1", "test:sender-state", Arguments({}));
   ASSERT_TRUE(result->success) << result->error;
   EXPECT_EQ(true, result->value.GetDict().FindBool("destroyed"));
   EXPECT_EQ(1, result->value.GetDict().FindInt("contentsDestroyedCount"));
@@ -2773,7 +3100,7 @@ TEST_F(XenonIpcMainContainerTest, CommonJsCanRequireNodeApiAddon) {
   base::CommandLine::ForCurrentProcess()->AppendSwitchPath("xenon-electron-app",
                                                            app_dir);
 
-  container_ = std::make_unique<XenonIpcMainContainer>();
+  container_ = CreateContainer();
   ASSERT_TRUE(container_->Initialize()) << container_->startup_error();
   base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
   container_->Invoke("renderer-1", "native:add",
@@ -3081,7 +3408,7 @@ TEST_F(XenonIpcMainContainerTest, InitializationFailsForInvalidMainScript) {
   base::CommandLine::ForCurrentProcess()->AppendSwitchPath("xenon-main-js",
                                                            invalid_main);
 
-  container_ = std::make_unique<XenonIpcMainContainer>();
+  container_ = CreateContainer();
   EXPECT_FALSE(container_->Initialize());
   EXPECT_FALSE(container_->is_initialized());
   EXPECT_FALSE(container_->startup_error().empty());
@@ -3102,7 +3429,7 @@ TEST_F(XenonIpcMainContainerTest, PackageMainCanPointToItsOwnDirectory) {
   base::CommandLine::ForCurrentProcess()->AppendSwitchPath("xenon-electron-app",
                                                            app_dir);
 
-  container_ = std::make_unique<XenonIpcMainContainer>();
+  container_ = CreateContainer();
   ASSERT_TRUE(container_->Initialize()) << container_->startup_error();
   base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
   container_->Invoke("renderer-1", "self-main:value", Arguments({}),

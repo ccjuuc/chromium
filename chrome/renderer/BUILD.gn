@@ -14,10 +14,10 @@ import("//content/public/common/features.gni")
 import("//extensions/buildflags/buildflags.gni")
 import("//media/media_options.gni")
 import("//pdf/features.gni")
-import("//xenon_overlay/buildflags/features.gni")
 import("//testing/libfuzzer/fuzzer_test.gni")
 import("//third_party/widevine/cdm/widevine.gni")
 import("//tools/grit/grit_rule.gni")
+import("//xenon_overlay/buildflags/features.gni")
 
 assert(enable_supervised_users)
 
@@ -233,11 +233,14 @@ static_library("renderer") {
     "//third_party/widevine/cdm:buildflags",
     "//ui/gfx/geometry",
     "//v8",
-    "//xenon_overlay/buildflags:buildflags",
+    "//xenon_overlay/buildflags",
   ]
 
   if (enable_xenon_service) {
-    deps += [ "//xenon_overlay/chrome/renderer:renderer" ]
+    deps += [
+      "//xenon_overlay/chrome/renderer",
+      "//xenon_overlay/common/ipc:privileged_schemes",
+    ]
   }
 
   if (is_mac || is_win || is_linux || is_chromeos) {

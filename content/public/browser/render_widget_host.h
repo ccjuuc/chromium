@@ -106,6 +106,8 @@ class TrackedElementObserver;
 // the associated renderer frame/widget is recreated.
 class CONTENT_EXPORT RenderWidgetHost {
  public:
+  // Keep application rendering active while the native view is hidden.
+  virtual void SetBackgroundThrottling(bool allowed) = 0;
   // Returns the RenderWidgetHost given its ID and the ID of its render process.
   // Returns nullptr if the IDs do not correspond to a live RenderWidgetHost.
   static RenderWidgetHost* FromID(int32_t process_id, int32_t routing_id);

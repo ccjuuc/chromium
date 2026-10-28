@@ -248,11 +248,20 @@ SiteInstanceImpl::CreateForFixedStoragePartition(
   CHECK(browser_context);
   CHECK(!partition_config.is_default());
 
-  return SiteInstanceImpl::CreateForUrlInfo(
-      browser_context,
-      UrlInfo(UrlInfoInit(url).WithStoragePartitionConfig(partition_config)),
+  const UrlInfo url_info(
+      UrlInfoInit(url).WithStoragePartitionConfig(partition_config));
+  auto site_instance = SiteInstanceImpl::CreateForUrlInfo(
+      browser_context, url_info,
       /*is_guest=*/false,
       /*is_fenced=*/false, /*is_fixed_storage_partition=*/true);
+  // Empty documents such as about:blank normally leave the site unassigned.
+  // A fixed partition must be recorded before WebContents creates its initial
+  // frame, otherwise that frame and subsequent navigations use the default
+  // partition instead of the explicitly requested one.
+  if (!site_instance->HasSite()) {
+    site_instance->SetSite(url_info);
+  }
+  return site_instance;
 }
 
 // static

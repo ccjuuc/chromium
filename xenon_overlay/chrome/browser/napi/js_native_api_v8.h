@@ -74,6 +74,13 @@ using XenonUvRunFunction = int (*)(uv_loop_t* loop, int mode);
 using XenonUvLoopAliveFunction = int (*)(const uv_loop_t* loop);
 
 struct napi_env__ {
+  struct CleanupHook {
+    napi_cleanup_hook callback;
+    NAPI_RAW_PTR_EXCLUSION void* arg;
+
+    bool operator==(const CleanupHook&) const = default;
+  };
+
   napi_env__(v8::Isolate* iso, v8::Local<v8::Context> ctx);
   ~napi_env__();
 
@@ -91,6 +98,8 @@ struct napi_env__ {
   // env (env itself is intentionally not torn down by the weak context hook).
   std::vector<std::unique_ptr<CallbackData>> callbacks;
   std::vector<std::unique_ptr<NapiFinalizerData>> finalizers;
+  // 宿主按 addon 管理独立 env；钩子须在该 addon 的 finalizer 和 DLL 卸载前运行。
+  std::vector<CleanupHook> cleanup_hooks;
   NAPI_RAW_PTR_EXCLUSION void* instance_data = nullptr;
   napi_finalize instance_data_finalize = nullptr;
   NAPI_RAW_PTR_EXCLUSION void* instance_data_finalize_hint = nullptr;

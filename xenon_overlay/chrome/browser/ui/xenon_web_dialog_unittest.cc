@@ -12,14 +12,19 @@
 #include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
+#include "chrome/browser/lifetime/browser_shutdown.h"
+#include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_renderer_host.h"
 #include "net/base/net_errors.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+#include "third_party/blink/public/common/web_preferences/web_preferences.h"
 #include "ui/views/widget/widget.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
 
@@ -183,6 +188,14 @@ TEST_F(XenonHostedWindowCloseTest, ContainerFailureAndShutdownCannotBeVetoed) {
   EXPECT_FALSE(RequestWindowClose(2));
   BeginShutdown();
   EXPECT_TRUE(RequestWindowClose(2));
+}
+
+TEST_F(XenonHostedWindowCloseTest, CanceledBrowserExitRestoresCloseDecision) {
+  AddWindow(1, true, true);
+  browser_shutdown::SetTryingToQuit(true);
+  EXPECT_TRUE(RequestWindowClose(1));
+  browser_shutdown::SetTryingToQuit(false);
+  EXPECT_FALSE(RequestWindowClose(1));
 }
 
 TEST_F(XenonHostedWindowCloseTest, NeverShownHelpersCannotBecomeEntryWindows) {
@@ -539,6 +552,154 @@ TEST_F(XenonHostedWindowPairingTest, RemovedWindowLeavesNoPairingConnection) {
   ExpectPaired(1, {});
   ExpectPaired(2, {});
   ExpectPaired(3, {});
+}
+
+class XenonHostedWindowRenderingTest
+    : public content::RenderViewHostTestHarness {
+ protected:
+  class VisibilityObserver : public content::WebContentsObserver {
+   public:
+    VisibilityObserver(content::WebContents* contents,
+                       int32_t id,
+                       std::vector<int32_t>& hidden_order)
+        : WebContentsObserver(contents), id_(id), hidden_order_(hidden_order) {}
+
+    void OnVisibilityChanged(content::Visibility visibility) override {
+      if (visibility == content::Visibility::HIDDEN) {
+        hidden_order_.push_back(id_);
+      }
+    }
+
+   private:
+    const int32_t id_;
+    std::vector<int32_t>& hidden_order_;
+  };
+
+  void SetUp() override {
+    content::RenderViewHostTestHarness::SetUp();
+    host_ = new XenonElectronWindowHost();
+    host_->shutting_down_ = true;
+  }
+
+  void TearDown() override {
+    observers_.clear();
+    delete host_;
+    contents_.clear();
+    content::RenderViewHostTestHarness::TearDown();
+  }
+
+  content::WebContents* AddWindow(int32_t id, int32_t parent_id = 0) {
+    contents_.push_back(CreateTestWebContents());
+    auto* contents = contents_.back().get();
+    auto& entry = host_->windows_[id];
+    entry.parent_id = parent_id;
+    entry.web_preferences.Set("backgroundThrottling", false);
+    host_->ObserveWebContents(id, contents);
+    content::NavigationSimulator::NavigateAndCommitFromBrowser(
+        contents, GURL("https://fixture.test/"));
+    auto prefs = contents->GetOrCreateWebPreferences();
+    prefs.background_throttling = false;
+    contents->SetWebPreferences(prefs);
+    contents->WasShown();
+    observers_.push_back(
+        std::make_unique<VisibilityObserver>(contents, id, hidden_order_));
+    return contents;
+  }
+
+  static content::RenderWidgetHostImpl* Widget(content::WebContents* contents) {
+    return content::RenderWidgetHostImpl::From(
+        contents->GetPrimaryMainFrame()->GetRenderWidgetHost());
+  }
+
+  void PrepareForClose(int32_t id) { host_->PrepareForClose(id); }
+
+  bool RequestCancellableClose(int32_t id) {
+    host_->shutting_down_ = false;
+    const bool close = host_->RequestClose(id);
+    host_->shutting_down_ = true;
+    return close;
+  }
+
+  XenonElectronWindowHost* host_ = nullptr;
+  std::vector<std::unique_ptr<content::WebContents>> contents_;
+  std::vector<int32_t> hidden_order_;
+  std::vector<std::unique_ptr<VisibilityObserver>> observers_;
+};
+
+TEST_F(XenonHostedWindowRenderingTest, CloseQuiescesOwnedDescendantsFirst) {
+  auto* parent = AddWindow(1);
+  auto* child = AddWindow(2, 1);
+  auto* grandchild = AddWindow(3, 2);
+  auto* unrelated = AddWindow(4);
+  ASSERT_FALSE(Widget(parent)->background_throttling_allowed());
+  ASSERT_FALSE(Widget(parent)->IsHidden());
+
+  PrepareForClose(1);
+
+  EXPECT_EQ((std::vector<int32_t>{3, 2, 1}), hidden_order_);
+  for (auto* contents : {parent, child, grandchild}) {
+    EXPECT_TRUE(contents->GetOrCreateWebPreferences().background_throttling);
+    EXPECT_TRUE(Widget(contents)->background_throttling_allowed());
+    EXPECT_TRUE(Widget(contents)->IsHidden());
+  }
+  EXPECT_FALSE(Widget(unrelated)->background_throttling_allowed());
+  EXPECT_FALSE(Widget(unrelated)->IsHidden());
+  PrepareForClose(1);
+  EXPECT_EQ((std::vector<int32_t>{3, 2, 1}), hidden_order_);
+}
+
+TEST_F(XenonHostedWindowRenderingTest, CanceledCloseKeepsRenderingPreference) {
+  auto* contents = AddWindow(1);
+  EXPECT_FALSE(RequestCancellableClose(1));
+  EXPECT_FALSE(contents->GetOrCreateWebPreferences().background_throttling);
+  EXPECT_FALSE(Widget(contents)->background_throttling_allowed());
+  EXPECT_FALSE(Widget(contents)->IsHidden());
+  EXPECT_TRUE(hidden_order_.empty());
+}
+
+TEST_F(XenonHostedWindowRenderingTest, CloseStopsAlreadyHiddenRendering) {
+  auto* contents = AddWindow(1);
+  contents->WasHidden();
+  ASSERT_FALSE(Widget(contents)->IsHidden());
+  PrepareForClose(1);
+  EXPECT_TRUE(Widget(contents)->background_throttling_allowed());
+  EXPECT_TRUE(Widget(contents)->IsHidden());
+}
+
+TEST_F(XenonHostedWindowRenderingTest, SpeculativeFrameWaitsForCommit) {
+  auto* contents = AddWindow(1);
+  auto navigation = content::NavigationSimulator::CreateBrowserInitiated(
+      GURL("https://other.test/"), contents);
+  navigation->Start();
+  navigation->ReadyToCommit();
+  auto* speculative = navigation->GetFinalRenderFrameHost();
+  ASSERT_FALSE(speculative->IsActive());
+  auto* widget =
+      content::RenderWidgetHostImpl::From(speculative->GetRenderWidgetHost());
+  EXPECT_TRUE(widget->background_throttling_allowed());
+
+  navigation->Commit();
+
+  EXPECT_TRUE(speculative->IsActive());
+  EXPECT_FALSE(widget->background_throttling_allowed());
+}
+
+TEST_F(XenonHostedWindowRenderingTest,
+       AbortedSpeculativeFrameKeepsCurrentRenderingPreference) {
+  auto* contents = AddWindow(1);
+  auto* current = contents->GetPrimaryMainFrame();
+  auto navigation = content::NavigationSimulator::CreateBrowserInitiated(
+      GURL("https://other.test/"), contents);
+  navigation->Start();
+  navigation->ReadyToCommit();
+  auto* speculative = navigation->GetFinalRenderFrameHost();
+  ASSERT_FALSE(speculative->IsActive());
+  EXPECT_TRUE(
+      content::RenderWidgetHostImpl::From(speculative->GetRenderWidgetHost())
+          ->background_throttling_allowed());
+  navigation->Fail(net::ERR_ABORTED);
+  EXPECT_EQ(current, contents->GetPrimaryMainFrame());
+  EXPECT_FALSE(Widget(contents)->background_throttling_allowed());
 }
 
 class XenonHostedWindowUserAgentTest

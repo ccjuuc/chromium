@@ -6,6 +6,7 @@
 
 Use --src <complete-release> --out <parent-containing-thunder_2025>.
 This command no longer assembles SDKs, repacks archives or splits renderers.
+The sibling host .xenon.json descriptor is managed separately and preserved.
 """
 
 import sys

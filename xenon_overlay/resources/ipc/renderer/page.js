@@ -185,25 +185,25 @@
     // This bootstrap runs at document creation, before application scripts.
     // Resolve preferences through the document's registered WebContents, not
     // a process-global window ID or an application-specific preload alias.
-    let preload = '';
-    let preferences = null;
-    try {
-      preferences =
-          transport.sendSync('__xenon:renderer-web-preferences');
-      preload = preferences && preferences.preload;
-      if (preload) {
-        if (preferences.contextIsolation !== false) {
-          throw new Error('Isolated-world preloads are not supported yet');
-        }
-        electronRequire(preload);
+    const preferences = injectedPaths.webPreferences ||
+        transport.sendSync('__xenon:renderer-web-preferences');
+    const preloads = [...(injectedPaths.sessionPreloads || [])];
+    if (preferences?.preload) preloads.push({filePath: preferences.preload});
+    for (const preload of preloads) {
+      try {
+        if (preferences.contextIsolation !== false && !injectedPaths.contextIsolated)
+          throw new Error('Preload requires an isolated execution world');
+        if (preload.source === undefined) electronRequire(preload.filePath);
+        else loadHostedCjsModule(preload.filePath, preload.source);
+      } catch (error) {
+        console.error('[xenon-ipc] Unable to load preload script:', preload.filePath, error);
+        ipcRenderer.send('__xenon:preload-error', preload.filePath, String(error.message || error));
       }
-    } catch (error) {
-      console.error('[xenon-ipc] Unable to load preload script:', preload, error);
-      ipcRenderer.send('__xenon:preload-error', preload, String(error.message || error));
     }
     // A guest preload can keep Node APIs in its CommonJS closure without
     // giving the remote page require(), process, or the privileged transport.
-    if (injectedPaths.isGuest && preferences?.nodeIntegration !== true) {
+    if (injectedPaths.isGuest && !injectedPaths.contextIsolated &&
+        preferences?.nodeIntegration !== true) {
       for (const key of ['require', 'process', 'Buffer', 'global', '__filename',
                         '__dirname', 'xenonIpcRenderer', '__xenonElectronRequire',
                         '__xenonElectronIpc', '__xenonPaths']) {

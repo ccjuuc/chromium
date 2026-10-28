@@ -396,6 +396,9 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   // the web contents should be hidden, e.g., because a background tab is
   // screen captured.
   virtual void ShowWithVisibility(PageVisibilityState page_visibility) = 0;
+  // Refresh renderer/delegated-frame visibility without changing the native
+  // window's requested visibility. Platform views retain occlusion separately.
+  virtual void OnBackgroundThrottlingChanged();
 
   // Hides the view.
   virtual void Hide() = 0;

@@ -171,7 +171,22 @@ interface XenonMainService {
       pending_remote<xenon.ipc.mojom.IpcRenderer> renderer,
       int32 process_id,
       int32 frame_id,
-      int32 window_id);
+      int32 window_id,
+      string document_url,
+      bool is_main_frame);
+
+  // Browser-authored URL refresh for same-document navigations. Never accepts
+  // renderer-provided identity metadata.
+  UpdateElectronIpcRendererFrame(string container_id,
+                                 string endpoint_id,
+                                 string document_url);
+
+  RegisterElectronIpcServiceWorker(
+      string container_id,
+      string endpoint_id,
+      pending_remote<xenon.ipc.mojom.IpcRenderer> renderer,
+      int32 process_id,
+      xenon.ipc.mojom.IpcServiceWorkerInfo identity);
 
   RemoveElectronIpcRenderer(string container_id, string endpoint_id);
 
@@ -195,6 +210,13 @@ interface XenonMainService {
                       string channel,
                       mojo_base.mojom.Value arguments)
       => (xenon.ipc.mojom.IpcResult result);
+
+  // Browser-owned custom protocol requests. These are never renderer IPC
+  // channels; the browser selects the application and Session from its frame.
+  HandleElectronProtocol(string container_id, string partition,
+                         string request_id, mojo_base.mojom.Value request)
+      => (xenon.ipc.mojom.IpcResult result);
+  CancelElectronProtocol(string container_id, string request_id);
 
   // N-API / Node Addon testing methods (runs in the utility process)
   [Sync]

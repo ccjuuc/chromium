@@ -445,6 +445,9 @@ void RenderWidgetHostViewAura::InitAsChild(gfx::NativeView parent_view) {
     }
   }
 #endif
+  if (!host()->background_throttling_allowed()) {
+    OnBackgroundThrottlingChanged();
+  }
 }
 
 void RenderWidgetHostViewAura::InitAsPopup(
@@ -683,8 +686,39 @@ void RenderWidgetHostViewAura::ShowImpl(PageVisibilityState page_visibility) {
   // OnShowWithPageVisibility will not call NotifyHostAndDelegateOnWasShown,
   // which updates `visibility_`, unless the host is hidden. Make sure no update
   // is needed.
-  CHECK(host_->IsHidden() || visibility_ == Visibility::VISIBLE);
-  OnShowWithPageVisibility(page_visibility);
+  if (host_->IsHidden() || visibility_ == Visibility::VISIBLE) {
+    OnShowWithPageVisibility(page_visibility);
+  } else {
+    CHECK(!host_->background_throttling_allowed());
+    visibility_ = Visibility::VISIBLE;
+    // Rendering was already resumed while hidden. Showing the native view
+    // still needs presentation bookkeeping and its Windows child wrapper.
+    OnShowWithPageVisibility(page_visibility);
+#if BUILDFLAG(IS_WIN)
+    UpdateLegacyWin();
+#endif
+  }
+}
+
+void RenderWidgetHostViewAura::OnBackgroundThrottlingChanged() {
+  // SetView happens before InitAsChild creates the Aura window.
+  if (!window_ || !delegated_frame_host_) {
+    return;
+  }
+  if (!host()->background_throttling_allowed()) {
+    if (host()->IsHidden()) {
+      // Keep visibility_ unchanged, and do not show the native child HWND.
+      UpdateScreenInfo();
+      if (!window_->GetLocalSurfaceId().is_valid()) {
+        window_->AllocateLocalSurfaceId();
+        SynchronizeVisualProperties(cc::DeadlinePolicy::UseDefaultDeadline(),
+                                    window_->GetLocalSurfaceId());
+      }
+      StartRendering(std::nullopt);
+    }
+  } else if (visibility_ != Visibility::VISIBLE) {
+    HideImpl();
+  }
 }
 
 void RenderWidgetHostViewAura::EnsurePlatformVisibility(
@@ -694,7 +728,7 @@ void RenderWidgetHostViewAura::EnsurePlatformVisibility(
   auto* wth = window()->GetHost();
   if (wth && !wth->window()->GetLocalSurfaceId().is_valid() &&
       base::FeatureList::IsEnabled(kRenderWidgetHostHiddenCheck)) {
-    CHECK(host()->IsHidden());
+    CHECK(host()->IsHidden() || !host()->background_throttling_allowed());
   }
 }
 
@@ -706,6 +740,19 @@ void RenderWidgetHostViewAura::NotifyHostAndDelegateOnWasShown(
   CHECK_NE(visibility_, Visibility::VISIBLE);
 
   visibility_ = Visibility::VISIBLE;
+
+  StartRendering(std::move(tab_switch_start_state));
+#if BUILDFLAG(IS_WIN)
+  UpdateLegacyWin();
+  // Updating the native child can destroy this view.
+#endif
+}
+
+void RenderWidgetHostViewAura::StartRendering(
+    std::optional<blink::RecordContentToVisibleTimeRequest>
+        tab_switch_start_state) {
+  CHECK(delegated_frame_host_);
+  CHECK(host_->IsHidden());
 
   // If the frame for the renderer is already available, then the tab-switching
   // time is the presentation time for the browser-compositor.
@@ -729,12 +776,6 @@ void RenderWidgetHostViewAura::NotifyHostAndDelegateOnWasShown(
 
   delegated_frame_host_->WasShown(GetLocalSurfaceId(), window_->bounds().size(),
                                   std::move(delegated_visible_time_request));
-
-#if BUILDFLAG(IS_WIN)
-  UpdateLegacyWin();
-  // WARNING: Do not add any code after this line, since the last call can
-  // potentially destroy `this`.
-#endif
 }
 
 void RenderWidgetHostViewAura::HideImpl() {
@@ -742,7 +783,7 @@ void RenderWidgetHostViewAura::HideImpl() {
   CHECK(visibility_ == Visibility::HIDDEN ||
         visibility_ == Visibility::OCCLUDED);
 
-  if (!host()->IsHidden()) {
+  if (!host()->IsHidden() && host()->background_throttling_allowed()) {
     host()->WasHidden();
     aura::WindowTreeHost* host = window_->GetHost();
       aura::Window* parent = window_->parent();

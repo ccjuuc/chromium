@@ -1,7 +1,108 @@
+  function callElectronSession(partition, method, args = {}) {
+    if (typeof __xenonBrowserWindowCall !== 'function') {
+      return electronUnsupported('session.' + method);
+    }
+    return __xenonBrowserWindowCall(0, 'electron-session', {partition, method, ...args});
+  }
+
+  class SessionServiceWorker extends EventEmitter {
+    constructor(session, info) {
+      super();
+      this.session = session;
+      this.versionId = Number(info.versionId);
+      this.scope = info.scope;
+      this.scriptURL = info.scriptUrl;
+      this._endpointId = '';
+      this.ipc = new EventEmitter();
+      this.ipc._invokeHandlers = new Map();
+      this.ipc.handle = (channel, handler) => {
+        if (typeof channel !== 'string' || typeof handler !== 'function')
+          throw new TypeError('ipc.handle requires a channel and handler');
+        if (this.ipc._invokeHandlers.has(channel))
+          throw new Error('Attempted to register a second handler for ' + channel);
+        this.ipc._invokeHandlers.set(channel, handler);
+      };
+      this.ipc.handleOnce = (channel, handler) => this.ipc.handle(channel, (...args) => {
+        this.ipc.removeHandler(channel);
+        return handler(...args);
+      });
+      this.ipc.removeHandler = channel => this.ipc._invokeHandlers.delete(channel);
+    }
+    send(channel, ...args) {
+      if (!this._endpointId) throw new Error('Service worker IPC endpoint is unavailable');
+      __xenonSendToRenderer(this._endpointId, channel, args);
+    }
+  }
+
+  class SessionServiceWorkers extends EventEmitter {
+    constructor(session) {
+      super();
+      this._session = session;
+      this._workers = new Map();
+      super.on('newListener', name => {
+        if (name === 'running-status-changed')
+          callElectronSession(session.partition, 'observe-workers');
+      });
+    }
+    getAllRunning() {
+      return callElectronSession(this._session.partition, 'get-running-workers');
+    }
+    getWorkerFromVersionID(versionId) {
+      const id = Number(versionId);
+      if (!Number.isSafeInteger(id)) throw new TypeError('Invalid service worker version ID');
+      const known = this._workers.get(id);
+      if (known && known._endpointId) return known;
+      const info = this.getAllRunning()[String(id)];
+      if (!info) return undefined;
+      const worker = known || new SessionServiceWorker(this._session, info);
+      this._workers.set(id, worker);
+      return worker;
+    }
+  }
+
+  // Only browser-supplied metadata reaches this entry. Endpoint IDs change on
+  // every worker start so an old object's handlers cannot follow a restart.
+  function getWorkerForIpc(sender, attached = true) {
+    const workers = getSession(sender.partition).serviceWorkers;
+    const id = Number(sender.versionId);
+    let worker = workers._workers.get(id);
+    if (!attached) {
+      if (worker && worker._endpointId === sender.endpointId) {
+        worker._endpointId = '';
+        workers._workers.delete(id);
+      }
+      return worker;
+    }
+    if (!worker || (worker._endpointId && worker._endpointId !== sender.endpointId)) {
+      if (worker) worker._endpointId = '';
+      worker = new SessionServiceWorker(workers._session, sender);
+      workers._workers.set(id, worker);
+    }
+    worker._endpointId = sender.endpointId;
+    worker.workerToken = sender.workerToken || sender.endpointId;
+    return worker;
+  }
+
+  function handleElectronSessionEvent(payload) {
+    if (!payload || payload.event !== 'running-status-changed') return;
+    const serviceWorkers = getSession(payload.partition).serviceWorkers;
+    const details = payload.details;
+    if (details.runningStatus === 'stopped') {
+      const worker = serviceWorkers._workers.get(Number(details.versionId));
+      if (worker) worker._endpointId = '';
+      serviceWorkers._workers.delete(Number(details.versionId));
+    }
+    serviceWorkers.emit('running-status-changed', {...details});
+  }
+
   class Session extends EventEmitter {
     constructor(partition = '') {
       super();
-      this.partition = String(partition || '');
+      // Session identity is shared by native windows, preloads and protocol
+      // handlers; changing it would route one object to different partitions.
+      Object.defineProperty(this, 'partition', {
+        value: String(partition || ''), enumerable: true,
+      });
       this._userAgent = '';
       this._downloadPath = '';
       this.webRequest = Object.fromEntries([
@@ -11,13 +112,21 @@
       ].map(method => [method, () => electronUnsupported(`webRequest.${method}`)]));
       this.cookies = Object.fromEntries(['get', 'set', 'remove', 'flushStore']
           .map(method => [method, async () => electronUnsupported(`cookies.${method}`)]));
-      this.protocol = Object.fromEntries([
-        'registerFileProtocol', 'registerBufferProtocol', 'registerStringProtocol',
-        'registerHttpProtocol', 'registerStreamProtocol', 'unregisterProtocol',
-        'isProtocolRegistered', 'interceptFileProtocol', 'interceptStringProtocol',
-        'interceptBufferProtocol', 'interceptHttpProtocol', 'interceptStreamProtocol',
-        'uninterceptProtocol', 'isProtocolIntercepted',
-      ].map(method => [method, () => electronUnsupported(`protocol.${method}`)]));
+      this.protocol = createSessionProtocol(this.partition);
+      this.serviceWorkers = new SessionServiceWorkers(this);
+    }
+    getPreloadScripts() { return callElectronSession(this.partition, 'get-preloads'); }
+    registerPreloadScript(script) {
+      if (!script || typeof script !== 'object' ||
+          !['frame', 'service-worker'].includes(script.type) ||
+          typeof script.filePath !== 'string' || !pathModule.isAbsolute(script.filePath) ||
+          (script.id !== undefined && (typeof script.id !== 'string' || !script.id)))
+        throw new TypeError('Invalid preload script descriptor');
+      return callElectronSession(this.partition, 'register-preload', {script});
+    }
+    unregisterPreloadScript(id) {
+      if (typeof id !== 'string' || !id) throw new TypeError('Invalid preload script ID');
+      callElectronSession(this.partition, 'unregister-preload', {id});
     }
     getUserAgent() {
       return this._userAgent || String(__xenonUserAgent || '');
@@ -57,6 +166,67 @@
     fromPartition: (partition) => getSession(partition),
   };
 
+  const protocol = {
+    registerSchemesAsPrivileged(customSchemes) {
+      if (appReady) {
+        throw new Error(
+            'protocol.registerSchemesAsPrivileged must be called before app is ready');
+      }
+      if (!Array.isArray(customSchemes)) {
+        throw new TypeError('Expected an array of custom schemes');
+      }
+      const privilegeNames = new Set([
+        'standard', 'secure', 'bypassCSP', 'allowServiceWorkers',
+        'supportFetchAPI', 'corsEnabled', 'stream',
+      ]);
+      const schemes = new Set();
+      for (const entry of customSchemes) {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry) ||
+            typeof entry.scheme !== 'string' ||
+            !/^[a-z][a-z0-9+.-]*$/i.test(entry.scheme)) {
+          throw new TypeError('Each custom scheme requires a valid scheme name');
+        }
+        const scheme = entry.scheme.toLowerCase();
+        if (schemes.has(scheme)) throw new TypeError('Duplicate custom scheme: ' + scheme);
+        schemes.add(scheme);
+        if (entry.privileges !== undefined) {
+          if (!entry.privileges || typeof entry.privileges !== 'object' ||
+              Array.isArray(entry.privileges)) {
+            throw new TypeError('Custom scheme privileges must be an object');
+          }
+          for (const [name, value] of Object.entries(entry.privileges)) {
+            if (!privilegeNames.has(name) || typeof value !== 'boolean') {
+              throw new TypeError('Invalid custom scheme privilege: ' + name);
+            }
+          }
+        }
+      }
+      if (typeof globalThis.__xenonRegisterSchemesAsPrivileged !== 'function') {
+        return electronUnsupported('protocol.registerSchemesAsPrivileged');
+      }
+      // 各模块可在 ready 前分次声明；每次都由宿主核对启动时冻结的权限，
+      // 不在运行期增加或覆盖 Chromium 的协议权限。
+      globalThis.__xenonRegisterSchemesAsPrivileged(customSchemes);
+      declareProtocolSchemes(customSchemes);
+    },
+  };
+  // Electron keeps global registration separate from session request handlers.
+  // Its module exposes the default session's methods only after app readiness.
+  Object.setPrototypeOf(protocol, new Proxy(Object.create(null), {
+    get(_target, name) {
+      const handlers = appReady ? defaultSession.protocol : null;
+      if (!handlers || !Object.prototype.hasOwnProperty.call(handlers, name)) return;
+      return (...args) => Reflect.apply(handlers[name], handlers, args);
+    },
+    has: (_target, name) => appReady && name in defaultSession.protocol,
+    ownKeys: () => appReady ? Reflect.ownKeys(defaultSession.protocol) : [],
+    getOwnPropertyDescriptor(_target, name) {
+      if (appReady && Object.prototype.hasOwnProperty.call(defaultSession.protocol, name)) {
+        return {configurable: true, enumerable: true};
+      }
+    },
+  }));
+
   globalThis.__xenonDispatchWillDownload = (url, filename, windowId) => {
     const owner = BrowserWindow.fromId(Number(windowId));
     const contents = owner ? owner.webContents : null;
@@ -74,10 +244,26 @@
   const webContentsState = new WeakMap();
   const allWebContents = new Map();
   const rendererWebContents = new Map();
+  const webFrameState = new WeakMap();
   const guestWebContents = new Map();
   const pendingGuestScripts = new Map();
   let nextGuestScriptId = 1;
   let nextWebContentsId = 1;
+
+  class WebFrameMain {
+    constructor(sender) {
+      webFrameState.set(this, {
+        processId: sender.processId,
+        routingId: sender.frameId,
+        url: typeof sender.url === 'string' ? sender.url : '',
+        detached: false,
+      });
+    }
+    get processId() { return webFrameState.get(this).processId; }
+    get routingId() { return webFrameState.get(this).routingId; }
+    get url() { return webFrameState.get(this).url; }
+    get detached() { return webFrameState.get(this).detached; }
+  }
 
   function getSenderWebContents(sender) {
     let contents = rendererWebContents.get(sender.endpointId);
@@ -86,14 +272,24 @@
       contents = guestWebContents.get(Number(sender.windowId)) ||
           (owner ? owner.webContents : new WebContents(null));
       rendererWebContents.set(sender.endpointId, contents);
-      webContentsState.get(contents).endpoints.set(sender.endpointId, sender);
+    }
+    const endpoints = webContentsState.get(contents).endpoints;
+    let endpoint = endpoints.get(sender.endpointId);
+    if (!endpoint) {
+      endpoint = {...sender, frame: new WebFrameMain(sender)};
+      endpoints.set(sender.endpointId, endpoint);
+    } else {
+      // URL updates originate in the browser's document host, including
+      // same-document navigations. Preserve the identity of this document.
+      webFrameState.get(endpoint.frame).url =
+          typeof sender.url === 'string' ? sender.url : '';
     }
     return contents;
   }
 
   function getMainEndpoint(contents) {
-    // The document host only admits primary main frames. During navigation,
-    // prefer the newly registered document over an endpoint being torn down.
+    // Guests may admit subframes. Only browser-authored main-frame metadata
+    // can select mainFrame; a newer navigation supersedes the old document.
     return [...webContentsState.get(contents).endpoints.values()]
         .filter(endpoint => endpoint.isMainFrame !== false).at(-1);
   }
@@ -110,6 +306,7 @@
     }
     const processIds = new Set();
     for (const endpoint of state.endpoints.values()) {
+      webFrameState.get(endpoint.frame).detached = true;
       rendererWebContents.delete(endpoint.endpointId);
       processIds.add(endpoint.processId);
     }
@@ -122,6 +319,10 @@
   }
 
   globalThis.__xenonDispatchRendererEvent = (sender, attached) => {
+    if (sender.type === 'service-worker') {
+      getWorkerForIpc(sender, attached);
+      return;
+    }
     if (attached) {
       getSenderWebContents(sender);
       return;
@@ -130,6 +331,8 @@
     if (!contents) return;
     rendererWebContents.delete(sender.endpointId);
     const state = webContentsState.get(contents);
+    const endpoint = state.endpoints.get(sender.endpointId);
+    if (endpoint) webFrameState.get(endpoint.frame).detached = true;
     state.endpoints.delete(sender.endpointId);
     if (![...state.endpoints.values()].some(
         endpoint => endpoint.processId === sender.processId)) {
@@ -148,7 +351,7 @@
       this._owner = owner;
       webContentsState.set(this, {endpoints: new Map(), destroyed: false});
       allWebContents.set(this.id, this);
-      this.session = defaultSession;
+      this.session = getSession(owner?._webPreferences?.partition || '');
     }
     send(channel, ...args) {
       if (this.isDestroyed()) throw new Error('Object has been destroyed');
@@ -166,6 +369,7 @@
       return true;
     }
     get processId() { return getMainEndpoint(this)?.processId || 0; }
+    get mainFrame() { return getMainEndpoint(this)?.frame || null; }
     get frameId() { return getMainEndpoint(this)?.frameId || 0; }
     getProcessId() { return this.processId; }
     getOSProcessId() {
@@ -175,11 +379,36 @@
       return callBrowserWindow({id}, 'get-os-process-id');
     }
     getOwnerBrowserWindow() { return this._owner; }
+    setBackgroundThrottling(allowed) {
+      if (typeof allowed !== 'boolean') throw new TypeError('Expected a boolean');
+      if (this.isDestroyed()) throw new Error('Object has been destroyed');
+      const id = this._guest?.nativeId ?? this._owner?.id;
+      if (id === undefined) throw new Error('WebContents has no native owner');
+      callBrowserWindow({id}, 'set-background-throttling', {allowed});
+      if (this._owner) {
+        this._owner._webPreferences = Object.freeze({
+          ...this._owner._webPreferences, backgroundThrottling: allowed,
+        });
+      }
+    }
+    getBackgroundThrottling() {
+      if (this.isDestroyed()) throw new Error('Object has been destroyed');
+      const id = this._guest?.nativeId ?? this._owner?.id;
+      if (id === undefined) throw new Error('WebContents has no native owner');
+      return callBrowserWindow({id}, 'get-background-throttling');
+    }
     getLastWebPreferences() {
       return this._guest ? {...this._guest.preferences} :
           this._owner ? {...this._owner._webPreferences} : null;
     }
     isDestroyed() { return webContentsState.get(this).destroyed; }
+    getType() {
+      if (this.isDestroyed()) throw new Error('Object has been destroyed');
+      // Unowned wrappers represent an existing browser-managed document,
+      // rather than a BrowserWindow created by this Electron container.
+      return this._guest ? 'webview' : this._owner ? 'window' : 'remote';
+    }
+    get hostWebContents() { return this._guest?.host; }
     getURL() { return this._url || ''; }
     getTitle() { return this._pageTitle || ''; }
     loadURL(url, options) {
@@ -253,6 +482,7 @@
     }
     const contents = new WebContents(null);
     contents._guest = {nativeId, host: event.sender, preferences: {...preferences}};
+    contents.session = getSession(preferences.partition || '');
     guestWebContents.set(nativeId, contents);
     event.sender.emit('did-attach-webview', {sender: event.sender}, contents);
     return contents.id;
@@ -449,11 +679,21 @@
         throw Object.assign(new Error('Cannot create a BrowserWindow while the application exits'),
                             {code: 'ERR_APP_QUITTING'});
       }
-      this._webPreferences = Object.freeze({
+      const webPreferences = {
         contextIsolation: true,
         nodeIntegration: false,
         ...options.webPreferences,
-      });
+      };
+      if (webPreferences.session !== undefined) {
+        if (!(webPreferences.session instanceof Session))
+          throw new TypeError('webPreferences.session must be a Session');
+        webPreferences.partition = webPreferences.session.partition;
+        delete webPreferences.session;
+      }
+      if (webPreferences.partition !== undefined &&
+          typeof webPreferences.partition !== 'string')
+        throw new TypeError('webPreferences.partition must be a string');
+      this._webPreferences = Object.freeze(webPreferences);
       if (this._webPreferences.preload &&
           (typeof this._webPreferences.preload !== 'string' ||
            !pathModule.isAbsolute(this._webPreferences.preload))) {
@@ -464,7 +704,7 @@
         return electronUnsupported('BrowserWindow creation');
       }
       const created =
-          __xenonCreateBrowserWindow({
+          callElectronSession(this._webPreferences.partition || '', 'create-window', {options: {
                   width: options.width || 800,
                   height: options.height || 600,
                   show: options.show !== false,
@@ -474,7 +714,7 @@
                       ? options.parent.id
                       : 0,
                   title,
-                });
+                }});
       this.id = created.id;
       try {
         callBrowserWindow(this, 'set-web-preferences', this._webPreferences);
@@ -845,6 +1085,10 @@
   let activeNativeMenu = null;
   globalThis.__xenonDispatchBrowserWindowEvent =
       (windowId, eventName, details = null) => {
+    if (windowId === 0 && eventName === '__xenon-session-event') {
+      handleElectronSessionEvent(details);
+      return;
+    }
     if (windowId === 0 && eventName === 'auto-updater') {
       if (!details || typeof details.event !== 'string' ||
           !Array.isArray(details.args)) return;
@@ -1161,6 +1405,7 @@
     systemPreferences: {isAeroGlassEnabled: () => false},
     powerMonitor,
     session,
+    protocol,
     globalShortcut: {
       register: () => electronUnsupported('globalShortcut.register'),
       registerAll: () => electronUnsupported('globalShortcut.registerAll'),

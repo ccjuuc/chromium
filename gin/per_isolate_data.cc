@@ -99,6 +99,13 @@ void PerIsolateData::RemoveDisposeObserver(DisposeObserver* observer) {
 }
 
 void PerIsolateData::NotifyBeforeDispose() {
+  task_runner_->InvalidateIsolate();
+  if (user_visible_task_runner_) {
+    user_visible_task_runner_->InvalidateIsolate();
+  }
+  if (best_effort_task_runner_) {
+    best_effort_task_runner_->InvalidateIsolate();
+  }
   for (auto& observer : dispose_observers_) {
     observer.OnBeforeDispose(isolate_.get());
   }

@@ -156,9 +156,13 @@ test('bootstrap preserves global descriptors and application RPC method identity
         index < 3 ? context.assignedRpc : context.descriptorRpc);
 });
 
-function createPreloadRenderer(preload, files, extraPreferences = {}) {
+function createPreloadRenderer(preload, files, extraPreferences = {}, runtimeConfig) {
   const sent = [];
   const renderer = createRenderer([], {
+    ...(runtimeConfig ? {getRuntimeConfig: () => ({
+      appPath: 'C:\\test-app', execPath: 'C:\\test-app\\host.exe', cwd: 'C:\\test-app',
+      contextIsolated: false, sandboxed: true, isPackaged: true, ...runtimeConfig,
+    })} : {}),
     sendSync(channel, request) {
       if (channel === '__xenon:renderer-web-preferences') {
         return {preload, contextIsolation: false, ...extraPreferences};
@@ -201,6 +205,29 @@ test('document preload runs before application code and once per document', () =
   }
 });
 
+test('browser Session preload snapshots run in registration order before window preload', () => {
+  const preload = 'C:\\test-app\\window.js';
+  const {context, sent} = createPreloadRenderer(preload, new Map([
+    [preload, "globalThis.order.push('window');"],
+    ['C:\\test-app\\value.json', '{"value":42}'],
+  ]), {}, {
+    webPreferences: {contextIsolation: false, preload},
+    sessionPreloads: [
+      {filePath: 'C:\\test-app\\first.js', source:
+          "globalThis.order = ['session']; globalThis.readValue = () => require('./value.json').value;"},
+      {filePath: 'C:\\test-app\\failed.js', source: "throw new Error('session failure');"},
+      {filePath: 'C:\\test-app\\last.js', source: "globalThis.order.push('last session');"},
+    ],
+  });
+  assert.deepEqual(Array.from(context.order), ['session', 'last session', 'window']);
+  assert.equal(context.readValue(), 42);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0], ['__xenon:preload-error', 'C:\\test-app\\failed.js', 'session failure']);
+  // No registered snapshot is available to a different document/session.
+  const other = createPreloadRenderer('', new Map());
+  assert.equal(other.context.order, undefined);
+});
+
 test('preload CommonJS dependencies remain relative after evaluation and in ASAR paths', () => {
   for (const root of ['C:\\test-app', 'C:\\test-app\\resources.asar']) {
     const preload = root + '\\preload\\entry.cjs';
@@ -233,7 +260,7 @@ test('isolated preload is never silently executed in the main world', () => {
       preload, new Map([[preload, 'globalThis.leaked = true;']]),
       {contextIsolation: true});
   assert.equal(context.leaked, undefined);
-  assert.match(sent[0][2], /Isolated-world preloads/);
+  assert.match(sent[0][2], /requires an isolated execution world/);
 });
 
 test('a preload exporting undefined still evaluates successfully and is cached', () => {

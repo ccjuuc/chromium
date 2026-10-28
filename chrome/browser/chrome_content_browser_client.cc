@@ -457,8 +457,10 @@
 #if BUILDFLAG(ENABLE_XENON_SERVICE)
 #include "xenon_overlay/chrome/browser/asar/xenon_asar_url_loader_factory.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_guest.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_protocol.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
+#include "xenon_overlay/common/ipc/xenon_privileged_schemes.h"
 #include "xenon_overlay/public/mojom/xenon_service.mojom.h"
 #endif
 
@@ -1533,6 +1535,10 @@ bool ApplyHostedElectronWebPreferences(WebContents* web_contents,
     changed |= web_prefs->web_security_enabled != *web_security;
     web_prefs->web_security_enabled = *web_security;
   }
+  const bool background_throttling =
+      preferences->FindBool("backgroundThrottling").value_or(true);
+  changed |= web_prefs->background_throttling != background_throttling;
+  web_prefs->background_throttling = background_throttling;
   // Electron defaults mixed-content permission to !webSecurity, while still
   // honoring an explicit allowRunningInsecureContent preference.
   if (preferences->contains("webSecurity") ||
@@ -2968,6 +2974,9 @@ void MaybeAppendBlinkSettingsSwitchForFieldTrial(
 void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
     base::CommandLine* command_line,
     int child_process_id) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  xenon::ipc::AppendStartupPrivilegedSchemes(command_line);
+#endif
   crash_keys::AppendStringAnnotationsCommandLineSwitch(command_line);
 #if BUILDFLAG(IS_MAC)
   std::unique_ptr<metrics::ClientInfo> client_info =
@@ -6242,6 +6251,9 @@ ChromeContentBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
               ->FindWindowIdForWebContents(web_contents) != 0) {
     return xenon::CreateAsarURLLoaderFactory();
   }
+  if (auto factory = xenon::ipc::CreateElectronProtocolURLLoaderFactory(web_contents, scheme)) {
+    return factory;
+  }
 #endif
 
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
@@ -6656,6 +6668,10 @@ void ChromeContentBrowserClient::
         // !BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(ENABLE_XENON_SERVICE)
+  for (const auto& scheme : xenon::ipc::GetElectronProtocolSchemes(web_contents)) {
+    factories->insert_or_assign(scheme,
+        xenon::ipc::CreateElectronProtocolURLLoaderFactory(web_contents, scheme));
+  }
   if (web_contents && request_initiator_origin) {
     auto* window_host = xenon::XenonElectronWindowHost::GetInstance();
     auto* guest = xenon::ipc::XenonElectronGuest::FromWebContents(web_contents);

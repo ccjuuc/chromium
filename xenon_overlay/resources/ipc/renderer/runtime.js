@@ -285,6 +285,7 @@
 
   const electron = {
     ipcRenderer,
+    contextBridge: transport.contextBridge,
     app: appApi,
     dialog: dialogApi,
     remote: {

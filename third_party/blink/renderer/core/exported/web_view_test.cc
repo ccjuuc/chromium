@@ -36,7 +36,9 @@
 #include <optional>
 #include <string>
 
+#include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
@@ -7174,6 +7176,116 @@ TEST_F(WebViewTest, HiddenButPaintingPageIsntThrottled) {
       mojom::blink::PageVisibilityState::kHiddenButPainting,
       /*is_initial_state=*/false);
   EXPECT_TRUE(scheduler->IsPageVisible());
+}
+
+TEST_F(WebViewTest, BackgroundThrottlingRestoresRequestedVisibility) {
+  WebViewImpl* web_view = web_view_helper_.Initialize();
+  auto* page = web_view->GetPage();
+  auto prefs = web_view->GetWebPreferences();
+  web_view->SetVisibilityState(mojom::blink::PageVisibilityState::kHidden,
+                               /*is_initial_state=*/false);
+  EXPECT_FALSE(web_view->Scheduler()->IsPageVisible());
+
+  prefs.background_throttling = false;
+  web_view->SetWebPreferences(prefs);
+  EXPECT_TRUE(web_view->Scheduler()->IsPageVisible());
+  EXPECT_EQ(mojom::blink::PageVisibilityState::kVisible,
+            web_view->GetVisibilityState());
+  prefs.background_throttling = true;
+  web_view->SetWebPreferences(prefs);
+  EXPECT_FALSE(web_view->Scheduler()->IsPageVisible());
+  EXPECT_EQ(mojom::blink::PageVisibilityState::kHidden,
+            web_view->GetVisibilityState());
+
+  prefs.background_throttling = false;
+  web_view->SetWebPreferences(prefs);
+  // Lifecycle messages must retain the latest requested visibility while
+  // their effective state remains visible. No extra message follows enabling.
+  for (auto visibility : {mojom::blink::PageVisibilityState::kVisible,
+                          mojom::blink::PageVisibilityState::kHidden}) {
+    auto state = page->GetPageLifecycleState().Clone();
+    state->visibility = visibility;
+    web_view->SetPageLifecycleState(std::move(state), nullptr,
+                                    base::DoNothing());
+    EXPECT_TRUE(web_view->Scheduler()->IsPageVisible());
+    EXPECT_EQ(mojom::blink::PageVisibilityState::kVisible,
+              web_view->GetVisibilityState());
+  }
+  prefs.background_throttling = true;
+  web_view->SetWebPreferences(prefs);
+  EXPECT_FALSE(web_view->Scheduler()->IsPageVisible());
+  EXPECT_EQ(mojom::blink::PageVisibilityState::kHidden,
+            web_view->GetVisibilityState());
+}
+
+TEST_F(WebViewTest, BackgroundThrottlingRespectsInactiveDocuments) {
+  WebViewImpl* web_view = web_view_helper_.Initialize();
+  auto* page = web_view->GetPage();
+  auto prefs = web_view->GetWebPreferences();
+  prefs.background_throttling = false;
+  web_view->SetWebPreferences(prefs);
+
+  // Even an application that draws hidden windows must not expose a
+  // prerendered document as visible before activation.
+  page->SetIsPrerendering(true);
+  web_view->SetVisibilityState(mojom::blink::PageVisibilityState::kHidden,
+                               /*is_initial_state=*/false);
+  EXPECT_EQ(mojom::blink::PageVisibilityState::kHidden,
+            web_view->GetVisibilityState());
+  EXPECT_FALSE(web_view->Scheduler()->IsPageVisible());
+  page->SetIsPrerendering(false);
+
+  for (bool frozen : {true, false}) {
+    auto state = page->GetPageLifecycleState().Clone();
+    state->visibility = mojom::blink::PageVisibilityState::kHidden;
+    state->is_frozen = frozen;
+    web_view->SetPageLifecycleState(std::move(state), nullptr,
+                                    base::DoNothing());
+    EXPECT_EQ(frozen ? mojom::blink::PageVisibilityState::kHidden
+                     : mojom::blink::PageVisibilityState::kVisible,
+              web_view->GetVisibilityState());
+    EXPECT_EQ(!frozen, web_view->Scheduler()->IsPageVisible());
+  }
+}
+
+TEST_F(WebViewTest, BackgroundThrottlingAppliesAfterHiddenPrerenderActivation) {
+  WebViewImpl* web_view = web_view_helper_.InitializeWithOpener(
+      nullptr, nullptr, nullptr, nullptr, std::nullopt,
+      /*is_prerendering=*/true);
+  auto* page = web_view->GetPage();
+  auto* document = web_view->MainFrameImpl()->GetFrame()->GetDocument();
+  ASSERT_TRUE(page->IsPrerendering());
+  ASSERT_TRUE(document->IsPrerendering());
+  auto prefs = web_view->GetWebPreferences();
+  prefs.background_throttling = false;
+  web_view->SetWebPreferences(prefs);
+  EXPECT_EQ(mojom::blink::PageVisibilityState::kHidden,
+            web_view->GetVisibilityState());
+  EXPECT_FALSE(web_view->Scheduler()->IsPageVisible());
+
+  // Activation records task queue timing, so exercise it from a real task.
+  // The browser sends no visibility update when the window remains hidden.
+  scheduler::GetSingleThreadTaskRunnerForTesting()->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](WebViewImpl* view) {
+            auto params = mojom::blink::PrerenderPageActivationParams::New();
+            params->activation_start = base::TimeTicks::Now();
+            view->ActivatePrerenderedPage(std::move(params), base::DoNothing());
+          },
+          base::Unretained(web_view)));
+  RunPendingTasks();
+
+  EXPECT_FALSE(page->IsPrerendering());
+  EXPECT_FALSE(document->IsPrerendering());
+  EXPECT_EQ(mojom::blink::PageVisibilityState::kVisible,
+            web_view->GetVisibilityState());
+  EXPECT_TRUE(web_view->Scheduler()->IsPageVisible());
+  prefs.background_throttling = true;
+  web_view->SetWebPreferences(prefs);
+  EXPECT_EQ(mojom::blink::PageVisibilityState::kHidden,
+            web_view->GetVisibilityState());
+  EXPECT_FALSE(web_view->Scheduler()->IsPageVisible());
 }
 
 TEST_F(WebViewTest, HiddenVisibilityTransitionsDontDispatchEvents) {

@@ -84,6 +84,13 @@
     },
   };
   const perfHooksModule = {performance: performanceModule};
+  const dataViewByteLength = Object.getOwnPropertyDescriptor(
+      DataView.prototype, 'byteLength').get;
+  const v8Module = {
+    serialize(value) {
+      return Buffer.from(__xenonV8Serialize(value, Buffer, dataViewByteLength));
+    },
+  };
 
   const processHrtime = time => {
     let nanoseconds = BigInt(Math.floor(performanceModule.now() * 1e6));
@@ -114,6 +121,7 @@
   globalThis.__xenonCrypto = cryptoModule;
   globalThis.__xenonUtil = utilModule;
   globalThis.__xenonUrl = urlModule;
+  globalThis.__xenonModule = moduleModule;
   globalThis.__xenonStream = streamModule;
   globalThis.__xenonStringDecoder = stringDecoderModule;
   globalThis.__xenonChildProcess = childProcessModule;
@@ -131,6 +139,7 @@
   globalThis.__xenonQuerystring = querystringModule;
   globalThis.__xenonTimers = timersModule;
   globalThis.__xenonPerfHooks = perfHooksModule;
+  globalThis.__xenonV8 = v8Module;
   globalThis.performance = performanceModule;
 
   const pendingAppEvents = [];
@@ -278,7 +287,8 @@
   // must not leak into the next; Promise/timer continuations keep their frame.
   for (const name of ['__xenonDispatchSend', '__xenonDispatchInvoke',
     '__xenonDispatchSync', '__xenonDispatchBrowserWindowEvent',
-    '__xenonDispatchRendererEvent', '__xenonDispatchWillDownload']) {
+    '__xenonDispatchRendererEvent', '__xenonDispatchWillDownload',
+    '__xenonDispatchProtocol', '__xenonCancelProtocol']) {
     const dispatch = globalThis[name];
     globalThis[name] = (...args) =>
         runWithAsyncContext(undefined, dispatch, undefined, args);

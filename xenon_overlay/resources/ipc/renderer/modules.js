@@ -1,5 +1,11 @@
   let hostedCjsLoadingFile = '';
   let rendererHttpServerModule;
+  const moduleModule = createModuleModule(pathModule, urlModule, filename => {
+    const boundRequire = request => electronRequire(request, filename);
+    boundRequire.resolve = request => resolveHostedCjs(request, filename);
+    boundRequire.cache = hostedCjsCache;
+    return boundRequire;
+  });
 
   function moduleError(code, message) {
     return Object.assign(new Error(message), {code});
@@ -308,7 +314,7 @@
     return resolved;
   }
 
-  function loadHostedCjsModule(resolved) {
+  function loadHostedCjsModule(resolved, registeredSource) {
     if (hostedCjsCache[resolved]) return hostedCjsCache[resolved].exports;
     installBindingsFileNameShim();
     const moduleObject = {
@@ -333,7 +339,8 @@
       if (/\.node$/i.test(resolved)) {
         moduleObject.exports = loadNativeNodeModule(resolved);
       } else {
-        const code = readHostedCjsSource(resolved).replace(/^\uFEFF/, '');
+        const code = (registeredSource === undefined ? readHostedCjsSource(resolved) :
+            registeredSource).replace(/^\uFEFF/, '');
         if (/\.json$/i.test(resolved)) {
           moduleObject.exports = JSON.parse(code);
         } else {
@@ -368,6 +375,7 @@
     }
 
     const norm = request;
+    if (norm === 'module') return moduleModule;
     if (norm === 'http2') return http2Module;
     if (norm === 'path/win32') return pathModule.win32;
     if (norm === 'path/posix') return pathModule.posix;

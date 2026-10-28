@@ -36,7 +36,7 @@
   const builtinModuleCache = new Map();
   const builtinModuleNames = new Set([
     'assert', 'async_hooks', 'buffer', 'child_process', 'constants', 'crypto',
-    'dns', 'events', 'fs', 'fs/promises', 'http', 'http2', 'https', 'net', 'os',
+    'dns', 'events', 'fs', 'fs/promises', 'http', 'http2', 'https', 'module', 'net', 'os',
     'path', 'path/posix', 'path/win32', 'process', 'querystring', 'readline', 'stream',
     'string_decoder', 'timers', 'tls', 'tty', 'url', 'util', 'zlib',
   ]);
@@ -49,6 +49,7 @@
   // @include "renderer/child_process.js"
   // @include "renderer/http2.js"
   // @include "common/http_server.js"
+  // @include "common/module.js"
   // @include "renderer/modules.js"
 
   // @include "renderer/page.js"

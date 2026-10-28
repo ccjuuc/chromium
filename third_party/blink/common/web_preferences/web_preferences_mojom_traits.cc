@@ -57,6 +57,7 @@ bool StructTraits<blink::mojom::WebPreferencesDataView,
   out->minimum_logical_font_size = data.minimum_logical_font_size();
   out->context_menu_on_mouse_up = data.context_menu_on_mouse_up();
   out->javascript_enabled = data.javascript_enabled();
+  out->background_throttling = data.background_throttling();
   out->web_security_enabled = data.web_security_enabled();
   out->loads_images_automatically = data.loads_images_automatically();
   out->images_enabled = data.images_enabled();

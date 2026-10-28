@@ -208,6 +208,7 @@ source_set("electron_app_config") {
     "//net",
     "//url",
     "//xenon_overlay/common/asar",
+    "//xenon_overlay/common/ipc:privileged_schemes",
     "//xenon_overlay/public/mojom",
   ]
 }
@@ -442,8 +443,14 @@ source_set("browser") {
     "asar/xenon_asar_url_loader_factory.h",
     "ipc/xenon_electron_guest.cc",
     "ipc/xenon_electron_guest.h",
+    "ipc/xenon_electron_protocol.cc",
+    "ipc/xenon_electron_protocol.h",
+    "ipc/xenon_electron_session_bridge.cc",
+    "ipc/xenon_electron_session_bridge.h",
     "ipc/xenon_ipc_document_host.cc",
     "ipc/xenon_ipc_document_host.h",
+    "ipc/xenon_service_worker_ipc_host.cc",
+    "ipc/xenon_service_worker_ipc_host.h",
     "reminder/xenon_reminder_notification_manager.cc",
     "reminder/xenon_reminder_notification_manager.h",
     "reminder/xenon_reminder_notification_observer.h",
@@ -585,6 +592,7 @@ source_set("browser") {
     "//xenon_overlay/buildflags",
     "//xenon_overlay/chrome/browser/ui/webui:mojo_bindings",
     "//xenon_overlay/common/asar",
+    "//xenon_overlay/common/ipc:privileged_schemes",
     "//xenon_overlay/public/mojom",
     "//xenon_overlay/resources",
     "//xenon_overlay/resources/webui:resources",
@@ -804,8 +812,11 @@ test("ipc_main_container_unittests") {
     "../../services/xenon_service_impl.h",
     "../../services/xenon_service_impl_unittest.cc",
     "ipc/xenon_app_runtime_unittest.cc",
+    "ipc/xenon_electron_api_bridge.cc",
+    "ipc/xenon_electron_api_bridge.h",
     "ipc/xenon_electron_api_bridge_unittest.cc",
     "ipc/xenon_electron_app_config_unittest.cc",
+    "ipc/xenon_electron_shell.h",
     "ipc/xenon_file_system_bridge_unittest.cc",
     "ipc/xenon_ipc_main_container.cc",
     "ipc/xenon_ipc_main_container.h",
@@ -815,10 +826,14 @@ test("ipc_main_container_unittests") {
     "ipc/xenon_os_bridge_unittest.cc",
     "ipc/xenon_sqlite_bridge_unittest.cc",
     "ipc/xenon_zlib_bridge_unittest.cc",
+    "updater/xenon_updater_unittest_stubs.cc",
   ]
+
+  # Use the real updater with standalone browser hooks; this test executable
+  # does not own a BrowserProcess or the browser lifetime implementation.
+  sources += xenon_updater_sources
   deps = [
     ":app_runtime",
-    ":electron_api_bridge",
     ":electron_app_config",
     ":filesystem_bridge",
     ":napi",
@@ -830,22 +845,30 @@ test("ipc_main_container_unittests") {
     "//base/test:run_all_unittests",
     "//base/test:test_support",
     "//chrome/common:constants",
+    "//chrome/common:non_code_constants",
     "//components/version_info",
+    "//components/zucchini:zucchini_io",
+    "//components/zucchini:zucchini_lib",
     "//crypto",
     "//gin",
     "//gin:gin_test",
     "//mojo/core/embedder",
     "//mojo/public/cpp/bindings",
+    "//net",
     "//services/network:test_support",
     "//services/network/public/cpp",
     "//testing/gtest",
+    "//third_party/zlib/google:zip",
     "//ui/base",
+    "//ui/base/clipboard",
     "//ui/base/clipboard:clipboard_test_support",
+    "//url",
     "//v8",
     "//xenon_overlay/buildflags",
     "//xenon_overlay/common/asar",
     "//xenon_overlay/common/asar:test_support",
     "//xenon_overlay/common/asar:unit_tests",
+    "//xenon_overlay/common/ipc:privileged_schemes",
     "//xenon_overlay/common/ipc:value_codec",
     "//xenon_overlay/public/mojom",
     "//xenon_overlay/resources:resources_grit",
@@ -854,14 +877,51 @@ test("ipc_main_container_unittests") {
   data = [
     "$root_gen_dir/xenon_overlay/resources/ipc/xenon_ipc_main_bootstrap.js",
   ]
+  if (enable_xenon_updater) {
+    # Standalone bridge tests must not start the macOS system updater service.
+    sources -= [ "updater/xenon_system_updater.cc" ]
+    sources += [ "updater/xenon_system_updater_stub.cc" ]
+  }
   if (is_win) {
+    sources += [ "ipc/xenon_electron_shell_win.cc" ]
+    libs = [ "shell32.lib" ]
     data += [
       "//base/test/data/file_version_info_unittest/FileVersionInfoTest1.dll",
     ]
+  } else {
+    sources += [ "ipc/xenon_electron_shell_stub.cc" ]
+  }
+  if (is_mac) {
+    deps += [
+      ":xenon_update_mac_privileged_client",
+      ":xenon_update_mac_util",
+    ]
+    frameworks = [ "AppKit.framework" ]
   }
   if (enable_xenon_node_uv_compat) {
     deps += [ "//xenon_overlay/third_party:libuv" ]
   }
+}
+
+test("xenon_session_unittests") {
+  testonly = true
+  sources = [
+    "//content/test/run_all_unittests.cc",
+    "ipc/xenon_electron_session_bridge.cc",
+    "ipc/xenon_electron_session_bridge_unittest.cc",
+    "ipc/xenon_file_system_bridge.cc",
+  ]
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//content/public/browser",
+    "//content/test:test_support",
+    "//crypto",
+    "//testing/gtest",
+    "//xenon_overlay/common/asar",
+    "//xenon_overlay/common/asar:test_support",
+    "//xenon_overlay/public/mojom",
+  ]
 }
 
 test("xenon_updater_unittests") {

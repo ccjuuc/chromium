@@ -1,0 +1,19 @@
+# IPC adapters must use Blink's public embedder API. Keep implementation
+# dependencies out of this directory even if another renderer feature has one.
+include_rules = [
+  "+chrome/common/chrome_isolated_world_ids.h",
+  "+components/version_info",
+  "+content/public/common",
+  "+content/public/renderer",
+  "+gin",
+  "+mojo/public/cpp/bindings",
+  "+sandbox/policy",
+  "+third_party/blink/public",
+  "-third_party/blink/renderer",
+  "+ui/base/resource",
+  "+v8/include",
+  "+xenon_overlay/buildflags",
+  "+xenon_overlay/common/ipc",
+  "+xenon_overlay/public/mojom",
+  "+xenon_overlay/resources/grit",
+]

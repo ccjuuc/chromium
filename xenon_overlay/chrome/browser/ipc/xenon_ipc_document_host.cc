@@ -27,6 +27,7 @@
 #include "url/origin.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_api_bridge.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_guest.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_session_bridge.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_file_system_bridge.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_network_request_bridge.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_os_bridge.h"
@@ -101,12 +102,11 @@ XenonIpcDocumentHost::XenonIpcDocumentHost(
 XenonIpcDocumentHost::~XenonIpcDocumentHost() {
   if (!endpoint_id_.empty()) {
     XenonManager::GetInstance()->RemoveElectronIpcRenderer(container_id_,
-                                                            endpoint_id_);
+                                                           endpoint_id_);
   }
 }
 
-void XenonIpcDocumentHost::GetRuntimeConfig(
-    GetRuntimeConfigCallback callback) {
+void XenonIpcDocumentHost::GetRuntimeConfig(GetRuntimeConfigCallback callback) {
   if (!IsAllowedDocument()) {
     std::move(callback).Run(nullptr);
     return;
@@ -121,13 +121,32 @@ void XenonIpcDocumentHost::GetRuntimeConfig(
     config->is_guest =
         XenonElectronGuest::FromWebContents(web_contents) != nullptr;
     config->is_main_frame = render_frame_host().IsInPrimaryMainFrame();
-    const bool hosted = config->is_guest ||
+    const base::DictValue* preferences = nullptr;
+    if (auto* guest = XenonElectronGuest::FromWebContents(web_contents)) {
+      preferences = &guest->preferences();
+    } else {
+      preferences = XenonElectronWindowHost::GetInstance()
+                        ->GetWebPreferencesForWebContents(web_contents);
+    }
+    config->web_preferences =
+        base::Value(preferences ? preferences->Clone() : base::DictValue());
+    auto* partition = render_frame_host().GetStoragePartition();
+    auto identity = FindElectronSessionIdentity(partition);
+    if (identity && identity->container_id == ResolveContainerId()) {
+      for (const auto& script :
+           GetElectronSessionPreloadScripts(partition, "frame")) {
+        config->session_preloads.push_back(mojom::IpcPreloadScript::New(
+            script.id, script.file_path, script.source));
+      }
+    }
+    const bool hosted =
+        config->is_guest ||
         XenonElectronWindowHost::GetInstance()->FindWindowIdForWebContents(
             web_contents) != 0;
     config->can_load_mapped_file_resources =
-        hosted && XenonManager::GetInstance()->IsDeclaredFileRendererURL(
-                      ResolveContainerId(),
-                      render_frame_host().GetLastCommittedURL());
+        hosted &&
+        XenonManager::GetInstance()->IsDeclaredFileRendererURL(
+            ResolveContainerId(), render_frame_host().GetLastCommittedURL());
   }
   std::move(callback).Run(std::move(config));
 }
@@ -144,7 +163,7 @@ void XenonIpcDocumentHost::AttachGuest(
     result->error = error;
     std::move(callback).Run(std::move(result));
   };
-  if (!IsAllowedDocument() || endpoint_id_.empty() || !preferences.is_dict()) {
+  if (!IsAllowedDocument() || !IsCurrentRenderer() || !preferences.is_dict()) {
     fail("Invalid guest owner or preferences");
     return;
   }
@@ -159,11 +178,8 @@ void XenonIpcDocumentHost::AttachGuest(
     return;
   }
   const auto& prefs = preferences.GetDict();
-  if (prefs.FindBool("contextIsolation").value_or(true) ||
-      prefs.FindBool("sandbox").value_or(true) || prefs.contains("partition")) {
-    fail(
-        "Guest isolated worlds, sandboxed preloads and partitions are not "
-        "supported yet");
+  if (prefs.contains("partition") && !prefs.FindString("partition")) {
+    fail("Guest partition must be a string");
     return;
   }
   frame->PrepareForInnerWebContentsAttach(base::BindOnce(
@@ -175,7 +191,8 @@ void XenonIpcDocumentHost::OnGuestFramePrepared(
     base::DictValue preferences,
     AttachGuestCallback callback,
     content::RenderFrameHost* frame) {
-  if (!frame || frame->GetParent() != &render_frame_host()) {
+  if (!IsCurrentRenderer() || !frame ||
+      frame->GetParent() != &render_frame_host()) {
     std::move(callback).Run(UnavailableResult());
     return;
   }
@@ -188,7 +205,13 @@ void XenonIpcDocumentHost::OnGuestFramePrepared(
   // preload. The reply contains the public, container-local WebContents ID.
   XenonManager::GetInstance()->ElectronIpcInvoke(
       container_id_, endpoint_id_, "__xenon:register-guest",
-      base::Value(std::move(args)), std::move(callback));
+      base::Value(std::move(args)), std::move(callback), service_generation_);
+}
+
+bool XenonIpcDocumentHost::IsCurrentRenderer() const {
+  return !endpoint_id_.empty() &&
+         XenonManager::GetInstance()->IsElectronIpcGenerationCurrent(
+             container_id_, service_generation_);
 }
 
 bool XenonIpcDocumentHost::IsAllowedDocument() const {
@@ -217,8 +240,8 @@ bool XenonIpcDocumentHost::IsAllowedDocument() const {
   // opaque and cannot be represented in an origin allowlist.
   content::WebContents* web_contents =
       content::WebContents::FromRenderFrameHost(&render_frame_host());
-  if (XenonElectronWindowHost::GetInstance()
-          ->FindWindowIdForWebContents(web_contents) > 0) {
+  if (XenonElectronWindowHost::GetInstance()->FindWindowIdForWebContents(
+          web_contents) > 0) {
     return true;
   }
 
@@ -265,8 +288,14 @@ void XenonIpcDocumentHost::BindRenderer(
     return;
   }
   if (!endpoint_id_.empty()) {
+    // A retained document must not rebind itself into a restarted main process.
+    // A new document receives a new DocumentService and can register normally.
+    if (!IsCurrentRenderer()) {
+      ResetAndDeleteThis();
+      return;
+    }
     XenonManager::GetInstance()->RemoveElectronIpcRenderer(container_id_,
-                                                            endpoint_id_);
+                                                           endpoint_id_);
   }
   const content::GlobalRenderFrameHostId frame_id =
       render_frame_host().GetGlobalId();
@@ -279,6 +308,7 @@ void XenonIpcDocumentHost::BindRenderer(
   }
   endpoint_id_ = base::Uuid::GenerateRandomV4().AsLowercaseString();
   container_id_ = ResolveContainerId();
+  renderer_frame_url_ = render_frame_host().GetLastCommittedURL().spec();
   LOG(INFO) << "RegisterElectronIpcRenderer origin="
             << render_frame_host().GetLastCommittedOrigin().Serialize()
             << " window_id=" << window_id << " endpoint=" << endpoint_id_;
@@ -288,29 +318,45 @@ void XenonIpcDocumentHost::BindRenderer(
   }
   XenonManager::GetInstance()->RegisterElectronIpcRenderer(
       container_id_, endpoint_id_, std::move(renderer),
-      frame_id.child_id.GetUnsafeValue(), frame_id.frame_routing_id,
-      window_id);
+      frame_id.child_id.GetUnsafeValue(), frame_id.frame_routing_id, window_id,
+      renderer_frame_url_, render_frame_host().IsInPrimaryMainFrame());
+  service_generation_ =
+      XenonManager::GetInstance()->service_generation(container_id_);
+}
+
+void XenonIpcDocumentHost::UpdateRendererFrameUrl() {
+  const std::string url = render_frame_host().GetLastCommittedURL().spec();
+  if (url == renderer_frame_url_) {
+    return;
+  }
+  renderer_frame_url_ = url;
+  // Queue this trusted update before the IPC using the same Utility pipe.
+  // DocumentService recreation already handles cross-document navigation.
+  XenonManager::GetInstance()->UpdateElectronIpcRendererFrame(
+      container_id_, endpoint_id_, url);
 }
 
 void XenonIpcDocumentHost::BindNodeAddonHost(
     mojo::PendingReceiver<xenon::ipc::mojom::NodeAddonHost> receiver,
     mojo::PendingRemote<xenon::ipc::mojom::IpcRenderer> callback_renderer) {
-  if (!IsAllowedDocument() || endpoint_id_.empty()) {
+  if (!IsAllowedDocument() || !IsCurrentRenderer()) {
     ResetAndDeleteThis();
     return;
   }
-  XenonManager::GetInstance()->BindNodeAddonHost(
-      container_id_, endpoint_id_, std::move(receiver),
-      std::move(callback_renderer));
+  XenonManager::GetInstance()->BindNodeAddonHost(container_id_, endpoint_id_,
+                                                 std::move(receiver),
+                                                 std::move(callback_renderer));
 }
 
 void XenonIpcDocumentHost::Send(const std::string& channel,
                                 base::Value arguments) {
-  if (!IsAllowedDocument() || endpoint_id_.empty()) {
+  if (!IsAllowedDocument() || !IsCurrentRenderer()) {
     return;
   }
-  XenonManager::GetInstance()->ElectronIpcSend(
-      container_id_, endpoint_id_, channel, std::move(arguments));
+  UpdateRendererFrameUrl();
+  XenonManager::GetInstance()->ElectronIpcSend(container_id_, endpoint_id_,
+                                               channel, std::move(arguments),
+                                               service_generation_);
 }
 
 void XenonIpcDocumentHost::Invoke(const std::string& channel,
@@ -318,11 +364,12 @@ void XenonIpcDocumentHost::Invoke(const std::string& channel,
                                   InvokeCallback callback) {
   callback = mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(callback),
                                                          UnavailableResult());
-  if (!IsAllowedDocument() || endpoint_id_.empty() ||
+  if (!IsAllowedDocument() || !IsCurrentRenderer() ||
       channel == "__xenon:register-guest") {
     std::move(callback).Run(UnavailableResult());
     return;
   }
+  UpdateRendererFrameUrl();
   if (channel == "__xenon:electron-api") {
     CallElectronApi(std::move(arguments), std::move(callback));
     return;
@@ -340,8 +387,8 @@ void XenonIpcDocumentHost::Invoke(const std::string& channel,
             .GetBrowserContext()
             ->GetDefaultStoragePartition()
             ->GetURLLoaderFactoryForBrowserProcess();
-    PerformNetworkRequest(std::move(url_loader_factory),
-                          std::move(arguments), std::move(callback));
+    PerformNetworkRequest(std::move(url_loader_factory), std::move(arguments),
+                          std::move(callback));
     return;
   }
   if (channel == "__xenon:sqlite") {
@@ -357,16 +404,17 @@ void XenonIpcDocumentHost::Invoke(const std::string& channel,
   }
   XenonManager::GetInstance()->ElectronIpcInvoke(
       container_id_, endpoint_id_, channel, std::move(arguments),
-      std::move(callback));
+      std::move(callback), service_generation_);
 }
 
 void XenonIpcDocumentHost::SendSync(const std::string& channel,
                                     base::Value arguments,
                                     SendSyncCallback callback) {
-  if (!IsAllowedDocument() || endpoint_id_.empty()) {
+  if (!IsAllowedDocument() || !IsCurrentRenderer()) {
     std::move(callback).Run(UnavailableResult());
     return;
   }
+  UpdateRendererFrameUrl();
   auto reply_state =
       base::MakeRefCounted<SynchronousIpcReplyState>(std::move(callback));
   reply_state->StartTimeout();
@@ -400,7 +448,8 @@ void XenonIpcDocumentHost::SendSync(const std::string& channel,
     base::Value request = std::move(arguments.GetList().front());
     base::ThreadPool::PostTaskAndReplyWithResult(
         FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-        base::BindOnce(&PerformOsCall, std::move(request)), std::move(callback));
+        base::BindOnce(&PerformOsCall, std::move(request)),
+        std::move(callback));
     return;
   }
   if (channel == "__xenon:fs") {
@@ -416,7 +465,7 @@ void XenonIpcDocumentHost::SendSync(const std::string& channel,
   // Waiting for Utility here would deadlock both sides.
   XenonManager::GetInstance()->ElectronIpcSendSync(
       container_id_, endpoint_id_, channel, std::move(arguments),
-      std::move(callback));
+      std::move(callback), service_generation_);
 }
 
 xenon::ipc::mojom::IpcResultPtr XenonIpcDocumentHost::UnavailableResult()

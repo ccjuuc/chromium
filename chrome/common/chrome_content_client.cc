@@ -60,6 +60,11 @@
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/resource/resource_scale_factor.h"
 #include "url/url_constants.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/common/ipc/xenon_privileged_schemes.h"
+#endif
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS)
@@ -201,6 +206,23 @@ static const char* const kChromeStandardURLSchemes[] = {
 };
 
 void ChromeContentClient::AddAdditionalSchemes(Schemes* schemes) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  xenon::ipc::InitializeStartupPrivilegedSchemes();
+  for (const auto& scheme : xenon::ipc::GetStartupPrivilegedSchemes()) {
+    if (scheme.standard) {
+      schemes->standard_schemes.push_back(scheme.scheme);
+    }
+    if (scheme.secure) {
+      schemes->secure_schemes.push_back(scheme.scheme);
+    }
+    if (scheme.bypass_csp) {
+      schemes->csp_bypassing_schemes.push_back(scheme.scheme);
+    }
+    if (scheme.cors_enabled) {
+      schemes->cors_enabled_schemes.push_back(scheme.scheme);
+    }
+  }
+#endif
   for (auto* standard_scheme : kChromeStandardURLSchemes)
     schemes->standard_schemes.push_back(standard_scheme);
 

@@ -16,10 +16,12 @@
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "ui/base/page_transition_types.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_session_bridge.h"
 
 namespace xenon::ipc {
 namespace {
@@ -40,8 +42,15 @@ int XenonElectronGuest::Attach(content::RenderFrameHost* frame,
                                const std::string& container_id,
                                base::DictValue preferences) {
   auto* owner = content::WebContents::FromRenderFrameHost(frame);
-  auto contents = content::WebContents::Create(
-      content::WebContents::CreateParams(owner->GetBrowserContext()));
+  auto* context = owner->GetBrowserContext();
+  const std::string* requested_partition = preferences.FindString("partition");
+  const std::string partition = requested_partition ? *requested_partition : "";
+  ResolveElectronSessionPartition(context, container_id, partition);
+  content::WebContents::CreateParams params(context);
+  params.site_instance = content::SiteInstance::CreateForFixedStoragePartition(
+      context, GURL("about:blank"),
+      GetElectronSessionPartitionConfig(context, container_id, partition));
+  auto contents = content::WebContents::Create(params);
   auto guest = std::unique_ptr<XenonElectronGuest>(new XenonElectronGuest(
       contents.get(), container_id, std::move(preferences)));
   const int id = guest->id();

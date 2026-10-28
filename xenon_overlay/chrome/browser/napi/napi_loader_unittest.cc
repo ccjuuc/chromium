@@ -4,6 +4,8 @@
 
 #include "napi_loader.h"
 
+#include <vector>
+
 #include "base/base_paths.h"
 #include "base/compiler_specific.h"
 #include "base/path_service.h"
@@ -122,6 +124,42 @@ napi_value CaptureMissingArgument(napi_env env, napi_callback_info info) {
 
 void MarkFinalized(napi_env env, void* data, void* hint) {
   *static_cast<bool*>(data) = true;
+}
+
+struct CleanupCall {
+  NAPI_RAW_PTR_EXCLUSION std::vector<int>* calls;
+  int value;
+};
+
+void RecordCleanupCall(void* data) {
+  auto* call = static_cast<CleanupCall*>(data);
+  call->calls->push_back(call->value);
+}
+
+void RecordCleanupFinalizer(napi_env, void* data, void*) {
+  RecordCleanupCall(data);
+}
+
+struct CleanupMutation {
+  NAPI_RAW_PTR_EXCLUSION napi_env env;
+  NAPI_RAW_PTR_EXCLUSION CleanupCall* current;
+  NAPI_RAW_PTR_EXCLUSION CleanupCall* removed;
+  NAPI_RAW_PTR_EXCLUSION CleanupCall* added_first;
+  NAPI_RAW_PTR_EXCLUSION CleanupCall* added_last;
+};
+
+void MutateCleanupHooks(void* data) {
+  auto* mutation = static_cast<CleanupMutation*>(data);
+  RecordCleanupCall(mutation->current);
+  EXPECT_EQ(napi_remove_env_cleanup_hook(mutation->env, RecordCleanupCall,
+                                        mutation->removed),
+            napi_ok);
+  EXPECT_EQ(napi_add_env_cleanup_hook(mutation->env, RecordCleanupCall,
+                                     mutation->added_first),
+            napi_ok);
+  EXPECT_EQ(napi_add_env_cleanup_hook(mutation->env, RecordCleanupCall,
+                                     mutation->added_last),
+            napi_ok);
 }
 
 void CountThreadsafeCall(napi_env env,
@@ -836,6 +874,91 @@ TEST_F(NapiLoaderTest, EnvironmentDestructionRunsFinalizers) {
 
   EXPECT_TRUE(wrap_finalized);
   EXPECT_TRUE(external_finalized);
+}
+
+TEST_F(NapiLoaderTest, CleanupHooksRunInReverseOrderBeforeFinalizers) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+
+  std::vector<int> calls;
+  CleanupCall first{&calls, 1};
+  CleanupCall second{&calls, 2};
+  CleanupCall finalizer{&calls, 3};
+  CleanupCall instance_finalizer{&calls, 4};
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  ASSERT_EQ(napi_add_env_cleanup_hook(env.get(), RecordCleanupCall, &first),
+            napi_ok);
+  ASSERT_EQ(napi_add_env_cleanup_hook(env.get(), RecordCleanupCall, &second),
+            napi_ok);
+  napi_value external;
+  ASSERT_EQ(napi_create_external(env.get(), &finalizer, RecordCleanupFinalizer,
+                                 nullptr, &external),
+            napi_ok);
+  ASSERT_EQ(napi_set_instance_data(env.get(), &instance_finalizer,
+                                   RecordCleanupFinalizer, nullptr),
+            napi_ok);
+  EXPECT_TRUE(calls.empty());
+  env.reset();
+  EXPECT_EQ(calls, (std::vector<int>{2, 1, 3, 4}));
+}
+
+TEST_F(NapiLoaderTest, CleanupHooksHonorRemovalAndDrainNewHooksInNextBatch) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+
+  std::vector<int> calls;
+  CleanupCall first{&calls, 1};
+  CleanupCall removed{&calls, 2};
+  CleanupCall third{&calls, 3};
+  CleanupCall current{&calls, 4};
+  CleanupCall added_first{&calls, 5};
+  CleanupCall added_last{&calls, 6};
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  CleanupMutation mutation{env.get(), &current, &removed, &added_first,
+                           &added_last};
+  ASSERT_EQ(napi_add_env_cleanup_hook(env.get(), RecordCleanupCall, &first),
+            napi_ok);
+  ASSERT_EQ(napi_add_env_cleanup_hook(env.get(), RecordCleanupCall, &removed),
+            napi_ok);
+  ASSERT_EQ(napi_add_env_cleanup_hook(env.get(), RecordCleanupCall, &third),
+            napi_ok);
+  ASSERT_EQ(napi_add_env_cleanup_hook(env.get(), MutateCleanupHooks, &mutation),
+            napi_ok);
+  env.reset();
+  EXPECT_EQ(calls, (std::vector<int>{4, 3, 1, 6, 5}));
+}
+
+TEST_F(NapiLoaderTest, CleanupHookArgumentsAndRepeatedRemoval) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  EXPECT_EQ(napi_add_env_cleanup_hook(nullptr, RecordCleanupCall, nullptr),
+            napi_invalid_arg);
+  EXPECT_EQ(napi_remove_env_cleanup_hook(nullptr, RecordCleanupCall, nullptr),
+            napi_invalid_arg);
+  EXPECT_EQ(napi_add_env_cleanup_hook(env.get(), nullptr, nullptr),
+            napi_invalid_arg);
+  EXPECT_EQ(napi_remove_env_cleanup_hook(env.get(), nullptr, nullptr),
+            napi_invalid_arg);
+  const napi_extended_error_info* error_info = nullptr;
+  ASSERT_EQ(napi_get_last_error_info(env.get(), &error_info), napi_ok);
+  EXPECT_EQ(error_info->error_code, napi_invalid_arg);
+  EXPECT_EQ(napi_add_env_cleanup_hook(env.get(), RecordCleanupCall, nullptr),
+            napi_ok);
+  ASSERT_EQ(napi_get_last_error_info(env.get(), &error_info), napi_ok);
+  EXPECT_EQ(error_info->error_code, napi_ok);
+  EXPECT_EQ(napi_remove_env_cleanup_hook(env.get(), RecordCleanupCall, nullptr),
+            napi_ok);
+  EXPECT_EQ(napi_remove_env_cleanup_hook(env.get(), RecordCleanupCall, nullptr),
+            napi_ok);
+  env.reset();
 }
 
 TEST_F(NapiLoaderTest, BufferUsesUint8ArraySemantics) {

@@ -176,13 +176,20 @@ class XenonIpcMainContainer {
       mojo::PendingRemote<xenon::ipc::mojom::IpcRenderer> renderer,
       int32_t process_id,
       int32_t frame_id,
-      int32_t window_id = 0);
+      int32_t window_id = 0,
+      const std::string& document_url = std::string(),
+      bool is_main_frame = true);
   void AddRenderer(
       const std::string& endpoint_id,
       mojo::PendingRemote<xenon::ipc::mojom::IpcRenderer> renderer,
       int32_t process_id,
       int32_t frame_id,
-      int32_t window_id = 0);
+      int32_t window_id = 0,
+      const std::string& document_url = std::string(),
+      bool is_main_frame = true,
+      mojom::IpcServiceWorkerInfoPtr worker_info = nullptr);
+  void UpdateRendererFrameUrl(const std::string& endpoint_id,
+                              const std::string& document_url);
   void RemoveRenderer(const std::string& endpoint_id);
   void DispatchToRenderer(const std::string& endpoint_id,
                           const std::string& channel,
@@ -202,6 +209,13 @@ class XenonIpcMainContainer {
   xenon::ipc::mojom::IpcResultPtr SendSync(const std::string& endpoint_id,
                                            const std::string& channel,
                                            base::Value arguments);
+  // Browser-owned protocol requests never pass through renderer ipcMain handlers.
+  void HandleProtocol(const std::string& partition,
+                      const std::string& request_id,
+                      base::Value request,
+                      InvokeCallback callback);
+  void CancelProtocol(const std::string& request_id);
+
   // Executes the privileged backend for renderer node:fs compatibility. The
   // renderer keeps Chromium's sandbox; Electron-compatible sync/callback/
   // promise APIs are layered over this operation in the renderer bootstrap.
@@ -225,6 +239,8 @@ class XenonIpcMainContainer {
   bool RunBootstrap();
   bool ResolveConfiguredMainScript();
   bool MaybeLoadConfiguredMainScript();
+  v8::Local<v8::Function> CreateRequireFunction(
+      const base::FilePath& parent_file);
   v8::MaybeLocal<v8::Value> LoadCommonJsSource(
       const base::FilePath& virtual_path,
       const std::string& source_text,
@@ -258,10 +274,13 @@ class XenonIpcMainContainer {
   void DispatchRendererEvent(const std::string& endpoint_id, bool attached);
 
   void NativeLog(gin::Arguments* args);
+  void NativeCreateRequire(gin::Arguments* args);
+  void NativeV8Serialize(gin::Arguments* args);
   void NativeInstallAsyncContextHooks(gin::Arguments* args);
   void NativeGetPath(gin::Arguments* args);
   void NativeNetworkInterfaces(gin::Arguments* args);
   void NativeOsCall(gin::Arguments* args);
+  void NativeRegisterSchemesAsPrivileged(gin::Arguments* args);
   void NativeSendToRenderer(gin::Arguments* args);
   void NativeNetSend(gin::Arguments* args);
   void NativeChildProcessCall(gin::Arguments* args);
@@ -325,6 +344,8 @@ class XenonIpcMainContainer {
   v8::Global<v8::Context> context_;
   v8::Global<v8::Function> dispatch_send_;
   v8::Global<v8::Function> dispatch_invoke_;
+  v8::Global<v8::Function> dispatch_protocol_;
+  v8::Global<v8::Function> cancel_protocol_;
   v8::Global<v8::Function> dispatch_sync_;
   v8::Global<v8::Function> dispatch_window_event_;
   v8::Global<v8::Function> dispatch_app_event_;

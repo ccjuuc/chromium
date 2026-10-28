@@ -510,6 +510,12 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   // Called to notify the RenderWidget that it has been hidden or restored from
   // having been hidden.
   void WasHidden();
+  // Application embedders may keep rendering a hidden window. This affects
+  // renderer scheduling, not the native window's visibility.
+  void SetBackgroundThrottling(bool allowed) override;
+  bool background_throttling_allowed() const {
+    return background_throttling_allowed_;
+  }
   void WasShown(std::optional<blink::RecordContentToVisibleTimeRequest>
                     record_tab_switch_time_request);
 
@@ -1367,6 +1373,7 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   // Indicates whether the page is hidden or not. Need to call
   // process_->UpdateClientPriority when this value changes.
   bool is_hidden_ = true;
+  bool background_throttling_allowed_ = true;
 
   // Records the latest time when |this| widget's visibility state changes from
   // hidden to shown.

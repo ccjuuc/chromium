@@ -1,6 +1,7 @@
 #ifndef XENON_OVERLAY_CHROME_BROWSER_UI_XENON_WEB_DIALOG_H_
 #define XENON_OVERLAY_CHROME_BROWSER_UI_XENON_WEB_DIALOG_H_
 
+#include <memory>
 #include <optional>
 
 #include "base/functional/callback.h"
@@ -23,6 +24,7 @@ class Widget;
 
 namespace content {
 class BrowserContext;
+class WebContents;
 }
 
 class Profile;
@@ -70,6 +72,14 @@ class XenonWebDialog : public ui::WebDialogDelegate {
                               raw_ptr<views::Widget>* out_widget,
                               gfx::NativeView parent,
                               base::OnceClosure on_dialog_closed);
+  // Takes ownership of WebContents created in an application's Session.
+  static void ShowWithOptions(content::BrowserContext* context,
+                              const GURL& url,
+                              const base::DictValue& options,
+                              raw_ptr<views::Widget>* out_widget,
+                              gfx::NativeView parent,
+                              base::OnceClosure on_dialog_closed,
+                              std::unique_ptr<content::WebContents> contents);
 
   // `--show-xenon-extension`: register Xenon WebUI Mojo and open chrome://xenon-overlay/.
   // Remote / observer checks run from the WebUI page (split Mojo tests).
@@ -178,9 +188,10 @@ class XenonWebDialog : public ui::WebDialogDelegate {
                            bool skip_taskbar,
                            bool show,
                            bool show_shadow,
-                           bool use_custom_modal = false,
-                           bool preserve_native_child_content = false,
-                           std::optional<gfx::Point> origin = std::nullopt);
+                           bool use_custom_modal,
+                           bool preserve_native_child_content,
+                           std::optional<gfx::Point> origin,
+                           std::unique_ptr<content::WebContents> contents);
 
   // ui::WebDialogDelegate:
   ui::mojom::ModalType GetDialogModalType() const override;

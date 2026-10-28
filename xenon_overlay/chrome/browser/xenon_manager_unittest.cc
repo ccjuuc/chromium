@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -461,6 +462,53 @@ TEST(XenonManagerTest, DisconnectedContainerRejectsRendererTraffic) {
   EXPECT_EQ(manager.FindContainerService(kContainerId), nullptr);
 }
 
+TEST(XenonManagerTest, RendererGenerationCannotReachRestartedContainer) {
+  base::test::TaskEnvironment task_environment;
+  XenonManager manager;
+  constexpr char kContainerId[] = "worker-generation";
+  auto connection =
+      std::make_unique<XenonManager::ContainerServiceConnection>();
+  connection->generation = 2;
+  auto service_pipe =
+      connection->remote.BindNewPipeAndPassReceiver().PassPipe();
+  manager.container_services_[kContainerId] = std::move(connection);
+  manager.container_service_generations_[kContainerId] = 2;
+  manager.ElectronIpcSend(kContainerId, "old-worker", "message", base::Value(),
+                          1);
+  bool rejected = false;
+  manager.ElectronIpcInvoke(
+      kContainerId, "old-worker", "invoke", base::Value(),
+      base::BindOnce(
+          [](bool* rejected, ipc::mojom::IpcResultPtr result) {
+            *rejected = result && !result->success;
+          },
+          &rejected),
+      1);
+  EXPECT_TRUE(rejected);
+  bool sync_rejected = false;
+  manager.ElectronIpcSendSync(
+      kContainerId, "old-document", "sync", base::Value(),
+      base::BindOnce(
+          [](bool* rejected, ipc::mojom::IpcResultPtr result) {
+            *rejected = result && !result->success;
+          },
+          &sync_rejected),
+      1);
+  EXPECT_TRUE(sync_rejected);
+  EXPECT_FALSE(manager.IsElectronIpcGenerationCurrent(kContainerId, 1));
+  EXPECT_TRUE(manager.IsElectronIpcGenerationCurrent(kContainerId, 2));
+  task_environment.RunUntilIdle();
+  EXPECT_FALSE(service_pipe->QuerySignalsState().readable());
+  EXPECT_EQ(manager.service_generation(kContainerId), 2u);
+
+  manager.ElectronIpcSend(kContainerId, "current-document", "message",
+                          base::Value(), 2);
+  task_environment.RunUntilIdle();
+  EXPECT_TRUE(service_pipe->QuerySignalsState().readable());
+  manager.CloseContainerService(kContainerId);
+  EXPECT_FALSE(manager.IsElectronIpcGenerationCurrent(kContainerId, 2));
+}
+
 TEST(XenonManagerTest, StaleDisconnectPreservesRestartedContainer) {
   base::test::TaskEnvironment task_environment;
   XenonManager manager;
@@ -637,6 +685,61 @@ TEST(XenonManagerTest,
   EXPECT_TRUE(manager.renderer_addon_services_.empty());
   EXPECT_EQ(manager.EnsureRendererAddonServiceStarted({"app", "document"}),
             nullptr);
+}
+
+TEST(XenonManagerTest,
+     ProcessExitDisconnectsRetainedServicesAndPreventsRestart) {
+  content::BrowserTaskEnvironment task_environment;
+  XenonManager manager;
+  std::vector<mojo::ScopedMessagePipeHandle> service_pipes;
+  service_pipes.push_back(
+      manager.service_remote_.BindNewPipeAndPassReceiver().PassPipe());
+#if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
+  std::vector<XenonManager::ServiceRemote> retained;
+  retained.push_back(manager.service_remote_);
+#endif
+  for (const char* id : {"shutdown-a", "shutdown-b"}) {
+    auto connection =
+        std::make_unique<XenonManager::ContainerServiceConnection>();
+    connection->generation = 1;
+    service_pipes.push_back(
+        connection->remote.BindNewPipeAndPassReceiver().PassPipe());
+#if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
+    retained.push_back(connection->remote);
+#endif
+    manager.container_services_[id] = std::move(connection);
+    manager.container_service_generations_[id] = 1;
+  }
+  auto addon = std::make_unique<XenonManager::RendererAddonServiceConnection>();
+  addon->container_generation = 1;
+  addon->generation = 1;
+  service_pipes.push_back(
+      addon->remote.BindNewPipeAndPassReceiver().PassPipe());
+#if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
+  retained.push_back(addon->remote);
+#endif
+  manager.renderer_addon_services_[{"shutdown-a", "page"}] = std::move(addon);
+
+  manager.ShutdownForProcessExit();
+  task_environment.RunUntilIdle();
+  for (const auto& pipe : service_pipes) {
+    EXPECT_TRUE(pipe->QuerySignalsState().peer_closed());
+  }
+  EXPECT_TRUE(manager.container_services_.empty());
+  EXPECT_TRUE(manager.renderer_addon_services_.empty());
+  EXPECT_FALSE(manager.service_remote_.is_bound());
+  EXPECT_FALSE(manager.IsElectronIpcGenerationCurrent("shutdown-a", 1));
+#if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
+  for (const auto& copy : retained) {
+    EXPECT_TRUE(copy.is_bound());
+  }
+  EXPECT_FALSE(manager.DuplicateServiceRemote("never-started").is_bound());
+#endif
+  EXPECT_EQ(manager.EnsureContainerServiceStarted("shutdown-a", true), nullptr);
+  EXPECT_EQ(manager.EnsureContainerServiceStarted("never-started"), nullptr);
+  manager.EnsureServiceStarted(nullptr);
+  EXPECT_FALSE(manager.service_remote_.is_bound());
+  manager.ShutdownForProcessExit();
 }
 
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)

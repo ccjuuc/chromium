@@ -63,6 +63,8 @@ struct BLINK_COMMON_EXPORT WebPreferences {
   std::string default_encoding = "ISO-8859-1";
   bool context_menu_on_mouse_up = BUILDFLAG(IS_WIN);
   bool javascript_enabled = true;
+  // Electron embedders can keep hidden application pages actively scheduled.
+  bool background_throttling = true;
   bool web_security_enabled = true;
   bool loads_images_automatically = true;
   bool images_enabled = true;

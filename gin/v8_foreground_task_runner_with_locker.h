@@ -5,7 +5,8 @@
 #ifndef GIN_V8_FOREGROUND_TASK_RUNNER_WITH_LOCKER_H_
 #define GIN_V8_FOREGROUND_TASK_RUNNER_WITH_LOCKER_H_
 
-#include "base/memory/raw_ptr.h"
+#include <memory>
+
 #include "base/memory/scoped_refptr.h"
 #include "gin/v8_foreground_task_runner_base.h"
 
@@ -26,6 +27,8 @@ class V8ForegroundTaskRunnerWithLocker : public V8ForegroundTaskRunnerBase {
   // v8::Platform implementation.
   bool NonNestableTasksEnabled() const override;
 
+  void InvalidateIsolate() override;
+
  private:
   // v8::Platform implementation.
   void PostTaskImpl(std::unique_ptr<v8::Task> task,
@@ -38,15 +41,10 @@ class V8ForegroundTaskRunnerWithLocker : public V8ForegroundTaskRunnerBase {
   void PostIdleTaskImpl(std::unique_ptr<v8::IdleTask> task,
                         const v8::SourceLocation& location) override;
 
-  // This dangles because the isolate must be disposed before the task runner
-  // can safely be destroyed. V8-managed tasks in other threads might try to
-  // post more tasks whilst the isolate is being disposed (before V8 cancels
-  // them as part of disposal).
-  //
-  // Once the isolate is disposed, V8 has made sure that no more tasks should be
-  // running or get posted, and this task runner will quickly get destroyed
-  // afterwards.
-  raw_ptr<v8::Isolate, DanglingUntriaged> isolate_;
+  struct IsolateState;
+  // Posting threads only copy this shared state. Its isolate is accessed and
+  // invalidated on the foreground thread, before entering v8::Locker.
+  const std::shared_ptr<IsolateState> isolate_state_;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 };
 

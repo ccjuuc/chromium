@@ -26,6 +26,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "base/check.h"
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
@@ -188,6 +189,19 @@ napi_env__::napi_env__(v8::Isolate* iso, v8::Local<v8::Context> ctx)
 }
 
 napi_env__::~napi_env__() {
+  while (!cleanup_hooks.empty()) {
+    // 与 Node 一致：本批逆序执行，回调中新加的钩子留到下一批；被移除的跳过。
+    const auto pending_hooks = cleanup_hooks;
+    for (auto it = pending_hooks.rbegin(); it != pending_hooks.rend(); ++it) {
+      if (std::find(cleanup_hooks.begin(), cleanup_hooks.end(), *it) ==
+          cleanup_hooks.end()) {
+        continue;
+      }
+      // 保留当前记录直到回调返回，确保重复注册仍被拒绝，且支持回调自行移除。
+      it->callback(it->arg);
+      std::erase(cleanup_hooks, *it);
+    }
+  }
   while (!finalizers.empty()) {
     std::unique_ptr<NapiFinalizerData> finalizer = std::move(finalizers.back());
     finalizers.pop_back();
@@ -3071,6 +3085,40 @@ napi_status napi_is_buffer(napi_env env, napi_value value, bool* result) {
   // Node's Buffer::HasInstance used by Node-API accepts all ArrayBufferViews,
   // including ordinary typed arrays and DataView, but not ArrayBuffer itself.
   *result = value->Get()->IsArrayBufferView();
+  return napi_ok;
+}
+
+napi_status napi_add_env_cleanup_hook(napi_env env,
+                                     napi_cleanup_hook fun,
+                                     void* arg) {
+  if (!env) {
+    return napi_invalid_arg;
+  }
+  if (!fun) {
+    env->last_error_info = {"Invalid argument", nullptr, 0, napi_invalid_arg};
+    return napi_invalid_arg;
+  }
+  const napi_env__::CleanupHook hook{fun, arg};
+  CHECK(std::find(env->cleanup_hooks.begin(), env->cleanup_hooks.end(), hook) ==
+        env->cleanup_hooks.end())
+      << "Duplicate N-API environment cleanup hook";
+  env->cleanup_hooks.push_back(hook);
+  env->last_error_info = {nullptr, nullptr, 0, napi_ok};
+  return napi_ok;
+}
+
+napi_status napi_remove_env_cleanup_hook(napi_env env,
+                                        napi_cleanup_hook fun,
+                                        void* arg) {
+  if (!env) {
+    return napi_invalid_arg;
+  }
+  if (!fun) {
+    env->last_error_info = {"Invalid argument", nullptr, 0, napi_invalid_arg};
+    return napi_invalid_arg;
+  }
+  std::erase(env->cleanup_hooks, napi_env__::CleanupHook{fun, arg});
+  env->last_error_info = {nullptr, nullptr, 0, napi_ok};
   return napi_ok;
 }
 

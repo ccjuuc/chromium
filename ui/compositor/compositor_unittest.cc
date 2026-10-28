@@ -18,6 +18,7 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "cc/metrics/frame_sequence_tracker.h"
+#include "cc/trees/layer_tree_host.h"
 #include "components/viz/common/surfaces/parent_local_surface_id_allocator.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -615,6 +616,56 @@ TEST_F(CompositorTestWithMessageLoop, CompositorVisibilityChanges) {
   ::testing::Mock::VerifyAndClearExpectations(&observer);
 
   compositor()->RemoveObserver(&observer);
+}
+
+TEST_F(CompositorTestWithMessageLoop,
+       BackgroundThrottlingPreservesNativeVisibility) {
+  compositor()->SetVisible(false);
+  EXPECT_FALSE(compositor()->host_for_testing()->IsVisible());
+  compositor()->SetBackgroundThrottling(false);
+  EXPECT_FALSE(compositor()->IsVisible());
+  EXPECT_TRUE(compositor()->host_for_testing()->IsVisible());
+  compositor()->SetVisible(false);
+  EXPECT_TRUE(compositor()->host_for_testing()->IsVisible());
+  compositor()->SetBackgroundThrottling(true);
+  EXPECT_FALSE(compositor()->IsVisible());
+  EXPECT_FALSE(compositor()->host_for_testing()->IsVisible());
+  compositor()->SetVisible(true);
+  compositor()->SetBackgroundThrottling(false);
+  compositor()->SetBackgroundThrottling(true);
+  EXPECT_TRUE(compositor()->IsVisible());
+  EXPECT_TRUE(compositor()->host_for_testing()->IsVisible());
+}
+
+TEST_F(CompositorTestWithMessageLoop,
+       BackgroundThrottlingStopsWhenOutputIsReleased) {
+  auto root_layer = std::make_unique<LayerSolidColor>();
+  viz::ParentLocalSurfaceIdAllocator allocator;
+  allocator.GenerateId();
+  root_layer->SetBounds(gfx::Rect(10, 10));
+  compositor()->SetRootLayer(root_layer.get());
+  compositor()->SetScaleAndSize(1.0f, gfx::Size(10, 10),
+                                allocator.GetCurrentLocalSurfaceId());
+  compositor()->ScheduleDraw();
+  DrawWaiterForTest::WaitForCompositingEnded(compositor());
+  compositor()->SetBackgroundThrottling(false);
+  compositor()->SetVisible(false);
+  EXPECT_TRUE(compositor()->host_for_testing()->IsVisible());
+
+  compositor()->ReleaseAcceleratedWidget();
+  EXPECT_FALSE(compositor()->host_for_testing()->IsVisible());
+  compositor()->SetVisible(false);
+  compositor()->SetBackgroundThrottling(true);
+  compositor()->SetBackgroundThrottling(false);
+  EXPECT_FALSE(compositor()->host_for_testing()->IsVisible());
+
+  compositor()->SetAcceleratedWidget(gfx::kNullAcceleratedWidget);
+  EXPECT_FALSE(compositor()->IsVisible());
+  EXPECT_TRUE(compositor()->host_for_testing()->IsVisible());
+  compositor()->ScheduleDraw();
+  DrawWaiterForTest::WaitForCompositingEnded(compositor());
+  compositor()->SetBackgroundThrottling(true);
+  compositor()->SetRootLayer(nullptr);
 }
 
 class CompositorPropertyTreeDelegateTest

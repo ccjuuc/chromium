@@ -2515,6 +2515,60 @@ static_library("run_all_unittests") {
   ]
 }
 
+# Exercise the native background-rendering paths without building the full
+# content_unittests or compositor_unittests suites.
+if (use_aura) {
+  test("xenon_background_throttling_unittests") {
+    sources = [
+      "//content/browser/renderer_host/render_widget_host_view_aura_unittest.cc",
+      "//content/test/run_all_unittests.cc",
+      "//ui/compositor/compositor_unittest.cc",
+    ]
+    deps = [
+      "//base",
+      "//base/test:test_support",
+      "//cc",
+      "//components/input",
+      "//components/viz/common",
+      "//components/viz/test:test_support",
+      "//content/browser:for_content_tests",
+      "//content/common:for_content_tests",
+      "//content/public/browser",
+      "//content/public/common",
+      "//content/test:test_support",
+      "//testing/gmock",
+      "//testing/gtest",
+      "//third_party/blink/public/common",
+      "//ui/aura",
+      "//ui/aura:test_support",
+      "//ui/base",
+      "//ui/base:test_support",
+      "//ui/base/clipboard:clipboard_test_support",
+      "//ui/base/ime/init",
+      "//ui/compositor",
+      "//ui/compositor:test_support",
+      "//ui/display",
+      "//ui/events",
+      "//ui/events:gesture_detection",
+      "//ui/events:test_support",
+      "//ui/events/blink",
+      "//ui/gfx",
+      "//ui/gfx/geometry",
+      "//ui/wm",
+    ]
+    configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+    if (is_component_build) {
+      check_includes = false
+    }
+    if (is_win) {
+      deps += [ "//components/stylus_handwriting/win" ]
+    }
+    if (use_ozone) {
+      deps += [ "//ui/ozone" ]
+    }
+  }
+}
+
 test("content_unittests") {
   use_xvfb = use_xvfb_in_this_config
 

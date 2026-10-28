@@ -556,11 +556,37 @@ void XenonServiceImpl::RegisterElectronIpcRenderer(
     mojo::PendingRemote<ipc::mojom::IpcRenderer> renderer,
     int32_t process_id,
     int32_t frame_id,
-    int32_t window_id) {
+    int32_t window_id,
+    const std::string& document_url,
+    bool is_main_frame) {
   auto it = ipc_main_containers_.find(NormalizeIpcContainerId(container_id));
   if (it != ipc_main_containers_.end()) {
     it->second->AddRenderer(endpoint_id, std::move(renderer), process_id,
-                            frame_id, window_id);
+                            frame_id, window_id, document_url, is_main_frame);
+  }
+}
+
+void XenonServiceImpl::UpdateElectronIpcRendererFrame(
+    const std::string& container_id,
+    const std::string& endpoint_id,
+    const std::string& document_url) {
+  auto it = ipc_main_containers_.find(NormalizeIpcContainerId(container_id));
+  if (it != ipc_main_containers_.end()) {
+    it->second->UpdateRendererFrameUrl(endpoint_id, document_url);
+  }
+}
+
+void XenonServiceImpl::RegisterElectronIpcServiceWorker(
+    const std::string& container_id,
+    const std::string& endpoint_id,
+    mojo::PendingRemote<ipc::mojom::IpcRenderer> renderer,
+    int32_t process_id,
+    ipc::mojom::IpcServiceWorkerInfoPtr identity) {
+  auto it = ipc_main_containers_.find(NormalizeIpcContainerId(container_id));
+  if (it != ipc_main_containers_.end() && identity) {
+    const std::string script_url = identity->script_url;
+    it->second->AddRenderer(endpoint_id, std::move(renderer), process_id, 0,
+                            0, script_url, false, std::move(identity));
   }
 }
 
@@ -821,6 +847,30 @@ void XenonServiceImpl::DispatchMainNetPipeEvent(const std::string& container_id,
   if (container != ipc_main_containers_.end()) {
     container->second->Send(kMainNetEndpointId, channel, std::move(arguments));
   }
+}
+
+void XenonServiceImpl::HandleElectronProtocol(
+    const std::string& container_id,
+    const std::string& partition,
+    const std::string& request_id,
+    base::Value request,
+    HandleElectronProtocolCallback callback) {
+  auto it = ipc_main_containers_.find(NormalizeIpcContainerId(container_id));
+  if (it == ipc_main_containers_.end() || !it->second->is_initialized()) {
+    auto result = ipc::mojom::IpcResult::New();
+    result->success = false;
+    result->error = "Protocol container is unavailable";
+    std::move(callback).Run(std::move(result));
+    return;
+  }
+  it->second->HandleProtocol(partition, request_id, std::move(request),
+                             std::move(callback));
+}
+
+void XenonServiceImpl::CancelElectronProtocol(const std::string& container_id,
+                                             const std::string& request_id) {
+  auto it = ipc_main_containers_.find(NormalizeIpcContainerId(container_id));
+  if (it != ipc_main_containers_.end()) it->second->CancelProtocol(request_id);
 }
 
 void XenonServiceImpl::ElectronIpcInvoke(

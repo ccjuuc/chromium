@@ -2,12 +2,40 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//testing/test.gni")
 import("//xenon_overlay/buildflags/features.gni")
+
+source_set("context_bridge") {
+  sources = [
+    "ipc/xenon_context_bridge.cc",
+    "ipc/xenon_context_bridge.h",
+  ]
+  public_deps = [
+    "//base",
+    "//gin",
+    "//v8",
+  ]
+  deps = [ "//xenon_overlay/common/ipc:value_codec" ]
+}
+
+test("context_bridge_unittests") {
+  sources = [ "ipc/xenon_context_bridge_unittest.cc" ]
+  deps = [
+    ":context_bridge",
+    "//base/test:run_all_unittests",
+    "//base/test:test_support",
+    "//gin:gin_test",
+    "//testing/gtest",
+    "//v8",
+  ]
+}
 
 source_set("renderer") {
   sources = [
     "ipc/xenon_ipc_renderer.cc",
     "ipc/xenon_ipc_renderer.h",
+    "ipc/xenon_service_worker_renderer.cc",
+    "ipc/xenon_service_worker_renderer.h",
     "js_xenon_api.cc",
     "js_xenon_api.h",
     "xenon_data_mask_js_conversions.cc",
@@ -17,7 +45,9 @@ source_set("renderer") {
   ]
 
   deps = [
+    ":context_bridge",
     "//base",
+    "//chrome/common",
     "//components/version_info",
     "//content/public/common",
     "//content/public/renderer",
@@ -26,11 +56,11 @@ source_set("renderer") {
     "//sandbox/policy",
     "//third_party/blink/public:blink",
     "//third_party/blink/public/common",
-    "//third_party/blink/renderer/core:core",
+    "//third_party/blink/renderer/core",
     "//ui/base",
     "//url",
     "//v8",
-    "//xenon_overlay/buildflags:buildflags",
+    "//xenon_overlay/buildflags",
     "//xenon_overlay/common/ipc:value_codec",
     "//xenon_overlay/public/mojom",
     "//xenon_overlay/resources:resources_grit",

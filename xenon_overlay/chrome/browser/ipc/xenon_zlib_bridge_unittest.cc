@@ -15,6 +15,7 @@
 #include "base/test/test_future.h"
 #include "gin/test/v8_test.h"
 #include "mojo/core/embedder/embedder.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_ipc_main_container.h"
 
@@ -80,9 +81,18 @@ TEST(XenonZlibBridgeTest, InvalidDataAndUnsupportedOptionsFailExplicitly) {
   EXPECT_TRUE(empty->value.GetBlob().empty());
 }
 
-class XenonZlibContainerTest : public gin::V8Test {
+class XenonZlibContainerTest : public gin::V8Test, public mojom::IpcRenderer {
  protected:
   static void SetUpTestSuite() { mojo::core::Init(); }
+
+  void TearDown() override {
+    renderer_receiver_.reset();
+    gin::V8Test::TearDown();
+  }
+
+  void Dispatch(const std::string& channel, base::Value arguments) override {}
+
+  mojo::Receiver<mojom::IpcRenderer> renderer_receiver_{this};
 };
 
 TEST_F(XenonZlibContainerTest, SyncAndWorkerCallbacksUseRealNativeCompression) {
@@ -123,6 +133,9 @@ TEST_F(XenonZlibContainerTest, SyncAndWorkerCallbacksUseRealNativeCompression) {
   ASSERT_TRUE(container.Initialize(std::move(module)))
       << container.startup_error();
   base::test::TestFuture<mojom::IpcResultPtr> future;
+  container.AddRenderer("renderer",
+                        renderer_receiver_.BindNewPipeAndPassRemote(), 1, 1, 0,
+                        "about:blank", true);
   container.Invoke("renderer", "test:zlib", base::Value(base::ListValue()),
                    future.GetCallback());
   auto result = future.Take();

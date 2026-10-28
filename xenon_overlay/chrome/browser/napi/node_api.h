@@ -15,6 +15,7 @@ typedef struct uv_loop_s uv_loop_t;
 
 typedef void (*napi_async_execute_callback)(napi_env env, void* data);
 typedef void (*napi_async_complete_callback)(napi_env env, napi_status status, void* data);
+typedef void (*napi_cleanup_hook)(void* arg);
 
 typedef enum {
   napi_tsfn_release,
@@ -65,6 +66,12 @@ NAPI_EXTERN napi_status napi_is_buffer(napi_env env, napi_value value, bool* res
 
 NAPI_EXTERN napi_status napi_get_node_version(napi_env env, const napi_node_version** version);
 NAPI_EXTERN napi_status napi_get_uv_event_loop(napi_env env, uv_loop_t** loop);
+NAPI_EXTERN napi_status napi_add_env_cleanup_hook(napi_env env,
+                                                 napi_cleanup_hook fun,
+                                                 void* arg);
+NAPI_EXTERN napi_status napi_remove_env_cleanup_hook(napi_env env,
+                                                    napi_cleanup_hook fun,
+                                                    void* arg);
 
 // Node module structures
 typedef struct napi_module {

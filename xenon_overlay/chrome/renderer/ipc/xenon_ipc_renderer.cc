@@ -15,6 +15,7 @@
 #include "base/process/process_handle.h"
 #include "base/unguessable_token.h"
 #include "components/version_info/version_info.h"
+#include "chrome/common/chrome_isolated_world_ids.h"
 #include "content/public/common/isolated_world_ids.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/v8_value_converter.h"
@@ -25,9 +26,11 @@
 #include "sandbox/policy/sandbox.h"
 #include "sandbox/policy/switches.h"
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/web_isolated_world_info.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_element.h"
 #include "third_party/blink/public/web/web_local_frame.h"
+#include "third_party/blink/public/web/web_script_source.h"
 #include "third_party/blink/public/web/web_security_policy.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "v8/include/v8-container.h"
@@ -42,6 +45,7 @@
 #include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/common/ipc/xenon_ipc_value_codec.h"
 #include "xenon_overlay/common/ipc/xenon_runtime_platform.h"
+#include "xenon_overlay/chrome/renderer/ipc/xenon_context_bridge.h"
 #include "xenon_overlay/resources/grit/xenon_resources.h"
 
 namespace xenon::ipc {
@@ -170,7 +174,36 @@ void XenonIpcRenderer::Install(content::RenderFrame* render_frame,
   if (!binding->EnsureRuntimeConfig()) {
     return;
   }
+  const auto* preferences = binding->runtime_config_->web_preferences.GetIfDict();
+  if (preferences && !preferences->empty() &&
+      preferences->FindBool("contextIsolation").value_or(true)) {
+    // Blink supplies the isolated DOM wrappers. The page never receives the
+    // privileged preload realm's require, process, or transport objects.
+    auto main_context = context;
+    blink::WebIsolatedWorldInfo world_info;
+    world_info.security_origin = render_frame->GetWebFrame()->GetDocument().GetSecurityOrigin();
+    world_info.content_security_policy = blink::WebString::FromUtf8(
+        "script-src 'self' 'unsafe-eval'; object-src 'none'");
+    world_info.human_readable_name = blink::WebString::FromUtf8("Xenon preload");
+    world_info.stable_id = blink::WebString::FromUtf8("xenon-preload");
+    blink::SetIsolatedWorldInfo(ISOLATED_WORLD_ID_XENON_PRELOAD, world_info);
+    render_frame->GetWebFrame()->ExecuteScriptInIsolatedWorld(
+        ISOLATED_WORLD_ID_XENON_PRELOAD,
+        blink::WebScriptSource(blink::WebString::FromUtf8("void 0")),
+        blink::BackForwardCacheAware::kAllow);
+    context = render_frame->GetWebFrame()->GetScriptContextFromWorldId(
+        isolate, ISOLATED_WORLD_ID_XENON_PRELOAD);
+    if (context.IsEmpty()) return;
+    binding->context_.Reset(isolate, context);
+    binding->context_isolated_ = true;
+    binding->context_bridge_ = XenonContextBridge::Create(context, main_context);
+  }
+  v8::Context::Scope preload_context_scope(context);
   v8::Local<v8::Object> wrapper = v8::Object::New(isolate);
+  if (binding->context_bridge_) {
+    wrapper->Set(context, gin::StringToV8(isolate, "contextBridge"),
+                 binding->context_bridge_->GetApi()).Check();
+  }
   VLOG(1) << "XenonIpcRenderer Install attaching methods";
   auto set_method = [&](const char* name, auto method) {
     v8::Local<v8::Function> fn;
@@ -253,6 +286,8 @@ void XenonIpcRenderer::Shutdown() {
   // pointers first so default replies cannot run in the released context.
   weak_factory_.InvalidateWeakPtrs();
   Dispose();
+  if (context_bridge_) context_bridge_->Shutdown();
+  context_bridge_.reset();
   context_.Reset();
   dispatch_handler_.Reset();
   queued_events_.clear();
@@ -266,7 +301,7 @@ void XenonIpcRenderer::Shutdown() {
 
 void XenonIpcRenderer::WillReleaseScriptContext(v8::Local<v8::Context> context,
                                                 int32_t world_id) {
-  if (world_id == content::ISOLATED_WORLD_ID_GLOBAL && !context_.IsEmpty() &&
+  if (!context_.IsEmpty() &&
       context == context_.Get(isolate_)) {
     // Clearing V8 roots may release method wrappers which own the binding.
     scoped_refptr<XenonIpcRenderer> keep_alive(this);
@@ -380,6 +415,19 @@ void XenonIpcRenderer::GetRuntimeConfig(gin::Arguments* args) {
   set_string("cwd", runtime_config_->working_directory);
   set_string("resourcesPath", runtime_config_->resources_directory);
   set_string("contextId", context_id_);
+  value->Set(context, gin::StringToV8(isolate, "contextIsolated"),
+             v8::Boolean::New(isolate, context_isolated_)).Check();
+  value->Set(context, gin::StringToV8(isolate, "webPreferences"),
+             content::V8ValueConverter::Create()->ToV8Value(
+                 runtime_config_->web_preferences, context)).Check();
+  base::ListValue session_preloads;
+  for (const auto& preload : runtime_config_->session_preloads) {
+    session_preloads.Append(base::DictValue().Set("id", preload->id)
+        .Set("filePath", preload->file_path).Set("source", preload->source));
+  }
+  value->Set(context, gin::StringToV8(isolate, "sessionPreloads"),
+             content::V8ValueConverter::Create()->ToV8Value(
+                 base::Value(std::move(session_preloads)), context)).Check();
   v8::Local<v8::Object> versions = v8::Object::New(isolate);
   versions
       ->Set(context, gin::StringToV8(isolate, "chrome"),
@@ -402,10 +450,6 @@ void XenonIpcRenderer::GetRuntimeConfig(gin::Arguments* args) {
       ->Set(context, gin::StringToV8(isolate, "pid"),
             v8::Integer::NewFromUnsigned(isolate, base::GetCurrentProcId()))
       .Check();
-  value
-      ->Set(context, gin::StringToV8(isolate, "contextIsolated"),
-            v8::Boolean::New(isolate, false))
-      .Check();  // This binding is installed only in the document's main world.
   value
       ->Set(context, gin::StringToV8(isolate, "sandboxed"),
             v8::Boolean::New(

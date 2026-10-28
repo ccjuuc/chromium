@@ -13,6 +13,8 @@
 
   // @include "main/app.js"
 
+  // @include "main/protocol.js"
+
   // @include "main/windows.js"
 
   // @include "main/buffer.js"
@@ -21,6 +23,10 @@
 
 
   // @include "main/builtins.js"
+
+  // @include "common/module.js"
+  const moduleModule = createModuleModule(pathModule, urlModule,
+      filename => __xenonCreateRequire(filename));
 
   // @include "common/child_process.js"
   // @include "main/child_process.js"

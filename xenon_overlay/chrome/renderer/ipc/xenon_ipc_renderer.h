@@ -28,6 +28,7 @@ class RenderFrame;
 }
 
 namespace xenon::ipc {
+class XenonContextBridge;
 
 // Document-scoped JavaScript binding installed as window.xenonIpcRenderer.
 // The Electron compatibility bootstrap uses this object as the transport for
@@ -105,6 +106,8 @@ class XenonIpcRenderer final : public xenon::ipc::mojom::IpcRenderer,
   // before its context/frame disappears; wrappers cannot reconnect afterward.
   const raw_ptr<v8::Isolate> isolate_;
   v8::Global<v8::Context> context_;
+  scoped_refptr<XenonContextBridge> context_bridge_;
+  bool context_isolated_ = false;
   const std::string context_id_;
   mojo::Remote<xenon::ipc::mojom::IpcHost> host_;
   xenon::ipc::mojom::IpcRendererConfigPtr runtime_config_;

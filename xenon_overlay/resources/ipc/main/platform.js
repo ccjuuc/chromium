@@ -249,14 +249,24 @@
   ipcMain.removeHandler = channel => invokeHandlers.delete(channel);
 
   function createEvent(sender) {
+    if (sender.type === 'service-worker') {
+      const worker = getWorkerForIpc(sender);
+      return {
+        type: 'service-worker',
+        processId: sender.processId,
+        session: worker.session,
+        serviceWorker: worker,
+        reply(channel, ...args) { worker.send(channel, ...args); },
+      };
+    }
+    const contents = getSenderWebContents(sender);
     const event = {
+      type: 'frame',
       processId: sender.processId,
       frameId: sender.frameId,
-      sender: getSenderWebContents(sender),
-      senderFrame: {
-        processId: sender.processId,
-        routingId: sender.frameId,
-      },
+      sender: contents,
+      senderFrame: webContentsState.get(contents).endpoints
+          .get(sender.endpointId).frame,
       ports: [],
       reply(channel, ...args) {
         __xenonSendToRenderer(sender.endpointId, channel, args);
@@ -269,6 +279,11 @@
   let dispatchXenonNet = null;
   globalThis.__xenonDispatchSend = (sender, channel, args) => {
     const list = Array.isArray(args) ? args : (args === undefined ? [] : [args]);
+    if (sender.type === 'service-worker') {
+      const event = createEvent(sender);
+      event.serviceWorker.ipc.emit(channel, event, ...list);
+      return;
+    }
     if (channel === '__xenon:preload-error') {
       const event = createEvent(sender);
       const error = new Error(String(list[1] || 'Preload script failed'));
@@ -282,12 +297,15 @@
     ipcMain.emit(channel, createEvent(sender), ...list);
   };
   globalThis.__xenonDispatchInvoke = (sender, channel, args) => {
-    const handler = invokeHandlers.get(channel);
+    const event = createEvent(sender);
+    const handler = sender.type === 'service-worker'
+        ? event.serviceWorker.ipc._invokeHandlers.get(channel)
+        : invokeHandlers.get(channel);
     if (!handler) {
       return Promise.reject(new Error(`No handler registered for '${channel}'`));
     }
     try {
-      return Promise.resolve(handler(createEvent(sender), ...args));
+      return Promise.resolve(handler(event, ...args));
     } catch (error) {
       return Promise.reject(error);
     }
@@ -295,8 +313,6 @@
   globalThis.__xenonDispatchSync = (sender, channel, args) => {
     const event = createEvent(sender);
     if (channel === '__xenon:renderer-web-preferences') {
-      const endpoint = webContentsState.get(event.sender).endpoints.get(sender.endpointId);
-      if (endpoint && typeof args[0] === 'boolean') endpoint.isMainFrame = args[0];
       return event.sender.getLastWebPreferences();
     }
     ipcMain.emit(channel, event, ...args);

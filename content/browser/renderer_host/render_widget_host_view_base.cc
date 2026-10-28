@@ -1100,6 +1100,17 @@ void RenderWidgetHostViewBase::OnShowWithPageVisibility(
   return;
 }
 
+void RenderWidgetHostViewBase::OnBackgroundThrottlingChanged() {
+  if (!host()) {
+    return;
+  }
+  if (!host()->background_throttling_allowed() && host()->IsHidden()) {
+    host()->WasShown(std::nullopt);
+  } else if (host()->background_throttling_allowed() && !IsShowing()) {
+    host()->WasHidden();
+  }
+}
+
 void RenderWidgetHostViewBase::SetIsFrameSinkIdOwner(bool is_owner) {
   if (is_frame_sink_id_owner_ == is_owner) {
     return;

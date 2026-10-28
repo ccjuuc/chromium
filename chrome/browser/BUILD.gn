@@ -1260,6 +1260,10 @@ source_set("core") {
     "//ui/webui/tracked_element",
   ]
 
+  if (enable_xenon_service) {
+    deps += [ "//xenon_overlay/common/ipc:privileged_schemes" ]
+  }
+
   if (!is_android) {
     public_deps = [
       "//chrome/browser/ui/omnibox/omnibox_everywhere:impl",

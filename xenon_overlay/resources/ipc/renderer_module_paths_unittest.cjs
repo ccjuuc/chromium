@@ -361,6 +361,52 @@ test('old hosts map only the matching document origin and preserve nested page p
                'https://player/static/chunk.js');
 });
 
+test('module.createRequire binds a new parent and uses the existing CommonJS cache', () => {
+  const root = 'C:\\test-app';
+  const nested = root + '\\nested\\value.js';
+  const {context, reads} = createPathRenderer(new Map([
+    [root + '\\value.js', 'module.exports = {value: "root"};'],
+    [nested, 'globalThis.nestedLoads = (globalThis.nestedLoads || 0) + 1; module.exports = {value: "nested"};'],
+  ]));
+  const module = context.require('module');
+  assert.equal(module, context.require('node:module'));
+  const bound = module.createRequire(root + '\\nested\\entry.js');
+  assert.equal(bound.resolve('./value'), nested);
+  assert.equal(reads.length, 0, 'resolve does not execute or read the JS source');
+  const value = bound('./value');
+  assert.equal(value.value, 'nested');
+  assert.equal(bound('./value'), context.require('./nested/value'));
+  assert.equal(context.nestedLoads, 1);
+  assert.equal(bound.cache, context.require.cache);
+  assert.equal(context.require('./value').value, 'root');
+  assert.equal(bound('node:path'), context.require('path'));
+  assert.equal(bound.resolve('node:module'), 'node:module');
+  assert.throws(() => bound('./missing'), {code: 'MODULE_NOT_FOUND'});
+});
+
+test('renderer createRequire supports file URL parents, directories, and cached-module invalidation', () => {
+  const filename = 'C:\\test-app\\nested dir\\value.js';
+  const harness = createPathRenderer(new Map([[filename, 'module.exports = 1;']]));
+  const module = harness.context.require('module');
+  const parents = ['file:///C:/test-app/nested%20dir/entry.js',
+    new URL('file:///C:/test-app/nested%20dir/entry.js'),
+    'C:\\test-app\\nested dir\\', 'file:///C:/test-app/nested%20dir/'];
+  for (const parent of parents) {
+    const bound = module.createRequire(parent);
+    assert.equal(bound('./value'), 1);
+    assert.equal(bound.resolve('./value'), filename);
+  }
+  const bound = module.createRequire(parents[0]);
+  harness.setFile(filename, 'module.exports = 2;');
+  assert.equal(bound('./value'), 1);
+  delete bound.cache[filename];
+  assert.equal(bound('./value'), 2);
+  for (const parent of [undefined, {}, 'relative.js', 'https://example.test/a.js',
+    'file:///C:/test-app%2foutside.js']) {
+    assert.throws(() => module.createRequire(parent), {code: 'ERR_INVALID_ARG_VALUE'});
+  }
+});
+
 const playerRoot = path.resolve(__dirname, '../../../out/Release_64/xenon_player');
 const actualBundlePath = process.env.XENON_TEST_PLAYER_BUNDLE;
 const hasPlayerRuntime = existsSync(path.join(playerRoot, 'resources/app/package.json')) &&

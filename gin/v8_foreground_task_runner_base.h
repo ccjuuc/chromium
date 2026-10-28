@@ -5,10 +5,11 @@
 #ifndef GIN_V8_FOREGROUND_TASK_RUNNER_BASE_H_
 #define GIN_V8_FOREGROUND_TASK_RUNNER_BASE_H_
 
-#include "v8/include/v8-platform.h"
+#include <memory>
 
 #include "gin/gin_export.h"
 #include "gin/public/v8_idle_task_runner.h"
+#include "v8/include/v8-platform.h"
 
 namespace gin {
 
@@ -23,6 +24,11 @@ class V8ForegroundTaskRunnerBase : public v8::TaskRunner {
   void EnableIdleTasks(std::unique_ptr<V8IdleTaskRunner> idle_task_runner);
 
   bool IdleTasksEnabled() override;
+
+  // Called on the foreground thread before the isolate is disposed. Runners
+  // that retain the isolate must stop accessing it from queued or future tasks.
+  // Runners without an isolate reference need no additional cleanup.
+  virtual void InvalidateIsolate() {}
 
  protected:
   V8IdleTaskRunner* idle_task_runner() { return idle_task_runner_.get(); }

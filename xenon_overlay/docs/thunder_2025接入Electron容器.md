@@ -90,11 +90,30 @@ resources/                         # 构建后对应宿主 exe 所在目录
   "name": "Thunder",
   "versionFromExecutable": true,
   "main": "out.asar/main.js",
-  "archivePublicKey": "thunder_2025.asar-public-key.pem"
+  "archivePublicKey": "thunder_2025.asar-public-key.pem",
+  "privilegedSchemes": [
+    {
+      "scheme": "miniapp",
+      "privileges": {
+        "standard": true,
+        "secure": true,
+        "supportFetchAPI": true,
+        "corsEnabled": true
+      }
+    },
+    {
+      "scheme": "crx",
+      "privileges": {
+        "bypassCSP": true
+      }
+    }
+  ]
 }
 ```
 
 `application`、`executable`、公钥路径相对于 JSON 目录。解析后的应用根是 `thunder_2025/resources/app`，因此 `main` 相对于该目录。运行根为 `thunder_2025`，保持 `process.execPath`、`app.getPath('exe')`、原生 DLL 和 SDK 的发行路径语义。
+
+当前接入版本为 `release/25.1.41` 的 `87902d36da5a9bae6da56fa8f26d43bc97440d9e`，程序版本 `25.1.41.888`。main 在 app ready 前声明 `miniapp` 和 `crx`；外置配置预声明相同权限，宿主在 Chromium 初始化协议表时应用。适配层不按协议名或 TH 名称分支。后续升级需核对新发行版实际调用与权限，不能沿用未经审查的声明。
 
 ## 4. 启动、关闭与重开
 
@@ -152,3 +171,56 @@ python xenon_overlay/tools/import_electron_app.py `
 5. 正常退出后是否释放旧服务，重开是否建立新的容器生命周期。
 
 旧验证记录保留在对应 `out/` 诊断目录；其中历史拆分路径和旧同步命令不再作为当前接入方式。
+
+## 8. 25.1.41 宿主兼容层的维护边界
+
+兼容修改位于 Xenon 和必要的 Chromium 扩展点；TH 源码、加密归档及发行文件保持原样。后续升级优先补通用 API 契约，不按 TH 文件名、页面地址或协议名添加成功分支。
+
+| 能力 | 实现位置 | 必须保留的约束 |
+| --- | --- | --- |
+| addon 清理 | `chrome/browser/napi`、`gin` | env cleanup hook 逆序执行且早于 native 卸载；isolate 销毁前撤销已排队的 Locker 任务。 |
+| `module.createRequire`、`v8.serialize` | `resources/ipc/common/module.js`、`xenon_ipc_main_container.cc` | 复用真实模块解析与缓存，文件 URL 必须正确转义；序列化只包含有效视图字节，输出使用 isolate allocator。 |
+| frame / Worker 身份 | document host、worker host、manager、main container | 身份由 browser 产生；断开和重启后旧 endpoint / generation 不能进入新 Utility。 |
+| Session / preload | `xenon_electron_session_bridge`、窗口与 guest 创建路径 | 创建初始空页前绑定 StoragePartition，跨导航不丢分区；容器退出撤销所有 Profile 下的注册及观察器。 |
+| 隔离预加载 | renderer、worker renderer、`xenon_context_bridge` | 页面没有原始 Node/IPC；代理释放时回收源回调，销毁时撤销仍存活的代理；Worker 的定时器和微任务经真实 Blink realm 调度。 |
+| 自定义协议 | `main/protocol.js`、`xenon_electron_protocol` | 权限在启动时冻结，处理器按 Session 注册；有缓冲上限、超时和取消。 |
+| 后台渲染 | window host、RenderWidgetHost/Aura、Blink、Compositor | 分别保留原生窗口可见性与渲染状态；仅已挂接的 active frame 恢复渲染，所有主/子 frame 提交后重新应用策略；冻结、缓存和预渲染页面遵守生命周期。 |
+
+分区和后台渲染涉及 Chromium 内部状态，升级 Chromium 时应重点检查固定分区工厂、页面生命周期、Aura 和 Compositor 的这些回归；只验证 JS 返回值不足以证明行为正确。窗口通过 `unique_ptr<WebContents>` 明确移交所有权，头文件避免用不完整类型的 `unique_ptr` 默认参数实例化析构。
+
+Worker IPC 通过 `WebServiceWorkerContextProxy::GetRemoteAssociatedInterface` 和 browser 的 `RegisterAssociatedInterfaceBindersForServiceWorker` 绑定。同步初始化发生在 Worker 脚本执行前；身份仍来自 Chromium 提供的 Worker version，必须保留 Session、分区及服务代次校验。IPC 目录的 `DEPS` 禁止包含 `blink/renderer` 内部头，不为该适配放宽 Blink 构建可见性。renderer 中既有 data-mask 功能的内部依赖属于独立维护范围。
+
+Gin 的 Locker 任务撤销是通用生命周期修复，不依赖 Xenon buildflags。它适用于所有 `kUseLocker` isolate；投递可来自其他线程，任务执行与销毁前撤销均在 isolate 所属线程完成。普通不使用 Locker 的 runner 保持现有行为。修改此逻辑时执行完整 `gin_unittests`，不能只验收 TH。
+
+维护这些下游补丁时，先使用现有 public/delegate 扩展点；只有无法表达的通用能力或底层契约修复才修改 Chromium 内部实现。至少保留以下依赖检查：
+
+```powershell
+python buildtools/checkdeps/checkdeps.py --root . gin
+python buildtools/checkdeps/checkdeps.py --root . xenon_overlay/chrome/renderer/ipc
+gn check out/Release_64 //gin:gin
+gn check out/Release_64 //xenon_overlay/chrome/renderer:renderer
+```
+
+可取消的关闭请求不改变渲染状态；确定关闭后，先停止子孙窗口的后台渲染，再销毁窗口。浏览器进入退出流程时拒绝新建窗口并抑制可能重建窗口的回调，取消退出后恢复正常行为。主循环结束时先撤销 manager 路由并主动断开所有 SharedRemote 副本，再清理宿主窗口，防止 Utility 在 Profile 销毁后继续运行。
+
+可重复的独立集成测试位于 [electron_host_smoke](../tools/testdata/electron_host_smoke/README.md)。它启动独立 profile 和本地测试站点，验证真实进程间身份、隔离 preload、二进制协议、后台渲染和 Worker IPC，结束时关闭自身启动的进程。该测试不加载 TH，也不代替 TH 登录、播放和扩展功能的人工验收。
+
+针对本次兼容层的原生验证目标：
+
+```powershell
+autoninja -C out/Release_64 chrome ipc_main_container_unittests `
+  xenon_session_unittests xenon_background_throttling_unittests `
+  context_bridge_unittests
+./out/Release_64/xenon_session_unittests.exe
+./out/Release_64/xenon_background_throttling_unittests.exe `
+  --gtest_filter="RenderWidgetHostViewAuraTest.BackgroundThrottling*:CompositorTestWithMessageLoop.BackgroundThrottling*"
+./out/Release_64/context_bridge_unittests.exe
+./out/Release_64/ipc_main_container_unittests.exe `
+  --gtest_filter="XenonIpcMainContainerTest.*:XenonIpcModuleLoaderTest.*:XenonElectronAppConfigTest.*"
+```
+
+Blink 的 `WebViewTest.BackgroundThrottling*` 属于 `blink_unittests`，`XenonHostedWindowRenderingTest.*`、关闭取消与 manager 进程退出测试属于 Chrome `unit_tests`；只构建测试对象不等于运行这些测试。NAPI、Gin 和协议声明另有 `napi_host_unittests`、`gin_unittests`、`privileged_schemes_unittests`，修改相应实现时执行对应回归。
+
+Gin 的内存统计测试在初始化 V8 前设置全局 flag。完整套件可使用 `gin_unittests --test-launcher-batch-limit=1 --test-launcher-retry-limit=0`，让每项测试在独立进程中运行且不自动重试。Worker 集成测试同时覆盖有预加载的宿主分区及无预加载的普通浏览器分区；后者必须能完成初始化和消息回复，且不能获得原生接口。
+
+当前兼容范围仍有明确边界：主进程 CommonJS `require.cache` 尚未公开；完整 `Session.extensions` 和部分 webview 扩展事件不支持；协议不提供流式响应、文件上传、跨协议重定向及旧式 handler API。应用能打开不表示上述能力均已实现。运行产生的 SDK 状态、日志等可能使输出目录多于发行清单，打包前需保留这些数据并恢复干净的发行目录，再执行一致性检查。

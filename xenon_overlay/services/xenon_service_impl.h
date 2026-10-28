@@ -82,7 +82,19 @@ class XenonServiceImpl : public mojom::XenonMainService,
       mojo::PendingRemote<ipc::mojom::IpcRenderer> renderer,
       int32_t process_id,
       int32_t frame_id,
-      int32_t window_id) override;
+      int32_t window_id,
+      const std::string& document_url,
+      bool is_main_frame) override;
+  void UpdateElectronIpcRendererFrame(
+      const std::string& container_id,
+      const std::string& endpoint_id,
+      const std::string& document_url) override;
+  void RegisterElectronIpcServiceWorker(
+      const std::string& container_id,
+      const std::string& endpoint_id,
+      mojo::PendingRemote<ipc::mojom::IpcRenderer> renderer,
+      int32_t process_id,
+      ipc::mojom::IpcServiceWorkerInfoPtr identity) override;
   void RemoveElectronIpcRenderer(const std::string& container_id,
                                  const std::string& endpoint_id) override;
   void ElectronIpcSend(const std::string& container_id,
@@ -101,6 +113,14 @@ class XenonServiceImpl : public mojom::XenonMainService,
                            ElectronIpcSendSyncCallback callback) override;
 
   // N-API / Node Addon testing methods
+  void HandleElectronProtocol(const std::string& container_id,
+                              const std::string& partition,
+                              const std::string& request_id,
+                              base::Value request,
+                              HandleElectronProtocolCallback callback) override;
+  void CancelElectronProtocol(const std::string& container_id,
+                              const std::string& request_id) override;
+
   void LoadAddon(const std::string& context_id,
                  const std::string& path,
                  LoadAddonCallback callback) override;

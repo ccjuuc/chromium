@@ -685,6 +685,11 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   void SetPageLifecycleStateInternal(
       mojom::blink::PageLifecycleStatePtr new_state,
       mojom::blink::PageRestoreParamsPtr page_restore_params);
+  mojom::blink::PageVisibilityState EffectiveVisibilityState(
+      mojom::blink::PageVisibilityState requested_visibility,
+      const mojom::blink::PageLifecycleState& lifecycle) const;
+  void ApplyVisibilityState(mojom::blink::PageVisibilityState visibility_state,
+                            bool is_initial_state);
 
   // Updates the main frame's view transition state.
   void UpdateViewTransitionState(
@@ -952,6 +957,10 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   Persistent<EventListener> popup_mouse_wheel_event_listener_;
 
   web_pref::WebPreferences web_preferences_;
+  // Visibility requested by the browser before the application's throttling
+  // override. Page's lifecycle visibility contains the effective value.
+  mojom::blink::PageVisibilityState requested_visibility_state_ =
+      mojom::blink::PageVisibilityState::kVisible;
 
   blink::RendererPreferences renderer_preferences_;
 

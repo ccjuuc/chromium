@@ -86,6 +86,9 @@ struct IpcRendererConfig {
   array<IpcRendererUrlMapping> renderer_url_mappings;
   bool is_guest;
   bool is_main_frame;
+  // Browser-owned registry snapshot for this document's real partition.
+  array<IpcPreloadScript> session_preloads;
+  mojo_base.mojom.Value web_preferences;
   // Browser-only authorization for this final Document URL. A hosted app's
   // declared file-to-WebUI mapping preserves local subresource display without
   // granting CORS access or changing privileges for other WebUI documents.
@@ -110,6 +113,38 @@ struct IpcRendererConfig {
 // renderer Document and is replaced when that Document navigates.
 interface IpcRenderer {
   Dispatch(string channel, mojo_base.mojom.Value arguments);
+};
+
+// This identity is supplied by Browser's service-worker binder, never by the
+// worker script. A version is scoped to its app's actual StoragePartition.
+struct IpcServiceWorkerInfo {
+  int64 version_id;
+  string scope;
+  string script_url;
+  string partition;
+};
+
+struct IpcPreloadScript {
+  string id;
+  string file_path;
+  string source;
+};
+
+struct IpcServiceWorkerConfig {
+  IpcServiceWorkerInfo identity;
+  array<IpcPreloadScript> preloads;
+};
+
+// Separate from document IPC: this interface exposes no file, addon, window,
+// or identity-selection operations. Only app-registered preload realms receive
+// a JavaScript wrapper for this worker-bound transport.
+interface ServiceWorkerIpcHost {
+  [Sync]
+  Initialize(pending_remote<IpcRenderer> renderer)
+      => (IpcServiceWorkerConfig? config);
+  Send(string channel, mojo_base.mojom.Value arguments);
+  Invoke(string channel, mojo_base.mojom.Value arguments)
+      => (IpcResult result);
 };
 
 // Direct renderer-to-Utility transport for synchronous Node addon calls.

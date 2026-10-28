@@ -1175,6 +1175,69 @@ TEST_F(RenderWidgetHostViewAuraTest, InitController) {
 }
 #endif  // BUILDFLAG(IS_WIN)
 
+TEST_F(RenderWidgetHostViewAuraTest,
+       BackgroundThrottlingRestoresHiddenRendering) {
+  InitViewForFrame(nullptr);
+  ParentHostView(view_, parent_view_);
+  view_->ShowWithVisibility(PageVisibilityState::kVisible);
+  view_->Hide();
+  const auto* evictor =
+      view_->GetDelegatedFrameHostForTesting()->GetFrameEvictorForTesting();
+  ASSERT_TRUE(widget_host_->IsHidden());
+  ASSERT_FALSE(evictor->visible());
+  widget_host_->SetBackgroundThrottling(false);
+  EXPECT_FALSE(view_->IsShowing());
+  EXPECT_FALSE(widget_host_->IsHidden());
+  EXPECT_TRUE(evictor->visible());
+  widget_host_->SetBackgroundThrottling(true);
+  EXPECT_TRUE(widget_host_->IsHidden());
+  EXPECT_FALSE(evictor->visible());
+  widget_host_->SetBackgroundThrottling(false);
+  view_->ShowWithVisibility(PageVisibilityState::kVisible);
+  EXPECT_TRUE(view_->IsShowing());
+  EXPECT_FALSE(widget_host_->IsHidden());
+  EXPECT_TRUE(evictor->visible());
+  widget_host_->SetBackgroundThrottling(true);
+  EXPECT_FALSE(widget_host_->IsHidden());
+  view_->Hide();
+  EXPECT_TRUE(widget_host_->IsHidden());
+}
+
+TEST_F(RenderWidgetHostViewAuraTest, BackgroundThrottlingRestoresOcclusion) {
+  InitViewForFrame(nullptr);
+  ParentHostView(view_, parent_view_);
+  view_->ShowWithVisibility(PageVisibilityState::kVisible);
+  view_->WasOccluded();
+  ASSERT_TRUE(view_->IsShowing());
+  ASSERT_TRUE(widget_host_->IsHidden());
+  widget_host_->SetBackgroundThrottling(false);
+  EXPECT_FALSE(widget_host_->IsHidden());
+  widget_host_->SetBackgroundThrottling(true);
+  EXPECT_TRUE(widget_host_->IsHidden());
+  EXPECT_FALSE(view_->GetDelegatedFrameHostForTesting()
+                   ->GetFrameEvictorForTesting()
+                   ->visible());
+  view_->ShowWithVisibility(PageVisibilityState::kVisible);
+  EXPECT_FALSE(widget_host_->IsHidden());
+}
+
+TEST_F(RenderWidgetHostViewAuraTest,
+       BackgroundThrottlingBeforeViewInitialization) {
+  auto* hidden_view = CreateView(true);
+  auto* hidden_host = hidden_view->host();
+  hidden_host->SetBackgroundThrottling(false);
+  hidden_view->InitAsChild(nullptr);
+  EXPECT_FALSE(hidden_view->IsShowing());
+  EXPECT_FALSE(hidden_host->IsHidden());
+  EXPECT_TRUE(hidden_view->GetLocalSurfaceId().is_valid());
+  EXPECT_TRUE(hidden_view->GetDelegatedFrameHostForTesting()
+                  ->GetFrameEvictorForTesting()
+                  ->visible());
+  hidden_host->SetBackgroundThrottling(true);
+  EXPECT_TRUE(hidden_host->IsHidden());
+  DestroyView(hidden_view);
+}
+
 // Checks that moving parent sends new screen bounds.
 TEST_F(RenderWidgetHostViewAuraTest, ParentMovementUpdatesScreenRect) {
   InitViewForFrame(nullptr);
@@ -5584,7 +5647,7 @@ TEST_F(RenderWidgetHostViewAuraTest,
   legacy_render_widget_host_HWND()->OnPointer(WM_POINTERUPDATE, pointer_id_b,
                                               0);
   legacy_render_widget_host_HWND()->OnPointer(WM_POINTERUP, pointer_id_b, 0);
-  EXPECT_EQ(8, event_target.handle_pointer_count_);
+  EXPECT_EQ(8u, event_target.handle_pointer_count_);
 
   // Check that on reparent pointer events are handled by new parent ie. verify
   // pointer re-route behavior is not persistent.
@@ -5620,7 +5683,7 @@ TEST_F(RenderWidgetHostViewAuraTest,
   legacy_render_widget_host_HWND()->OnPointer(WM_POINTERUPDATE, pointer_id_a,
                                               0);
   legacy_render_widget_host_HWND()->OnPointer(WM_POINTERUP, pointer_id_a, 0);
-  EXPECT_EQ(3, new_event_target.handle_pointer_count_);
+  EXPECT_EQ(3u, new_event_target.handle_pointer_count_);
 }
 #endif
 
@@ -5804,7 +5867,7 @@ TEST_F(RenderWidgetHostViewAuraTest, TouchpadResendsFilteredGSB) {
   base::RunLoop().RunUntilIdle();
 
   // Events are filtered by paint holding.
-  EXPECT_EQ(0, GetAndResetDispatchedMessages().size());
+  EXPECT_TRUE(GetAndResetDispatchedMessages().empty());
   auto* render_input_router = widget_host_->GetRenderInputRouter();
   EXPECT_FALSE(render_input_router->IsWheelScrollInProgress());
 

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -72,6 +73,7 @@
 #include "v8/include/v8-promise.h"
 #include "v8/include/v8-script.h"
 #include "v8/include/v8-typed-array.h"
+#include "v8/include/v8-value-serializer.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_app_runtime.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_file_system_bridge.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_network_request_bridge.h"
@@ -80,6 +82,7 @@
 #include "xenon_overlay/chrome/browser/napi/napi_loader.h"
 #include "xenon_overlay/common/asar/archive.h"
 #include "xenon_overlay/common/ipc/xenon_ipc_value_codec.h"
+#include "xenon_overlay/common/ipc/xenon_privileged_schemes.h"
 #include "xenon_overlay/common/ipc/xenon_runtime_platform.h"
 #include "xenon_overlay/public/xenon_ipc_switches.h"
 #include "xenon_overlay/resources/grit/xenon_resources.h"
@@ -91,6 +94,112 @@ namespace {
 constexpr int kMaxPackageMainDepth = 32;
 constexpr int kMaxIpcValueDepth = 32;
 constexpr uint64_t kMaxSafeInteger = 9007199254740991ULL;
+
+// Node's v8.serialize writes views as host objects so pooled Buffers neither
+// expose unrelated backing-store bytes nor inflate the serialized size.
+class NodeValueSerializer : public v8::ValueSerializer::Delegate {
+ public:
+  NodeValueSerializer(v8::Isolate* isolate,
+                      v8::Local<v8::Value> buffer_constructor,
+                      v8::Local<v8::Function> data_view_byte_length)
+      : isolate_(isolate),
+        buffer_constructor_(buffer_constructor),
+        data_view_byte_length_(data_view_byte_length),
+        serializer_(isolate, this) {
+    serializer_.SetTreatArrayBufferViewsAsHostObjects(true);
+  }
+
+  void ThrowDataCloneError(v8::Local<v8::String> message) override {
+    isolate_->ThrowException(v8::Exception::Error(message));
+  }
+
+  v8::Maybe<bool> WriteHostObject(v8::Isolate* isolate,
+                                  v8::Local<v8::Object> object) override {
+    if (!object->IsArrayBufferView()) {
+      ThrowDataCloneError(v8::String::NewFromUtf8Literal(
+          isolate, "Unserializable host object"));
+      return v8::Nothing<bool>();
+    }
+    auto context = isolate->GetCurrentContext();
+    v8::Local<v8::Value> constructor;
+    if (!object->Get(context, gin::StringToV8(isolate, "constructor"))
+             .ToLocal(&constructor)) {
+      return v8::Nothing<bool>();
+    }
+    // These tags are Node DefaultSerializer's stable ArrayBufferView indices.
+    uint32_t tag;
+    if (constructor->StrictEquals(buffer_constructor_)) {
+      tag = 10;
+    } else if (object->IsInt8Array()) {
+      tag = 0;
+    } else if (object->IsUint8Array()) {
+      tag = 1;
+    } else if (object->IsUint8ClampedArray()) {
+      tag = 2;
+    } else if (object->IsInt16Array()) {
+      tag = 3;
+    } else if (object->IsUint16Array()) {
+      tag = 4;
+    } else if (object->IsInt32Array()) {
+      tag = 5;
+    } else if (object->IsUint32Array()) {
+      tag = 6;
+    } else if (object->IsFloat32Array()) {
+      tag = 7;
+    } else if (object->IsFloat64Array()) {
+      tag = 8;
+    } else if (object->IsDataView()) {
+      tag = 9;
+    } else if (object->IsBigInt64Array()) {
+      tag = 11;
+    } else if (object->IsBigUint64Array()) {
+      tag = 12;
+    } else if (object->IsFloat16Array()) {
+      tag = 13;
+    } else {
+      ThrowDataCloneError(v8::String::NewFromUtf8Literal(
+          isolate, "Unserializable ArrayBufferView"));
+      return v8::Nothing<bool>();
+    }
+    auto view = object.As<v8::ArrayBufferView>();
+    // The C++ ByteLength API returns zero for an out-of-bounds DataView over a
+    // resized buffer; Node's intrinsic getter throws instead.
+    if (object->IsDataView() &&
+        data_view_byte_length_->Call(context, object, 0, nullptr).IsEmpty()) {
+      return v8::Nothing<bool>();
+    }
+    if (view->Buffer()->WasDetached()) {
+      isolate->ThrowException(
+          v8::Exception::TypeError(v8::String::NewFromUtf8Literal(
+              isolate, "Cannot serialize detached ArrayBufferView")));
+      return v8::Nothing<bool>();
+    }
+    const size_t size = view->ByteLength();
+    if (!base::IsValueInRangeForNumericType<uint32_t>(size)) {
+      ThrowDataCloneError(v8::String::NewFromUtf8Literal(
+          isolate, "ArrayBufferView is too large to serialize"));
+      return v8::Nothing<bool>();
+    }
+    std::vector<uint8_t> bytes(size);
+    if (size && view->CopyContents(bytes.data(), size) != size) {
+      ThrowDataCloneError(v8::String::NewFromUtf8Literal(
+          isolate, "Cannot serialize detached ArrayBufferView"));
+      return v8::Nothing<bool>();
+    }
+    serializer_.WriteUint32(tag);
+    serializer_.WriteUint32(static_cast<uint32_t>(size));
+    serializer_.WriteRawBytes(bytes.data(), size);
+    return v8::Just(true);
+  }
+
+  v8::ValueSerializer& serializer() { return serializer_; }
+
+ private:
+  raw_ptr<v8::Isolate> isolate_;
+  v8::Local<v8::Value> buffer_constructor_;
+  v8::Local<v8::Function> data_view_byte_length_;
+  v8::ValueSerializer serializer_;
+};
 
 // OS realpath/stat APIs cannot traverse an ASAR. Canonicalize the archive on
 // disk, then resolve the member and ASAR links so equivalent CommonJS requests
@@ -511,12 +620,16 @@ struct XenonIpcMainContainer::PromiseReplyContext {
   InvokeCallback callback;
   std::string endpoint_id;
   bool serialized = false;
+  bool preserve_nested_binary = false;
 };
 
 struct XenonIpcMainContainer::RendererEndpoint {
   int32_t process_id;
   int32_t frame_id;
   int32_t window_id;
+  std::string document_url;
+  bool is_main_frame;
+  mojom::IpcServiceWorkerInfoPtr worker_info;
   mojo::Remote<xenon::ipc::mojom::IpcRenderer> remote;
 };
 
@@ -882,12 +995,17 @@ bool XenonIpcMainContainer::InitializeInternal(
           .Check();
     };
     bind_func("__xenonLog", &XenonIpcMainContainer::NativeLog);
+    bind_func("__xenonCreateRequire",
+              &XenonIpcMainContainer::NativeCreateRequire);
+    bind_func("__xenonV8Serialize", &XenonIpcMainContainer::NativeV8Serialize);
     bind_func("__xenonInstallAsyncContextHooks",
               &XenonIpcMainContainer::NativeInstallAsyncContextHooks);
     bind_func("__xenonGetPath", &XenonIpcMainContainer::NativeGetPath);
     bind_func("__xenonNetworkInterfaces",
               &XenonIpcMainContainer::NativeNetworkInterfaces);
     bind_func("__xenonOsCall", &XenonIpcMainContainer::NativeOsCall);
+    bind_func("__xenonRegisterSchemesAsPrivileged",
+              &XenonIpcMainContainer::NativeRegisterSchemesAsPrivileged);
     bind_func("__xenonSendToRenderer",
               &XenonIpcMainContainer::NativeSendToRenderer);
     bind_func("__xenonNetSend", &XenonIpcMainContainer::NativeNetSend);
@@ -1019,6 +1137,8 @@ void XenonIpcMainContainer::Shutdown() {
   }
   dispatch_send_.Reset();
   dispatch_invoke_.Reset();
+  dispatch_protocol_.Reset();
+  cancel_protocol_.Reset();
   dispatch_sync_.Reset();
   dispatch_window_event_.Reset();
   dispatch_app_event_.Reset();
@@ -1073,6 +1193,8 @@ bool XenonIpcMainContainer::RunBootstrap() {
   };
   return capture_function("__xenonDispatchSend", &dispatch_send_) &&
          capture_function("__xenonDispatchInvoke", &dispatch_invoke_) &&
+         capture_function("__xenonDispatchProtocol", &dispatch_protocol_) &&
+         capture_function("__xenonCancelProtocol", &cancel_protocol_) &&
          capture_function("__xenonDispatchSync", &dispatch_sync_) &&
          capture_function("__xenonDispatchBrowserWindowEvent",
                           &dispatch_window_event_) &&
@@ -1326,54 +1448,10 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::LoadResolvedCommonJsModule(
   return LoadCommonJsSource(normalized, source_text, error);
 }
 
-v8::MaybeLocal<v8::Value> XenonIpcMainContainer::LoadCommonJsSource(
-    const base::FilePath& virtual_path,
-    const std::string& source_text,
-    std::string* error) {
-  const std::string cache_key = virtual_path.AsUTF8Unsafe();
+v8::Local<v8::Function> XenonIpcMainContainer::CreateRequireFunction(
+    const base::FilePath& parent_path) {
   v8::Local<v8::Context> context = context_.Get(isolate_);
-  auto cached = module_cache_.find(cache_key);
-  if (cached != module_cache_.end()) {
-    return cached->second.Get(isolate_).As<v8::Object>()->Get(
-        context, v8::String::NewFromUtf8Literal(isolate_, "exports"));
-  }
-
-  std::string wrapped =
-      "(function(exports, require, module, __filename, __dirname) {\n" +
-      source_text + "\n})";
-  v8::TryCatch try_catch(isolate_);
-  v8::Local<v8::String> source =
-      v8::String::NewFromUtf8(isolate_, wrapped.c_str()).ToLocalChecked();
-  // Resource name must be set so Error.stack CallSite#getFileName() works.
-  // Node's `bindings` package crashes on undefined.getFileName() with
-  // `Cannot read properties of undefined (reading 'indexOf')`.
-  const std::string resource_name = virtual_path.AsUTF8Unsafe();
-  v8::ScriptOrigin origin(
-      v8::String::NewFromUtf8(isolate_, resource_name.c_str()).ToLocalChecked());
-  v8::Local<v8::Script> script;
-  v8::Local<v8::Value> wrapper_value;
-  if (!v8::Script::Compile(context, source, &origin).ToLocal(&script) ||
-      !script->Run(context).ToLocal(&wrapper_value) ||
-      !wrapper_value->IsFunction()) {
-    *error = "Failed to compile CommonJS module: " + cache_key;
-    if (try_catch.HasCaught()) {
-      try_catch.ReThrow();
-    }
-    return {};
-  }
-
-  v8::Local<v8::Object> exports = v8::Object::New(isolate_);
-  v8::Local<v8::Object> module = v8::Object::New(isolate_);
-  module
-      ->Set(context, v8::String::NewFromUtf8Literal(isolate_, "exports"),
-            exports)
-      .Check();
-  // Keep the module record: a circular dependency can observe a replacement
-  // module.exports before this wrapper returns, or an exported function can
-  // replace it after evaluation. An exports snapshot is stale in both cases.
-  module_cache_.emplace(cache_key, v8::Global<v8::Value>(isolate_, module));
-
-  const std::string parent_file = virtual_path.AsUTF8Unsafe();
+  const std::string parent_file = parent_path.AsUTF8Unsafe();
   auto require_callback = [](const v8::FunctionCallbackInfo<v8::Value>& info) {
     v8::Local<v8::Array> data = info.Data().As<v8::Array>();
     v8::Isolate* isolate = info.GetIsolate();
@@ -1465,6 +1543,59 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::LoadCommonJsSource(
       ->Set(context, v8::String::NewFromUtf8Literal(isolate_, "resolve"),
             create_require(true))
       .Check();
+
+  return require_function;
+}
+
+v8::MaybeLocal<v8::Value> XenonIpcMainContainer::LoadCommonJsSource(
+    const base::FilePath& virtual_path,
+    const std::string& source_text,
+    std::string* error) {
+  const std::string cache_key = virtual_path.AsUTF8Unsafe();
+  v8::Local<v8::Context> context = context_.Get(isolate_);
+  auto cached = module_cache_.find(cache_key);
+  if (cached != module_cache_.end()) {
+    return cached->second.Get(isolate_).As<v8::Object>()->Get(
+        context, v8::String::NewFromUtf8Literal(isolate_, "exports"));
+  }
+
+  std::string wrapped =
+      "(function(exports, require, module, __filename, __dirname) {\n" +
+      source_text + "\n})";
+  v8::TryCatch try_catch(isolate_);
+  v8::Local<v8::String> source =
+      v8::String::NewFromUtf8(isolate_, wrapped.c_str()).ToLocalChecked();
+  // Resource name must be set so Error.stack CallSite#getFileName() works.
+  // Node's `bindings` package crashes on undefined.getFileName() with
+  // `Cannot read properties of undefined (reading 'indexOf')`.
+  const std::string resource_name = virtual_path.AsUTF8Unsafe();
+  v8::ScriptOrigin origin(
+      v8::String::NewFromUtf8(isolate_, resource_name.c_str())
+          .ToLocalChecked());
+  v8::Local<v8::Script> script;
+  v8::Local<v8::Value> wrapper_value;
+  if (!v8::Script::Compile(context, source, &origin).ToLocal(&script) ||
+      !script->Run(context).ToLocal(&wrapper_value) ||
+      !wrapper_value->IsFunction()) {
+    *error = "Failed to compile CommonJS module: " + cache_key;
+    if (try_catch.HasCaught()) {
+      try_catch.ReThrow();
+    }
+    return {};
+  }
+
+  v8::Local<v8::Object> exports = v8::Object::New(isolate_);
+  v8::Local<v8::Object> module = v8::Object::New(isolate_);
+  module
+      ->Set(context, v8::String::NewFromUtf8Literal(isolate_, "exports"),
+            exports)
+      .Check();
+  // Keep the module record: a circular dependency can observe a replacement
+  // module.exports before this wrapper returns, or an exported function can
+  // replace it after evaluation. An exports snapshot is stale in both cases.
+  module_cache_.emplace(cache_key, v8::Global<v8::Value>(isolate_, module));
+
+  auto require_function = CreateRequireFunction(virtual_path);
 
   v8::Local<v8::Value> argv[] = {
       exports,
@@ -1602,6 +1733,7 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::RequireModule(
           {"http", "__xenonHttp"},
           {"http2", "__xenonHttp2"},
           {"https", "__xenonHttps"},
+          {"module", "__xenonModule"},
           {"net", "__xenonNet"},
           {"node:assert", "__xenonAssert"},
           {"node:async_hooks", "__xenonAsyncHooks"},
@@ -1616,6 +1748,7 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::RequireModule(
           {"node:http", "__xenonHttp"},
           {"node:http2", "__xenonHttp2"},
           {"node:https", "__xenonHttps"},
+          {"node:module", "__xenonModule"},
           {"node:net", "__xenonNet"},
           {"node:os", "__xenonOs"},
           {"node:path", "__xenonPath"},
@@ -1631,6 +1764,7 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::RequireModule(
           {"node:tty", "__xenonTty"},
           {"node:url", "__xenonUrl"},
           {"node:util", "__xenonUtil"},
+          {"node:v8", "__xenonV8"},
           {"node:zlib", "__xenonZlib"},
           {"os", "__xenonOs"},
           {"path", "__xenonPath"},
@@ -1646,6 +1780,7 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::RequireModule(
           {"tty", "__xenonTty"},
           {"url", "__xenonUrl"},
           {"util", "__xenonUtil"},
+          {"v8", "__xenonV8"},
           {"zlib", "__xenonZlib"},
       });
 
@@ -1812,6 +1947,73 @@ void XenonIpcMainContainer::NativeInstallAsyncContextHooks(
 #endif
 }
 
+void XenonIpcMainContainer::NativeCreateRequire(gin::Arguments* args) {
+  std::string filename;
+  if (!args->GetNext(&filename) || filename.find('\0') != std::string::npos) {
+    args->ThrowTypeError("createRequire requires an absolute filename");
+    return;
+  }
+  auto parent = base::FilePath::FromUTF8Unsafe(filename);
+#if BUILDFLAG(IS_WIN)
+  if (!parent.IsAbsolute() && !parent.empty() &&
+      base::FilePath::IsSeparator(parent.value().front())) {
+    // Node accepts drive-relative rooted paths such as /app/entry.js. Resolve
+    // their device using this container's cwd, without consulting the host cwd
+    // or requiring the synthetic parent file to exist.
+    const auto cwd = working_directory_.NormalizePathSeparators();
+    const auto components = cwd.GetComponents();
+    if (cwd.IsNetwork() && components.size() >= 3) {
+      parent = base::FilePath(components[0] + components[1] +
+                              FILE_PATH_LITERAL("\\") + components[2] +
+                              parent.value());
+    } else if (!components.empty()) {
+      parent = base::FilePath(components.front() + parent.value());
+    }
+  }
+#endif
+  if (!parent.IsAbsolute()) {
+    args->ThrowTypeError("createRequire requires an absolute filename");
+    return;
+  }
+  args->Return(CreateRequireFunction(parent));
+}
+
+void XenonIpcMainContainer::NativeV8Serialize(gin::Arguments* args) {
+  v8::Local<v8::Value> value;
+  if (!args->GetNext(&value)) {
+    value = v8::Undefined(isolate_);
+  }
+  v8::Local<v8::Value> buffer_constructor;
+  if (!args->GetNext(&buffer_constructor) ||
+      !buffer_constructor->IsFunction()) {
+    args->ThrowTypeError("serialize requires the runtime Buffer constructor");
+    return;
+  }
+  v8::Local<v8::Function> data_view_byte_length;
+  if (!args->GetNext(&data_view_byte_length)) {
+    args->ThrowTypeError("serialize requires the runtime DataView getter");
+    return;
+  }
+  NodeValueSerializer delegate(isolate_, buffer_constructor,
+                               data_view_byte_length);
+  auto& serializer = delegate.serializer();
+  serializer.WriteHeader();
+  if (!serializer.WriteValue(context_.Get(isolate_), value).FromMaybe(false)) {
+    return;
+  }
+  auto [data, size] = serializer.Release();
+  // V8 sandbox builds require ArrayBuffer memory from the isolate allocator;
+  // the serializer's malloc allocation cannot be adopted as a backing store.
+  auto backing = v8::ArrayBuffer::NewBackingStore(isolate_, size);
+  if (size) {
+    UNSAFE_BUFFERS(base::span(static_cast<uint8_t*>(backing->Data()), size))
+        .copy_from(UNSAFE_BUFFERS(base::span(data, size)));
+  }
+  std::free(data);
+  auto buffer = v8::ArrayBuffer::New(isolate_, std::move(backing));
+  args->Return(v8::Uint8Array::New(buffer, 0, size).As<v8::Value>());
+}
+
 void XenonIpcMainContainer::NativeLog(gin::Arguments* args) {
   std::string message;
   if (!args->GetNext(&message)) {
@@ -1882,6 +2084,25 @@ void XenonIpcMainContainer::NativeNetworkInterfaces(gin::Arguments* args) {
   v8::Local<v8::Value> value;
   if (ValueToV8(result->value).ToLocal(&value)) {
     args->Return(value);
+  }
+}
+
+void XenonIpcMainContainer::NativeRegisterSchemesAsPrivileged(
+    gin::Arguments* args) {
+  v8::Local<v8::Value> input;
+  base::Value schemes;
+  std::string error;
+  if (args->Length() != 1 || !args->GetNext(&input) ||
+      !V8ToValue(input, &schemes, &error) || !schemes.is_list()) {
+    args->ThrowTypeError(
+        "ERR_INVALID_ARG_TYPE: privileged schemes must be an array");
+    return;
+  }
+  // Chromium locks its scheme tables before any application main is loaded.
+  // Never mutate those process-wide tables from a live Utility V8 context.
+  if (!ValidatePrivilegedSchemesAgainstStartup(schemes.GetList(), &error)) {
+    isolate_->ThrowException(
+        v8::Exception::Error(gin::StringToV8(isolate_, error)));
   }
 }
 
@@ -2361,11 +2582,13 @@ std::string XenonIpcMainContainer::AddRenderer(
     mojo::PendingRemote<xenon::ipc::mojom::IpcRenderer> renderer,
     int32_t process_id,
     int32_t frame_id,
-    int32_t window_id) {
+    int32_t window_id,
+    const std::string& document_url,
+    bool is_main_frame) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   const std::string endpoint_id = base::NumberToString(next_endpoint_id_++);
-  AddRenderer(endpoint_id, std::move(renderer), process_id, frame_id,
-              window_id);
+  AddRenderer(endpoint_id, std::move(renderer), process_id, frame_id, window_id,
+              document_url, is_main_frame);
   return endpoint_id;
 }
 
@@ -2374,16 +2597,32 @@ void XenonIpcMainContainer::AddRenderer(
     mojo::PendingRemote<xenon::ipc::mojom::IpcRenderer> renderer,
     int32_t process_id,
     int32_t frame_id,
-    int32_t window_id) {
+    int32_t window_id,
+    const std::string& document_url,
+    bool is_main_frame,
+    mojom::IpcServiceWorkerInfoPtr worker_info) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   RemoveRenderer(endpoint_id);
   mojo::Remote<xenon::ipc::mojom::IpcRenderer> remote(std::move(renderer));
   remote.set_disconnect_handler(
       base::BindOnce(&XenonIpcMainContainer::RemoveRenderer,
                      weak_factory_.GetWeakPtr(), endpoint_id));
-  renderers_.emplace(endpoint_id,
-                     RendererEndpoint{process_id, frame_id, window_id,
-                                      std::move(remote)});
+  renderers_.emplace(
+      endpoint_id, RendererEndpoint{process_id, frame_id, window_id,
+                                    document_url, is_main_frame,
+                                    std::move(worker_info), std::move(remote)});
+  DispatchRendererEvent(endpoint_id, true);
+}
+
+void XenonIpcMainContainer::UpdateRendererFrameUrl(
+    const std::string& endpoint_id,
+    const std::string& document_url) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  auto endpoint = renderers_.find(endpoint_id);
+  if (endpoint == renderers_.end()) {
+    return;
+  }
+  endpoint->second.document_url = document_url;
   DispatchRendererEvent(endpoint_id, true);
 }
 
@@ -2581,6 +2820,9 @@ v8::Local<v8::Object> XenonIpcMainContainer::CreateSenderMetadata(
   v8::Local<v8::Context> context = context_.Get(isolate_);
   v8::Local<v8::Object> sender = v8::Object::New(isolate_);
   const auto endpoint = renderers_.find(endpoint_id);
+  // Only native main-process events have no renderer. All renderer entry
+  // points validate registration before constructing frame/worker identities.
+  CHECK(endpoint != renderers_.end() || endpoint_id == "@main");
   const int32_t process_id =
       endpoint == renderers_.end() ? 0 : endpoint->second.process_id;
   const int32_t frame_id =
@@ -2604,6 +2846,29 @@ v8::Local<v8::Object> XenonIpcMainContainer::CreateSenderMetadata(
       ->Set(context, v8::String::NewFromUtf8Literal(isolate_, "windowId"),
             v8::Integer::New(isolate_, window_id))
       .Check();
+  sender
+      ->Set(context, v8::String::NewFromUtf8Literal(isolate_, "url"),
+            gin::StringToV8(isolate_, endpoint == renderers_.end()
+                                          ? std::string()
+                                          : endpoint->second.document_url))
+      .Check();
+  sender
+      ->Set(context, v8::String::NewFromUtf8Literal(isolate_, "isMainFrame"),
+            v8::Boolean::New(isolate_, endpoint != renderers_.end() &&
+                                           endpoint->second.is_main_frame))
+      .Check();
+  if (endpoint != renderers_.end() && endpoint->second.worker_info) {
+    const auto& worker = *endpoint->second.worker_info;
+    auto set = [&](const char* key, v8::Local<v8::Value> value) {
+      sender->Set(context, gin::StringToV8(isolate_, key), value).Check();
+    };
+    set("type", gin::StringToV8(isolate_, "service-worker"));
+    set("workerToken", gin::StringToV8(isolate_, endpoint_id));
+    set("versionId", v8::Number::New(isolate_, worker.version_id));
+    set("scope", gin::StringToV8(isolate_, worker.scope));
+    set("scriptUrl", gin::StringToV8(isolate_, worker.script_url));
+    set("partition", gin::StringToV8(isolate_, worker.partition));
+  }
   return sender;
 }
 
@@ -2612,6 +2877,12 @@ void XenonIpcMainContainer::Send(const std::string& endpoint_id,
                                  base::Value arguments) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!initialized_) {
+    return;
+  }
+  const bool native_main_event =
+      endpoint_id == "@main" && (channel.starts_with("__xenon:net:") ||
+                                 channel == "__xenon:child-process:event");
+  if (!native_main_event && !renderers_.contains(endpoint_id)) {
     return;
   }
   ScopedV8Context scope(isolate_, context_);
@@ -2647,6 +2918,12 @@ void XenonIpcMainContainer::Invoke(const std::string& endpoint_id,
     std::move(callback).Run(ErrorResult(
         startup_error_.empty() ? "ipcMain container is not initialized"
                                : startup_error_));
+    return;
+  }
+
+  if (!renderers_.contains(endpoint_id)) {
+    std::move(callback).Run(
+        ErrorResult("Renderer IPC endpoint is unavailable"));
     return;
   }
 
@@ -2712,6 +2989,74 @@ void XenonIpcMainContainer::Invoke(const std::string& endpoint_id,
   isolate_->PerformMicrotaskCheckpoint();
 }
 
+void XenonIpcMainContainer::HandleProtocol(const std::string& partition,
+                                           const std::string& request_id,
+                                           base::Value request,
+                                           InvokeCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!initialized_) {
+    std::move(callback).Run(ErrorResult("Protocol container is unavailable"));
+    return;
+  }
+  ScopedV8Context scope(isolate_, context_);
+  v8::Local<v8::Value> payload;
+  if (!ValueToV8(request).ToLocal(&payload)) {
+    std::move(callback).Run(ErrorResult("Invalid protocol request"));
+    return;
+  }
+  v8::Local<v8::Value> argv[] = {gin::StringToV8(isolate_, partition),
+                                 gin::StringToV8(isolate_, request_id),
+                                 payload};
+  gin::TryCatch try_catch(isolate_);
+  v8::Local<v8::Value> result;
+  if (!dispatch_protocol_.Get(isolate_)
+           ->Call(scope.context(), scope.context()->Global(), std::size(argv),
+                  argv)
+           .ToLocal(&result) ||
+      !result->IsPromise()) {
+    std::move(callback).Run(
+        ErrorResult("Protocol dispatch failed: " + try_catch.GetStackTrace()));
+    return;
+  }
+  auto* reply =
+      new PromiseReplyContext{weak_factory_.GetWeakPtr(), std::move(callback),
+                              "protocol:" + request_id, false, true};
+  pending_promise_replies_.insert(reply);
+  auto data =
+      v8::External::New(isolate_, reply, v8::kExternalPointerTypeTagDefault);
+  auto resolved = v8::Function::New(scope.context(), OnPromiseResolved, data)
+                      .ToLocalChecked();
+  auto rejected = v8::Function::New(scope.context(), OnPromiseRejected, data)
+                      .ToLocalChecked();
+  if (result.As<v8::Promise>()
+          ->Then(scope.context(), resolved, rejected)
+          .IsEmpty()) {
+    pending_promise_replies_.erase(reply);
+    std::move(reply->callback)
+        .Run(ErrorResult("Cannot await protocol handler"));
+    delete reply;
+  }
+  isolate_->PerformMicrotaskCheckpoint();
+}
+
+void XenonIpcMainContainer::CancelProtocol(const std::string& request_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!initialized_) {
+    return;
+  }
+  ScopedV8Context scope(isolate_, context_);
+  v8::Local<v8::Value> argv[] = {gin::StringToV8(isolate_, request_id)};
+  gin::TryCatch try_catch(isolate_);
+  v8::Local<v8::Value> ignored;
+  if (!cancel_protocol_.Get(isolate_)
+           ->Call(scope.context(), scope.context()->Global(), std::size(argv),
+                  argv)
+           .ToLocal(&ignored)) {
+    LOG(ERROR) << "Protocol cancellation failed: " << try_catch.GetStackTrace();
+  }
+  isolate_->PerformMicrotaskCheckpoint();
+}
+
 xenon::ipc::mojom::IpcResultPtr XenonIpcMainContainer::SendSync(
     const std::string& endpoint_id,
     const std::string& channel,
@@ -2719,6 +3064,9 @@ xenon::ipc::mojom::IpcResultPtr XenonIpcMainContainer::SendSync(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!initialized_) {
     return ErrorResult("ipcMain container is not initialized");
+  }
+  if (!renderers_.contains(endpoint_id)) {
+    return ErrorResult("Renderer IPC endpoint is unavailable");
   }
 
   ScopedV8Context scope(isolate_, context_);
@@ -3546,7 +3894,12 @@ void XenonIpcMainContainer::CompletePromise(PromiseReplyContext* reply,
   if (success) {
     base::Value converted;
     std::string error;
-    if (!V8ToIpcPayload(value, reply->serialized, &converted, &error)) {
+    const bool converted_ok =
+        reply->preserve_nested_binary
+            ? ConvertV8ToValue(isolate_, context_.Get(isolate_), value,
+                               &converted, &error, 0, true)
+            : V8ToIpcPayload(value, reply->serialized, &converted, &error);
+    if (!converted_ok) {
       std::move(reply->callback).Run(ErrorResult(error));
     } else {
       auto result = xenon::ipc::mojom::IpcResult::New();

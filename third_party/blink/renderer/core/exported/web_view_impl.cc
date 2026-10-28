@@ -2564,6 +2564,9 @@ void WebViewImpl::SetPageLifecycleStateInternal(
     return;
   }
   auto& old_state = page->GetPageLifecycleState();
+  requested_visibility_state_ = new_state->visibility;
+  new_state->visibility =
+      EffectiveVisibilityState(requested_visibility_state_, *new_state);
   TRACE_EVENT2("navigation", "WebViewImpl::SetPageLifecycleStateInternal",
                "old_state", old_state, "new_state", new_state);
 
@@ -2628,7 +2631,7 @@ void WebViewImpl::SetPageLifecycleStateInternal(
     DispatchPagehide(new_state->pagehide_dispatch);
   }
   if (hiding_page) {
-    SetVisibilityState(new_state->visibility, /*is_initial_state=*/false);
+    ApplyVisibilityState(new_state->visibility, /*is_initial_state=*/false);
   }
   if (storing_in_bfcache) {
     // TODO(https://crbug.com/427130212): Consider moving this to happen earlier
@@ -2670,7 +2673,7 @@ void WebViewImpl::SetPageLifecycleStateInternal(
     SetPageFrozen(false);
   }
   if (showing_page) {
-    SetVisibilityState(new_state->visibility, /*is_initial_state=*/false);
+    ApplyVisibilityState(new_state->visibility, /*is_initial_state=*/false);
   }
   if (restoring_from_bfcache) {
     DCHECK(dispatching_pageshow);
@@ -3739,6 +3742,16 @@ void WebViewImpl::ActivatePrerenderedPage(
     document->ActivateForPrerendering(*prerender_page_activation_params);
   }
 
+  // Activating into a hidden window may not produce another visibility IPC.
+  // Reapply the override after every local document has left prerendering.
+  if (GetPage() && !web_preferences_.background_throttling) {
+    const auto visibility = EffectiveVisibilityState(
+        requested_visibility_state_, *GetPage()->GetPageLifecycleState());
+    if (visibility != GetVisibilityState()) {
+      ApplyVisibilityState(visibility, /*is_initial_state=*/false);
+    }
+  }
+
   std::move(callback).Run();
 }
 
@@ -3891,7 +3904,15 @@ const web_pref::WebPreferences& WebViewImpl::GetWebPreferences() {
 
 void WebViewImpl::UpdateWebPreferences(
     const blink::web_pref::WebPreferences& preferences) {
+  const bool throttling_changed = web_preferences_.background_throttling !=
+                                  preferences.background_throttling;
   web_preferences_ = preferences;
+
+  if (throttling_changed && GetPage()) {
+    // Enabling throttling restores the browser's requested visibility even
+    // when no new visibility IPC follows.
+    SetVisibilityState(requested_visibility_state_, /*is_initial_state=*/false);
+  }
 
   if (IsFencedFrameRoot()) {
     // The main frame of a fenced frame should not behave like a top level
@@ -4245,10 +4266,34 @@ PageScheduler* WebViewImpl::Scheduler() const {
   return GetPage()->GetPageScheduler();
 }
 
+mojom::blink::PageVisibilityState WebViewImpl::EffectiveVisibilityState(
+    mojom::blink::PageVisibilityState requested_visibility,
+    const mojom::blink::PageLifecycleState& lifecycle) const {
+  // Background rendering only applies to active documents. It must not make
+  // prerendered, frozen, cached or departing documents appear visible.
+  if (!web_preferences_.background_throttling && !GetPage()->IsPrerendering() &&
+      !lifecycle.is_frozen && !lifecycle.is_in_back_forward_cache &&
+      lifecycle.pagehide_dispatch ==
+          mojom::blink::PagehideDispatch::kNotDispatched) {
+    return mojom::blink::PageVisibilityState::kVisible;
+  }
+  return requested_visibility;
+}
+
 void WebViewImpl::SetVisibilityState(
     mojom::blink::PageVisibilityState visibility_state,
     bool is_initial_state) {
   DCHECK(GetPage());
+  requested_visibility_state_ = visibility_state;
+  ApplyVisibilityState(
+      EffectiveVisibilityState(visibility_state,
+                               *GetPage()->GetPageLifecycleState()),
+      is_initial_state);
+}
+
+void WebViewImpl::ApplyVisibilityState(
+    mojom::blink::PageVisibilityState visibility_state,
+    bool is_initial_state) {
   GetPage()->SetVisibilityState(visibility_state, is_initial_state);
   // Do not throttle if the page should be painting.
   bool is_visible =

@@ -604,12 +604,15 @@ void Compositor::SetVisible(bool visible) {
                           this, visible);
   }
 
-  host_->SetVisible(visible);
+  requested_visibility_ = visible;
+  const bool rendering_visible =
+      visible || (!background_throttling_allowed_ && widget_valid_);
+  host_->SetVisible(rendering_visible);
   // Visibility is reset when the output surface is lost, so this must also be
   // updated then. We need to call this even if the visibility hasn't changed,
   // for the same reason.
   if (display_private_)
-    display_private_->SetDisplayVisible(visible);
+    display_private_->SetDisplayVisible(rendering_visible);
 
   if (changed) {
     observer_list_.Notify(&CompositorObserver::OnCompositorVisibilityChanged,
@@ -617,8 +620,18 @@ void Compositor::SetVisible(bool visible) {
   }
 }
 
+void Compositor::SetBackgroundThrottling(bool allowed) {
+  background_throttling_allowed_ = allowed;
+  const bool rendering_visible =
+      requested_visibility_ || (!allowed && widget_valid_);
+  host_->SetVisible(rendering_visible);
+  if (display_private_) {
+    display_private_->SetDisplayVisible(rendering_visible);
+  }
+}
+
 bool Compositor::IsVisible() {
-  return host_->IsVisible();
+  return requested_visibility_;
 }
 
 // TODO(bokan): These calls should be delegated through the
@@ -686,6 +699,9 @@ void Compositor::SetAcceleratedWidget(gfx::AcceleratedWidget widget) {
   DCHECK(!widget_valid_);
   widget_ = widget;
   widget_valid_ = true;
+  if (!background_throttling_allowed_) {
+    host_->SetVisible(true);
+  }
   if (layer_tree_frame_sink_requested_) {
     context_factory_->CreateLayerTreeFrameSink(
         context_creation_weak_ptr_factory_.GetWeakPtr());
@@ -694,6 +710,11 @@ void Compositor::SetAcceleratedWidget(gfx::AcceleratedWidget widget) {
 
 gfx::AcceleratedWidget Compositor::ReleaseAcceleratedWidget() {
   DCHECK(!IsVisible());
+  if (!background_throttling_allowed_) {
+    // A released output must stop rendering even when its application keeps
+    // hidden windows active. Reacquiring the widget restores that preference.
+    host_->SetVisible(false);
+  }
   host_->ReleaseLayerTreeFrameSink();
   display_private_.reset();
   external_begin_frame_controller_.reset();

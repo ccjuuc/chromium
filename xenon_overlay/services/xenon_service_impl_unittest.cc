@@ -27,6 +27,7 @@
 #include "build/build_config.h"
 #include "mojo/core/embedder/embedder.h"
 #include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/bindings/receiver_set.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "v8/include/v8.h"
 #include "xenon_overlay/common/asar/archive.h"
@@ -206,8 +207,20 @@ class XenonServiceOwnerTest : public testing::Test {
   void StartService() {
     service_.reset();
     browser_.reset();
+    main_driver_receivers_.Clear();
     service_ = std::make_unique<XenonServiceImpl>(
         browser_.BindNewPipeAndPassReceiver());
+  }
+
+  void RegisterMainDriver(const std::string& container_id,
+                          const std::string& endpoint) {
+    mojo::PendingRemote<ipc::mojom::IpcRenderer> remote;
+    main_driver_receivers_.Add(&main_driver_,
+                               remote.InitWithNewPipeAndPassReceiver());
+    browser_->RegisterElectronIpcRenderer(
+        container_id, endpoint, std::move(remote), 1, 1, 0,
+        "file:///service-test-driver.html", true);
+    browser_.FlushForTesting();
   }
 
   NodeRemote Bind(
@@ -350,6 +363,8 @@ class XenonServiceOwnerTest : public testing::Test {
       base::test::TaskEnvironment::ThreadPoolExecutionMode::QUEUED};
   mojo::Remote<mojom::XenonMainService> browser_;
   std::unique_ptr<XenonServiceImpl> service_;
+  NodeCallbackRecorder main_driver_;
+  mojo::ReceiverSet<ipc::mojom::IpcRenderer> main_driver_receivers_;
   std::string addon_path_;
 };
 
@@ -399,6 +414,7 @@ class XenonServiceArchiveTest : public XenonServiceOwnerTest {
   }
 
   void ExpectArchiveReply() {
+    RegisterMainDriver(kContext, "archive-page");
     ResultFuture reply;
     browser_->ElectronIpcInvoke(kContext, "archive-page", "archive-answer",
                                 base::Value(base::ListValue()),
@@ -499,6 +515,7 @@ ipcMain.handle('disk-app:metadata', () => ({
   ASSERT_TRUE(initialized.Wait());
   ASSERT_TRUE(initialized.Get<0>()) << initialized.Get<1>();
 
+  RegisterMainDriver(kContext, "disk-page");
   ResultFuture reply;
   browser_->ElectronIpcInvoke(kContext, "disk-page", "disk-app:metadata",
                               base::Value(base::ListValue()),
@@ -809,7 +826,8 @@ TEST_F(XenonServiceOwnerTest,
   NodeCallbackRecorder observer;
   mojo::Receiver<ipc::mojom::IpcRenderer> receiver(&observer);
   browser_->RegisterElectronIpcRenderer(
-      kContext, "callback-page", receiver.BindNewPipeAndPassRemote(), 1, 1, 1);
+      kContext, "callback-page", receiver.BindNewPipeAndPassRemote(), 1, 1, 1,
+      "file:///callback-page.html", true);
   browser_.FlushForTesting();
   NodeRemote node = Bind("callback-page");
   Load(node);
@@ -1133,17 +1151,19 @@ class XenonServiceAppEventTest : public XenonServiceOwnerTest {
     config->app_path = app_path_.AsUTF8Unsafe();
     config->app_name = container_id;
     base::test::TestFuture<bool, const std::string&> initialized;
-    browser_->InitializeElectronIpc(std::move(config), initialized.GetCallback());
+    browser_->InitializeElectronIpc(std::move(config),
+                                    initialized.GetCallback());
     ASSERT_TRUE(initialized.Wait());
     ASSERT_TRUE(initialized.Get<0>()) << initialized.Get<1>();
+    RegisterMainDriver(container_id, "test-driver");
     task_environment_.RunUntilIdle();
   }
 
   ipc::mojom::IpcResultPtr ReadState(const std::string& container_id) {
     ResultFuture result;
-    browser_->ElectronIpcInvoke(
-        container_id, "test-driver", "app:event-state",
-        base::Value(base::ListValue()), result.GetCallback());
+    browser_->ElectronIpcInvoke(container_id, "test-driver", "app:event-state",
+                                base::Value(base::ListValue()),
+                                result.GetCallback());
     if (!result.Wait()) {
       ADD_FAILURE() << "App event state query did not complete";
       return nullptr;
@@ -1347,13 +1367,15 @@ class XenonServiceMainNetTest : public XenonServiceOwnerTest {
                                     initialized.GetCallback());
     ASSERT_TRUE(initialized.Wait());
     ASSERT_TRUE(initialized.Get<0>()) << initialized.Get<1>();
+    RegisterMainDriver(kContext, "test-driver");
     task_environment_.RunUntilIdle();
   }
 
   void RegisterRenderer(const std::string& endpoint,
                         NetPipeRenderer& renderer) {
     browser_->RegisterElectronIpcRenderer(kContext, endpoint,
-                                          renderer.BindNewRemote(), 1, 1, 1);
+                                          renderer.BindNewRemote(), 1, 1, 1,
+                                          "file:///net-pipe.html", true);
     browser_.FlushForTesting();
     task_environment_.RunUntilIdle();
   }

@@ -12,13 +12,14 @@
 #include "base/json/json_reader.h"
 #include "gin/test/v8_test.h"
 #include "mojo/core/embedder/embedder.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_ipc_main_container.h"
 
 namespace xenon::ipc {
 namespace {
 
-class XenonIpcModuleLoaderTest : public gin::V8Test {
+class XenonIpcModuleLoaderTest : public gin::V8Test, public mojom::IpcRenderer {
  protected:
   static void SetUpTestSuite() { mojo::core::Init(); }
 
@@ -34,8 +35,11 @@ class XenonIpcModuleLoaderTest : public gin::V8Test {
 
   void TearDown() override {
     container_.reset();
+    renderer_receiver_.reset();
     gin::V8Test::TearDown();
   }
+
+  void Dispatch(const std::string& channel, base::Value arguments) override {}
 
   void WriteModule(const std::string& relative_path,
                    const std::string& source) {
@@ -64,6 +68,10 @@ class XenonIpcModuleLoaderTest : public gin::V8Test {
     container_->SetNativeAddonHooks(std::move(native_hooks));
     ASSERT_TRUE(container_->Initialize(std::move(module)))
         << container_->startup_error();
+    renderer_receiver_.reset();
+    container_->AddRenderer("renderer",
+                            renderer_receiver_.BindNewPipeAndPassRemote(), 1, 1,
+                            0, "about:blank", true);
     auto result = container_->SendSync("renderer", "test:module-result",
                                        base::Value(base::ListValue()));
     ASSERT_TRUE(result->success) << result->error;
@@ -73,6 +81,7 @@ class XenonIpcModuleLoaderTest : public gin::V8Test {
 
   base::ScopedTempDir temp_dir_;
   base::FilePath app_path_;
+  mojo::Receiver<mojom::IpcRenderer> renderer_receiver_{this};
   std::unique_ptr<XenonIpcMainContainer> container_;
 };
 

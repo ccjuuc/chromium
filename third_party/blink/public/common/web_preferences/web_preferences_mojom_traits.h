@@ -87,6 +87,10 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
     return r.javascript_enabled;
   }
 
+  static bool background_throttling(const blink::web_pref::WebPreferences& r) {
+    return r.background_throttling;
+  }
+
   static bool web_security_enabled(const blink::web_pref::WebPreferences& r) {
     return r.web_security_enabled;
   }

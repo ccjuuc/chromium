@@ -154,6 +154,10 @@ TEST_F(ElectronAppConfigTest, InvalidDescriptorsKeepPreviousConfiguration) {
        R"({"application":"../source","main":"../escape.js"})",
        R"({"application":"../source","archivePublicKey":[]})",
        R"({"application":"../source","versionFromExecutable":"true"})",
+       R"({"application":"../source","privilegedSchemes":{}})",
+       R"({"application":"../source","privilegedSchemes":[{"scheme":"https","privileges":{"secure":true}}]})",
+       R"({"application":"../source","privilegedSchemes":[{"scheme":"fixture","privileges":{"secure":1}}]})",
+       R"({"application":"../source","privilegedSchemes":[{"scheme":"fixture","privileges":{"allowServiceWorkers":true}}]})",
        R"({"application":"../source","parentWindowPairing":"dist/page.html"})",
        R"({"application":"../source","parentWindowPairing":[42]})",
        R"({"application":"../source","parentWindowPairing":["../escape.html"]})"}) {
@@ -175,6 +179,47 @@ TEST_F(ElectronAppConfigTest, InvalidDescriptorsKeepPreviousConfiguration) {
   std::string error;
   EXPECT_FALSE(LoadElectronAppConfig(descriptor_, "new", &config, &error));
   EXPECT_FALSE(config);
+}
+
+TEST_F(ElectronAppConfigTest, AcceptsPrivilegedSchemeDeclarationWithoutMutatingApp) {
+  const auto app = root_.AppendASCII("source");
+  ASSERT_TRUE(WriteApplication(app));
+  const auto before = Snapshot(app);
+  ASSERT_TRUE(WriteDescriptor(
+      base::DictValue()
+          .Set("application", "../source")
+          .Set("privilegedSchemes",
+               base::ListValue().Append(
+                   base::DictValue()
+                       .Set("scheme", "fixture")
+                       .Set("privileges", base::DictValue()
+                                              .Set("standard", true)
+                                              .Set("secure", true)
+                                              .Set("supportFetchAPI", true)
+                                              .Set("corsEnabled", true))))));
+  mojom::IpcMainConfigPtr config;
+  std::string error;
+  ASSERT_TRUE(LoadElectronAppConfig(descriptor_, "hosted", &config, &error))
+      << error;
+  EXPECT_EQ(app.AsUTF8Unsafe(), config->app_path);
+  EXPECT_EQ(before, Snapshot(app));
+}
+
+TEST_F(ElectronAppConfigTest,
+       AcceptsCspBypassForCustomSchemeWithoutMutatingApp) {
+  const auto app = root_.AppendASCII("source");
+  ASSERT_TRUE(WriteApplication(app));
+  const auto before = Snapshot(app);
+  ASSERT_TRUE(base::WriteFile(descriptor_, R"({
+    "application":"../source",
+    "privilegedSchemes":[{"scheme":"crx","privileges":{"bypassCSP":true}}]
+  })"));
+  mojom::IpcMainConfigPtr config;
+  std::string error;
+  ASSERT_TRUE(LoadElectronAppConfig(descriptor_, "hosted", &config, &error))
+      << error;
+  EXPECT_EQ(app.AsUTF8Unsafe(), config->app_path);
+  EXPECT_EQ(before, Snapshot(app));
 }
 
 TEST_F(ElectronAppConfigTest,

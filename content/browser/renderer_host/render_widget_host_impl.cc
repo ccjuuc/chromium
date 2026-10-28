@@ -843,7 +843,7 @@ void RenderWidgetHostImpl::SimulateUserInteraction(const WebInputEvent& event) {
 }
 
 void RenderWidgetHostImpl::WasHidden() {
-  if (is_hidden_) {
+  if (is_hidden_ || !background_throttling_allowed_) {
     return;
   }
 
@@ -883,6 +883,23 @@ void RenderWidgetHostImpl::WasHidden() {
 
   for (auto& observer : observers_) {
     observer.RenderWidgetHostVisibilityChanged(this, false);
+  }
+}
+
+void RenderWidgetHostImpl::SetBackgroundThrottling(bool allowed) {
+  // A prerendered page must remain hidden until activation. The embedder
+  // reapplies its preference when that page becomes the primary frame.
+  if (!allowed && frame_tree_ && frame_tree_->is_prerendering()) {
+    return;
+  }
+  if (background_throttling_allowed_ == allowed) {
+    return;
+  }
+  background_throttling_allowed_ = allowed;
+  if (view_) {
+    // Let the platform view synchronize both the renderer and its delegated
+    // frame host, preserving hidden versus occluded native visibility.
+    view_->OnBackgroundThrottlingChanged();
   }
 }
 

@@ -161,6 +161,7 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
   void SetIsLoading(bool is_loading) override;
   void RenderProcessGone() override;
   void ShowWithVisibility(PageVisibilityState page_visibility) final;
+  void OnBackgroundThrottlingChanged() override;
   void Destroy() override;
   void UpdateTooltipUnderCursor(const std::u16string& tooltip_text) override;
   void UpdateTooltip(const std::u16string& tooltip_text) override;
@@ -724,6 +725,8 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
 
   // Common part of UnOccluded() and Show().
   void ShowImpl(PageVisibilityState page_visibility);
+  void StartRendering(std::optional<blink::RecordContentToVisibleTimeRequest>
+                          tab_switch_start_state);
 
   // Common part of Occluded() and Hide().
   void HideImpl();

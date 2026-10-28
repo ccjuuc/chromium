@@ -122,12 +122,16 @@ void XenonBrowserMainExtraParts::PostEarlyInitialization() {
 
 void XenonBrowserMainExtraParts::PostMainMessageLoopRun() {
   xenon::certificates::XenonManagedCertificateService::Get()->Shutdown();
+  // Disconnect app/native services before closing their windows. A retained
+  // service remote or a close callback must not outlive Profile teardown.
+  xenon::XenonManager::GetInstance()->ShutdownForProcessExit();
   // Hosted BrowserWindows own WebContents associated with a Profile. They must
   // be destroyed before BrowserProcessImpl tears down ProfileManager.
   xenon::XenonElectronWindowHost::GetInstance()->ShutdownForProcessExit();
 
   // 在有序关闭阶段析构 BrowserCollection 观察者，避免进程退出时
-  // 静态析构顺序导致 ObserverList 先于本对象析构而触发 observers_.empty() 的 CHECK
+  // 静态析构顺序导致 ObserverList 先于本对象析构而触发 observers_.empty() 的
+  // CHECK
   if (reminder_browser_observer_) {
     reminder_browser_observer_.reset();
   }

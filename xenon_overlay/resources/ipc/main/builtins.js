@@ -227,13 +227,93 @@
     URL,
     URLSearchParams: typeof URLSearchParams !== 'undefined' ? URLSearchParams : class {},
     pathToFileURL(p) {
-      let str = String(p).replace(/\\/g, '/');
+      const windows = __xenonPlatform === 'win32';
+      let str = String(p);
+      if (windows) str = str.replace(/\\/g, '/');
+      // A filename's percent signs, query markers and fragments are literal
+      // path bytes. Escape them before URL parses its query/hash components.
+      str = encodeURI(str).replace(/\?/g, '%3F').replace(/#/g, '%23');
+      if (windows && str.startsWith('//')) return new URL('file:' + str);
       if (!str.startsWith('/')) str = '/' + str;
       return new URL('file://' + str);
     },
-    fileURLToPath(u) {
-      const str = typeof u === 'string' ? u : u.href;
-      return decodeURIComponent(str.replace(/^file:\/\/\/?/, ''));
+    fileURLToPath(input, options) {
+      const fail = (code, message) => Object.assign(new TypeError(message), {code});
+      if (typeof input !== 'string' && !(input instanceof URL)) {
+        throw fail('ERR_INVALID_ARG_TYPE', 'path must be a string or URL');
+      }
+      if (typeof input === 'string' && /^file:\/\/[^/?#]*@/i.test(input.replace(/\\/g, '/'))) {
+        throw fail('ERR_INVALID_URL', 'Invalid file URL authority');
+      }
+      let url;
+      try { url = typeof input === 'string' ? new URL(input) : input; }
+      catch (_error) { throw fail('ERR_INVALID_URL', 'Invalid URL'); }
+      if (url.protocol.toLowerCase() !== 'file:') throw fail('ERR_INVALID_URL_SCHEME', 'URL must be of scheme file');
+      if (url.username || url.password || url.port) throw fail('ERR_INVALID_URL', 'Invalid file URL authority');
+      let windows = __xenonPlatform === 'win32';
+      if (options && options.windows !== undefined && options.windows !== null) {
+        if (typeof options.windows !== 'boolean') {
+          throw fail('ERR_INVALID_ARG_TYPE', 'options.windows must be a boolean');
+        }
+        windows = options.windows;
+      }
+      if ((windows ? /%(?:2f|5c)/i : /%2f/i).test(url.pathname)) {
+        throw fail('ERR_INVALID_FILE_URL_PATH', 'File URL must not include encoded path separators');
+      }
+      let pathname = decodeURIComponent(url.pathname);
+      const hostname = url.hostname.toLowerCase() === 'localhost' ? '' : url.hostname;
+      if (!windows) {
+        if (hostname) throw fail('ERR_INVALID_FILE_URL_HOST', 'File URL host must be empty or localhost');
+        return pathname;
+      }
+      pathname = pathname.replace(/\//g, '\\');
+      if (hostname) {
+        // Match the renderer URL adapter: Node decodes IDN labels when forming
+        // a Windows UNC filename, even though URL.hostname uses ASCII labels.
+        const unicodeHost = hostname.split('.').map(label => {
+          if (!label.startsWith('xn--')) return label;
+          const encoded = label.slice(4);
+          if (!encoded) throw fail('ERR_INVALID_URL', 'Invalid URL hostname');
+          const delimiter = encoded.lastIndexOf('-');
+          const output = delimiter < 0 ? [] : Array.from(encoded.slice(0, delimiter), c => c.codePointAt(0));
+          let cursor = delimiter < 0 ? 0 : delimiter + 1;
+          let n = 128, index = 0, bias = 72;
+          while (cursor < encoded.length) {
+            const oldIndex = index;
+            let weight = 1;
+            for (let k = 36;; k += 36) {
+              if (cursor >= encoded.length) throw fail('ERR_INVALID_URL', 'Invalid URL hostname');
+              const code = encoded.charCodeAt(cursor++);
+              const digit = code >= 48 && code <= 57 ? code - 22 :
+                  code >= 65 && code <= 90 ? code - 65 : code - 97;
+              if (digit < 0 || digit >= 36) throw fail('ERR_INVALID_URL', 'Invalid URL hostname');
+              index += digit * weight;
+              if (!Number.isSafeInteger(index)) throw fail('ERR_INVALID_URL', 'Invalid URL hostname');
+              const threshold = k <= bias ? 1 : k >= bias + 26 ? 26 : k - bias;
+              if (digit < threshold) break;
+              weight *= 36 - threshold;
+            }
+            const size = output.length + 1;
+            let delta = Math.floor((index - oldIndex) / (oldIndex === 0 ? 700 : 2));
+            delta += Math.floor(delta / size);
+            let k = 0;
+            while (delta > 455) { delta = Math.floor(delta / 35); k += 36; }
+            bias = k + Math.floor(36 * delta / (delta + 38));
+            n += Math.floor(index / size);
+            if (n > 0x10ffff || (n >= 0xd800 && n <= 0xdfff)) {
+              throw fail('ERR_INVALID_URL', 'Invalid URL hostname');
+            }
+            index %= size;
+            output.splice(index++, 0, n);
+          }
+          return String.fromCodePoint(...output);
+        }).join('.');
+        return '\\\\' + unicodeHost + pathname;
+      }
+      if (!/^\\[a-zA-Z]:/.test(pathname)) {
+        throw fail('ERR_INVALID_FILE_URL_PATH', 'File URL path must be absolute');
+      }
+      return pathname.slice(1);
     },
     parse(urlStr) {
       try {

@@ -113,6 +113,8 @@ class XenonManager : public ProfileObserver {
   void EnsureServiceStarted(content::BrowserContext* context);
   uint64_t service_generation() const { return service_generation_; }
   uint64_t service_generation(const std::string& container_id) const;
+  bool IsElectronIpcGenerationCurrent(const std::string& container_id,
+                                      uint64_t generation);
 
   void RegisterNodeObserver(XenonNodeObserver* observer);
   void UnregisterNodeObserver(XenonNodeObserver* observer);
@@ -124,6 +126,15 @@ class XenonManager : public ProfileObserver {
       base::OnceCallback<void(ipc::mojom::IpcResultPtr)>;
   using ElectronIpcSendSyncCallback =
       base::OnceCallback<void(ipc::mojom::IpcResultPtr)>;
+  void RequestElectronProtocol(const std::string& container_id,
+                               const std::string& partition,
+                               uint64_t generation,
+                               const std::string& request_id,
+                               base::Value request,
+                               ElectronIpcInvokeCallback callback);
+  void CancelElectronProtocol(const std::string& container_id,
+                              uint64_t generation,
+                              const std::string& request_id);
   // Validates and stores a container configuration without launching its
   // Utility process or executing the Electron main module.
   bool RegisterElectronIpc(ipc::mojom::IpcMainConfigPtr config);
@@ -160,7 +171,18 @@ class XenonManager : public ProfileObserver {
       mojo::PendingRemote<ipc::mojom::IpcRenderer> renderer,
       int32_t process_id,
       int32_t frame_id,
-      int32_t window_id);
+      int32_t window_id,
+      const std::string& document_url = std::string(),
+      bool is_main_frame = true);
+  void UpdateElectronIpcRendererFrame(const std::string& container_id,
+                                      const std::string& endpoint_id,
+                                      const std::string& document_url);
+  void RegisterElectronIpcServiceWorker(
+      const std::string& container_id,
+      const std::string& endpoint_id,
+      mojo::PendingRemote<ipc::mojom::IpcRenderer> renderer,
+      int32_t process_id,
+      ipc::mojom::IpcServiceWorkerInfoPtr identity);
   void RemoveElectronIpcRenderer(const std::string& container_id,
                                  const std::string& endpoint_id);
   void BindNodeAddonHost(
@@ -171,23 +193,28 @@ class XenonManager : public ProfileObserver {
   void ElectronIpcSend(const std::string& container_id,
                        const std::string& endpoint_id,
                        const std::string& channel,
-                       base::Value arguments);
+                       base::Value arguments,
+                       uint64_t expected_generation = 0);
   void ElectronIpcInvoke(const std::string& container_id,
                          const std::string& endpoint_id,
                          const std::string& channel,
                          base::Value arguments,
-                         ElectronIpcInvokeCallback callback);
+                         ElectronIpcInvokeCallback callback,
+                         uint64_t expected_generation = 0);
   void ElectronIpcSendSync(const std::string& container_id,
                            const std::string& endpoint_id,
                            const std::string& channel,
                            base::Value arguments,
-                           ElectronIpcSendSyncCallback callback);
+                           ElectronIpcSendSyncCallback callback,
+                           uint64_t expected_generation = 0);
   void DispatchElectronWindowEvent(int32_t window_id,
                                    const std::string& event_name,
                                    base::Value arguments);
+  void DispatchElectronSessionEvent(const std::string& container_id,
+                                    base::Value arguments);
 
-  // Drops the Utility process connection during browser shutdown (login gate
-  // dismiss before any Browser window exists).
+  // Disconnects all Utility services and prevents further launches during
+  // browser shutdown, including login dismissal before any Browser exists.
   void ShutdownForProcessExit();
 
 #if BUILDFLAG(ENABLE_XENON_ASSOCIATED_SIDE)
@@ -252,6 +279,8 @@ class XenonManager : public ProfileObserver {
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
                            DisconnectedContainerRejectsRendererTraffic);
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
+                           RendererGenerationCannotReachRestartedContainer);
+  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
                            StaleDisconnectPreservesRestartedContainer);
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
                            RendererAddonDisconnectDoesNotRestartOrCloseApp);
@@ -268,6 +297,9 @@ class XenonManager : public ProfileObserver {
   FRIEND_TEST_ALL_PREFIXES(
       XenonManagerTest,
       ResetClosesRendererAddonServicesWithoutRevivingDocuments);
+  FRIEND_TEST_ALL_PREFIXES(
+      XenonManagerTest,
+      ProcessExitDisconnectsRetainedServicesAndPreventsRestart);
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
   FRIEND_TEST_ALL_PREFIXES(
       XenonManagerTest,
@@ -358,6 +390,7 @@ class XenonManager : public ProfileObserver {
   raw_ptr<content::BrowserContext> last_browser_context_ = nullptr;
   base::ScopedObservation<Profile, ProfileObserver> profile_observation_{this};
   bool runtime_metadata_initialized_ = false;
+  bool shutting_down_for_process_exit_ = false;
   std::string startup_working_directory_;
   std::map<std::string, ipc::mojom::IpcMainConfigPtr> last_ipc_configs_;
   std::map<std::string, std::string> electron_ipc_origin_containers_;

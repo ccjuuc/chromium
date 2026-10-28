@@ -51,6 +51,19 @@ class ThunderImportEntryTest(unittest.TestCase):
             self.assertEqual(sync.main(self.args + ['--check']), 1)
         self.assertEqual((self.target / 'single.node').read_bytes(), b'changed')
 
+    def test_import_preserves_external_host_scheme_declarations(self):
+        descriptor = self.output / 'thunder_2025.xenon.json'
+        # The importer preserves any sibling descriptor, independently of
+        # the scheme names and permissions in a particular TH release.
+        template = (b'{"privilegedSchemes":[{"scheme":"fixture",'
+                    b'"privileges":{"secure":true}}]}\n')
+        self.output.mkdir(parents=True)
+        descriptor.write_bytes(template)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(sync.main(self.args), 0)
+            self.assertEqual(sync.main(self.args + ['--check']), 0)
+        self.assertEqual(descriptor.read_bytes(), template)
+
     def test_retired_assembly_options_are_explicitly_rejected(self):
         for argument in ('--player-sdk', '--plugins-dir', '--asar-format',
                          '--asar-public-key', '--include-maps', '--skip-asar'):

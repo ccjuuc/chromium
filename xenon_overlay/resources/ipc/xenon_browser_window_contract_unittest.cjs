@@ -29,6 +29,9 @@ function createRuntime(onWindowCall = () => null, metadata = {}) {
       return {id, hwnd: '0'};
     },
     __xenonBrowserWindowCall(id, command, details) {
+      if (id === 0 && command === 'electron-session' && details.method === 'create-window') {
+        return context.__xenonCreateBrowserWindow({...details.options, partition: details.partition});
+      }
       calls.push({id, command, details: {...details}});
       return onWindowCall(id, command, details);
     },
@@ -47,6 +50,202 @@ function createRuntime(onWindowCall = () => null, metadata = {}) {
   vm.runInContext(readBootstrap(filename), context, {filename});
   return {context, calls, BrowserWindow: context.__xenonElectron.BrowserWindow};
 }
+
+test('background throttling changes reach the host and only commit after success', () => {
+  let allowed = true;
+  let fail = false;
+  const {BrowserWindow} = createRuntime((_id, command, details) => {
+    if (command === 'get-background-throttling') return allowed;
+    if (command === 'set-background-throttling') {
+      if (fail) throw new Error('native update failed');
+      allowed = details.allowed;
+    }
+  });
+  const contents = new BrowserWindow().webContents;
+  assert.equal(contents.getBackgroundThrottling(), true);
+  contents.setBackgroundThrottling(false);
+  assert.equal(allowed, false);
+  assert.equal(contents.getLastWebPreferences().backgroundThrottling, false);
+  fail = true;
+  assert.throws(() => contents.setBackgroundThrottling(true), /native update failed/);
+  assert.equal(contents.getLastWebPreferences().backgroundThrottling, false);
+  assert.throws(() => contents.setBackgroundThrottling('false'), /boolean/);
+  contents.getOwnerBrowserWindow().destroy();
+  assert.throws(() => contents.setBackgroundThrottling(false), /destroyed/);
+});
+
+test('Session preload registration uses host state, preserves partitions and rolls back by ID', () => {
+  const registries = new Map();
+  const {context} = createRuntime((_id, command, request) => {
+    assert.equal(command, 'electron-session');
+    let scripts = registries.get(request.partition);
+    if (!scripts) registries.set(request.partition, scripts = new Map());
+    if (request.method === 'get-preloads') return [...scripts.values()].map(x => ({...x}));
+    if (request.method === 'register-preload') {
+      if (request.script.filePath.endsWith('missing.js')) throw new Error('ENOENT');
+      if (scripts.has(request.script.id)) throw new Error('duplicate');
+      scripts.set(request.script.id, {...request.script});
+      return request.script.id;
+    }
+    if (request.method === 'unregister-preload') {
+      if (!scripts.delete(request.id)) throw new Error('not registered');
+    }
+  });
+  const {session} = context.__xenonElectron;
+  const browser = session.fromPartition('persist:browser');
+  assert.equal(browser, session.fromPartition('persist:browser'));
+  const script = {id: 'frame', type: 'frame', filePath: 'C:\\fixture\\preload.js'};
+  assert.equal(browser.registerPreloadScript(script), 'frame');
+  assert.deepEqual(browser.getPreloadScripts(), [script]);
+  browser.getPreloadScripts()[0].filePath = 'changed';
+  assert.deepEqual(browser.getPreloadScripts(), [script]);
+  assert.deepEqual(session.defaultSession.getPreloadScripts(), []);
+  assert.throws(() => browser.registerPreloadScript(script), /duplicate/);
+  assert.throws(() => browser.registerPreloadScript({
+    ...script, id: 'worker', type: 'service-worker', filePath: 'C:\\fixture\\missing.js',
+  }), /ENOENT/);
+  browser.unregisterPreloadScript('frame');
+  assert.deepEqual(browser.getPreloadScripts(), []);
+  assert.throws(() => browser.unregisterPreloadScript('frame'), /not registered/);
+  assert.throws(() => browser.registerPreloadScript({...script, filePath: 'relative.js'}),
+      /Invalid preload/);
+});
+
+test('BrowserWindow selects its real session before creation and explicit session takes precedence', () => {
+  const {context, calls, BrowserWindow} = createRuntime();
+  const {session} = context.__xenonElectron;
+  const selected = session.fromPartition('persist:browser');
+  const window = new BrowserWindow({webPreferences: {session: selected, partition: 'ignored'}});
+  assert.equal(window.webContents.session, selected);
+  assert.equal(calls.find(x => x.command === 'create').options.partition, 'persist:browser');
+  const prefs = calls.find(x => x.command === 'set-web-preferences').details;
+  assert.equal(prefs.partition, 'persist:browser');
+  assert.equal('session' in prefs, false);
+  assert.throws(() => new BrowserWindow({webPreferences: {session: {}}}), /must be a Session/);
+});
+
+test('Session identity cannot change independently of its native consumers', () => {
+  const {context, calls, BrowserWindow} = createRuntime(() => []);
+  const {session} = context.__xenonElectron;
+  const selected = session.fromPartition('persist:browser');
+  assert.equal(Reflect.set(selected, 'partition', 'another-session'), false);
+  assert.throws(() => Object.defineProperty(selected, 'partition', {value: 'another-session'}),
+      TypeError);
+  selected.getPreloadScripts();
+  selected.serviceWorkers.getAllRunning();
+  const window = new BrowserWindow({webPreferences: {session: selected}});
+  assert.equal(selected.partition, 'persist:browser');
+  assert.equal(session.fromPartition('persist:browser'), selected);
+  assert.equal(window.webContents.session, selected);
+  assert.equal(calls.find(call => call.command === 'create').options.partition, 'persist:browser');
+  for (const call of calls.filter(call => call.command === 'electron-session')) {
+    assert.equal(call.details.partition, 'persist:browser');
+  }
+});
+
+test('WebContents type and guest host reflect registered ownership', async () => {
+  const {context, BrowserWindow} = createRuntime();
+  const electron = context.__xenonElectron;
+  const owner = new BrowserWindow();
+  assert.equal(owner.webContents.getType(), 'window');
+  assert.equal(owner.webContents.hostWebContents, undefined);
+  const sender = {windowId: owner.id, endpointId: 'owner-document', processId: 30,
+    frameId: 1, isMainFrame: true, url: 'file:///fixture/shell.html'};
+  const guestId = await context.__xenonDispatchInvoke(sender, '__xenon:register-guest',
+      [-1, {partition: 'persist:browser', contextIsolation: false}]);
+  const guest = electron.webContents.fromId(guestId);
+  assert.equal(guest.getType(), 'webview');
+  assert.equal(guest.hostWebContents, owner.webContents);
+  assert.equal(guest.session, electron.session.fromPartition('persist:browser'));
+  context.__xenonDispatchRendererEvent({endpointId: 'external-document',
+    processId: 31, frameId: 2, isMainFrame: true, windowId: 0, url: 'chrome://fixture/'}, true);
+  const remote = electron.webContents.getAllWebContents().find(contents =>
+      contents !== guest && contents !== owner.webContents);
+  assert.equal(remote.getType(), 'remote');
+  assert.equal(remote.hostWebContents, undefined);
+  owner.destroy();
+  assert.throws(() => owner.webContents.getType(), /destroyed/);
+});
+
+test('ServiceWorker queries and lifecycle events belong to their Session and replace stopped objects', () => {
+  const live = {'7': {versionId: 7, scope: 'chrome-extension://fixture/', scriptUrl: 'worker.js'}};
+  const {context} = createRuntime((_id, command, request) => {
+    assert.equal(command, 'electron-session');
+    if (request.method === 'observe-workers') return;
+    assert.equal(request.method, 'get-running-workers');
+    return request.partition === 'persist:browser' ? {...live} : {};
+  });
+  const {session} = context.__xenonElectron;
+  const browser = session.fromPartition('persist:browser');
+  assert.deepEqual(browser.serviceWorkers.getAllRunning(), live);
+  assert.deepEqual(session.defaultSession.serviceWorkers.getAllRunning(), {});
+  const first = browser.serviceWorkers.getWorkerFromVersionID(7);
+  assert.equal(first.scope, live['7'].scope);
+  assert.equal(first.session, browser);
+  first.ipc.handle('fixture', () => 1);
+  assert.throws(() => first.ipc.handle('fixture', () => 2), /second handler/);
+  assert.throws(() => first.send('fixture'), /unavailable/);
+  let event;
+  browser.serviceWorkers.on('running-status-changed', e => { event = e; });
+  context.__xenonDispatchBrowserWindowEvent(0, '__xenon-session-event', {
+    partition: 'persist:browser', event: 'running-status-changed',
+    details: {versionId: 7, runningStatus: 'stopped'},
+  });
+  assert.equal(event.runningStatus, 'stopped');
+  assert.equal(event.versionId, 7);
+  const replacement = browser.serviceWorkers.getWorkerFromVersionID(7);
+  assert.notEqual(replacement, first);
+  assert.equal(replacement.ipc._invokeHandlers.size, 0);
+  assert.equal(browser.serviceWorkers.getWorkerFromVersionID(8), undefined);
+});
+
+test('service worker IPC is scoped to its session and endpoint lifetime', async () => {
+  const sent = [];
+  const {context} = createRuntime(undefined, {
+    __xenonSendToRenderer: (...args) => sent.push(args),
+  });
+  const electron = context.__xenonElectron;
+  const sender = {
+    type: 'service-worker', partition: 'persist:worker-a', versionId: 12,
+    scope: 'chrome-extension://fixture/',
+    scriptUrl: 'chrome-extension://fixture/worker.js',
+    processId: 42, endpointId: 'worker-first', workerToken: 'worker-first',
+  };
+  context.__xenonDispatchRendererEvent(sender, true);
+  const session = electron.session.fromPartition(sender.partition);
+  const worker = session.serviceWorkers.getWorkerFromVersionID(12);
+  let event;
+  worker.ipc.handle('identity', incoming => {
+    event = incoming;
+    return incoming.serviceWorker.scope;
+  });
+  electron.ipcMain.handle('identity', () => { throw Error('Wrong IPC receiver'); });
+  assert.equal(await context.__xenonDispatchInvoke(sender, 'identity', []), sender.scope);
+  assert.equal(event.type, 'service-worker');
+  assert.equal(event.session, session);
+  assert.equal(event.serviceWorker, worker);
+  assert.equal(event.sender, undefined);
+  assert.equal(event.senderFrame, undefined);
+  worker.ipc.once('message', incoming => incoming.reply('response', 1));
+  context.__xenonDispatchSend(sender, 'message', []);
+  assert.equal(sent[0][0], 'worker-first');
+  assert.equal(sent[0][1], 'response');
+
+  const other = {...sender, partition: 'persist:worker-b', endpointId: 'worker-other'};
+  context.__xenonDispatchRendererEvent(other, true);
+  await assert.rejects(context.__xenonDispatchInvoke(other, 'identity', []), /No handler/);
+
+  context.__xenonDispatchRendererEvent(sender, false);
+  assert.throws(() => worker.send('old'), /unavailable/);
+  const restarted = {...sender, endpointId: 'worker-restarted', workerToken: 'worker-restarted'};
+  context.__xenonDispatchRendererEvent(restarted, true);
+  const replacement = session.serviceWorkers.getWorkerFromVersionID(12);
+  assert.notEqual(replacement, worker);
+  await assert.rejects(context.__xenonDispatchInvoke(restarted, 'identity', []), /No handler/);
+  context.__xenonDispatchRendererEvent(sender, false);
+  replacement.send('current');
+  assert.equal(sent.at(-1)[0], 'worker-restarted');
+});
 
 test('packaged application metadata does not depend on renderer URL mappings', () => {
   const {context} = createRuntime(undefined, {
@@ -87,6 +286,73 @@ test('WebContents queries the OS process through its native owner', () => {
   assert.equal(window.webContents.getOSProcessId(), 4000 + window.id);
   assert.equal(calls.at(-1).id, window.id);
   assert.equal(calls.at(-1).command, 'get-os-process-id');
+});
+
+test('IPC frame identity uses the registered document and survives URL refresh', () => {
+  const {BrowserWindow, context} = createRuntime();
+  const window = new BrowserWindow();
+  window.loadURL('file:///requested-but-not-committed.html');
+  const sender = {endpointId: 'document-1', windowId: window.id,
+    processId: 17, frameId: 23, isMainFrame: true,
+    url: 'file:///committed-client.html'};
+  const observed = [];
+  context.__xenonElectron.ipcMain.on('frame:identity', event => {
+    observed.push(event);
+    assert.equal(event.senderFrame, event.sender.mainFrame);
+    assert.ok(BrowserWindow.getAllWindows().some(
+      owner => owner.webContents === event.sender));
+  });
+  context.__xenonDispatchRendererEvent(sender, true);
+  context.__xenonDispatchSend(sender, 'frame:identity', []);
+  context.__xenonDispatchSync(sender, '__xenon:renderer-web-preferences', [false]);
+  context.__xenonDispatchSend(sender, 'frame:identity', []);
+  assert.equal(observed[0].senderFrame, observed[1].senderFrame);
+  const frame = observed[0].senderFrame;
+  assert.equal(frame.url, sender.url);
+  assert.equal(frame.processId, 17);
+  assert.equal(frame.routingId, 23);
+  assert.equal(frame.detached, false);
+  assert.equal(Reflect.set(frame, 'url', 'https://forged.test/'), false);
+  assert.equal(frame.url, sender.url);
+
+  const navigated = {...sender, url: 'file:///committed-client.html#updated'};
+  context.__xenonDispatchRendererEvent(navigated, true);
+  context.__xenonDispatchSend(navigated, 'frame:identity', []);
+  assert.equal(window.webContents.mainFrame, frame);
+  assert.equal(frame.url, navigated.url);
+});
+
+test('subframes and replaced documents cannot claim the active main frame', () => {
+  const {BrowserWindow, context} = createRuntime();
+  const window = new BrowserWindow();
+  const main = {endpointId: 'main-old', windowId: window.id,
+    processId: 17, frameId: 23, isMainFrame: true, url: 'file:///client.html'};
+  const child = {...main, endpointId: 'child', frameId: 24,
+    isMainFrame: false, url: 'https://guest.test/'};
+  const events = [];
+  context.__xenonElectron.ipcMain.on('frame:identity', event => events.push(event));
+  context.__xenonDispatchRendererEvent(main, true);
+  const oldFrame = window.webContents.mainFrame;
+  context.__xenonDispatchRendererEvent(child, true);
+  context.__xenonDispatchSync(child, '__xenon:renderer-web-preferences', [true]);
+  context.__xenonDispatchSend(child, 'frame:identity', []);
+  assert.notEqual(events[0].senderFrame, window.webContents.mainFrame);
+  assert.equal(window.webContents.mainFrame, oldFrame);
+  assert.equal(events[0].senderFrame.url, child.url);
+
+  context.__xenonDispatchRendererEvent(main, false);
+  assert.equal(oldFrame.detached, true);
+  assert.equal(window.webContents.mainFrame, null);
+  const next = {...main, endpointId: 'main-new', processId: 18, frameId: 25,
+    url: 'file:///next-client.html'};
+  context.__xenonDispatchRendererEvent(next, true);
+  context.__xenonDispatchSend(next, 'frame:identity', []);
+  assert.notEqual(events[1].senderFrame, oldFrame);
+  assert.equal(events[1].senderFrame, window.webContents.mainFrame);
+  assert.equal(events[0].sender, events[1].sender);
+  context.__xenonDispatchBrowserWindowEvent(window.id, 'closed');
+  assert.equal(events[0].senderFrame.detached, true);
+  assert.equal(events[1].senderFrame.detached, true);
 });
 
 test('failed BrowserWindow initialization releases native and JS resources', () => {
