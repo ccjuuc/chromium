@@ -254,12 +254,26 @@ action("mini_installer_archive") {
   }
 
   if (enable_xenon_service) {
+    outputs += [ "$root_out_dir/xenon_installer_manifest.json" ]
+    args += [
+      "--xenon-packaging-manifest=xenon_installer_manifest.json",
+      "--xenon-stage-hosted-sources",
+    ]
     deps += [ "//xenon_overlay/resources:copy_electron_apps" ]
-    inputs += [ "//xenon_overlay/tools/import_electron_app.py" ]
+    inputs += [
+      "//xenon_overlay/tools/copy_runtime_tree.py",
+      "//xenon_overlay/tools/import_electron_app.py",
+      "//xenon_overlay/tools/windows_electron_runtime.py",
+    ]
 
     # Only explicitly selected releases enter the installer, including when
     # unselected applications remain in an existing build output directory.
     foreach(app, xenon_electron_apps) {
+      foreach(hosted, xenon_windows_hosted_apps) {
+        if (app == hosted.application) {
+          args += [ "--xenon-windows-hosted-payload=$app=" + hosted.profile ]
+        }
+      }
       args += [
         "--xenon-payload-directory=$app",
         "--xenon-payload-source=$app=" +

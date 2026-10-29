@@ -2,10 +2,12 @@
 # Copyright 2026 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-"""Add explicitly configured, unchanged application payloads to Chrome staging.
+"""Add explicitly configured application payloads to Chrome staging.
 
 GN only selects this wrapper when enable_xenon_service is enabled. Application
 directories and external host files are arguments, not product-name rules.
+Payloads are unchanged by default. Explicit Windows hosted profiles can stage
+directly from unchanged canonical sources or verify a projected build copy.
 --xenon-staging-only exercises the same staging and verification without 7z,
 binary differencing, setup compression or compilation.
 """
@@ -22,6 +24,9 @@ from pathlib import Path, PureWindowsPath
 import shutil
 import sys
 
+import windows_electron_runtime
+from copy_runtime_tree import sync_tree
+
 from import_electron_app import (ImportFailure, absolute_path, check_ancestors,
                                  contains, detect_layout, import_application,
                                  inventory)
@@ -29,6 +34,25 @@ from import_electron_app import (ImportFailure, absolute_path, check_ancestors,
 
 class StagingComplete(Exception):
     """Stop the upstream pipeline immediately before archive creation."""
+
+
+def write_manifest(path: Path, staging: Path, directories: list) -> None:
+    """Record this staging operation, never copy historical test results."""
+    check_ancestors(path)
+    manifest = {
+        'schema_version': 1,
+        'archive_root': 'Chrome-bin',
+        'applications': [
+            {'path': item['path'].as_posix(),
+             'profile': item['windows_profile'] if item['windows_hosted'] else None}
+            for item in directories],
+        'tree': inventory(staging / 'Chrome-bin'),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + '.tmp')
+    check_ancestors(temporary)
+    temporary.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+    os.replace(temporary, path)
 
 
 def insensitive_glob(pattern: str) -> list[str]:
@@ -74,23 +98,50 @@ def prepare_payloads(archive, options, wrapper_options) -> tuple[list, list]:
             raise ImportFailure('payload source requires one directory=source declaration')
         canonical_sources[relative] = absolute_path(Path(source))
     directories = []
+    projected_sources = {}
+    for value in wrapper_options.xenon_windows_hosted_payload:
+        directory, separator, profile = value.partition('=')
+        profile = profile if separator else 'thunder'
+        relative = relative_path(directory)
+        if profile not in windows_electron_runtime.PROFILES or relative in projected_sources:
+            raise ImportFailure('hosted payload requires a unique directory[=thunder|ple]')
+        projected_sources[relative] = profile
     for value in wrapper_options.xenon_payload_directory:
         relative = relative_path(value)
         source = build / relative
-        if not source.is_dir():
+        hosted = relative in projected_sources
+        from_source = hosted and wrapper_options.xenon_stage_hosted_sources
+        canonical = canonical_sources.pop(relative, None)
+        input_source = canonical if from_source else source
+        if input_source is None or not input_source.is_dir():
             raise ImportFailure(f'required application directory is missing: {source}')
         if any(contains(previous['path'], relative) or
                contains(relative, previous['path']) for previous in directories):
             raise ImportFailure('application payload directories must not overlap')
-        expected = inventory(source)
-        detect_layout(source)
-        canonical = canonical_sources.pop(relative, None)
-        if canonical is not None and inventory(canonical) != expected:
+        expected = inventory(input_source)
+        detect_layout(input_source)
+        canonical_expected = inventory(canonical) if canonical is not None else None
+        profile = projected_sources.get(relative, 'thunder')
+        if hosted:
+            if canonical is None:
+                raise ImportFailure('Windows hosted payload requires its canonical source')
+            canonical_expected = windows_electron_runtime.project_inventory(
+                canonical_expected, profile)
+            if from_source:
+                expected = windows_electron_runtime.project_inventory(expected, profile)
+            windows_electron_runtime.validate_projection(input_source, expected, profile)
+            del projected_sources[relative]
+        if canonical is not None and canonical_expected != expected:
             raise ImportFailure(
                 f'build application differs from canonical source: {relative}; '
                 'resynchronize the complete release before packaging')
         directories.append({'path': relative, 'inventory': expected,
-                            'canonical_source': canonical})
+                            'canonical_source': canonical,
+                            'windows_hosted': hosted,
+                            'windows_profile': profile,
+                            'from_canonical_source': from_source})
+    if projected_sources:
+        raise ImportFailure('Windows hosted payload must name a declared application')
     if canonical_sources:
         raise ImportFailure('payload source must name a declared application directory')
     file_paths = {relative_path(value) for value in wrapper_options.xenon_payload_file}
@@ -121,17 +172,23 @@ def stage_payloads(archive, options, staging: Path, directories: list,
     destination.mkdir(parents=True, exist_ok=True)
     for payload in directories:
         relative = payload['path']
-        copied = import_application(build / relative, destination / relative)
+        if payload['from_canonical_source']:
+            sync_tree(payload['canonical_source'], destination / relative, True,
+                      payload['windows_profile'])
+            copied = inventory(destination / relative)
+        else:
+            copied = import_application(build / relative, destination / relative)
         expected = payload['inventory']
         if any(copied[key] != expected[key] for key in ('directories', 'files')):
             raise ImportFailure(f'application changed during staging: {relative}')
         # Track directories too, so adding/removing a nested file invalidates
         # the archive even when all previously listed files remain unchanged.
-        archive.g_archive_inputs.append(str(relative))
-        archive.g_archive_inputs.extend(str(relative / name)
-                                        for name in expected['directories'])
-        archive.g_archive_inputs.extend(str(relative / entry['path'])
-                                        for entry in expected['files'])
+        if not payload['from_canonical_source']:
+            archive.g_archive_inputs.append(str(relative))
+            archive.g_archive_inputs.extend(str(relative / name)
+                                            for name in expected['directories'])
+            archive.g_archive_inputs.extend(str(relative / entry['path'])
+                                            for entry in expected['files'])
         canonical = payload['canonical_source']
         if canonical is not None:
             source_inputs = [canonical]
@@ -160,11 +217,20 @@ def verify_payloads(archive, options, staging: Path, directories: list,
                'applications': [], 'external_files': []}
     for payload in directories:
         relative, expected = payload['path'], payload['inventory']
-        if (inventory(build / relative) != expected or
+        canonical_record = (inventory(payload['canonical_source'])
+                            if payload['canonical_source'] is not None else None)
+        if payload['windows_hosted']:
+            canonical_record = windows_electron_runtime.project_inventory(
+                canonical_record, payload['windows_profile'])
+            windows_electron_runtime.validate_projection(destination / relative,
+                                                         inventory(destination / relative),
+                                                         payload['windows_profile'])
+        if ((not payload['from_canonical_source'] and
+             inventory(build / relative) != expected) or
                 inventory(destination / relative) != expected or
                 (payload['canonical_source'] is not None and
-                 inventory(payload['canonical_source']) != expected)):
-            raise ImportFailure(f'installer application differs from build output: {relative}')
+                 canonical_record != expected)):
+            raise ImportFailure(f'installer application differs from prepared source snapshot: {relative}')
         summary['applications'].append({
             'path': relative.as_posix(), 'files': len(expected['files']),
             'directories': len(expected['directories']), 'verified': True})
@@ -194,7 +260,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--xenon-payload-source', action='append', default=[])
     parser.add_argument('--xenon-payload-file', action='append', default=[])
     parser.add_argument('--xenon-payload-glob', action='append', default=[])
+    parser.add_argument('--xenon-windows-hosted-payload', action='append', default=[])
+    parser.add_argument('--xenon-stage-hosted-sources', action='store_true')
     parser.add_argument('--xenon-staging-only', action='store_true')
+    parser.add_argument('--xenon-packaging-manifest')
     wrapper_options, forwarded = parser.parse_known_args(argv)
     archive = load_archive_module()
     archive.insensiglob = insensitive_glob
@@ -217,10 +286,25 @@ def main(argv: list[str] | None = None) -> int:
         if staging.resolve() != staging or contains(staging, build):
             raise ImportFailure('unsafe installer staging directory')
         directories, files = prepare_payloads(archive, options, wrapper_options)
+        manifest_path = None
+        if wrapper_options.xenon_packaging_manifest:
+            manifest_path = absolute_path(Path(wrapper_options.xenon_packaging_manifest))
+            if not Path(wrapper_options.xenon_packaging_manifest).is_absolute():
+                manifest_path = build / relative_path(wrapper_options.xenon_packaging_manifest)
+            check_ancestors(manifest_path)
+            protected = [staging, *(build / item['path'] for item in directories)]
+            protected.extend(item['canonical_source'] for item in directories
+                             if item['canonical_source'] is not None)
+            if any(contains(source, manifest_path) for source in protected):
+                raise ImportFailure('manifest must not overlap application inputs or staging')
         for payload in directories:
             source = build / payload['path']
             if contains(source, staging) or contains(staging, source):
                 raise ImportFailure('staging must not overlap an application payload')
+            if payload['from_canonical_source']:
+                source = payload['canonical_source']
+                if contains(source, staging) or contains(staging, source):
+                    raise ImportFailure('staging must not overlap a canonical application source')
         for payload in files:
             if contains(staging, build / payload['path']):
                 raise ImportFailure('staging must not contain an external payload input')
@@ -242,16 +326,20 @@ def main(argv: list[str] | None = None) -> int:
             report = verify_payloads(archive, options, Path(staged), directories, files)
             print(json.dumps(report, ensure_ascii=False))
             if wrapper_options.xenon_staging_only:
+                if manifest_path:
+                    write_manifest(manifest_path, Path(staged), directories)
                 raise StagingComplete()
             return original_create(settings, staged, *arguments)
 
         archive.CopyAllFilesToStagingDir = copy_with_payloads
         archive.CreateArchiveFiles = create_after_verification
         archive.main(options)
+        if manifest_path:
+            write_manifest(manifest_path, staging, directories)
         return 0
     except StagingComplete:
         return 0
-    except (OSError, ImportFailure) as error:
+    except (OSError, ValueError) as error:
         print(f'error: {error}', file=sys.stderr)
         return 1
 

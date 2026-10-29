@@ -13,6 +13,8 @@ import stat
 import sys
 from pathlib import Path
 
+import windows_electron_runtime
+
 # Add src root to sys.path so we can import build.action_helpers if needed
 _SRC_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_SRC_ROOT))
@@ -121,10 +123,23 @@ def _same_contents(source: Path, target: Path) -> bool:
                 return True
 
 
-def sync_tree(src_dir: Path, dst_dir: Path) -> tuple[int, int, list[str]]:
+def sync_tree(src_dir: Path, dst_dir: Path,
+              strip_windows_electron_runtime: bool = False,
+              windows_electron_profile: str = 'thunder') -> tuple[int, int, list[str]]:
     """Mirror layout and bytes incrementally; return copied, skipped, inputs."""
     src_dir, dst_dir = _validate_roots(src_dir, dst_dir)
     source_dirs, source_files = _inventory(src_dir)
+    input_dirs, input_files = source_dirs, source_files
+    if strip_windows_electron_runtime:
+        from import_electron_app import inventory
+        projected = windows_electron_runtime.project_inventory(
+            inventory(src_dir), windows_electron_profile)
+        windows_electron_runtime.validate_projection(
+            src_dir, projected, windows_electron_profile)
+        source_dirs = {path for path in source_dirs
+                       if not windows_electron_runtime.excluded(path, windows_electron_profile)}
+        source_files = {path for path in source_files
+                        if not windows_electron_runtime.excluded(path, windows_electron_profile)}
     target_dirs, target_files = (_inventory(dst_dir) if dst_dir.exists()
                                  else (set(), set()))
     # Validate both complete trees before deleting stale output or copying.
@@ -154,9 +169,15 @@ def sync_tree(src_dir: Path, dst_dir: Path) -> tuple[int, int, list[str]]:
 
     # Directories are dependencies too: otherwise creating or removing an
     # entry that was absent from the previous depfile would not rerun Ninja.
-    inputs = sorted(
-        os.path.relpath(src_dir / relative, Path.cwd()).replace('\\', '/')
-        for relative in source_dirs | source_files)
+    def dependency_path(relative):
+        path = src_dir / relative
+        try:
+            return os.path.relpath(path, Path.cwd()).replace('\\', '/')
+        except ValueError:  # Windows source and staging can be on different drives.
+            return path.as_posix()
+
+    inputs = sorted(dependency_path(relative)
+                    for relative in input_dirs | input_files)
     return copied, skipped, inputs
 
 
@@ -166,10 +187,15 @@ def main() -> int:
     parser.add_argument('--dest', type=Path, required=True, help='Destination directory')
     parser.add_argument('--stamp', type=Path, required=True, help='Stamp file to touch')
     parser.add_argument('--depfile', type=Path, help='Depfile path for Ninja tracking')
+    parser.add_argument('--strip-windows-electron-runtime', action='store_true')
+    parser.add_argument('--windows-electron-profile',
+                        choices=windows_electron_runtime.PROFILES, default='thunder')
     args = parser.parse_args()
 
     try:
-        copied, skipped, input_rel_paths = sync_tree(args.src, args.dest)
+        copied, skipped, input_rel_paths = sync_tree(
+            args.src, args.dest, args.strip_windows_electron_runtime,
+            args.windows_electron_profile)
     except (OSError, ValueError) as error:
         print(f'Error: {error}', file=sys.stderr)
         return 1

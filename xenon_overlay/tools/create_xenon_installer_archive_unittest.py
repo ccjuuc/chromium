@@ -20,6 +20,87 @@ from import_electron_app import inventory
 
 
 class InstallerPayloadTest(unittest.TestCase):
+    def test_manifest_records_actual_staged_hashes_without_test_claims(self):
+        manifest = self.build / 'xenon_installer_manifest.json'
+        self.assertEqual(self.run_staging(
+            ['--xenon-packaging-manifest=xenon_installer_manifest.json'])[0], 0)
+        record = json.loads(manifest.read_text(encoding='utf-8'))
+        self.assertEqual(record['tree'], inventory(self.staged_root()))
+        self.assertEqual(record['schema_version'], 1)
+        self.assertNotIn('unit_tests_passed', record)
+        self.assertNotIn('startup_passed', record)
+
+    def test_manifest_cannot_overwrite_application_input(self):
+        path = self.first / 'resources/app/package.json'
+        before = path.read_bytes()
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.run_staging(
+                ['--xenon-packaging-manifest=' + str(path)])[0], 1)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_canonical_input_inside_staging_is_rejected_before_deletion(self):
+        from windows_electron_runtime_unittest import pe_image
+        (self.first / 'resources/app/out.asar.unpacked/addon.node').write_bytes(pe_image())
+        canonical = self.staging / 'temp_installer_archive/canonical'
+        shutil.copytree(self.first, canonical)
+        before = inventory(canonical)
+        args = ['--xenon-payload-source=application-a=' + str(canonical),
+                '--xenon-windows-hosted-payload=application-a',
+                '--xenon-stage-hosted-sources']
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(self.run_staging(args)[0], 1)
+        self.assertIn('staging must not overlap a canonical', errors.getvalue())
+        self.assertEqual(inventory(canonical), before)
+
+    def test_canonical_staging_ignores_runtime_cache_without_modifying_build(self):
+        from windows_electron_runtime_unittest import pe_image
+        canonical = self.root / 'canonical-live'
+        (self.first / 'resources/app/out.asar.unpacked/addon.node').write_bytes(pe_image())
+        shutil.copytree(self.first, canonical)
+        self.write(self.first, 'logs/live.log', b'active runtime log')
+        before = inventory(self.first)
+        args = ['--xenon-payload-source=application-a=' + str(canonical),
+                '--xenon-windows-hosted-payload=application-a',
+                '--xenon-stage-hosted-sources']
+        self.assertEqual(self.run_staging(args)[0], 0)
+        self.assertEqual(inventory(self.first), before)
+        self.assertFalse((self.staged_root() / 'application-a/XDASKernel.dll').exists())
+        self.assertFalse((self.staged_root() / 'application-a/logs/live.log').exists())
+
+    def test_ple_profile_survives_installer_verification(self):
+        from windows_electron_runtime_unittest import pe_image
+        canonical = self.root / 'canonical-ple'
+        (self.first / 'resources/app/out.asar.unpacked/addon.node').unlink()
+        shutil.copytree(self.first, canonical)
+        (self.first / 'XDASKernel.dll').unlink()
+        for directory in (self.first, canonical):
+            self.write(directory, 'libplacebo-274.dll', pe_image('vulkan-1.dll'))
+            self.write(directory, 'vulkan-1.dll', pe_image())
+        self.write(canonical, 'debug.log', b'upstream log')
+        args = ['--xenon-payload-source=application-a=' + str(canonical),
+                '--xenon-windows-hosted-payload=application-a=ple']
+        self.assertEqual(self.run_staging(args)[0], 0)
+        self.assertEqual((self.staged_root() / 'application-a/vulkan-1.dll').read_bytes(),
+                         pe_image())
+        self.assertFalse((self.staged_root() / 'application-a/debug.log').exists())
+
+    def test_explicit_windows_projection_compares_retained_bytes_and_rejects_runtime(self):
+        canonical = self.root / 'canonical'
+        shutil.copytree(self.first, canonical)
+        # Opaque fixture DLLs are sufficient for the generic import tests; this
+        # explicit policy checks every remaining executable as a real PE.
+        (self.first / 'resources/app/out.asar.unpacked/addon.node').unlink()
+        (canonical / 'resources/app/out.asar.unpacked/addon.node').unlink()
+        (self.first / 'XDASKernel.dll').unlink()
+        args = ['--xenon-payload-source=application-a=' + str(canonical),
+                '--xenon-windows-hosted-payload=application-a']
+        self.assertEqual(self.run_staging(args)[0], 0)
+        self.assertFalse((self.staged_root() / 'application-a/XDASKernel.dll').exists())
+        self.write(self.first, 'XDASKernel.dll', b'leaked runtime')
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.run_staging(args)[0], 1)
+        self.assertFalse((self.staged_root() / 'application-a/XDASKernel.dll').exists())
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix='installer-payload-test-')
         self.addCleanup(temporary.cleanup)
