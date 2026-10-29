@@ -278,6 +278,28 @@ source_set("clipboard") {
   }
 }
 
+# Keep the Windows input implementation reusable by an in-browser remote
+# session without bringing in the CRD host service and registration machinery.
+if (is_win) {
+  source_set("win_input_injector") {
+    sources = [
+      "input_injector_win.cc",
+      "touch_injector_win.cc",
+      "touch_injector_win.h",
+    ]
+    deps = [
+      ":clipboard",
+      "//base",
+      "//remoting/base",
+      "//remoting/proto",
+      "//remoting/protocol",
+      "//third_party/webrtc_overrides:webrtc_component",
+      "//ui/events:dom_keycode_converter",
+    ]
+    public_deps = [ ":platform_interfaces" ]
+  }
+}
+
 source_set("platform_interfaces") {
   sources = [
     "action_executor.h",
@@ -804,17 +826,15 @@ static_library("common") {
       "desktop_session_win.h",
       "disconnect_window_win.cc",
       "host_event_logger_win.cc",
-      "input_injector_win.cc",
       "keyboard_layout_monitor_win.cc",
       "pairing_registry_delegate_win.cc",
       "pairing_registry_delegate_win.h",
       "sas_injector_win.cc",
-      "touch_injector_win.cc",
-      "touch_injector_win.h",
       "usage_stats_consent_win.cc",
     ]
     libs += [ "crypt32.lib" ]
     deps += [
+      ":win_input_injector",
       "//mojo/core/embedder",
       "//remoting/base/crash",
       "//remoting/host/crash:crash_uploader",

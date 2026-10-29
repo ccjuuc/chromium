@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>远程接收端 · Xenon</title>
+  <link rel="stylesheet" href="index.css">
+  <script src="session.js" defer></script>
+  <script src="viewer.js" defer></script>
+</head>
+<body>
+  <main class="shell viewer-shell">
+    <header class="page-header"><div><p class="eyebrow">XENON / REMOTE</p><h1>远程接收端</h1>
+      <p class="subtitle">连接共享端，查看页面、浏览器窗口或桌面。</p></div>
+    </header>
+    <section class="status-bar" aria-live="polite" aria-atomic="true">
+      <span id="status-dot" class="status-dot"></span>
+      <div><strong id="status-title">等待配对</strong><p id="status-description">粘贴共享端发来的配对信息。</p></div>
+    </section>
+    <p id="error" class="error" role="alert" hidden></p>
+
+    <section id="viewer-stage" class="panel preview-panel viewer-preview">
+      <button id="viewer-menu" class="viewer-menu small" aria-controls="viewer-controls" aria-expanded="false" hidden>控制</button>
+      <div id="viewer-controls" class="viewer-controls">
+        <div class="preview-heading"><h2 id="source-title">远程画面</h2>
+          <span id="control-badge" class="badge">仅观看</span>
+        </div>
+        <div class="button-row compact">
+          <button id="play-audio" class="small" hidden>播放声音</button>
+          <button id="fullscreen" class="small" disabled>全屏</button>
+          <button id="disconnect" class="small danger" disabled>断开连接</button>
+        </div>
+        <p id="input-hint" class="help video-help">操作权限由共享端开启。点击画面后，键盘输入会发送到远端。</p>
+        <form id="text-form" class="text-entry">
+          <label class="sr-only" for="text-input">发送文字（支持中文输入法与手机键盘）</label>
+          <input id="text-input" type="text" maxlength="4096" autocomplete="off" placeholder="输入文字后发送，支持中文与手机键盘" disabled>
+          <button id="send-text" type="submit" disabled>发送文字</button>
+        </form>
+      </div>
+      <div class="video-wrap">
+        <video id="remote-video" autoplay playsinline tabindex="0" aria-label="远程画面；获得控制权限后，点击画面可使用键盘鼠标"></video>
+        <div id="preview-placeholder" class="video-placeholder"><span class="placeholder-icon">▧</span><p>连接后的画面将显示在这里</p></div>
+      </div>
+    </section>
+
+    <details id="pairing-section" class="panel pairing-panel" open>
+      <summary class="pairing-summary">连接配对</summary>
+      <div class="pairing-grid">
+        <div><label class="field-label" for="offer-input">共享端配对信息</label>
+          <textarea id="offer-input" rows="5" spellcheck="false" autocomplete="off" placeholder="粘贴以 XENON-REMOTE-1. 开头的完整信息。" maxlength="262144"></textarea>
+          <div class="button-row"><button id="create-answer" class="primary">生成回复</button></div>
+        </div>
+        <div><label class="field-label" for="answer-output">发回共享端的回复</label>
+          <textarea id="answer-output" rows="5" readonly spellcheck="false" placeholder="生成回复后，复制并发回共享端。"></textarea>
+          <div class="button-row"><button id="copy-answer" disabled>复制回复</button></div>
+        </div>
+      </div>
+      <details class="advanced"><summary>跨网络连接设置</summary>
+        <p class="help">可配置自己的 STUN / TURN 服务。默认不使用外部服务器，配置只在当前页面生效。</p>
+        <label class="field-label" for="ice-servers">ICE 服务器（JSON 数组，可留空）</label>
+        <textarea id="ice-servers" rows="3" spellcheck="false" autocomplete="off" placeholder='[{"urls":"stun:your-server.example:3478"}]' maxlength="16384"></textarea>
+      </details>
+    </details>
+    <footer>文字输入框会一次发送已输入的文字。浏览器保留的系统快捷键可能无法传到远端。</footer>
+  </main>
+</body>
+</html>

@@ -35,6 +35,7 @@
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_node_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_player_by_elec_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_player_electron_controller.h"
+#include "xenon_overlay/chrome/browser/ui/webui/xenon_remote_ui_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_thunder_2025_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_ui_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_update_ui_controller.h"
@@ -279,6 +280,9 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
 
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<xenon::XenonCertificatesUIConfig>());
+
+  content::WebUIConfigMap::GetInstance().AddWebUIConfig(
+      std::make_unique<xenon::XenonRemoteUIConfig>());
 
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<xenon::LocalVideoTestWebUIConfig>());

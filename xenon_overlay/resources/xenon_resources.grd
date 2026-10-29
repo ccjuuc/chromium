@@ -67,6 +67,14 @@
       <include name="IDR_XENON_UPDATE_HTML" file="webui/xenon_update/index.html" type="BINDATA" />
       <include name="IDR_XENON_UPDATE_CSS" file="webui/xenon_update/index.css" type="BINDATA" />
       <include name="IDR_XENON_UPDATE_JS" file="webui/xenon_update/index.js" type="BINDATA" />
+
+      <!-- Remote sharing: native capture selection and portable WebRTC viewer. -->
+      <include name="IDR_XENON_REMOTE_HTML" file="webui/xenon_remote/index.html" type="BINDATA" />
+      <include name="IDR_XENON_REMOTE_CSS" file="webui/xenon_remote/index.css" type="BINDATA" />
+      <include name="IDR_XENON_REMOTE_JS" file="webui/xenon_remote/index.js" type="BINDATA" />
+      <include name="IDR_XENON_REMOTE_SESSION_JS" file="webui/xenon_remote/session.js" type="BINDATA" />
+      <include name="IDR_XENON_REMOTE_VIEWER_HTML" file="webui/xenon_remote/viewer.html" type="BINDATA" />
+      <include name="IDR_XENON_REMOTE_VIEWER_JS" file="webui/xenon_remote/viewer.js" type="BINDATA" />
     </includes>
   </release>
 </grit>

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>远程共享 · Xenon</title>
+  <link rel="stylesheet" href="index.css">
+  <script type="module" src="index.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="page-header">
+      <div><p class="eyebrow">XENON / REMOTE</p><h1>远程共享</h1>
+        <p class="subtitle">选择页面、浏览器窗口或桌面，在另一台设备上查看和操作。</p></div>
+      <a class="button secondary" href="viewer.html" target="_blank" rel="noopener">打开接收端 ↗</a>
+    </header>
+
+    <section class="status-bar" aria-live="polite" aria-atomic="true">
+      <span id="status-dot" class="status-dot"></span>
+      <div><strong id="status-title">准备共享</strong>
+        <p id="status-description">先选择共享范围，再与接收端配对。</p></div>
+      <span id="mode-badge" class="badge">未选择目标</span>
+    </section>
+    <p id="error" class="error" role="alert" hidden></p>
+
+    <div class="workspace">
+      <section class="panel controls">
+        <div class="section-title"><span class="step">1</span><h2>选择共享内容</h2></div>
+        <fieldset class="mode-options" id="mode-options">
+          <legend class="sr-only">共享范围</legend>
+          <label class="mode-option"><input type="radio" name="mode" value="tab" checked>
+            <span><strong>页面</strong><small>一个标签页的内容</small></span></label>
+          <label class="mode-option"><input type="radio" name="mode" value="window">
+            <span><strong>浏览器窗口</strong><small>包含地址栏和标签栏</small></span></label>
+          <label class="mode-option"><input type="radio" name="mode" value="screen">
+            <span><strong>桌面</strong><small>选择一块显示器</small></span></label>
+        </fieldset>
+        <label class="check-row"><input id="share-audio" type="checkbox">共享音频（按目标支持情况提供）</label>
+        <div class="button-row">
+          <button id="choose-source" class="primary" type="button">选择共享目标</button>
+          <button id="stop" class="danger" type="button" disabled>停止共享</button>
+        </div>
+        <div class="permission-box">
+          <label class="check-row"><input id="allow-control" type="checkbox" disabled><strong>允许接收端操作</strong></label>
+          <p id="control-hint">连接后可开启；默认仅观看。</p>
+        </div>
+        <p class="help">浏览器窗口模式只共享选中的一个窗口。切换目标或连接中断后，需要重新开启操作权限。</p>
+      </section>
+
+      <section class="panel preview-panel">
+        <div class="preview-heading"><h2>本机预览</h2><span id="capture-size" class="muted"></span></div>
+        <div class="video-wrap">
+          <video id="preview" autoplay muted playsinline aria-label="共享内容预览"></video>
+          <div id="preview-placeholder" class="video-placeholder"><span class="placeholder-icon">▧</span><p>共享画面将显示在这里</p></div>
+        </div>
+      </section>
+    </div>
+
+    <section class="panel pairing-panel">
+      <div class="section-title"><span class="step">2</span><h2>与另一台设备配对</h2></div>
+      <p class="help">当前使用手动配对：发送本机配对信息，接收对方回复后建立连接。连接建立后，音视频通过 WebRTC 传输。</p>
+      <div class="pairing-grid">
+        <div>
+          <label class="field-label" for="offer-output">本机配对信息</label>
+          <textarea id="offer-output" rows="5" readonly spellcheck="false" placeholder="选择共享目标后，点击生成配对信息。"></textarea>
+          <div class="button-row"><button id="create-offer" class="primary" disabled>生成配对信息</button><button id="copy-offer" disabled>复制</button></div>
+        </div>
+        <div>
+          <label class="field-label" for="answer-input">接收端回复</label>
+          <textarea id="answer-input" rows="5" spellcheck="false" autocomplete="off" placeholder="把接收端生成的回复粘贴到这里。" maxlength="262144"></textarea>
+          <div class="button-row"><button id="accept-answer" disabled>确认连接</button></div>
+        </div>
+      </div>
+      <details class="advanced">
+        <summary>跨网络连接设置</summary>
+        <p class="help">默认不使用外部服务器，适合可直连的网络。跨网络连接可配置自己的 STUN / TURN 服务，两端都可以设置。配置只用于当前页面，不会保存在浏览器中。</p>
+        <label class="field-label" for="ice-servers">ICE 服务器（JSON 数组，可留空）</label>
+        <textarea id="ice-servers" rows="3" spellcheck="false" autocomplete="off" placeholder='[{"urls":"stun:your-server.example:3478"}]' maxlength="16384"></textarea>
+      </details>
+    </section>
+    <footer>共享期间请保持此页面打开。关闭页面或点击“停止共享”会结束采集和远程操作。</footer>
+  </main>
+</body>
+</html>
