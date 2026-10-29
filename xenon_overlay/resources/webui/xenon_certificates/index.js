@@ -1,7 +1,18 @@
 // Copyright 2026 The Xenon Overlay Authors. All rights reserved.
+import '/strings.m.js';
+
 import {sendWithPromise} from 'chrome://resources/js/cr.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 
 const $ = id => document.getElementById(id);
+const gmEnabled = loadTimeData.getBoolean('gmEnabled');
+if (gmEnabled) {
+  $('gm-test-presets').hidden = false;
+  $('gm-pin-hint').hidden = false;
+} else {
+  $('gm-test-presets').remove();
+  $('gm-pin-hint').remove();
+}
 const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
   year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit',
   minute: '2-digit', second: '2-digit', hour12: false, timeZoneName: 'short',
@@ -236,15 +247,15 @@ function renderTestResult(result, requestedUrl) {
       '已收到服务器响应；HTTP 结果与证书校验分别显示。';
   $('network-error').textContent = Number.isInteger(result.netError) ?
       `${errorName} (${result.netError})` : errorName;
+  $('connection-details').hidden = !result.connection;
+  $('connection-protocol').textContent = text(result.connection?.protocol);
+  $('connection-cipher').textContent = text(result.connection?.cipher);
+  $('connection-suite').textContent = text(result.connection?.cipherSuite);
   renderPeerCertificate(result.certificate);
   $('result-details').hidden = false;
 }
 
-async function testUrl(event) {
-  event.preventDefault();
-  if (testing) {
-    return;
-  }
+function validatedTestUrl() {
   let url;
   try {
     url = new URL($('test-url').value.trim());
@@ -256,13 +267,38 @@ async function testUrl(event) {
     showError('url-error', '请输入完整 HTTPS 地址，不含账号、密码或 # 片段，规范化后最长 2048 个字符。');
     $('test-url').setAttribute('aria-invalid', 'true');
     $('test-url').focus();
-    return;
+    return null;
   }
   showError('url-error', '');
   $('test-url').removeAttribute('aria-invalid');
+  return url;
+}
+
+function openTestUrl() {
+  if (testing) {
+    return;
+  }
+  const url = validatedTestUrl();
+  if (!url) {
+    return;
+  }
+  $('test-result').hidden = true;
+  window.open(url.href, '_blank', 'noopener');
+}
+
+async function testUrl(event) {
+  event.preventDefault();
+  if (testing) {
+    return;
+  }
+  const url = validatedTestUrl();
+  if (!url) {
+    return;
+  }
   testing = true;
   $('test-button').disabled = true;
   $('test-button').textContent = '正在测试…';
+  $('open-button').disabled = true;
   $('test-url').disabled = true;
   $('test-preset').disabled = true;
   $('test-result').hidden = false;
@@ -282,25 +318,44 @@ async function testUrl(event) {
     testing = false;
     $('test-button').disabled = false;
     $('test-button').textContent = '测试连接';
+    $('open-button').disabled = false;
     $('test-url').disabled = false;
     $('test-preset').disabled = false;
+    updatePresetHint();
     $('test-result').setAttribute('aria-busy', 'false');
   }
 }
 
+function findTestPreset(value) {
+  try {
+    const url = new URL(value.trim());
+    return [...$('test-preset').options].find(option => option.value === url.href);
+  } catch {
+    return undefined;
+  }
+}
+
+function updatePresetHint() {
+  const preset = findTestPreset($('test-url').value);
+  $('preset-hint').textContent = preset?.dataset.hint ||
+      '选择后填入下方地址，点击“测试连接”执行校验。';
+}
+
 $('refresh-status').addEventListener('click', refreshStatus);
 $('test-form').addEventListener('submit', testUrl);
+$('open-button').addEventListener('click', openTestUrl);
 $('test-preset').addEventListener('change', () => {
   if ($('test-preset').value) {
     $('test-url').value = $('test-preset').value;
   }
+  updatePresetHint();
   showError('url-error', '');
   $('test-url').removeAttribute('aria-invalid');
   $('test-url').focus();
 });
 $('test-url').addEventListener('input', () => {
-  $('test-preset').value = [...$('test-preset').options].some(
-      option => option.value === $('test-url').value) ? $('test-url').value : '';
+  $('test-preset').value = findTestPreset($('test-url').value)?.value || '';
+  updatePresetHint();
   showError('url-error', '');
   $('test-url').removeAttribute('aria-invalid');
 });

@@ -46,6 +46,7 @@ class HttpAuthHandlerFactory;
 class HttpResponseInfo;
 class HttpUserAgentSettings;
 class NetLog;
+struct NetErrorDetails;
 class NetLogWithSource;
 class NetworkQualityEstimator;
 class ProxyDelegate;
@@ -185,6 +186,12 @@ class NET_EXPORT_PRIVATE ConnectJob {
                                   HttpAuthController* auth_controller,
                                   base::OnceClosure restart_with_auth_callback,
                                   ConnectJob* job) = 0;
+
+    // Selects the live request owning fresh GM client authentication. Pools
+    // may bind the job to that request before exposing its UI context.
+    virtual base::UnguessableToken GetGmClientAuthContext(
+        ConnectJob* job,
+        const base::RepeatingCallback<base::UnguessableToken()>& fallback);
   };
 
   // A |timeout_duration| of 0 corresponds to no timeout.
@@ -223,6 +230,10 @@ class NET_EXPORT_PRIVATE ConnectJob {
 
   void ChangePriority(RequestPriority priority);
 
+  bool gm_client_auth_without_owner() const {
+    return gm_client_auth_without_owner_;
+  }
+
   // Begins connecting the socket.  Returns OK on success, ERR_IO_PENDING if it
   // cannot complete synchronously without blocking, or another net error code
   // on error.  In asynchronous completion, the ConnectJob will notify
@@ -260,6 +271,7 @@ class NET_EXPORT_PRIVATE ConnectJob {
   // negotiation started. If the ConnectJob succeeded, the returned value is
   // undefined.
   virtual bool IsSSLError() const;
+  virtual void PopulateNetErrorDetails(NetErrorDetails* details) const {}
 
   // If the ConnectJob failed with ERR_SSL_CLIENT_AUTH_CERT_NEEDED, returns the
   // SSLCertRequestInfo received. Otherwise, returns nullptr.
@@ -322,6 +334,8 @@ class NET_EXPORT_PRIVATE ConnectJob {
   void NotifyDelegateOfProxyAuth(const HttpResponseInfo& response,
                                  HttpAuthController* auth_controller,
                                  base::OnceClosure restart_with_auth_callback);
+  base::UnguessableToken ResolveGmClientAuthContext(
+      const base::RepeatingCallback<base::UnguessableToken()>& fallback);
 
   // If |remaining_time| is base::TimeDelta(), stops the timeout timer, if it's
   // running. Otherwise, Starts / restarts the timeout timer to trigger in the
@@ -357,6 +371,7 @@ class NET_EXPORT_PRIVATE ConnectJob {
   // Timer to abort jobs that take too long.
   base::OneShotTimer timer_;
   raw_ptr<Delegate> delegate_;
+  bool gm_client_auth_without_owner_ = false;
   std::unique_ptr<StreamSocket> socket_;
   // Indicates if this is the topmost ConnectJob. The topmost ConnectJob logs an
   // extra begin and end event, to allow callers to log extra data before the

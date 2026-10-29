@@ -27,6 +27,21 @@
 
 namespace net {
 
+base::UnguessableToken ConnectJob::Delegate::GetGmClientAuthContext(
+    ConnectJob* job,
+    const base::RepeatingCallback<base::UnguessableToken()>& fallback) {
+  return fallback ? fallback.Run() : base::UnguessableToken();
+}
+
+base::UnguessableToken ConnectJob::ResolveGmClientAuthContext(
+    const base::RepeatingCallback<base::UnguessableToken()>& fallback) {
+  const auto context = delegate_
+                           ? delegate_->GetGmClientAuthContext(this, fallback)
+                           : base::UnguessableToken();
+  gm_client_auth_without_owner_ = context.is_empty();
+  return context;
+}
+
 CommonConnectJobParams::CommonConnectJobParams(
     ClientSocketFactory* client_socket_factory,
     HostResolver* host_resolver,

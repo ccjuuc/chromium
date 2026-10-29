@@ -1,0 +1,207 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//build/buildflag_header.gni")
+import("//net/gm/gm.gni")
+import("//testing/test.gni")
+
+buildflag_header("buildflags") {
+  header = "gm_buildflags.h"
+  flags = [
+    "XENON_GM=$gm_tls_backend_enabled",
+    "ENABLE_GM_TLS_SOCKET=$gm_tls_socket_supported",
+  ]
+}
+
+source_set("api") {
+  sources = [ "gm_backend.h" ]
+}
+
+executable("gm_connection_profile_test") {
+  testonly = true
+  sources = [ "tests/connection_profile_test.cc" ]
+  deps = [ "//net" ]
+}
+
+if (gm_tls_backend_enabled) {
+  executable("gm_crypto_benchmark") {
+    testonly = true
+    sources = [ "tests/crypto_benchmark.cc" ]
+    deps = [ "//third_party/boringssl" ]
+  }
+}
+
+# Allows the independent test peer to exercise the actual browser facade.
+# This library is deliberately absent from all production data dependencies.
+if (is_win && gm_tls_backend_enabled) {
+  shared_library("gm_boringssl_test_backend") {
+    testonly = true
+    sources = [
+      "tests/boringssl_test_entry.cc",
+      "tests/boringssl_test_entry.def",
+    ]
+    deps = [ "//net" ]
+  }
+}
+
+# The independent peer is provisioned explicitly for interoperability tests.
+# It is an executable test fixture, not a browser dependency.
+if (is_win && gm_tls_backend_enabled && gm_interop_peer_dir != "") {
+  copy("gm_backend_smoke") {
+    testonly = true
+    sources = [
+      "$gm_interop_peer_dir/gm_backend_smoke.exe",
+      "$gm_interop_peer_dir/libcrypto-3-x64.dll",
+      "$gm_interop_peer_dir/libssl-3-x64.dll",
+      "$gm_interop_peer_dir/vcruntime140.dll",
+      "$gm_interop_peer_dir/vcruntime140_1.dll",
+    ]
+    outputs = [ "$root_out_dir/gm_interop_peer/{{source_file_part}}" ]
+  }
+} else {
+  group("gm_backend_smoke") {
+    testonly = true
+  }
+}
+
+group("gm_tests") {
+  testonly = true
+  deps = [
+    ":gm_connection_profile_test",
+    "//third_party/boringssl:boringssl_crypto_tests",
+    "//third_party/boringssl:boringssl_pki_tests",
+    "//third_party/boringssl:boringssl_ssl_tests",
+  ]
+  if (is_win && target_cpu == "x64" && gm_tls_backend_enabled) {
+    deps += [ "//services/gm_key:gm_key_tests" ]
+  }
+  if (gm_tls_backend_enabled) {
+    deps += [ ":gm_backend_smoke" ]
+    if (is_win && target_cpu == "x64") {
+      deps += [
+        ":gm_boringssl_test_backend",
+        "//services/gm_key:gm_key_service_tests",
+      ]
+    }
+  }
+}
+
+# One entry point for the Windows x64 integration builder. The source sets are
+# also linked into the standard net/network/Chrome test targets.
+group("gm_integration_tests") {
+  testonly = true
+  deps = [
+    ":gm_net_unittests",
+    ":gm_network_service_unittests",
+    ":gm_tests",
+  ]
+  if (is_win && target_cpu == "x64") {
+    deps += [
+      "//chrome/browser/gm:gm_browser_unittests",
+      "//content/test:gm_content_unittests",
+    ]
+    if (gm_tls_backend_enabled) {
+      deps += [ "//chrome/browser/gm:gm_browser_browsertests" ]
+    }
+  }
+}
+
+# Focused Chromium integration coverage of the in-process BoringSSL adapter.
+test("gm_net_unittests") {
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+  sources = [
+    "//net/http/http_stream_key_unittest.cc",
+    "//net/http/http_stream_pool_attempt_manager_unittest.cc",
+    "//net/http/http_stream_pool_attempt_unittest.cc",
+    "//net/http/http_stream_pool_group_unittest.cc",
+    "//net/http/http_stream_pool_ip_endpoint_state_tracker_unittest.cc",
+    "//net/quic/mock_quic_data.cc",
+    "//net/quic/mock_quic_data.h",
+    "//net/quic/quic_test_packet_maker.cc",
+    "//net/quic/quic_test_packet_maker.h",
+    "//net/quic/quic_test_packet_printer.cc",
+    "//net/quic/quic_test_packet_printer.h",
+    "//net/socket/client_socket_pool_unittest.cc",
+    "//net/socket/connect_job_params_factory_unittest.cc",
+    "//net/socket/connect_job_test_util.cc",
+    "//net/socket/connect_job_test_util.h",
+    "//net/socket/ssl_client_socket_unittest.cc",
+    "//net/socket/ssl_connect_job_unittest.cc",
+    "//net/socket/transport_client_socket_pool_test_util.cc",
+    "//net/socket/transport_client_socket_pool_test_util.h",
+    "//net/socket/transport_client_socket_pool_unittest.cc",
+    "//net/spdy/spdy_session_key_unittest.cc",
+    "//net/ssl/ssl_cipher_suite_names_unittest.cc",
+    "//net/ssl/ssl_client_session_cache_unittest.cc",
+    "tests/run_network_tests.cc",
+  ]
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//mojo/core/embedder",
+    "//net",
+    "//net:quic_test_tools",
+    "//net:spdy_test_tools",
+    "//net:test_support",
+    "//net/third_party/quiche:quiche_tool_support",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//third_party/boringssl",
+    "//url",
+  ]
+  if (gm_tls_backend_enabled) {
+    sources += [
+      "tests/auto_routing_unittest.cc",
+      "tests/client_cert_constraints_unittest.cc",
+      "tests/http_cache_unittest.cc",
+      "tests/tls_policy_unittest.cc",
+    ]
+  } else {
+    sources += [ "tests/disabled_unittest.cc" ]
+  }
+  if (is_win && target_cpu == "x64" && gm_tls_backend_enabled) {
+    sources += [
+      "tests/certificate_verifier_unittest.cc",
+      "tests/gm_ssl_private_key_unittest.cc",
+      "tests/ssl_socket_tcp_unittest.cc",
+    ]
+    data_deps = [ ":gm_backend_smoke" ]
+  }
+}
+
+test("gm_network_service_unittests") {
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+  sources = [
+    "//services/network/ssl_config_service_mojo_unittest.cc",
+    "tests/run_network_tests.cc",
+  ]
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//crypto",
+    "//mojo/core/embedder",
+    "//mojo/public/cpp/bindings",
+    "//net",
+    "//net:test_support",
+    "//services/network:network_service",
+    "//services/network:test_support",
+    "//services/network/public/cpp",
+    "//services/network/public/mojom",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//third_party/boringssl",
+  ]
+  if (gm_tls_backend_enabled) {
+    sources += [ "//services/network/gm_identity_provider_unittest.cc" ]
+  }
+  if (is_win && target_cpu == "x64" && gm_tls_backend_enabled) {
+    sources += [ "//services/network/gm_identity_tls_unittest.cc" ]
+    deps += [ "//services/gm_key:test_client" ]
+    data_deps = [
+      ":gm_backend_smoke",
+      "//services/gm_key:gm_key_service_test_helper",
+      "//services/gm_key:gm_sm2_simulator",
+    ]
+  }
+}

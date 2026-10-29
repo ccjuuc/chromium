@@ -16,7 +16,9 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
+#include "chrome/common/webui_url_constants.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
@@ -29,9 +31,11 @@
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/label_button.h"
+#include "ui/views/controls/scroll_view.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/layout/box_layout.h"
 #include "url/gurl.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/sidebar/xenon_sidebar_service_factory.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 
@@ -60,26 +64,28 @@ struct SidebarShortcut {
 };
 
 constexpr SidebarShortcut kShortcuts[] = {
-    // {"XO", "Xenon Overlay", "chrome://xenon-overlay/"},
-    // {"AI", "Xenon AI", "chrome://xenon-ai-side-panel.top-chrome/"},
-    // {"UI", "Xenon UI", "chrome://xenon-ui/"},
-    // {"N", "Xenon Node", "chrome://xenon-node/"},
-    // {"PC", "pc_addon", "chrome://xenon-node/#pc_addon"},
-    // {"XP", "Xenon Player", "chrome://xenon-player/"},
-    // {"XPE", "Electron Container Test", "chrome://xenon-player-by-elec/"},
-    {"PLE", "Player via Electron Container",
-     "chrome://xenon-player-electron/"},
+    {"CRT", "证书诊断", "chrome://xenon-certificates/"},
+    {"XO", "Xenon Overlay", "chrome://xenon-overlay/"},
+#if BUILDFLAG(ENABLE_XENON_AI)
+    {"AI", "Xenon AI", chrome::kChromeUIXenonAISidePanelURL},
+#endif
+    {"UI", "Xenon UI", "chrome://xenon-ui/"},
+    {"N", "Xenon Node", "chrome://xenon-node/"},
+    {"PC", "pc_addon", "chrome://xenon-node/#pc_addon"},
+    {"XP", "Xenon Player", "chrome://xenon-player/"},
+    {"XPE", "Electron Container Test", "chrome://xenon-player-by-elec/"},
+    {"PLE", "Player via Electron Container", "chrome://xenon-player-electron/"},
     {"TH", "Thunder 2025", "chrome://thunder-2025/"},
     {"UPD", "检查更新", "chrome://xenon-update/"},
-    // {"VT", "Local Video Test", "chrome://local-video-test/"},
-    // {"RDL", "Render DLL Test", "chrome://render-dll-test/"},
-    // {"MI", "Media Internals", "chrome://media-internals/"},
-    // {"GPU", "GPU Internals", "chrome://gpu/"},
-    // {"VS", "Video Sniffer", "chrome://video-sniffer/"},
-    // {"SW", "Simple WebUI", "chrome://simple-webui/"},
-    // {"LG", "Xenon Login", "chrome://xenon-login/"},
-    // {"VER", "Version", "chrome://version/"},
-    // {"FLG", "Flags", "chrome://flags/"},
+    {"VT", "Local Video Test", "chrome://local-video-test/"},
+    {"RDL", "Render DLL Test", "chrome://render-dll-test/"},
+    {"MI", "Media Internals", "chrome://media-internals/"},
+    {"GPU", "GPU Internals", "chrome://gpu/"},
+    {"VS", "Video Sniffer", "chrome://video-sniffer/"},
+    {"SW", "Simple WebUI", "chrome://simple-webui/"},
+    {"LG", "Xenon Login", "chrome://xenon-login/"},
+    {"VER", "Version", "chrome://version/"},
+    {"FLG", "Flags", "chrome://flags/"},
 };
 
 class XenonSidebarButton : public views::LabelButton {
@@ -225,15 +231,33 @@ XenonSidebarView::XenonSidebarView(Browser* browser)
   layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
+  auto shortcut_contents = std::make_unique<views::View>();
+  auto* shortcut_layout =
+      shortcut_contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kVertical, gfx::Insets(),
+          kButtonSpacing));
+  shortcut_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
   for (const SidebarShortcut& shortcut : kShortcuts) {
-    AddChildView(CreateShortcutButton(
+    shortcut_contents->AddChildView(CreateShortcutButton(
         shortcut, base::BindRepeating(&XenonSidebarView::OpenShortcut,
                                       weak_ptr_factory_.GetWeakPtr(),
                                       GURL(shortcut.url))));
   }
 
-  views::View* spacer = AddChildView(std::make_unique<views::View>());
-  layout->SetFlexForView(spacer, 1);
+  auto* shortcuts = AddChildView(std::make_unique<views::ScrollView>());
+  shortcuts->SetBackgroundColor(kColorSidePanelBackground);
+  shortcuts->SetHorizontalScrollBarMode(
+      views::ScrollView::ScrollBarMode::kDisabled);
+  shortcuts->SetVerticalScrollBarMode(
+      views::ScrollView::ScrollBarMode::kHiddenButEnabled);
+  shortcuts->SetDrawOverflowIndicator(false);
+  // The buttons have fixed sizes. ScrollView does not size its contents when
+  // compositor scrolling is disabled, so initialize the strip's bounds here.
+  shortcut_contents->SizeToPreferredSize();
+  shortcuts->SetContents(std::move(shortcut_contents));
+  // Only the shortcuts scroll; alignment and auto-hide controls stay visible.
+  layout->SetFlexForView(shortcuts, 1);
 
   left_align_button_ = AddChildView(CreateSideOptionButton(
       u"\u5de6", u"\u4fa7\u8fb9\u680f\u9760\u5de6",
@@ -461,6 +485,15 @@ void XenonSidebarView::OpenShortcut(const GURL& url) {
   if (!browser_) {
     return;
   }
+
+#if BUILDFLAG(ENABLE_XENON_AI)
+  if (url == GURL(chrome::kChromeUIXenonAISidePanelURL)) {
+    if (auto* side_panel = SidePanelUI::From(browser_)) {
+      side_panel->Show(SidePanelEntryId::kXenonAI);
+    }
+    return;
+  }
+#endif
 
   // Player HWND windows are created by packaged main.js BrowserWindow.
   // Sidebar only activates those widgets — do not open a second WebDialog.

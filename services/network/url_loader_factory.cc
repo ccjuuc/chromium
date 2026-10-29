@@ -429,6 +429,10 @@ URLLoaderFactory::GetDeviceBoundSessionAccessObserverSharedRemote() const {
   return device_bound_session_observer_;
 }
 
+GmIdentityProvider* URLLoaderFactory::GetGmIdentityProvider() const {
+  return context_->gm_identity_provider();
+}
+
 mojom::URLLoaderNetworkServiceObserver*
 URLLoaderFactory::GetURLLoaderNetworkServiceObserver() const {
   if (cors_url_loader_factory_->url_loader_network_service_observer()) {

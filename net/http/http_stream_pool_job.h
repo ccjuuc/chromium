@@ -9,9 +9,11 @@
 #include <optional>
 #include <vector>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
+#include "base/unguessable_token.h"
 #include "net/base/load_timing_internal_info.h"
 #include "net/base/net_error_details.h"
 #include "net/base/net_export.h"
@@ -43,6 +45,9 @@ class HttpStreamPool::Job {
 
     // Returns the priority of the job.
     virtual RequestPriority priority() const = 0;
+
+    virtual base::RepeatingCallback<base::UnguessableToken()>
+    gm_client_auth_context() const;
 
     // Returns whether the limits should be respected.
     virtual RespectLimits respect_limits() const = 0;
@@ -156,6 +161,12 @@ class HttpStreamPool::Job {
   size_t NumRequiredTcpAttempts() const;
 
   RequestPriority priority() const { return delegate_->priority(); }
+
+  base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context()
+      const {
+    return is_preconnect() ? base::RepeatingCallback<base::UnguessableToken()>()
+                           : delegate_->gm_client_auth_context();
+  }
 
   RespectLimits respect_limits() const { return delegate_->respect_limits(); }
 

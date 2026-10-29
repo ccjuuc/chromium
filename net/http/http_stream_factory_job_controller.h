@@ -354,6 +354,9 @@ class HttpStreamFactory::JobController
   // Error status used for alternative service brokenness reporting.
   // Net error code of the main job. Set to OK by default.
   int main_job_net_error_ = OK;
+  NetErrorDetails gm_origin_error_details_;
+  ResolveErrorInfo gm_origin_resolve_error_info_;
+  ProxyInfo gm_origin_proxy_info_;
   // Net error code of the alternative job. Set to OK by default.
   int alternative_job_net_error_ = OK;
   // Set to true if the alternative job failed on the default network.
@@ -395,7 +398,7 @@ class HttpStreamFactory::JobController
 
   State next_state_ = STATE_RESOLVE_PROXY;
   std::unique_ptr<ProxyResolutionRequest> proxy_resolve_request_;
-  const StreamRequestInfo request_info_;
+  StreamRequestInfo request_info_;
   ProxyInfo proxy_info_;
   const std::vector<SSLConfig::CertAndStatus> allowed_bad_certs_;
   int num_streams_ = 0;

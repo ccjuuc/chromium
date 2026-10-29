@@ -12,6 +12,7 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "net/cert/cert_verifier.h"
+#include "net/gm/gm_buildflags.h"
 #include "net/ssl/ech_mode_getter.h"
 #include "net/ssl/ssl_config_service.h"
 #include "services/network/public/mojom/ssl_config.mojom.h"
@@ -58,11 +59,20 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) SSLConfigServiceMojo
       std::string_view hostname) const override;
 
  private:
+  void UpdateGmPolicyEpoch();
+
   mojo::Receiver<mojom::SSLConfigClient> receiver_{this};
 
   std::unique_ptr<net::EchModeGetter> ech_mode_getter_;
 
   net::SSLContextConfig ssl_context_config_;
+#if BUILDFLAG(XENON_GM)
+  std::shared_ptr<const net::gm::TlsPolicy> configured_gm_policy_;
+  std::shared_ptr<const net::gm::TlsPolicy> effective_gm_policy_;
+  std::shared_ptr<const net::gm::AutoConfig> configured_gm_auto_config_;
+  std::shared_ptr<const net::gm::AutoConfig> effective_gm_auto_config_;
+  uint64_t gm_policy_epoch_ = 0;
+#endif  // BUILDFLAG(XENON_GM)
   net::CertVerifier::Config cert_verifier_config_;
 
   raw_ptr<net::CertVerifier> cert_verifier_;

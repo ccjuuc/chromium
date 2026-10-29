@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- USBKey authentication strings (included from generated_resources.grd). -->
+<grit-part>
+  <message name="IDS_GM_PIN_TITLE" desc="Title of the dialog asking for a USBKey security token PIN to authenticate to a website.">
+    USBKey authentication
+  </message>
+  <message name="IDS_GM_PIN_AUTHORIZE" desc="Button approving use of a USBKey certificate for website authentication.">
+    Authorize
+  </message>
+  <message name="IDS_GM_PIN_CANCEL" desc="Button cancelling USBKey website authentication.">
+    Cancel
+  </message>
+  <message name="IDS_GM_PIN_REQUEST" desc="Explains which website is requesting a USBKey certificate. The placeholder is the HTTPS origin, including the port when needed.">
+    The site <ph name="ORIGIN">$1<ex>https://example.com:8443</ex></ph> requests your USBKey certificate to sign in.
+  </message>
+  <message name="IDS_GM_PIN_CERTIFICATE" desc="Accessible name of the certificate selection control in the USBKey authentication dialog.">
+    Authentication certificate
+  </message>
+  <message name="IDS_GM_PIN_PROMPT" desc="Label and accessible name for the masked USBKey PIN input.">
+    Enter your USBKey PIN
+  </message>
+  <message name="IDS_GM_PIN_INCORRECT" desc="Message when the USBKey rejects an incorrect PIN.">
+    Incorrect PIN.
+  </message>
+  <message name="IDS_GM_PIN_RETRIES" desc="Remaining PIN attempts reported by the USBKey. The placeholder is a nonnegative integer.">
+    Attempts remaining: <ph name="COUNT">$1<ex>2</ex></ph>
+  </message>
+  <message name="IDS_GM_PIN_SELECT_CERTIFICATE" desc="Local validation error when no USBKey certificate is selected.">
+    Select an authentication certificate.
+  </message>
+  <message name="IDS_GM_PIN_INVALID_INPUT" desc="Local validation error before sending a PIN to the USBKey. Only printable ASCII characters and at most 64 characters are supported by the interface.">
+    Enter a PIN with 1–64 printable ASCII characters. This input has not been sent to the USBKey.
+  </message>
+  <message name="IDS_GM_PIN_LOCKED_TITLE" desc="Title of the informational dialog shown when a USBKey PIN is locked.">
+    USBKey PIN locked
+  </message>
+  <message name="IDS_GM_PIN_LOCKED_MESSAGE" desc="Explains that website authentication failed because the USBKey is locked and directs the user to their administrator. No retry button is offered. The placeholder is the HTTPS origin.">
+    Your USBKey PIN is locked, so you cannot sign in to <ph name="ORIGIN">$1<ex>https://example.com</ex></ph>. Contact your administrator to unlock the USBKey.
+  </message>
+  <message name="IDS_GM_PIN_CLOSE" desc="Button dismissing the notice that a USBKey PIN is locked.">
+    Close
+  </message>
+</grit-part>

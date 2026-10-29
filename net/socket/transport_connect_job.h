@@ -58,7 +58,9 @@ class NET_EXPORT_PRIVATE TransportSocketParams
                         SecureDnsPolicy secure_dns_policy,
                         handles::NetworkHandle target_network,
                         OnHostResolutionCallback host_resolution_callback,
-                        base::flat_set<std::string> supported_alpns);
+                        base::flat_set<std::string> supported_alpns,
+                        bool gm_tls = false,
+                        base::flat_set<std::string> automatic_ech_alpns = {});
 
   TransportSocketParams(const TransportSocketParams&) = delete;
   TransportSocketParams& operator=(const TransportSocketParams&) = delete;
@@ -67,6 +69,7 @@ class NET_EXPORT_PRIVATE TransportSocketParams
   const NetworkAnonymizationKey& network_anonymization_key() const {
     return network_anonymization_key_;
   }
+  bool gm_tls() const { return gm_tls_; }
   SecureDnsPolicy secure_dns_policy() const { return secure_dns_policy_; }
   handles::NetworkHandle target_network() const { return target_network_; }
   const OnHostResolutionCallback& host_resolution_callback() const {
@@ -74,6 +77,11 @@ class NET_EXPORT_PRIVATE TransportSocketParams
   }
   const base::flat_set<std::string>& supported_alpns() const {
     return supported_alpns_;
+  }
+  // Ordinary ALPNs are usable only on effective ECH endpoints, so a learned
+  // GM route can request Standard TLS reselection before creating its socket.
+  const base::flat_set<std::string>& automatic_ech_alpns() const {
+    return automatic_ech_alpns_;
   }
 
  private:
@@ -86,6 +94,8 @@ class NET_EXPORT_PRIVATE TransportSocketParams
   const handles::NetworkHandle target_network_;
   const OnHostResolutionCallback host_resolution_callback_;
   const base::flat_set<std::string> supported_alpns_;
+  const bool gm_tls_;
+  const base::flat_set<std::string> automatic_ech_alpns_;
 };
 
 // TransportConnectJob handles the host resolution necessary for socket creation
@@ -219,6 +229,7 @@ class NET_EXPORT_PRIVATE TransportConnectJob : public ConnectJob {
   // `results`.
   bool IsSvcbOptional(
       base::span<const HostResolverEndpointResult> results) const;
+  bool IsEchEnabled() const;
 
   // Returns whether `result` is usable for this connection. If `svcb_optional`
   // is true, the non-HTTPS/SVCB fallback is allowed.

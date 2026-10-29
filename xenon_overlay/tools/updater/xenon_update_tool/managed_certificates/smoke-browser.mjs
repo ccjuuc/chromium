@@ -11,6 +11,7 @@ import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkCertificatePageActions } from '../../../certificate_page_actions.mjs';
 
 const usage = `Usage: node smoke-browser.mjs --browser <absolute chrome.exe path>
 
@@ -302,10 +303,13 @@ async function checkCertificatePage(siteUrl, expectedTrusted,
         input.value = ${JSON.stringify(siteUrl)};
         input.dispatchEvent(new Event('input', {bubbles: true}));
         form.requestSubmit();
-        return true;
+        return document.getElementById('test-button').disabled &&
+          document.getElementById('open-button').disabled && input.disabled;
       })()`, returnByValue: true,
     }, sessionId);
     assert(!submitted.exceptionDetails, 'Certificate URL test form could not be submitted');
+    assert.equal(submitted.result?.value, true,
+      'Both actions and the URL must be disabled while the HEAD probe is pending');
     const outcome = await until('certificate diagnostics TLS test result', async () => {
       const evaluated = await cdp.send('Runtime.evaluate', {
         expression: `(() => {
@@ -319,6 +323,7 @@ async function checkCertificatePage(siteUrl, expectedTrusted,
             httpStatus: document.getElementById('http-status').textContent,
             certificateVisible: !document.getElementById('peer-certificate').hidden,
             certificateSha256: document.getElementById('peer-sha256').textContent,
+            openDisabled: document.getElementById('open-button').disabled,
           };
         })()`, returnByValue: true,
       }, sessionId);
@@ -326,12 +331,21 @@ async function checkCertificatePage(siteUrl, expectedTrusted,
       return value && ['passed', 'failed', 'incomplete'].includes(value.status) ? value : false;
     });
     assert.equal(outcome.status, expectedTrusted ? 'passed' : 'failed', outcome.message);
+    assert.equal(outcome.openDisabled, false, 'Browser action must recover after the probe');
     if (httpStatus !== undefined) assert.equal(outcome.httpStatus, `HTTP ${httpStatus}`, outcome.message);
     if (certificateSha256 !== undefined) {
       assert(outcome.certificateVisible, 'Diagnostics must display the original server certificate');
       assert.equal(outcome.certificateSha256, certificateSha256);
       assert.equal(outcome.url, siteUrl, 'Diagnostics must retain the original requested URL');
     }
+    const gmConfig = await cdp.send('Runtime.evaluate', {
+      expression: "import('chrome://resources/js/load_time_data.js').then(({loadTimeData}) => loadTimeData.getBoolean('gmEnabled'))",
+      awaitPromise: true, returnByValue: true,
+    }, sessionId);
+    assert(!gmConfig.exceptionDetails, JSON.stringify(gmConfig.exceptionDetails));
+    assert.equal(typeof gmConfig.result?.value, 'boolean');
+    await checkCertificatePageActions(
+      cdp.send.bind(cdp), sessionId, siteUrl, gmConfig.result.value);
     assert.equal(exceptions.length, 0, `Certificate diagnostics JavaScript exception: ${JSON.stringify(exceptions)}`);
     console.log(`PASS: chrome://xenon-certificates/ reports TLS ${expectedTrusted ? 'passed' : 'failed'} without JavaScript exceptions`);
   } finally {

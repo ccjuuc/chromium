@@ -5,6 +5,9 @@
 #ifndef SERVICES_NETWORK_TEST_TEST_URL_LOADER_NETWORK_OBSERVER_H_
 #define SERVICES_NETWORK_TEST_TEST_URL_LOADER_NETWORK_OBSERVER_H_
 
+#include <utility>
+
+#include "base/functional/callback.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "services/network/public/mojom/url_loader_network_service_observer.mojom.h"
@@ -32,6 +35,18 @@ class TestURLLoaderNetworkObserver
 
   void FlushReceivers();
 
+  using GmCertificateRequestedCallback = base::RepeatingCallback<void(
+      const std::optional<base::UnguessableToken>&,
+      const url::Origin&,
+      const std::string&,
+      uint64_t,
+      mojom::GmClientCertificateRequestPtr,
+      mojo::PendingRemote<mojom::GmClientCertificateResponder>)>;
+  void set_gm_certificate_requested_callback(
+      GmCertificateRequestedCallback callback) {
+    gm_certificate_requested_callback_ = std::move(callback);
+  }
+
   // mojom::URLLoaderNetworkServiceObserver overrides:
   void OnSSLCertificateError(const GURL& url,
                              int net_error,
@@ -43,6 +58,14 @@ class TestURLLoaderNetworkObserver
       const scoped_refptr<net::SSLCertRequestInfo>& cert_info,
       mojo::PendingRemote<mojom::ClientCertificateResponder>
           client_cert_responder) override;
+  void OnGmCertificateRequested(
+      const std::optional<base::UnguessableToken>& window_id,
+      const url::Origin& origin,
+      const std::string& identity_policy_id,
+      uint64_t identity_generation,
+      mojom::GmClientCertificateRequestPtr certificate_request,
+      mojo::PendingRemote<mojom::GmClientCertificateResponder> cert_responder)
+      override;
   void OnAuthRequired(
       const std::optional<base::UnguessableToken>& window_id,
       int32_t request_id,
@@ -83,6 +106,7 @@ class TestURLLoaderNetworkObserver
 
  private:
   mojo::ReceiverSet<mojom::URLLoaderNetworkServiceObserver> receivers_;
+  GmCertificateRequestedCallback gm_certificate_requested_callback_;
   bool ignore_certificate_errors_ = false;
   bool platform_local_network_permission_response_ = false;
 };

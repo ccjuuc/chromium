@@ -17,17 +17,19 @@
 #include "net/base/connection_endpoint_metadata.h"
 #include "net/base/features.h"
 #include "net/base/host_port_pair.h"
+#include "net/base/net_error_details.h"
 #include "net/base/net_errors.h"
 #include "net/base/trace_constants.h"
 #include "net/base/url_util.h"
 #include "net/cert/x509_util.h"
+#include "net/gm/gm_tls_policy.h"
 #include "net/http/http_proxy_connect_job.h"
-#include "net/socket/leaf_connect_job.h"
 #include "net/log/net_log_source_type.h"
 #include "net/log/net_log_values.h"
 #include "net/log/net_log_with_source.h"
 #include "net/socket/client_socket_factory.h"
 #include "net/socket/client_socket_handle.h"
+#include "net/socket/leaf_connect_job.h"
 #include "net/socket/socks_connect_job.h"
 #include "net/socket/ssl_client_socket.h"
 #include "net/socket/tcp_connect_job.h"
@@ -455,6 +457,19 @@ int SSLConnectJob::DoSSLConnect() {
   ssl_config.server_padding_to_request =
       ssl_client_context()->config().RequestServerPadding();
 
+  if (ssl_config.gm_rule && ssl_config.gm_rule->automatic &&
+      ssl_config.gm_rule->profile.protocol() != gm::TlsProtocol::kTls13Auto &&
+      !ssl_config.ech_config_list.empty() &&
+      (!ssl_client_context()->ssl_config_service() ||
+       ssl_client_context()->ssl_config_service()->GetEchMode(
+           params_->host_and_port().host()) != EchMode::kDisabled)) {
+    // This learned route predates the current ECH metadata. Never erase ECH or
+    // create a BoringSSL socket under the GM pool key. The transaction
+    // reselects Standard TLS, if its one-attempt budget still permits it.
+    gm_standard_tls_required_ = true;
+    return ERR_ABORTED;
+  }
+
   net_log().AddEvent(NetLogEventType::SSL_CONNECT_JOB_SSL_CONNECT, [&] {
     base::DictValue dict;
     dict.Set("ech_enabled", ssl_client_context()->config().ech_enabled);
@@ -471,6 +486,16 @@ int SSLConnectJob::DoSSLConnect() {
     }
     return dict;
   });
+  gm::ApplyTlsRule(ssl_config.gm_rule, &ssl_config);
+  if (ssl_config.gm_rule) {
+    ssl_config.gm_client_auth_context = base::BindRepeating(
+        [](base::WeakPtr<SSLConnectJob> job,
+           base::RepeatingCallback<base::UnguessableToken()> fallback) {
+          return job ? job->ResolveGmClientAuthContext(fallback)
+                     : base::UnguessableToken();
+        },
+        weak_factory_.GetWeakPtr(), ssl_config.gm_client_auth_context);
+  }
   ssl_socket_ = client_socket_factory()->CreateSSLClientSocket(
       ssl_client_context(), std::move(nested_socket_), params_->host_and_port(),
       ssl_config);
@@ -481,6 +506,12 @@ int SSLConnectJob::DoSSLConnect() {
 
 int SSLConnectJob::DoSSLConnectComplete(int result) {
   connect_timing_.ssl_end = base::TimeTicks::Now();
+
+  if (gm_standard_tls_required_) {
+    CHECK_EQ(result, ERR_ABORTED);
+    CHECK(!ssl_socket_);
+    return result;
+  }
 
   if (result != OK && !server_address_.address().empty()) {
     connection_attempts_.emplace_back(server_address_, result);
@@ -510,7 +541,14 @@ int SSLConnectJob::DoSSLConnectComplete(int result) {
   // retry on a potentially unreliably network connection.
   //
   // TODO(crbug.com/40085786): Remove this now redundant retry.
-  if (disable_legacy_crypto_with_fallback_ &&
+  NetErrorDetails gm_error_details;
+  PopulateNetErrorDetails(&gm_error_details);
+  const auto& auto_config = ssl_client_context()->config().gm_auto_config;
+  const bool has_gm_retry = gm_error_details.gm_protocol_retry_allowed &&
+                            auto_config && auto_config->enabled &&
+                            auto_config->IsValid();
+  if (disable_legacy_crypto_with_fallback_ && !has_gm_retry &&
+      !params_->ssl_config().gm_rule &&
       (result == ERR_CONNECTION_CLOSED || result == ERR_CONNECTION_RESET ||
        result == ERR_SSL_PROTOCOL_ERROR ||
        result == ERR_SSL_VERSION_OR_CIPHER_MISMATCH)) {
@@ -596,9 +634,22 @@ void SSLConnectJob::ResetStateForRestart() {
   ssl_socket_ = nullptr;
   ssl_cert_request_info_ = nullptr;
   ssl_negotiation_started_ = false;
+  gm_standard_tls_required_ = false;
   is_connected_via_stale_dns_ = false;
   resolve_error_info_ = ResolveErrorInfo();
   server_address_ = IPEndPoint();
+}
+
+void SSLConnectJob::PopulateNetErrorDetails(NetErrorDetails* details) const {
+  if (gm_standard_tls_required_) {
+    details->gm_standard_tls_required = true;
+    return;
+  }
+  // A nested proxy's TLS error must never enable origin protocol fallback.
+  if (ssl_socket_ && !ech_retry_configs_ &&
+      params_->ssl_config().session_usage == SessionUsage::kDestination) {
+    ssl_socket_->PopulateNetErrorDetails(details);
+  }
 }
 
 void SSLConnectJob::ChangePriorityInternal(RequestPriority priority) {

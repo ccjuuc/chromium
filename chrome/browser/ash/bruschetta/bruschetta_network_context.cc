@@ -40,6 +40,7 @@
 #include "net/ssl/ssl_cert_request_info.h"
 #include "net/ssl/ssl_private_key.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/gm_identity.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/public/mojom/url_loader_network_service_observer.mojom.h"
@@ -160,6 +161,19 @@ void BruschettaNetworkContext::OnCertificateRequested(
       cert_info, base::BindOnce(&BruschettaNetworkContext::OnGotClientCerts,
                                 weak_ptr_factory_.GetWeakPtr(), cert_info,
                                 std::move(cert_responder_remote)));
+}
+
+void BruschettaNetworkContext::OnGmCertificateRequested(
+    const std::optional<base::UnguessableToken>& window_id,
+    const url::Origin& origin,
+    const std::string& identity_policy_id,
+    uint64_t identity_generation,
+    network::mojom::GmClientCertificateRequestPtr certificate_request,
+    mojo::PendingRemote<network::mojom::GmClientCertificateResponder>
+        cert_responder) {
+  mojo::Remote<network::mojom::GmClientCertificateResponder> remote(
+      std::move(cert_responder));
+  remote->Continue(net::ERR_SSL_CLIENT_AUTH_PRIVATE_KEY_ACCESS_DENIED, nullptr);
 }
 
 void BruschettaNetworkContext::OnGotClientCerts(

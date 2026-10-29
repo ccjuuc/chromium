@@ -6,6 +6,7 @@
 
 #include <inttypes.h>
 
+#include <algorithm>
 #include <utility>
 
 #include "base/atomic_sequence_num.h"
@@ -20,6 +21,7 @@
 #include "build/build_config.h"
 #include "net/base/features.h"
 #include "net/dns/host_resolver.h"
+#include "net/gm/gm_buildflags.h"
 #include "net/http/http_auth_handler_factory.h"
 #include "net/http/http_response_body_drainer.h"
 #include "net/http/http_stream_factory.h"
@@ -227,12 +229,14 @@ HttpNetworkSession::HttpNetworkSession(const HttpNetworkSessionParams& params,
   http_stream_pool_ = std::make_unique<HttpStreamPool>(
       this,
       /*cleanup_on_ip_address_change=*/!params.ignore_ip_address_changes);
+  ssl_client_context_.AddObserver(this);
 #if BUILDFLAG(IS_WIN)
   base::PowerMonitor::GetInstance()->AddPowerSuspendObserver(this);
 #endif
 }
 
 HttpNetworkSession::~HttpNetworkSession() {
+  ssl_client_context_.RemoveObserver(this);
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 #if BUILDFLAG(IS_WIN)
   base::PowerMonitor::GetInstance()->RemovePowerSuspendObserver(this);
@@ -385,10 +389,244 @@ void HttpNetworkSession::DisableQuic() {
   params_.enable_quic = false;
 }
 
+std::shared_ptr<const gm::TlsRule> HttpNetworkSession::GetGmTlsRule(
+    const url::SchemeHostPort& destination) const {
+#if BUILDFLAG(XENON_GM)
+  const auto& policy = ssl_client_context_.config().gm_tls_policy;
+  return policy ? policy->Match(destination.scheme(), destination.host(),
+                                destination.port())
+                : nullptr;
+
+#else
+  return nullptr;
+#endif  // BUILDFLAG(XENON_GM)
+}
+
+#if BUILDFLAG(XENON_GM)
+namespace {
+url::SchemeHostPort GmCapabilityOrigin(const url::SchemeHostPort& destination) {
+  return destination.scheme() == "wss"
+             ? url::SchemeHostPort("https", destination.host(),
+                                   destination.port())
+             : destination;
+}
+}  // namespace
+
+#endif  // BUILDFLAG(XENON_GM)
+bool HttpNetworkSession::IsGmTlsRuleCurrent(
+    const url::SchemeHostPort& destination,
+    const std::shared_ptr<const gm::TlsRule>& rule) const {
+#if BUILDFLAG(XENON_GM)
+  const auto explicit_rule = GetGmTlsRule(destination);
+  if (!rule || !rule->automatic) {
+    return gm::TlsRulesEqual(explicit_rule, rule);
+  }
+  const auto& config = ssl_client_context_.config().gm_auto_config;
+  return !explicit_rule && config &&
+         config->MatchesRule(destination.scheme(), destination.host(),
+                             destination.port(), *rule);
+
+#else
+  return !rule;
+#endif  // BUILDFLAG(XENON_GM)
+}
+
+void HttpNetworkSession::OnSSLConfigChanged(
+    SSLClientContext::SSLConfigChangeType) {
+#if BUILDFLAG(XENON_GM)
+  gm_capabilities_.clear();
+  gm_capability_trust_bytes_ = 0;
+
+#endif  // BUILDFLAG(XENON_GM)
+}
+
+void HttpNetworkSession::OnSSLConfigForServersChanged(
+    const base::flat_set<HostPortPair>& servers) {
+#if BUILDFLAG(XENON_GM)
+  std::erase_if(gm_capabilities_, [&](const auto& item) {
+    if (!servers.contains(
+            HostPortPair::FromSchemeHostPort(std::get<0>(item.first)))) {
+      return false;
+    }
+    gm_capability_trust_bytes_ -= item.second.trust_bytes;
+    return true;
+  });
+
+#endif  // BUILDFLAG(XENON_GM)
+}
+
+void HttpNetworkSession::ExpireGmCapabilities() {
+#if BUILDFLAG(XENON_GM)
+  if (gm_capabilities_.empty()) {
+    return;
+  }
+  const auto now = base::TimeTicks::Now();
+  if (now < next_gm_capability_expiry_) {
+    return;
+  }
+  base::flat_set<HostPortPair> expired;
+  std::erase_if(gm_capabilities_, [&](const auto& item) {
+    const auto& destination = std::get<0>(item.first);
+    if (item.second.expires <= now ||
+        !IsGmTlsRuleCurrent(destination, item.second.rule)) {
+      expired.insert(HostPortPair::FromSchemeHostPort(destination));
+      gm_capability_trust_bytes_ -= item.second.trust_bytes;
+      return true;
+    }
+    return false;
+  });
+  if (!expired.empty()) {
+    ssl_client_context_.InvalidateGmSessionsForServers(expired);
+  }
+  next_gm_capability_expiry_ = base::TimeTicks::Max();
+  for (const auto& [key, hint] : gm_capabilities_) {
+    next_gm_capability_expiry_ =
+        std::min(next_gm_capability_expiry_, hint.expires);
+  }
+
+#endif  // BUILDFLAG(XENON_GM)
+}
+
+void HttpNetworkSession::OnGmConfigForServersChanged(
+    const base::flat_set<HostPortPair>&) {
+  // This notification only invalidates established GM connections and tickets.
+  // Forget/expiry/budget eviction already removed the precise capability key;
+  // feeding the notification back into host-wide hint removal would also erase
+  // still-valid proxy, NAK, and privacy partitions. Actual trust/policy changes
+  // arrive through OnSSLConfigChanged or OnSSLConfigForServersChanged instead.
+}
+
+std::shared_ptr<const gm::TlsRule> HttpNetworkSession::GetGmCapabilityHint(
+    const url::SchemeHostPort& destination,
+    const NetworkAnonymizationKey& key,
+    PrivacyMode privacy_mode,
+    const ProxyChain& proxy_chain) {
+#if BUILDFLAG(XENON_GM)
+  ExpireGmCapabilities();
+  if (gm_capabilities_.empty()) {
+    return nullptr;
+  }
+  const auto it = gm_capabilities_.find(
+      {GmCapabilityOrigin(destination), key, privacy_mode, proxy_chain});
+  return it == gm_capabilities_.end() ? nullptr : it->second.rule;
+
+#else
+  return nullptr;
+#endif  // BUILDFLAG(XENON_GM)
+}
+
+bool HttpNetworkSession::HasGmCapabilityHint(
+    const url::SchemeHostPort& destination,
+    const NetworkAnonymizationKey& key,
+    PrivacyMode privacy_mode) {
+#if BUILDFLAG(XENON_GM)
+  ExpireGmCapabilities();
+  if (gm_capabilities_.empty()) {
+    return false;
+  }
+  const auto origin = GmCapabilityOrigin(destination);
+  const auto it =
+      gm_capabilities_.lower_bound({origin, key, privacy_mode, ProxyChain()});
+  return it != gm_capabilities_.end() && std::get<0>(it->first) == origin &&
+         std::get<1>(it->first) == key &&
+         std::get<2>(it->first) == privacy_mode;
+
+#else
+  return false;
+#endif  // BUILDFLAG(XENON_GM)
+}
+
+void HttpNetworkSession::RememberGmCapability(
+    const url::SchemeHostPort& destination,
+    const NetworkAnonymizationKey& key,
+    PrivacyMode privacy_mode,
+    const ProxyChain& proxy_chain,
+    std::shared_ptr<const gm::TlsRule> rule) {
+#if BUILDFLAG(XENON_GM)
+  if (!rule || !rule->automatic || !IsGmTlsRuleCurrent(destination, rule)) {
+    return;
+  }
+  if (rule->profile.protocol() == gm::TlsProtocol::kRfc8998) {
+    // The caller has authenticated an actual RFC 8998 connection. Subsequent
+    // connections may offer both TLS 1.3 families in one ClientHello, retaining
+    // this exact system trust snapshot and all routing partitions.
+    const auto& config = ssl_client_context_.config().gm_auto_config;
+    rule = config->CreateRule(destination.scheme(), destination.host(),
+                              destination.port(), gm::TlsProtocol::kTls13Auto);
+    if (!rule) {
+      return;
+    }
+  }
+  ExpireGmCapabilities();
+  const GmCapabilityKey hint_key(GmCapabilityOrigin(destination), key,
+                                 privacy_mode, proxy_chain);
+  constexpr size_t kMaxHints = 256;
+  constexpr size_t kMaxTrustBytes = 64 * 1024 * 1024;
+  size_t trust_bytes = 0;
+  for (const auto* list : {&rule->trust_anchors, &rule->untrusted_intermediates,
+                           &rule->disallowed_certificates, &rule->crls}) {
+    for (const auto& blob : *list) {
+      trust_bytes += blob.size();
+    }
+  }
+  if (trust_bytes > kMaxTrustBytes) {
+    return;
+  }
+  const auto replaced_bytes = [&] {
+    const auto it = gm_capabilities_.find(hint_key);
+    return it == gm_capabilities_.end() ? 0u : it->second.trust_bytes;
+  };
+  while ((!gm_capabilities_.contains(hint_key) &&
+          gm_capabilities_.size() >= kMaxHints) ||
+         gm_capability_trust_bytes_ - replaced_bytes() + trust_bytes >
+             kMaxTrustBytes) {
+    auto oldest =
+        std::min_element(gm_capabilities_.begin(), gm_capabilities_.end(),
+                         [](const auto& a, const auto& b) {
+                           return a.second.expires < b.second.expires;
+                         });
+    const auto server =
+        HostPortPair::FromSchemeHostPort(std::get<0>(oldest->first));
+    gm_capability_trust_bytes_ -= oldest->second.trust_bytes;
+    gm_capabilities_.erase(oldest);
+    ssl_client_context_.InvalidateGmSessionsForServers({server});
+  }
+  const auto expires = base::TimeTicks::Now() + base::Minutes(10);
+  if (gm_capabilities_.empty()) {
+    next_gm_capability_expiry_ = expires;
+  } else {
+    next_gm_capability_expiry_ = std::min(next_gm_capability_expiry_, expires);
+  }
+  gm_capability_trust_bytes_ -= replaced_bytes();
+  gm_capabilities_.insert_or_assign(
+      hint_key, GmCapability{std::move(rule), expires, trust_bytes});
+  gm_capability_trust_bytes_ += trust_bytes;
+
+#endif  // BUILDFLAG(XENON_GM)
+}
+
+void HttpNetworkSession::ForgetGmCapability(
+    const url::SchemeHostPort& destination,
+    const NetworkAnonymizationKey& key,
+    PrivacyMode privacy_mode,
+    const ProxyChain& proxy_chain) {
+#if BUILDFLAG(XENON_GM)
+  const auto it = gm_capabilities_.find(
+      {GmCapabilityOrigin(destination), key, privacy_mode, proxy_chain});
+  if (it != gm_capabilities_.end()) {
+    gm_capability_trust_bytes_ -= it->second.trust_bytes;
+    gm_capabilities_.erase(it);
+    ssl_client_context_.InvalidateGmSessionsForServers(
+        {HostPortPair::FromSchemeHostPort(destination)});
+  }
+
+#endif  // BUILDFLAG(XENON_GM)
+}
+
 bool HttpNetworkSession::ShouldForceQuic(const url::SchemeHostPort& destination,
                                          const ProxyInfo& proxy_info,
                                          bool is_websocket) {
-  if (!IsQuicEnabled()) {
+  if (GetGmTlsRule(destination) || !IsQuicEnabled()) {
     return false;
   }
   if (is_websocket) {

@@ -359,6 +359,8 @@ class NET_EXPORT SpdySessionPool
   // streams.
   void OnSSLConfigForServersChanged(
       const base::flat_set<HostPortPair>& servers) override;
+  void OnGmConfigForServersChanged(
+      const base::flat_set<HostPortPair>& servers) override;
 
   void set_network_quality_estimator(
       NetworkQualityEstimator* network_quality_estimator) {

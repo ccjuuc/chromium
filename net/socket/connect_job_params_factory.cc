@@ -24,8 +24,9 @@
 #include "net/base/proxy_string_util.h"
 #include "net/base/request_priority.h"
 #include "net/dns/public/secure_dns_policy.h"
-#include "net/net_buildflags.h"
+#include "net/gm/gm_tls_policy.h"
 #include "net/http/http_proxy_connect_job.h"
+#include "net/net_buildflags.h"
 #include "net/socket/connect_job_params.h"
 #include "net/socket/leaf_connect_job.h"
 #include "net/socket/next_proto.h"
@@ -375,11 +376,14 @@ ConnectJobParams ConstructConnectJobParams(
     bool disable_cert_network_fetches,
     const CommonConnectJobParams* common_connect_job_params,
     const NetworkAnonymizationKey& proxy_dns_network_anonymization_key,
-    handles::NetworkHandle target_network) {
+    handles::NetworkHandle target_network,
+    std::shared_ptr<const gm::TlsRule> gm_rule,
+    base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context) {
   DCHECK(proxy_chain.IsValid());
 
   // Set up `ssl_config` if using SSL to the endpoint.
   SSLConfig ssl_config;
+  base::flat_set<std::string> automatic_ech_alpns;
   if (UsingSsl(endpoint)) {
     ssl_config.allowed_bad_certs = allowed_bad_certs;
     ssl_config.privacy_mode = privacy_mode;
@@ -398,6 +402,11 @@ ConnectJobParams ConstructConnectJobParams(
     ssl_config.proxy_chain = proxy_chain;
     ssl_config.proxy_chain_index = proxy_chain.length();
     ssl_config.session_usage = SessionUsage::kDestination;
+    ssl_config.gm_client_auth_context = gm_client_auth_context;
+    if (gm_rule && gm_rule->automatic) {
+      automatic_ech_alpns = SupportedProtocolsFromSSLConfig(ssl_config);
+    }
+    gm::ApplyTlsRule(std::move(gm_rule), &ssl_config);
   }
 
   // Create the nested parameters over which the connection to the endpoint
@@ -407,7 +416,9 @@ ConnectJobParams ConstructConnectJobParams(
     params = ConnectJobParams(base::MakeRefCounted<TransportSocketParams>(
         ToTransportEndpoint(endpoint), endpoint_network_anonymization_key,
         secure_dns_policy, target_network, resolution_callback,
-        SupportedProtocolsFromSSLConfig(ssl_config)));
+        SupportedProtocolsFromSSLConfig(ssl_config),
+        ssl_config.gm_rule && !ssl_config.gm_rule->automatic,
+        std::move(automatic_ech_alpns)));
   } else {
     bool should_tunnel = force_tunnel || UsingSsl(endpoint) ||
                          !proxy_chain.is_get_to_proxy_allowed();

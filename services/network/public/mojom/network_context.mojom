@@ -36,6 +36,7 @@ import "services/network/public/mojom/devtools_observer.mojom";
 import "services/network/public/mojom/document_isolation_policy.mojom";
 import "services/network/public/mojom/fetch_api.mojom";
 import "services/network/public/mojom/first_party_sets_access_delegate.mojom";
+import "services/network/public/mojom/gm_identity.mojom";
 import "services/network/public/mojom/hash_value.mojom";
 import "services/network/public/mojom/host_resolver.mojom";
 import "services/network/public/mojom/http_cache_backend_file_operations.mojom";
@@ -430,6 +431,9 @@ struct NetworkContextParams {
   // SSL configuration. |initial_proxy_config| is the initial SSL configuration
   // to use. If nullptr, uses the default configuration. Updated SSL
   // configurations can be passed in via |ssl_config_client_receiver|.
+  // Profile-scoped browser authorization for national TLS client identities.
+  // PIN entry and vendor driver configuration remain outside Network Service.
+  pending_remote<GmIdentityBroker>? gm_identity_broker;
   SSLConfig? initial_ssl_config;
   pending_receiver<SSLConfigClient>? ssl_config_client_receiver;
 

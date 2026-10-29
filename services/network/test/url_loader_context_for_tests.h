@@ -55,6 +55,7 @@ class URLLoaderContextForTests : public URLLoaderContext {
   mojom::TrustedURLLoaderHeaderClient* GetUrlLoaderHeaderClient()
       const override;
   net::URLRequestContext* GetUrlRequestContext() const override;
+  GmIdentityProvider* GetGmIdentityProvider() const override;
   scoped_refptr<ResourceSchedulerClient> GetResourceSchedulerClient()
       const override;
   orb::PerFactoryState& GetMutableOrbState() override;

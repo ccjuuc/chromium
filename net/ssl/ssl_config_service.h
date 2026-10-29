@@ -17,6 +17,10 @@
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace net {
+namespace gm {
+class TlsPolicy;
+struct AutoConfig;
+}  // namespace gm
 
 // Represents a given named group in TLS, used in supported_groups and
 // key_share.
@@ -65,6 +69,10 @@ struct NET_EXPORT SSLContextConfig {
   // trusts. The list is returned in wire format (a series of 8-bit length
   // prefixed non-empty strings) such that it can be passed into BoringSSL.
   std::vector<uint8_t> SelectAllTrustAnchorIDs() const;
+
+  // Immutable national TLS policy for this NetworkContext.
+  std::shared_ptr<const gm::TlsPolicy> gm_tls_policy;
+  std::shared_ptr<const gm::AutoConfig> gm_auto_config;
 
   // The minimum and maximum protocol versions that are enabled.
   // (Use the SSL_PROTOCOL_VERSION_xxx enumerators defined in ssl_config.h.)

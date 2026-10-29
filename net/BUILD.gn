@@ -9,6 +9,7 @@ import("//build/config/cronet/config.gni")
 import("//build/config/features.gni")
 import("//crypto/features.gni")
 import("//net/features.gni")
+import("//net/gm/gm.gni")
 import("//testing/libfuzzer/fuzzer_test.gni")
 import("//testing/test.gni")
 import("//third_party/icu/config.gni")
@@ -584,6 +585,14 @@ component("net") {
     "first_party_sets/local_set_declaration.h",
     "first_party_sets/sets_mutation.cc",
     "first_party_sets/sets_mutation.h",
+    "gm/gm_client_cert_constraints.cc",
+    "gm/gm_client_cert_constraints.h",
+    "gm/gm_client_identity.cc",
+    "gm/gm_client_identity.h",
+    "gm/gm_connection_profile.cc",
+    "gm/gm_connection_profile.h",
+    "gm/gm_tls_policy.cc",
+    "gm/gm_tls_policy.h",
     "http/alternative_service.cc",
     "http/alternative_service.h",
     "http/bidirectional_stream.cc",
@@ -961,6 +970,8 @@ component("net") {
     "socket/bandwidth_throttle.h",
     "socket/bottleneck_buffer.cc",
     "socket/bottleneck_buffer.h",
+    "socket/chromium_leaf_vless_handshake.cc",
+    "socket/chromium_leaf_vless_handshake.h",
     "socket/client_socket_factory.cc",
     "socket/client_socket_factory.h",
     "socket/client_socket_handle.cc",
@@ -987,6 +998,13 @@ component("net") {
     "socket/delayed_stream_socket.cc",
     "socket/delayed_stream_socket.h",
     "socket/diff_serv_code_point.h",
+    "socket/leaf_client_socket.cc",
+    "socket/leaf_client_socket.h",
+    "socket/leaf_connect_job.cc",
+    "socket/leaf_connect_job.h",
+    "socket/leaf_outbound_protocol.h",
+    "socket/leaf_vmess_engine.cc",
+    "socket/leaf_vmess_engine.h",
     "socket/network_binding_client_socket_factory.cc",
     "socket/network_binding_client_socket_factory.h",
     "socket/next_proto.cc",
@@ -1017,15 +1035,6 @@ component("net") {
     "socket/socks_client_socket.h",
     "socket/socks_connect_job.cc",
     "socket/socks_connect_job.h",
-    "socket/chromium_leaf_vless_handshake.cc",
-    "socket/chromium_leaf_vless_handshake.h",
-    "socket/leaf_client_socket.cc",
-    "socket/leaf_client_socket.h",
-    "socket/leaf_vmess_engine.cc",
-    "socket/leaf_vmess_engine.h",
-    "socket/leaf_connect_job.cc",
-    "socket/leaf_connect_job.h",
-    "socket/leaf_outbound_protocol.h",
     "socket/ssl_client_socket.cc",
     "socket/ssl_client_socket.h",
     "socket/ssl_client_socket_impl.cc",
@@ -1255,6 +1264,7 @@ component("net") {
     "//net/dns:host_resolver_manager",
     "//net/dns:mdns_client",
     "//net/dns/public",
+    "//net/gm:buildflags",
     "//net/third_party/quiche",
   ]
 
@@ -1496,6 +1506,29 @@ component("net") {
       "socket/socket_apple.cc",
       "socket/socket_apple.h",
     ]
+  }
+
+  if (gm_tls_backend_enabled && gm_tls_socket_supported) {
+    sources += [
+      "gm/gm_backend.h",
+      "gm/gm_backend_loader.cc",
+      "gm/gm_backend_loader.h",
+      "gm/gm_client_context.cc",
+      "gm/gm_client_context.h",
+      "socket/gm_ssl_client_socket.cc",
+      "socket/gm_ssl_client_socket.h",
+    ]
+    if (gm_tls_backend_enabled) {
+      sources += [
+        "gm/gm_backend.cc",
+        "gm/gm_certificate_verifier.cc",
+        "gm/gm_certificate_verifier.h",
+        "gm/gm_ssl_private_key.cc",
+        "gm/gm_ssl_private_key.h",
+        "gm/gm_tls13_client.cc",
+        "gm/gm_tls13_client.h",
+      ]
+    }
   }
 
   if (is_win) {
@@ -2854,6 +2887,39 @@ if (is_cronet_build) {
   _test_target_type = "test"
 }
 
+# Separate object directory: GM and ordinary HTTP cache tests share a basename.
+if (is_win && target_cpu == "x64") {
+  source_set("gm_net_test_sources") {
+    testonly = true
+    configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+    if (gm_tls_backend_enabled) {
+      sources = [
+        "gm/tests/auto_routing_unittest.cc",
+        "gm/tests/client_cert_constraints_unittest.cc",
+        "gm/tests/http_cache_unittest.cc",
+        "gm/tests/tls_policy_unittest.cc",
+      ]
+    } else {
+      sources = [ "gm/tests/disabled_unittest.cc" ]
+    }
+    deps = [
+      ":net",
+      ":spdy_test_tools",
+      ":test_support",
+      "//base",
+      "//base/test:test_support",
+      "//testing/gmock",
+      "//testing/gtest",
+      "//third_party/boringssl",
+      "//url",
+    ]
+    if (gm_tls_backend_enabled && enable_websockets) {
+      sources += [ "gm/tests/ssl_socket_tcp_unittest.cc" ]
+      data_deps = [ "//net/gm:gm_backend_smoke" ]
+    }
+  }
+}
+
 target(_test_target_type, "net_unittests") {
   sources = [
     "base/address_family_unittest.cc",
@@ -3441,6 +3507,10 @@ target(_test_target_type, "net_unittests") {
     "data/verify_certificate_chain_unittest/",
   ]
   data_deps = [ "//testing/buildbot/filters:net_unittests_filters" ]
+
+  if (is_win && target_cpu == "x64") {
+    deps += [ ":gm_net_test_sources" ]
+  }
 
   if (is_linux || is_chromeos) {
     sources += [ "tools/quic/quic_simple_server_test.cc" ]

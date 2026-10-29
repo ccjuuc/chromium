@@ -30,6 +30,7 @@
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_member.h"
 #include "content/public/browser/storage_partition.h"
+#include "net/gm/gm_buildflags.h"
 #include "net/net_buildflags.h"
 #include "net/ssl/client_cert_matcher.h"
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom-forward.h"
@@ -47,6 +48,10 @@
 
 class PrefRegistrySimple;
 class Profile;
+
+namespace gm_browser {
+class KeyManager;
+}
 
 namespace net {
 class ClientCertStore;
@@ -80,6 +85,15 @@ class ProfileNetworkContextService
       delete;
 
   ~ProfileNetworkContextService() override;
+
+#if BUILDFLAG(XENON_GM) && BUILDFLAG(IS_WIN) && defined(ARCH_CPU_X86_64)
+  // Returns this profile's manager, or null after Shutdown(). Off-the-record
+  // profiles have a separate ProfileNetworkContextService and key manager.
+  gm_browser::KeyManager* GetGmKeyManager();
+  gm_browser::KeyManager* gm_key_manager_for_testing() {
+    return gm_key_manager_.get();
+  }
+#endif
 
   // Configures the NetworkContextParams and the CertVerifierCreationParams for
   // the BrowserContext, using the specified parameters. An empty
@@ -294,6 +308,10 @@ class ProfileNetworkContextService
   std::unique_ptr<enterprise_encryption::CacheEncryptionProviderImpl>
       cache_encryption_provider_;
 #endif  // BUILDFLAG(ENTERPRISE_CACHE_ENCRYPTION)
+
+#if BUILDFLAG(XENON_GM) && BUILDFLAG(IS_WIN) && defined(ARCH_CPU_X86_64)
+  std::unique_ptr<gm_browser::KeyManager> gm_key_manager_;
+#endif
 
   base::WeakPtrFactory<ProfileNetworkContextService> weak_factory_{this};
 };

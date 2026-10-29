@@ -14,6 +14,7 @@
 #include "base/values.h"
 #include "net/base/features.h"
 #include "net/cert/x509_certificate_net_log_param.h"
+#include "net/gm/gm_tls_policy.h"
 #include "net/log/net_log.h"
 #include "net/log/net_log_event_type.h"
 #include "net/socket/ssl_client_socket_impl.h"
@@ -22,6 +23,11 @@
 #include "net/ssl/ssl_connection_status_flags.h"
 #include "net/ssl/ssl_info.h"
 #include "net/ssl/ssl_key_logger.h"
+
+#if BUILDFLAG(XENON_GM) && BUILDFLAG(ENABLE_GM_TLS_SOCKET)
+#include "net/gm/gm_client_context.h"
+#include "net/socket/gm_ssl_client_socket.h"
+#endif
 
 namespace net {
 
@@ -231,6 +237,10 @@ SSLClientContext::SSLClientContext(
 
   if (ssl_config_service_) {
     config_ = ssl_config_service_->GetSSLContextConfig();
+#if !BUILDFLAG(XENON_GM)
+    config_.gm_tls_policy.reset();
+    config_.gm_auto_config.reset();
+#endif
     ssl_config_service_->AddObserver(this);
   }
   cert_verifier_->AddObserver(this);
@@ -245,10 +255,30 @@ SSLClientContext::~SSLClientContext() {
   CertDatabase::GetInstance()->RemoveObserver(this);
 }
 
+#if BUILDFLAG(XENON_GM) && BUILDFLAG(ENABLE_GM_TLS_SOCKET)
+gm::ClientContext* SSLClientContext::GetGmClientContext() {
+  if (!gm_client_context_) {
+    gm_client_context_ = std::make_unique<gm::ClientContext>();
+  }
+  return gm_client_context_.get();
+}
+#endif
+
 std::unique_ptr<SSLClientSocket> SSLClientContext::CreateSSLClientSocket(
     std::unique_ptr<StreamSocket> stream_socket,
     const HostPortPair& host_and_port,
     const SSLConfig& ssl_config) {
+#if BUILDFLAG(XENON_GM) && BUILDFLAG(ENABLE_GM_TLS_SOCKET)
+  if (ssl_config.gm_rule &&
+      ssl_config.gm_rule->profile.protocol() != gm::TlsProtocol::kTls13Auto) {
+    if (!gm_client_context_) {
+      gm_client_context_ = std::make_unique<gm::ClientContext>();
+    }
+    return std::make_unique<GmSSLClientSocket>(
+        this, gm_client_context_.get(), gm_identity_provider_,
+        std::move(stream_socket), host_and_port, ssl_config);
+  }
+#endif
   return std::make_unique<SSLClientSocketImpl>(this, std::move(stream_socket),
                                                host_and_port, ssl_config);
 }
@@ -298,7 +328,59 @@ void SSLClientContext::RemoveObserver(Observer* observer) {
 }
 
 void SSLClientContext::OnSSLContextConfigChanged() {
+#if BUILDFLAG(XENON_GM)
+  SSLContextConfig previous = config_;
+#endif
   config_ = ssl_config_service_->GetSSLContextConfig();
+#if BUILDFLAG(XENON_GM)
+  const auto old_policy = previous.gm_tls_policy;
+  const auto new_policy = config_.gm_tls_policy;
+  const bool auto_config_changed =
+      previous.gm_auto_config != config_.gm_auto_config;
+#if BUILDFLAG(XENON_GM) && BUILDFLAG(ENABLE_GM_TLS_SOCKET)
+  if (gm_client_context_) {
+    gm_client_context_->Clear();
+  }
+#endif
+  // Policy-only changes need not discard unrelated ordinary TLS connections.
+  // Preserve all other upstream invalidation behavior, including explicit
+  // notifications for client-certificate pooling preferences not in config_.
+  previous.gm_tls_policy = new_policy;
+  previous.gm_auto_config = config_.gm_auto_config;
+  if ((old_policy != new_policy || auto_config_changed) &&
+      previous == config_ && (!old_policy || old_policy->IsValid()) &&
+      (!new_policy || new_policy->IsValid())) {
+    base::flat_set<HostPortPair> servers;
+    if (old_policy != new_policy && old_policy) {
+      servers = old_policy->GetServers();
+    }
+    if (old_policy != new_policy && new_policy) {
+      const auto added = new_policy->GetServers();
+      servers.insert(added.begin(), added.end());
+    }
+    if (ssl_client_session_cache_ && !servers.empty()) {
+      // A removed GM rule must not revive an ordinary TLS ticket issued before
+      // the site became managed. Other sites retain their existing tickets.
+      ssl_client_session_cache_->FlushForServers(servers);
+    }
+    if (!servers.empty()) {
+      NotifySSLConfigForServersChanged(servers);
+    }
+    if (auto_config_changed) {
+      // A system SM2 trust snapshot update affects GM profiles only. In
+      // particular, asynchronously enabling discovery must not interrupt
+      // existing ordinary HTTPS connections or discard BoringSSL tickets.
+      NotifySSLConfigChanged(SSLConfigChangeType::kGmConfigChanged);
+    }
+    return;
+  }
+#endif  // BUILDFLAG(XENON_GM)
+#if !BUILDFLAG(XENON_GM)
+  config_.gm_tls_policy.reset();
+  config_.gm_auto_config.reset();
+#endif
+  // Invalid GM configuration deliberately applies to every secure origin, so
+  // entering or leaving that fail-closed state requires global invalidation.
   if (ssl_client_session_cache_) {
     ssl_client_session_cache_->Flush();
   }
@@ -398,6 +480,21 @@ void SSLClientContext::ClearMatchingClientCertificate(
 void SSLClientContext::NotifySSLConfigChanged(SSLConfigChangeType change_type) {
   for (Observer& observer : observers_) {
     observer.OnSSLConfigChanged(change_type);
+  }
+}
+
+void SSLClientContext::InvalidateGmSessionsForServers(
+    const base::flat_set<HostPortPair>& servers) {
+  if (ssl_client_session_cache_) {
+    ssl_client_session_cache_->FlushGmForServers(servers);
+  }
+#if BUILDFLAG(XENON_GM) && BUILDFLAG(ENABLE_GM_TLS_SOCKET)
+  if (gm_client_context_) {
+    gm_client_context_->ClearForServers(servers);
+  }
+#endif
+  for (Observer& observer : observers_) {
+    observer.OnGmConfigForServersChanged(servers);
   }
 }
 

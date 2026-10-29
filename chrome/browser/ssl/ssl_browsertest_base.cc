@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ssl/ssl_browsertest_base.h"
 
+#include <utility>
+
 #include "base/command_line.h"
 #include "base/run_loop.h"
 #include "base/task/current_thread.h"
@@ -98,7 +100,7 @@ void SSLUITestBase::SetUpOnMainThread() {
   host_resolver()->AddRule("*", "127.0.0.1");
   network::mojom::NetworkContextParamsPtr context_params =
       CreateDefaultNetworkContextParams();
-  last_ssl_config_ = *context_params->initial_ssl_config;
+  last_ssl_config_ = std::move(context_params->initial_ssl_config);
   receiver_.Bind(std::move(context_params->ssl_config_client_receiver));
 }
 
@@ -108,7 +110,7 @@ void SSLUITestBase::TearDownOnMainThread() {
 
 void SSLUITestBase::OnSSLConfigUpdated(
     network::mojom::SSLConfigPtr ssl_config) {
-  last_ssl_config_ = *ssl_config;
+  last_ssl_config_ = std::move(ssl_config);
 }
 
 // static

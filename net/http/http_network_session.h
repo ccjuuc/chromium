@@ -13,6 +13,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "base/containers/flat_set.h"
@@ -25,6 +26,8 @@
 #include "build/buildflag.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/net_export.h"
+#include "net/gm/gm_buildflags.h"
+#include "net/gm/gm_tls_policy.h"
 #include "net/http/http_auth_cache.h"
 #include "net/http/http_stream_factory.h"
 #include "net/net_buildflags.h"
@@ -197,7 +200,8 @@ struct NET_EXPORT HttpNetworkSessionContext {
 };
 
 // This class holds session objects used by HttpNetworkTransaction objects.
-class NET_EXPORT HttpNetworkSession : public base::PowerSuspendObserver {
+class NET_EXPORT HttpNetworkSession : public base::PowerSuspendObserver,
+                                      public SSLClientContext::Observer {
  public:
   enum class SocketPoolType {
     kNormal = 0,
@@ -215,6 +219,35 @@ class NET_EXPORT HttpNetworkSession : public base::PowerSuspendObserver {
 
   HttpAuthCache* http_auth_cache() { return &http_auth_cache_; }
   SSLClientContext* ssl_client_context() { return &ssl_client_context_; }
+
+  std::shared_ptr<const gm::TlsRule> GetGmTlsRule(
+      const url::SchemeHostPort& destination) const;
+
+  bool IsGmTlsRuleCurrent(const url::SchemeHostPort& destination,
+                          const std::shared_ptr<const gm::TlsRule>& rule) const;
+  std::shared_ptr<const gm::TlsRule> GetGmCapabilityHint(
+      const url::SchemeHostPort& destination,
+      const NetworkAnonymizationKey& network_anonymization_key,
+      PrivacyMode privacy_mode,
+      const ProxyChain& proxy_chain);
+  // Conservative cache check; actual routing additionally matches proxy_chain.
+  bool HasGmCapabilityHint(const url::SchemeHostPort& destination,
+                           const NetworkAnonymizationKey& key,
+                           PrivacyMode privacy_mode);
+  void RememberGmCapability(const url::SchemeHostPort& destination,
+                            const NetworkAnonymizationKey& key,
+                            PrivacyMode privacy_mode,
+                            const ProxyChain& proxy_chain,
+                            std::shared_ptr<const gm::TlsRule> rule);
+  void ForgetGmCapability(const url::SchemeHostPort& destination,
+                          const NetworkAnonymizationKey& key,
+                          PrivacyMode privacy_mode,
+                          const ProxyChain& proxy_chain);
+  void OnSSLConfigChanged(SSLClientContext::SSLConfigChangeType) override;
+  void OnSSLConfigForServersChanged(
+      const base::flat_set<HostPortPair>& servers) override;
+  void OnGmConfigForServersChanged(
+      const base::flat_set<HostPortPair>& servers) override;
 
   void StartResponseDrainer(std::unique_ptr<HttpResponseBodyDrainer> drainer);
 
@@ -319,6 +352,22 @@ class NET_EXPORT HttpNetworkSession : public base::PowerSuspendObserver {
 
   ClientSocketPoolManager* GetSocketPoolManager(SocketPoolType pool_type);
 
+  void ExpireGmCapabilities();
+#if BUILDFLAG(XENON_GM)
+  using GmCapabilityKey = std::tuple<url::SchemeHostPort,
+                                     NetworkAnonymizationKey,
+                                     PrivacyMode,
+                                     ProxyChain>;
+  struct GmCapability {
+    std::shared_ptr<const gm::TlsRule> rule;
+    base::TimeTicks expires;
+    size_t trust_bytes = 0;
+  };
+  std::map<GmCapabilityKey, GmCapability> gm_capabilities_;
+  size_t gm_capability_trust_bytes_ = 0;
+  base::TimeTicks next_gm_capability_expiry_;
+
+#endif  // BUILDFLAG(XENON_GM)
   const raw_ptr<NetLog> net_log_;
   const raw_ptr<HttpServerProperties> http_server_properties_;
   const raw_ptr<CertVerifier> cert_verifier_;

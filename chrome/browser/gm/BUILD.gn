@@ -1,0 +1,239 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//net/gm/gm.gni")
+import("//testing/test.gni")
+
+source_set("policy") {
+  sources = [
+    "gm_policy.cc",
+    "gm_policy.h",
+  ]
+  public_deps = [
+    "//base",
+    "//services/gm_key/public/mojom",
+    "//services/network/public/mojom",
+  ]
+  deps = [
+    "//components/prefs",
+    "//net",
+    "//url",
+  ]
+}
+
+source_set("policy_handler") {
+  sources = [
+    "gm_site_rules_policy_handler.cc",
+    "gm_site_rules_policy_handler.h",
+  ]
+  public_deps = [ "//components/policy/core/browser" ]
+  deps = [
+    ":policy",
+    "//base",
+    "//components/policy:generated",
+    "//components/prefs",
+    "//components/strings:components_strings",
+  ]
+}
+
+if (is_win && target_cpu == "x64") {
+  source_set("system_trust") {
+    sources = [
+      "gm_system_trust_win.cc",
+      "gm_system_trust_win.h",
+    ]
+    public_deps = [
+      "//base",
+      "//services/network/public/mojom",
+    ]
+    deps = [
+      "//crypto",
+      "//net",
+    ]
+    libs = [ "crypt32.lib" ]
+  }
+
+  source_set("key_manager") {
+    sources = [
+      "gm_client_cert_chain_win.cc",
+      "gm_client_cert_chain_win.h",
+      "gm_key_manager.cc",
+      "gm_key_manager.h",
+      "gm_pin_dialog.cc",
+      "gm_pin_dialog.h",
+    ]
+    public_deps = [
+      ":policy",
+      "//base",
+      "//mojo/public/cpp/bindings",
+      "//net",
+      "//url",
+    ]
+    deps = [
+      "//chrome/app:generated_resources",
+      "//components/constrained_window",
+      "//components/prefs",
+      "//components/web_modal",
+      "//content/public/browser",
+      "//crypto",
+      "//third_party/boringssl",
+      "//ui/base",
+      "//ui/views",
+    ]
+    libs = [ "crypt32.lib" ]
+  }
+
+  source_set("unit_test_sources") {
+    testonly = true
+    sources = [
+      "gm_client_cert_chain_win_unittest.cc",
+      "gm_key_manager_unittest.cc",
+      "gm_pin_dialog_unittest.cc",
+      "gm_policy_unittest.cc",
+      "gm_system_trust_win_unittest.cc",
+    ]
+    deps = [
+      ":key_manager",
+      ":policy",
+      ":policy_handler",
+      ":system_trust",
+      "//base/test:test_support",
+      "//chrome/app:generated_resources",
+      "//chrome/common:constants",
+      "//components/content_settings/core/browser",
+      "//components/content_settings/core/common",
+      "//components/policy:generated",
+      "//components/policy/core/common",
+      "//components/prefs:test_support",
+      "//crypto",
+      "//mojo/core/embedder",
+      "//net:test_support",
+      "//net/gm:buildflags",
+      "//testing/gmock",
+      "//testing/gtest",
+      "//third_party/boringssl",
+      "//ui/base",
+      "//ui/views",
+      "//ui/views:test_support",
+    ]
+    data_deps = [ "//ui/resources:ui_test_pak" ]
+    data = [
+      "$root_gen_dir/chrome/generated_resources_en-US.pak",
+      "$root_gen_dir/components/strings/components_strings_en-US.pak",
+    ]
+  }
+
+  test("gm_browser_unittests") {
+    sources = [
+      "//chrome/browser/ssl/ssl_config_service_manager.cc",
+      "//chrome/browser/ssl/ssl_config_service_manager.h",
+      "//chrome/browser/ssl/ssl_config_service_manager_unittest.cc",
+      "//components/policy/core/common/registry_dict_unittest.cc",
+      "run_tests.cc",
+    ]
+    deps = [
+      "//base/test:test_support",
+      "//chrome/app:generated_resources",
+      "//chrome/common:constants",
+      "//components/content_settings/core/browser",
+      "//components/content_settings/core/common",
+      "//components/policy/core/common",
+      "//components/prefs:test_support",
+      "//components/strings:components_strings",
+      "//crypto",
+      "//mojo/core/embedder",
+      "//net:test_support",
+      "//net/gm:buildflags",
+      "//services/network/public/mojom",
+      "//testing/gmock",
+      "//testing/gtest",
+      "//third_party/boringssl",
+      "//ui/base",
+      "//ui/views",
+      "//ui/views:test_support",
+    ]
+    if (gm_tls_backend_enabled) {
+      deps += [
+        ":key_manager",
+        ":policy",
+        ":system_trust",
+        ":unit_test_sources",
+      ]
+    }
+    data_deps = [ "//ui/resources:ui_test_pak" ]
+    data = [
+      "$root_gen_dir/chrome/generated_resources_en-US.pak",
+      "$root_gen_dir/components/strings/components_strings_en-US.pak",
+    ]
+  }
+}
+
+# A focused executable using the normal Chrome browser-test launcher. This
+# deliberately does not pull in the unrelated //chrome/test:browser_tests
+# test source list, but still launches the genuine browser and child services.
+import("//xenon_overlay/buildflags/features.gni")
+if (is_win && target_cpu == "x64" && gm_tls_backend_enabled) {
+  source_set("browser_test_sources") {
+    testonly = true
+    defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+    sources = [
+      "gm_browser_browsertest.cc",
+      "gm_pin_dialog_browsertest.cc",
+    ]
+    deps = [
+      ":key_manager",
+      ":policy",
+      ":system_trust",
+      "//base",
+      "//base/test:test_support",
+      "//chrome:packed_resources",
+      "//chrome:resources",
+      "//chrome/app:chrome_dll_resources",
+      "//chrome/browser",
+      "//chrome/browser/net",
+      "//chrome/browser/profiles:profile",
+      "//chrome/browser/ui",
+      "//chrome/test:test_support",
+      "//chrome/test:test_support_ui",
+      "//components/policy:generated",
+      "//components/policy/core/browser",
+      "//components/policy/core/common:test_support",
+      "//components/prefs",
+      "//components/web_modal",
+      "//content/public/browser",
+      "//content/public/common",
+      "//content/test:test_support",
+      "//crypto",
+      "//net",
+      "//net:test_support",
+      "//sandbox/policy",
+      "//services/gm_key:test_client",
+      "//services/network/public/mojom",
+      "//testing/gmock",
+      "//testing/gtest",
+      "//ui/views",
+    ]
+    data_deps = [
+      "//chrome:browser_tests_pak",
+      "//net/gm:gm_backend_smoke",
+      "//services/gm_key:gm_key_service_test_helper",
+      "//services/gm_key:gm_sm2_simulator",
+    ]
+    if (enable_xenon_service) {
+      defines += [ "GM_BROWSER_TEST_HAS_XENON_UPDATER=1" ]
+      deps += [ "//xenon_overlay/chrome/browser:xenon_updater" ]
+    }
+  }
+
+  test("gm_browser_browsertests") {
+    defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+
+    # Sandboxed renderer processes also start from this executable.
+    configs += [ "//build/config/win:delayloads_for_tests" ]
+    deps = [
+      ":browser_test_sources",
+      "//chrome/test:browser_tests_runner",
+    ]
+  }
+}

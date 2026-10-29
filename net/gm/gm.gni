@@ -1,0 +1,23 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+declare_args() {
+  # The single switch for XENON_GM: browser integration, USBKey service and
+  # Chromium's BoringSSL GM extensions. Chromium code uses BUILDFLAG(XENON_GM);
+  # BoringSSL uses a private compiler define with the same value.
+  enable_gm_tls = false
+
+  # Optional external interoperability peer, used only by test targets.
+  # Its directory contains gm_backend_smoke.exe and its independent runtime.
+  # The peer is never linked into or packaged with the browser.
+  gm_interop_peer_dir = ""
+}
+
+gm_tls_socket_supported = (current_os == "win" && current_cpu == "x64") ||
+                          ((current_os == "mac" || current_os == "linux") &&
+                           (current_cpu == "x64" || current_cpu == "arm64"))
+gm_tls_backend_enabled = enable_gm_tls
+if (enable_gm_tls) {
+  assert(gm_tls_socket_supported, "GM TLS requires a supported 64-bit target.")
+}

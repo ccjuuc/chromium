@@ -35,6 +35,7 @@ import("//crypto/features.gni")
 import("//extensions/buildflags/buildflags.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
 import("//net/features.gni")
+import("//net/gm/gm.gni")
 import("//pdf/features.gni")
 import("//printing/buildflags/buildflags.gni")
 import("//remoting/remoting_enable.gni")
@@ -2817,6 +2818,14 @@ if (!is_android) {
       "//ui/webui:test_support",
       "//ui/webui/resources/cr_components/history_clusters:mojo_bindings",
     ]
+
+    if (is_win && target_cpu == "x64" && gm_tls_backend_enabled) {
+      deps += [ "//chrome/browser/gm:browser_test_sources" ]
+    }
+
+    if (toolkit_views && enable_xenon_service) {
+      deps += [ "//xenon_overlay/chrome/browser:sidebar_browser_test_sources" ]
+    }
 
     # TODO(crbug.com/428666921): Remove this dependency when
     # chrome/browser/ui/tab_ui_helper_browsertest.cc gets modularized.
@@ -5826,6 +5835,10 @@ test("unit_tests") {
     "//ui/webui",
     "//v8",
   ]
+
+  if (gm_tls_backend_enabled && is_win && target_cpu == "x64") {
+    deps += [ "//chrome/browser/gm:unit_test_sources" ]
+  }
 
   if (enable_devtools_frontend) {
     deps += [ "//chrome/browser/ui/webui/devtools:unit_tests" ]

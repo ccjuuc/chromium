@@ -34,8 +34,10 @@
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/features.h"
+#include "net/base/net_errors.h"
 #include "net/base/network_change_notifier.h"
 #include "services/network/public/cpp/network_switches.h"
+#include "services/network/public/mojom/gm_identity.mojom.h"
 #include "services/network/public/mojom/network_change_manager.mojom-forward.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
@@ -282,6 +284,19 @@ void NetworkServiceClient::OnCertificateRequested(
   mojo::Remote<network::mojom::ClientCertificateResponder> cert_responder(
       std::move(cert_responder_remote));
   cert_responder->CancelRequest();
+}
+
+void NetworkServiceClient::OnGmCertificateRequested(
+    const std::optional<base::UnguessableToken>& window_id,
+    const url::Origin& origin,
+    const std::string& identity_policy_id,
+    uint64_t identity_generation,
+    network::mojom::GmClientCertificateRequestPtr certificate_request,
+    mojo::PendingRemote<network::mojom::GmClientCertificateResponder>
+        cert_responder) {
+  mojo::Remote<network::mojom::GmClientCertificateResponder> remote(
+      std::move(cert_responder));
+  remote->Continue(net::ERR_SSL_CLIENT_AUTH_PRIVATE_KEY_ACCESS_DENIED, nullptr);
 }
 
 void NetworkServiceClient::OnAuthRequired(

@@ -8,6 +8,7 @@ import("//build/config/compiler/compiler.gni")
 import("//build/config/rust.gni")
 import("//build/config/sanitizers/sanitizers.gni")
 import("//build_overrides/build.gni")
+import("//net/gm/gm.gni")
 import("src/gen/sources.gni")
 
 if (enable_rust) {
@@ -35,6 +36,11 @@ config("component_config") {
 config("internal_config") {
   visibility = [ ":*" ]
   defines = [ "OPENSSL_SMALL" ]
+
+  # Keep the raw macro private; Chromium consumers use BUILDFLAG(XENON_GM).
+  if (gm_tls_backend_enabled) {
+    defines += [ "XENON_GM=1" ]
+  }
 }
 
 config("no_asm_config") {

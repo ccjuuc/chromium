@@ -1,0 +1,20 @@
+Name: Tongsuo
+URL: https://github.com/Tongsuo-Project/Tongsuo
+Version: 8.5.0
+Update Mechanism: Manual
+License: Apache-2.0
+License File: LICENSE.txt, NOTICE
+Security Critical: yes
+Shipped: no
+
+Description:
+Pinned source reference and independent interoperability test implementation.
+The browser uses its current BoringSSL baseline, including locally ported
+national algorithms and protocols. No production GN target imports this
+dependency. source.json preserves the exact reference archive and SHA-256;
+LICENSE.txt and NOTICE preserve its attribution. Legacy build tools are
+retained only to reproduce external test peers, not as browser prerequisites.
+
+Local Modifications:
+No reference-source modifications. Tongsuo headers and libraries must not enter
+production BoringSSL consumers or browser packages.

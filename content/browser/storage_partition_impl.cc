@@ -108,6 +108,7 @@
 #include "content/public/browser/cookie_access_details.h"
 #include "content/public/browser/dom_storage_context.h"
 #include "content/public/browser/login_delegate.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/permission_controller.h"
 #include "content/public/browser/permission_descriptor_util.h"
@@ -121,6 +122,7 @@
 #include "content/public/browser/storage_partition_config.h"
 #include "content/public/browser/storage_usage_info.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/child_process_id_util.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_constants.h"
@@ -134,6 +136,7 @@
 #include "net/base/net_errors.h"
 #include "net/cookies/cookie_setting_override.h"
 #include "net/disk_cache/buildflags.h"
+#include "net/gm/gm_buildflags.h"
 #include "net/ssl/client_cert_store.h"
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
 #include "services/network/public/cpp/constants.h"
@@ -146,6 +149,7 @@
 #include "services/network/public/mojom/cookie_access_observer.mojom.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "services/network/public/mojom/device_bound_sessions.mojom.h"
+#include "services/network/public/mojom/gm_identity.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/shared_dictionary_access_observer.mojom.h"
 #include "services/network/public/mojom/trust_tokens.mojom.h"
@@ -664,6 +668,82 @@ class SSLClientAuthDelegate : public SSLClientAuthHandler::Delegate {
       client_cert_responder_;
   std::unique_ptr<SSLClientAuthHandler> ssl_client_auth_handler_;
 };
+
+// Owns one live GM certificate/PIN interaction. It is created before invoking
+// the embedder, which may complete synchronously, and is destroyed on any page
+// or request cancellation. No UI survives its originating network request.
+#if BUILDFLAG(XENON_GM)
+class GmClientAuthDelegate final : public WebContentsObserver {
+ public:
+  GmClientAuthDelegate(
+      WebContents* web_contents,
+      mojo::PendingRemote<network::mojom::GmClientCertificateResponder>
+          responder)
+      : WebContentsObserver(web_contents), responder_(std::move(responder)) {
+    responder_.set_disconnect_handler(
+        base::BindOnce(&GmClientAuthDelegate::Cancel, base::Unretained(this)));
+  }
+
+  void Start(
+      const url::Origin& origin,
+      const std::string& identity_policy_id,
+      uint64_t identity_generation,
+      network::mojom::GmClientCertificateRequestPtr certificate_request) {
+    auto weak_this = weak_factory_.GetWeakPtr();
+    auto cancel_request =
+        GetContentClient()->browser()->SelectGmClientCertificate(
+            web_contents(), origin, identity_policy_id, identity_generation,
+            std::move(certificate_request),
+            base::BindOnce(&GmClientAuthDelegate::Complete, weak_this));
+    if (weak_this) {
+      weak_this->cancel_request_ = std::move(cancel_request);
+    } else if (cancel_request) {
+      // The embedder may have synchronously destroyed the page or completed.
+      std::move(cancel_request).Run();
+    }
+  }
+
+ private:
+  ~GmClientAuthDelegate() override {
+    weak_factory_.InvalidateWeakPtrs();
+    if (cancel_request_) {
+      std::move(cancel_request_).Run();
+    }
+  }
+
+  void Complete(int net_error, network::mojom::GmIdentityGrantPtr grant) {
+    cancel_request_.Reset();
+    responder_->Continue(net_error, std::move(grant));
+    delete this;
+  }
+
+  void Cancel() {
+    responder_->Continue(net::ERR_ABORTED, nullptr);
+    delete this;
+  }
+
+  void WebContentsDestroyed() override { Cancel(); }
+
+  void DidStartNavigation(NavigationHandle* navigation_handle) override {
+    if (navigation_handle->IsInPrimaryMainFrame() &&
+        !navigation_handle->IsSameDocument()) {
+      Cancel();
+    }
+  }
+
+  mojo::Remote<network::mojom::GmClientCertificateResponder> responder_;
+  base::OnceClosure cancel_request_;
+  base::WeakPtrFactory<GmClientAuthDelegate> weak_factory_{this};
+};
+
+#endif  // BUILDFLAG(XENON_GM)
+void RejectGmCertificateRequest(
+    mojo::PendingRemote<network::mojom::GmClientCertificateResponder>
+        responder) {
+  mojo::Remote<network::mojom::GmClientCertificateResponder> remote(
+      std::move(responder));
+  remote->Continue(net::ERR_SSL_CLIENT_AUTH_PRIVATE_KEY_ACCESS_DENIED, nullptr);
+}
 
 void CallCancelRequest(
     mojo::PendingRemote<network::mojom::ClientCertificateResponder>
@@ -1446,7 +1526,6 @@ void StoragePartitionImpl::Initialize(
 
   lock_manager_ = std::make_unique<LockManager<storage::BucketId>>();
 
-
   scoped_refptr<ChromeBlobStorageContext> blob_context =
       ChromeBlobStorageContext::GetFor(browser_context_);
 
@@ -1602,7 +1681,6 @@ void StoragePartitionImpl::Initialize(
   }
 #endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
 
-
   if (base::FeatureList::IsEnabled(
           blink::features::kDeclarativePerformanceObserver)) {
     declarative_performance_observer_store_ =
@@ -1751,7 +1829,6 @@ LockManager<storage::BucketId>* StoragePartitionImpl::GetLockManager() {
   DCHECK(initialized_);
   return lock_manager_.get();
 }
-
 
 storage::mojom::IndexedDBControl& StoragePartitionImpl::GetIndexedDBControl() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
@@ -1946,7 +2023,6 @@ leveldb_proto::ProtoDatabaseProvider*
 StoragePartitionImpl::GetProtoDatabaseProviderForTesting() {
   return proto_database_provider_.get();
 }
-
 
 void StoragePartitionImpl::DeleteStaleSessionData() {
   CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
@@ -2527,6 +2603,68 @@ void StoragePartitionImpl::OnCertificateRequested(
                             process_id, web_contents_weak, cert_info);
 }
 
+void StoragePartitionImpl::OnGmCertificateRequested(
+    const std::optional<base::UnguessableToken>& window_id,
+    const url::Origin& origin,
+    const std::string& identity_policy_id,
+    uint64_t identity_generation,
+    network::mojom::GmClientCertificateRequestPtr certificate_request,
+    mojo::PendingRemote<network::mojom::GmClientCertificateResponder>
+        cert_responder) {
+#if BUILDFLAG(XENON_GM)
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  URLLoaderNetworkContext context =
+      url_loader_network_observers_.current_context();
+
+  if (window_id) {
+    // A service worker may act for several windows. Only the originating
+    // window may own the PIN prompt, including a navigation before commit.
+    auto* worker_context = service_worker_context_->context();
+    auto* client = worker_context
+                       ? worker_context->service_worker_client_owner()
+                             .GetServiceWorkerClientByWindowId(*window_id)
+                       : nullptr;
+    if (!client || client->is_initiated_by_prefetch()) {
+      RejectGmCertificateRequest(std::move(cert_responder));
+      return;
+    }
+    if (client->GetRenderFrameHostId()) {
+      context = URLLoaderNetworkContext::CreateForRenderFrameHost(
+          client->GetRenderFrameHostId());
+    } else if (auto* navigation =
+                   client->GetOngoingNavigationRequestBeforeCommit(
+                       base::PassKey<StoragePartitionImpl>())) {
+      context = URLLoaderNetworkContext::CreateForNavigation(*navigation);
+    } else {
+      RejectGmCertificateRequest(std::move(cert_responder));
+      return;
+    }
+  }
+
+  if (CancelIfPrerendering(context.navigation_or_document(),
+                           PrerenderFinalStatus::kClientCertRequested)) {
+    RejectGmCertificateRequest(std::move(cert_responder));
+    return;
+  }
+
+  WebContents* web_contents = context.GetWebContents();
+  if (!web_contents || web_contents->IsBeingDestroyed()) {
+    RejectGmCertificateRequest(std::move(cert_responder));
+    return;
+  }
+  CHECK_EQ(web_contents->GetBrowserContext(), browser_context_.get());
+
+  // The delegate owns itself and must exist before the embedder is called.
+  auto* delegate =
+      new GmClientAuthDelegate(web_contents, std::move(cert_responder));
+  delegate->Start(origin, identity_policy_id, identity_generation,
+                  std::move(certificate_request));
+
+#else
+  RejectGmCertificateRequest(std::move(cert_responder));
+#endif  // BUILDFLAG(XENON_GM)
+}
+
 void StoragePartitionImpl::OnSSLCertificateError(
     const GURL& url,
     int net_error,
@@ -2576,7 +2714,6 @@ void StoragePartitionImpl::OnDataUseUpdate(
       render_frame_host_id, network_traffic_annotation_id_hash, recv_bytes,
       sent_bytes);
 }
-
 
 void StoragePartitionImpl::Clone(
     mojo::PendingReceiver<network::mojom::URLLoaderNetworkServiceObserver>
@@ -3063,7 +3200,6 @@ void StoragePartitionImpl::DataDeletionHelper::ClearData(
          remove_mask_ & REMOVE_DATA_MASK_INTEREST_GROUPS);
   DCHECK(!(remove_mask_ & REMOVE_DATA_MASK_INTEREST_GROUPS_USER_CLEAR) ||
          remove_mask_ & REMOVE_DATA_MASK_INTEREST_GROUPS);
-
 
 #if BUILDFLAG(ENABLE_LIBRARY_CDMS)
   if ((remove_mask_ & REMOVE_DATA_MASK_MEDIA_LICENSES)) {

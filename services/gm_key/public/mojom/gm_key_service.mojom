@@ -1,0 +1,103 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+module gm_key.mojom;
+
+import "mojo/public/mojom/base/file_path.mojom";
+import "sandbox/policy/mojom/sandbox.mojom";
+
+enum KeyError {
+  kOk,
+  kInvalidArgument,
+  kNotConfigured,
+  kAlreadyConfigured,
+  kUntrustedDriver,
+  kDriverFailure,
+  kIdentityUnavailable,
+  kPinRequired,
+  kPinIncorrect,
+  kPinLocked,
+  kCancelled,
+  kQueueFull,
+  kTimedOut,
+};
+
+struct KeyResult {
+  KeyError error;
+  uint32 skf_error;
+  uint32 system_error;
+  // UINT32_MAX means not supplied by the driver.
+  uint32 pin_retries = 4294967295;
+};
+
+struct DriverConfig {
+  mojo_base.mojom.FilePath library_path;
+  array<uint8, 32> sha256;
+};
+
+struct KeyIdentity {
+  // Opaque service-instance identifier, never a vendor device path.
+  string identity_id;
+  uint64 generation;
+  array<uint8> signing_certificate;
+  array<uint8> encryption_certificate;
+  array<array<uint8>> intermediates;
+};
+
+// C++ maps this struct to SecurePin, which clears owned/decoded PIN buffers.
+// Mojo's internal serialized transport buffers are not covered by that wipe.
+struct KeyPin {
+  array<uint8> value;
+};
+
+interface KeyObserver {
+  // Inventory/generation changed and existing grants have been revoked.
+  // PIN failures revoke grants but return through Authorize without this event.
+  OnIdentitiesChanged();
+  OnServiceFailure(KeyError error);
+};
+
+// An authorization capability bound to one identity and one generation. Only
+// the browser may obtain it; passing its remote grants signing to that caller.
+// No PIN, device path, key selection or software key import is exposed here.
+interface KeySigner {
+  Sign(uint64 request_id, array<uint8, 32> digest)
+      => (KeyResult result, array<uint8> signature_der);
+  Cancel(uint64 request_id);
+};
+
+// Third-party USB SDKs require device/file/registry access. This is a dedicated
+// fault-isolation process, not a security sandbox for untrusted native code.
+// Its control pipe is browser-only and Configure requires a provisioned hash.
+[ServiceSandbox=sandbox.mojom.Sandbox.kNoSandbox]
+interface KeyService {
+  // One configuration per process; Authenticode and hash are both mandatory.
+  Configure(DriverConfig config, pending_remote<KeyObserver> observer)
+      => (KeyResult result);
+  Enumerate() => (KeyResult result, array<KeyIdentity> identities);
+  // PIN is a UTF-8/ASCII byte buffer, without a trailing NUL. The service wipes
+  // its copy; C++ callers must use SecurePin throughout ownership. Never persist
+  // it. This does not promise erasure of Mojo's internal transport buffers.
+  // Nonzero request IDs increase monotonically on this control pipe. Success
+  // prepares an authorization; it is not reusable and cannot sign until the
+  // browser accepts the still-current request with CommitAuthorization.
+  // Prepared authorizations expire after 30 seconds if not committed.
+  Authorize(uint64 request_id, string identity_id, uint64 generation, KeyPin pin,
+            pending_receiver<KeySigner> signer)
+      => (KeyResult result, KeyIdentity? identity);
+  CommitAuthorization(uint64 request_id);
+  // Cancels queued, running, or prepared authorization. Previously committed
+  // authorizations are unaffected. Repeated cancellation is harmless.
+  // An early cancellation consumes its ID so it cannot be authorized later.
+  CancelAuthorization(uint64 request_id);
+  // Browser-only: creates another signing capability for an identity already
+  // authorized in this service instance. No PIN is retained or replayed.
+  // Lock, removal and failures clear this authorization. Returns kPinRequired
+  // if a fresh Authorize is needed.
+  GrantAuthorized(string identity_id, uint64 generation,
+                  pending_receiver<KeySigner> signer)
+      => (KeyResult result, KeyIdentity? identity);
+  // Revokes all capabilities for the identity before returning to the caller.
+  Lock(string identity_id) => (KeyResult result);
+};

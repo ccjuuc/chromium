@@ -5,11 +5,14 @@
 #ifndef NET_HTTP_HTTP_STREAM_POOL_REQUEST_INFO_H_
 #define NET_HTTP_HTTP_STREAM_POOL_REQUEST_INFO_H_
 
+#include "base/functional/callback.h"
+#include "base/unguessable_token.h"
 #include "net/base/net_export.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/base/network_handle.h"
 #include "net/base/privacy_mode.h"
 #include "net/dns/public/secure_dns_policy.h"
+#include "net/gm/gm_tls_policy.h"
 #include "net/http/alternate_protocol_usage.h"
 #include "net/http/alternative_service.h"
 #include "net/log/net_log_with_source.h"
@@ -47,6 +50,8 @@ struct NET_EXPORT_PRIVATE HttpStreamPoolRequestInfo {
   ~HttpStreamPoolRequestInfo();
 
   url::SchemeHostPort destination;
+  std::shared_ptr<const gm::TlsRule> gm_rule;
+  base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context;
   PrivacyMode privacy_mode = PrivacyMode::PRIVACY_MODE_DISABLED;
   SocketTag socket_tag;
   NetworkAnonymizationKey network_anonymization_key;

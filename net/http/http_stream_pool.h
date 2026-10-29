@@ -268,6 +268,8 @@ class NET_EXPORT_PRIVATE HttpStreamPool
       SSLClientContext::SSLConfigChangeType change_type) override;
   void OnSSLConfigForServersChanged(
       const base::flat_set<HostPortPair>& servers) override;
+  void OnGmConfigForServersChanged(
+      const base::flat_set<HostPortPair>& servers) override;
 
   // Called when a group has completed.
   void OnGroupComplete(Group* group);

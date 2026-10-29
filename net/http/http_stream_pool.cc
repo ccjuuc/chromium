@@ -335,6 +335,11 @@ void HttpStreamPool::OnIPAddressChanged(
 void HttpStreamPool::OnSSLConfigChanged(
     SSLClientContext::SSLConfigChangeType change_type) {
   for (auto& group : groups_) {
+    if (change_type ==
+            SSLClientContext::SSLConfigChangeType::kGmConfigChanged &&
+        group.first.gm_profile().protocol() == gm::TlsProtocol::kStandardTls) {
+      continue;
+    }
     group.second.Refresh(kSslConfigChanged,
                          StreamSocketCloseReason::kSslConfigChanged);
   }
@@ -349,6 +354,18 @@ void HttpStreamPool::OnSSLConfigForServersChanged(
             HostPortPair::FromSchemeHostPort(group.first.destination()))) {
       group.second.Refresh(kSslConfigChanged,
                            StreamSocketCloseReason::kSslConfigChanged);
+    }
+  }
+  ProcessPendingRequestsInGroups();
+}
+
+void HttpStreamPool::OnGmConfigForServersChanged(
+    const base::flat_set<HostPortPair>& servers) {
+  for (auto& [key, group] : groups_) {
+    if (key.gm_profile().protocol() != gm::TlsProtocol::kStandardTls &&
+        servers.contains(HostPortPair::FromSchemeHostPort(key.destination()))) {
+      group.Refresh(kSslConfigChanged,
+                    StreamSocketCloseReason::kSslConfigChanged);
     }
   }
   ProcessPendingRequestsInGroups();
@@ -439,6 +456,9 @@ bool HttpStreamPool::CanUseQuic(
     const url::SchemeHostPort& destination,
     const NetworkAnonymizationKey& network_anonymization_key,
     bool enable_alternative_services) const {
+  if (http_network_session()->GetGmTlsRule(destination)) {
+    return false;
+  }
   if (http_network_session()->ShouldForceQuic(destination, ProxyInfo::Direct(),
                                               /*is_websocket=*/false)) {
     return true;
@@ -582,14 +602,17 @@ base::WeakPtr<SpdySession> HttpStreamPool::FindAvailableSpdySession(
   // Also ignore any live H2 sessions for origins marked as requiring HTTP/1.1.
   // Ideally such sessions would not exist, but that is a difficult invariant to
   // enforce globally.
-  if (!GURL::SchemeIsCryptographic(stream_key.destination().scheme()) ||
+  if (!stream_key.gm_profile().AllowsHttp2() ||
+      !GURL::SchemeIsCryptographic(stream_key.destination().scheme()) ||
       RequiresHTTP11(stream_key.destination(),
                      stream_key.network_anonymization_key())) {
     return nullptr;
   }
 
   return http_network_session()->spdy_session_pool()->FindAvailableSession(
-      spdy_session_key, enable_ip_based_pooling_for_h2,
+      spdy_session_key,
+      enable_ip_based_pooling_for_h2 &&
+          stream_key.gm_profile().AllowsCrossOriginHttp2(),
       /*is_websocket=*/false, net_log);
 }
 

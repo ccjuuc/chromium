@@ -502,6 +502,7 @@ void URLRequestHttpJob::Start() {
   // Privacy mode could still be disabled in SetCookieHeaderAndStart if we are
   // going to send previously saved cookies.
   request_info_.privacy_mode = DeterminePrivacyMode();
+  request_info_.gm_client_auth_context = request()->gm_client_auth_context();
   request()->net_log().AddEventWithStringParams(
       NetLogEventType::COMPUTED_PRIVACY_MODE, "privacy_mode",
       PrivacyModeToDebugString(request_info_.privacy_mode));

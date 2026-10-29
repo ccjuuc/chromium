@@ -7,10 +7,13 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <optional>
 
 #include "base/containers/flat_map.h"
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/unguessable_token.h"
 #include "net/base/net_export.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/base/privacy_mode.h"
@@ -22,6 +25,9 @@
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace net {
+namespace gm {
+struct TlsRule;
+}  // namespace gm
 
 // Supported TLS ProtocolVersion values encoded as uint16_t.
 enum {
@@ -37,6 +43,12 @@ NET_EXPORT extern const uint16_t kDefaultSSLVersionMax;
 
 // A collection of SSL-related configuration settings.
 struct NET_EXPORT SSLConfig {
+  // Selected before pool lookup and retained for the entire connection attempt.
+  std::shared_ptr<const gm::TlsRule> gm_rule;
+
+  // Live request allowed to own new client-auth UI. Never a pool/cache key.
+  base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context;
+
   using ApplicationSettings = base::flat_map<NextProto, std::vector<uint8_t>>;
 
   SSLConfig();

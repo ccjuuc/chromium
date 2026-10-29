@@ -4,6 +4,10 @@
 
 #include "chrome/browser/net/profile_network_context_service.h"
 
+#if BUILDFLAG(XENON_GM) && BUILDFLAG(IS_WIN) && defined(ARCH_CPU_X86_64)
+#include "chrome/browser/gm/gm_key_manager.h"  // nogncheck: XENON_GM conditional dependency.
+#endif
+
 #include <memory>
 #include <string>
 #include <string_view>
@@ -1374,6 +1378,11 @@ void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
       ->ConfigureDefaultNetworkContextParams(network_context_params);
 
   network_context_params->accept_language = ComputeAcceptLanguage();
+#if BUILDFLAG(XENON_GM) && BUILDFLAG(IS_WIN) && defined(ARCH_CPU_X86_64)
+  if (auto* key_manager = GetGmKeyManager()) {
+    network_context_params->gm_identity_broker = key_manager->Bind();
+  }
+#endif
   network_context_params->enable_referrers = enable_referrers_.GetValue();
 
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
@@ -1701,8 +1710,24 @@ void ProfileNetworkContextService::OnContentSettingChanged(
   }
 }
 
+#if BUILDFLAG(XENON_GM) && BUILDFLAG(IS_WIN) && defined(ARCH_CPU_X86_64)
+gm_browser::KeyManager* ProfileNetworkContextService::GetGmKeyManager() {
+  if (is_shutting_down_) {
+    return nullptr;
+  }
+  if (!gm_key_manager_) {
+    gm_key_manager_ = std::make_unique<gm_browser::KeyManager>(
+        g_browser_process->local_state());
+  }
+  return gm_key_manager_.get();
+}
+#endif
+
 void ProfileNetworkContextService::Shutdown() {
   is_shutting_down_ = true;
+#if BUILDFLAG(XENON_GM) && BUILDFLAG(IS_WIN) && defined(ARCH_CPU_X86_64)
+  gm_key_manager_.reset();
+#endif
   managed_certificates_observer_ = {};
 
 #if BUILDFLAG(CHROME_ROOT_STORE_CERT_MANAGEMENT_UI)

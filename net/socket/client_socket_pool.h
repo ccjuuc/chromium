@@ -8,11 +8,14 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/time/time.h"
+#include "base/unguessable_token.h"
 #include "base/values.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/load_states.h"
@@ -24,6 +27,7 @@
 #include "net/base/request_priority.h"
 #include "net/dns/host_resolver.h"
 #include "net/dns/public/secure_dns_policy.h"
+#include "net/gm/gm_tls_policy.h"
 #include "net/http/http_request_info.h"
 #include "net/log/net_log_capture_mode.h"
 #include "net/socket/connect_job.h"
@@ -132,7 +136,8 @@ class NET_EXPORT ClientSocketPool : public LowerLayeredPool {
             NetworkAnonymizationKey network_anonymization_key,
             SecureDnsPolicy secure_dns_policy,
             bool disable_cert_network_fetches,
-            handles::NetworkHandle target_network);
+            handles::NetworkHandle target_network,
+            std::shared_ptr<const gm::TlsRule> gm_rule = nullptr);
     GroupId(const GroupId& group_id);
 
     ~GroupId();
@@ -159,9 +164,24 @@ class NET_EXPORT ClientSocketPool : public LowerLayeredPool {
     // Returns the group ID as a string, for logging.
     std::string ToString() const;
 
-    bool operator==(const GroupId& other) const = default;
+    const gm::ConnectionProfile& gm_profile() const { return gm_profile_; }
+    const std::shared_ptr<const gm::TlsRule>& gm_rule() const {
+      return gm_rule_;
+    }
 
-    auto operator<=>(const GroupId& other) const = default;
+    auto operator<=>(const GroupId& other) const {
+      return std::tie(destination_, privacy_mode_, network_anonymization_key_,
+                      secure_dns_policy_, disable_cert_network_fetches_,
+                      target_network_, gm_profile_) <=>
+             std::tie(other.destination_, other.privacy_mode_,
+                      other.network_anonymization_key_,
+                      other.secure_dns_policy_,
+                      other.disable_cert_network_fetches_,
+                      other.target_network_, other.gm_profile_);
+    }
+    bool operator==(const GroupId& other) const {
+      return (*this <=> other) == 0;
+    }
 
    private:
     // The endpoint of the final destination (not the proxy).
@@ -182,6 +202,8 @@ class NET_EXPORT ClientSocketPool : public LowerLayeredPool {
     bool disable_cert_network_fetches_;
 
     handles::NetworkHandle target_network_ = handles::kInvalidNetworkHandle;
+    gm::ConnectionProfile gm_profile_;
+    std::shared_ptr<const gm::TlsRule> gm_rule_;
   };
 
   // Parameters that, in combination with GroupId, proxy, websocket information,
@@ -198,7 +220,9 @@ class NET_EXPORT ClientSocketPool : public LowerLayeredPool {
     // For non-SSL requests, `allowed_bad_certs` argument will be ignored (and
     // is likely empty, anyways).
     explicit SocketParams(
-        const std::vector<SSLConfig::CertAndStatus>& allowed_bad_certs);
+        const std::vector<SSLConfig::CertAndStatus>& allowed_bad_certs,
+        base::RepeatingCallback<base::UnguessableToken()>
+            gm_client_auth_context = {});
 
     SocketParams(const SocketParams&) = delete;
     SocketParams& operator=(const SocketParams&) = delete;
@@ -211,11 +235,17 @@ class NET_EXPORT ClientSocketPool : public LowerLayeredPool {
       return allowed_bad_certs_;
     }
 
+    const base::RepeatingCallback<base::UnguessableToken()>&
+    gm_client_auth_context() const {
+      return gm_client_auth_context_;
+    }
+
    private:
     friend class base::RefCounted<SocketParams>;
     ~SocketParams();
 
     std::vector<SSLConfig::CertAndStatus> allowed_bad_certs_;
+    base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context_;
   };
 
   ClientSocketPool(const ClientSocketPool&) = delete;

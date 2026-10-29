@@ -25,6 +25,7 @@
 #include "net/base/privacy_mode.h"
 #include "net/base/proxy_chain.h"
 #include "net/base/session_usage.h"
+#include "net/gm/gm_connection_profile.h"
 #include "third_party/boringssl/src/include/openssl/base.h"
 
 namespace base {
@@ -60,6 +61,11 @@ class NET_EXPORT SSLClientSessionCache : public base::MemoryConsumer {
     SessionUsage session_usage = SessionUsage::kDestination;
     ProxyChain proxy_chain = ProxyChain::Direct();
     size_t proxy_chain_index = 0;
+    // Empty for the ordinary TLS path. Joint negotiation retains its complete
+    // managed trust/policy partition even if a standard suite is negotiated.
+    std::optional<gm::ConnectionProfile> gm_profile;
+    std::string gm_identity_id;
+    uint64_t gm_identity_generation = 0;
   };
 
   explicit SSLClientSessionCache(const Config& config);
@@ -80,6 +86,7 @@ class NET_EXPORT SSLClientSessionCache : public base::MemoryConsumer {
   // inserting the session into the cache, which will ensure that sessions
   // created with stale configs don't get cached.
   uint64_t generation_number() const { return generation_number_; }
+  uint64_t gm_generation_number() const { return gm_generation_number_; }
 
   // Returns the session associated with |cache_key| and moves it to the front
   // of the MRU list. Returns nullptr if there is none.
@@ -100,6 +107,9 @@ class NET_EXPORT SSLClientSessionCache : public base::MemoryConsumer {
 
   // Removes all entries associated with items in |servers|.
   void FlushForServers(const base::flat_set<HostPortPair>& servers);
+  // Invalidates only managed joint-negotiation entries and their outstanding
+  // tickets. Ordinary TLS entries and their insertion generation are preserved.
+  void FlushGmForServers(const base::flat_set<HostPortPair>& servers);
 
   // Removes all entries from the cache and updates the generation number.
   // Future insertions will be ignored unless they match the new generation.
@@ -137,6 +147,7 @@ class NET_EXPORT SSLClientSessionCache : public base::MemoryConsumer {
 
   raw_ptr<base::Clock> clock_;
   uint64_t generation_number_ = 0;
+  uint64_t gm_generation_number_ = 0;
   Config config_;
   base::LRUCache<Key, Entry> cache_;
   size_t lookups_since_flush_ = 0;

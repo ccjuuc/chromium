@@ -27,6 +27,7 @@
 #include "media/media_buildflags.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/service_factory.h"
+#include "net/gm/gm_buildflags.h"
 #include "pdf/buildflags.h"
 #include "printing/buildflags/buildflags.h"
 #include "services/passage_embeddings/passage_embeddings_service.h"
@@ -50,6 +51,9 @@
 #include "components/services/quarantine/quarantine_impl.h"  // nogncheck
 #include "services/proxy_resolver/public/mojom/proxy_resolver.mojom.h"
 #include "services/proxy_resolver_win/windows_system_proxy_resolver_impl.h"
+#if BUILDFLAG(XENON_GM) && defined(ARCH_CPU_X86_64)
+#include "services/gm_key/gm_key_service.h"  // nogncheck: XENON_GM conditional dependency.
+#endif
 #endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(IS_MAC)
@@ -184,6 +188,12 @@ auto ContentBookmarkParser(
 }
 
 #if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(XENON_GM) && defined(ARCH_CPU_X86_64)
+auto RunGmKeyService(
+    mojo::PendingReceiver<gm_key::mojom::KeyService> receiver) {
+  return std::make_unique<gm_key::GmKeyService>(std::move(receiver));
+}
+#endif
 auto RunProcessorMetrics(
     mojo::PendingReceiver<chrome::mojom::ProcessorMetrics> receiver) {
   return std::make_unique<ProcessorMetricsImpl>(std::move(receiver));
@@ -466,8 +476,8 @@ auto RunBabelOrcaTachyonParsingService(
 #if BUILDFLAG(IS_ANDROID)
 std::unique_ptr<readaloud::ReadAloudPlaybackController>
 RunReadAloudPlaybackControllerFactory(
-    mojo::PendingReceiver<
-        read_aloud::mojom::ReadAloudPlaybackControllerFactory> receiver) {
+    mojo::PendingReceiver<read_aloud::mojom::ReadAloudPlaybackControllerFactory>
+        receiver) {
   if (!features::IsReadAloudNativeEnabled()) {
     return nullptr;
   }
@@ -516,6 +526,9 @@ void RegisterMainThreadServices(mojo::ServiceFactory& services) {
 #endif  // !BUILDFLAG(ENABLE_BROWSER_SPEECH_SERVICE)
 
 #if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(XENON_GM) && defined(ARCH_CPU_X86_64)
+  services.Add(RunGmKeyService);
+#endif
   services.Add(RunProcessorMetrics);
   services.Add(RunQuarantineService);
   services.Add(RunWindowsUtility);

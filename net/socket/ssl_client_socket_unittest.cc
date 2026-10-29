@@ -1119,7 +1119,7 @@ class SSLClientSocketFalseStartTest : public SSLClientSocketTest {
       rv = callback.GetResult(
           sock->Write(request_buffer.get(), request_text.size(),
                       callback.callback(), TRAFFIC_ANNOTATION_FOR_TESTS));
-      EXPECT_EQ(request_text.size(), rv);
+      EXPECT_EQ(base::checked_cast<int>(request_text.size()), rv);
 
       // The read will hang; it's waiting for the peer to complete the
       // handshake, and the handshake is still blocked.
@@ -1659,7 +1659,7 @@ TEST_P(SSLClientSocketReadTest, Read) {
   rv = callback.GetResult(sock->Write(request_buffer.get(), request_text.size(),
                                       callback.callback(),
                                       TRAFFIC_ANNOTATION_FOR_TESTS));
-  EXPECT_EQ(request_text.size(), rv);
+  EXPECT_EQ(base::checked_cast<int>(request_text.size()), rv);
 
   auto buf = base::MakeRefCounted<IOBufferWithSize>(4096);
   int64_t unencrypted_bytes_read = 0;
@@ -1767,7 +1767,7 @@ TEST_P(SSLClientSocketReadTest, Read_WithSynchronousError) {
   rv = callback.GetResult(sock->Write(request_buffer.get(), request_text.size(),
                                       callback.callback(),
                                       TRAFFIC_ANNOTATION_FOR_TESTS));
-  EXPECT_EQ(request_text.size(), rv);
+  EXPECT_EQ(base::checked_cast<int>(request_text.size()), rv);
 
   // Simulate an unclean/forcible shutdown.
   raw_transport->SetNextReadError(ERR_CONNECTION_RESET);
@@ -1826,7 +1826,7 @@ TEST_P(SSLClientSocketVersionTest, Write_WithSynchronousError) {
   rv = callback.GetResult(sock->Write(request_buffer.get(), request_text.size(),
                                       callback.callback(),
                                       TRAFFIC_ANNOTATION_FOR_TESTS));
-  EXPECT_EQ(request_text.size(), rv);
+  EXPECT_EQ(base::checked_cast<int>(request_text.size()), rv);
 
   auto buf = base::MakeRefCounted<IOBufferWithSize>(4096);
 
@@ -1887,7 +1887,7 @@ TEST_P(SSLClientSocketVersionTest, Write_WithSynchronousErrorNoRead) {
   rv = callback.GetResult(sock->Write(request_buffer.get(), request_text.size(),
                                       callback.callback(),
                                       TRAFFIC_ANNOTATION_FOR_TESTS));
-  ASSERT_EQ(request_text.size(), rv);
+  ASSERT_EQ(base::checked_cast<int>(request_text.size()), rv);
 
   // Let the event loop spin for a little bit of time. Even on platforms where
   // pumping the state machine involve thread hops, there should be no further
@@ -2067,7 +2067,7 @@ TEST_P(SSLClientSocketReadTest, Read_WithWriteError) {
   rv = callback.GetResult(sock->Write(request_buffer.get(), request_text.size(),
                                       callback.callback(),
                                       TRAFFIC_ANNOTATION_FOR_TESTS));
-  EXPECT_EQ(request_text.size(), rv);
+  EXPECT_EQ(base::checked_cast<int>(request_text.size()), rv);
 
   // Start a hanging read.
   TestCompletionCallback read_callback;

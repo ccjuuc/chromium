@@ -9,6 +9,7 @@
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "net/gm/gm_buildflags.h"
 #include "net/ssl/ssl_connection_status_flags.h"
 #include "third_party/boringssl/src/include/openssl/ssl.h"
 
@@ -18,14 +19,28 @@ namespace {
 
 int ObsoleteSSLStatusForProtocol(int ssl_version) {
   int obsolete_ssl = OBSOLETE_SSL_NONE;
-  if (ssl_version < SSL_CONNECTION_VERSION_TLS1_2)
+  if (ssl_version < SSL_CONNECTION_VERSION_TLS1_2) {
     obsolete_ssl |= OBSOLETE_SSL_MASK_PROTOCOL;
+  }
   return obsolete_ssl;
 }
 
 int ObsoleteSSLStatusForCipherSuite(uint16_t cipher_suite) {
   int obsolete_ssl = OBSOLETE_SSL_NONE;
 
+#if BUILDFLAG(XENON_GM)
+  if (cipher_suite == 0x00c6 || cipher_suite == 0x00c7) {
+    return OBSOLETE_SSL_NONE;  // RFC 8998 TLS 1.3 AEAD suites.
+  }
+  if (cipher_suite == 0xe053) {
+    // Static SM2 has no forward secrecy.
+    return OBSOLETE_SSL_MASK_KEY_EXCHANGE;
+  }
+  if (cipher_suite == 0xe013) {
+    return OBSOLETE_SSL_MASK_KEY_EXCHANGE | OBSOLETE_SSL_MASK_CIPHER;
+  }
+
+#endif  // BUILDFLAG(XENON_GM)
   const SSL_CIPHER* cipher = SSL_get_cipher_by_value(cipher_suite);
   if (!cipher) {
     // Cannot determine/unknown cipher suite. Err on the side of caution.
@@ -68,9 +83,27 @@ void SSLCipherSuiteToStrings(const char** key_exchange_str,
   *is_aead = false;
   *is_tls13 = false;
 
-  const SSL_CIPHER* cipher = SSL_get_cipher_by_value(cipher_suite);
-  if (!cipher)
+#if BUILDFLAG(XENON_GM)
+  if (cipher_suite == 0x00c6 || cipher_suite == 0x00c7 ||
+      cipher_suite == 0xe013 || cipher_suite == 0xe053) {
+    *is_tls13 = cipher_suite == 0x00c6 || cipher_suite == 0x00c7;
+    *is_aead = cipher_suite != 0xe013;
+    *key_exchange_str = *is_tls13 ? nullptr : "ECC_SM2";
+    *cipher_str = "SM4_GCM";
+    if (cipher_suite == 0x00c7) {
+      *cipher_str = "SM4_CCM";
+    } else if (cipher_suite == 0xe013) {
+      *cipher_str = "SM4_CBC";
+    }
+    *mac_str = *is_aead ? nullptr : "HMAC-SM3";
     return;
+  }
+
+#endif  // BUILDFLAG(XENON_GM)
+  const SSL_CIPHER* cipher = SSL_get_cipher_by_value(cipher_suite);
+  if (!cipher) {
+    return;
+  }
 
   switch (SSL_CIPHER_get_kx_nid(cipher)) {
     case NID_kx_any:
@@ -154,9 +187,21 @@ void SSLVersionToString(const char** name, int ssl_version) {
     case SSL_CONNECTION_VERSION_QUIC:
       *name = "QUIC";
       break;
+    case SSL_CONNECTION_VERSION_TLCP:
+      *name = "TLCP 1.1";
+      break;
     default:
       NOTREACHED() << ssl_version;
   }
+}
+
+const char* SSLKeyExchangeGroupToName(uint16_t group) {
+#if BUILDFLAG(XENON_GM)
+  if (group == 41) {
+    return "curveSM2";
+  }
+#endif  // BUILDFLAG(XENON_GM)
+  return SSL_get_curve_name(group);
 }
 
 bool ParseSSLCipherString(const std::string& cipher_string,

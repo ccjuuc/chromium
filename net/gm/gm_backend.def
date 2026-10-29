@@ -1,0 +1,3 @@
+LIBRARY gm_backend
+EXPORTS
+  gm_backend_get_api

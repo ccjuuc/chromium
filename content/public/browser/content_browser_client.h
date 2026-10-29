@@ -72,6 +72,7 @@
 #include "services/network/public/cpp/cross_origin_embedder_policy.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "services/network/public/mojom/fetch_api.mojom-forward.h"
+#include "services/network/public/mojom/gm_identity.mojom-forward.h"
 #include "services/network/public/mojom/ip_address_space.mojom-forward.h"
 #include "services/network/public/mojom/network_context.mojom-forward.h"
 #include "services/network/public/mojom/proxy_config.mojom-forward.h"
@@ -1233,6 +1234,18 @@ class CONTENT_EXPORT ContentBrowserClient {
       net::SSLCertRequestInfo* cert_request_info,
       net::ClientCertIdentityList client_certs,
       std::unique_ptr<ClientCertificateDelegate> delegate);
+
+  // Acquires a GM identity for a live page. The callback may run synchronously.
+  // The returned closure cancels the request and its UI. The caller runs it if
+  // the network request or page is destroyed, or a new main navigation starts.
+  virtual base::OnceClosure SelectGmClientCertificate(
+      WebContents* web_contents,
+      const url::Origin& origin,
+      const std::string& identity_policy_id,
+      uint64_t identity_generation,
+      network::mojom::GmClientCertificateRequestPtr certificate_request,
+      base::OnceCallback<void(int, network::mojom::GmIdentityGrantPtr)>
+          callback);
 
   // Returns a class to get notifications about media event. The embedder can
   // return nullptr if they're not interested.

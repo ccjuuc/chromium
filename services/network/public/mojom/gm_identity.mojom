@@ -1,0 +1,42 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+module network.mojom;
+
+import "services/gm_key/public/mojom/gm_key_service.mojom";
+import "services/network/public/mojom/ssl_config.mojom";
+import "url/mojom/origin.mojom";
+
+struct GmClientCertificateRequest {
+  // A negotiated GM protocol: kTlcp or kRfc8998. The broker rejects kTls13Auto,
+  // which is only valid in site policy and cannot authorize a key request.
+  GmTlsProtocol protocol;
+  uint32 required_roles;
+  array<array<uint8>> certificate_authorities;
+  array<uint16> signature_algorithms;
+  array<uint8> certificate_types;
+};
+
+struct GmIdentityGrant {
+  gm_key.mojom.KeyIdentity identity;
+  pending_remote<gm_key.mojom.KeySigner> signer;
+};
+
+// One live URLLoader authentication interaction. Closing either endpoint
+// cancels the request, including a PIN prompt or an outstanding SKF operation.
+interface GmClientCertificateResponder {
+  Continue(int32 net_error, GmIdentityGrant? grant);
+};
+
+// Bound by the browser separately for each profile. The browser validates the
+// origin against current managed policy before granting a signing capability.
+// Neither PIN entry nor driver configuration is exposed to Network Service.
+interface GmIdentityBroker {
+  // Nonzero request IDs increase monotonically within each broker pipe.
+  AcquireIdentity(uint64 request_id, url.mojom.Origin origin, string identity_policy_id,
+                  uint64 identity_generation,
+                  GmClientCertificateRequest certificate_request)
+      => (int32 net_error, GmIdentityGrant? grant);
+  Cancel(uint64 request_id);
+};

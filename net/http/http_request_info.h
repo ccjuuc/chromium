@@ -5,20 +5,25 @@
 #ifndef NET_HTTP_HTTP_REQUEST_INFO_H__
 #define NET_HTTP_HTTP_REQUEST_INFO_H__
 
+#include <memory>
 #include <optional>
 #include <string>
 
+#include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
+#include "base/unguessable_token.h"
 #include "net/base/idempotency.h"
 #include "net/base/net_export.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/base/network_handle.h"
 #include "net/base/network_isolation_key.h"
 #include "net/base/privacy_mode.h"
+#include "net/base/proxy_chain.h"
 #include "net/base/reconnect_notifier.h"
 #include "net/base/request_priority.h"
 #include "net/dns/public/secure_dns_policy.h"
+#include "net/gm/gm_tls_policy.h"
 #include "net/http/http_request_headers.h"
 #include "net/shared_dictionary/shared_dictionary.h"
 #include "net/shared_dictionary/shared_dictionary_getter.h"
@@ -45,6 +50,17 @@ struct NET_EXPORT HttpRequestInfo {
 
   // The requested URL.
   GURL url;
+
+  // Internal, concrete automatic route chosen before entering connection pools.
+  std::shared_ptr<const gm::TlsRule> gm_auto_rule;
+  base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context;
+  std::optional<ProxyChain> gm_auto_proxy_chain;
+
+  // The HTTP cache preserves caller headers/URL before adding validators or
+  // changing ranges. An automatic GM connection must not inherit those cache
+  // validators or retrieve content under an ordinary TLS cache key.
+  std::optional<HttpRequestHeaders> gm_cache_original_headers;
+  GURL gm_cache_original_url;
 
   // The method to use (GET, POST, etc.).
   std::string method;

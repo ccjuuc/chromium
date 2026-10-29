@@ -828,8 +828,15 @@ bool TcpConnectJob::IsEndpointResultUsable(
   // Note that, if `params_` did not specify any ALPN protocols, no
   // SVCB/HTTPS-based endpoints will match and we will effectively ignore all
   // but plain A/AAAA endpoints.
+  const bool automatic_ech =
+      !params_->automatic_ech_alpns().empty() &&
+      !service_endpoint.metadata.ech_config_list.empty() &&
+      IsEchEnabled(common_connect_job_params()->ssl_client_context,
+                   ToLegacyDestinationEndpoint(params_->destination()).host());
+  const auto& supported_alpns = automatic_ech ? params_->automatic_ech_alpns()
+                                              : params_->supported_alpns();
   for (const auto& alpn : service_endpoint.metadata.supported_protocol_alpns) {
-    if (params_->supported_alpns().contains(alpn)) {
+    if (supported_alpns.contains(alpn)) {
       return true;
     }
   }
@@ -866,7 +873,8 @@ void TcpConnectJob::UpdateSvcbOptional() {
   if (!scheme_host_port || scheme_host_port->scheme() != url::kHttpsScheme) {
     // This is not a SVCB-capable request at all.
     is_svcb_optional_ = true;
-  } else if (!IsEchEnabled(common_connect_job_params()->ssl_client_context,
+  } else if (params_->gm_tls() ||
+             !IsEchEnabled(common_connect_job_params()->ssl_client_context,
                            scheme_host_port->host())) {
     // ECH is not supported for this request.
     is_svcb_optional_ = true;

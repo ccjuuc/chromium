@@ -15,6 +15,7 @@
 #include "net/base/ip_endpoint.h"
 #include "net/base/load_states.h"
 #include "net/base/load_timing_info.h"
+#include "net/base/net_error_details.h"
 #include "net/base/net_export.h"
 #include "net/base/network_handle.h"
 #include "net/log/net_log_event_type.h"
@@ -83,6 +84,9 @@ class NET_EXPORT_PRIVATE StreamAttempt {
   virtual scoped_refptr<SSLCertRequestInfo> GetCertRequestInfo();
 
   StreamSocket* stream_socket() const { return stream_socket_.get(); }
+  const NetErrorDetails& net_error_details() const {
+    return net_error_details_;
+  }
 
   std::unique_ptr<StreamSocket> ReleaseStreamSocket();
 
@@ -110,6 +114,7 @@ class NET_EXPORT_PRIVATE StreamAttempt {
   const StreamAttemptParams& params() { return *params_; }
 
   void SetStreamSocket(std::unique_ptr<StreamSocket> stream_socket);
+  NetErrorDetails& mutable_net_error_details() { return net_error_details_; }
 
   // Called by subclasses to notify the completion of this attempt. `this` may
   // be deleted after calling this method.
@@ -136,6 +141,7 @@ class NET_EXPORT_PRIVATE StreamAttempt {
   CompletionOnceCallback callback_;
 
   std::unique_ptr<StreamSocket> stream_socket_;
+  NetErrorDetails net_error_details_;
 
   LoadTimingInfo::ConnectTiming connect_timing_;
 

@@ -62,13 +62,17 @@ TransportSocketParams::TransportSocketParams(
     SecureDnsPolicy secure_dns_policy,
     handles::NetworkHandle target_network,
     OnHostResolutionCallback host_resolution_callback,
-    base::flat_set<std::string> supported_alpns)
+    base::flat_set<std::string> supported_alpns,
+    bool gm_tls,
+    base::flat_set<std::string> automatic_ech_alpns)
     : destination_(std::move(destination)),
       network_anonymization_key_(std::move(network_anonymization_key)),
       secure_dns_policy_(secure_dns_policy),
       target_network_(target_network),
       host_resolution_callback_(std::move(host_resolution_callback)),
-      supported_alpns_(std::move(supported_alpns)) {
+      supported_alpns_(std::move(supported_alpns)),
+      gm_tls_(gm_tls),
+      automatic_ech_alpns_(std::move(automatic_ech_alpns)) {
 #if DCHECK_IS_ON()
   auto* scheme_host_port = std::get_if<url::SchemeHostPort>(&destination_);
   if (scheme_host_port) {
@@ -232,8 +236,9 @@ base::TimeDelta TransportConnectJob::ConnectionTimeout() {
 
 void TransportConnectJob::OnIOComplete(int result) {
   result = DoLoop(result);
-  if (result != ERR_IO_PENDING)
+  if (result != ERR_IO_PENDING) {
     NotifyDelegateOfCompletion(result);  // Deletes |this|
+  }
 }
 
 int TransportConnectJob::DoLoop(int result) {
@@ -410,8 +415,9 @@ int TransportConnectJob::DoTransportConnect() {
     ipv6_job_ = std::make_unique<TransportConnectSubJob>(
         std::move(ipv6_addresses), this, SUB_JOB_IPV6);
     int result = ipv6_job_->Start();
-    if (result != ERR_IO_PENDING)
+    if (result != ERR_IO_PENDING) {
       return HandleSubJobComplete(result, ipv6_job_.get());
+    }
     if (ipv4_job_) {
       base::TimeDelta fallback_time = TcpConnectJob::GetIPv6FallbackTime(
           common_connect_job_params(), params_.get());
@@ -428,8 +434,9 @@ int TransportConnectJob::DoTransportConnect() {
   DCHECK(!ipv6_job_);
   DCHECK(ipv4_job_);
   int result = ipv4_job_->Start();
-  if (result != ERR_IO_PENDING)
+  if (result != ERR_IO_PENDING) {
     return HandleSubJobComplete(result, ipv4_job_.get());
+  }
   return ERR_IO_PENDING;
 }
 
@@ -519,8 +526,9 @@ void TransportConnectJob::StartIPv4JobAsync() {
   DCHECK(ipv4_job_);
   net_log().AddEvent(NetLogEventType::TRANSPORT_CONNECT_JOB_IPV6_FALLBACK);
   int result = ipv4_job_->Start();
-  if (result != ERR_IO_PENDING)
+  if (result != ERR_IO_PENDING) {
     OnSubJobComplete(result, ipv4_job_.get());
+  }
 }
 
 int TransportConnectJob::ConnectInternal() {
@@ -538,14 +546,21 @@ void TransportConnectJob::ChangePriorityInternal(RequestPriority priority) {
 
 bool TransportConnectJob::IsSvcbOptional(
     base::span<const HostResolverEndpointResult> results) const {
+  if (params_->gm_tls() || !IsEchEnabled()) {
+    return true;  // Explicit GM policy or ECH disabled for this request.
+  }
   // If SVCB/HTTPS resolution succeeded, the client supports ECH, and all routes
   // support ECH, disable the A/AAAA fallback. See Section 5.1 of
   // draft-ietf-tls-svcb-ech-08.
 
-  auto* scheme_host_port =
+  return !HostResolver::AllAlternativeEndpointsHaveEch(results);
+}
+
+bool TransportConnectJob::IsEchEnabled() const {
+  const auto* scheme_host_port =
       std::get_if<url::SchemeHostPort>(&params_->destination());
   if (!scheme_host_port || scheme_host_port->scheme() != url::kHttpsScheme) {
-    return true;  // This is not a SVCB-capable request at all.
+    return false;
   }
 
   SSLClientContext* ssl_client_context =
@@ -554,10 +569,9 @@ bool TransportConnectJob::IsSvcbOptional(
       (ssl_client_context->ssl_config_service() &&
        ssl_client_context->ssl_config_service()->GetEchMode(
            scheme_host_port->host()) == EchMode::kDisabled)) {
-    return true;  // ECH is not supported for this request.
+    return false;
   }
-
-  return !HostResolver::AllAlternativeEndpointsHaveEch(results);
+  return true;
 }
 
 bool TransportConnectJob::IsEndpointResultUsable(
@@ -576,8 +590,13 @@ bool TransportConnectJob::IsEndpointResultUsable(
   // Note that, if `params_` did not specify any ALPN protocols, no
   // SVCB/HTTPS-based endpoints will match and we will effectively ignore all
   // but plain A/AAAA endpoints.
+  const bool automatic_ech = !params_->automatic_ech_alpns().empty() &&
+                             !result.metadata.ech_config_list.empty() &&
+                             IsEchEnabled();
+  const auto& supported_alpns = automatic_ech ? params_->automatic_ech_alpns()
+                                              : params_->supported_alpns();
   for (const auto& alpn : result.metadata.supported_protocol_alpns) {
-    if (params_->supported_alpns().contains(alpn)) {
+    if (supported_alpns.contains(alpn)) {
       return true;
     }
   }

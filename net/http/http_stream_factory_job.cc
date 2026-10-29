@@ -133,20 +133,24 @@ HttpStreamFactory::Job::Job(
       session_(session),
       destination_(std::move(destination)),
       is_websocket_(is_websocket),
-      try_websocket_over_http2_(is_websocket_ &&
-                                request_info_.url.SchemeIs(url::kWssScheme)),
+      try_websocket_over_http2_(
+          is_websocket_ && request_info_.url.SchemeIs(url::kWssScheme) &&
+          gm::ProfileForRule(request_info.gm_rule).AllowsHttp2()),
       // Only support IP-based pooling for non-proxied streams.
-      enable_ip_based_pooling_for_h2_(enable_ip_based_pooling_for_h2 &&
-                                      proxy_info.is_direct()),
+      enable_ip_based_pooling_for_h2_(
+          enable_ip_based_pooling_for_h2 && !request_info.gm_rule &&
+          proxy_info.is_direct() &&
+          gm::ProfileForRule(request_info.gm_rule).AllowsCrossOriginHttp2()),
       delegate_(delegate),
       job_type_(job_type),
       using_ssl_(request_info_.url.SchemeIs(url::kHttpsScheme) ||
                  request_info_.url.SchemeIs(url::kWssScheme)),
       using_quic_(
-          alternative_protocol == NextProto::kProtoQUIC ||
-          session->ShouldForceQuic(destination_, proxy_info, is_websocket_) ||
-          job_type == DNS_ALPN_H3 || job_type == PRECONNECT_DNS_ALPN_H3 ||
-          job_type == WS_OVER_H3),
+          !request_info.gm_rule &&
+          (alternative_protocol == NextProto::kProtoQUIC ||
+           session->ShouldForceQuic(destination_, proxy_info, is_websocket_) ||
+           job_type == DNS_ALPN_H3 || job_type == PRECONNECT_DNS_ALPN_H3 ||
+           job_type == WS_OVER_H3)),
       quic_version_(quic_version),
       expect_spdy_(alternative_protocol == NextProto::kProtoHTTP2 &&
                    !using_quic_),
@@ -366,8 +370,8 @@ bool HttpStreamFactory::Job::TargettedSocketGroupHasActiveSocket() const {
   ClientSocketPool::GroupId connection_group(
       destination_, request_info_.privacy_mode,
       request_info_.network_anonymization_key, request_info_.secure_dns_policy,
-      disable_cert_verification_network_fetches(),
-      request_info_.target_network);
+      disable_cert_verification_network_fetches(), request_info_.target_network,
+      request_info_.gm_rule);
   return pool->HasActiveSocket(connection_group);
 }
 
@@ -416,6 +420,9 @@ bool HttpStreamFactory::Job::UsingHttpProxyWithoutTunnel() const {
 
 bool HttpStreamFactory::Job::CanUseExistingSpdySession() const {
   DCHECK(!using_quic_);
+  if (!gm::ProfileForRule(request_info_.gm_rule).AllowsHttp2()) {
+    return false;
+  }
 
   if (session_->http_server_properties()->RequiresHTTP11(
           url::SchemeHostPort(request_info_.url),
@@ -739,6 +746,11 @@ int HttpStreamFactory::Job::DoInitConnectionImpl() {
   DCHECK(proxy_info_.proxy_chain().IsValid());
   next_state_ = STATE_INIT_CONNECTION_COMPLETE;
 
+  if (!session_->IsGmTlsRuleCurrent(url::SchemeHostPort(request_info_.url),
+                                    request_info_.gm_rule)) {
+    return ERR_NETWORK_CHANGED;
+  }
+
   if (using_quic_) {
     return DoInitConnectionImplQuic();
   }
@@ -824,7 +836,7 @@ int HttpStreamFactory::Job::DoInitConnectionImpl() {
         proxy_info_, allowed_bad_certs_, request_info_.privacy_mode,
         request_info_.network_anonymization_key,
         request_info_.secure_dns_policy, request_info_.target_network, net_log_,
-        num_streams_, std::move(preconnect_callback));
+        num_streams_, std::move(preconnect_callback), request_info_.gm_rule);
   }
 
   ClientSocketPool::ProxyAuthCallback proxy_auth_callback =
@@ -837,7 +849,8 @@ int HttpStreamFactory::Job::DoInitConnectionImpl() {
         destination_, request_info_.load_flags, priority_, session_,
         proxy_info_, allowed_bad_certs_, request_info_.privacy_mode,
         request_info_.network_anonymization_key, request_info_.target_network,
-        net_log_, connection_.get(), io_callback_, proxy_auth_callback);
+        net_log_, connection_.get(), io_callback_, proxy_auth_callback,
+        request_info_.gm_rule, request_info_.gm_client_auth_context);
   }
 
   return InitSocketHandleForHttpRequest(
@@ -845,7 +858,8 @@ int HttpStreamFactory::Job::DoInitConnectionImpl() {
       allowed_bad_certs_, request_info_.privacy_mode,
       request_info_.network_anonymization_key, request_info_.secure_dns_policy,
       request_info_.socket_tag, request_info_.target_network, net_log_,
-      connection_.get(), io_callback_, proxy_auth_callback);
+      connection_.get(), io_callback_, proxy_auth_callback,
+      request_info_.gm_rule, request_info_.gm_client_auth_context);
 }
 
 int HttpStreamFactory::Job::DoInitConnectionImplQuic() {
@@ -953,6 +967,12 @@ void HttpStreamFactory::Job::OnFailedOnDefaultNetwork(int result) {
 }
 
 int HttpStreamFactory::Job::DoInitConnectionComplete(int result) {
+  if (result < 0 && connection_ && using_ssl_ && !using_quic_) {
+    net_error_details_.gm_protocol_retry_allowed =
+        connection_->net_error_details().gm_protocol_retry_allowed;
+    net_error_details_.gm_standard_tls_required =
+        connection_->net_error_details().gm_standard_tls_required;
+  }
   net_log_.EndEvent(NetLogEventType::HTTP_STREAM_JOB_INIT_CONNECTION);
 
   establishing_tunnel_ = false;

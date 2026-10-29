@@ -32,7 +32,8 @@ SpdySessionKey::SpdySessionKey(
     const NetworkAnonymizationKey& network_anonymization_key,
     SecureDnsPolicy secure_dns_policy,
     bool disable_cert_verification_network_fetches,
-    handles::NetworkHandle target_network)
+    handles::NetworkHandle target_network,
+    gm::ConnectionProfile gm_profile)
     : host_port_pair_(host_port_pair),
       privacy_mode_(privacy_mode),
       proxy_chain_(proxy_chain),
@@ -45,7 +46,8 @@ SpdySessionKey::SpdySessionKey(
       secure_dns_policy_(secure_dns_policy),
       disable_cert_verification_network_fetches_(
           disable_cert_verification_network_fetches),
-      target_network_(target_network) {
+      target_network_(target_network),
+      gm_profile_(std::move(gm_profile)) {
   DCHECK(disable_cert_verification_network_fetches_ ||
          session_usage_ != SessionUsage::kProxy);
   DCHECK(privacy_mode_ == PRIVACY_MODE_DISABLED ||
@@ -60,19 +62,23 @@ bool SpdySessionKey::operator<(const SpdySessionKey& other) const {
   return std::tie(host_port_pair_, privacy_mode_, proxy_chain_, session_usage_,
                   network_anonymization_key_, secure_dns_policy_,
                   disable_cert_verification_network_fetches_, socket_tag_,
-                  target_network_) <
+                  target_network_, gm_profile_) <
          std::tie(other.host_port_pair_, other.privacy_mode_,
                   other.proxy_chain_, other.session_usage_,
                   other.network_anonymization_key_, other.secure_dns_policy_,
                   other.disable_cert_verification_network_fetches_,
-                  other.socket_tag_, other.target_network_);
+                  other.socket_tag_, other.target_network_, other.gm_profile_);
 }
 
 SpdySessionKey::CompareForAliasingResult SpdySessionKey::CompareForAliasing(
     const SpdySessionKey& other) const {
   CompareForAliasingResult result;
   result.is_potentially_aliasable =
-      (privacy_mode_ == other.privacy_mode_ &&
+      (gm_profile_ == other.gm_profile_ &&
+       (host_port_pair_ == other.host_port_pair_ ||
+        (gm_profile_.AllowsCrossOriginHttp2() &&
+         other.gm_profile_.AllowsCrossOriginHttp2())) &&
+       privacy_mode_ == other.privacy_mode_ &&
        proxy_chain_ == other.proxy_chain_ &&
        session_usage_ == other.session_usage_ &&
        network_anonymization_key_ == other.network_anonymization_key_ &&

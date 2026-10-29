@@ -137,6 +137,7 @@ class NET_EXPORT_PRIVATE TransportClientSocketPool
     // Unassigns the request's |job_| and returns it. Must be called on a
     // request with a job.
     ConnectJob* ReleaseJob();
+    bool TryRetryGmPreconnect();
 
    private:
     const raw_ptr<ClientSocketHandle> handle_;
@@ -150,6 +151,7 @@ class NET_EXPORT_PRIVATE TransportClientSocketPool
     const NetLogWithSource net_log_;
     const SocketTag socket_tag_;
     raw_ptr<ConnectJob> job_ = nullptr;
+    bool gm_preconnect_retry_used_ = false;
   };
 
   TransportClientSocketPool(
@@ -271,6 +273,8 @@ class NET_EXPORT_PRIVATE TransportClientSocketPool
       SSLClientContext::SSLConfigChangeType change_type) override;
   void OnSSLConfigForServersChanged(
       const base::flat_set<HostPortPair>& servers) override;
+  void OnGmConfigForServersChanged(
+      const base::flat_set<HostPortPair>& servers) override;
 
  private:
   // Entry for a persistent socket which became idle at time |start_time|.
@@ -346,6 +350,11 @@ class NET_EXPORT_PRIVATE TransportClientSocketPool
                           HttpAuthController* auth_controller,
                           base::OnceClosure restart_with_auth_callback,
                           ConnectJob* job) override;
+    base::UnguessableToken GetGmClientAuthContext(
+        ConnectJob* job,
+        const base::RepeatingCallback<base::UnguessableToken()>& fallback)
+        override;
+    bool TryRetryGmPreconnect();
 
     bool IsEmpty() const {
       return active_socket_count_ == 0 && idle_sockets_.empty() &&
@@ -434,7 +443,8 @@ class NET_EXPORT_PRIVATE TransportClientSocketPool
     // to |connect_job|, returns the previously bound request. If there are no
     // requests, or the highest priority request doesn't have a proxy auth
     // callback, returns nullptr.
-    const Request* BindRequestToConnectJob(ConnectJob* connect_job);
+    const Request* BindRequestToConnectJob(ConnectJob* connect_job,
+                                           bool for_gm_client_auth = false);
 
     // Finds the request, if any, bound to |connect_job|, and returns the
     // BoundRequest or std::nullopt if there was none.

@@ -13,3 +13,12 @@ Shipped: yes
 Description:
 This is BoringSSL, a fork of OpenSSL. See
 https://www.imperialviolet.org/2014/06/20/boringssl.html
+
+Local Modifications:
+The pinned Chromium baseline has local SM2/SM3/SM4, RFC 8998, TLCP client,
+and libpki SM2 certificate extensions. See src/ssl/gm_protocol.md,
+src/crypto/sm2/README.md, src/crypto/sm4/README.gm.md and
+//net/gm/SINGLE_LIBRARY_DESIGN.md for boundaries, provenance and validation.
+These extensions are not part of upstream BoringSSL or its FIPS validation.
+gm_patch/ preserves the local delta against the pinned revision, with an
+explicit file inventory, hashes and an index-only replay validation tool.

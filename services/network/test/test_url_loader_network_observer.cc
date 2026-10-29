@@ -4,7 +4,9 @@
 
 #include "services/network/test/test_url_loader_network_observer.h"
 
+#include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/net_errors.h"
+#include "services/network/public/mojom/gm_identity.mojom.h"
 
 namespace network {
 
@@ -36,6 +38,24 @@ void TestURLLoaderNetworkObserver::OnCertificateRequested(
     const scoped_refptr<net::SSLCertRequestInfo>& cert_info,
     mojo::PendingRemote<mojom::ClientCertificateResponder>
         client_cert_responder) {}
+
+void TestURLLoaderNetworkObserver::OnGmCertificateRequested(
+    const std::optional<base::UnguessableToken>& window_id,
+    const url::Origin& origin,
+    const std::string& identity_policy_id,
+    uint64_t identity_generation,
+    mojom::GmClientCertificateRequestPtr certificate_request,
+    mojo::PendingRemote<mojom::GmClientCertificateResponder> cert_responder) {
+  if (gm_certificate_requested_callback_) {
+    gm_certificate_requested_callback_.Run(
+        window_id, origin, identity_policy_id, identity_generation,
+        std::move(certificate_request), std::move(cert_responder));
+    return;
+  }
+  mojo::Remote<mojom::GmClientCertificateResponder> remote(
+      std::move(cert_responder));
+  remote->Continue(net::ERR_SSL_CLIENT_AUTH_PRIVATE_KEY_ACCESS_DENIED, nullptr);
+}
 
 void TestURLLoaderNetworkObserver::OnAuthRequired(
     const std::optional<base::UnguessableToken>& window_id,

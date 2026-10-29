@@ -53,6 +53,10 @@ net::URLRequestContext* URLLoaderContextForTests::GetUrlRequestContext() const {
   return url_request_context_;
 }
 
+GmIdentityProvider* URLLoaderContextForTests::GetGmIdentityProvider() const {
+  return nullptr;
+}
+
 scoped_refptr<ResourceSchedulerClient>
 URLLoaderContextForTests::GetResourceSchedulerClient() const {
   return resource_scheduler_client_;

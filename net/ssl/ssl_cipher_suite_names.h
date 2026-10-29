@@ -36,6 +36,10 @@ NET_EXPORT void SSLCipherSuiteToStrings(const char** key_exchange_str,
 // If the version is unknown, |name| is set to "???".
 NET_EXPORT void SSLVersionToString(const char** name, int ssl_version);
 
+// IANA group name, including the RFC 8998 curve not implemented by BoringSSL.
+// Returns nullptr for unknown groups.
+NET_EXPORT const char* SSLKeyExchangeGroupToName(uint16_t group);
+
 // Parses a string literal that represents a SSL/TLS cipher suite.
 //
 // Supported literal forms:

@@ -31,6 +31,7 @@ import("//device/vr/buildflags/buildflags.gni")
 import("//extensions/buildflags/buildflags.gni")
 import("//media/gpu/args.gni")
 import("//net/features.gni")
+import("//net/gm/gm.gni")
 import("//pdf/features.gni")
 import("//printing/buildflags/buildflags.gni")
 import("//rlz/buildflags/buildflags.gni")
@@ -1425,6 +1426,10 @@ source_set("core") {
       "process_singleton_win.cc",
       "shell_integration_win.cc",
     ]
+
+    if (gm_tls_backend_enabled && target_cpu == "x64") {
+      deps += [ "//chrome/browser/gm:key_manager" ]
+    }
 
     libs = [
       "secur32.lib",
@@ -4442,6 +4447,7 @@ group("browser_public_dependencies") {
     "//components/webapps/browser",
     "//content/public/browser",
     "//ipc",
+    "//net/gm:buildflags",
     "//pdf:buildflags",
     "//services/data_decoder/public/mojom",
     "//services/image_annotation/public/mojom",

@@ -14,9 +14,11 @@
 #include <vector>
 
 #include "base/containers/unique_ptr_adapters.h"
+#include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/unguessable_token.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/load_states.h"
 #include "net/base/net_export.h"
@@ -26,6 +28,7 @@
 #include "net/base/proxy_server.h"
 #include "net/base/request_priority.h"
 #include "net/dns/public/secure_dns_policy.h"
+#include "net/gm/gm_tls_policy.h"
 #include "net/http/http_request_info.h"
 #include "net/http/http_server_properties.h"
 #include "net/http/http_stream_request.h"
@@ -94,6 +97,9 @@ class NET_EXPORT HttpStreamFactory {
     // information when logging.
     GURL url;
 
+    std::shared_ptr<const gm::TlsRule> gm_rule;
+    base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context;
+    std::optional<ProxyChain> gm_auto_proxy_chain;
     std::string method;
     NetworkAnonymizationKey network_anonymization_key;
     MutableNetworkTrafficAnnotationTag traffic_annotation;

@@ -29,7 +29,8 @@ HttpStreamKey::HttpStreamKey(
     SecureDnsPolicy secure_dns_policy,
     bool disable_cert_network_fetches,
     handles::NetworkHandle target_network,
-    base::optional_ref<const AlternativeService> alt_service)
+    base::optional_ref<const AlternativeService> alt_service,
+    std::shared_ptr<const gm::TlsRule> gm_rule)
     : destination_(std::move(destination)),
       privacy_mode_(privacy_mode),
       socket_tag_(std::move(socket_tag)),
@@ -40,7 +41,9 @@ HttpStreamKey::HttpStreamKey(
       secure_dns_policy_(secure_dns_policy),
       disable_cert_network_fetches_(disable_cert_network_fetches),
       target_network_(target_network),
-      alt_service_(alt_service.CopyAsOptional()) {
+      alt_service_(alt_service.CopyAsOptional()),
+      gm_profile_(gm::ProfileForRule(gm_rule)),
+      gm_rule_(std::move(gm_rule)) {
   CHECK(socket_tag_ == SocketTag()) << "Socket tag is not supported yet";
 
   // Should only have an alt service for HTTPS requests.
@@ -55,17 +58,19 @@ HttpStreamKey::HttpStreamKey(const HttpStreamKey& other) = default;
 
 HttpStreamKey& HttpStreamKey::operator=(const HttpStreamKey& other) = default;
 
-bool HttpStreamKey::operator==(const HttpStreamKey& other) const = default;
+bool HttpStreamKey::operator==(const HttpStreamKey& other) const {
+  return !(*this < other) && !(other < *this);
+}
 
 bool HttpStreamKey::operator<(const HttpStreamKey& other) const {
   return std::tie(destination_, privacy_mode_, socket_tag_,
                   network_anonymization_key_, secure_dns_policy_,
-                  disable_cert_network_fetches_, alt_service_,
-                  target_network_) <
+                  disable_cert_network_fetches_, alt_service_, target_network_,
+                  gm_profile_) <
          std::tie(other.destination_, other.privacy_mode_, other.socket_tag_,
                   other.network_anonymization_key_, other.secure_dns_policy_,
                   other.disable_cert_network_fetches_, other.alt_service_,
-                  other.target_network_);
+                  other.target_network_, other.gm_profile_);
 }
 
 std::string HttpStreamKey::ToString() const {
@@ -101,10 +106,11 @@ SpdySessionKey HttpStreamKey::CalculateSpdySessionKey() const {
   HostPortPair host_port = GURL::SchemeIsCryptographic(destination().scheme())
                                ? HostPortPair::FromSchemeHostPort(destination())
                                : HostPortPair();
-  return SpdySessionKey(
-      std::move(host_port), privacy_mode(), ProxyChain::Direct(),
-      SessionUsage::kDestination, socket_tag(), network_anonymization_key(),
-      secure_dns_policy(), disable_cert_network_fetches(), target_network());
+  return SpdySessionKey(std::move(host_port), privacy_mode(),
+                        ProxyChain::Direct(), SessionUsage::kDestination,
+                        socket_tag(), network_anonymization_key(),
+                        secure_dns_policy(), disable_cert_network_fetches(),
+                        target_network(), gm_profile());
 }
 
 HostResolver::Host HttpStreamKey::GetHostToResolve() const {
@@ -119,7 +125,8 @@ HostResolver::Host HttpStreamKey::GetHostToResolve() const {
 QuicSessionAliasKey HttpStreamKey::CalculateQuicSessionAliasKey() const {
   // HTTP requests have empty QuicSessionAliasKeys, as do non-QUIC alt-service
   // requests.
-  if (!GURL::SchemeIsCryptographic(destination_.scheme()) ||
+  if (!gm_profile_.AllowsQuic() ||
+      !GURL::SchemeIsCryptographic(destination_.scheme()) ||
       (alt_service_ && alt_service_->protocol != NextProto::kProtoQUIC)) {
     return QuicSessionAliasKey();
   }

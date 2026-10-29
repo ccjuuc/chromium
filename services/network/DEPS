@@ -25,6 +25,8 @@ include_rules = [
   "+ipc",
   "+net",
   "+sandbox",
+  "+services/gm_key/public/mojom/gm_key_service.mojom",
+  "+services/gm_key/public/mojom/gm_key_service.mojom.h",
   "+services/proxy_resolver/public/mojom",
   "+services/service_manager/public",
   "+third_party/boringssl/src/include",
@@ -34,6 +36,9 @@ include_rules = [
 ]
 
 specific_include_rules = {
+  "gm_identity_tls_unittest\\.cc": [
+    "+services/gm_key/test/key_service_test_client.h",
+  ],
   # Some tests use a real proxy_resolver::ProxyResolverImpl.
   "test_mojo_proxy_resolver_factory\\.h": [
     "+services/proxy_resolver/proxy_resolver_factory_impl.h",

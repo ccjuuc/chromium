@@ -29,6 +29,7 @@
 #include "net/cert/asn1_util.h"
 #include "net/cert/time_conversions.h"
 #include "net/cert/x509_certificate.h"
+#include "net/gm/gm_buildflags.h"
 #include "third_party/boringssl/src/include/openssl/bytestring.h"
 #include "third_party/boringssl/src/include/openssl/digest.h"
 #include "third_party/boringssl/src/include/openssl/ec.h"
@@ -181,8 +182,9 @@ bool AddName(CBB* cbb, std::string_view name) {
         !CBB_add_asn1(&rdn, &attr, CBS_ASN1_SEQUENCE) ||
         !CBB_add_asn1(&attr, &type, CBS_ASN1_OBJECT) ||
         !CBB_add_bytes(&type, type_bytes.data(), type_bytes.size()) ||
-        !CBB_add_asn1(&attr, &value, type_string == "C" ?
-                          CBS_ASN1_PRINTABLESTRING : CBS_ASN1_UTF8STRING) ||
+        !CBB_add_asn1(&attr, &value,
+                      type_string == "C" ? CBS_ASN1_PRINTABLESTRING
+                                         : CBS_ASN1_UTF8STRING) ||
         !CBB_add_bytes(&value,
                        reinterpret_cast<const uint8_t*>(value_string.data()),
                        value_string.size()) ||
@@ -295,9 +297,15 @@ bool GetTLSServerEndPointChannelBinding(const X509Certificate& certificate,
     case bssl::DigestAlgorithm::Sha512:
       digest_evp_md = EVP_sha512();
       break;
+    case bssl::DigestAlgorithm::Sm3:
+#if BUILDFLAG(XENON_GM)
+      digest_evp_md = EVP_sm3();
+#endif
+      break;
   }
-  if (!digest_evp_md)
+  if (!digest_evp_md) {
     return false;
+  }
 
   std::array<uint8_t, EVP_MAX_MD_SIZE> digest;
   unsigned int out_size;
@@ -393,8 +401,9 @@ bool CreateCert(EVP_PKEY* subject_key,
     }
   }
 
-  if (!CBB_finish(cbb.get(), &tbs_cert_bytes, &tbs_cert_len))
+  if (!CBB_finish(cbb.get(), &tbs_cert_bytes, &tbs_cert_len)) {
     return false;
+  }
   bssl::UniquePtr<uint8_t> delete_tbs_cert_bytes(tbs_cert_bytes);
 
   // Sign the TBSCertificate and write the entire certificate.
@@ -474,8 +483,9 @@ std::vector<bssl::UniquePtr<CRYPTO_BUFFER>> DupCryptoBuffers(
 
 bool CryptoBufferEqual(const CRYPTO_BUFFER* a, const CRYPTO_BUFFER* b) {
   DCHECK(a && b);
-  if (a == b)
+  if (a == b) {
     return true;
+  }
   return CryptoBufferAsSpan(a) == CryptoBufferAsSpan(b);
 }
 

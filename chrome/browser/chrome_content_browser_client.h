@@ -477,6 +477,14 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
       net::SSLCertRequestInfo* cert_request_info,
       net::ClientCertIdentityList client_certs,
       std::unique_ptr<content::ClientCertificateDelegate> delegate) override;
+  base::OnceClosure SelectGmClientCertificate(
+      content::WebContents* web_contents,
+      const url::Origin& origin,
+      const std::string& identity_policy_id,
+      uint64_t identity_generation,
+      network::mojom::GmClientCertificateRequestPtr certificate_request,
+      base::OnceCallback<void(int, network::mojom::GmIdentityGrantPtr)>
+          callback) override;
   content::MediaObserver* GetMediaObserver() override;
   content::FeatureObserverClient* GetFeatureObserverClient() override;
   bool IsPopupBypassAllowed(

@@ -4,10 +4,13 @@
 
 #include "services/network/ssl_config_service_mojo.h"
 
+#include <limits>
 #include <string_view>
 
 #include "base/strings/string_util.h"
 #include "mojo/public/cpp/bindings/type_converter.h"
+#include "net/gm/gm_buildflags.h"
+#include "net/gm/gm_tls_policy.h"
 #include "services/network/ssl_config_type_converter.h"
 
 namespace network {
@@ -42,10 +45,12 @@ SSLConfigServiceMojo::SSLConfigServiceMojo(
   if (initial_config) {
     cert_verifier_config_ = MojoSSLConfigToCertVerifierConfig(initial_config);
     ssl_context_config_ = MojoSSLConfigToSSLContextConfig(initial_config);
+    UpdateGmPolicyEpoch();
   }
 
-  if (ssl_config_client_receiver)
+  if (ssl_config_client_receiver) {
     receiver_.Bind(std::move(ssl_config_client_receiver));
+  }
 }
 
 SSLConfigServiceMojo::~SSLConfigServiceMojo() = default;
@@ -65,6 +70,7 @@ void SSLConfigServiceMojo::OnSSLConfigUpdated(mojom::SSLConfigPtr ssl_config) {
 
   net::SSLContextConfig old_config = ssl_context_config_;
   ssl_context_config_ = MojoSSLConfigToSSLContextConfig(ssl_config);
+  UpdateGmPolicyEpoch();
   ProcessConfigUpdate(old_config, ssl_context_config_, force_notification);
 
   net::CertVerifier::Config old_cert_verifier_config = cert_verifier_config_;
@@ -72,6 +78,42 @@ void SSLConfigServiceMojo::OnSSLConfigUpdated(mojom::SSLConfigPtr ssl_config) {
   if (cert_verifier_ && (old_cert_verifier_config != cert_verifier_config_)) {
     cert_verifier_->SetConfig(cert_verifier_config_);
   }
+}
+
+void SSLConfigServiceMojo::UpdateGmPolicyEpoch() {
+#if BUILDFLAG(XENON_GM)
+  const auto& next = ssl_context_config_.gm_tls_policy;
+  const auto& next_auto = ssl_context_config_.gm_auto_config;
+  if (bool(next) == bool(configured_gm_policy_) &&
+      (!next || *next == *configured_gm_policy_) &&
+      bool(next_auto) == bool(configured_gm_auto_config_) &&
+      (!next_auto || *next_auto == *configured_gm_auto_config_)) {
+    ssl_context_config_.gm_tls_policy = effective_gm_policy_;
+    ssl_context_config_.gm_auto_config = effective_gm_auto_config_;
+    return;
+  }
+  configured_gm_policy_ = next;
+  configured_gm_auto_config_ = next_auto;
+  // Saturating instead of wrapping makes exhaustion fail closed permanently.
+  if (gm_policy_epoch_ != std::numeric_limits<uint64_t>::max()) {
+    ++gm_policy_epoch_;
+  }
+  effective_gm_policy_ =
+      next ? next->WithPolicyEpoch(gm_policy_epoch_ ==
+                                           std::numeric_limits<uint64_t>::max()
+                                       ? 0
+                                       : gm_policy_epoch_)
+           : nullptr;
+  effective_gm_auto_config_ =
+      next_auto ? next_auto->WithEpoch(
+                      gm_policy_epoch_ == std::numeric_limits<uint64_t>::max()
+                          ? 0
+                          : gm_policy_epoch_)
+                : nullptr;
+  ssl_context_config_.gm_tls_policy = effective_gm_policy_;
+  ssl_context_config_.gm_auto_config = effective_gm_auto_config_;
+
+#endif  // BUILDFLAG(XENON_GM)
 }
 
 net::SSLContextConfig SSLConfigServiceMojo::GetSSLContextConfig() {

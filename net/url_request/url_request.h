@@ -15,12 +15,14 @@
 
 #include "base/byte_size.h"
 #include "base/containers/flat_set.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/supports_user_data.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "base/types/pass_key.h"
+#include "base/unguessable_token.h"
 #include "base/values.h"
 #include "net/base/auth.h"
 #include "net/base/completion_repeating_callback.h"
@@ -921,6 +923,15 @@ class NET_EXPORT URLRequest : public base::SupportsUserData {
   }
   bool send_client_certs() const { return send_client_certs_; }
 
+  void set_gm_client_auth_context(
+      base::RepeatingCallback<base::UnguessableToken()> context) {
+    gm_client_auth_context_ = context;
+  }
+  const base::RepeatingCallback<base::UnguessableToken()>&
+  gm_client_auth_context() const {
+    return gm_client_auth_context_;
+  }
+
   // When true, all redirects are considered safe to follow regardless of the
   // target URL scheme. The caller is responsible for filtering unsafe
   // redirects.
@@ -1286,6 +1297,7 @@ class NET_EXPORT URLRequest : public base::SupportsUserData {
   bool client_side_content_decoding_enabled_ = false;
 
   bool send_client_certs_ = true;
+  base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context_;
 
   bool treat_all_redirects_as_safe_ = false;
 

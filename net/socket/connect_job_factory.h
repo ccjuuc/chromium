@@ -10,6 +10,8 @@
 #include <variant>
 #include <vector>
 
+#include "base/functional/callback.h"
+#include "base/unguessable_token.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/base/network_handle.h"
@@ -103,7 +105,10 @@ class NET_EXPORT_PRIVATE ConnectJobFactory {
       bool disable_cert_network_fetches,
       const CommonConnectJobParams* common_connect_job_params,
       handles::NetworkHandle target_network,
-      ConnectJob::Delegate* delegate) const;
+      ConnectJob::Delegate* delegate,
+      std::shared_ptr<const gm::TlsRule> gm_rule = nullptr,
+      base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context =
+          {}) const;
 
   // TODO(crbug.com/40181080): Rename to discourage use except in cases where
   // the scheme is non-standard or unknown.
@@ -121,7 +126,10 @@ class NET_EXPORT_PRIVATE ConnectJobFactory {
       SecureDnsPolicy secure_dns_policy,
       const CommonConnectJobParams* common_connect_job_params,
       handles::NetworkHandle target_network,
-      ConnectJob::Delegate* delegate) const;
+      ConnectJob::Delegate* delegate,
+      std::shared_ptr<const gm::TlsRule> gm_rule = nullptr,
+      base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context =
+          {}) const;
 
  private:
   virtual std::unique_ptr<ConnectJob> CreateConnectJob(
@@ -140,7 +148,10 @@ class NET_EXPORT_PRIVATE ConnectJobFactory {
       bool disable_cert_network_fetches,
       const CommonConnectJobParams* common_connect_job_params,
       handles::NetworkHandle target_network,
-      ConnectJob::Delegate* delegate) const;
+      ConnectJob::Delegate* delegate,
+      std::shared_ptr<const gm::TlsRule> gm_rule = nullptr,
+      base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context =
+          {}) const;
 
   std::unique_ptr<HttpProxyConnectJob::Factory> http_proxy_connect_job_factory_;
   std::unique_ptr<SOCKSConnectJob::Factory> socks_connect_job_factory_;

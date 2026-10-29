@@ -18,6 +18,7 @@
 #include "net/base/ip_endpoint.h"
 #include "net/base/load_states.h"
 #include "net/base/load_timing_info.h"
+#include "net/base/net_error_details.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_export.h"
 #include "net/base/request_priority.h"
@@ -141,6 +142,9 @@ class NET_EXPORT ClientSocketHandle : public StreamSocketHandle {
     group_generation_ = group_generation;
   }
   void set_is_ssl_error(bool is_ssl_error) { is_ssl_error_ = is_ssl_error; }
+  const NetErrorDetails& net_error_details() const {
+    return net_error_details_;
+  }
   void set_ssl_cert_request_info(
       scoped_refptr<SSLCertRequestInfo> ssl_cert_request_info) {
     ssl_cert_request_info_ = std::move(ssl_cert_request_info);
@@ -207,6 +211,7 @@ class NET_EXPORT ClientSocketHandle : public StreamSocketHandle {
   int64_t group_generation_ = -1;
   ResolveErrorInfo resolve_error_info_;
   bool is_ssl_error_ = false;
+  NetErrorDetails net_error_details_;
   scoped_refptr<SSLCertRequestInfo> ssl_cert_request_info_;
   std::vector<ConnectionAttempt> connection_attempts_;
 

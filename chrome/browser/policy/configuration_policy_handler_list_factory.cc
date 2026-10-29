@@ -154,6 +154,12 @@
 #include "pdf/buildflags.h"
 #include "printing/buildflags/buildflags.h"
 
+#include "net/gm/gm_buildflags.h"
+
+#if BUILDFLAG(XENON_GM)
+#include "chrome/browser/gm/gm_site_rules_policy_handler.h"  // nogncheck: XENON_GM conditional dependency.
+#endif
+
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/first_run/android/first_run_prefs.h"
 #include "chrome/browser/lens/android/lens_prefs.h"
@@ -1144,6 +1150,9 @@ const PolicyToPreferenceMapEntry kSimplePolicyMap[] = {
   { key::kCoalesceH2ConnectionsWithClientCertificatesForHosts,
     prefs::kH2ClientCertCoalescingHosts,
     base::Value::Type::LIST },
+#if BUILDFLAG(XENON_GM)
+  { key::kGmUsbKeyDriver, prefs::kGmUsbKeyDriver, base::Value::Type::DICT },
+#endif
   { key::kEnterpriseHardwarePlatformAPIEnabled,
     prefs::kEnterpriseHardwarePlatformAPIEnabled,
     base::Value::Type::BOOLEAN },
@@ -2651,6 +2660,10 @@ std::unique_ptr<ConfigurationPolicyHandlerList> BuildHandlerList(
   }
 
   // Policies for all platforms - Start
+
+#if BUILDFLAG(XENON_GM)
+  handlers->AddHandler(std::make_unique<gm_browser::SiteRulesPolicyHandler>());
+#endif
 
   // For Local Network Access policies, device policies are added before user
   // policies so that user policies override device policies.

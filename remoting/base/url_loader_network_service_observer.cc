@@ -8,6 +8,7 @@
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/single_thread_task_runner.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "net/base/net_errors.h"
 #include "net/ssl/client_cert_store.h"
@@ -18,6 +19,7 @@
 #include "remoting/base/logging.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/gm_identity.mojom.h"
 #include "url/gurl.h"
 
 namespace remoting {
@@ -107,6 +109,19 @@ void UrlLoaderNetworkServiceObserver::OnCertificateRequested(
       base::BindOnce(&UrlLoaderNetworkServiceObserver::OnCertificatesSelected,
                      weak_factory_.GetWeakPtr(),
                      std::move(client_cert_responder), cert_info));
+}
+
+void UrlLoaderNetworkServiceObserver::OnGmCertificateRequested(
+    const std::optional<base::UnguessableToken>& window_id,
+    const url::Origin& origin,
+    const std::string& identity_policy_id,
+    uint64_t identity_generation,
+    network::mojom::GmClientCertificateRequestPtr certificate_request,
+    mojo::PendingRemote<network::mojom::GmClientCertificateResponder>
+        cert_responder) {
+  mojo::Remote<network::mojom::GmClientCertificateResponder> remote(
+      std::move(cert_responder));
+  remote->Continue(net::ERR_SSL_CLIENT_AUTH_PRIVATE_KEY_ACCESS_DENIED, nullptr);
 }
 
 void UrlLoaderNetworkServiceObserver::OnAuthRequired(

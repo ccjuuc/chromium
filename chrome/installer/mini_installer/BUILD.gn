@@ -90,9 +90,9 @@ source_set("lib") {
     ]
     deps += [ "//third_party/duilib" ]
     sources += [ "//chrome/install_static/localized_product_name.h" ]
-    defines = [ "MINI_INSTALLER_HAS_DUILIB_UI=1" ] +
-              chrome_custom_names_defines +
-              chrome_custom_install_identity_defines
+    defines =
+        [ "MINI_INSTALLER_HAS_DUILIB_UI=1" ] + chrome_custom_names_defines +
+        chrome_custom_install_identity_defines
     configs -= [ "//build/config/compiler:chromium_code" ]
     configs += [ "//build/config/compiler:no_chromium_code" ]
   }
@@ -360,7 +360,8 @@ copy("copy_signing") {
 }
 
 if (custom_exe_name != "" && custom_version_string != "") {
-  mini_installer_output_name = "${custom_exe_name}_installer_${custom_version_string}"
+  mini_installer_output_name =
+      "${custom_exe_name}_installer_${custom_version_string}"
 } else {
   mini_installer_output_name = "mini_installer"
 }

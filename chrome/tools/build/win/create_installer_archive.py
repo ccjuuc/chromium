@@ -176,7 +176,9 @@ def insensiglob(pattern):
     def recase(c):
         return '[{}{}]'.format(c.lower(), c.upper()) if c.isalpha() else c
 
-    return glob.glob(''.join(map(recase, pattern)))
+    # A wildcard drive prefix ("[cC]:") is not a Windows drive. Keep it literal.
+    drive, tail = os.path.splitdrive(pattern)
+    return glob.glob(drive + ''.join(map(recase, tail)))
 
 
 def CopySectionFilesToStagingDir(config, section, staging_dir, src_dir,

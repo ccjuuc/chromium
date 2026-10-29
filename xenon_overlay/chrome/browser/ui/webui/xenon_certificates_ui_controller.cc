@@ -15,6 +15,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_view_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "content/public/browser/render_frame_host.h"
@@ -28,7 +29,10 @@
 #include "net/base/net_errors.h"
 #include "net/cert/cert_status_flags.h"
 #include "net/cert/x509_certificate.h"
+#include "net/gm/gm_buildflags.h"
 #include "net/http/http_response_headers.h"
+#include "net/ssl/ssl_cipher_suite_names.h"
+#include "net/ssl/ssl_connection_status_flags.h"
 #include "net/ssl/ssl_info.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -198,7 +202,11 @@ class XenonCertificatesMessageHandler : public content::WebUIMessageHandler {
     auto request = std::make_unique<network::ResourceRequest>();
     request->url = url;
     request->method = "HEAD";
-    request->credentials_mode = network::mojom::CredentialsMode::kOmit;
+    // kOmit still permits client certificates unless kOmitCorsClientCert is
+    // enabled. Keep this probe anonymous; interactive client authentication
+    // needs a normal tab with a WebContents-bound certificate observer.
+    request->credentials_mode =
+        network::mojom::CredentialsMode::kOmitBug_775438_Workaround;
     request->do_not_prompt_for_login = true;
     request->redirect_mode = network::mojom::RedirectMode::kError;
     request->load_flags = net::LOAD_BYPASS_CACHE | net::LOAD_DISABLE_CACHE |
@@ -263,6 +271,32 @@ class XenonCertificatesMessageHandler : public content::WebUIMessageHandler {
     }
     if (ssl_info && ssl_info->is_valid()) {
       result.Set("certificate", CertificateDetails(*ssl_info));
+      const auto version =
+          net::SSLConnectionStatusToVersion(ssl_info->connection_status);
+      const auto suite =
+          net::SSLConnectionStatusToCipherSuite(ssl_info->connection_status);
+      if (version != net::SSL_CONNECTION_VERSION_UNKNOWN && suite != 0) {
+        const char* protocol = nullptr;
+        const char* key_exchange = nullptr;
+        const char* cipher = nullptr;
+        const char* mac = nullptr;
+        bool is_aead = false;
+        bool is_tls13 = false;
+        net::SSLVersionToString(&protocol, version);
+        net::SSLCipherSuiteToStrings(&key_exchange, &cipher, &mac, &is_aead,
+                                     &is_tls13, suite);
+        std::string cipher_description(cipher);
+        if (mac) {
+          cipher_description.append(" + ").append(mac);
+        }
+        base::DictValue connection;
+        connection.Set("protocol", protocol);
+        connection.Set("cipher", std::move(cipher_description));
+        connection.Set(
+            "cipherSuite",
+            base::StringPrintf("0x%04X", static_cast<unsigned>(suite)));
+        result.Set("connection", std::move(connection));
+      }
       // An HTTP error is distinct from certificate verification. Requiring a
       // response also avoids reporting a partial TLS handshake as a success.
       result.Set("tlsPassed",
@@ -283,6 +317,8 @@ XenonCertificatesUIController::XenonCertificatesUIController(
     : content::WebUIController(web_ui) {
   auto* source = content::WebUIDataSource::CreateAndAdd(
       web_ui->GetWebContents()->GetBrowserContext(), kCertificatesHost);
+  source->AddBoolean("gmEnabled", BUILDFLAG(XENON_GM));
+  source->UseStringsJs();
   source->SetDefaultResource(IDR_XENON_CERTIFICATES_HTML);
   source->AddResourcePath("index.css", IDR_XENON_CERTIFICATES_CSS);
   source->AddResourcePath("index.js", IDR_XENON_CERTIFICATES_JS);
