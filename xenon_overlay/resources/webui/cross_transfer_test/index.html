@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>文件传输测试</title>
+    <link rel="stylesheet" href="index.css">
+    <script type="module" src="index.js"></script>
+  </head>
+  <body>
+    <main>
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">CROSS TRANSFER · 开发测试</p>
+          <h1>把文件送到另一端。</h1>
+          <p class="subtitle">连接两台设备，测试真实的加密文件传输与断点续传。</p>
+        </div>
+        <span id="bridgeBadge" class="badge" role="status">正在连接浏览器</span>
+      </header>
+
+      <div id="bridgeNotice" class="notice" role="alert" hidden></div>
+
+      <div class="workspace">
+        <form id="transferForm" class="card config-card">
+          <div class="card-heading">
+            <div><p class="eyebrow">01 / 配置连接</p><h2>这台设备做什么？</h2></div>
+            <span class="small-label">每次传输一个文件</span>
+          </div>
+
+          <fieldset id="configFields" class="config-fields">
+            <fieldset class="choice-group">
+              <legend>传输角色</legend>
+              <div class="choices">
+                <label class="choice">
+                  <input type="radio" name="role" value="receive" checked>
+                  <span><strong>接收文件</strong><small>先在这台设备开始接收</small></span>
+                  <span class="choice-mark" aria-hidden="true">↓</span>
+                </label>
+                <label class="choice">
+                  <input type="radio" name="role" value="send">
+                  <span><strong>发送文件</strong><small>把本地文件送到接收端</small></span>
+                  <span class="choice-mark" aria-hidden="true">↑</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset class="choice-group transport-group">
+              <legend>连接方式</legend>
+              <div class="choices">
+                <label class="choice compact">
+                  <input type="radio" name="transport" value="direct" checked>
+                  <span><strong>局域网直连</strong><small>发送端连接接收端地址</small></span>
+                </label>
+                <label class="choice compact">
+                  <input type="radio" name="transport" value="relay">
+                  <span><strong>服务器中继</strong><small>两端连接同一中继服务</small></span>
+                </label>
+              </div>
+            </fieldset>
+
+            <section class="form-section" aria-labelledby="fileHeading">
+              <h3 id="fileHeading">文件位置</h3>
+              <div id="sendPathFields" hidden>
+                <label for="sourcePath">发送文件的完整路径</label>
+                <input id="sourcePath" type="text" placeholder="例如 /Users/me/Downloads/example.zip" autocomplete="off" spellcheck="false" required>
+                <p class="field-help">填写这台设备上已存在文件的绝对路径。</p>
+              </div>
+              <div id="receivePathFields">
+                <label for="outputDir">接收目录的完整路径</label>
+                <input id="outputDir" type="text" placeholder="例如 /Users/me/Downloads" autocomplete="off" spellcheck="false" required>
+                <p class="field-help">使用这台设备上已存在、可写入的目录。</p>
+                <label class="checkbox-label" for="allowOverwrite">
+                  <input id="allowOverwrite" type="checkbox">
+                  <span>允许覆盖接收目录中的同名文件</span>
+                </label>
+              </div>
+            </section>
+
+            <section class="form-section" aria-labelledby="networkHeading">
+              <h3 id="networkHeading">网络连接</h3>
+              <div id="directFields">
+                <div class="network-grid">
+                  <div>
+                    <label id="directHostLabel" for="directHost">监听地址</label>
+                    <input id="directHost" type="text" value="0.0.0.0" autocomplete="off" spellcheck="false" required>
+                  </div>
+                  <div>
+                    <label for="directPort">端口</label>
+                    <input id="directPort" type="number" value="53317" min="1" max="65535" step="1" required>
+                  </div>
+                </div>
+                <p id="directHelp" class="field-help">0.0.0.0 监听所有 IPv4 网卡。发送端应填写这台设备的实际 IP 地址。</p>
+              </div>
+              <div id="relayFields" hidden>
+                <div class="network-grid">
+                  <div>
+                    <label for="relayHost">中继服务器地址</label>
+                    <input id="relayHost" type="text" placeholder="主机名或 IP，不含 https://" autocomplete="off" spellcheck="false" required>
+                  </div>
+                  <div>
+                    <label for="relayPort">端口</label>
+                    <input id="relayPort" type="number" value="443" min="1" max="65535" step="1" required>
+                  </div>
+                </div>
+                <div class="field">
+                  <label for="roomId">房间 ID</label>
+                  <input id="roomId" type="text" placeholder="两端填写同一房间 ID" autocomplete="off" spellcheck="false" required>
+                </div>
+                <div class="field">
+                  <label for="connectionId">本次连接 ID</label>
+                  <div class="input-action">
+                    <input id="connectionId" type="text" placeholder="32 位十六进制字符" pattern="[0-9a-fA-F]{32}" minlength="32" maxlength="32" autocomplete="off" spellcheck="false" required aria-describedby="connectionHelp">
+                    <button id="generateConnectionId" type="button" class="button subtle">生成</button>
+                  </div>
+                  <p id="connectionHelp" class="field-help">每次连接使用新 ID，并复制给另一端；本次连接的两端必须相同。</p>
+                </div>
+                <div class="field">
+                  <label for="bearerToken">当前角色的访问令牌</label>
+                  <input id="bearerToken" type="password" placeholder="64 位十六进制字符" pattern="[0-9a-fA-F]{64}" minlength="64" maxlength="64" autocomplete="off" spellcheck="false" required aria-describedby="tokenHelp">
+                  <p id="tokenHelp" class="field-help">由中继服务提供。发送端与接收端分别使用各自角色的令牌；本页不持久保存令牌。</p>
+                </div>
+              </div>
+            </section>
+
+            <section class="form-section" aria-labelledby="tlsHeading">
+              <h3 id="tlsHeading">TLS 证书</h3>
+              <div id="clientTlsFields">
+                <label for="caFile">CA 证书路径 <span class="optional">可选</span></label>
+                <input id="caFile" type="text" placeholder="例如 /Users/me/certs/ca.pem" autocomplete="off" spellcheck="false">
+                <p id="caHelp" class="field-help">测试建议显式指定 CA；留空使用 TLS 默认信任库。</p>
+                <div id="directPeerFields" class="field">
+                  <label for="peerName">对端证书校验名称</label>
+                  <input id="peerName" type="text" placeholder="对端证书中的域名" autocomplete="off" spellcheck="false" required>
+                  <p class="field-help">填写另一台设备证书中的域名，用于双向身份校验。</p>
+                </div>
+              </div>
+              <div id="serverTlsFields" class="field">
+                <label for="certificateFile">本机证书路径</label>
+                <input id="certificateFile" type="text" placeholder="例如 /Users/me/certs/device.pem" autocomplete="off" spellcheck="false" required>
+                <div class="field">
+                  <label for="privateKeyFile">本机私钥路径</label>
+                  <input id="privateKeyFile" type="text" placeholder="例如 /Users/me/certs/device-key.pem" autocomplete="off" spellcheck="false" required>
+                </div>
+                <p class="field-help">直连使用双向 TLS，发送端与接收端都需要自己的证书和私钥。</p>
+              </div>
+            </section>
+
+            <section class="form-section" aria-labelledby="resumeHeading">
+              <h3 id="resumeHeading">断点续传 <span class="optional">可选</span></h3>
+              <label for="taskId">任务 ID</label>
+              <input id="taskId" type="text" placeholder="留空新建任务，或填写原任务的 32 位 ID" pattern="[0-9a-fA-F]{32}" minlength="32" maxlength="32" autocomplete="off" spellcheck="false" aria-describedby="resumeHelp">
+              <p id="resumeHelp" class="field-help">续传时，两端使用原任务 ID、相同的源文件与接收目录。开始后会自动填入当前任务 ID；测试新文件前请清空。</p>
+            </section>
+          </fieldset>
+
+          <div id="formError" class="form-error" role="alert" hidden></div>
+          <div class="form-actions">
+            <button id="startButton" class="button primary" type="submit" disabled>开始接收</button>
+            <span id="actionHelp" class="field-help">准备好后，先在接收端开始。</span>
+          </div>
+        </form>
+
+        <aside class="side-column" aria-label="传输状态与操作说明">
+          <section class="card status-card" aria-labelledby="statusHeading">
+            <div class="card-heading">
+              <p class="eyebrow">02 / 实时状态</p>
+              <span id="activityDot" class="activity-dot" aria-hidden="true"></span>
+            </div>
+            <div class="status-summary" role="status" aria-live="polite" aria-atomic="true">
+              <h2 id="statusHeading">准备开始</h2>
+              <p id="statusMessage">填写连接信息后开始传输。</p>
+            </div>
+            <div class="progress-heading">
+              <span>传输进度</span><strong id="progressPercent">—</strong>
+            </div>
+            <progress id="transferProgress" max="100" value="0" aria-label="文件传输进度"></progress>
+            <div class="progress-details"><span id="transferredBytes">0 B</span><span id="totalBytes">总大小未知</span></div>
+            <div class="transfer-details">
+              <div><span class="detail-label">监听端口</span><span class="detail-value" id="listeningPort">—</span></div>
+              <div class="task-detail">
+                <span class="detail-label">任务 ID</span>
+                <div class="detail-value"><code id="resultTaskId">—</code><button id="copyTaskId" type="button" class="text-button" disabled>复制</button></div>
+              </div>
+              <div class="path-detail"><span class="detail-label">保存位置</span><div class="detail-value" id="savedPath">—</div></div>
+            </div>
+            <p id="transferError" class="form-error" role="alert" hidden></p>
+            <button id="cancelButton" type="button" class="button cancel" disabled>取消传输</button>
+            <p class="status-footnote">状态每 0.5 秒更新，进度来自实际传输。</p>
+          </section>
+
+          <section class="guide" aria-labelledby="guideHeading">
+            <h2 id="guideHeading">两台设备，三步连接</h2>
+            <ol>
+              <li><span class="step-number">1</span><div><strong>准备连接信息</strong><p id="guideFirst">确保两台设备可互相访问，两端各自准备证书、私钥及用于信任对端的 CA。</p></div></li>
+              <li><span class="step-number">2</span><div><strong>先开始接收</strong><p id="guideSecond">在接收端填写目录并开始，等待状态显示正在监听。</p></div></li>
+              <li><span class="step-number">3</span><div><strong>再开始发送</strong><p id="guideThird">在发送端填写文件路径和接收端 IP，使用相同端口开始发送。</p></div></li>
+            </ol>
+            <p class="guide-note">此页面会读写真实文件。路径均指当前这台设备，不支持目录传输。</p>
+          </section>
+        </aside>
+      </div>
+      <footer>Cross Transfer <span aria-hidden="true">·</span> Chromium 内部测试页</footer>
+    </main>
+  </body>
+</html>

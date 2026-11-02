@@ -28,6 +28,7 @@
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_app_config.h"
 #include "xenon_overlay/chrome/browser/managed_certificates/managed_certificate_service.h"
 #include "xenon_overlay/chrome/browser/reminder/xenon_reminder_notification_manager.h"
+#include "xenon_overlay/chrome/browser/ui/webui/cross_transfer_test_ui.h"
 #include "xenon_overlay/chrome/browser/ui/webui/dev_test_pages_webui.h"
 #include "xenon_overlay/chrome/browser/ui/webui/simple_webui_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/video_sniffer_webui_controller.h"
@@ -284,6 +285,8 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
       std::make_unique<xenon::LocalVideoTestWebUIConfig>());
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<xenon::RenderDllTestWebUIConfig>());
+  content::WebUIConfigMap::GetInstance().AddWebUIConfig(
+      std::make_unique<xenon::CrossTransferTestUIConfig>());
   LOG(INFO) << "XenonBrowserMainExtraParts: Registered local-video-test / "
                "render-dll-test WebUI";
 

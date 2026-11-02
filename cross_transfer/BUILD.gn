@@ -1,0 +1,86 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+config("cross_transfer_public") {
+  include_dirs = [ "include" ]
+  defines = [ "CROSS_TRANSFER_CHROMIUM=1" ]
+}
+
+source_set("cross_transfer_core") {
+  sources = [
+    "include/cross_transfer/borrowed_ptr.h",
+    "include/cross_transfer/chunk_bitmap.h",
+    "include/cross_transfer/connection_manager.h",
+    "include/cross_transfer/https_relay_channel.h",
+    "include/cross_transfer/network_nic_helper.h",
+    "include/cross_transfer/platform_adapter.h",
+    "include/cross_transfer/protocol.h",
+    "include/cross_transfer/streaming_file_io.h",
+    "include/cross_transfer/test_job.h",
+    "include/cross_transfer/tls_transport_channel.h",
+    "include/cross_transfer/transfer_session.h",
+    "include/cross_transfer/transfer_store.h",
+    "include/cross_transfer/transport_channel.h",
+    "src/chunk_bitmap.cc",
+    "src/connection_manager.cc",
+    "src/https_relay_channel.cc",
+    "src/network_nic_helper.cc",
+    "src/protocol.cc",
+    "src/streaming_file_io.cc",
+    "src/test_job.cc",
+    "src/tls_transport_channel.cc",
+    "src/transfer_session.cc",
+    "src/transfer_store.cc",
+    "src/transport_channel.cc",
+  ]
+
+  if (is_apple) {
+    sources += [ "src/platform_adapter.mm" ]
+    frameworks = [ "Foundation.framework" ]
+  } else {
+    sources += [ "src/platform_adapter.cc" ]
+  }
+
+  public_configs = [ ":cross_transfer_public" ]
+  public_deps = [ "//base/allocator/partition_allocator:raw_ptr" ]
+  deps = [ "//third_party/boringssl" ]
+  if (is_win) {
+    libs = [
+      "ws2_32.lib",
+      "iphlpapi.lib",
+    ]
+  }
+}
+
+# Standalone assertion-based regression executables. They remain active in
+# release builds; TLS/HTTPS fixtures are provided by tests/test_https_relay.py.
+foreach(name,
+        [
+          "protocol",
+          "chunk_bitmap",
+          "streaming_file_io",
+          "network_nic_helper",
+          "resume_transfer",
+          "end_to_end_transfer",
+          "transfer_store",
+          "session_recovery",
+          "test_job",
+          "transport_channel",
+          "tls_transport",
+          "https_relay",
+        ]) {
+  executable("test_${name}") {
+    testonly = true
+    sources = [ "tests/test_${name}.cc" ]
+    deps = [
+      ":cross_transfer_core",
+      "//third_party/boringssl",
+    ]
+    if (is_win) {
+      cflags = [ "/UNDEBUG" ]
+    } else {
+      cflags = [ "-UNDEBUG" ]
+    }
+  }
+}

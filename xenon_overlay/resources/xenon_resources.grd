@@ -32,6 +32,9 @@
       <include name="IDR_SIMPLE_WEBUI_INDEX_JS" file="webui/simple_webui/index.js" type="BINDATA" />
 
       <!-- Dev smoke-test pages (packaged; no machine-local file://) -->
+      <include name="IDR_CROSS_TRANSFER_TEST_HTML" file="webui/cross_transfer_test/index.html" type="BINDATA" />
+      <include name="IDR_CROSS_TRANSFER_TEST_CSS" file="webui/cross_transfer_test/index.css" type="BINDATA" />
+      <include name="IDR_CROSS_TRANSFER_TEST_JS" file="webui/cross_transfer_test/index.js" type="BINDATA" />
       <include name="IDR_XENON_CERTIFICATES_HTML" file="webui/xenon_certificates/index.html" type="BINDATA" />
       <include name="IDR_XENON_CERTIFICATES_CSS" file="webui/xenon_certificates/index.css" type="BINDATA" />
       <include name="IDR_XENON_CERTIFICATES_JS" file="webui/xenon_certificates/index.js" type="BINDATA" />
