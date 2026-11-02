@@ -91,6 +91,7 @@
 #include "net/extras/sqlite/cookie_crypto_delegate.h"
 #include "net/extras/sqlite/sqlite_persistent_cookie_store.h"
 #include "net/first_party_sets/first_party_set_metadata.h"
+#include "net/gm/gm_buildflags.h"
 #include "net/http/http_auth.h"
 #include "net/http/http_auth_handler_factory.h"
 #include "net/http/http_auth_preferences.h"
@@ -165,6 +166,9 @@
 #include "services/network/shared_dictionary/shared_dictionary_constants.h"
 #include "services/network/shared_dictionary/shared_dictionary_manager.h"
 #include "services/network/shared_dictionary/shared_dictionary_storage.h"
+#if BUILDFLAG(XENON_GM)
+#include "services/network/gm_identity_provider.h"
+#endif
 #include "services/network/ssl_config_service_mojo.h"
 #include "services/network/throttling/network_conditions.h"
 #include "services/network/throttling/throttling_controller.h"
@@ -821,6 +825,17 @@ NetworkContext::NetworkContext(
       std::move(on_url_request_context_builder_configured),
       params_->bound_network);
   url_request_context_ = url_request_context_owner_.url_request_context.get();
+#if BUILDFLAG(XENON_GM) && BUILDFLAG(IS_WIN) && defined(ARCH_CPU_X86_64)
+  if (params_->gm_identity_broker &&
+      url_request_context_->http_transaction_factory()) {
+    gm_identity_provider_ = std::make_unique<GmIdentityProvider>(
+        std::move(params_->gm_identity_broker));
+    url_request_context_->http_transaction_factory()
+        ->GetSession()
+        ->ssl_client_context()
+        ->set_gm_identity_provider(gm_identity_provider_.get());
+  }
+#endif
 
   cookie_manager_ = std::make_unique<CookieManager>(
       url_request_context_, &first_party_sets_access_delegate_,

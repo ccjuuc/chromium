@@ -9,11 +9,33 @@
 
 #include "base/check_op.h"
 #include "base/notreached.h"
+#include "net/gm/gm_buildflags.h"
+#include "net/gm/gm_tls_policy.h"
 #include "net/ssl/ssl_config_service.h"
 #include "third_party/boringssl/src/include/openssl/ssl.h"
 
 namespace mojo {
+#if BUILDFLAG(XENON_GM)
+namespace {
 
+net::gm::TlsProtocol ConvertGmTlsProtocol(
+    network::mojom::GmTlsProtocol protocol) {
+  switch (protocol) {
+    case network::mojom::GmTlsProtocol::kTlcp:
+      return net::gm::TlsProtocol::kTlcp;
+    case network::mojom::GmTlsProtocol::kRfc8998:
+      return net::gm::TlsProtocol::kRfc8998;
+    case network::mojom::GmTlsProtocol::kTls13Auto:
+      return net::gm::TlsProtocol::kTls13Auto;
+  }
+  // Mojo rejects unknown wire values. Also fail closed when an in-process
+  // caller supplies an invalid enum, instead of reinterpreting it as RFC 8998.
+  return static_cast<net::gm::TlsProtocol>(-1);
+}
+
+}  // namespace
+
+#endif  // BUILDFLAG(XENON_GM)
 int MojoSSLVersionToNetSSLVersion(network::mojom::SSLVersion mojo_version) {
   switch (mojo_version) {
     case network::mojom::SSLVersion::kTLS12:
@@ -28,6 +50,40 @@ net::SSLContextConfig MojoSSLConfigToSSLContextConfig(
     const network::mojom::SSLConfigPtr& mojo_config) {
   net::SSLContextConfig net_config;
 
+#if BUILDFLAG(XENON_GM)
+  if (mojo_config->gm_auto_config) {
+    auto automatic = std::make_shared<net::gm::AutoConfig>();
+    const auto& source = *mojo_config->gm_auto_config;
+    automatic->enabled = source.enabled;
+    automatic->trust_anchors = source.trust_anchors;
+    automatic->untrusted_intermediates = source.untrusted_intermediates;
+    automatic->disallowed_certificates = source.disallowed_certificates;
+    automatic->crls = source.crls;
+    automatic->epoch = source.epoch;
+    net_config.gm_auto_config = std::move(automatic);
+  }
+
+  if (!mojo_config->gm_tls_rules.empty()) {
+    std::vector<net::gm::TlsRule> rules;
+    for (const auto& source : mojo_config->gm_tls_rules) {
+      net::gm::TlsRule rule;
+      rule.host = source->host;
+      rule.port = source->port;
+      rule.profile = net::gm::ConnectionProfile(
+          ConvertGmTlsProtocol(source->protocol), source->trust_profile_id,
+          source->trust_generation, source->identity_policy_id,
+          source->identity_generation, source->policy_revision);
+      rule.trust_anchors = source->trust_anchors;
+      rule.crls = source->crls;
+      rule.revocation_mode = source->revocation_mode;
+      rule.enable_session_resumption = source->enable_session_resumption;
+      rules.push_back(std::move(rule));
+    }
+    net_config.gm_tls_policy =
+        std::make_shared<const net::gm::TlsPolicy>(std::move(rules));
+  }
+
+#endif  // BUILDFLAG(XENON_GM)
   net_config.version_min =
       MojoSSLVersionToNetSSLVersion(mojo_config->version_min);
   net_config.version_max =

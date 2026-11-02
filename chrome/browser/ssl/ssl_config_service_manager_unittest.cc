@@ -4,28 +4,29 @@
 
 #include "chrome/browser/ssl/ssl_config_service_manager.h"
 
+#include <atomic>
 #include <memory>
 #include <utility>
 
 #include "base/command_line.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/task_environment.h"
 #include "base/values.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/testing_pref_service.h"
-#include "content/public/browser/network_service_instance.h"
-#include "content/public/test/browser_task_environment.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "net/base/features.h"
+#include "net/cert/cert_database.h"
 #include "net/cert/cert_verifier.h"
 #include "net/ssl/ssl_config.h"
-#include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
-#include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/ssl_config.mojom.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -40,17 +41,28 @@ class SSLConfigServiceManagerTest : public testing::Test,
   }
 
   std::unique_ptr<SSLConfigServiceManager> SetUpConfigServiceManager(
-      TestingPrefServiceSimple* local_state) {
-    auto config_manager =
-        std::make_unique<SSLConfigServiceManager>(local_state);
+      TestingPrefServiceSimple* local_state,
+      SSLConfigServiceManager::GmTrustSnapshotLoader gm_trust_loader = {},
+      SSLConfigServiceManager::GmTrustMonitorFactory gm_trust_monitor = {}) {
+    if (!gm_trust_loader) {
+      gm_trust_loader = base::BindRepeating([] {
+        auto snapshot = network::mojom::GmAutoConfig::New();
+        snapshot->enabled = true;
+        return snapshot;
+      });
+    }
+    auto config_manager = std::make_unique<SSLConfigServiceManager>(
+        local_state, std::move(gm_trust_loader), std::move(gm_trust_monitor));
+    // Complete the injected startup snapshot before attaching a client. These
+    // tests neither enumerate machine stores nor race a startup update.
+    task_environment_.RunUntilIdle();
 
     // Create NetworkContextParams, pass it to the |config_manager|, and then
     // steal the only two params that the |config_manager| populates.
     network::mojom::NetworkContextParamsPtr network_context_params =
         network::mojom::NetworkContextParams::New();
-    network_context_params->cert_verifier_params =
-        content::GetCertVerifierParams(
-            cert_verifier::mojom::CertVerifierCreationParams::New());
+    // This manager only populates SSL configuration and its update pipe; no
+    // browser or certificate-verifier service is needed to exercise it.
     config_manager->AddToNetworkContextParams(network_context_params.get());
     EXPECT_TRUE(network_context_params->initial_ssl_config);
     initial_config_ = std::move(network_context_params->initial_ssl_config);
@@ -68,8 +80,9 @@ class SSLConfigServiceManagerTest : public testing::Test,
     ASSERT_FALSE(run_loop_);
 
     ++updates_waited_for_;
-    if (observed_configs_.size() == updates_waited_for_)
+    if (observed_configs_.size() == updates_waited_for_) {
       return;
+    }
 
     // Fail if there was more than one update since the last call to
     // WaitForUpdate.
@@ -89,12 +102,13 @@ class SSLConfigServiceManagerTest : public testing::Test,
   // network::mojom::SSLConfigClient implementation:
   void OnSSLConfigUpdated(network::mojom::SSLConfigPtr ssl_config) override {
     observed_configs_.emplace_back(std::move(ssl_config));
-    if (run_loop_)
+    if (run_loop_) {
       run_loop_->Quit();
+    }
   }
 
  protected:
-  content::BrowserTaskEnvironment task_environment_;
+  base::test::TaskEnvironment task_environment_;
 
   TestingPrefServiceSimple local_state_;
 
@@ -105,8 +119,190 @@ class SSLConfigServiceManagerTest : public testing::Test,
   std::unique_ptr<base::RunLoop> run_loop_;
 };
 
+#if BUILDFLAG(XENON_GM)
+TEST_F(SSLConfigServiceManagerTest, GmTrustUpdatesInvalidateBeforeAsyncReload) {
+  SSLConfigServiceManager::RegisterPrefs(local_state_.registry());
+  auto reads = std::make_shared<std::atomic<int>>(0);
+  auto manager = SetUpConfigServiceManager(
+      &local_state_, base::BindRepeating(
+                         [](std::shared_ptr<std::atomic<int>> reads) {
+                           ++*reads;
+                           auto snapshot = network::mojom::GmAutoConfig::New();
+                           snapshot->enabled = true;
+                           snapshot->trust_anchors = {{0x30, 0}};
+                           return snapshot;
+                         },
+                         reads));
+  ASSERT_TRUE(initial_config_->gm_auto_config);
+  EXPECT_EQ(reads->load(), 1);
+  const auto original_epoch = initial_config_->gm_auto_config->epoch;
+
+  auto another_context = network::mojom::NetworkContextParams::New();
+  manager->AddToNetworkContextParams(another_context.get());
+  another_context->ssl_config_client_receiver.reset();
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(reads->load(), 1);
+
+  net::CertDatabase::GetInstance()->NotifyObserversTrustStoreChanged();
+  task_environment_.RunUntilIdle();
+  manager->FlushForTesting();
+  ASSERT_EQ(observed_configs_.size(), 2u);
+  updates_waited_for_ = observed_configs_.size();
+  const auto& invalidated = observed_configs_[0]->gm_auto_config;
+  const auto& refreshed = observed_configs_[1]->gm_auto_config;
+  ASSERT_TRUE(invalidated);
+  ASSERT_TRUE(refreshed);
+  EXPECT_GT(invalidated->epoch, original_epoch);
+  EXPECT_TRUE(invalidated->enabled);
+  EXPECT_TRUE(invalidated->trust_anchors.empty());
+  EXPECT_EQ(refreshed->epoch, invalidated->epoch);
+  EXPECT_EQ(refreshed->trust_anchors,
+            initial_config_->gm_auto_config->trust_anchors);
+  EXPECT_EQ(reads->load(), 2);
+}
+
+TEST_F(SSLConfigServiceManagerTest,
+       IndependentGmMonitorRefreshesRepeatedlyAndFailsClosed) {
+  SSLConfigServiceManager::RegisterPrefs(local_state_.registry());
+  base::RepeatingCallback<void(bool)> signal;
+  auto manager = SetUpConfigServiceManager(
+      &local_state_, base::BindRepeating([] {
+        auto snapshot = network::mojom::GmAutoConfig::New();
+        snapshot->enabled = true;
+        snapshot->trust_anchors = {{0x30, 0}};
+        return snapshot;
+      }),
+      base::BindRepeating(
+          [](base::RepeatingCallback<void(bool)>* signal,
+             base::RepeatingCallback<void(bool)> callback) {
+            *signal = callback;
+            callback.Run(true);
+            return base::OnceClosure();
+          },
+          &signal));
+  ASSERT_TRUE(initial_config_->gm_auto_config->enabled);
+  auto epoch = initial_config_->gm_auto_config->epoch;
+  for (size_t change = 0; change < 2; ++change) {
+    signal.Run(true);
+    task_environment_.RunUntilIdle();
+    manager->FlushForTesting();
+    ASSERT_EQ(observed_configs_.size(), 2 * (change + 1));
+    const auto& empty = observed_configs_[change * 2]->gm_auto_config;
+    const auto& snapshot = observed_configs_[change * 2 + 1]->gm_auto_config;
+    EXPECT_GT(empty->epoch, epoch);
+    EXPECT_TRUE(empty->trust_anchors.empty());
+    EXPECT_EQ(snapshot->epoch, empty->epoch);
+    EXPECT_EQ(snapshot->trust_anchors,
+              initial_config_->gm_auto_config->trust_anchors);
+    epoch = snapshot->epoch;
+  }
+  // Fail while a snapshot is in flight: its later result must not restore
+  // trust after reliable monitoring has been lost.
+  signal.Run(true);
+  signal.Run(false);
+  task_environment_.RunUntilIdle();
+  manager->FlushForTesting();
+  ASSERT_EQ(observed_configs_.size(), 6u);
+  EXPECT_FALSE(observed_configs_.back()->gm_auto_config->enabled);
+  EXPECT_TRUE(observed_configs_.back()->gm_auto_config->trust_anchors.empty());
+  updates_waited_for_ = observed_configs_.size();
+}
+
+TEST_F(SSLConfigServiceManagerTest, GmTrustWaitsForMonitorBeforeLoading) {
+  SSLConfigServiceManager::RegisterPrefs(local_state_.registry());
+  base::RepeatingCallback<void(bool)> signal;
+  auto reads = std::make_shared<std::atomic<int>>(0);
+  auto manager = SetUpConfigServiceManager(
+      &local_state_,
+      base::BindRepeating(
+          [](std::shared_ptr<std::atomic<int>> reads) {
+            ++*reads;
+            auto snapshot = network::mojom::GmAutoConfig::New();
+            snapshot->enabled = true;
+            snapshot->trust_anchors = {{0x30, 0}};
+            return snapshot;
+          },
+          reads),
+      base::BindRepeating(
+          [](base::RepeatingCallback<void(bool)>* signal,
+             base::RepeatingCallback<void(bool)> callback) {
+            *signal = std::move(callback);
+            return base::OnceClosure();
+          },
+          &signal));
+  EXPECT_EQ(reads->load(), 0);
+  net::CertDatabase::GetInstance()->NotifyObserversTrustStoreChanged();
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(reads->load(), 0);
+  ASSERT_EQ(observed_configs_.size(), 1u);
+  EXPECT_TRUE(observed_configs_.back()->gm_auto_config->trust_anchors.empty());
+
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(signal, true));
+  manager->FlushForTesting();
+  EXPECT_EQ(reads->load(), 1);
+  ASSERT_EQ(observed_configs_.size(), 3u);
+  EXPECT_FALSE(observed_configs_.back()->gm_auto_config->trust_anchors.empty());
+  updates_waited_for_ = observed_configs_.size();
+}
+
+TEST_F(SSLConfigServiceManagerTest,
+       GmTrustFlushCompletesOnMonitorStartupFailure) {
+  SSLConfigServiceManager::RegisterPrefs(local_state_.registry());
+  base::RepeatingCallback<void(bool)> signal;
+  auto manager = SetUpConfigServiceManager(
+      &local_state_, {},
+      base::BindRepeating(
+          [](base::RepeatingCallback<void(bool)>* signal,
+             base::RepeatingCallback<void(bool)> callback) {
+            *signal = std::move(callback);
+            return base::OnceClosure();
+          },
+          &signal));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(signal, false));
+  manager->FlushForTesting();
+  ASSERT_EQ(observed_configs_.size(), 1u);
+  EXPECT_FALSE(observed_configs_.back()->gm_auto_config->enabled);
+  updates_waited_for_ = observed_configs_.size();
+}
+
 // Test that cipher suites can be disabled. "Good" refers to the fact that
 // every value is expected to be successfully parsed into a cipher suite.
+#else
+TEST_F(SSLConfigServiceManagerTest, GmDisabledDoesNotRegisterOrLoadTrust) {
+  SSLConfigServiceManager::RegisterPrefs(local_state_.registry());
+  EXPECT_FALSE(local_state_.FindPreference(prefs::kGmTlsSiteRules));
+  EXPECT_FALSE(local_state_.FindPreference(prefs::kGmUsbKeyDriver));
+  auto reads = std::make_shared<std::atomic<int>>(0);
+  int monitor_starts = 0;
+  auto manager = SetUpConfigServiceManager(
+      &local_state_,
+      base::BindRepeating(
+          [](std::shared_ptr<std::atomic<int>> reads) {
+            ++*reads;
+            auto snapshot = network::mojom::GmAutoConfig::New();
+            snapshot->enabled = true;
+            return snapshot;
+          },
+          reads),
+      base::BindRepeating(
+          [](int* starts, base::RepeatingCallback<void(bool)>) {
+            ++*starts;
+            return base::OnceClosure();
+          },
+          &monitor_starts));
+  EXPECT_FALSE(initial_config_->gm_auto_config);
+  EXPECT_TRUE(initial_config_->gm_tls_rules.empty());
+  net::CertDatabase::GetInstance()->NotifyObserversTrustStoreChanged();
+  task_environment_.RunUntilIdle();
+  manager->FlushForTesting();
+  EXPECT_EQ(reads->load(), 0);
+  EXPECT_EQ(monitor_starts, 0);
+  EXPECT_TRUE(observed_configs_.empty());
+}
+#endif  // BUILDFLAG(XENON_GM)
+
 TEST_F(SSLConfigServiceManagerTest, GoodDisabledCipherSuites) {
   TestingPrefServiceSimple local_state;
   SSLConfigServiceManager::RegisterPrefs(local_state.registry());
@@ -326,9 +522,6 @@ TEST_F(SSLConfigServiceManagerTest, InitialTrustAnchorIDs) {
   {
     network::mojom::NetworkContextParamsPtr network_context_params =
         network::mojom::NetworkContextParams::New();
-    network_context_params->cert_verifier_params =
-        content::GetCertVerifierParams(
-            cert_verifier::mojom::CertVerifierCreationParams::New());
     config_manager->AddToNetworkContextParams(network_context_params.get());
     ASSERT_TRUE(network_context_params->initial_ssl_config);
     EXPECT_TRUE(
@@ -352,9 +545,6 @@ TEST_F(SSLConfigServiceManagerTest, InitialTrustAnchorIDs) {
   {
     network::mojom::NetworkContextParamsPtr network_context_params =
         network::mojom::NetworkContextParams::New();
-    network_context_params->cert_verifier_params =
-        content::GetCertVerifierParams(
-            cert_verifier::mojom::CertVerifierCreationParams::New());
     config_manager->AddToNetworkContextParams(network_context_params.get());
     ASSERT_TRUE(network_context_params->initial_ssl_config);
     EXPECT_THAT(
@@ -384,9 +574,6 @@ TEST_F(SSLConfigServiceManagerTest, InitialTrustAnchorIDs) {
   {
     network::mojom::NetworkContextParamsPtr network_context_params =
         network::mojom::NetworkContextParams::New();
-    network_context_params->cert_verifier_params =
-        content::GetCertVerifierParams(
-            cert_verifier::mojom::CertVerifierCreationParams::New());
     config_manager->AddToNetworkContextParams(network_context_params.get());
     ASSERT_TRUE(network_context_params->initial_ssl_config);
     EXPECT_THAT(
@@ -415,9 +602,6 @@ TEST_F(SSLConfigServiceManagerTest, InitialTrustAnchorIDs) {
   {
     network::mojom::NetworkContextParamsPtr network_context_params =
         network::mojom::NetworkContextParams::New();
-    network_context_params->cert_verifier_params =
-        content::GetCertVerifierParams(
-            cert_verifier::mojom::CertVerifierCreationParams::New());
     config_manager->AddToNetworkContextParams(network_context_params.get());
     ASSERT_TRUE(network_context_params->initial_ssl_config);
     EXPECT_TRUE(

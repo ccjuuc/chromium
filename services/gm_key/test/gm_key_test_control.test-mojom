@@ -1,0 +1,19 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+module gm_key.test.mojom;
+import "services/gm_key/public/mojom/gm_key_service.mojom";
+
+// Built only into the separate test helper. No production utility registers it.
+interface KeyTestControl {
+  // 0: root DER; 1: present; 2: signing delay milliseconds; 3: crash next sign;
+  // 4: reset PIN retry counter; 5: PIN delay milliseconds;
+  // 6: same-name remove/reinsert plus immediate OS device-generation event;
+  // 7: renew both certificates; 8: add/remove an extra container;
+  // 9: force the normal metadata refresh; 10: wait for request |value| to enter
+  // the PIN SDK call. 6 advances the generation before queuing its SDK work;
+  // 10 runs on the Mojo sequence, so both work while the SDK thread is blocked.
+  Control(uint32 operation, uint32 value)
+      => (gm_key.mojom.KeyResult result, array<uint8> bytes);
+};

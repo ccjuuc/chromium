@@ -23,6 +23,7 @@
 #include "net/base/port_util.h"
 #include "net/base/request_priority.h"
 #include "net/dns/public/resolve_error_info.h"
+#include "net/gm/gm_buildflags.h"
 #include "net/http/alternative_service.h"
 #include "net/http/http_network_session.h"
 #include "net/http/http_stream_key.h"
@@ -46,6 +47,20 @@
 #include "url/url_constants.h"
 
 namespace net {
+
+namespace {
+std::shared_ptr<const gm::TlsRule> EffectiveGmRule(
+    HttpStreamPool* pool,
+    const HttpStreamPoolRequestInfo& info) {
+#if BUILDFLAG(XENON_GM)
+  return info.gm_rule
+             ? info.gm_rule
+             : pool->http_network_session()->GetGmTlsRule(info.destination);
+#else
+  return nullptr;
+#endif
+}
+}  // namespace
 
 HttpStreamPool::JobController::Alternative::Alternative(
     HttpStreamKey stream_key,
@@ -90,7 +105,8 @@ HttpStreamPool::JobController::CalculateAlternative(
     bool enable_alternative_services) {
   const NextProto protocol = request_info.alternative_service_info.protocol();
 
-  if (!enable_alternative_services || protocol == NextProto::kProtoUnknown ||
+  if (EffectiveGmRule(pool, request_info) || !enable_alternative_services ||
+      protocol == NextProto::kProtoUnknown ||
       !request_info.allowed_alpns.Has(protocol)) {
     return std::nullopt;
   }
@@ -145,10 +161,13 @@ HttpStreamPool::JobController::JobController(
     bool enable_ip_based_pooling_for_h2,
     bool enable_alternative_services)
     : pool_(pool),
+      gm_client_auth_context_(request_info.gm_client_auth_context),
       priority_(priority),
       allowed_bad_certs_(std::move(allowed_bad_certs)),
-      enable_ip_based_pooling_for_h2_(enable_ip_based_pooling_for_h2),
-      enable_alternative_services_(enable_alternative_services),
+      enable_ip_based_pooling_for_h2_(enable_ip_based_pooling_for_h2 &&
+                                      !EffectiveGmRule(pool, request_info)),
+      enable_alternative_services_(enable_alternative_services &&
+                                   !EffectiveGmRule(pool, request_info)),
       respect_limits_(request_info.load_flags & LOAD_IGNORE_LIMITS
                           ? RespectLimits::kIgnore
                           : RespectLimits::kRespect),
@@ -162,7 +181,9 @@ HttpStreamPool::JobController::JobController(
                          request_info.network_anonymization_key,
                          request_info.secure_dns_policy,
                          request_info.disable_cert_network_fetches,
-                         request_info.target_network),
+                         request_info.target_network,
+                         std::nullopt,
+                         EffectiveGmRule(pool, request_info)),
       origin_quic_key_(origin_stream_key_.CalculateQuicSessionAliasKey()),
       alternative_(CalculateAlternative(pool,
                                         request_info,
@@ -170,6 +191,12 @@ HttpStreamPool::JobController::JobController(
       net_log_(request_info.factory_job_controller_net_log),
       flow_(NetLogWithSourceToFlow(net_log_)),
       created_time_(base::TimeTicks::Now()) {
+  if (origin_stream_key_.gm_rule()) {
+    allowed_alpns_.Remove(NextProto::kProtoQUIC);
+    if (!origin_stream_key_.gm_profile().AllowsHttp2()) {
+      allowed_alpns_.Remove(NextProto::kProtoHTTP2);
+    }
+  }
   TRACE_EVENT("net.stream", "JobController::JobController", flow_,
               "destination", request_info.destination.Serialize());
   net_log_.BeginEvent(
@@ -189,7 +216,8 @@ HttpStreamPool::JobController::JobController(
       });
 
   CHECK(proxy_info_.is_direct());
-  if (!alternative_.has_value() &&
+  if (origin_stream_key_.gm_profile().AllowsQuic() &&
+      !alternative_.has_value() &&
       alternative_service_info_.protocol() == NextProto::kProtoQUIC) {
     origin_quic_version_ = pool_->SelectQuicVersion(alternative_service_info_);
   }
@@ -211,6 +239,18 @@ void HttpStreamPool::JobController::HandleStreamRequest(
   stream_request->SetHelperForSwitchingToPool(this);
   delegate_ = delegate;
   stream_request_ = stream_request;
+  stream_request_->set_gm_route(origin_stream_key_.gm_rule(),
+                                proxy_info_.proxy_chain());
+
+  if (!pool_->http_network_session()->IsGmTlsRuleCurrent(
+          origin_stream_key_.destination(), origin_stream_key_.gm_rule())) {
+    TaskRunner(priority_)->PostTask(
+        FROM_HERE,
+        base::BindOnce(&HttpStreamPool::JobController::CallOnStreamFailed,
+                       weak_ptr_factory_.GetWeakPtr(), ERR_NETWORK_CHANGED,
+                       NetErrorDetails(), ResolveErrorInfo()));
+    return;
+  }
 
   if (pool_->delegate_for_testing_) {
     pool_->delegate_for_testing_->OnRequestStream(origin_stream_key_);
@@ -261,10 +301,14 @@ void HttpStreamPool::JobController::HandleStreamRequest(
   }
 }
 
-int HttpStreamPool::JobController::Preconnect(
-    size_t num_streams,
-    CompletionOnceCallback callback) {
+int HttpStreamPool::JobController::Preconnect(size_t num_streams,
+                                              CompletionOnceCallback callback) {
   TRACE_EVENT("net.stream", "JobController::Preconnect", flow_);
+
+  if (!pool_->http_network_session()->IsGmTlsRuleCurrent(
+          origin_stream_key_.destination(), origin_stream_key_.gm_rule())) {
+    return ERR_NETWORK_CHANGED;
+  }
 
   num_streams = std::min(kDefaultMaxStreamSocketsPerGroup, num_streams);
 
@@ -326,6 +370,11 @@ int HttpStreamPool::JobController::Preconnect(
 
 RequestPriority HttpStreamPool::JobController::priority() const {
   return priority_;
+}
+
+base::RepeatingCallback<base::UnguessableToken()>
+HttpStreamPool::JobController::gm_client_auth_context() const {
+  return gm_client_auth_context_;
 }
 
 HttpStreamPool::RespectLimits HttpStreamPool::JobController::respect_limits()
@@ -401,15 +450,31 @@ void HttpStreamPool::JobController::OnStreamFailed(
 
   stream_request_->AddConnectionAttempts(job->connection_attempts());
   SetJobResult(job, status);
+  if (job == origin_job_.get()) {
+    gm_origin_error_details_ = net_error_details;
+    gm_origin_resolve_error_info_ = resolve_error_info;
+  }
   if (AllJobsFinished()) {
     // Use PostTask to align the behavior with HttpStreamFactory::Job, see
     // https://crrev.com/2827533002.
     // TODO(crbug.com/346835898): Avoid using PostTask here if possible.
+    NetErrorDetails origin_details = net_error_details;
+    if (job != origin_job_.get()) {
+      origin_details.gm_protocol_retry_allowed = false;
+      origin_details.gm_standard_tls_required = false;
+      if (gm_origin_error_details_.gm_protocol_retry_allowed ||
+          gm_origin_error_details_.gm_standard_tls_required) {
+        CHECK(origin_job_result_);
+        status = *origin_job_result_;
+        origin_details = gm_origin_error_details_;
+        resolve_error_info = gm_origin_resolve_error_info_;
+      }
+    }
     TaskRunner(priority_)->PostTask(
         FROM_HERE,
         base::BindOnce(&JobController::CallOnStreamFailed,
-                       weak_ptr_factory_.GetWeakPtr(), status,
-                       net_error_details, std::move(resolve_error_info)));
+                       weak_ptr_factory_.GetWeakPtr(), status, origin_details,
+                       std::move(resolve_error_info)));
   }
 }
 

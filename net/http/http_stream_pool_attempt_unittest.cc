@@ -18,6 +18,7 @@
 #include "net/base/load_timing_info.h"
 #include "net/base/net_errors.h"
 #include "net/base/network_anonymization_key.h"
+#include "net/cert/cert_status_flags.h"
 #include "net/dns/host_resolver.h"
 #include "net/dns/public/secure_dns_policy.h"
 #include "net/http/http_stream_key.h"
@@ -373,13 +374,13 @@ TEST_F(HttpStreamPoolAttemptTest, CertificateError) {
   SequencedSocketData data;
   socket_factory()->AddSocketDataProvider(&data);
   SSLSocketDataProvider ssl_data(ASYNC, ERR_CERT_DATE_INVALID);
-  ssl_data.ssl_info.cert_status = ERR_CERT_DATE_INVALID;
+  ssl_data.ssl_info.cert_status = CERT_STATUS_DATE_INVALID;
   ssl_data.ssl_info.cert = kCert;
   socket_factory()->AddSSLSocketDataProvider(&ssl_data);
 
   delegate.Start();
   ASSERT_EQ(delegate.WaitForResult(), ERR_CERT_DATE_INVALID);
-  EXPECT_EQ(delegate.GetCertErrorSSLInfo().cert_status, ERR_CERT_DATE_INVALID);
+  EXPECT_EQ(delegate.GetCertErrorSSLInfo().cert_status, CERT_STATUS_DATE_INVALID);
   EXPECT_EQ(delegate.GetCertErrorSSLInfo().cert, kCert);
 }
 

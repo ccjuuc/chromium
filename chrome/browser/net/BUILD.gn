@@ -9,6 +9,7 @@ import("//components/offline_pages/buildflags/features.gni")
 import("//crypto/features.gni")
 import("//extensions/buildflags/buildflags.gni")
 import("//net/features.gni")
+import("//net/gm/gm.gni")
 import("//third_party/protobuf/proto_library.gni")
 
 if (is_android) {
@@ -58,9 +59,7 @@ source_set("net") {
   ]
 
   if (enable_device_bound_sessions) {
-    public += [
-      "device_bound_session_prewarmer.h",
-    ]
+    public += [ "device_bound_session_prewarmer.h" ]
   }
 
   public_deps = [
@@ -88,6 +87,7 @@ source_set("net") {
     "//extensions/buildflags",
     "//mojo/public/cpp/bindings",
     "//net",
+    "//net/gm:buildflags",
     "//services/cert_verifier/public/mojom",
     "//services/network/public/cpp",
     "//services/network/public/mojom",
@@ -159,9 +159,7 @@ source_set("impl") {
   ]
 
   if (enable_device_bound_sessions) {
-    sources += [
-      "device_bound_session_prewarmer.cc",
-    ]
+    sources += [ "device_bound_session_prewarmer.cc" ]
   }
 
   public_deps = [
@@ -171,7 +169,6 @@ source_set("impl") {
 
   deps = [
     ":key_pinning_proto",
-    "//xenon_overlay/chrome/browser:managed_certificates",
     "//base:build_time",
     "//chrome/browser:browser_features",
     "//chrome/browser:browser_process",
@@ -222,6 +219,7 @@ source_set("impl") {
     "//sandbox/policy",
     "//services/network:network_service",
     "//services/strings",
+    "//xenon_overlay/chrome/browser:managed_certificates",
   ]
 
   if (enable_extensions_core) {
@@ -297,6 +295,10 @@ source_set("impl") {
 
   if (enterprise_client_certificates) {
     deps += [ "//components/enterprise/client_certificates/core" ]
+  }
+
+  if (gm_tls_backend_enabled && is_win && target_cpu == "x64") {
+    deps += [ "//chrome/browser/gm:key_manager" ]
   }
 
   if (use_nss_certs) {

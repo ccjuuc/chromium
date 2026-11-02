@@ -9,6 +9,7 @@ chrome/app/chromeos_shared_strings.grdp
 chrome/app/chromeos_strings.grdp
 chrome/app/extensions_strings.grdp
 chrome/app/glic_strings.grdp
+chrome/app/gm_strings.grdp
 chrome/app/gmc_strings.grdp
 chrome/app/media_live_preview_strings.grdp
 chrome/app/media_router_strings.grdp

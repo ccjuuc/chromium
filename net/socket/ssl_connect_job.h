@@ -15,6 +15,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/completion_repeating_callback.h"
@@ -141,6 +142,7 @@ class NET_EXPORT_PRIVATE SSLConnectJob : public ConnectJob,
   ConnectionAttempts GetConnectionAttempts() const override;
   ResolveErrorInfo GetResolveErrorInfo() const override;
   bool IsSSLError() const override;
+  void PopulateNetErrorDetails(NetErrorDetails* details) const override;
   scoped_refptr<SSLCertRequestInfo> GetCertRequestInfo() override;
   std::optional<ResolutionDetails> GetResolutionDetails() const override;
 
@@ -206,6 +208,7 @@ class NET_EXPORT_PRIVATE SSLConnectJob : public ConnectJob,
 
   // True once SSL negotiation has started.
   bool ssl_negotiation_started_ = false;
+  bool gm_standard_tls_required_ = false;
 
   // True if legacy crypto should be disabled for the job's current connection
   // attempt. On error, the connection will be retried with legacy crypto
@@ -249,6 +252,7 @@ class NET_EXPORT_PRIVATE SSLConnectJob : public ConnectJob,
   // attempt. Set to true when a previous connection attempt via stale DNS
   // failed and the job needs to retry with fresh results.
   bool disable_stale_dns_ = false;
+  base::WeakPtrFactory<SSLConnectJob> weak_factory_{this};
 };
 
 }  // namespace net

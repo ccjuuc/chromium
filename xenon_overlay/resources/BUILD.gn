@@ -169,6 +169,18 @@ if (is_win) {
         "--depfile",
         rebase_path(depfile, root_build_dir),
       ]
+      foreach(hosted, xenon_windows_hosted_apps) {
+        if (app == hosted.application) {
+          inputs += [
+            "//xenon_overlay/tools/import_electron_app.py",
+            "//xenon_overlay/tools/windows_electron_runtime.py",
+          ]
+          args += [
+            "--strip-windows-electron-runtime",
+            "--windows-electron-profile=" + hosted.profile,
+          ]
+        }
+      }
     }
   }
 

@@ -397,9 +397,11 @@
 #include "media/mojo/mojom/speech_recognizer.mojom.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/data_url.h"
+#include "net/base/net_errors.h"
 #include "net/base/url_util.h"
 #include "net/cookies/cookie_setting_override.h"
 #include "net/cookies/site_for_cookies.h"
+#include "net/gm/gm_buildflags.h"
 #include "net/ssl/client_cert_store.h"
 #include "net/ssl/ssl_cert_request_info.h"
 #include "net/ssl/ssl_private_key.h"
@@ -420,6 +422,7 @@
 #include "services/network/public/cpp/web_sandbox_flags.h"
 #include "services/network/public/mojom/cert_verifier_service.mojom.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
+#include "services/network/public/mojom/gm_identity.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
@@ -462,6 +465,10 @@
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
 #include "xenon_overlay/common/ipc/xenon_privileged_schemes.h"
 #include "xenon_overlay/public/mojom/xenon_service.mojom.h"
+#endif
+
+#if BUILDFLAG(XENON_GM) && BUILDFLAG(IS_WIN) && defined(ARCH_CPU_X86_64)
+#include "chrome/browser/gm/gm_key_manager.h"  // nogncheck: XENON_GM conditional dependency.
 #endif
 
 #if BUILDFLAG(IS_WIN)
@@ -2621,8 +2628,7 @@ void ChromeContentBrowserClient::SiteInstanceGotProcessAndSite(
     SiteInstance* site_instance) {
   CHECK(site_instance->HasProcess());
 
-#if BUILDFLAG(IS_WIN) && defined(COMPONENT_BUILD) && \
-    !defined(OFFICIAL_BUILD)
+#if BUILDFLAG(IS_WIN) && defined(COMPONENT_BUILD) && !defined(OFFICIAL_BUILD)
   const GURL& site_url = site_instance->GetSiteURL();
   if (site_url.SchemeIs(content::kChromeUIScheme) &&
       site_url.host() == beijing::kRenderDllTestHost) {
@@ -3042,8 +3048,7 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
     content::RenderProcessHost* process =
         content::RenderProcessHost::FromID(child_process_id);
     if (process) {
-#if BUILDFLAG(IS_WIN) && defined(COMPONENT_BUILD) && \
-    !defined(OFFICIAL_BUILD)
+#if BUILDFLAG(IS_WIN) && defined(COMPONENT_BUILD) && !defined(OFFICIAL_BUILD)
       if (render_dll_test_process_ids_.contains(child_process_id)) {
         command_line->AppendSwitch(beijing::kPreloadRenderDllSwitch);
       }
@@ -4253,6 +4258,42 @@ bool ShouldPromptOnMultipleMatchingCertificates(const Profile* profile) {
 
 }  // namespace
 
+base::OnceClosure ChromeContentBrowserClient::SelectGmClientCertificate(
+    content::WebContents* web_contents,
+    const url::Origin& origin,
+    const std::string& identity_policy_id,
+    uint64_t identity_generation,
+    network::mojom::GmClientCertificateRequestPtr certificate_request,
+    base::OnceCallback<void(int, network::mojom::GmIdentityGrantPtr)>
+        callback) {
+#if BUILDFLAG(XENON_GM)
+  if (web_contents) {
+    auto* no_state_prefetch_contents =
+        prerender::ChromeNoStatePrefetchContentsDelegate::FromWebContents(
+            web_contents);
+    if (no_state_prefetch_contents) {
+      no_state_prefetch_contents->Destroy(
+          prerender::FINAL_STATUS_SSL_CLIENT_CERTIFICATE_REQUESTED);
+      std::move(callback).Run(net::ERR_ABORTED, nullptr);
+      return {};
+    }
+#if BUILDFLAG(IS_WIN) && defined(ARCH_CPU_X86_64)
+    auto* service = ProfileNetworkContextServiceFactory::GetForContext(
+        web_contents->GetBrowserContext());
+    auto* key_manager = service ? service->GetGmKeyManager() : nullptr;
+    if (key_manager) {
+      return key_manager->AcquireIdentityForWebContents(
+          web_contents, origin, identity_policy_id, identity_generation,
+          std::move(certificate_request), std::move(callback));
+    }
+#endif
+  }
+#endif  // BUILDFLAG(XENON_GM)
+  std::move(callback).Run(net::ERR_SSL_CLIENT_AUTH_PRIVATE_KEY_ACCESS_DENIED,
+                          nullptr);
+  return {};
+}
+
 base::OnceClosure ChromeContentBrowserClient::SelectClientCertificate(
     content::BrowserContext* browser_context,
     int process_id,
@@ -5441,8 +5482,7 @@ bool ChromeContentBrowserClient::PreSpawnChild(
   // Win32 absolute paths as AllowExtraDll below (see render_dll_names.h).
   // Private deps are LoadNativeLibrary'd by abs path in loadDll so the PE
   // loader does not open imports via a path form outside this rule.
-#if BUILDFLAG(IS_WIN) && !defined(OFFICIAL_BUILD) && \
-    !defined(COMPONENT_BUILD)
+#if BUILDFLAG(IS_WIN) && !defined(OFFICIAL_BUILD) && !defined(COMPONENT_BUILD)
   if (sandbox_type == sandbox::mojom::Sandbox::kRenderer) {
     const bool file_ok = beijing::ForEachRenderDllPathNextToExe(
         [&](const base::FilePath& render_dll_path) {

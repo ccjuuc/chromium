@@ -18,7 +18,6 @@
 #include "base/values.h"
 #include "build/buildflag.h"
 #include "net/base/features.h"
-#include "net/net_buildflags.h"
 #include "net/base/load_flags.h"
 #include "net/base/load_timing_internal_info.h"
 #include "net/base/net_errors.h"
@@ -40,6 +39,7 @@
 #include "net/log/net_log.h"
 #include "net/log/net_log_event_type.h"
 #include "net/log/net_log_with_source.h"
+#include "net/net_buildflags.h"
 #include "net/proxy_resolution/proxy_info.h"
 #include "net/proxy_resolution/proxy_resolution_request.h"
 #include "net/proxy_resolution/proxy_resolution_service.h"
@@ -168,7 +168,13 @@ HttpStreamFactory::JobController::JobController(
       delay_main_job_with_available_spdy_session_(
           delay_main_job_with_available_spdy_session),
       management_config_(http_request_info.connection_management_config),
-      request_info_(http_request_info),
+      request_info_([&] {
+        StreamRequestInfo info(http_request_info);
+        if (auto rule = session->GetGmTlsRule(url::SchemeHostPort(info.url))) {
+          info.gm_rule = std::move(rule);
+        }
+        return info;
+      }()),
       allowed_bad_certs_(allowed_bad_certs),
       net_log_(NetLogWithSource::Make(
           session->net_log(),
@@ -434,6 +440,9 @@ void HttpStreamFactory::JobController::OnStreamFailed(Job* job, int status) {
   if (job->job_type() == MAIN) {
     DCHECK_EQ(main_job_.get(), job);
     main_job_net_error_ = status;
+    gm_origin_error_details_ = *job->net_error_details();
+    gm_origin_resolve_error_info_ = job->resolve_error_info();
+    gm_origin_proxy_info_ = job->proxy_info();
   } else if (job->job_type() == ALTERNATIVE) {
     DCHECK_EQ(alternative_job_.get(), job);
     DCHECK_NE(NextProto::kProtoUnknown, advertised_alt_svc_.info.protocol());
@@ -498,8 +507,24 @@ void HttpStreamFactory::JobController::OnStreamFailed(Job* job, int status) {
   }
 
   HistogramProxyUsed(job->proxy_info(), /*success=*/false);
-  delegate_->OnStreamFailed(status, *job->net_error_details(),
-                            job->proxy_info(), job->resolve_error_info());
+  NetErrorDetails origin_details = *job->net_error_details();
+  if (job->job_type() != MAIN) {
+    origin_details.gm_protocol_retry_allowed = false;
+    origin_details.gm_standard_tls_required = false;
+    if ((gm_origin_error_details_.gm_protocol_retry_allowed ||
+         gm_origin_error_details_.gm_standard_tls_required) &&
+        gm_origin_proxy_info_.proxy_chain() ==
+            job->proxy_info().proxy_chain()) {
+      // The origin failed before an alternative connection finished. Keep
+      // that exact origin evidence; never turn an alternative's error into it.
+      delegate_->OnStreamFailed(main_job_net_error_, gm_origin_error_details_,
+                                gm_origin_proxy_info_,
+                                gm_origin_resolve_error_info_);
+      return;
+    }
+  }
+  delegate_->OnStreamFailed(status, origin_details, job->proxy_info(),
+                            job->resolve_error_info());
 }
 
 void HttpStreamFactory::JobController::OnFailedOnDefaultNetwork(Job* job) {
@@ -662,6 +687,7 @@ void HttpStreamFactory::JobController::ResumeMainJob() {
 
 void HttpStreamFactory::JobController::ResetErrorStatusForJobs() {
   main_job_net_error_ = OK;
+  gm_origin_error_details_ = NetErrorDetails();
   alternative_job_net_error_ = OK;
   alternative_job_failed_on_default_network_ = false;
   dns_alpn_h3_job_net_error_ = OK;
@@ -914,6 +940,28 @@ int HttpStreamFactory::JobController::DoCreateJobs() {
   DCHECK(destination.IsValid());
   ConvertWsToHttp(destination);
 
+  if (!session_->IsGmTlsRuleCurrent(destination, request_info_.gm_rule)) {
+    return ERR_NETWORK_CHANGED;
+  }
+
+  // Proxy resolution precedes learned-route lookup. An automatic retry is
+  // bound to the proxy chain that produced the origin handshake failure.
+  if (request_info_.gm_auto_proxy_chain &&
+      *request_info_.gm_auto_proxy_chain != proxy_info_.proxy_chain()) {
+    return ERR_NETWORK_CHANGED;
+  }
+  if (!request_info_.gm_rule && !request_info_.gm_auto_proxy_chain) {
+    request_info_.gm_rule = session_->GetGmCapabilityHint(
+        destination, request_info_.network_anonymization_key,
+        request_info_.privacy_mode, proxy_info_.proxy_chain());
+    if (request_info_.gm_rule) {
+      request_info_.gm_auto_proxy_chain = proxy_info_.proxy_chain();
+    }
+  }
+  if (request_) {
+    request_->set_gm_route(request_info_.gm_rule, proxy_info_.proxy_chain());
+  }
+
   // Create an alternative job if alternative service is set up for this domain.
   // This is applicable even if the connection will be made via a proxy.
   advertised_alt_svc_ =
@@ -937,6 +985,7 @@ int HttpStreamFactory::JobController::DoCreateJobs() {
   // - proxied connections perform DNS on the proxy, so they can't get supported
   //   ALPNs from DNS
   const bool dns_alpn_h3_job_enabled =
+      !request_info_.gm_rule &&
       !session_->ShouldForceQuic(destination, proxy_info_, is_websocket_) &&
       enable_alternative_services_ &&
       session_->params().use_dns_https_svcb_alpn &&
@@ -999,7 +1048,7 @@ int HttpStreamFactory::JobController::DoCreateJobs() {
   // supports Extended CONNECT before creating `main_job_`, so that
   // `ws_over_h3_job_` can consume `destination` directly without copying.
   // This is a synchronous check -- no new QUIC connections are created.
-  if (is_websocket_ && session_->IsQuicEnabled() &&
+  if (!request_info_.gm_rule && is_websocket_ && session_->IsQuicEnabled() &&
       base::FeatureList::IsEnabled(features::kEnableWebsocketsOverHttp3) &&
       proxy_info_.is_direct()) {
     QuicSessionKey ws_session_key(
@@ -1366,7 +1415,7 @@ HttpStreamFactory::JobController::GetAdvertisedAltSvcFor(
     const StreamRequestInfo& request_info,
     HttpStreamRequest::Delegate* delegate,
     HttpStreamRequest::StreamType stream_type) {
-  if (!enable_alternative_services_) {
+  if (request_info.gm_rule || !enable_alternative_services_) {
     return AdvertisedAlternativeService();
   }
 
@@ -1663,6 +1712,11 @@ void HttpStreamFactory::JobController::SwitchToHttpStreamPool() {
       advertised_alt_svc_.info, advertised_alt_svc_.state, allowed_alpns,
       request_info_.load_flags, proxy_info_, request_info_.target_network,
       net_log_);
+  pool_request_info.gm_rule = request_info_.gm_rule;
+  if (!is_preconnect_) {
+    pool_request_info.gm_client_auth_context =
+        request_info_.gm_client_auth_context;
+  }
   if (is_preconnect_) {
     auto split_callback = base::SplitOnceCallback(
         base::IgnoreArgs<int>(std::move(preconnect_callback_)));

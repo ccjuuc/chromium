@@ -4,6 +4,12 @@
 
 import("//xenon_overlay/buildflags/features.gni")
 
+# Shared by runtime copying and installer staging. Cleanup policy code remains
+# in tools/windows_electron_runtime.py; this file only selects each app's
+# policy.
+xenon_windows_hosted_apps =
+    read_file("//xenon_overlay/resources/windows_hosted_apps.json", "json")
+
 declare_args() {
   # Complete releases imported into //xenon_overlay/resources/<name> locally.
   # An empty list builds/packages the host without any Electron applications.

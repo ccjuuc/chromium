@@ -19,6 +19,7 @@ class URLRequestContext;
 namespace network {
 
 class ResourceSchedulerClient;
+class GmIdentityProvider;
 
 namespace cors {
 class OriginAccessList;
@@ -47,6 +48,9 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) URLLoaderContext {
   virtual mojom::TrustedURLLoaderHeaderClient* GetUrlLoaderHeaderClient()
       const = 0;
   virtual net::URLRequestContext* GetUrlRequestContext() const = 0;
+  // Returns nullptr when the context has no interactive national TLS
+  // identities.
+  virtual GmIdentityProvider* GetGmIdentityProvider() const = 0;
   virtual scoped_refptr<ResourceSchedulerClient> GetResourceSchedulerClient()
       const = 0;
   virtual orb::PerFactoryState& GetMutableOrbState() = 0;

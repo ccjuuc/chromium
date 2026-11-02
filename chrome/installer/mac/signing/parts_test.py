@@ -20,6 +20,12 @@ def _get_identity_hash(i):
 
 class TestGetParts(unittest.TestCase):
 
+    def test_no_retired_gm_library_in_signing_manifest(self):
+        for channel in (None, 'dev'):
+            config = model.Distribution(channel=channel).to_config(
+                test_config.TestConfig())
+            self.assertNotIn('libgm_backend.dylib', parts.get_parts(config))
+
     def test_get_parts_no_base(self):
         config = test_config.TestConfig()
         all_parts = parts.get_parts(config)

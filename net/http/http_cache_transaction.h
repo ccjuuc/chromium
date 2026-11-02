@@ -32,6 +32,7 @@
 #include "net/base/net_error_details.h"
 #include "net/base/net_errors.h"
 #include "net/base/request_priority.h"
+#include "net/gm/gm_tls_policy.h"
 #include "net/http/http_cache.h"
 #include "net/http/http_cache_util.h"
 #include "net/http/http_request_headers.h"
@@ -776,6 +777,9 @@ class NET_EXPORT_PRIVATE HttpCache::Transaction : public HttpTransaction {
   // checked_cast<int> at the ReadData() call site.
   size_t compressed_disk_offset_ = 0;
   int effective_load_flags_ = 0;
+  // Frozen before cache lookup, including the no-GM-policy state.
+  std::shared_ptr<const gm::TlsRule> gm_rule_;
+  std::shared_ptr<const gm::AutoConfig> gm_auto_config_;
   std::unique_ptr<PartialData> partial_;  // We are dealing with range requests.
   CompletionRepeatingCallback io_callback_;
   CompletionRepeatingCallback cache_io_callback_;  // cache-specific IO callback

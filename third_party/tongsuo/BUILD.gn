@@ -1,0 +1,83 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//build/config/clang/clang.gni")
+import("tongsuo.gni")
+
+assert(gm_tls_backend_enabled)
+assert(
+    host_os == current_os,
+    "Build Tongsuo on its target OS; native macOS/Linux runners are required.")
+
+_config_path = "$target_gen_dir/build-config.json"
+_build_config = {
+  target_os = current_os
+  target_cpu = current_cpu
+  debug = is_debug
+  archive = rebase_path(gm_tongsuo_archive)
+  output_dir = rebase_path(gm_tongsuo_output_dir)
+  compiler_dir = rebase_path("$clang_base_path/bin")
+  make = ""
+  jobs = gm_tongsuo_jobs
+  public_headers = gm_tongsuo_header_names
+  sysroot = ""
+  deployment_target = ""
+  environment = ""
+  nasm = ""
+  perl = "/usr/bin/perl"
+  if (gm_tongsuo_make != "") {
+    make = rebase_path(gm_tongsuo_make)
+  }
+}
+
+_tool_inputs = []
+_tool_deps = []
+if (is_win) {
+  _host_output =
+      get_label_info("//third_party/nasm:nasm($host_toolchain)", "root_out_dir")
+  _build_config.environment = rebase_path("$root_build_dir/environment.x64")
+  _build_config.perl = rebase_path("//third_party/perl/perl/bin/perl.exe")
+  _build_config.nasm = rebase_path("$_host_output/nasm.exe")
+  _tool_inputs += [
+    "//third_party/perl/perl/bin/perl.exe",
+    "$clang_base_path/bin/clang-cl.exe",
+  ]
+  _tool_deps += [ "//third_party/nasm:nasm($host_toolchain)" ]
+} else {
+  import("//build/config/sysroot.gni")
+  assert(sysroot != "", "Tongsuo must use the Chromium SDK/sysroot.")
+  _build_config.sysroot = rebase_path(sysroot)
+  if (is_mac) {
+    _build_config.deployment_target = mac_deployment_target
+  }
+  _tool_inputs += [
+    "$clang_base_path/bin/clang",
+    "$clang_base_path/bin/llvm-ar",
+  ]
+}
+
+write_file(_config_path, _build_config, "json")
+
+action("build") {
+  script = "build_dependency.py"
+  deps = _tool_deps
+  inputs = _tool_inputs + [
+             _config_path,
+             gm_tongsuo_archive,
+             "source.json",
+             "chromium.conf",
+             "public_headers.gni",
+           ]
+  outputs = gm_tongsuo_libraries + [ gm_tongsuo_manifest ]
+  foreach(header, gm_tongsuo_header_names) {
+    outputs += [ "$gm_tongsuo_include_dir/$header" ]
+  }
+  depfile = "$target_gen_dir/tongsuo.d"
+  args = [
+    "--config",
+    rebase_path(_config_path, root_build_dir),
+    "--depfile",
+    rebase_path(depfile, root_build_dir),
+  ]
+}

@@ -6,6 +6,8 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 
+#include <array>
+#include <cstdint>
 #include <memory>
 #include <utility>
 
@@ -28,6 +30,7 @@
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/core/common/preferences_mock_mac.h"
 #include "components/policy/policy_constants.h"
+#include "net/gm/gm_buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::apple::ScopedCFTypeRef;
@@ -183,6 +186,21 @@ class PolicyLoaderMacTest : public PolicyTestBase {
     return nullptr;
   }
 
+  void LoadGmRules(CFPropertyListRef value) {
+    RegisterChromeSchema(PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()));
+    prefs_->AddTestItem(base::SysUTF8ToCFStringRef(key::kGmTlsSiteRules).get(),
+                        value, /*is_forced=*/true, /*is_machine=*/true);
+    provider_->RefreshPolicies(PolicyFetchReason::kTest);
+    task_environment_.RunUntilIdle();
+  }
+
+  const base::Value* GetGmRules() {
+    const auto* entry = provider_->policies()
+                            .Get(PolicyNamespace(POLICY_DOMAIN_CHROME, ""))
+                            .Get(key::kGmTlsSiteRules);
+    return entry ? entry->value_unsafe() : nullptr;
+  }
+
   raw_ptr<MockPreferences, AcrossTasksDanglingUntriaged> prefs_ = nullptr;
   std::unique_ptr<AsyncPolicyProvider> provider_;
 };
@@ -205,6 +223,97 @@ TEST_F(PolicyLoaderMacTest, Invalid) {
   task_environment_.RunUntilIdle();
   const PolicyBundle kEmptyBundle;
   EXPECT_TRUE(provider_->policies().Equals(kEmptyBundle));
+}
+
+#if BUILDFLAG(XENON_GM)
+TEST_F(PolicyLoaderMacTest, GmUnconvertibleTopLevelValuesRemainPresent) {
+  ScopedCFTypeRef<CFDataRef> data(CFDataCreate(nullptr, nullptr, 0));
+  ScopedCFTypeRef<CFDateRef> date(CFDateCreate(nullptr, 0));
+  const int64_t large_integer = INT64_C(1) << 40;
+  ScopedCFTypeRef<CFNumberRef> number(
+      CFNumberCreate(nullptr, kCFNumberSInt64Type, &large_integer));
+  ASSERT_TRUE(data);
+  ASSERT_TRUE(date);
+  ASSERT_TRUE(number);
+  for (CFPropertyListRef value :
+       std::array<CFPropertyListRef, 3>{data.get(), date.get(), number.get()}) {
+    LoadGmRules(value);
+    ASSERT_TRUE(GetGmRules());
+    EXPECT_TRUE(GetGmRules()->is_none());
+  }
+}
+
+TEST_F(PolicyLoaderMacTest, GmUnsupportedArrayEntryCannotBecomeEmptyRules) {
+  ScopedCFTypeRef<CFMutableArrayRef> rules(
+      CFArrayCreateMutable(nullptr, 0, &kCFTypeArrayCallBacks));
+  ScopedCFTypeRef<CFDataRef> data(CFDataCreate(nullptr, nullptr, 0));
+  ASSERT_TRUE(rules);
+  ASSERT_TRUE(data);
+  CFArrayAppendValue(rules.get(), data.get());
+  LoadGmRules(rules.get());
+  ASSERT_TRUE(GetGmRules());
+  EXPECT_TRUE(GetGmRules()->is_none());
+}
+
+TEST_F(PolicyLoaderMacTest, GmUnsupportedNestedRestrictionRejectsWholeValue) {
+  ScopedCFTypeRef<CFMutableDictionaryRef> rule(
+      CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks,
+                                &kCFTypeDictionaryValueCallBacks));
+  ScopedCFTypeRef<CFMutableArrayRef> rules(
+      CFArrayCreateMutable(nullptr, 0, &kCFTypeArrayCallBacks));
+  ScopedCFTypeRef<CFDataRef> fingerprint(CFDataCreate(nullptr, nullptr, 0));
+  ASSERT_TRUE(rule);
+  ASSERT_TRUE(rules);
+  ASSERT_TRUE(fingerprint);
+  CFDictionarySetValue(rule.get(), CFSTR("host"), CFSTR("gm.example"));
+  CFDictionarySetValue(rule.get(), CFSTR("protocol"), CFSTR("rfc8998"));
+  // Dropping an optional fingerprint would change certificate selection.
+  CFDictionarySetValue(rule.get(), CFSTR("certificate_sha256"),
+                       fingerprint.get());
+  CFArrayAppendValue(rules.get(), rule.get());
+  LoadGmRules(rules.get());
+  ASSERT_TRUE(GetGmRules());
+  EXPECT_TRUE(GetGmRules()->is_none());
+}
+
+TEST_F(PolicyLoaderMacTest, GmConvertibleValuesReachHandlerUnchanged) {
+  base::ListValue rules;
+  rules.Append(base::DictValue()
+                   .Set("host", "gm.example")
+                   .Set("protocol", "rfc8998")
+                   .Set("trust_anchors", base::ListValue().Append("DER")));
+  for (const auto& expected : std::array<base::Value, 3>{
+           base::Value(rules.Clone()), base::Value(base::ListValue()),
+           base::Value("wrong top-level type")}) {
+    auto property = ValueToProperty(expected);
+    ASSERT_TRUE(property);
+    LoadGmRules(property.get());
+    ASSERT_TRUE(GetGmRules());
+    EXPECT_EQ(*GetGmRules(), expected);
+  }
+}
+
+#endif  // BUILDFLAG(XENON_GM)
+
+TEST_F(PolicyLoaderMacTest, OtherPolicyArraysKeepExistingConversion) {
+  RegisterChromeSchema(PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()));
+  ScopedCFTypeRef<CFMutableArrayRef> values(
+      CFArrayCreateMutable(nullptr, 0, &kCFTypeArrayCallBacks));
+  ScopedCFTypeRef<CFDataRef> data(CFDataCreate(nullptr, nullptr, 0));
+  ASSERT_TRUE(values);
+  ASSERT_TRUE(data);
+  CFArrayAppendValue(values.get(), CFSTR("https://example.com"));
+  CFArrayAppendValue(values.get(), data.get());
+  prefs_->AddTestItem(base::SysUTF8ToCFStringRef(key::kURLAllowlist).get(),
+                      values.get(), /*is_forced=*/true, /*is_machine=*/true);
+  provider_->RefreshPolicies(PolicyFetchReason::kTest);
+  task_environment_.RunUntilIdle();
+  const auto* value =
+      provider_->policies()
+          .Get(PolicyNamespace(POLICY_DOMAIN_CHROME, ""))
+          .GetValue(key::kURLAllowlist, base::Value::Type::LIST);
+  ASSERT_TRUE(value);
+  EXPECT_EQ(value->GetList(), base::ListValue().Append("https://example.com"));
 }
 
 TEST_F(PolicyLoaderMacTest, TestNonForcedValue) {

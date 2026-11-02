@@ -16,6 +16,7 @@
 #include "net/base/privacy_mode.h"
 #include "net/dns/host_resolver.h"
 #include "net/dns/public/secure_dns_policy.h"
+#include "net/gm/gm_tls_policy.h"
 #include "net/http/alternative_service.h"
 #include "net/quic/quic_session_alias_key.h"
 #include "net/quic/quic_session_key.h"
@@ -45,7 +46,8 @@ class NET_EXPORT_PRIVATE HttpStreamKey {
       SecureDnsPolicy secure_dns_policy,
       bool disable_cert_network_fetches,
       handles::NetworkHandle target_network,
-      base::optional_ref<const AlternativeService> alt_service = std::nullopt);
+      base::optional_ref<const AlternativeService> alt_service = std::nullopt,
+      std::shared_ptr<const gm::TlsRule> gm_rule = nullptr);
 
   ~HttpStreamKey();
 
@@ -72,6 +74,9 @@ class NET_EXPORT_PRIVATE HttpStreamKey {
   }
 
   handles::NetworkHandle target_network() const { return target_network_; }
+
+  const gm::ConnectionProfile& gm_profile() const { return gm_profile_; }
+  const std::shared_ptr<const gm::TlsRule>& gm_rule() const { return gm_rule_; }
 
   std::string ToString() const;
 
@@ -112,6 +117,8 @@ class NET_EXPORT_PRIVATE HttpStreamKey {
   bool disable_cert_network_fetches_ = false;
   handles::NetworkHandle target_network_ = handles::kInvalidNetworkHandle;
   std::optional<AlternativeService> alt_service_;
+  gm::ConnectionProfile gm_profile_;
+  std::shared_ptr<const gm::TlsRule> gm_rule_;
 };
 
 }  // namespace net

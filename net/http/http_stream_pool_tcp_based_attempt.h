@@ -12,6 +12,7 @@
 #include "base/timer/timer.h"
 #include "base/trace_event/trace_event.h"
 #include "base/types/expected.h"
+#include "base/unguessable_token.h"
 #include "base/values.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/ip_endpoint.h"
@@ -40,7 +41,10 @@ class HttpStreamPool::TcpBasedAttempt : public TlsStreamAttempt::Delegate {
 
   TcpBasedAttemptSlot* slot() const { return slot_; }
 
-  void ResetSlot() { slot_ = nullptr; }
+  void ResetSlot() {
+    slot_ = nullptr;
+    gm_client_auth_owner_ = nullptr;
+  }
 
   StreamAttempt* attempt() { return attempt_.get(); }
 
@@ -53,6 +57,15 @@ class HttpStreamPool::TcpBasedAttempt : public TlsStreamAttempt::Delegate {
   // Set to true when the attempt is aborted. When true, the attempt will fail
   // but not be considered as an actual failure.
   bool is_aborted() const { return is_aborted_; }
+
+  Job* gm_client_auth_owner() const { return gm_client_auth_owner_; }
+  bool gm_client_auth_without_owner() const {
+    return gm_client_auth_without_owner_;
+  }
+  void SetGmClientAuthOwner(Job* owner) {
+    gm_client_auth_owner_ = owner;
+    gm_client_auth_without_owner_ = !owner;
+  }
 
   // TlsStreamAttempt::Delegate implementation:
   void OnTcpHandshakeComplete() override;
@@ -73,6 +86,7 @@ class HttpStreamPool::TcpBasedAttempt : public TlsStreamAttempt::Delegate {
  private:
   void OnAttemptSlow();
   void OnAttemptComplete(int rv);
+  base::UnguessableToken ResolveGmClientAuthContext();
 
   const raw_ptr<AttemptManager> manager_;
   const perfetto::Track track_;
@@ -90,6 +104,11 @@ class HttpStreamPool::TcpBasedAttempt : public TlsStreamAttempt::Delegate {
   // Set to true when `this` and `attempt_` should abort. Currently used to
   // handle ECH failure.
   bool is_aborted_ = false;
+
+  // Set only when a fresh GM authorization actually needs a page. The manager
+  // destroys this pending attempt before removing its owner.
+  raw_ptr<Job> gm_client_auth_owner_ = nullptr;
+  bool gm_client_auth_without_owner_ = false;
 
   // Set to the time `attempt_` completes the TCP handshake. Only set when the
   // underlying attempt is TLS. Used for histogram recording.

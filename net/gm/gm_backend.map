@@ -1,0 +1,4 @@
+{
+  global: gm_backend_get_api;
+  local: *;
+};

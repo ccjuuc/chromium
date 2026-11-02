@@ -1,0 +1,61 @@
+caption: Configure national TLS for exact enterprise origins
+desc: |-
+  Selects TLCP, strict RFC 8998, or joint TLS 1.3 negotiation for exact HTTPS origins in supported 64-bit builds on Windows, macOS and Linux. Normal origins retain Chromium TLS. Rules include explicit DER trust anchors and revocation settings. A malformed configuration rejects secure connections rather than silently reverting to ordinary TLS. A change revokes USBKey authorizations. No PIN or private key belongs in this policy.
+  The tls13_auto protocol offers ordinary TLS 1.3 and RFC 8998 in one ClientHello. Its RFC 8998 result uses the configured national TLS trust anchors; an ordinary TLS result uses Chromium's normal certificate verification. It does not enable TLCP, QUIC, or cross-origin connection reuse. The rfc8998 protocol continues to require national TLS algorithms. A required USBKey identity must never be silently waived by an ordinary TLS result.
+  The optional certificate_sha256 selects a signing certificate by exact SHA-256 fingerprint. Without it the user chooses an identity. Generations and policy_revision are positive integers. Revocation must explicitly be disabled, leaf or chain; the latter two require current DER CRLs. Trust anchors and CRLs are base64 encoded DER. This policy requires a build with the national TLS backend.
+  macOS and Linux currently require these explicit trust anchors and do not enable automatic system-trust discovery. USBKey client authentication is currently implemented only on Windows x64; an identity policy on another platform fails if no supported identity provider is available.
+example_value: []
+features:
+  dynamic_refresh: true
+  per_profile: false
+owners:
+- file://net/OWNERS
+schema:
+  type: array
+  items:
+    type: object
+    properties:
+      host:
+        type: string
+      port:
+        type: integer
+        minimum: 1
+        maximum: 65535
+      protocol:
+        type: string
+        enum: [tlcp, rfc8998, tls13_auto]
+      trust_profile_id:
+        type: string
+      trust_generation:
+        type: integer
+        minimum: 1
+      identity_policy_id:
+        type: string
+      identity_generation:
+        type: integer
+        minimum: 1
+      policy_revision:
+        type: integer
+        minimum: 1
+      certificate_sha256:
+        type: string
+      trust_anchors:
+        type: array
+        items:
+          type: string
+      crls:
+        type: array
+        items:
+          type: string
+      revocation:
+        type: string
+        enum: [disabled, leaf, chain]
+      enable_session_resumption:
+        type: boolean
+    required: [host, protocol, trust_profile_id, trust_generation, policy_revision, trust_anchors, revocation]
+supported_on:
+- chrome.win:153-
+- chrome.mac:153-
+- chrome.linux:153-
+tags: []
+type: dict

@@ -558,6 +558,23 @@ mojom("mojom_origin_or_wildcard_header_value") {
 # These .mojom files are put in their own target to avoid a circular dependency,
 # which comes from the fact that the typemap for url_loader.mojom
 # (ResourceRequest) depends on them.
+mojom("mojom_ssl_config") {
+  generate_java = true
+  sources = [ "ssl_config.mojom" ]
+}
+
+# Authentication requests are shared by the network context and individual
+# URLLoader observers. Keep them below both targets to avoid a dependency cycle.
+mojom("mojom_gm_identity") {
+  generate_java = true
+  sources = [ "gm_identity.mojom" ]
+  public_deps = [
+    ":mojom_ssl_config",
+    "//services/gm_key/public/mojom",
+    "//url/mojom:url_mojom_origin",
+  ]
+}
+
 mojom("url_loader_base") {
   generate_java = true
   sources = [
@@ -617,6 +634,7 @@ mojom("url_loader_base") {
     ":cookies_mojom",
     ":mojom_connection_allowlist",
     ":mojom_content_security_policy",
+    ":mojom_gm_identity",
     ":mojom_integrity_algorithm",
     ":mojom_integrity_policy",
     ":mojom_ip_address",
@@ -1937,7 +1955,6 @@ mojom("mojom") {
     "socket_broker.mojom",
     "socket_connection_tracker.mojom",
     "socket_factory.mojom",
-    "ssl_config.mojom",
     "system_dns_resolution.mojom",
     "tcp_socket.mojom",
     "tls_socket.mojom",
@@ -1952,6 +1969,7 @@ mojom("mojom") {
     ":mojom_connection_allowlist",
     ":mojom_cors_origin_pattern",
     ":mojom_first_party_sets",
+    ":mojom_gm_identity",
     ":mojom_host_resolver",
     ":mojom_ip_address",
     ":mojom_network_anonymization_key",
@@ -1960,6 +1978,7 @@ mojom("mojom") {
     ":mojom_proxy_config",
     ":mojom_schemeful_site",
     ":mojom_shared_dictionary",
+    ":mojom_ssl_config",
     ":mojom_storage_access_api",
     ":mojom_structured_headers",
     ":mojom_unencoded_digest",

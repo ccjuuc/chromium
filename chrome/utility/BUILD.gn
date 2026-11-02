@@ -9,6 +9,7 @@ import("//components/on_device_translation/buildflags/features.gni")
 import("//crypto/features.gni")
 import("//extensions/buildflags/buildflags.gni")
 import("//media/media_options.gni")
+import("//net/gm/gm.gni")
 import("//pdf/features.gni")
 import("//printing/buildflags/buildflags.gni")
 import("//services/screen_ai/buildflags/features.gni")
@@ -62,6 +63,7 @@ static_library("utility") {
     "//ipc",
     "//media",
     "//net",
+    "//net/gm:buildflags",
     "//pdf:buildflags",
     "//printing/buildflags",
     "//services/data_decoder:lib",
@@ -83,6 +85,9 @@ static_library("utility") {
       "//components/services/quarantine",
       "//components/services/quarantine/public/mojom",
     ]
+    if (gm_tls_backend_enabled && target_cpu == "x64") {
+      deps += [ "//services/gm_key:service" ]
+    }
   }
 
   if (is_mac) {

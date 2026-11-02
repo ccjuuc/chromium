@@ -4,6 +4,8 @@
 
 #include "net/ssl/ssl_client_session_cache.h"
 
+#include <vector>
+
 #include "base/memory_coordinator/memory_coordinator_features.h"
 #include "base/memory_coordinator/test_memory_consumer_registry.h"
 #include "base/memory_coordinator/utils.h"
@@ -19,6 +21,7 @@
 #include "net/base/features.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/base/schemeful_site.h"
+#include "net/gm/gm_connection_profile.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/boringssl/src/include/openssl/ssl.h"
@@ -60,6 +63,15 @@ SSLClientSessionCache::Key WithProxyUsage(SSLClientSessionCache::Key key) {
   return key;
 }
 
+SSLClientSessionCache::Key MakeJointTestKey() {
+  auto key = MakeTestKey("joint.test");
+  key.gm_profile = gm::ConnectionProfile(gm::TlsProtocol::kTls13Auto, "corp-ca",
+                                         1, "usbkey-policy", 1, 1);
+  key.gm_identity_id = "authorized-key";
+  key.gm_identity_generation = 1;
+  return key;
+}
+
 class SSLClientSessionCacheTest : public testing::Test {
  public:
   SSLClientSessionCacheTest() : ssl_ctx_(SSL_CTX_new(TLS_method())) {}
@@ -68,8 +80,9 @@ class SSLClientSessionCacheTest : public testing::Test {
   bssl::UniquePtr<SSL_SESSION> NewSSLSession(
       uint16_t version = TLS1_2_VERSION) {
     SSL_SESSION* session = SSL_SESSION_new(ssl_ctx_.get());
-    if (!SSL_SESSION_set_protocol_version(session, version))
+    if (!SSL_SESSION_set_protocol_version(session, version)) {
       return nullptr;
+    }
     return bssl::UniquePtr<SSL_SESSION>(session);
   }
 
@@ -159,6 +172,251 @@ TEST_F(SSLClientSessionCacheTest, Basic) {
   EXPECT_EQ(nullptr, cache.Lookup(AddProxyChain(MakeTestKey("key1"))).get());
   EXPECT_EQ(nullptr, cache.Lookup(WithProxyUsage(MakeTestKey("key1"))).get());
   EXPECT_EQ(0u, cache.size());
+}
+
+TEST_F(SSLClientSessionCacheTest,
+       OrdinaryAndJointNegotiationCannotShareSessions) {
+  SSLClientSessionCache cache({});
+  const auto ordinary = MakeTestKey("joint.test");
+  const auto joint = MakeJointTestKey();
+  auto ordinary_session = NewSSLSession(TLS1_3_VERSION);
+  auto joint_session = NewSSLSession(TLS1_3_VERSION);
+  ASSERT_TRUE(ordinary_session);
+  ASSERT_TRUE(joint_session);
+
+  cache.Insert(cache.generation_number(), ordinary,
+               bssl::UpRef(ordinary_session));
+  EXPECT_FALSE(cache.Lookup(joint));
+  cache.Insert(cache.gm_generation_number(), joint, bssl::UpRef(joint_session));
+  EXPECT_EQ(cache.size(), 2u);
+  EXPECT_EQ(cache.Lookup(ordinary).get(), ordinary_session.get());
+  EXPECT_EQ(cache.Lookup(joint).get(), joint_session.get());
+  EXPECT_EQ(cache.size(), 0u);
+
+  cache.Insert(cache.gm_generation_number(), joint, bssl::UpRef(joint_session));
+  EXPECT_FALSE(cache.Lookup(ordinary));
+  EXPECT_EQ(cache.Lookup(joint).get(), joint_session.get());
+}
+
+TEST_F(SSLClientSessionCacheTest,
+       JointTrustPolicyAndIdentityAreSeparatePartitions) {
+  SSLClientSessionCache cache({});
+  const auto original = MakeJointTestKey();
+  std::vector<SSLClientSessionCache::Key> keys{original};
+  for (const auto& profile : {
+           gm::ConnectionProfile(gm::TlsProtocol::kRfc8998, "corp-ca", 1,
+                                 "usbkey-policy", 1, 1),
+           gm::ConnectionProfile(gm::TlsProtocol::kTls13Auto, "other-ca", 1,
+                                 "usbkey-policy", 1, 1),
+           gm::ConnectionProfile(gm::TlsProtocol::kTls13Auto, "corp-ca", 2,
+                                 "usbkey-policy", 1, 1),
+           gm::ConnectionProfile(gm::TlsProtocol::kTls13Auto, "corp-ca", 1,
+                                 "other-policy", 1, 1),
+           gm::ConnectionProfile(gm::TlsProtocol::kTls13Auto, "corp-ca", 1,
+                                 "usbkey-policy", 2, 1),
+           gm::ConnectionProfile(gm::TlsProtocol::kTls13Auto, "corp-ca", 1,
+                                 "usbkey-policy", 1, 2),
+       }) {
+    auto changed = original;
+    changed.gm_profile = profile;
+    keys.push_back(std::move(changed));
+  }
+  auto other_device = original;
+  other_device.gm_identity_id = "other-authorized-key";
+  keys.push_back(std::move(other_device));
+  auto renewed_authorization = original;
+  renewed_authorization.gm_identity_generation = 2;
+  keys.push_back(std::move(renewed_authorization));
+  auto anonymous = original;
+  anonymous.gm_identity_id.clear();
+  anonymous.gm_identity_generation = 0;
+  keys.push_back(std::move(anonymous));
+
+  std::vector<bssl::UniquePtr<SSL_SESSION>> sessions;
+  for (size_t i = 0; i < keys.size(); ++i) {
+    SCOPED_TRACE(i);
+    // A session from any previous policy or device must not be offered under
+    // the new key, even when the host, NAK and TLS wire version are identical.
+    EXPECT_FALSE(cache.Lookup(keys[i]));
+    sessions.push_back(NewSSLSession(TLS1_3_VERSION));
+    ASSERT_TRUE(sessions.back());
+    cache.Insert(cache.gm_generation_number(), keys[i],
+                 bssl::UpRef(sessions.back()));
+  }
+  EXPECT_EQ(cache.size(), keys.size());
+  for (size_t i = 0; i < keys.size(); ++i) {
+    SCOPED_TRACE(i);
+    EXPECT_EQ(cache.Lookup(keys[i]).get(), sessions[i].get());
+  }
+  EXPECT_EQ(cache.size(), 0u);
+}
+
+TEST_F(SSLClientSessionCacheTest, FlushForServersClearsEveryJointPartition) {
+  SSLClientSessionCache cache({});
+  const auto joint = MakeJointTestKey();
+  auto changed_identity = joint;
+  changed_identity.gm_identity_generation = 2;
+  auto other_port = joint;
+  other_port.server = HostPortPair("joint.test", 444);
+  auto other_host = joint;
+  other_host.server = HostPortPair("unaffected.test", 443);
+  const auto ordinary = MakeTestKey("joint.test");
+  auto session = NewSSLSession(TLS1_3_VERSION);
+  ASSERT_TRUE(session);
+  const uint64_t generation = cache.generation_number();
+  const uint64_t gm_generation = cache.gm_generation_number();
+  for (const auto& key :
+       {joint, changed_identity, other_port, other_host, ordinary}) {
+    cache.Insert(key.gm_profile ? gm_generation : generation, key,
+                 bssl::UpRef(session));
+  }
+  ASSERT_EQ(cache.size(), 5u);
+  cache.FlushForServers({HostPortPair("joint.test", 443)});
+  EXPECT_FALSE(cache.Lookup(joint));
+  EXPECT_FALSE(cache.Lookup(changed_identity));
+  EXPECT_FALSE(cache.Lookup(ordinary));
+  EXPECT_EQ(cache.size(), 2u);
+  // A late ticket callback from the invalidated connection cannot revive it.
+  cache.Insert(gm_generation, joint, bssl::UpRef(session));
+  EXPECT_FALSE(cache.Lookup(joint));
+  EXPECT_EQ(cache.Lookup(other_port).get(), session.get());
+  EXPECT_EQ(cache.Lookup(other_host).get(), session.get());
+}
+
+TEST_F(SSLClientSessionCacheTest,
+       GmInvalidationPreservesOrdinaryAndProxyTickets) {
+  SSLClientSessionCache cache({});
+  const auto joint = MakeJointTestKey();
+  auto changed_identity = joint;
+  changed_identity.gm_identity_generation = 2;
+  auto anonymous = joint;
+  anonymous.gm_identity_id.clear();
+  anonymous.gm_identity_generation = 0;
+  const std::vector gm_keys = {joint, changed_identity, anonymous,
+                               AddProxyChain(joint)};
+  const auto ordinary = MakeTestKey("joint.test");
+  const std::vector ordinary_keys = {ordinary, WithProxyUsage(ordinary),
+                                     AddProxyChain(ordinary)};
+  auto other_host = joint;
+  other_host.server = HostPortPair("unaffected.test", 443);
+  auto other_port = joint;
+  other_port.server = HostPortPair("joint.test", 444);
+  auto session = NewSSLSession(TLS1_3_VERSION);
+  ASSERT_TRUE(session);
+
+  // Deliberately separate the generations before insertion: GM tickets must
+  // use their own generation even if the negotiated suite was ordinary TLS.
+  cache.FlushGmForServers({HostPortPair("unrelated.test", 443)});
+  const uint64_t generation = cache.generation_number();
+  const uint64_t gm_generation = cache.gm_generation_number();
+  ASSERT_NE(generation, gm_generation);
+  for (const auto& key : gm_keys) {
+    cache.Insert(gm_generation, key, bssl::UpRef(session));
+  }
+  for (const auto& key : ordinary_keys) {
+    cache.Insert(generation, key, bssl::UpRef(session));
+  }
+  for (const auto& key : {other_host, other_port}) {
+    cache.Insert(gm_generation, key, bssl::UpRef(session));
+  }
+  ASSERT_EQ(cache.size(), gm_keys.size() + ordinary_keys.size() + 2);
+
+  // A Key removal or capability expiry must leave same-host ordinary HTTPS,
+  // HTTPS proxy authentication, and unrelated GM origins reusable.
+  cache.FlushGmForServers({joint.server});
+  EXPECT_EQ(cache.generation_number(), generation);
+  EXPECT_NE(cache.gm_generation_number(), gm_generation);
+  for (const auto& key : gm_keys) {
+    EXPECT_FALSE(cache.Lookup(key));
+  }
+  ASSERT_EQ(cache.size(), ordinary_keys.size() + 2);
+  for (const auto& key : ordinary_keys) {
+    EXPECT_EQ(cache.Lookup(key).get(), session.get());
+  }
+  EXPECT_EQ(cache.Lookup(other_host).get(), session.get());
+  EXPECT_EQ(cache.Lookup(other_port).get(), session.get());
+  EXPECT_EQ(cache.size(), 0u);
+}
+
+TEST_F(SSLClientSessionCacheTest,
+       GmInvalidationRejectsStaleGmButAcceptsLateOrdinaryTickets) {
+  SSLClientSessionCache cache({});
+  const auto joint = MakeJointTestKey();
+  auto other_gm = joint;
+  other_gm.server = HostPortPair("unaffected.test", 443);
+  const auto ordinary = MakeTestKey("joint.test");
+  const uint64_t generation = cache.generation_number();
+  const uint64_t gm_generation = cache.gm_generation_number();
+  auto retained = NewSSLSession(TLS1_3_VERSION);
+  auto late = NewSSLSession(TLS1_3_VERSION);
+  auto current = NewSSLSession(TLS1_3_VERSION);
+  ASSERT_TRUE(retained);
+  ASSERT_TRUE(late);
+  ASSERT_TRUE(current);
+  cache.Insert(gm_generation, other_gm, bssl::UpRef(retained));
+
+  cache.FlushGmForServers({joint.server});
+  // These ordinary handshakes started before the GM invalidation. Their late
+  // NewSessionTicket callbacks must still cache tickets without reconnecting.
+  for (const auto& key : {ordinary, WithProxyUsage(ordinary),
+                          MakeTestKey("ordinary-elsewhere.test")}) {
+    cache.Insert(generation, key, bssl::UpRef(late));
+    EXPECT_EQ(cache.Lookup(key).get(), late.get());
+  }
+  // Stale GM callbacks cannot revive the affected identity or overwrite an
+  // unrelated, already cached ticket. Existing unrelated entries stay valid.
+  cache.Insert(gm_generation, joint, bssl::UpRef(late));
+  cache.Insert(gm_generation, other_gm, bssl::UpRef(late));
+  EXPECT_FALSE(cache.Lookup(joint));
+  EXPECT_EQ(cache.Lookup(other_gm).get(), retained.get());
+  EXPECT_FALSE(cache.Lookup(other_gm));
+  cache.Insert(cache.gm_generation_number(), joint, bssl::UpRef(current));
+  EXPECT_EQ(cache.Lookup(joint).get(), current.get());
+}
+
+TEST_F(SSLClientSessionCacheTest,
+       OrdinaryInvalidationRejectsLateTicketsFromBothGenerations) {
+  for (const bool flush_all : {false, true}) {
+    SCOPED_TRACE(flush_all);
+    SSLClientSessionCache cache({});
+    const auto joint = MakeJointTestKey();
+    const auto ordinary = MakeTestKey("joint.test");
+    auto other_joint = joint;
+    other_joint.server = HostPortPair("unaffected.test", 443);
+    const auto other_ordinary = MakeTestKey("unaffected.test");
+    auto session = NewSSLSession(TLS1_3_VERSION);
+    ASSERT_TRUE(session);
+    cache.FlushGmForServers({HostPortPair("unrelated.test", 443)});
+    const uint64_t generation = cache.generation_number();
+    const uint64_t gm_generation = cache.gm_generation_number();
+    ASSERT_NE(generation, gm_generation);
+    for (const auto& key : {joint, other_joint}) {
+      cache.Insert(gm_generation, key, bssl::UpRef(session));
+    }
+    for (const auto& key : {ordinary, other_ordinary}) {
+      cache.Insert(generation, key, bssl::UpRef(session));
+    }
+    ASSERT_EQ(cache.size(), 4u);
+    if (flush_all) {
+      cache.Flush();
+    } else {
+      cache.FlushForServers({joint.server});
+    }
+    EXPECT_NE(cache.generation_number(), generation);
+    EXPECT_NE(cache.gm_generation_number(), gm_generation);
+    cache.Insert(generation, ordinary, bssl::UpRef(session));
+    cache.Insert(gm_generation, joint, bssl::UpRef(session));
+    EXPECT_FALSE(cache.Lookup(ordinary));
+    EXPECT_FALSE(cache.Lookup(joint));
+    EXPECT_EQ(cache.Lookup(other_ordinary).get(),
+              flush_all ? nullptr : session.get());
+    EXPECT_EQ(cache.Lookup(other_joint).get(),
+              flush_all ? nullptr : session.get());
+    cache.Insert(cache.generation_number(), ordinary, bssl::UpRef(session));
+    cache.Insert(cache.gm_generation_number(), joint, bssl::UpRef(session));
+    EXPECT_EQ(cache.Lookup(ordinary).get(), session.get());
+    EXPECT_EQ(cache.Lookup(joint).get(), session.get());
+  }
 }
 
 // Test basic insertion and lookup operations with single-use sessions.
@@ -376,8 +634,9 @@ TEST_F(SSLClientSessionCacheTest, Expiration) {
 
   // Perform one fewer lookup than needed to trigger the expiration check. This
   // shall not expire any session.
-  for (size_t i = 0; i < kExpirationCheckCount - 1; i++)
+  for (size_t i = 0; i < kExpirationCheckCount - 1; i++) {
     cache.Lookup(MakeTestKey("key"));
+  }
 
   // All entries are still in the cache.
   EXPECT_EQ(kNumEntries, cache.size());

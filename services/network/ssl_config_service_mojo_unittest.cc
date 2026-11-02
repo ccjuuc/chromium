@@ -5,6 +5,7 @@
 #include "services/network/ssl_config_service_mojo.h"
 
 #include <array>
+#include <utility>
 
 #include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
@@ -22,6 +23,8 @@
 #include "net/cert/test_root_certs.h"
 #include "net/cert/x509_certificate.h"
 #include "net/cert/x509_util.h"
+#include "net/gm/gm_buildflags.h"
+#include "net/gm/gm_tls_policy.h"
 #include "net/log/net_log_with_source.h"
 #include "net/ssl/ssl_config.h"
 #include "net/ssl/ssl_config_service.h"
@@ -78,6 +81,224 @@ class TestSSLConfigServiceObserver : public net::SSLConfigService::Observer {
   // Most recent call to OnSSLContextConfigChanged().
   base::test::TestFuture<net::SSLContextConfig> config_changed_call_;
 };
+
+#if BUILDFLAG(XENON_GM)
+TEST(SSLConfigServiceMojoTest, GmPolicyEpochCannotReviveStaleConnections) {
+  base::test::TaskEnvironment task_environment;
+  auto config = mojom::SSLConfig::New();
+  auto rule = mojom::GmTlsRule::New();
+  rule->host = "gm.example";
+  rule->protocol = mojom::GmTlsProtocol::kTlcp;
+  rule->trust_profile_id = "enterprise";
+  rule->trust_generation = 1;
+  rule->identity_policy_id = "feitian";
+  rule->identity_generation = 1;
+  rule->policy_revision = 1;
+  rule->trust_anchors = {{0x30, 0}};
+  config->gm_tls_rules.push_back(std::move(rule));
+  SSLConfigServiceMojo service(config.Clone(), {}, nullptr);
+  TestSSLConfigServiceObserver observer(&service);
+  const auto first = service.GetSSLContextConfig().gm_tls_policy;
+  ASSERT_TRUE(first);
+  ASSERT_TRUE(first->IsValid());
+  service.OnSSLConfigUpdated(config.Clone());
+  EXPECT_EQ(first, service.GetSSLContextConfig().gm_tls_policy);
+
+  // Reusing every supplied generation must still get a distinct pool key when
+  // the actual roots change. The old immutable snapshot remains unchanged.
+  config->gm_tls_rules[0]->trust_anchors[0].push_back(1);
+  service.OnSSLConfigUpdated(config.Clone());
+  const auto changed = observer.WaitForChange().gm_tls_policy;
+  ASSERT_TRUE(changed);
+  EXPECT_NE(first->Match("https", "gm.example", 443)->profile,
+            changed->Match("https", "gm.example", 443)->profile);
+  service.OnSSLConfigUpdated(config.Clone());
+  EXPECT_EQ(changed, service.GetSSLContextConfig().gm_tls_policy);
+
+  service.OnSSLConfigUpdated(mojom::SSLConfig::New());
+  EXPECT_FALSE(observer.WaitForChange().gm_tls_policy);
+  service.OnSSLConfigUpdated(config.Clone());
+  const auto readded = observer.WaitForChange().gm_tls_policy;
+  ASSERT_TRUE(readded);
+  EXPECT_NE(changed->Match("https", "gm.example", 443)->profile,
+            readded->Match("https", "gm.example", 443)->profile);
+
+  config->gm_tls_rules[0]->trust_anchors.clear();
+  service.OnSSLConfigUpdated(config.Clone());
+  const auto invalid = observer.WaitForChange().gm_tls_policy;
+  ASSERT_TRUE(invalid);
+  EXPECT_FALSE(invalid->IsValid());
+  ASSERT_TRUE(invalid->Match("https", "other.example", 443));
+  EXPECT_FALSE(invalid->Match("https", "other.example", 443)->IsValid());
+}
+
+TEST(SSLConfigServiceMojoTest, GmAutomaticTrustEpochAndDisableInvalidateState) {
+  base::test::TaskEnvironment task_environment;
+  auto config = mojom::SSLConfig::New();
+  config->gm_auto_config = mojom::GmAutoConfig::New();
+  config->gm_auto_config->enabled = true;
+  config->gm_auto_config->epoch = 1;
+  config->gm_auto_config->trust_anchors = {{0x30, 1}};
+  config->gm_auto_config->untrusted_intermediates = {{0x30, 2}};
+  config->gm_auto_config->disallowed_certificates = {{0x30, 3}};
+  config->gm_auto_config->crls = {{0x30, 4}};
+  SSLConfigServiceMojo service(config.Clone(), {}, nullptr);
+  TestSSLConfigServiceObserver observer(&service);
+  const auto first = service.GetSSLContextConfig().gm_auto_config;
+  ASSERT_TRUE(first);
+  EXPECT_TRUE(first->IsValid());
+  EXPECT_EQ(first->untrusted_intermediates,
+            config->gm_auto_config->untrusted_intermediates);
+  EXPECT_EQ(first->disallowed_certificates,
+            config->gm_auto_config->disallowed_certificates);
+  EXPECT_EQ(first->crls, config->gm_auto_config->crls);
+  service.OnSSLConfigUpdated(config.Clone());
+  EXPECT_EQ(first, service.GetSSLContextConfig().gm_auto_config);
+
+  // A store notification changes the epoch even if the DER is unchanged.
+  ++config->gm_auto_config->epoch;
+  service.OnSSLConfigUpdated(config.Clone());
+  const auto notified = observer.WaitForChange().gm_auto_config;
+  ASSERT_TRUE(notified);
+  EXPECT_NE(first->epoch, notified->epoch);
+
+  // Reusing the supplied generation cannot revive old trust or session keys.
+  config->gm_auto_config->trust_anchors.clear();
+  service.OnSSLConfigUpdated(config.Clone());
+  const auto empty = observer.WaitForChange().gm_auto_config;
+  ASSERT_TRUE(empty);
+  EXPECT_TRUE(empty->IsValid());
+  EXPECT_NE(notified->epoch, empty->epoch);
+  const auto rule = empty->CreateRule("https", "gm.example", 443,
+                                      net::gm::TlsProtocol::kTlcp);
+  ASSERT_TRUE(rule);
+  EXPECT_TRUE(rule->trust_anchors.empty());
+
+  config->gm_auto_config->enabled = false;
+  service.OnSSLConfigUpdated(config.Clone());
+  const auto disabled = observer.WaitForChange().gm_auto_config;
+  ASSERT_TRUE(disabled);
+  EXPECT_FALSE(disabled->CreateRule("https", "gm.example", 443,
+                                    net::gm::TlsProtocol::kTlcp));
+  service.OnSSLConfigUpdated(mojom::SSLConfig::New());
+  EXPECT_FALSE(observer.WaitForChange().gm_auto_config);
+  config->gm_auto_config->enabled = true;
+  service.OnSSLConfigUpdated(config.Clone());
+  EXPECT_NE(disabled->epoch, observer.WaitForChange().gm_auto_config->epoch);
+}
+
+TEST(SSLConfigServiceMojoTest, GmJointModeRoundTripsWithItsOwnTrustProfile) {
+  base::test::TaskEnvironment task_environment;
+  for (const auto [wire_protocol, expected_protocol] :
+       {std::pair(mojom::GmTlsProtocol::kTlcp, net::gm::TlsProtocol::kTlcp),
+        std::pair(mojom::GmTlsProtocol::kRfc8998,
+                  net::gm::TlsProtocol::kRfc8998),
+        std::pair(mojom::GmTlsProtocol::kTls13Auto,
+                  net::gm::TlsProtocol::kTls13Auto)}) {
+    SCOPED_TRACE(static_cast<int>(wire_protocol));
+    mojo::Remote<mojom::SSLConfigClient> client;
+    SSLConfigServiceMojo service(mojom::SSLConfig::New(),
+                                 client.BindNewPipeAndPassReceiver(), nullptr);
+    TestSSLConfigServiceObserver observer(&service);
+    auto config = mojom::SSLConfig::New();
+    auto rule = mojom::GmTlsRule::New();
+    rule->host = "gm.example";
+    rule->protocol = wire_protocol;
+    rule->trust_profile_id = "explicit-gm-roots";
+    rule->trust_generation = 7;
+    rule->identity_policy_id = "feitian";
+    rule->identity_generation = 9;
+    rule->policy_revision = 11;
+    rule->trust_anchors = {{0x30, 1}};
+    rule->crls = {{0x30, 2}};
+    rule->revocation_mode = 2;
+    rule->enable_session_resumption = false;
+    config->gm_tls_rules.push_back(std::move(rule));
+    client->OnSSLConfigUpdated(config.Clone());
+    const auto converted = observer.WaitForChange();
+    ASSERT_TRUE(converted.gm_tls_policy);
+    ASSERT_TRUE(converted.gm_tls_policy->IsValid());
+    const auto selected =
+        converted.gm_tls_policy->Match("https", "gm.example", 443);
+    ASSERT_TRUE(selected);
+    EXPECT_EQ(selected->profile.protocol(), expected_protocol);
+    EXPECT_EQ(selected->profile.trust_profile_id(), "explicit-gm-roots");
+    EXPECT_EQ(selected->profile.trust_generation(), 7u);
+    EXPECT_EQ(selected->profile.client_identity_policy_id(), "feitian");
+    EXPECT_EQ(selected->profile.identity_generation(), 9u);
+    EXPECT_NE(selected->profile.effective_policy_revision(), 0u);
+    EXPECT_EQ(selected->trust_anchors, config->gm_tls_rules[0]->trust_anchors);
+    EXPECT_EQ(selected->crls, config->gm_tls_rules[0]->crls);
+    EXPECT_EQ(selected->revocation_mode, 2u);
+    EXPECT_FALSE(selected->enable_session_resumption);
+    EXPECT_FALSE(selected->automatic);
+    EXPECT_FALSE(converted.gm_auto_config);
+  }
+}
+
+TEST(SSLConfigServiceMojoTest, GmJointModeCannotBorrowAutomaticTrust) {
+  base::test::TaskEnvironment task_environment;
+  auto config = mojom::SSLConfig::New();
+  config->gm_auto_config = mojom::GmAutoConfig::New();
+  config->gm_auto_config->enabled = true;
+  config->gm_auto_config->epoch = 1;
+  config->gm_auto_config->trust_anchors = {{0x30, 1}};
+  auto rule = mojom::GmTlsRule::New();
+  rule->host = "gm.example";
+  rule->protocol = mojom::GmTlsProtocol::kTls13Auto;
+  rule->trust_profile_id = "explicit-gm-roots";
+  rule->trust_generation = 1;
+  rule->policy_revision = 1;
+  config->gm_tls_rules.push_back(std::move(rule));
+  SSLConfigServiceMojo service(config.Clone(), {}, nullptr);
+  const auto converted = service.GetSSLContextConfig();
+  ASSERT_TRUE(converted.gm_auto_config);
+  EXPECT_TRUE(converted.gm_auto_config->IsValid());
+  ASSERT_TRUE(converted.gm_tls_policy);
+  EXPECT_FALSE(converted.gm_tls_policy->IsValid());
+  const auto rejecting =
+      converted.gm_tls_policy->Match("https", "gm.example", 443);
+  ASSERT_TRUE(rejecting);
+  EXPECT_FALSE(rejecting->IsValid());
+
+  config->gm_tls_rules[0]->trust_anchors = {{0x30, 2}};
+  config->gm_tls_rules[0]->protocol = static_cast<mojom::GmTlsProtocol>(99);
+  SSLConfigServiceMojo unknown_service(config.Clone(), {}, nullptr);
+  const auto unknown = unknown_service.GetSSLContextConfig().gm_tls_policy;
+  ASSERT_TRUE(unknown);
+  EXPECT_FALSE(unknown->IsValid());
+}
+
+#else
+TEST(SSLConfigServiceMojoTest, DisabledGmConfigurationIsNotForwarded) {
+  base::test::TaskEnvironment task_environment;
+  auto config = mojom::SSLConfig::New();
+  config->version_min = mojom::SSLVersion::kTLS13;
+  config->gm_auto_config = mojom::GmAutoConfig::New();
+  config->gm_auto_config->enabled = true;
+  config->gm_auto_config->epoch = 1;
+  config->gm_auto_config->trust_anchors = {{0x30, 0}};
+  auto rule = mojom::GmTlsRule::New();
+  rule->host = "gm.example";
+  rule->protocol = mojom::GmTlsProtocol::kTlcp;
+  rule->trust_profile_id = "enterprise";
+  rule->trust_generation = 1;
+  rule->policy_revision = 1;
+  rule->trust_anchors = {{0x30, 0}};
+  config->gm_tls_rules.push_back(std::move(rule));
+  SSLConfigServiceMojo service(config.Clone(), {}, nullptr);
+  const auto initial = service.GetSSLContextConfig();
+  EXPECT_EQ(initial.version_min, net::SSL_PROTOCOL_VERSION_TLS1_3);
+  EXPECT_FALSE(initial.gm_tls_policy);
+  EXPECT_FALSE(initial.gm_auto_config);
+
+  config->gm_tls_rules[0]->protocol = mojom::GmTlsProtocol::kTls13Auto;
+  config->gm_auto_config->epoch = 2;
+  service.OnSSLConfigUpdated(std::move(config));
+  EXPECT_FALSE(service.GetSSLContextConfig().gm_tls_policy);
+  EXPECT_FALSE(service.GetSSLContextConfig().gm_auto_config);
+}
+#endif  // BUILDFLAG(XENON_GM)
 
 class TestCertVerifierConfigObserver : public net::CertVerifier {
  public:

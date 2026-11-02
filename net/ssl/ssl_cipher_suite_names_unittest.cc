@@ -4,6 +4,7 @@
 
 #include "net/ssl/ssl_cipher_suite_names.h"
 
+#include "net/gm/gm_buildflags.h"
 #include "net/ssl/ssl_connection_status_flags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/boringssl/src/include/openssl/ssl.h"
@@ -119,9 +120,9 @@ TEST(CipherSuiteNamesTest, ParseSSLCipherString) {
 
 TEST(CipherSuiteNamesTest, ParseSSLCipherStringFails) {
   const char* const cipher_strings[] = {
-    "0004",
-    "0x004",
-    "0xBEEFY",
+      "0004",
+      "0x004",
+      "0xBEEFY",
   };
 
   for (const auto* cipher_string : cipher_strings) {
@@ -266,6 +267,47 @@ TEST(CipherSuiteNamesTest, HTTP2CipherSuites) {
   EXPECT_TRUE(IsTLSCipherSuiteAllowedByHTTP2(0x1303 /* CHACHA20_POLY1305 */));
 }
 
+#if BUILDFLAG(XENON_GM)
+TEST(CipherSuiteNamesTest, NationalTlsMetadataAndHttp2Safety) {
+  const char *key_exchange, *cipher, *mac;
+  bool aead, tls13;
+  for (uint16_t suite : {0x00c6, 0x00c7}) {
+    SSLCipherSuiteToStrings(&key_exchange, &cipher, &mac, &aead, &tls13, suite);
+    EXPECT_TRUE(aead);
+    EXPECT_TRUE(tls13);
+    EXPECT_EQ(key_exchange, nullptr);
+    EXPECT_EQ(mac, nullptr);
+    EXPECT_STREQ(cipher, suite == 0x00c6 ? "SM4_GCM" : "SM4_CCM");
+    EXPECT_TRUE(IsTLSCipherSuiteAllowedByHTTP2(suite));
+    EXPECT_EQ(
+        ObsoleteSSLStatus(
+            MakeConnectionStatus(SSL_CONNECTION_VERSION_TLS1_3, suite), 0x0708),
+        OBSOLETE_SSL_NONE);
+  }
+  EXPECT_STREQ(SSLKeyExchangeGroupToName(41), "curveSM2");
+  EXPECT_STREQ(SSLKeyExchangeGroupToName(29), "X25519");
+  EXPECT_EQ(SSLKeyExchangeGroupToName(0xffff), nullptr);
+  for (uint16_t suite : {0xe013, 0xe053}) {
+    SSLCipherSuiteToStrings(&key_exchange, &cipher, &mac, &aead, &tls13, suite);
+    EXPECT_FALSE(tls13);
+    EXPECT_STREQ(key_exchange, "ECC_SM2");
+    EXPECT_FALSE(IsTLSCipherSuiteAllowedByHTTP2(suite));
+    const int status = MakeConnectionStatus(SSL_CONNECTION_VERSION_TLCP, suite);
+    EXPECT_EQ(SSLConnectionStatusToVersion(status),
+              SSL_CONNECTION_VERSION_TLCP);
+    EXPECT_EQ(SSLConnectionStatusToCipherSuite(status), suite);
+    EXPECT_TRUE(ObsoleteSSLStatus(status, 0x0708) &
+                OBSOLETE_SSL_MASK_KEY_EXCHANGE);
+  }
+  const char* version;
+  SSLVersionToString(&version, SSL_CONNECTION_VERSION_TLCP);
+  EXPECT_STREQ(version, "TLCP 1.1");
+  // Existing persisted values remain unchanged after adding the fourth bit.
+  EXPECT_EQ(MakeConnectionStatus(SSL_CONNECTION_VERSION_TLS1_3, 0x1301),
+            0x601301);
+}
+
+#endif  // BUILDFLAG(XENON_GM)
 }  // anonymous namespace
 
 }  // namespace net

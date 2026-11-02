@@ -4,6 +4,7 @@
 
 import("//components/captive_portal/core/features.gni")
 import("//components/safe_browsing/buildflags.gni")
+import("//net/gm/gm.gni")
 
 source_set("ssl") {
   public = [
@@ -50,6 +51,7 @@ source_set("ssl") {
     "//content/public/browser",
     "//mojo/public/cpp/bindings",
     "//net",
+    "//net/gm:buildflags",
     "//services/metrics/public/cpp:metrics_cpp",
     "//services/metrics/public/cpp:ukm_builders",
     "//services/network/public/cpp",
@@ -146,7 +148,15 @@ source_set("impl") {
     "//components/password_manager/core/browser:metrics_util",
     "//components/pref_registry",
     "//components/safe_browsing/core/browser:safe_browsing_metrics_collector",
+    "//net/gm:buildflags",
   ]
+
+  if (gm_tls_backend_enabled) {
+    deps += [ "//chrome/browser/gm:policy" ]
+    if (is_win && target_cpu == "x64") {
+      deps += [ "//chrome/browser/gm:system_trust" ]
+    }
+  }
 
   if (enable_captive_portal_detection) {
     deps += [ "//chrome/browser/captive_portal" ]

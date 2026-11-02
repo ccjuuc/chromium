@@ -1242,7 +1242,7 @@ void PageInfo::ComputeUIInputs(const GURL& url) {
         // For TLS 1.3 ciphers, report the group (historically, curve) as the
         // key exchange.
         key_exchange =
-            SSL_get_curve_name(visible_security_state.key_exchange_group);
+            net::SSLKeyExchangeGroupToName(visible_security_state.key_exchange_group);
         if (!key_exchange) {
           NOTREACHED();
         }

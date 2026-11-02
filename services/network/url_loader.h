@@ -35,6 +35,7 @@
 #include "net/base/upload_progress.h"
 #include "net/cookies/cookie_setting_override.h"
 #include "net/cookies/cookie_util.h"
+#include "net/gm/gm_buildflags.h"
 #include "net/socket/socket_tag.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/url_request/url_request.h"
@@ -55,6 +56,7 @@
 #include "services/network/public/mojom/device_bound_sessions.mojom.h"
 #include "services/network/public/mojom/devtools_observer.mojom.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
+#include "services/network/public/mojom/gm_identity.mojom.h"
 #include "services/network/public/mojom/ip_address_space.mojom-shared.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
@@ -482,6 +484,17 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) URLLoader
   void MaybeCollectDurableMessage(size_t new_data_offset, int num_bytes);
 
   const raw_ptr<net::URLRequestContext> url_request_context_;
+#if BUILDFLAG(XENON_GM)
+  raw_ptr<GmIdentityProvider> gm_identity_provider_ = nullptr;
+  base::UnguessableToken gm_client_auth_context_;
+#endif  // BUILDFLAG(XENON_GM)
+  base::UnguessableToken GetGmClientAuthContext();
+  base::OnceClosure RequestGmIdentity(
+      const url::Origin& origin,
+      const std::string& policy_id,
+      uint64_t generation,
+      mojom::GmClientCertificateRequestPtr constraints,
+      mojom::GmIdentityBroker::AcquireIdentityCallback callback);
 
   const raw_ptr<mojom::NetworkContextClient> network_context_client_;
   DeleteCallback delete_callback_;
@@ -621,7 +634,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) URLLoader
   // This is used to determine whether it is allowed to use a dictionary when
   // there is a matching shared dictionary for the request.
   std::unique_ptr<SharedDictionaryAccessChecker> shared_dictionary_checker_;
-
 
   // Outlives `this`.
   const raw_ref<const cors::OriginAccessList> origin_access_list_;

@@ -24,6 +24,7 @@
 #include "net/base/privacy_mode.h"
 #include "net/base/upload_data_stream.h"
 #include "net/dns/public/secure_dns_policy.h"
+#include "net/gm/gm_buildflags.h"
 #include "net/http/http_network_session.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_server_properties.h"
@@ -81,7 +82,7 @@ SpdySessionKey HttpStreamFactory::GetSpdySessionKey(
       proxy_chain, SessionUsage::kDestination, request_info.socket_tag,
       request_info.network_anonymization_key, request_info.secure_dns_policy,
       request_info.load_flags & LOAD_DISABLE_CERT_NETWORK_FETCHES,
-      request_info.target_network);
+      request_info.target_network, gm::ProfileForRule(request_info.gm_rule));
 }
 
 // static
@@ -98,6 +99,11 @@ HttpStreamFactory::StreamRequestInfo::StreamRequestInfo() = default;
 HttpStreamFactory::StreamRequestInfo::StreamRequestInfo(
     const HttpRequestInfo& http_request_info)
     : url(RemoveCredentialsFromUrl(http_request_info.url)),
+#if BUILDFLAG(XENON_GM)
+      gm_rule(http_request_info.gm_auto_rule),
+      gm_client_auth_context(http_request_info.gm_client_auth_context),
+      gm_auto_proxy_chain(http_request_info.gm_auto_proxy_chain),
+#endif  // BUILDFLAG(XENON_GM)
       method(http_request_info.method),
       network_anonymization_key(http_request_info.network_anonymization_key),
       traffic_annotation(http_request_info.traffic_annotation),
@@ -107,7 +113,8 @@ HttpStreamFactory::StreamRequestInfo::StreamRequestInfo(
       privacy_mode(http_request_info.privacy_mode),
       secure_dns_policy(http_request_info.secure_dns_policy),
       socket_tag(http_request_info.socket_tag),
-      target_network(http_request_info.target_network) {}
+      target_network(http_request_info.target_network) {
+}
 
 HttpStreamFactory::StreamRequestInfo::StreamRequestInfo(
     const StreamRequestInfo& other) = default;
@@ -132,8 +139,9 @@ void HttpStreamFactory::ProcessAlternativeServices(
     const NetworkAnonymizationKey& network_anonymization_key,
     const HttpResponseHeaders* headers,
     const url::SchemeHostPort& http_server) {
-  if (!headers->HasHeader(kAlternativeServiceHeader))
+  if (!headers->HasHeader(kAlternativeServiceHeader)) {
     return;
+  }
 
   std::string alternative_service_str =
       headers->GetNormalizedHeader(kAlternativeServiceHeader)

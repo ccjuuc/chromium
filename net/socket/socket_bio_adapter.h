@@ -5,6 +5,8 @@
 #ifndef NET_SOCKET_SOCKET_BIO_ADAPTER_H_
 #define NET_SOCKET_SOCKET_BIO_ADAPTER_H_
 
+#include <array>
+
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
@@ -83,6 +85,14 @@ class NET_EXPORT_PRIVATE SocketBIOAdapter {
 
   BIO* bio() { return bio_.get(); }
 
+  // Enable before the first read. Records at most seven initial incoming bytes
+  // without adding reads. Used only to classify an
+  // otherwise ambiguous initial TLS record-version error.
+  void EnableFirstReadPrefixCapture() { capture_first_read_prefix_ = true; }
+  base::span<const uint8_t> first_read_prefix() const {
+    return base::span(first_read_prefix_).first(first_read_prefix_size_);
+  }
+
   // Returns true if any data has been read from the underlying StreamSocket,
   // but not yet consumed by the BIO.
   bool HasPendingReadData();
@@ -131,6 +141,9 @@ class NET_EXPORT_PRIVATE SocketBIOAdapter {
   // socket Read() in progress. If another error, Read() has failed. Otherwise,
   // it is the number of bytes in the buffer (zero if empty).
   int read_result_ = 0;
+  bool capture_first_read_prefix_ = false;
+  std::array<uint8_t, 7> first_read_prefix_;
+  size_t first_read_prefix_size_ = 0;
 
   // The capacity of the write buffer.
   int write_buffer_capacity_;

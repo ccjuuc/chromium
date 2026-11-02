@@ -1016,14 +1016,14 @@ TEST_P(TransportClientSocketPoolTest, IdleSocketLoadTiming) {
   base::RunLoop().RunUntilIdle();
 
   // Now we should have 1 idle socket.
-  EXPECT_EQ(1, pool_->IdleSocketCount());
+  EXPECT_EQ(1u, pool_->IdleSocketCount());
 
   rv = handle.Init(group_id_, params_, std::nullopt /* proxy_annotation_tag */,
                    LOW, SocketTag(), ClientSocketPool::RespectLimits::ENABLED,
                    callback.callback(), ClientSocketPool::ProxyAuthCallback(),
                    pool_.get(), NetLogWithSource());
   EXPECT_THAT(rv, IsOk());
-  EXPECT_EQ(0, pool_->IdleSocketCount());
+  EXPECT_EQ(0u, pool_->IdleSocketCount());
   TestLoadTimingInfoConnectedReused(handle);
 }
 
@@ -1049,13 +1049,13 @@ TEST_P(TransportClientSocketPoolTest, CloseIdleSocketsOnIPAddressChange) {
   base::RunLoop().RunUntilIdle();
 
   // Now we should have 1 idle socket.
-  EXPECT_EQ(1, pool_->IdleSocketCount());
+  EXPECT_EQ(1u, pool_->IdleSocketCount());
 
   // After an IP address change, we should have 0 idle sockets.
   NetworkChangeNotifier::NotifyObserversOfIPAddressChangeForTests();
   base::RunLoop().RunUntilIdle();  // Notification happens async.
 
-  EXPECT_EQ(0, pool_->IdleSocketCount());
+  EXPECT_EQ(0u, pool_->IdleSocketCount());
 }
 
 TEST(TransportClientSocketPoolStandaloneTest, DontCleanupOnIPAddressChange) {
@@ -1107,13 +1107,13 @@ TEST(TransportClientSocketPoolStandaloneTest, DontCleanupOnIPAddressChange) {
   // Need to run all pending to release the socket back to the pool.
   base::RunLoop().RunUntilIdle();
   // Now we should have 1 idle socket.
-  EXPECT_EQ(1, pool->IdleSocketCount());
+  EXPECT_EQ(1u, pool->IdleSocketCount());
 
   // Since we set cleanup_on_ip_address_change = false, we should still have 1
   // idle socket after an IP address change.
   NetworkChangeNotifier::NotifyObserversOfIPAddressChangeForTests();
   base::RunLoop().RunUntilIdle();  // Notification happens async.
-  EXPECT_EQ(1, pool->IdleSocketCount());
+  EXPECT_EQ(1u, pool->IdleSocketCount());
 }
 
 TEST_P(TransportClientSocketPoolTest, SSLCertError) {
@@ -1274,6 +1274,7 @@ class TransportClientSocketPoolSSLConfigChangeTest
         session_deps_.ssl_config_service->NotifySSLContextConfigChange();
         break;
       case SSLClientContext::SSLConfigChangeType::kCertDatabaseChanged:
+      case SSLClientContext::SSLConfigChangeType::kGmConfigChanged:
         // TODO(mattm): For more realistic testing this should call
         // `CertDatabase::GetInstance()->NotifyObserversCertDBChanged()`,
         // however that delivers notifications asynchronously, and running
@@ -1291,6 +1292,8 @@ class TransportClientSocketPoolSSLConfigChangeTest
   const char* ExpectedMessage() {
     switch (GetParam()) {
       case SSLClientContext::SSLConfigChangeType::kSSLConfigChanged:
+        return TransportClientSocketPool::kNetworkChanged;
+      case SSLClientContext::SSLConfigChangeType::kGmConfigChanged:
         return TransportClientSocketPool::kNetworkChanged;
       case SSLClientContext::SSLConfigChangeType::kCertDatabaseChanged:
         return TransportClientSocketPool::kCertDatabaseChanged;
@@ -1320,7 +1323,7 @@ TEST_P(TransportClientSocketPoolSSLConfigChangeTest, GracefulConfigChange) {
     EXPECT_TRUE(handle1.is_initialized());
     EXPECT_TRUE(handle1.socket());
     EXPECT_EQ(0, handle1.group_generation());
-    EXPECT_EQ(0, pool_->IdleSocketCount());
+    EXPECT_EQ(0u, pool_->IdleSocketCount());
 
     handle1.Reset();
   }
@@ -1329,7 +1332,7 @@ TEST_P(TransportClientSocketPoolSSLConfigChangeTest, GracefulConfigChange) {
   base::RunLoop().RunUntilIdle();
 
   // Now we should have 1 idle socket.
-  EXPECT_EQ(1, pool_->IdleSocketCount());
+  EXPECT_EQ(1u, pool_->IdleSocketCount());
 
   // Create another request and finish connection of the socket, but hold on to
   // the handle until later in the test.
@@ -1358,7 +1361,7 @@ TEST_P(TransportClientSocketPoolSSLConfigChangeTest, GracefulConfigChange) {
 
   // Still only have 1 idle socket since handle2 is still alive.
   base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(1, pool_->IdleSocketCount());
+  EXPECT_EQ(1u, pool_->IdleSocketCount());
 
   // Create a pending request but don't finish connection.
   ClientSocketPool::GroupId group_id3(
@@ -1386,7 +1389,7 @@ TEST_P(TransportClientSocketPoolSSLConfigChangeTest, GracefulConfigChange) {
   // After a configuration change, we should have 0 idle sockets. The first
   // idle socket should have been closed, and handle2 and handle3 are still
   // alive.
-  EXPECT_EQ(0, pool_->IdleSocketCount());
+  EXPECT_EQ(0u, pool_->IdleSocketCount());
 
   // Verify the netlog messages recorded the correct reason for closing the
   // idle sockets.
@@ -1408,13 +1411,13 @@ TEST_P(TransportClientSocketPoolSSLConfigChangeTest, GracefulConfigChange) {
   // part of the first generation.
   handle2.Reset();
   base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(0, pool_->IdleSocketCount());
+  EXPECT_EQ(0u, pool_->IdleSocketCount());
 
   // After releasing handle3, there is now one idle socket, since that socket
   // was connected during the new generation.
   handle3.Reset();
   base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(1, pool_->IdleSocketCount());
+  EXPECT_EQ(1u, pool_->IdleSocketCount());
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -1454,7 +1457,7 @@ TEST_P(TransportClientSocketPoolTest, BackupSocketConnect) {
   for (auto rules : cases) {
     client_socket_factory_.SetRules(rules);
 
-    EXPECT_EQ(0, pool_->IdleSocketCount());
+    EXPECT_EQ(0u, pool_->IdleSocketCount());
 
     TestCompletionCallback callback;
     ClientSocketHandle handle;
@@ -1482,7 +1485,7 @@ TEST_P(TransportClientSocketPoolTest, BackupSocketConnect) {
     EXPECT_TRUE(handle.socket());
 
     // One socket is stalled, the other is active.
-    EXPECT_EQ(0, pool_->IdleSocketCount());
+    EXPECT_EQ(0u, pool_->IdleSocketCount());
     handle.Reset();
 
     // Close all pending connect jobs and existing sockets.
@@ -1499,7 +1502,7 @@ TEST_P(TransportClientSocketPoolTest, BackupSocketCancel) {
   enum { CANCEL_BEFORE_WAIT, CANCEL_AFTER_WAIT };
 
   for (int index = CANCEL_BEFORE_WAIT; index < CANCEL_AFTER_WAIT; ++index) {
-    EXPECT_EQ(0, pool_->IdleSocketCount());
+    EXPECT_EQ(0u, pool_->IdleSocketCount());
 
     TestCompletionCallback callback;
     ClientSocketHandle handle;
@@ -1531,7 +1534,7 @@ TEST_P(TransportClientSocketPoolTest, BackupSocketCancel) {
     EXPECT_FALSE(handle.socket());
 
     // One socket is stalled, the other is active.
-    EXPECT_EQ(0, pool_->IdleSocketCount());
+    EXPECT_EQ(0u, pool_->IdleSocketCount());
   }
 }
 
@@ -1550,7 +1553,7 @@ TEST_P(TransportClientSocketPoolTest, BackupSocketFailAfterStall) {
 
   client_socket_factory_.SetRules(rules);
 
-  EXPECT_EQ(0, pool_->IdleSocketCount());
+  EXPECT_EQ(0u, pool_->IdleSocketCount());
 
   TestCompletionCallback callback;
   ClientSocketHandle handle;
@@ -1583,7 +1586,7 @@ TEST_P(TransportClientSocketPoolTest, BackupSocketFailAfterStall) {
   ASSERT_EQ(1u, handle.connection_attempts().size());
   EXPECT_THAT(handle.connection_attempts()[0].result,
               IsError(ERR_CONNECTION_FAILED));
-  EXPECT_EQ(0, pool_->IdleSocketCount());
+  EXPECT_EQ(0u, pool_->IdleSocketCount());
   handle.Reset();
 }
 
@@ -1603,7 +1606,7 @@ TEST_P(TransportClientSocketPoolTest, BackupSocketFailAfterDelay) {
   client_socket_factory_.SetRules(rules);
   client_socket_factory_.set_delay(base::Seconds(5));
 
-  EXPECT_EQ(0, pool_->IdleSocketCount());
+  EXPECT_EQ(0u, pool_->IdleSocketCount());
 
   TestCompletionCallback callback;
   ClientSocketHandle handle;
@@ -2365,7 +2368,7 @@ TEST_P(TransportClientSocketPoolTest, HasActiveSocket) {
   // HasActiveSocket returns true for the idle socket.
   EXPECT_TRUE(pool_->HasActiveSocket(group_id1));
   // Now we should have 1 idle socket.
-  EXPECT_EQ(1, pool_->IdleSocketCount());
+  EXPECT_EQ(1u, pool_->IdleSocketCount());
 
   // HasActiveSocket() for group_id2 must still return false.
   EXPECT_FALSE(pool_->HasActiveSocket(group_id2));

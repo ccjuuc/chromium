@@ -72,10 +72,13 @@ bool g_allow_size_randomization_for_proxy = true;
 // entirely.
 scoped_refptr<ClientSocketPool::SocketParams> CreateSocketParams(
     const ClientSocketPool::GroupId& group_id,
-    const std::vector<SSLConfig::CertAndStatus>& allowed_bad_certs) {
+    const std::vector<SSLConfig::CertAndStatus>& allowed_bad_certs,
+    base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context) {
   bool using_ssl = GURL::SchemeIsCryptographic(group_id.destination().scheme());
   return base::MakeRefCounted<ClientSocketPool::SocketParams>(
-      using_ssl ? allowed_bad_certs : std::vector<SSLConfig::CertAndStatus>());
+      using_ssl ? allowed_bad_certs : std::vector<SSLConfig::CertAndStatus>(),
+      using_ssl ? gm_client_auth_context
+                : base::RepeatingCallback<base::UnguessableToken()>());
 }
 
 int InitSocketPoolHelper(
@@ -96,18 +99,26 @@ int InitSocketPoolHelper(
     HttpNetworkSession::SocketPoolType socket_pool_type,
     CompletionOnceCallback callback,
     const ClientSocketPool::ProxyAuthCallback& proxy_auth_callback,
-    ClientSocketPool::PreconnectCompletionCallback preconnect_callback) {
+    ClientSocketPool::PreconnectCompletionCallback preconnect_callback,
+    std::shared_ptr<const gm::TlsRule> gm_rule,
+    base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context) {
   DCHECK(endpoint.IsValid());
 
+  // The stream controller already selected a concrete route after resolving
+  // the proxy. Preserve it, including nullptr for an explicit Standard retry.
   session->ApplyTestingFixedPort(endpoint);
 
   bool disable_cert_network_fetches =
       !!(request_load_flags & LOAD_DISABLE_CERT_NETWORK_FETCHES);
   ClientSocketPool::GroupId connection_group(
       std::move(endpoint), privacy_mode, std::move(network_anonymization_key),
-      secure_dns_policy, disable_cert_network_fetches, target_network);
+      secure_dns_policy, disable_cert_network_fetches, target_network, gm_rule);
   scoped_refptr<ClientSocketPool::SocketParams> socket_params =
-      CreateSocketParams(connection_group, allowed_bad_certs);
+      CreateSocketParams(
+          connection_group, allowed_bad_certs,
+          num_preconnect_streams
+              ? base::RepeatingCallback<base::UnguessableToken()>()
+              : gm_client_auth_context);
 
   ClientSocketPool* pool =
       session->GetSocketPool(socket_pool_type, proxy_info.proxy_chain());
@@ -226,7 +237,9 @@ int InitSocketHandleForHttpRequest(
     const NetLogWithSource& net_log,
     ClientSocketHandle* socket_handle,
     CompletionOnceCallback callback,
-    const ClientSocketPool::ProxyAuthCallback& proxy_auth_callback) {
+    const ClientSocketPool::ProxyAuthCallback& proxy_auth_callback,
+    std::shared_ptr<const gm::TlsRule> gm_rule,
+    base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context) {
   DCHECK(socket_handle);
   return InitSocketPoolHelper(
       std::move(endpoint), request_load_flags, request_priority, session,
@@ -234,7 +247,8 @@ int InitSocketHandleForHttpRequest(
       std::move(network_anonymization_key), secure_dns_policy, socket_tag,
       target_network, net_log, 0, socket_handle,
       HttpNetworkSession::SocketPoolType::kNormal, std::move(callback),
-      proxy_auth_callback, ClientSocketPool::PreconnectCompletionCallback());
+      proxy_auth_callback, ClientSocketPool::PreconnectCompletionCallback(),
+      std::move(gm_rule), gm_client_auth_context);
 }
 
 int InitSocketHandleForWebSocketRequest(
@@ -250,7 +264,9 @@ int InitSocketHandleForWebSocketRequest(
     const NetLogWithSource& net_log,
     ClientSocketHandle* socket_handle,
     CompletionOnceCallback callback,
-    const ClientSocketPool::ProxyAuthCallback& proxy_auth_callback) {
+    const ClientSocketPool::ProxyAuthCallback& proxy_auth_callback,
+    std::shared_ptr<const gm::TlsRule> gm_rule,
+    base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context) {
   DCHECK(socket_handle);
 
   // QUIC proxies are currently not supported through this method.
@@ -267,7 +283,8 @@ int InitSocketHandleForWebSocketRequest(
       std::move(network_anonymization_key), SecureDnsPolicy::kAllow,
       SocketTag(), target_network, net_log, 0, socket_handle,
       HttpNetworkSession::SocketPoolType::kWebSocket, std::move(callback),
-      proxy_auth_callback, ClientSocketPool::PreconnectCompletionCallback());
+      proxy_auth_callback, ClientSocketPool::PreconnectCompletionCallback(),
+      std::move(gm_rule), gm_client_auth_context);
 }
 
 int PreconnectSocketsForHttpRequest(
@@ -283,7 +300,8 @@ int PreconnectSocketsForHttpRequest(
     handles::NetworkHandle target_network,
     const NetLogWithSource& net_log,
     int num_preconnect_streams,
-    ClientSocketPool::PreconnectCompletionCallback callback) {
+    ClientSocketPool::PreconnectCompletionCallback callback,
+    std::shared_ptr<const gm::TlsRule> gm_rule) {
   // Expect websocket schemes (ws and wss) to be converted to the http(s)
   // equivalent.
   DCHECK(endpoint.scheme() == url::kHttpScheme ||
@@ -295,7 +313,8 @@ int PreconnectSocketsForHttpRequest(
       std::move(network_anonymization_key), secure_dns_policy, SocketTag(),
       target_network, net_log, num_preconnect_streams, nullptr,
       HttpNetworkSession::SocketPoolType::kNormal, CompletionOnceCallback(),
-      ClientSocketPool::ProxyAuthCallback(), std::move(callback));
+      ClientSocketPool::ProxyAuthCallback(), std::move(callback),
+      std::move(gm_rule), {});
 }
 
 }  // namespace net

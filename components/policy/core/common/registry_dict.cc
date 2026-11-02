@@ -41,7 +41,8 @@ bool IsKeyNumerical(const std::string& key) {
 }  // namespace
 
 std::optional<base::Value> ConvertRegistryValue(const base::Value& value,
-                                                const Schema& schema) {
+                                                const Schema& schema,
+                                                bool preserve_invalid_values) {
   if (!schema.valid()) {
     return value.Clone();
   }
@@ -53,7 +54,8 @@ std::optional<base::Value> ConvertRegistryValue(const base::Value& value,
       base::DictValue result;
       for (auto entry : value.GetDict()) {
         std::optional<base::Value> converted =
-            ConvertRegistryValue(entry.second, schema.GetProperty(entry.first));
+            ConvertRegistryValue(entry.second, schema.GetProperty(entry.first),
+                                 preserve_invalid_values);
         if (converted.has_value()) {
           result.Set(entry.first, std::move(converted.value()));
         }
@@ -62,8 +64,8 @@ std::optional<base::Value> ConvertRegistryValue(const base::Value& value,
     } else if (value.is_list()) {
       base::ListValue result;
       for (const auto& entry : value.GetList()) {
-        std::optional<base::Value> converted =
-            ConvertRegistryValue(entry, schema.GetItems());
+        std::optional<base::Value> converted = ConvertRegistryValue(
+            entry, schema.GetItems(), preserve_invalid_values);
         if (converted.has_value()) {
           result.Append(std::move(converted.value()));
         }
@@ -115,10 +117,13 @@ std::optional<base::Value> ConvertRegistryValue(const base::Value& value,
         base::ListValue result;
         for (auto it : value.GetDict()) {
           if (!IsKeyNumerical(it.first)) {
+            if (preserve_invalid_values) {
+              return value.Clone();
+            }
             continue;
           }
-          std::optional<base::Value> converted =
-              ConvertRegistryValue(it.second, schema.GetItems());
+          std::optional<base::Value> converted = ConvertRegistryValue(
+              it.second, schema.GetItems(), preserve_invalid_values);
           if (converted.has_value()) {
             result.Append(std::move(converted.value()));
           }
@@ -148,6 +153,9 @@ std::optional<base::Value> ConvertRegistryValue(const base::Value& value,
 
   LOG(WARNING) << "Failed to convert " << value.type() << " to "
                << schema.type();
+  if (preserve_invalid_values) {
+    return value.Clone();
+  }
   return std::nullopt;
 }
 
@@ -245,7 +253,9 @@ void RegistryDict::Swap(RegistryDict* other) {
 }
 
 #if BUILDFLAG(IS_WIN)
-void RegistryDict::ReadRegistry(HKEY hive, const std::wstring& root) {
+void RegistryDict::ReadRegistry(HKEY hive,
+                                const std::wstring& root,
+                                bool preserve_invalid_values) {
   ClearKeys();
   ClearValues();
 
@@ -296,13 +306,17 @@ void RegistryDict::ReadRegistry(HKEY hive, const std::wstring& root) {
 
     LOG(WARNING) << "Failed to read hive " << hive << " at " << root << "\\"
                  << name << " type " << it.Type();
+    if (preserve_invalid_values) {
+      SetValue(name, base::Value());
+    }
   }
 
   // Recurse for all subkeys.
   for (RegistryKeyIterator it(hive, root.c_str()); it.Valid(); ++it) {
     std::string name(base::WideToUTF8(it.Name()));
     std::unique_ptr<RegistryDict> subdict(new RegistryDict());
-    subdict->ReadRegistry(hive, root + L"\\" + it.Name());
+    subdict->ReadRegistry(hive, root + L"\\" + it.Name(),
+                          preserve_invalid_values);
     SetKey(name, std::move(subdict));
   }
 }
@@ -351,7 +365,8 @@ void GetMatchingPropertiesAndCanonicalName(const std::string& entry_name,
 }  // namespace
 
 std::optional<base::Value> RegistryDict::ConvertToJSON(
-    const Schema& schema) const {
+    const Schema& schema,
+    bool preserve_invalid_values) const {
   base::Value::Type type =
       schema.valid() ? schema.type() : base::Value::Type::DICT;
   switch (type) {
@@ -367,8 +382,8 @@ std::optional<base::Value> RegistryDict::ConvertToJSON(
         if (matching_schemas.empty())
           matching_schemas.push_back(Schema());
         for (const Schema& subschema : matching_schemas) {
-          std::optional<base::Value> converted =
-              ConvertRegistryValue(entry->second, subschema);
+          std::optional<base::Value> converted = ConvertRegistryValue(
+              entry->second, subschema, preserve_invalid_values);
           if (converted.has_value()) {
             result.Set(canonical_name, std::move(converted.value()));
             break;
@@ -386,7 +401,7 @@ std::optional<base::Value> RegistryDict::ConvertToJSON(
           matching_schemas.push_back(Schema());
         for (const Schema& subschema : matching_schemas) {
           std::optional<base::Value> converted =
-              entry->second->ConvertToJSON(subschema);
+              entry->second->ConvertToJSON(subschema, preserve_invalid_values);
           if (converted) {
             result.Set(canonical_name, std::move(*converted));
             break;
@@ -400,26 +415,39 @@ std::optional<base::Value> RegistryDict::ConvertToJSON(
       Schema item_schema = schema.valid() ? schema.GetItems() : Schema();
       for (RegistryDict::KeyMap::const_iterator entry(keys_.begin());
            entry != keys_.end(); ++entry) {
-        if (!IsKeyNumerical(entry->first))
+        if (!IsKeyNumerical(entry->first)) {
+          if (preserve_invalid_values) {
+            return ConvertToJSON(Schema());
+          }
           continue;
+        }
         std::optional<base::Value> converted =
-            entry->second->ConvertToJSON(item_schema);
-        if (converted)
+            entry->second->ConvertToJSON(item_schema, preserve_invalid_values);
+        if (converted) {
           result.Append(std::move(*converted));
+        }
       }
       for (RegistryDict::ValueMap::const_iterator entry(values_.begin());
            entry != values_.end(); ++entry) {
-        if (!IsKeyNumerical(entry->first))
+        if (!IsKeyNumerical(entry->first)) {
+          if (preserve_invalid_values) {
+            return ConvertToJSON(Schema());
+          }
           continue;
-        std::optional<base::Value> converted =
-            ConvertRegistryValue(entry->second, item_schema);
-        if (converted.has_value())
+        }
+        std::optional<base::Value> converted = ConvertRegistryValue(
+            entry->second, item_schema, preserve_invalid_values);
+        if (converted.has_value()) {
           result.Append(std::move(*converted));
+        }
       }
       return base::Value(std::move(result));
     }
     default:
       LOG(WARNING) << "Can't convert registry key to schema type " << type;
+      if (preserve_invalid_values) {
+        return ConvertToJSON(Schema());
+      }
   }
 
   return std::nullopt;

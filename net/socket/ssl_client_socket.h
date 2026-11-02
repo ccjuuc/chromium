@@ -13,20 +13,28 @@
 #include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
+#include "build/build_config.h"
 #include "net/base/load_timing_info.h"
 #include "net/base/net_export.h"
 #include "net/cert/cert_database.h"
 #include "net/cert/cert_verifier.h"
+#include "net/gm/gm_buildflags.h"
 #include "net/socket/ssl_socket.h"
 #include "net/ssl/ssl_client_auth_cache.h"
 #include "net/ssl/ssl_config_service.h"
 
 namespace net {
 
+namespace gm {
+class ClientContext;
+class ClientIdentityProvider;
+}  // namespace gm
+
 class HostPortPair;
 class SCTAuditingDelegate;
 class SSLClientSessionCache;
 struct SSLConfig;
+struct NetErrorDetails;
 class SSLKeyLogger;
 class StreamSocket;
 class TransportSecurityState;
@@ -95,6 +103,8 @@ class NET_EXPORT SSLClientSocket : public SSLSocket {
 
   SSLClientSocket();
 
+  virtual void PopulateNetErrorDetails(NetErrorDetails* details) const {}
+
   // Called in response to |ERR_ECH_NOT_NEGOTIATED| in Connect(), to determine
   // how to retry the connection, up to some limit. If this method returns a
   // non-empty string, it is the serialized updated ECHConfigList provided by
@@ -131,12 +141,17 @@ class NET_EXPORT SSLClientContext : public SSLConfigService::Observer,
  public:
   enum class SSLConfigChangeType {
     kSSLConfigChanged,
+    kGmConfigChanged,
     kCertDatabaseChanged,
     kCertVerifierChanged,
   };
 
   class NET_EXPORT Observer : public base::CheckedObserver {
    public:
+    // Only GM destination profiles are invalidated. These names must never be
+    // interpreted as proxy TLS endpoints or applied to ordinary TLS groups.
+    virtual void OnGmConfigForServersChanged(
+        const base::flat_set<HostPortPair>& servers) {}
     // Called when SSL configuration for all hosts changed. Newly-created
     // SSLClientSockets will pick up the new configuration. Note that changes
     // which only apply to one server will result in a call to
@@ -167,6 +182,7 @@ class NET_EXPORT SSLClientContext : public SSLConfigService::Observer,
   ~SSLClientContext() override;
 
   const SSLContextConfig& config() { return config_; }
+  const SSLContextConfig& config() const { return config_; }
 
   SSLConfigService* ssl_config_service() { return ssl_config_service_; }
   CertVerifier* cert_verifier() { return cert_verifier_; }
@@ -179,6 +195,16 @@ class NET_EXPORT SSLClientContext : public SSLConfigService::Observer,
   SCTAuditingDelegate* sct_auditing_delegate() {
     return sct_auditing_delegate_;
   }
+
+  void set_gm_identity_provider(gm::ClientIdentityProvider* provider) {
+    gm_identity_provider_ = provider;
+  }
+  gm::ClientIdentityProvider* gm_identity_provider() {
+    return gm_identity_provider_;
+  }
+#if BUILDFLAG(XENON_GM) && BUILDFLAG(ENABLE_GM_TLS_SOCKET)
+  gm::ClientContext* GetGmClientContext();
+#endif
 
   // Creates a new SSLClientSocket which can then be used to establish an SSL
   // connection to |host_and_port| over the already-connected |stream_socket|.
@@ -247,6 +273,10 @@ class NET_EXPORT SSLClientContext : public SSLConfigService::Observer,
   // Remove an observer added with AddObserver().
   void RemoveObserver(Observer* observer);
 
+  // Drop GM resumptions and notify pools after a learned route expires.
+  void InvalidateGmSessionsForServers(
+      const base::flat_set<HostPortPair>& servers);
+
   // SSLConfigService::Observer:
   void OnSSLContextConfigChanged() override;
 
@@ -271,6 +301,11 @@ class NET_EXPORT SSLClientContext : public SSLConfigService::Observer,
   raw_ptr<SCTAuditingDelegate> sct_auditing_delegate_;
 
   SSLClientAuthCache ssl_client_auth_cache_;
+
+  raw_ptr<gm::ClientIdentityProvider> gm_identity_provider_ = nullptr;
+#if BUILDFLAG(XENON_GM) && BUILDFLAG(ENABLE_GM_TLS_SOCKET)
+  std::unique_ptr<gm::ClientContext> gm_client_context_;
+#endif
 
   base::ObserverList<Observer, true /* check_empty */> observers_;
 };

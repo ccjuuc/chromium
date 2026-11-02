@@ -94,7 +94,7 @@ class SSLUITestBase : public InProcessBrowserTest,
 
   testing::NiceMock<policy::MockConfigurationPolicyProvider> policy_provider_;
 
-  network::mojom::SSLConfig last_ssl_config_;
+  network::mojom::SSLConfigPtr last_ssl_config_ = network::mojom::SSLConfig::New();
   mojo::Receiver<network::mojom::SSLConfigClient> receiver_{this};
 
  private:

@@ -2515,6 +2515,53 @@ static_library("run_all_unittests") {
   ]
 }
 
+# Reuse the normal Content harness for GM certificate request lifetimes without
+# compiling the unrelated content_unittests source list. The source also remains
+# in content_unittests so standard Content coverage keeps exercising it.
+if (is_win && target_cpu == "x64") {
+  test("gm_content_unittests") {
+    sources = [ "../browser/storage_partition_impl_unittest.cc" ]
+    configs += [
+      "//build/config:precompiled_headers",
+      "//build/config/compiler:no_exit_time_destructors",
+    ]
+    if (is_component_build) {
+      check_includes = false
+    }
+    deps = [
+      ":run_all_unittests",
+      ":test_support",
+      "//base",
+      "//base/test:test_support",
+      "//components/services/storage",
+      "//components/services/storage:storage_features",
+      "//components/services/storage:test_support",
+      "//components/services/storage/public/cpp",
+      "//components/services/storage/public/mojom",
+      "//content:content_resources",
+      "//content/browser:for_content_tests",
+      "//content/common:for_content_tests",
+      "//content/public/browser",
+      "//content/public/common",
+      "//mojo/public/cpp/bindings",
+      "//net",
+      "//net:test_support",
+      "//services/network:network_service",
+      "//services/network:test_support",
+      "//services/network/public/cpp",
+      "//services/network/public/mojom",
+      "//storage/browser",
+      "//storage/browser:test_support",
+      "//testing/gmock",
+      "//testing/gtest",
+      "//third_party/blink/public/common",
+      "//url",
+    ]
+    data = [ "$root_out_dir/content_shell.pak" ]
+    data_deps = [ "//content/shell:pak" ]
+  }
+}
+
 # Exercise the native background-rendering paths without building the full
 # content_unittests or compositor_unittests suites.
 if (use_aura) {

@@ -20,6 +20,7 @@
 #include "base/trace_event/trace_event.h"
 #include "base/types/expected.h"
 #include "base/types/optional_ref.h"
+#include "base/unguessable_token.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/load_states.h"
@@ -192,6 +193,10 @@ class HttpStreamPool::AttemptManager
 
   // Called when `job` that has not completed is destroyed.
   void OnJobCancelled(Job* job);
+
+  // Selects an authorization owner at CertificateRequest time, after any
+  // requests cancelled while the shared connection was being established.
+  base::UnguessableToken ResolveGmClientAuthContext(TcpBasedAttempt* attempt);
 
   // Cancels all jobs.
   void CancelJobs(int error, StreamSocketCloseReason cancel_reason);
@@ -474,6 +479,8 @@ class HttpStreamPool::AttemptManager
   // from).
   void OnJobDone(Job* job);
 
+  bool CancelGmClientAuthAttempts(Job* job);
+
   // Extracts an entry from `request_jobs_` of which priority is highest. The
   // ownership of the entry is moved to `notified_jobs_`.
   Job* ExtractFirstJobToNotify();
@@ -589,6 +596,10 @@ class HttpStreamPool::AttemptManager
   // Set to the most recent TCP based attempt failure, if any.
   std::optional<int> most_recent_tcp_error_;
 
+  // A real request may join after a speculative GM handshake has already
+  // declined interactive authorization. Only that race gets one fresh attempt.
+  bool gm_ownerless_retry_used_ = false;
+
   // Set to a SSLInfo when an attempt has failed with a certificate error. Used
   // to notify jobs.
   std::optional<SSLInfo> cert_error_ssl_info_;
@@ -600,6 +611,8 @@ class HttpStreamPool::AttemptManager
   // Base SSLConfig for TCP based attempts, Allowed bad certificates are set
   // from the newest job.
   std::optional<SSLConfig> base_ssl_config_;
+  // Used only on effective ECH endpoints to reach Standard TLS reselection.
+  NextProtoVector automatic_ech_alpns_;
 
   std::set<std::unique_ptr<TcpBasedAttemptSlot>, base::UniquePtrComparator>
       tcp_based_attempt_slots_;

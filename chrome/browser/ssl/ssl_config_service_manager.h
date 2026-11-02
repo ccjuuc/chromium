@@ -5,9 +5,14 @@
 #ifndef CHROME_BROWSER_SSL_SSL_CONFIG_SERVICE_MANAGER_H_
 #define CHROME_BROWSER_SSL_SSL_CONFIG_SERVICE_MANAGER_H_
 
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/weak_ptr.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_member.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
+#include "net/cert/cert_database.h"
+#include "net/gm/gm_buildflags.h"
 #include "services/network/public/mojom/network_context.mojom-forward.h"
 #include "services/network/public/mojom/ssl_config.mojom.h"
 
@@ -16,19 +21,26 @@ class PrefRegistrySimple;
 
 // Sends updated `network::mojom::SSLConfig`s to one or more
 // `network::Mojom::SSLConfigClient`s. Not threadsafe.
-class SSLConfigServiceManager {
+class SSLConfigServiceManager : private net::CertDatabase::Observer {
  public:
   // Creates a new `SSLConfigServiceManager`. The lifetime of the `PrefService`
   // objects must be longer than that of the manager. Get SSL preferences from
   // `local_state`.
-  explicit SSLConfigServiceManager(PrefService* local_state);
+  using GmTrustSnapshotLoader =
+      base::RepeatingCallback<network::mojom::GmAutoConfigPtr()>;
+  using GmTrustMonitorFactory = base::RepeatingCallback<base::OnceClosure(
+      base::RepeatingCallback<void(bool)>)>;
+  explicit SSLConfigServiceManager(
+      PrefService* local_state,
+      GmTrustSnapshotLoader gm_trust_loader_for_testing = {},
+      GmTrustMonitorFactory gm_trust_monitor_for_testing = {});
 
   SSLConfigServiceManager(const SSLConfigServiceManager&) = delete;
   SSLConfigServiceManager& operator=(const SSLConfigServiceManager&) = delete;
 
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
-  ~SSLConfigServiceManager();
+  ~SSLConfigServiceManager() override;
 
   // The main entry point for obtaining an SSLConfig from this class:
   // Populates the `SSLConfig`-related members of `network_context_params`
@@ -57,7 +69,8 @@ class SSLConfigServiceManager {
       const StringPrefMember& tls13_cipher_compliance_pref,
       network::mojom::SSLConfig* config);
 
-  // Flushes all `SSLConfigClient` mojo pipes, to avoid races in tests.
+  // Waits for pending GM trust snapshots and flushes all `SSLConfigClient`
+  // mojo pipes, to avoid races in tests.
   void FlushForTesting();
 
  private:
@@ -73,6 +86,14 @@ class SSLConfigServiceManager {
   // Processes changes to the disabled cipher suites preference, updating the
   // cached list of parsed SSL/TLS cipher suites that are disabled.
   void OnDisabledCipherSuitesChange(PrefService* local_state);
+
+  void OnTrustStoreChanged() override;
+#if BUILDFLAG(XENON_GM)
+  void OnGmTrustMonitoringChanged(bool active);
+  void StartGmTrustSnapshot();
+  void OnGmTrustSnapshot(network::mojom::GmAutoConfigPtr snapshot);
+  void SendUpdatedSSLConfig();
+#endif
 
   PrefChangeRegistrar local_state_change_registrar_;
 
@@ -103,6 +124,23 @@ class SSLConfigServiceManager {
   // The time (in seconds since the unix epoch) that the MTC trust anchor IDs
   // were generated.
   int64_t mtc_update_time_seconds_ = 0;
+
+#if BUILDFLAG(XENON_GM)
+  // Collected once at startup and after database changes on a blocking worker.
+  // An empty snapshot is published immediately on changes so stale trust is
+  // never used while the replacement snapshot is being collected.
+  network::mojom::GmAutoConfigPtr gm_auto_config_;
+  uint64_t gm_trust_epoch_ = 0;
+  bool gm_trust_load_in_progress_ = false;
+  bool gm_trust_refresh_pending_ = false;
+  bool gm_trust_monitor_starting_ = false;
+  bool gm_trust_monitor_failed_ = false;
+  base::ScopedClosureRunner gm_trust_monitor_stop_;
+  GmTrustSnapshotLoader gm_trust_loader_;
+  base::OnceClosure gm_trust_flushed_for_testing_;
+
+  base::WeakPtrFactory<SSLConfigServiceManager> weak_factory_{this};
+#endif
 };
 
 #endif  // CHROME_BROWSER_SSL_SSL_CONFIG_SERVICE_MANAGER_H_

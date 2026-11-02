@@ -90,9 +90,9 @@ source_set("lib") {
     ]
     deps += [ "//third_party/duilib" ]
     sources += [ "//chrome/install_static/localized_product_name.h" ]
-    defines = [ "MINI_INSTALLER_HAS_DUILIB_UI=1" ] +
-              chrome_custom_names_defines +
-              chrome_custom_install_identity_defines
+    defines =
+        [ "MINI_INSTALLER_HAS_DUILIB_UI=1" ] + chrome_custom_names_defines +
+        chrome_custom_install_identity_defines
     configs -= [ "//build/config/compiler:chromium_code" ]
     configs += [ "//build/config/compiler:no_chromium_code" ]
   }
@@ -254,12 +254,26 @@ action("mini_installer_archive") {
   }
 
   if (enable_xenon_service) {
+    outputs += [ "$root_out_dir/xenon_installer_manifest.json" ]
+    args += [
+      "--xenon-packaging-manifest=xenon_installer_manifest.json",
+      "--xenon-stage-hosted-sources",
+    ]
     deps += [ "//xenon_overlay/resources:copy_electron_apps" ]
-    inputs += [ "//xenon_overlay/tools/import_electron_app.py" ]
+    inputs += [
+      "//xenon_overlay/tools/copy_runtime_tree.py",
+      "//xenon_overlay/tools/import_electron_app.py",
+      "//xenon_overlay/tools/windows_electron_runtime.py",
+    ]
 
     # Only explicitly selected releases enter the installer, including when
     # unselected applications remain in an existing build output directory.
     foreach(app, xenon_electron_apps) {
+      foreach(hosted, xenon_windows_hosted_apps) {
+        if (app == hosted.application) {
+          args += [ "--xenon-windows-hosted-payload=$app=" + hosted.profile ]
+        }
+      }
       args += [
         "--xenon-payload-directory=$app",
         "--xenon-payload-source=$app=" +
@@ -360,7 +374,8 @@ copy("copy_signing") {
 }
 
 if (custom_exe_name != "" && custom_version_string != "") {
-  mini_installer_output_name = "${custom_exe_name}_installer_${custom_version_string}"
+  mini_installer_output_name =
+      "${custom_exe_name}_installer_${custom_version_string}"
 } else {
   mini_installer_output_name = "mini_installer"
 }

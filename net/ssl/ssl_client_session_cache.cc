@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-
 #include "net/ssl/ssl_client_session_cache.h"
 
 #include <tuple>
@@ -25,7 +24,8 @@ namespace {
 auto TieKeyFields(const SSLClientSessionCache::Key& key) {
   return std::tie(key.server, key.dest_ip_addr, key.network_anonymization_key,
                   key.privacy_mode, key.session_usage, key.proxy_chain,
-                  key.proxy_chain_index);
+                  key.proxy_chain_index, key.gm_profile, key.gm_identity_id,
+                  key.gm_identity_generation);
 }
 
 constexpr base::MemoryConsumerTraits kSSLClientSessionCacheTraits(
@@ -89,16 +89,19 @@ bssl::UniquePtr<SSL_SESSION> SSLClientSessionCache::Lookup(
   }
 
   auto iter = cache_.Get(cache_key);
-  if (iter == cache_.end())
+  if (iter == cache_.end()) {
     return nullptr;
+  }
 
   time_t now = clock_->Now().ToTimeT();
   bssl::UniquePtr<SSL_SESSION> session = iter->second.Pop();
-  if (iter->second.ExpireSessions(now))
+  if (iter->second.ExpireSessions(now)) {
     cache_.Erase(iter);
+  }
 
-  if (IsExpired(session.get(), now))
+  if (IsExpired(session.get(), now)) {
     session = nullptr;
+  }
 
   return session;
 }
@@ -106,7 +109,8 @@ bssl::UniquePtr<SSL_SESSION> SSLClientSessionCache::Lookup(
 void SSLClientSessionCache::Insert(uint64_t generation_number,
                                    const Key& cache_key,
                                    bssl::UniquePtr<SSL_SESSION> session) {
-  if (generation_number != generation_number_) {
+  if (generation_number !=
+      (cache_key.gm_profile ? gm_generation_number_ : generation_number_)) {
     return;
   }
   auto iter = cache_.Get(cache_key);
@@ -143,6 +147,7 @@ void SSLClientSessionCache::FlushForServers(
   // time of this flush from being cached. That is not optimal but is a
   // trade-off for implementation simplicity.
   ++generation_number_;
+  ++gm_generation_number_;
 
   auto iter = cache_.begin();
   while (iter != cache_.end()) {
@@ -154,8 +159,22 @@ void SSLClientSessionCache::FlushForServers(
   }
 }
 
+void SSLClientSessionCache::FlushGmForServers(
+    const base::flat_set<HostPortPair>& servers) {
+  ++gm_generation_number_;
+  auto iter = cache_.begin();
+  while (iter != cache_.end()) {
+    if (iter->first.gm_profile && servers.contains(iter->first.server)) {
+      iter = cache_.Erase(iter);
+    } else {
+      ++iter;
+    }
+  }
+}
+
 void SSLClientSessionCache::Flush() {
   ++generation_number_;
+  ++gm_generation_number_;
   cache_.Clear();
 }
 
@@ -164,8 +183,9 @@ void SSLClientSessionCache::SetClockForTesting(base::Clock* clock) {
 }
 
 bool SSLClientSessionCache::IsExpired(SSL_SESSION* session, time_t now) {
-  if (now < 0)
+  if (now < 0) {
     return true;
+  }
   uint64_t now_u64 = static_cast<uint64_t>(now);
 
   // now_u64 may be slightly behind because of differences in how
@@ -189,8 +209,9 @@ void SSLClientSessionCache::Entry::Push(bssl::UniquePtr<SSL_SESSION> session) {
 }
 
 bssl::UniquePtr<SSL_SESSION> SSLClientSessionCache::Entry::Pop() {
-  if (sessions[0] == nullptr)
+  if (sessions[0] == nullptr) {
     return nullptr;
+  }
   bssl::UniquePtr<SSL_SESSION> session = bssl::UpRef(sessions[0]);
   if (SSL_SESSION_should_be_single_use(session.get())) {
     sessions[0] = std::move(sessions[1]);
@@ -200,8 +221,9 @@ bssl::UniquePtr<SSL_SESSION> SSLClientSessionCache::Entry::Pop() {
 }
 
 bool SSLClientSessionCache::Entry::ExpireSessions(time_t now) {
-  if (sessions[0] == nullptr)
+  if (sessions[0] == nullptr) {
     return true;
+  }
 
   if (SSLClientSessionCache::IsExpired(sessions[0].get(), now)) {
     return true;

@@ -69,7 +69,16 @@ def main():
     # (default argument for os.path.relpath) and rustlib_dir are different. The
     # workaround is also dereference os.curdir so that the roots are the same for
     # relative path determination.
-    rustlib_dir = os.path.relpath(rustlib_dir, os.path.realpath(os.curdir))
+    try:
+        rustlib_dir = os.path.relpath(rustlib_dir, os.path.realpath(os.curdir))
+    except ValueError:
+        # A Windows output-directory junction may deliberately put build
+        # artifacts on another volume. Prefer the logical checkout path in
+        # that case; absolute paths also work when neither root is shared.
+        try:
+            rustlib_dir = os.path.relpath(rustlib_dir, os.getcwd())
+        except ValueError:
+            rustlib_dir = os.path.abspath(rustlib_dir)
 
     # Copy the rlibs to a predictable location. Whilst we're doing so,
     # also write a .d file so that ninja knows it doesn't need to do this

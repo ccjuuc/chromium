@@ -10,6 +10,8 @@
 #include <variant>
 #include <vector>
 
+#include "base/functional/callback.h"
+#include "base/unguessable_token.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/base/network_handle.h"
@@ -45,7 +47,10 @@ NET_EXPORT_PRIVATE ConnectJobParams ConstructConnectJobParams(
     bool disable_cert_network_fetches,
     const CommonConnectJobParams* common_connect_job_params,
     const NetworkAnonymizationKey& proxy_dns_network_anonymization_key,
-    handles::NetworkHandle target_network);
+    handles::NetworkHandle target_network,
+    std::shared_ptr<const gm::TlsRule> gm_rule = nullptr,
+    base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context =
+        {});
 
 }  // namespace net
 

@@ -36,6 +36,11 @@
 
 namespace net {
 
+base::RepeatingCallback<base::UnguessableToken()>
+HttpStreamPool::Job::Delegate::gm_client_auth_context() const {
+  return {};
+}
+
 namespace {
 
 NextProtoSet CalculateAllowedAlpns(HttpStreamPool::Job::Delegate* delegate,

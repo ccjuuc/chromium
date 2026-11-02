@@ -42,6 +42,7 @@
 #include "base/trace_event/typed_macros.h"
 #include "base/unguessable_token.h"
 #include "build/build_config.h"
+#include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
 #include "net/base/completion_once_callback.h"
@@ -68,6 +69,7 @@
 #include "net/device_bound_sessions/session.h"
 #include "net/dns/public/secure_dns_policy.h"
 #include "net/filter/filter_source_stream.h"
+#include "net/gm/gm_buildflags.h"
 #include "net/http/http_connection_info.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
@@ -89,6 +91,9 @@
 #include "services/network/cookie_settings.h"
 #include "services/network/devtools_durable_msg_writer.h"
 #include "services/network/file_opener_for_upload.h"
+#if BUILDFLAG(XENON_GM)
+#include "services/network/gm_identity_provider.h"
+#endif
 #include "services/network/orb/orb_impl.h"
 #include "services/network/pervasive_resources/shared_resource_checker.h"
 #include "services/network/public/cpp/client_hints.h"
@@ -141,6 +146,30 @@ namespace network {
 
 namespace {
 
+#if BUILDFLAG(XENON_GM)
+// Its receiver is closed when the socket request or URLLoader goes away; the
+// browser observes the disconnect and cancels the page's PIN interaction.
+class GmClientAuthResponse final : public mojom::GmClientCertificateResponder {
+ public:
+  explicit GmClientAuthResponse(
+      mojom::GmIdentityBroker::AcquireIdentityCallback callback)
+      : callback_(std::move(callback)) {}
+  ~GmClientAuthResponse() override {
+    if (callback_) {
+      std::move(callback_).Run(net::ERR_ABORTED, nullptr);
+    }
+  }
+  void Continue(int32_t error, mojom::GmIdentityGrantPtr grant) override {
+    if (callback_) {
+      std::move(callback_).Run(error, std::move(grant));
+    }
+  }
+
+ private:
+  mojom::GmIdentityBroker::AcquireIdentityCallback callback_;
+};
+
+#endif  // BUILDFLAG(XENON_GM)
 BASE_FEATURE(kDelayedCookieNotification, base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Cannot use 0, because this means "default" in
@@ -213,8 +242,9 @@ net::HttpRequestHeaders AttachCookies(const net::HttpRequestHeaders& headers,
         [&cookie](const net::cookie_util::ParsedRequestCookie& old_cookie) {
           return old_cookie.first == cookie.first;
         });
-    if (it != parsed_cookies.end())
+    if (it != parsed_cookies.end()) {
       continue;
+    }
 
     parsed_cookies.emplace_back(cookie.first, cookie.second);
   }
@@ -312,10 +342,12 @@ URLLoader::MaybeSyncURLLoaderClient::BindNewPipeAndPassReceiver() {
 }
 
 mojom::URLLoaderClient* URLLoader::MaybeSyncURLLoaderClient::Get() {
-  if (sync_client_)
+  if (sync_client_) {
     return sync_client_.get();
-  if (mojo_client_)
+  }
+  if (mojo_client_) {
     return mojo_client_.get();
+  }
   return nullptr;
 }
 
@@ -468,6 +500,18 @@ URLLoader::URLLoader(
       factory_params_->target_network.value_or(
           net::handles::kInvalidNetworkHandle),
       /*is_for_websockets=*/false, request.net_log_create_info);
+
+#if BUILDFLAG(XENON_GM)
+  if (url_loader_network_observer_ && context.GetGmIdentityProvider()) {
+    gm_identity_provider_ = context.GetGmIdentityProvider();
+    url_request_->set_gm_client_auth_context(base::BindRepeating(
+        [](base::WeakPtr<URLLoader> loader) {
+          return loader ? loader->GetGmClientAuthContext()
+                        : base::UnguessableToken();
+        },
+        weak_ptr_factory_.GetWeakPtr()));
+  }
+#endif
 
   // If the request is to a URL that we can determine is an LNA request from
   // just the URL, then trigger the LNA prompt. We only trigger this for request
@@ -750,13 +794,19 @@ void URLLoader::ScheduleStart() {
         base::BindOnce(&URLLoader::ResumeStart, base::Unretained(this)));
     resource_scheduler_request_handle_->WillStartRequest(&defer);
   }
-  if (defer)
+  if (defer) {
     url_request_->LogBlockedBy("ResourceScheduler");
-  else
+  } else {
     url_request_->Start();
+  }
 }
 
 URLLoader::~URLLoader() {
+#if BUILDFLAG(XENON_GM)
+  if (gm_identity_provider_ && !gm_client_auth_context_.is_empty()) {
+    gm_identity_provider_->UnregisterRequest(gm_client_auth_context_);
+  }
+#endif
   TRACE_EVENT("loading", "URLLoader::~URLLoader",
               net::NetLogWithSourceToFlow(url_request_->net_log()));
   if (keepalive_ && keepalive_statistics_recorder_) {
@@ -774,6 +824,70 @@ URLLoader::~URLLoader() {
 
 // static
 const void* const URLLoader::kUserDataKey = &URLLoader::kUserDataKey;
+
+base::UnguessableToken URLLoader::GetGmClientAuthContext() {
+#if BUILDFLAG(XENON_GM)
+  if (!gm_identity_provider_ || !url_loader_network_observer_ ||
+      !url_request_->send_client_certs()) {
+    return {};
+  }
+  if (gm_client_auth_context_.is_empty()) {
+    gm_client_auth_context_ =
+        gm_identity_provider_->RegisterRequest(base::BindRepeating(
+            [](base::WeakPtr<URLLoader> loader, const url::Origin& origin,
+               const std::string& policy, uint64_t generation,
+               mojom::GmClientCertificateRequestPtr constraints,
+               mojom::GmIdentityBroker::AcquireIdentityCallback callback) {
+              if (!loader) {
+                std::move(callback).Run(net::ERR_ABORTED, nullptr);
+                return base::OnceClosure();
+              }
+              return loader->RequestGmIdentity(origin, policy, generation,
+                                               std::move(constraints),
+                                               std::move(callback));
+            },
+            weak_ptr_factory_.GetWeakPtr()));
+  }
+  return gm_client_auth_context_;
+
+#else
+  return {};
+#endif  // BUILDFLAG(XENON_GM)
+}
+
+base::OnceClosure URLLoader::RequestGmIdentity(
+    const url::Origin& origin,
+    const std::string& policy_id,
+    uint64_t generation,
+    mojom::GmClientCertificateRequestPtr constraints,
+    mojom::GmIdentityBroker::AcquireIdentityCallback callback) {
+#if BUILDFLAG(XENON_GM)
+  if (!url_loader_network_observer_ || !url_request_->send_client_certs() ||
+      origin != url::Origin::Create(url_request_->url())) {
+    std::move(callback).Run(net::ERR_ACCESS_DENIED, nullptr);
+    return {};
+  }
+  mojo::PendingRemote<mojom::GmClientCertificateResponder> responder;
+  auto receiver = mojo::MakeSelfOwnedReceiver(
+      std::make_unique<GmClientAuthResponse>(std::move(callback)),
+      responder.InitWithNewPipeAndPassReceiver());
+  url_loader_network_observer_->OnGmCertificateRequested(
+      fetch_window_id_, origin, policy_id, generation, std::move(constraints),
+      std::move(responder));
+  return base::BindOnce(
+      [](mojo::SelfOwnedReceiverRef<mojom::GmClientCertificateResponder>
+             receiver) {
+        if (receiver) {
+          receiver->Close();
+        }
+      },
+      std::move(receiver));
+
+#else
+  std::move(callback).Run(net::ERR_NOT_IMPLEMENTED, nullptr);
+  return {};
+#endif  // BUILDFLAG(XENON_GM)
+}
 
 void URLLoader::FollowRedirect(
     network::HttpRequestHeadersUpdateParams headers_update_params,
@@ -1129,7 +1243,6 @@ void URLLoader::OnSSLCertificateError(net::URLRequest* request,
       base::BindOnce(&URLLoader::OnSSLCertificateErrorResponse,
                      weak_ptr_factory_.GetWeakPtr(), ssl_info));
 }
-
 
 void URLLoader::OnResponseStarted(net::URLRequest* url_request, int net_error) {
   DCHECK(url_request == url_request_.get());
@@ -1684,8 +1797,9 @@ void URLLoader::DidRead(int num_bytes,
     if (pending_write_) {
       // Limit sniffing to the first net::kMaxBytesToSniff.
       size_t data_length = pending_write_buffer_offset_;
-      if (data_length > net::kMaxBytesToSniff)
+      if (data_length > net::kMaxBytesToSniff) {
         data_length = net::kMaxBytesToSniff;
+      }
 
       std::string_view data(pending_write_->buffer(), data_length);
       bool stop_sniffing_after_processing_current_data =
@@ -1704,8 +1818,9 @@ void URLLoader::DidRead(int num_bytes,
         response_->mime_type.assign(new_type);
         response_->did_mime_sniff = true;
 
-        if (stop_sniffing_after_processing_current_data)
+        if (stop_sniffing_after_processing_current_data) {
           is_more_mime_sniffing_needed_ = false;
+        }
       }
 
       if (is_more_orb_sniffing_needed_) {
@@ -1714,8 +1829,9 @@ void URLLoader::DidRead(int num_bytes,
 
         // `has_new_data_to_sniff` can be false at the end-of-stream.
         bool has_new_data_to_sniff = new_data_offset < data.length();
-        if (has_new_data_to_sniff)
+        if (has_new_data_to_sniff) {
           orb_decision = orb_analyzer_->Sniff(data);
+        }
 
         if (orb_decision == orb::ResponseAnalyzer::Decision::kSniffMore &&
             stop_sniffing_after_processing_current_data) {
@@ -1899,8 +2015,9 @@ bool URLLoader::AllowFullCookies(
 URLLoader* URLLoader::ForRequest(const net::URLRequest& request) {
   auto* pointer =
       static_cast<UnownedPointer*>(request.GetUserData(kUserDataKey));
-  if (!pointer)
+  if (!pointer) {
     return nullptr;
+  }
   return pointer->get();
 }
 
@@ -1996,8 +2113,9 @@ void URLLoader::NotifyCompleted(int error_code) {
   }
 
   if (url_loader_client_.Get()) {
-    if (consumer_handle_.is_valid())
+    if (consumer_handle_.is_valid()) {
       SendResponseToClient();
+    }
 
     URLLoaderCompletionStatus status;
     status.error_code = error_code;
@@ -2314,8 +2432,9 @@ void URLLoader::SendUploadProgress(const net::UploadProgress& progress) {
 }
 
 void URLLoader::OnUploadProgressACK() {
-  if (upload_progress_tracker_)
+  if (upload_progress_tracker_) {
     upload_progress_tracker_->OnAckReceived();
+  }
 }
 
 void URLLoader::OnSSLCertificateErrorResponse(const net::SSLInfo& ssl_info,

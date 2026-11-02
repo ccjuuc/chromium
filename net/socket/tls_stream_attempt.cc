@@ -18,6 +18,7 @@
 #include "net/base/net_errors.h"
 #include "net/cert/x509_util.h"
 #include "net/dns/public/host_resolver_results.h"
+#include "net/gm/gm_tls_policy.h"
 #include "net/socket/client_socket_factory.h"
 #include "net/socket/tcp_stream_attempt.h"
 #include "net/ssl/ssl_cert_request_info.h"
@@ -218,6 +219,21 @@ int TlsStreamAttempt::DoTlsAttempt(int rv) {
 
   nested_attempt_.reset();
 
+  const auto* ssl_config_service =
+      params().ssl_client_context->ssl_config_service();
+  if (ssl_config_->gm_rule && ssl_config_->gm_rule->automatic &&
+      ssl_config_->gm_rule->profile.protocol() != gm::TlsProtocol::kTls13Auto &&
+      !ssl_config_->ech_config_list.empty() &&
+      (!ssl_config_service ||
+       ssl_config_service->GetEchMode(host_port_pair_.host()) !=
+           EchMode::kDisabled)) {
+    // Re-enter Standard TLS above the pools; never silently erase DNS ECH or
+    // create an ordinary socket under this GM profile's pool key.
+    mutable_net_error_details().gm_standard_tls_required = true;
+    next_state_ = State::kNone;
+    return ERR_ABORTED;
+  }
+
   tls_handshake_started_ = true;
   mutable_connect_timing().ssl_start = base::TimeTicks::Now();
   tls_handshake_timeout_timer_.Start(
@@ -225,6 +241,7 @@ int TlsStreamAttempt::DoTlsAttempt(int rv) {
       base::BindOnce(&TlsStreamAttempt::OnTlsHandshakeTimeout,
                      base::Unretained(this)));
 
+  gm::ApplyTlsRule(ssl_config_->gm_rule, &*ssl_config_);
   ssl_socket_ = params().client_socket_factory->CreateSSLClientSocket(
       params().ssl_client_context, std::move(nested_socket), host_port_pair_,
       *ssl_config_);
@@ -246,6 +263,12 @@ int TlsStreamAttempt::DoTlsAttempt(int rv) {
 }
 
 int TlsStreamAttempt::DoTlsAttemptComplete(int rv) {
+  mutable_net_error_details() = NetErrorDetails();
+  if (ssl_socket_ && !ech_retry_configs_ &&
+      (rv == ERR_SSL_PROTOCOL_ERROR ||
+       rv == ERR_SSL_VERSION_OR_CIPHER_MISMATCH)) {
+    ssl_socket_->PopulateNetErrorDetails(&mutable_net_error_details());
+  }
   MaybeRecordTlsHandshakeEnd(rv);
   net_log().EndEvent(NetLogEventType::TLS_STREAM_ATTEMPT_CONNECT, [&] {
     base::DictValue results;

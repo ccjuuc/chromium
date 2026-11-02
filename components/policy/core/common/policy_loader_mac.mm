@@ -6,6 +6,7 @@
 
 #include <Foundation/Foundation.h>
 
+#include <string_view>
 #include <utility>
 
 #include "base/apple/foundation_util.h"
@@ -31,6 +32,8 @@
 #include "components/policy/core/common/preferences_mac.h"
 #include "components/policy/core/common/schema.h"
 #include "components/policy/core/common/schema_map.h"
+#include "components/policy/policy_constants.h"
+#include "net/gm/gm_buildflags.h"
 
 namespace policy {
 
@@ -42,6 +45,43 @@ bool ShouldHonorPolicies() {
   // TODO (crbug.com/1322121): Use PlatformManagementService instead.
   return base::IsManagedOrEnterpriseDevice();
 }
+
+#if BUILDFLAG(XENON_GM)
+// PropertyToValue intentionally skips unsupported dictionary/array entries for
+// ordinary policies. Security constraints must not turn into an empty list, or
+// lose an optional restriction, when a plist contains an unsupported value.
+bool CanConvertGmPolicyWithoutLoss(CFPropertyListRef property, int depth = 0) {
+  if (depth > 64) {
+    return false;
+  }
+  if (auto array = base::apple::CFCast<CFArrayRef>(property)) {
+    for (CFIndex i = 0; i < CFArrayGetCount(array); ++i) {
+      if (!CanConvertGmPolicyWithoutLoss(CFArrayGetValueAtIndex(array, i),
+                                         depth + 1)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (auto dictionary = base::apple::CFCast<CFDictionaryRef>(property)) {
+    struct ConversionCheck {
+      int depth;
+      bool valid = true;
+    } check{depth};
+    CFDictionaryApplyFunction(
+        dictionary,
+        [](const void* key, const void* value, void* context) {
+          auto& check = *static_cast<ConversionCheck*>(context);
+          check.valid = check.valid && base::apple::CFCast<CFStringRef>(key) &&
+                        CanConvertGmPolicyWithoutLoss(value, check.depth + 1);
+        },
+        &check);
+    return check.valid;
+  }
+  return PropertyToValue(property) != nullptr;
+}
+
+#endif  // BUILDFLAG(XENON_GM)
 
 }  // namespace
 
@@ -121,8 +161,9 @@ PolicyBundle PolicyLoaderMac::Load() {
         base::SysUTF8ToCFStringRef(it.key()));
     base::apple::ScopedCFTypeRef<CFPropertyListRef> value(
         preferences_->CopyAppValue(name.get(), application_id_.get()));
-    if (!value)
+    if (!value) {
       continue;
+    }
     bool forced =
         preferences_->AppValueIsForced(name.get(), application_id_.get());
     PolicyLevel level =
@@ -133,7 +174,18 @@ PolicyBundle PolicyLoaderMac::Load() {
                   ? POLICY_SCOPE_MACHINE
                   : POLICY_SCOPE_USER;
     }
-    std::unique_ptr<base::Value> policy = PropertyToValue(value.get());
+    std::unique_ptr<base::Value> policy;
+#if BUILDFLAG(XENON_GM)
+    if (std::string_view(it.key()) == key::kGmTlsSiteRules &&
+        !CanConvertGmPolicyWithoutLoss(value.get())) {
+      // Preserve presence as an invalid value for SiteRulesPolicyHandler. A
+      // lossy conversion must neither remove the rule nor weaken its fields.
+      policy = std::make_unique<base::Value>();
+    } else
+#endif
+    {
+      policy = PropertyToValue(value.get());
+    }
     if (policy) {
       chrome_policy.Set(it.key(), level, scope, POLICY_SOURCE_PLATFORM,
                         std::move(*policy), nullptr);
@@ -188,8 +240,9 @@ base::FilePath PolicyLoaderMac::GetManagedPolicyPath(CFStringRef bundle_id) {
   }
   path = path.Append(FILE_PATH_LITERAL("Managed Preferences"));
   char* login = getlogin();
-  if (!login)
+  if (!login) {
     return base::FilePath();
+  }
   path = path.AppendASCII(login);
   return path.Append(base::SysCFStringRefToUTF8(bundle_id) + ".plist");
 }
@@ -203,15 +256,17 @@ void PolicyLoaderMac::LoadPolicyForDomain(PolicyDomain domain,
   id_prefix.append(".").append(domain_name).append(".");
 
   const ComponentMap* components = schema_map()->GetComponents(domain);
-  if (!components)
+  if (!components) {
     return;
+  }
 
   for (const auto& component : *components) {
     PolicyMap policy;
     LoadPolicyForComponent(id_prefix + component.first, component.second,
                            &policy);
-    if (!policy.empty())
+    if (!policy.empty()) {
       bundle->Get(PolicyNamespace(domain, component.first)).Swap(&policy);
+    }
   }
 }
 
@@ -222,8 +277,9 @@ void PolicyLoaderMac::LoadPolicyForComponent(
   // TODO(joaodasilva): Extensions may be registered in a ComponentMap
   // without a schema, to allow a graceful update of the Legacy Browser Support
   // extension on Windows. Remove this check once that support is removed.
-  if (!schema.valid())
+  if (!schema.valid()) {
     return;
+  }
 
   base::apple::ScopedCFTypeRef<CFStringRef> bundle_id =
       base::SysUTF8ToCFStringRef(bundle_id_string);
@@ -235,8 +291,9 @@ void PolicyLoaderMac::LoadPolicyForComponent(
         base::SysUTF8ToCFStringRef(it.key());
     base::apple::ScopedCFTypeRef<CFPropertyListRef> value(
         preferences_->CopyAppValue(pref_name.get(), bundle_id.get()));
-    if (!value)
+    if (!value) {
       continue;
+    }
     bool forced =
         preferences_->AppValueIsForced(pref_name.get(), bundle_id.get());
     PolicyLevel level =
@@ -257,8 +314,9 @@ void PolicyLoaderMac::LoadPolicyForComponent(
 }
 
 void PolicyLoaderMac::OnFileUpdated(const base::FilePath& path, bool error) {
-  if (!error)
+  if (!error) {
     Reload(false);
+  }
 }
 
 }  // namespace policy

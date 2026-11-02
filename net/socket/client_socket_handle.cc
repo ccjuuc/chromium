@@ -133,6 +133,8 @@ void ClientSocketHandle::SetAdditionalErrorState(ConnectJob* connect_job) {
 
   resolve_error_info_ = connect_job->GetResolveErrorInfo();
   is_ssl_error_ = connect_job->IsSSLError();
+  net_error_details_ = NetErrorDetails();
+  connect_job->PopulateNetErrorDetails(&net_error_details_);
   ssl_cert_request_info_ = connect_job->GetCertRequestInfo();
 }
 
@@ -210,6 +212,7 @@ void ClientSocketHandle::ResetInternal(bool cancel, bool cancel_connect_job) {
 void ClientSocketHandle::ResetErrorState() {
   resolve_error_info_ = ResolveErrorInfo(OK);
   is_ssl_error_ = false;
+  net_error_details_ = NetErrorDetails();
   ssl_cert_request_info_ = nullptr;
 }
 

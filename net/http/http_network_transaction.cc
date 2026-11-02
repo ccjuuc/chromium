@@ -51,6 +51,7 @@
 #include "net/cert/cert_status_flags.h"
 #include "net/filter/filter_source_stream.h"
 #include "net/filter/source_stream_type.h"
+#include "net/gm/gm_buildflags.h"
 #include "net/http/bidirectional_stream_impl.h"
 #include "net/http/http_auth.h"
 #include "net/http/http_auth_controller.h"
@@ -391,8 +392,9 @@ HttpNetworkTransaction::~HttpNetworkTransaction() {
       stream->Drain(session_);
     }
   }
-  if (request_ && request_->upload_data_stream)
+  if (request_ && request_->upload_data_stream) {
     request_->upload_data_stream->Reset();  // Invalidate pending callbacks.
+  }
 }
 
 int HttpNetworkTransaction::Start(const HttpRequestInfo* request_info,
@@ -413,6 +415,10 @@ int HttpNetworkTransaction::Start(const HttpRequestInfo* request_info,
   DCHECK(request_info->IsConsistent());
   net_log_ = net_log;
   request_ = request_info;
+#if BUILDFLAG(XENON_GM)
+  gm_auto_config_ = session_->ssl_client_context()->config().gm_auto_config;
+  gm_initial_rule_ = session_->GetGmTlsRule(url::SchemeHostPort(request_->url));
+#endif
   url_ = request_->url;
   network_anonymization_key_ = request_->network_anonymization_key;
   start_timeticks_ = base::TimeTicks::Now();
@@ -449,8 +455,9 @@ int HttpNetworkTransaction::Start(const HttpRequestInfo* request_info,
 
   next_state_ = STATE_CREATE_STREAM;
   int rv = DoLoop(OK);
-  if (rv == ERR_IO_PENDING)
+  if (rv == ERR_IO_PENDING) {
     callback_ = std::move(callback);
+  }
 
   // This always returns ERR_IO_PENDING because DoCreateStream() does, but
   // GenerateNetworkErrorLoggingReportIfError() should be called here if any
@@ -468,14 +475,16 @@ int HttpNetworkTransaction::RestartIgnoringLastError(
   TRACE_EVENT("net", "HttpNetworkTransaction::RestartIgnoringLastError",
               NetLogWithSourceToFlow(net_log_));
 
-  if (!CheckMaxRestarts())
+  if (!CheckMaxRestarts()) {
     return ERR_TOO_MANY_RETRIES;
+  }
 
   next_state_ = STATE_CREATE_STREAM;
 
   int rv = DoLoop(OK);
-  if (rv == ERR_IO_PENDING)
+  if (rv == ERR_IO_PENDING) {
     callback_ = std::move(callback);
+  }
 
   // This always returns ERR_IO_PENDING because DoCreateStream() does, but
   // GenerateNetworkErrorLoggingReportIfError() should be called here if any
@@ -497,8 +506,9 @@ int HttpNetworkTransaction::RestartWithCertificate(
   TRACE_EVENT("net", "HttpNetworkTransaction::RestartWithCertificate",
               NetLogWithSourceToFlow(net_log_));
 
-  if (!CheckMaxRestarts())
+  if (!CheckMaxRestarts()) {
     return ERR_TOO_MANY_RETRIES;
+  }
 
   // Add the credentials to the client auth cache. The next stream request will
   // then pick them up.
@@ -506,16 +516,18 @@ int HttpNetworkTransaction::RestartWithCertificate(
       response_.cert_request_info->host_and_port, std::move(client_cert),
       std::move(client_private_key));
 
-  if (!response_.cert_request_info->is_proxy)
+  if (!response_.cert_request_info->is_proxy) {
     configured_client_cert_for_server_ = true;
+  }
 
   // Reset the other member variables.
   // Note: this is necessary only with SSL renegotiation.
   ResetStateForRestart();
   next_state_ = STATE_CREATE_STREAM;
   int rv = DoLoop(OK);
-  if (rv == ERR_IO_PENDING)
+  if (rv == ERR_IO_PENDING) {
     callback_ = std::move(callback);
+  }
 
   // This always returns ERR_IO_PENDING because DoCreateStream() does, but
   // GenerateNetworkErrorLoggingReportIfError() should be called here if any
@@ -529,8 +541,9 @@ int HttpNetworkTransaction::RestartWithAuth(const AuthCredentials& credentials,
   TRACE_EVENT("net", "HttpNetworkTransaction::RestartWithAuth",
               NetLogWithSourceToFlow(net_log_));
 
-  if (!CheckMaxRestarts())
+  if (!CheckMaxRestarts()) {
     return ERR_TOO_MANY_RETRIES;
+  }
 
   HttpAuth::Target target = pending_auth_target_;
   if (target == HttpAuth::AUTH_NONE) {
@@ -564,8 +577,9 @@ int HttpNetworkTransaction::RestartWithAuth(const AuthCredentials& credentials,
     // that request).
   }
 
-  if (rv == ERR_IO_PENDING)
+  if (rv == ERR_IO_PENDING) {
     callback_ = std::move(callback);
+  }
   return rv;
 }
 
@@ -639,7 +653,7 @@ void HttpNetworkTransaction::DidDrainBodyForAuthRestart(bool keep_alive) {
 
 bool HttpNetworkTransaction::IsReadyToRestartForAuth() {
   return pending_auth_target_ != HttpAuth::AUTH_NONE &&
-      HaveAuth(pending_auth_target_);
+         HaveAuth(pending_auth_target_);
 }
 
 int HttpNetworkTransaction::Read(IOBuffer* buf,
@@ -672,8 +686,9 @@ int HttpNetworkTransaction::Read(IOBuffer* buf,
   read_buf_len_ = buf_len;
 
   int rv = DoLoop(OK);
-  if (rv == ERR_IO_PENDING)
+  if (rv == ERR_IO_PENDING) {
     callback_ = std::move(callback);
+  }
   return rv;
 }
 
@@ -728,8 +743,9 @@ LoadState HttpNetworkTransaction::GetLoadState() const {
 
 bool HttpNetworkTransaction::GetLoadTimingInfo(
     LoadTimingInfo* load_timing_info) const {
-  if (!stream_ || !stream_->GetLoadTimingInfo(load_timing_info))
+  if (!stream_ || !stream_->GetLoadTimingInfo(load_timing_info)) {
     return false;
+  }
 
   // If `dns_resolution_{start/end}_time_override_` are set, and they are older
   // than `domain_lookup_{start/end}` of the `stream_`, use the overrides.
@@ -791,8 +807,9 @@ void HttpNetworkTransaction::PopulateLoadTimingInternalInfo(
 }
 
 bool HttpNetworkTransaction::GetRemoteEndpoint(IPEndPoint* endpoint) const {
-  if (remote_endpoint_.address().empty())
+  if (remote_endpoint_.address().empty()) {
     return false;
+  }
 
   *endpoint = remote_endpoint_;
   return true;
@@ -801,17 +818,20 @@ bool HttpNetworkTransaction::GetRemoteEndpoint(IPEndPoint* endpoint) const {
 void HttpNetworkTransaction::PopulateNetErrorDetails(
     NetErrorDetails* details) const {
   *details = net_error_details_;
-  if (stream_)
+  if (stream_) {
     stream_->PopulateNetErrorDetails(details);
+  }
 }
 
 void HttpNetworkTransaction::SetPriority(RequestPriority priority) {
   priority_ = priority;
 
-  if (stream_request_)
+  if (stream_request_) {
     stream_request_->SetPriority(priority);
-  if (stream_)
+  }
+  if (stream_) {
     stream_->SetPriority(priority);
+  }
 
   // The above call may have resulted in deleting |*this|.
 }
@@ -1023,8 +1043,9 @@ void HttpNetworkTransaction::DoCallback(int rv) {
 
 void HttpNetworkTransaction::OnIOComplete(int result) {
   int rv = DoLoop(result);
-  if (rv != ERR_IO_PENDING)
+  if (rv != ERR_IO_PENDING) {
     DoCallback(rv);
+  }
 }
 
 int HttpNetworkTransaction::DoLoop(int result) {
@@ -1185,7 +1206,109 @@ int HttpNetworkTransaction::DoCreateStreamComplete(int result) {
   stream_request_completion_details_ = stream_request_->completion_details();
   RecordStreamRequestResult(result);
   CopyConnectionAttemptsFromStreamRequest();
+#if BUILDFLAG(XENON_GM)
+  const auto gm_rule = stream_request_->gm_rule();
+  const auto& gm_proxy_chain = stream_request_->gm_proxy_chain();
+  const url::SchemeHostPort destination(request_->url);
+  const auto& current_auto_config =
+      session_->ssl_client_context()->config().gm_auto_config;
+  const bool gm_config_current =
+      current_auto_config == gm_auto_config_ &&
+      gm::TlsRulesEqual(gm_initial_rule_, session_->GetGmTlsRule(destination));
+  if (gm_rule && gm_rule->automatic) {
+    gm_attempted_protocols_ |=
+        1u << static_cast<unsigned>(gm_rule->profile.protocol());
+    if (gm_rule->profile.protocol() == gm::TlsProtocol::kTls13Auto) {
+      // Joint negotiation already offered RFC 8998. Keep one ordinary TLS
+      // retry available for peers which now support only TLS 1.2.
+      gm_attempted_protocols_ |=
+          1u << static_cast<unsigned>(gm::TlsProtocol::kRfc8998);
+    }
+  } else if (!gm_rule) {
+    gm_attempted_protocols_ |=
+        1u << static_cast<unsigned>(gm::TlsProtocol::kStandardTls);
+  }
+  if (result < 0 && gm_rule && gm_rule->automatic) {
+    session_->ForgetGmCapability(destination, network_anonymization_key_,
+                                 request_->privacy_mode, gm_proxy_chain);
+  }
+  if (result == OK && (!session_->IsGmTlsRuleCurrent(destination, gm_rule) ||
+                       (gm_rule && gm_rule->automatic && !gm_config_current))) {
+    stream_->Close(true);
+    stream_.reset();
+    result = ERR_NETWORK_CHANGED;
+  }
+  const bool gm_requires_standard =
+      result == ERR_ABORTED && net_error_details_.gm_standard_tls_required &&
+      gm_rule && gm_rule->automatic;
+  if ((gm_requires_standard ||
+       ((result == ERR_SSL_PROTOCOL_ERROR ||
+         result == ERR_SSL_VERSION_OR_CIPHER_MISMATCH) &&
+        net_error_details_.gm_protocol_retry_allowed)) &&
+      gm_config_current && !gm_initial_rule_ && gm_auto_config_ &&
+      gm_auto_config_->enabled && gm_auto_config_->IsValid() &&
+      (destination.scheme() == "https" || destination.scheme() == "wss")) {
+    // Re-enter above both pool implementations with a concrete profile.
+    // No HTTP bytes, certificate prompt, or USBKey operation has occurred.
+    for (auto protocol : {gm::TlsProtocol::kStandardTls, gm::TlsProtocol::kTlcp,
+                          gm::TlsProtocol::kRfc8998}) {
+      const unsigned bit = 1u << static_cast<unsigned>(protocol);
+      if (gm_attempted_protocols_ & bit) {
+        continue;
+      }
+      const bool standard = protocol == gm::TlsProtocol::kStandardTls;
+      if (gm_requires_standard && !standard) {
+        // DNS now requires ECH. Exhausting the Standard TLS budget must fail
+        // closed, never continue to another GM protocol without ECH.
+        break;
+      }
+      auto rule = standard ? nullptr
+                           : gm_auto_config_->CreateRule(
+                                 destination.scheme(), destination.host(),
+                                 destination.port(), protocol);
+      if (!standard && (!rule || !rule->IsValid())) {
+        break;
+      }
+      gm_attempted_protocols_ |= bit;
+      gm_retry_request_ = std::make_unique<HttpRequestInfo>(*request_);
+      gm_retry_request_->gm_auto_rule = std::move(rule);
+      gm_retry_request_->gm_auto_proxy_chain = gm_proxy_chain;
+      request_ = gm_retry_request_.get();
+      net_error_details_ = NetErrorDetails();
+      stream_request_.reset();
+      next_state_ = STATE_CREATE_STREAM;
+      return OK;
+    }
+  }
+#endif  // BUILDFLAG(XENON_GM)
   if (result == OK) {
+#if BUILDFLAG(XENON_GM)
+    if (gm_rule) {
+      if (!gm_retry_request_) {
+        gm_retry_request_ = std::make_unique<HttpRequestInfo>(*request_);
+        request_ = gm_retry_request_.get();
+      }
+      gm_retry_request_->gm_auto_rule = gm_rule;
+      gm_retry_request_->gm_auto_proxy_chain = gm_proxy_chain;
+      gm_retry_request_->load_flags |= LOAD_DISABLE_CACHE;
+      if (request_->gm_cache_original_headers) {
+        gm_retry_request_->extra_headers = *request_->gm_cache_original_headers;
+        gm_retry_request_->url = request_->gm_cache_original_url;
+        url_ = request_->url;
+      }
+      SSLInfo ssl_info;
+      stream_->GetSSLInfo(&ssl_info);
+      if (ssl_info.gm_tls && ssl_info.is_valid() &&
+          !IsCertStatusError(ssl_info.cert_status)) {
+        session_->RememberGmCapability(destination, network_anonymization_key_,
+                                       request_->privacy_mode, gm_proxy_chain,
+                                       gm_rule);
+      }
+      // An ordinary result of joint negotiation is not evidence of national
+      // TLS support. Leave the existing hint's expiry unchanged; forgetting it
+      // here would invalidate the very connection that just succeeded.
+    }
+#endif  // BUILDFLAG(XENON_GM)
     next_state_ = STATE_CONNECTED_CALLBACK;
     DCHECK(stream_.get());
   } else if (result == ERR_HTTP_1_1_REQUIRED ||
@@ -1335,22 +1458,25 @@ int HttpNetworkTransaction::DoInitStreamComplete(int result) {
 
 int HttpNetworkTransaction::DoGenerateProxyAuthToken() {
   next_state_ = STATE_GENERATE_PROXY_AUTH_TOKEN_COMPLETE;
-  if (!ShouldApplyProxyAuth())
+  if (!ShouldApplyProxyAuth()) {
     return OK;
+  }
   HttpAuth::Target target = HttpAuth::AUTH_PROXY;
-  if (!auth_controllers_[target].get())
+  if (!auth_controllers_[target].get()) {
     auth_controllers_[target] = base::MakeRefCounted<HttpAuthController>(
         target, AuthURL(target), request_->network_anonymization_key,
         session_->http_auth_cache(), session_->http_auth_handler_factory(),
         session_->host_resolver());
+  }
   return auth_controllers_[target]->MaybeGenerateAuthToken(
       request_, io_callback_, net_log_);
 }
 
 int HttpNetworkTransaction::DoGenerateProxyAuthTokenComplete(int rv) {
   DCHECK_NE(ERR_IO_PENDING, rv);
-  if (rv == OK)
+  if (rv == OK) {
     next_state_ = STATE_GENERATE_SERVER_AUTH_TOKEN;
+  }
   return rv;
 }
 
@@ -1362,19 +1488,22 @@ int HttpNetworkTransaction::DoGenerateServerAuthToken() {
         target, AuthURL(target), request_->network_anonymization_key,
         session_->http_auth_cache(), session_->http_auth_handler_factory(),
         session_->host_resolver());
-    if (request_->load_flags & LOAD_DO_NOT_USE_EMBEDDED_IDENTITY)
+    if (request_->load_flags & LOAD_DO_NOT_USE_EMBEDDED_IDENTITY) {
       auth_controllers_[target]->DisableEmbeddedIdentity();
+    }
   }
-  if (!ShouldApplyServerAuth())
+  if (!ShouldApplyServerAuth()) {
     return OK;
+  }
   return auth_controllers_[target]->MaybeGenerateAuthToken(
       request_, io_callback_, net_log_);
 }
 
 int HttpNetworkTransaction::DoGenerateServerAuthTokenComplete(int rv) {
   DCHECK_NE(ERR_IO_PENDING, rv);
-  if (rv == OK)
+  if (rv == OK) {
     next_state_ = STATE_INIT_REQUEST_BODY;
+  }
   return rv;
 }
 
@@ -1394,8 +1523,8 @@ int HttpNetworkTransaction::BuildRequestHeaders(
   // Add a content length header?
   if (request_->upload_data_stream) {
     if (request_->upload_data_stream->is_chunked()) {
-      request_headers_.SetHeader(
-          HttpRequestHeaders::kTransferEncoding, "chunked");
+      request_headers_.SetHeader(HttpRequestHeaders::kTransferEncoding,
+                                 "chunked");
     } else {
       request_headers_.SetHeader(
           HttpRequestHeaders::kContentLength,
@@ -1419,12 +1548,14 @@ int HttpNetworkTransaction::BuildRequestHeaders(
     request_headers_.SetHeader(HttpRequestHeaders::kCacheControl, "max-age=0");
   }
 
-  if (ShouldApplyProxyAuth() && HaveAuth(HttpAuth::AUTH_PROXY))
+  if (ShouldApplyProxyAuth() && HaveAuth(HttpAuth::AUTH_PROXY)) {
     auth_controllers_[HttpAuth::AUTH_PROXY]->AddAuthorizationHeader(
         &request_headers_);
-  if (ShouldApplyServerAuth() && HaveAuth(HttpAuth::AUTH_SERVER))
+  }
+  if (ShouldApplyServerAuth() && HaveAuth(HttpAuth::AUTH_SERVER)) {
     auth_controllers_[HttpAuth::AUTH_SERVER]->AddAuthorizationHeader(
         &request_headers_);
+  }
 
   request_headers_.MergeFrom(request_->extra_headers);
 
@@ -1442,19 +1573,21 @@ int HttpNetworkTransaction::DoInitRequestBody() {
               NetLogWithSourceToFlow(net_log_));
   next_state_ = STATE_INIT_REQUEST_BODY_COMPLETE;
   int rv = OK;
-  if (request_->upload_data_stream)
+  if (request_->upload_data_stream) {
     rv = request_->upload_data_stream->Init(
         base::BindOnce(&HttpNetworkTransaction::OnIOComplete,
                        base::Unretained(this)),
         net_log_);
+  }
   return rv;
 }
 
 int HttpNetworkTransaction::DoInitRequestBodyComplete(int result) {
   TRACE_EVENT("net", "HttpNetworkTransaction::InitRequestBodyComplete",
               NetLogWithSourceToFlow(net_log_), "result", result);
-  if (result == OK)
+  if (result == OK) {
     next_state_ = STATE_BUILD_REQUEST;
+  }
   return result;
 }
 
@@ -1508,8 +1641,9 @@ int HttpNetworkTransaction::DoSendRequestComplete(int result) {
     return HandleHttp11Required(result);
   }
 
-  if (result < 0)
+  if (result < 0) {
     return HandleIOError(result);
+  }
   next_state_ = STATE_READ_HEADERS;
   return OK;
 }
@@ -1554,8 +1688,9 @@ int HttpNetworkTransaction::DoReadHeadersComplete(int result) {
   // TODO(davidben): Consider moving this to HttpBasicStream, It's a little
   // bizarre for SPDY. Assuming this logic is useful at all.
   // TODO(davidben): Bubble the error code up so we do not cache?
-  if (result == ERR_CONNECTION_CLOSED && response_.headers.get())
+  if (result == ERR_CONNECTION_CLOSED && response_.headers.get()) {
     result = OK;
+  }
 
   if (ForWebSocketHandshake()) {
     RecordWebSocketFallbackResult(
@@ -1563,8 +1698,9 @@ int HttpNetworkTransaction::DoReadHeadersComplete(int result) {
         HttpConnectionInfoToCoarse(response_.connection_info));
   }
 
-  if (result < 0)
+  if (result < 0) {
     return HandleIOError(result);
+  }
 
   DCHECK(response_.headers.get());
 
@@ -1599,8 +1735,9 @@ int HttpNetworkTransaction::DoReadHeadersComplete(int result) {
     return OK;
   }
 
-  if (!ContentEncodingsValid())
+  if (!ContentEncodingsValid()) {
     return ERR_CONTENT_DECODING_FAILED;
+  }
 
   // On a 408 response from the server ("Request Timeout") on a stale socket,
   // retry the request for HTTP/1.1 but not HTTP/2 or QUIC because those
@@ -1624,15 +1761,17 @@ int HttpNetworkTransaction::DoReadHeadersComplete(int result) {
   NetLogResponseHeaders(net_log_,
                         NetLogEventType::HTTP_TRANSACTION_READ_RESPONSE_HEADERS,
                         response_.headers.get());
-  if (response_headers_callback_)
+  if (response_headers_callback_) {
     response_headers_callback_.Run(response_.headers);
+  }
 
   if (response_.headers->GetHttpVersion() < HttpVersion(1, 0)) {
     // HTTP/0.9 doesn't support the PUT method, so lack of response headers
     // indicates a buggy server.  See:
     // https://bugzilla.mozilla.org/show_bug.cgi?id=193921
-    if (request_->method == "PUT")
+    if (request_->method == "PUT") {
       return ERR_METHOD_NOT_SUPPORTED;
+    }
   }
 
   if (response_.headers->response_code() == HTTP_TOO_EARLY) {
@@ -1681,8 +1820,9 @@ int HttpNetworkTransaction::DoReadHeadersComplete(int result) {
   ProcessAltSvcHeader();
 
   int rv = HandleAuthChallenge();
-  if (rv != OK)
+  if (rv != OK) {
     return rv;
+  }
 
 #if BUILDFLAG(ENABLE_REPORTING)
   // Note: This just handles the legacy Report-To header, which is still
@@ -1722,8 +1862,9 @@ int HttpNetworkTransaction::DoReadHeadersComplete(int result) {
   // from its creating consumer in cases where it is shared for writing to the
   // cache. It is also safe to set it to null at this point since
   // upload_data_stream is also not used in the Read state machine.
-  if (pending_auth_target_ == HttpAuth::AUTH_NONE)
+  if (pending_auth_target_ == HttpAuth::AUTH_NONE) {
     request_ = nullptr;
+  }
 
   return OK;
 }
@@ -1736,8 +1877,8 @@ int HttpNetworkTransaction::DoReadBody() {
   DCHECK(stream_ != nullptr);
 
   next_state_ = STATE_READ_BODY_COMPLETE;
-  return stream_->ReadResponseBody(
-      read_buf_.get(), read_buf_len_, io_callback_);
+  return stream_->ReadResponseBody(read_buf_.get(), read_buf_len_,
+                                   io_callback_);
 }
 
 int HttpNetworkTransaction::DoReadBodyComplete(int result) {
@@ -1843,15 +1984,18 @@ void HttpNetworkTransaction::ProcessReportToHeader() {
   }
 
   ReportingService* reporting_service = session_->reporting_service();
-  if (!reporting_service)
+  if (!reporting_service) {
     return;
+  }
 
   // Only accept Report-To headers on HTTPS connections that have no
   // certificate errors.
-  if (!response_.ssl_info.is_valid())
+  if (!response_.ssl_info.is_valid()) {
     return;
-  if (IsCertStatusError(response_.ssl_info.cert_status))
+  }
+  if (IsCertStatusError(response_.ssl_info.cert_status)) {
     return;
+  }
 
   reporting_service->ProcessReportToHeader(url::Origin::Create(url_),
                                            network_anonymization_key_, *value);
@@ -1866,8 +2010,9 @@ void HttpNetworkTransaction::ProcessNetworkErrorLoggingHeader() {
 
   NetworkErrorLoggingService* network_error_logging_service =
       session_->network_error_logging_service();
-  if (!network_error_logging_service)
+  if (!network_error_logging_service) {
     return;
+  }
 
   // Don't accept NEL headers received via a proxy, because the IP address of
   // the destination server is not known.
@@ -1882,8 +2027,9 @@ void HttpNetworkTransaction::ProcessNetworkErrorLoggingHeader() {
     return;
   }
 
-  if (remote_endpoint_.address().empty())
+  if (remote_endpoint_.address().empty()) {
     return;
+  }
 
   network_error_logging_service->OnHeader(network_anonymization_key_,
                                           url::Origin::Create(url_),
@@ -1891,8 +2037,9 @@ void HttpNetworkTransaction::ProcessNetworkErrorLoggingHeader() {
 }
 
 void HttpNetworkTransaction::GenerateNetworkErrorLoggingReportIfError(int rv) {
-  if (rv < 0 && rv != ERR_IO_PENDING)
+  if (rv < 0 && rv != ERR_IO_PENDING) {
     GenerateNetworkErrorLoggingReport(rv);
+  }
 }
 
 void HttpNetworkTransaction::GenerateNetworkErrorLoggingReport(int rv) {
@@ -1900,14 +2047,16 @@ void HttpNetworkTransaction::GenerateNetworkErrorLoggingReport(int rv) {
   DCHECK_NE(rv, ERR_IO_PENDING);
   DCHECK_LE(rv, 0);
 
-  if (network_error_logging_report_generated_)
+  if (network_error_logging_report_generated_) {
     return;
+  }
   network_error_logging_report_generated_ = true;
 
   NetworkErrorLoggingService* service =
       session_->network_error_logging_service();
-  if (!service)
+  if (!service) {
     return;
+  }
 
   // Don't report on proxy auth challenges.
   if (response_.headers && response_.headers->response_code() ==
@@ -1922,15 +2071,17 @@ void HttpNetworkTransaction::GenerateNetworkErrorLoggingReport(int rv) {
   }
 
   // Ignore errors from non-HTTPS origins.
-  if (!url_.SchemeIsCryptographic())
+  if (!url_.SchemeIsCryptographic()) {
     return;
+  }
 
   NetworkErrorLoggingService::RequestDetails details;
 
   details.network_anonymization_key = network_anonymization_key_;
   details.uri = url_;
-  if (!request_referrer_.empty())
+  if (!request_referrer_.empty()) {
     details.referrer = GURL(request_referrer_);
+  }
   details.user_agent = request_user_agent_;
   if (!remote_endpoint_.address().empty()) {
     details.server_ip = remote_endpoint_.address();
@@ -2307,8 +2458,9 @@ void HttpNetworkTransaction::ResetStateForAuthRestart() {
 }
 
 void HttpNetworkTransaction::CacheNetErrorDetailsAndResetStream() {
-  if (stream_)
+  if (stream_) {
     stream_->PopulateNetErrorDetails(&net_error_details_);
+  }
   stream_.reset();
 }
 
@@ -2387,23 +2539,28 @@ int HttpNetworkTransaction::HandleAuthChallenge() {
 
   int status = headers->response_code();
   if (status != HTTP_UNAUTHORIZED &&
-      status != HTTP_PROXY_AUTHENTICATION_REQUIRED)
+      status != HTTP_PROXY_AUTHENTICATION_REQUIRED) {
     return OK;
-  HttpAuth::Target target = status == HTTP_PROXY_AUTHENTICATION_REQUIRED ?
-                            HttpAuth::AUTH_PROXY : HttpAuth::AUTH_SERVER;
-  if (target == HttpAuth::AUTH_PROXY && proxy_info_.is_direct())
+  }
+  HttpAuth::Target target = status == HTTP_PROXY_AUTHENTICATION_REQUIRED
+                                ? HttpAuth::AUTH_PROXY
+                                : HttpAuth::AUTH_SERVER;
+  if (target == HttpAuth::AUTH_PROXY && proxy_info_.is_direct()) {
     return ERR_UNEXPECTED_PROXY_AUTH;
+  }
 
   // This case can trigger when an HTTPS server responds with a "Proxy
   // authentication required" status code through a non-authenticating
   // proxy.
-  if (!auth_controllers_[target].get())
+  if (!auth_controllers_[target].get()) {
     return ERR_UNEXPECTED_PROXY_AUTH;
+  }
 
   int rv = auth_controllers_[target]->HandleAuthChallenge(
       headers, response_.ssl_info, !ShouldApplyServerAuth(), false, net_log_);
-  if (auth_controllers_[target]->HaveAuthHandler())
+  if (auth_controllers_[target]->HaveAuthHandler()) {
     pending_auth_target_ = target;
+  }
 
   auth_controllers_[target]->TakeAuthInfo(&response_.auth_challenge);
 
@@ -2412,7 +2569,7 @@ int HttpNetworkTransaction::HandleAuthChallenge() {
 
 bool HttpNetworkTransaction::HaveAuth(HttpAuth::Target target) const {
   return auth_controllers_[target].get() &&
-      auth_controllers_[target]->HaveAuth();
+         auth_controllers_[target]->HaveAuth();
 }
 
 GURL HttpNetworkTransaction::AuthURL(HttpAuth::Target target) const {
@@ -2437,7 +2594,7 @@ GURL HttpNetworkTransaction::AuthURL(HttpAuth::Target target) const {
       }
       return request_->url;
     default:
-     return GURL();
+      return GURL();
   }
 }
 
@@ -2472,14 +2629,16 @@ bool HttpNetworkTransaction::ContentEncodingsValid() const {
   std::string content_encoding =
       headers->GetNormalizedHeader("Content-Encoding").value_or(std::string());
   std::set<std::string> used_encodings;
-  if (!HttpUtil::ParseContentEncoding(content_encoding, &used_encodings))
+  if (!HttpUtil::ParseContentEncoding(content_encoding, &used_encodings)) {
     return false;
+  }
 
   // When "Accept-Encoding" is not specified, it is parsed as "*".
   // If "*" encoding is advertised, then any encoding should be "accepted".
   // This does not mean, that it will be successfully decoded.
-  if (allowed_encodings.find("*") != allowed_encodings.end())
+  if (allowed_encodings.find("*") != allowed_encodings.end()) {
     return true;
+  }
 
   bool result = true;
   for (auto const& encoding : used_encodings) {

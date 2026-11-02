@@ -20,6 +20,7 @@
 #include "net/base/proxy_server.h"
 #include "net/base/schemeful_site.h"
 #include "net/dns/public/secure_dns_policy.h"
+#include "net/gm/gm_tls_policy.h"
 #include "net/http/http_proxy_connect_job.h"
 #include "net/socket/connect_job_factory.h"
 #include "net/socket/next_proto.h"
@@ -1049,6 +1050,54 @@ TEST_P(ConnectJobParamsFactoryTest, HttpsEndpointViaMixedProxyChain) {
       quic_ssl_config_b, HostPortPair("proxyc", 443), proxy_chain,
       /*proxy_chain_index=*/1,
       /*tunnel=*/true, NetworkAnonymizationKey(), secure_dns_policy());
+}
+
+TEST_P(ConnectJobParamsFactoryTest, GmRuleReachesDestinationOnly) {
+  if (alpn_mode() == ConnectJobFactory::AlpnMode::kDisabled) {
+    return;
+  }
+  const url::SchemeHostPort endpoint(url::kHttpsScheme, "gm.example", 443);
+  gm::TlsRule value;
+  value.host = endpoint.host();
+  value.profile = gm::ConnectionProfile(gm::TlsProtocol::kTlcp, "enterprise", 1,
+                                        "feitian", 1, 1);
+  value.trust_anchors = {{0x30, 0}};
+  auto rule = std::make_shared<const gm::TlsRule>(std::move(value));
+  for (bool use_proxy : {false, true}) {
+    const auto chain =
+        use_proxy ? ProxyChain::FromSchemeHostAndPort(ProxyServer::SCHEME_HTTPS,
+                                                      "proxy.example", 443)
+                  : ProxyChain::Direct();
+    ConnectJobParams params = ConstructConnectJobParams(
+        endpoint, chain, TRAFFIC_ANNOTATION_FOR_TESTS,
+        /*allowed_bad_certs=*/{}, alpn_mode(), /*force_tunnel=*/false,
+        privacy_mode(), OnHostResolutionCallback(), kEndpointNak,
+        secure_dns_policy(), disable_cert_network_fetches(),
+        &common_connect_job_params_, kProxyDnsNak,
+        handles::kInvalidNetworkHandle, rule);
+    auto destination_ssl = ExpectSSLSocketParams(params);
+    ASSERT_TRUE(destination_ssl);
+    EXPECT_EQ(destination_ssl->ssl_config().gm_rule, rule);
+    EXPECT_FALSE(destination_ssl->ssl_config().early_data_enabled);
+    EXPECT_FALSE(destination_ssl->ssl_config().ignore_certificate_errors);
+    EXPECT_TRUE(destination_ssl->ssl_config().application_settings.empty());
+    EXPECT_EQ(destination_ssl->ssl_config().alpn_protos,
+              NextProtoVector({NextProto::kProtoHTTP11}));
+    if (use_proxy) {
+      auto proxy = destination_ssl->GetHttpProxyConnectionParams();
+      ASSERT_TRUE(proxy);
+      auto proxy_ssl = proxy->ssl_params();
+      ASSERT_TRUE(proxy_ssl);
+      EXPECT_FALSE(proxy_ssl->ssl_config().gm_rule);
+      EXPECT_FALSE(proxy_ssl->GetDirectConnectionParams()->gm_tls());
+    } else {
+      auto transport = destination_ssl->GetDirectConnectionParams();
+      ASSERT_TRUE(transport);
+      EXPECT_TRUE(transport->gm_tls());
+      EXPECT_EQ(transport->supported_alpns(),
+                base::flat_set<std::string>({"http/1.1"}));
+    }
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(

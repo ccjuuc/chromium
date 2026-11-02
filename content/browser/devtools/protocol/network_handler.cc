@@ -2803,7 +2803,7 @@ std::unique_ptr<protocol::Network::SecurityDetails> BuildSecurityDetails(
 
   if (ssl_info.key_exchange_group != 0) {
     const char* key_exchange_group =
-        SSL_get_curve_name(ssl_info.key_exchange_group);
+        net::SSLKeyExchangeGroupToName(ssl_info.key_exchange_group);
     if (key_exchange_group) {
       security_details->SetKeyExchangeGroup(key_exchange_group);
     }

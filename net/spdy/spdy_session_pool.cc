@@ -40,11 +40,11 @@ namespace net {
 namespace {
 
 enum SpdySessionGetTypes {
-  CREATED_NEW                 = 0,
-  FOUND_EXISTING              = 1,
+  CREATED_NEW = 0,
+  FOUND_EXISTING = 1,
   FOUND_EXISTING_FROM_IP_POOL = 2,
-  IMPORTED_FROM_SOCKET        = 3,
-  SPDY_SESSION_GET_MAX        = 4
+  IMPORTED_FROM_SOCKET = 3,
+  SPDY_SESSION_GET_MAX = 4
 };
 
 }  // namespace
@@ -67,8 +67,9 @@ SpdySessionPool::SpdySessionRequest::SpdySessionRequest(
       spdy_session_pool_(spdy_session_pool) {}
 
 SpdySessionPool::SpdySessionRequest::~SpdySessionRequest() {
-  if (spdy_session_pool_)
+  if (spdy_session_pool_) {
     spdy_session_pool_->RemoveRequestForSpdySession(this);
+  }
 }
 
 void SpdySessionPool::SpdySessionRequest::OnRemovedFromPool() {
@@ -117,10 +118,12 @@ SpdySessionPool::SpdySessionPool(
       network_quality_estimator_(network_quality_estimator),
       cleanup_sessions_on_ip_address_changed_(
           cleanup_sessions_on_ip_address_changed) {
-  if (cleanup_sessions_on_ip_address_changed_)
+  if (cleanup_sessions_on_ip_address_changed_) {
     NetworkChangeNotifier::AddIPAddressObserver(this);
-  if (ssl_client_context_)
+  }
+  if (ssl_client_context_) {
     ssl_client_context_->AddObserver(this);
+  }
 }
 
 SpdySessionPool::~SpdySessionPool() {
@@ -143,10 +146,12 @@ SpdySessionPool::~SpdySessionPool() {
     RemoveUnavailableSession((*sessions_.begin())->GetWeakPtr());
   }
 
-  if (ssl_client_context_)
+  if (ssl_client_context_) {
     ssl_client_context_->RemoveObserver(this);
-  if (cleanup_sessions_on_ip_address_changed_)
+  }
+  if (cleanup_sessions_on_ip_address_changed_) {
     NetworkChangeNotifier::RemoveIPAddressObserver(this);
+  }
 }
 
 int SpdySessionPool::CreateAvailableSessionFromSocketHandle(
@@ -308,8 +313,9 @@ OnHostResolutionCallbackResult SpdySessionPool::OnHostResolutionComplete(
     base::span<const HostResolverEndpointResult> endpoint_results,
     const std::set<std::string>& aliases) {
   // If there are no pending requests for that alias, nothing to do.
-  if (spdy_session_request_map_.find(key) == spdy_session_request_map_.end())
+  if (spdy_session_request_map_.find(key) == spdy_session_request_map_.end()) {
     return OnHostResolutionCallbackResult::kContinue;
+  }
 
   // Check if there's already a matching session. If so, there may already
   // be a pending task to inform consumers of the alias. In this case, do
@@ -470,6 +476,16 @@ void SpdySessionPool::OnIPAddressChanged(
 void SpdySessionPool::OnSSLConfigChanged(
     SSLClientContext::SSLConfigChangeType change_type) {
   switch (change_type) {
+    case SSLClientContext::SSLConfigChangeType::kGmConfigChanged:
+      for (auto& session : GetCurrentSessions()) {
+        if (session && session->spdy_session_key().gm_profile().protocol() !=
+                           gm::TlsProtocol::kStandardTls) {
+          session->MakeUnavailable(ERR_NETWORK_CHANGED);
+          session->StartGoingAway(kLastStreamId, ERR_NETWORK_CHANGED);
+          session->MaybeFinishGoingAway();
+        }
+      }
+      break;
     case SSLClientContext::SSLConfigChangeType::kSSLConfigChanged:
       MakeCurrentSessionsGoingAway(ERR_NETWORK_CHANGED);
       break;
@@ -487,8 +503,9 @@ void SpdySessionPool::OnSSLConfigForServersChanged(
   WeakSessionList current_sessions = GetCurrentSessions();
   for (base::WeakPtr<SpdySession>& session : current_sessions) {
     bool session_matches = false;
-    if (!session)
+    if (!session) {
       continue;
+    }
 
     // If the destination for this session is invalidated, or any of the proxy
     // hops along the way, make the session go away.
@@ -519,11 +536,26 @@ void SpdySessionPool::OnSSLConfigForServersChanged(
   }
 }
 
+void SpdySessionPool::OnGmConfigForServersChanged(
+    const base::flat_set<HostPortPair>& servers) {
+  for (auto& session : GetCurrentSessions()) {
+    if (session &&
+        session->spdy_session_key().gm_profile().protocol() !=
+            gm::TlsProtocol::kStandardTls &&
+        servers.contains(session->host_port_pair())) {
+      session->MakeUnavailable(ERR_NETWORK_CHANGED);
+      session->StartGoingAway(kLastStreamId, ERR_NETWORK_CHANGED);
+      session->MaybeFinishGoingAway();
+    }
+  }
+}
+
 std::set<std::string> SpdySessionPool::GetDnsAliasesForSessionKey(
     const SpdySessionKey& key) const {
   auto it = dns_aliases_by_session_key_.find(key);
-  if (it == dns_aliases_by_session_key_.end())
+  if (it == dns_aliases_by_session_key_.end()) {
     return {};
+  }
 
   return it->second;
 }
@@ -554,8 +586,9 @@ SpdySessionPool::RequestInfoForKey::~RequestInfoForKey() = default;
 bool SpdySessionPool::IsSessionAvailable(
     const base::WeakPtr<SpdySession>& session) const {
   for (const auto& available_session : available_sessions_) {
-    if (available_session.second.get() == session.get())
+    if (available_session.second.get() == session.get()) {
       return true;
+    }
   }
   return false;
 }
@@ -573,8 +606,7 @@ void SpdySessionPool::MapKeyToAvailableSession(
 }
 
 SpdySessionPool::AvailableSessionMap::iterator
-SpdySessionPool::LookupAvailableSessionByKey(
-    const SpdySessionKey& key) {
+SpdySessionPool::LookupAvailableSessionByKey(const SpdySessionKey& key) {
   return available_sessions_.find(key);
 }
 
@@ -612,14 +644,17 @@ void SpdySessionPool::CloseCurrentSessionsHelper(Error error,
                                                  bool idle_only) {
   WeakSessionList current_sessions = GetCurrentSessions();
   for (base::WeakPtr<SpdySession>& session : current_sessions) {
-    if (!session)
+    if (!session) {
       continue;
+    }
 
-    if (idle_only && session->is_active())
+    if (idle_only && session->is_active()) {
       continue;
+    }
 
-    if (session->IsDraining())
+    if (session->IsDraining()) {
       continue;
+    }
 
     session->CloseSessionOnError(error, description);
 
@@ -697,8 +732,9 @@ base::expected<base::WeakPtr<SpdySession>, int> SpdySessionPool::InsertSession(
   // to see if this is a direct connection.
   if (key.proxy_chain().is_direct()) {
     IPEndPoint address;
-    if (available_session->GetPeerAddress(&address) == OK)
+    if (available_session->GetPeerAddress(&address) == OK) {
       aliases_.insert(AliasMap::value_type(address, key));
+    }
   }
 
   if (!perform_post_insertion_checks) {
@@ -739,8 +775,9 @@ void SpdySessionPool::UpdatePendingRequests(const SpdySessionKey& key) {
       // queue (Order by priority first, then FIFO within same priority).
       // Unclear that it matters here.
       auto iter = spdy_session_request_map_.find(key);
-      if (iter == spdy_session_request_map_.end())
+      if (iter == spdy_session_request_map_.end()) {
         break;
+      }
       RequestSet* request_set = &iter->second.request_set;
       // Find a request that can use the socket, if any.
       RequestSet::iterator request;
@@ -748,16 +785,18 @@ void SpdySessionPool::UpdatePendingRequests(const SpdySessionKey& key) {
            ++request) {
         // If the request is for use with websockets, and the session doesn't
         // support websockets, skip over the request.
-        if ((*request)->is_websocket() && !new_session->support_websocket())
+        if ((*request)->is_websocket() && !new_session->support_websocket()) {
           continue;
+        }
         // Don't use IP pooled session if not allowed.
         if (!(*request)->enable_ip_based_pooling_for_h2() && is_pooled) {
           continue;
         }
         break;
       }
-      if (request == request_set->end())
+      if (request == request_set->end()) {
         break;
+      }
 
       SpdySessionRequest::Delegate* delegate = (*request)->delegate();
       RemoveRequestInternal(iter, request);
@@ -766,8 +805,9 @@ void SpdySessionPool::UpdatePendingRequests(const SpdySessionKey& key) {
   }
 
   auto iter = spdy_session_request_map_.find(key);
-  if (iter == spdy_session_request_map_.end())
+  if (iter == spdy_session_request_map_.end()) {
     return;
+  }
   // Remove all pending requests, if there are any. As a result, if one of these
   // callbacks triggers a new RequestSession() call,
   // |is_blocking_request_for_session| will be true.
@@ -776,8 +816,9 @@ void SpdySessionPool::UpdatePendingRequests(const SpdySessionKey& key) {
 
   // Delete the RequestMap if there are no SpdySessionRequests, and no deferred
   // requests.
-  if (iter->second.request_set.empty())
+  if (iter->second.request_set.empty()) {
     spdy_session_request_map_.erase(iter);
+  }
 
   // Resume any deferred requests. This needs to be after the
   // OnSpdySessionAvailable() calls, to prevent requests from calling into the

@@ -6,6 +6,7 @@ import("//build/config/features.gni")
 import("//components/vrp_flags/features.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
 import("//net/features.gni")
+import("//net/gm/gm.gni")
 import("//services/network/public/cpp/features.gni")
 import("//testing/libfuzzer/fuzzer_test.gni")
 
@@ -357,6 +358,13 @@ component("network_service") {
 
   configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
+  if (gm_tls_backend_enabled) {
+    sources += [
+      "gm_identity_provider.cc",
+      "gm_identity_provider.h",
+    ]
+  }
+
   deps = [
     "//base",
     "//base:build_time",
@@ -651,6 +659,23 @@ source_set("tests") {
     "//testing/gmock",
     "//testing/gtest",
   ]
+
+  if (gm_tls_backend_enabled) {
+    sources += [ "gm_identity_provider_unittest.cc" ]
+  }
+
+  if (is_win && target_cpu == "x64" && gm_tls_backend_enabled) {
+    sources += [ "gm_identity_tls_unittest.cc" ]
+    deps += [
+      "//mojo/core/embedder",
+      "//services/gm_key:test_client",
+    ]
+    data_deps = [
+      "//net/gm:gm_backend_smoke",
+      "//services/gm_key:gm_key_service_test_helper",
+      "//services/gm_key:gm_sm2_simulator",
+    ]
+  }
 
   if (is_ct_supported) {
     sources += [

@@ -10,9 +10,46 @@ import unittest
 from unittest import mock
 
 import copy_runtime_tree as copy_runtime
+from windows_electron_runtime_unittest import pe_image
 
 
 class CopyRuntimeTreeTest(unittest.TestCase):
+    def test_ple_sync_keeps_root_vulkan_dependency_and_removes_engine(self):
+        self.write(self.source, 'resources/app/out.asar', b'opaque PLE')
+        self.write(self.source, 'libplacebo-274.dll', pe_image('vulkan-1.dll'))
+        self.write(self.source, 'vulkan-1.dll', pe_image())
+        self.write(self.source, 'XDASKernel.dll', pe_image())
+        self.write(self.source, 'debug.log', b'log')
+        self.write(self.target, 'XDASKernel.dll', b'stale runtime')
+        copy_runtime.sync_tree(self.source, self.target, True, 'ple')
+        self.assertEqual((self.target / 'vulkan-1.dll').read_bytes(), pe_image())
+        self.assertFalse((self.target / 'XDASKernel.dll').exists())
+        self.assertFalse((self.target / 'debug.log').exists())
+
+    def test_host_projection_removes_stale_runtime_without_changing_source(self):
+        from import_electron_app import inventory
+        self.write(self.source, 'resources/app/out.asar', b'original signed archive')
+        self.write(self.source, 'XDASKernel.dll', pe_image())
+        self.write(self.source, 'locales/en-US.pak', b'locale')
+        self.write(self.source, 'thunder_helper.node', pe_image())
+        self.write(self.target, 'XDASKernel.dll', b'stale runtime')
+        self.write(self.target, 'locales/old.pak', b'stale locale')
+        before = inventory(self.source)
+        _, _, inputs = copy_runtime.sync_tree(self.source, self.target, True)
+        self.assertEqual(inventory(self.source), before)
+        self.assertFalse((self.target / 'XDASKernel.dll').exists())
+        self.assertFalse((self.target / 'locales').exists())
+        self.assertEqual((self.target / 'resources/app/out.asar').read_bytes(),
+                         b'original signed archive')
+        self.assertTrue(any(name.endswith('XDASKernel.dll') for name in inputs))
+
+    def test_unsafe_projection_keeps_previous_output(self):
+        self.write(self.source, 'addon.node', pe_image('XDASKernel.dll', True))
+        self.write(self.target, 'keep', b'previous output')
+        with self.assertRaisesRegex(ValueError, 'needs removed runtime'):
+            copy_runtime.sync_tree(self.source, self.target, True)
+        self.assertEqual((self.target / 'keep').read_bytes(), b'previous output')
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix='copy-runtime-')
         self.addCleanup(temporary.cleanup)

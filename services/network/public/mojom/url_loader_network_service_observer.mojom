@@ -10,6 +10,7 @@ import "mojo/public/mojom/base/time.mojom";
 import "mojo/public/mojom/base/unguessable_token.mojom";
 import "services/network/public/mojom/auth.mojom";
 import "services/network/public/mojom/cookie_partition_key.mojom";
+import "services/network/public/mojom/gm_identity.mojom";
 import "services/network/public/mojom/http_response_headers.mojom";
 import "services/network/public/mojom/ip_address.mojom";
 import "services/network/public/mojom/ip_address_space.mojom";
@@ -134,6 +135,18 @@ interface URLLoaderNetworkServiceObserver {
       mojo_base.mojom.UnguessableToken? window_id,
       network.mojom.SSLCertRequestInfo cert_info,
       pending_remote<ClientCertificateResponder> cert_responder);
+
+  // Requests a GM client identity for this live request. As above, window_id
+  // identifies a service worker's originating page. The browser must resolve
+  // a live page before displaying PIN UI, and cancel when the responder pipe
+  // disconnects. Identity grants are scoped to the supplied policy generation.
+  OnGmCertificateRequested(
+      mojo_base.mojom.UnguessableToken? window_id,
+      url.mojom.Origin origin,
+      string identity_policy_id,
+      uint64 identity_generation,
+      GmClientCertificateRequest certificate_request,
+      pending_remote<GmClientCertificateResponder> cert_responder);
 
   // Called when we receive an authentication failure.
   // The |auth_challenge_responder| will respond to auth challenge with

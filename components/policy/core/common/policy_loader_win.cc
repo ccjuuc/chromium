@@ -7,7 +7,7 @@
 // Must be included before lm.h
 #include <windows.h>
 
-#include <lm.h>       // For NetGetJoinInformation
+#include <lm.h>  // For NetGetJoinInformation
 // <security.h> needs this.
 #define SECURITY_WIN32 1
 #include <security.h>  // For GetUserNameEx()
@@ -35,10 +35,12 @@
 #include "base/path_service.h"
 #include "base/scoped_native_library.h"
 #include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/syslog_logging.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/threading/scoped_thread_priority.h"
 #include "base/values.h"
+#include "base/win/registry.h"
 #include "base/win/win_util.h"
 #include "base/win/windows_version.h"
 #include "components/policy/core/common/async_policy_loader.h"
@@ -51,6 +53,7 @@
 #include "components/policy/core/common/schema.h"
 #include "components/policy/core/common/scoped_critical_policy_section.h"
 #include "components/policy/policy_constants.h"
+#include "net/gm/gm_buildflags.h"
 
 namespace policy {
 
@@ -79,8 +82,9 @@ void ParsePolicy(const RegistryDict* gpo_dict,
                  PolicyScope scope,
                  const Schema& schema,
                  PolicyMap* policy) {
-  if (!gpo_dict)
+  if (!gpo_dict) {
     return;
+  }
 
   std::optional<base::Value> policy_value(gpo_dict->ConvertToJSON(schema));
   DCHECK(policy_value);
@@ -93,6 +97,27 @@ void ParsePolicy(const RegistryDict* gpo_dict,
   policy->LoadFrom(*policy_dict, level, scope, POLICY_SOURCE_PLATFORM);
 }
 
+#if BUILDFLAG(XENON_GM)
+void PreserveInvalidGmRegistryValues(HKEY hive,
+                                     const std::wstring& root,
+                                     RegistryDict* gpo_dict) {
+  const std::wstring name = base::UTF8ToWide(key::kGmTlsSiteRules);
+  if (!gpo_dict->GetValue(key::kGmTlsSiteRules)) {
+    base::win::RegKey registry_key(hive, root.c_str(), KEY_QUERY_VALUE);
+    if (registry_key.HasValue(name.c_str())) {
+      // ReadRegistry omits unsupported native types. Preserve their presence
+      // without interpreting or exposing their bytes as policy data.
+      gpo_dict->SetValue(key::kGmTlsSiteRules, base::Value());
+    }
+  }
+  if (auto* rules = gpo_dict->GetKey(key::kGmTlsSiteRules)) {
+    rules->ReadRegistry(hive, root + L"\\" + name,
+                        /*preserve_invalid_values=*/true);
+  }
+}
+
+#endif  // BUILDFLAG(XENON_GM)
+
 // Returns a name, using the |get_name| callback, which may refuse the call if
 // the name is longer than _MAX_PATH. So this helper function takes care of the
 // retry with the required size.
@@ -101,12 +126,14 @@ bool GetName(const base::RepeatingCallback<BOOL(LPWSTR, LPDWORD)>& get_name,
   DCHECK(name);
   DWORD size = _MAX_PATH;
   if (!get_name.Run(base::WriteInto(name, size), &size)) {
-    if (::GetLastError() != ERROR_MORE_DATA)
+    if (::GetLastError() != ERROR_MORE_DATA) {
       return false;
+    }
     // Try again with the required size. This time it must work, the size should
     // not have changed in between the two calls.
-    if (!get_name.Run(base::WriteInto(name, size), &size))
+    if (!get_name.Run(base::WriteInto(name, size), &size)) {
       return false;
+    }
   }
   return true;
 }
@@ -156,8 +183,9 @@ bool IsDomainJoined() {
   bool is_joined = net_get_join_information_function(
                        nullptr, &buffer, &buffer_type) == NERR_Success &&
                    buffer_type == NetSetupDomainName;
-  if (buffer)
+  if (buffer) {
     net_api_buffer_free_function(buffer);
+  }
 
   return is_joined;
 }
@@ -310,8 +338,9 @@ void PolicyLoaderWin::InitOnBackgroundThread() {
 PolicyBundle PolicyLoaderWin::Load() {
   // Reset the watches BEFORE reading the individual policies to avoid
   // missing a change notification.
-  if (is_initialized_)
+  if (is_initialized_) {
     SetupWatches();
+  }
 
   // Policy scope and corresponding hive.
   static const struct {
@@ -331,10 +360,21 @@ PolicyBundle PolicyLoaderWin::Load() {
     RegistryDict gpo_dict;
 
     gpo_dict.ReadRegistry(entry.hive, chrome_policy_key_);
+#if BUILDFLAG(XENON_GM)
+    PreserveInvalidGmRegistryValues(entry.hive, chrome_policy_key_, &gpo_dict);
+#endif
 
     // Remove special-cased entries from the GPO dictionary.
     std::unique_ptr<RegistryDict> recommended_dict(
         gpo_dict.RemoveKey(kKeyRecommended));
+#if BUILDFLAG(XENON_GM)
+    if (recommended_dict) {
+      PreserveInvalidGmRegistryValues(
+          entry.hive,
+          chrome_policy_key_ + L"\\" + base::UTF8ToWide(kKeyRecommended),
+          recommended_dict.get());
+    }
+#endif
     std::unique_ptr<RegistryDict> third_party_dict(
         gpo_dict.RemoveKey(kKeyThirdParty));
 
@@ -344,8 +384,9 @@ PolicyBundle PolicyLoaderWin::Load() {
                      chrome_policy);
 
     // Load 3rd-party policy.
-    if (third_party_dict)
+    if (third_party_dict) {
       Load3rdPartyPolicy(third_party_dict.get(), scope, &bundle);
+    }
   }
 
   return bundle;
@@ -377,8 +418,31 @@ void PolicyLoaderWin::LoadChromePolicy(const RegistryDict* gpo_dict,
   const Schema* chrome_schema =
       schema_map()->GetSchema(PolicyNamespace(POLICY_DOMAIN_CHROME, ""));
   ParsePolicy(gpo_dict, level, scope, *chrome_schema, &policy);
-  if (ShouldFilterSensitivePolicies())
+#if BUILDFLAG(XENON_GM)
+  if (gpo_dict) {
+    // A missing national-TLS policy enables ordinary TLS. Keep invalid values
+    // and list entries for its fail-closed handler, including values rejected
+    // by registry-to-JSON conversion. Other policies retain their usual
+    // conversion behavior. As in RegistryDict, a subkey overrides a value.
+    const Schema gm_schema =
+        chrome_schema->GetKnownProperty(key::kGmTlsSiteRules);
+    std::optional<base::Value> gm_rules;
+    if (const auto* rules_key = gpo_dict->GetKey(key::kGmTlsSiteRules)) {
+      gm_rules = rules_key->ConvertToJSON(gm_schema,
+                                          /*preserve_invalid_values=*/true);
+    } else if (const auto* rules = gpo_dict->GetValue(key::kGmTlsSiteRules)) {
+      gm_rules = ConvertRegistryValue(*rules, gm_schema,
+                                      /*preserve_invalid_values=*/true);
+    }
+    if (gm_rules) {
+      policy.Set(key::kGmTlsSiteRules, level, scope, POLICY_SOURCE_PLATFORM,
+                 std::move(*gm_rules), nullptr);
+    }
+  }
+#endif
+  if (ShouldFilterSensitivePolicies()) {
     FilterSensitivePolicies(&policy);
+  }
   chrome_policy_map->MergeFrom(policy);
 }
 
@@ -406,8 +470,9 @@ void PolicyLoaderWin::Load3rdPartyPolicy(const RegistryDict* gpo_dict,
     const char* name = entry.name;
     const PolicyDomain domain = entry.domain;
     const RegistryDict* domain_dict = gpo_dict->GetKey(name);
-    if (!domain_dict)
+    if (!domain_dict) {
       continue;
+    }
 
     for (RegistryDict::KeyMap::const_iterator component(
              domain_dict->keys().begin());
@@ -424,8 +489,9 @@ void PolicyLoaderWin::Load3rdPartyPolicy(const RegistryDict* gpo_dict,
       // Parse policy.
       for (const auto& level : kLevels) {
         const RegistryDict* policy_dict = component->second->GetKey(level.path);
-        if (!policy_dict)
+        if (!policy_dict) {
           continue;
+        }
 
         PolicyMap policy;
         ParsePolicy(policy_dict, level.level, scope, schema, &policy);

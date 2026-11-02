@@ -1,0 +1,3 @@
+LIBRARY gm_boringssl_test_backend
+EXPORTS
+  gm_backend_get_api=gm_boringssl_test_get_api

@@ -26,10 +26,13 @@ namespace policy {
 class Schema;
 
 // Converts a value (as read from the registry) to meet |schema|, converting
-// types as necessary. Unconvertible types will show up as null values in the
-// result.
+// types as necessary. Unconvertible values return nullopt unless
+// `preserve_invalid_values` is true, in which case their original type and
+// contents are retained for validation by the caller.
 std::optional<base::Value> POLICY_EXPORT
-ConvertRegistryValue(const base::Value& value, const Schema& schema);
+ConvertRegistryValue(const base::Value& value,
+                     const Schema& schema,
+                     bool preserve_invalid_values = false);
 
 // A case-insensitive string comparison functor.
 struct POLICY_EXPORT CaseInsensitiveStringCompare {
@@ -80,14 +83,23 @@ class POLICY_EXPORT RegistryDict {
 
 #if BUILDFLAG(IS_WIN)
   // Read a Windows registry subtree into this registry dictionary object.
-  void ReadRegistry(HKEY hive, const std::wstring& root);
+  // With `preserve_invalid_values`, unsupported native types become NONE
+  // values so a policy handler can reject them instead of losing the setting.
+  void ReadRegistry(HKEY hive,
+                    const std::wstring& root,
+                    bool preserve_invalid_values = false);
 
   // Converts the dictionary to base::Value representation. For key/value name
   // collisions, the key wins. |schema| is used to determine the expected type
   // for each policy.
   // The underlying data of the returned object is either a base::DictValue or
   // a base::ListValue.
-  std::optional<base::Value> ConvertToJSON(const class Schema& schema) const;
+  // When `preserve_invalid_values` is true, retain malformed values instead of
+  // filtering them out. Security policies whose absence removes a constraint
+  // can then reject the entire configuration in their policy handler.
+  std::optional<base::Value> ConvertToJSON(
+      const class Schema& schema,
+      bool preserve_invalid_values = false) const;
 #endif
 
   const KeyMap& keys() const { return keys_; }

@@ -391,6 +391,10 @@ class NET_EXPORT_PRIVATE HttpNetworkTransaction
 
   // Reset to null at the start of the Read state machine.
   raw_ptr<const HttpRequestInfo> request_ = nullptr;
+  std::unique_ptr<HttpRequestInfo> gm_retry_request_;
+  std::shared_ptr<const gm::AutoConfig> gm_auto_config_;
+  std::shared_ptr<const gm::TlsRule> gm_initial_rule_;
+  unsigned gm_attempted_protocols_ = 0;
 
   // The requested URL.
   GURL url_;

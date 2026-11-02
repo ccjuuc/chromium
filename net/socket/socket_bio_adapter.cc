@@ -188,6 +188,17 @@ void SocketBIOAdapter::HandleSocketReadResult(int result) {
 
   read_result_ = result;
 
+  if (result > 0 && capture_first_read_prefix_ &&
+      first_read_prefix_size_ < first_read_prefix_.size()) {
+    const size_t count =
+        std::min(static_cast<size_t>(result),
+                 first_read_prefix_.size() - first_read_prefix_size_);
+    base::span(first_read_prefix_)
+        .subspan(first_read_prefix_size_, count)
+        .copy_from(read_buffer_->span().first(count));
+    first_read_prefix_size_ += count;
+  }
+
   // The read buffer is no longer needed.
   if (read_result_ <= 0)
     read_buffer_ = nullptr;

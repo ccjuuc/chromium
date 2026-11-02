@@ -324,6 +324,14 @@ class CONTENT_EXPORT StoragePartitionImpl
       const scoped_refptr<net::SSLCertRequestInfo>& cert_info,
       mojo::PendingRemote<network::mojom::ClientCertificateResponder>
           cert_responder) override;
+  void OnGmCertificateRequested(
+      const std::optional<base::UnguessableToken>& window_id,
+      const url::Origin& origin,
+      const std::string& identity_policy_id,
+      uint64_t identity_generation,
+      network::mojom::GmClientCertificateRequestPtr certificate_request,
+      mojo::PendingRemote<network::mojom::GmClientCertificateResponder>
+          cert_responder) override;
   void Clone(
       mojo::PendingReceiver<network::mojom::URLLoaderNetworkServiceObserver>
           listener) override;

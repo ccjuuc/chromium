@@ -90,20 +90,30 @@
         <label for="test-preset">证书测试页面</label>
         <select id="test-preset" aria-describedby="preset-hint">
           <option value="">自定义 HTTPS 地址</option>
-          <option value="https://ev-rsag3-valid.trustasia.com/">TrustAsia G3 · 有效证书</option>
-          <option value="https://ev-eccg4-valid.trustasia.com/">TrustAsia G4 · 有效证书</option>
-          <option value="https://demossl-rsa-valid.bjca.org.cn/">BJCA CA1 · 有效证书</option>
-          <option value="https://demossl-ecc-valid.bjca.org.cn/">BJCA CA2 · 有效证书</option>
-          <option value="https://ev-rsag3-expired.trustasia.com/">TrustAsia G3 · 过期证书（预期校验失败）</option>
+          <optgroup id="gm-test-presets" label="国密测试" hidden>
+            <option value="https://test.gmssl.cn/" data-hint="GmSSL 自适应站点也能使用普通 TLS。连接成功后请核对实际协议和套件；普通 TLS 连接成功不代表已经使用国密。">GmSSL · 自适应协议测试</option>
+            <option value="https://test1.gmssl.cn/" data-hint="GmSSL 的 TLCP 单向认证站点。测试使用当前协议与证书信任配置；请结合协商信息和证书校验结果判断。">GmSSL · TLCP 单向认证</option>
+            <option value="https://test2.gmssl.cn/" data-hint="双向认证需要站点认可的客户端证书和可用 USBKey。请选择“在浏览器中打开”完成证书选择与 PIN 验证；未插入 Key 或证书不受站点信任时无法完成认证。">GmSSL · TLCP 双向认证 / USBKey</option>
+            <option value="https://sm2test.ovssl.cn/" data-hint="沃通演示站点同时支持国密和普通 TLS。TLS 校验通过不等于使用国密，请核对下方是否协商 TLCP 或 SM4 套件。">沃通 · 国密 / 普通 TLS 双模式</option>
+          </optgroup>
+          <optgroup label="普通证书测试">
+            <option value="https://ev-rsag3-valid.trustasia.com/">TrustAsia G3 · 有效证书</option>
+            <option value="https://ev-eccg4-valid.trustasia.com/">TrustAsia G4 · 有效证书</option>
+            <option value="https://demossl-rsa-valid.bjca.org.cn/">BJCA CA1 · 有效证书</option>
+            <option value="https://demossl-ecc-valid.bjca.org.cn/">BJCA CA2 · 有效证书</option>
+            <option value="https://ev-rsag3-expired.trustasia.com/">TrustAsia G3 · 过期证书（预期校验失败）</option>
+          </optgroup>
         </select>
         <p id="preset-hint" class="hint preset-hint">选择后填入下方地址，点击“测试连接”执行校验。</p>
         <label for="test-url">HTTPS 地址</label>
         <div class="test-controls">
-          <input id="test-url" type="url" inputmode="url" placeholder="https://example.com/" autocomplete="off" spellcheck="false" dir="ltr" required aria-describedby="test-hint url-error">
-          <button id="test-button" type="submit" class="button primary">测试连接</button>
+          <input id="test-url" type="url" inputmode="url" placeholder="https://example.com/" autocomplete="off" spellcheck="false" dir="ltr" required aria-describedby="test-hint open-hint url-error">
+          <button id="test-button" type="submit" class="button primary" aria-describedby="test-hint">测试连接</button>
+          <button id="open-button" type="button" class="button secondary" aria-describedby="open-hint">在浏览器中打开</button>
         </div>
         <p id="url-error" class="error-message field-error" role="alert" hidden></p>
-        <p id="test-hint" class="hint">发送 HEAD 请求，不跟随重定向，超时约 15 秒。不发送 Cookie 或网站登录凭据。</p>
+        <p id="test-hint" class="hint">发送 HEAD 请求，不跟随重定向，超时约 15 秒。不发送 Cookie、客户端证书或网站登录凭据。</p>
+        <p id="open-hint" class="hint">在新标签页中正常访问；若站点要求客户端证书，可完成证书选择<span id="gm-pin-hint" hidden>和 USBKey PIN 验证</span>。验证结果请查看新标签页。</p>
       </form>
 
       <section id="test-result" class="test-result" aria-labelledby="result-heading" hidden>
@@ -127,6 +137,14 @@
             </div>
           </div>
           <dl class="network-result"><dt>网络结果</dt><dd id="network-error" class="monospace"></dd></dl>
+          <section id="connection-details" class="peer-certificate" aria-labelledby="connection-heading" hidden>
+            <h3 id="connection-heading">协商信息</h3>
+            <dl class="certificate-metadata">
+              <div><dt>协议</dt><dd id="connection-protocol" class="monospace"></dd></div>
+              <div><dt>加密算法</dt><dd id="connection-cipher" class="monospace"></dd></div>
+              <div><dt>套件编号</dt><dd id="connection-suite" class="monospace"></dd></div>
+            </dl>
+          </section>
           <div id="peer-certificate" class="peer-certificate" hidden>
             <h3>服务器证书</h3>
             <p class="hint">由本次连接返回；可用于核对站点证书，与上方托管 CA 列表分别展示。</p>

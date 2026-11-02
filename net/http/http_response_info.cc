@@ -27,9 +27,10 @@ namespace net {
 namespace {
 
 bool KeyExchangeGroupIsValid(int ssl_connection_status) {
-  // TLS 1.3 and later always treat the field correctly.
-  if (SSLConnectionStatusToVersion(ssl_connection_status) >=
-      SSL_CONNECTION_VERSION_TLS1_3) {
+  // TLCP has its own enum value and must not be ordered as a newer TLS.
+  const auto version = SSLConnectionStatusToVersion(ssl_connection_status);
+  if (version == SSL_CONNECTION_VERSION_TLS1_3 ||
+      version == SSL_CONNECTION_VERSION_QUIC) {
     return true;
   }
 

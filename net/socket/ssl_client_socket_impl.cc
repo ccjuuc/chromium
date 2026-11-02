@@ -40,6 +40,7 @@
 #include "net/base/features.h"
 #include "net/base/ip_address.h"
 #include "net/base/ip_endpoint.h"
+#include "net/base/net_error_details.h"
 #include "net/base/net_errors.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/base/trace_constants.h"
@@ -51,6 +52,10 @@
 #include "net/cert/sct_status_flags.h"
 #include "net/cert/x509_certificate_net_log_param.h"
 #include "net/cert/x509_util.h"
+#include "net/gm/gm_tls_policy.h"
+#if BUILDFLAG(XENON_GM)
+#include "net/gm/gm_tls13_client.h"
+#endif
 #include "net/http/transport_security_state.h"
 #include "net/log/net_log_event_type.h"
 #include "net/log/net_log_values.h"
@@ -338,9 +343,8 @@ SSLClientSocketImpl::GetServerTrustAnchorIDs() {
   // says `available_trust_anchor_ids` and `available_trust_anchor_ids_len`
   // define a buffer containing a list of Trust Anchor IDs in wire format
   // (length-prefixed non-empty strings);
-  base::span<const uint8_t> wire_ids =
-      UNSAFE_BUFFERS(base::span(available_trust_anchor_ids,
-                                available_trust_anchor_ids_len));
+  base::span<const uint8_t> wire_ids = UNSAFE_BUFFERS(
+      base::span(available_trust_anchor_ids, available_trust_anchor_ids_len));
   return x509_util::ParseTlsTrustAnchorIDs(wire_ids);
 }
 
@@ -349,8 +353,9 @@ int SSLClientSocketImpl::ExportKeyingMaterial(
     std::optional<base::span<const uint8_t>> context,
     base::span<uint8_t> out) {
   DCHECK(base::IsStringASCII(label));
-  if (!IsConnected())
+  if (!IsConnected()) {
     return ERR_SOCKET_NOT_CONNECTED;
+  }
 
   crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
 
@@ -366,6 +371,24 @@ int SSLClientSocketImpl::ExportKeyingMaterial(
 }
 
 int SSLClientSocketImpl::Connect(CompletionOnceCallback callback) {
+  // Joint TLS 1.3 retains the ordinary verifier and client authentication
+  // when a standard suite is selected. Strict GM modes use their adapter.
+  if (ssl_config_.gm_rule) {
+#if BUILDFLAG(XENON_GM)
+    if (!ssl_config_.gm_rule->IsValid() ||
+        ssl_config_.gm_rule->profile.protocol() !=
+            gm::TlsProtocol::kTls13Auto ||
+        ssl_config_.session_usage != SessionUsage::kDestination) {
+      return ERR_SSL_VERSION_OR_CIPHER_MISMATCH;
+    }
+    if (ssl_config_.privacy_mode == PRIVACY_MODE_ENABLED_WITHOUT_CLIENT_CERTS &&
+        !ssl_config_.gm_rule->profile.client_identity_policy_id().empty()) {
+      return ERR_SSL_CLIENT_AUTH_PRIVATE_KEY_ACCESS_DENIED;
+    }
+#else
+    return ERR_SSL_VERSION_OR_CIPHER_MISMATCH;
+#endif
+  }
   // Although StreamSocket does allow calling Connect() after Disconnect(),
   // this has never worked for layered sockets. CHECK to detect any consumers
   // reconnecting an SSL socket.
@@ -403,6 +426,11 @@ void SSLClientSocketImpl::Disconnect() {
   // Shut down anything that may call us back.
   cert_verifier_request_.reset();
   weak_factory_.InvalidateWeakPtrs();
+#if BUILDFLAG(XENON_GM)
+  if (gm_tls13_client_) {
+    gm_tls13_client_->Cancel();
+  }
+#endif
   transport_adapter_.reset();
 
   // Release user callbacks.
@@ -444,11 +472,13 @@ int SSLClientSocketImpl::ConfirmHandshake(CompletionOnceCallback callback) {
 bool SSLClientSocketImpl::IsConnected() const {
   // If the handshake has not yet completed or the socket has been explicitly
   // disconnected.
-  if (!completed_connect_ || disconnected_)
+  if (!completed_connect_ || disconnected_) {
     return false;
+  }
   // If an asynchronous operation is still pending.
-  if (user_read_buf_.get() || user_write_buf_.get())
+  if (user_read_buf_.get() || user_write_buf_.get()) {
     return true;
+  }
 
   return stream_socket_->IsConnected();
 }
@@ -456,11 +486,13 @@ bool SSLClientSocketImpl::IsConnected() const {
 bool SSLClientSocketImpl::IsConnectedAndIdle() const {
   // If the handshake has not yet completed or the socket has been explicitly
   // disconnected.
-  if (!completed_connect_ || disconnected_)
+  if (!completed_connect_ || disconnected_) {
     return false;
+  }
   // If an asynchronous operation is still pending.
-  if (user_read_buf_.get() || user_write_buf_.get())
+  if (user_read_buf_.get() || user_write_buf_.get()) {
     return false;
+  }
 
   // If there is data read from the network that has not yet been consumed, do
   // not treat the connection as idle.
@@ -469,8 +501,9 @@ bool SSLClientSocketImpl::IsConnectedAndIdle() const {
   // been flushed to the network. |Write| returns early, so this can cause race
   // conditions which cause a socket to not be treated reusable when it should
   // be. See https://crbug.com/466147.
-  if (transport_adapter_->HasPendingReadData())
+  if (transport_adapter_->HasPendingReadData()) {
     return false;
+  }
 
   return stream_socket_->IsConnectedAndIdle();
 }
@@ -509,17 +542,24 @@ SSLClientSocketImpl::GetPeerApplicationSettings() const {
 
 bool SSLClientSocketImpl::GetSSLInfo(SSLInfo* ssl_info) {
   *ssl_info = SSLInfo();
-  if (!server_cert_)
+  if (!server_cert_) {
     return false;
+  }
 
   ssl_info->cert = server_cert_verify_result_.verified_cert;
   ssl_info->unverified_cert = server_cert_;
   ssl_info->cert_status = server_cert_verify_result_.cert_status;
+  ssl_info->gm_tls = IsGmNegotiated();
   ssl_info->is_issued_by_known_root =
       server_cert_verify_result_.is_issued_by_known_root;
   ssl_info->pkp_bypassed = pkp_bypassed_;
   ssl_info->public_key_hashes = server_cert_verify_result_.public_key_hashes;
   ssl_info->client_cert_sent = send_client_cert_ && client_cert_.get();
+#if BUILDFLAG(XENON_GM)
+  if (IsGmNegotiated()) {
+    ssl_info->client_cert_sent = gm_session_identity_bound_;
+  }
+#endif
   ssl_info->encrypted_client_hello = SSL_ech_accepted(ssl_.get());
   ssl_info->is_fatal_cert_error = is_fatal_cert_error_;
   ssl_info->signed_certificate_timestamps = server_cert_verify_result_.scts;
@@ -583,8 +623,8 @@ void SSLClientSocketImpl::GetSSLCertRequestInfo(
   // SAFETY: The comment of `SSL_get0_peer_verify_algorithms` says that
   // `algorithms` is set to an array, and its return value is the length of the
   // array.
-  cert_request_info->signature_algorithms = base::ToVector(
-      UNSAFE_BUFFERS(base::span(algorithms, num_algorithms)));
+  cert_request_info->signature_algorithms =
+      base::ToVector(UNSAFE_BUFFERS(base::span(algorithms, num_algorithms)));
 }
 
 void SSLClientSocketImpl::ApplySocketTag(const SocketTag& tag) {
@@ -610,8 +650,9 @@ int SSLClientSocketImpl::ReadIfReady(IOBuffer* buf,
   if (rv == ERR_IO_PENDING) {
     user_read_callback_ = std::move(callback);
   } else {
-    if (rv > 0)
+    if (rv > 0) {
       was_ever_used_ = true;
+    }
   }
   return rv;
 }
@@ -685,8 +726,28 @@ int SSLClientSocketImpl::Init() {
   crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
 
   ssl_.reset(SSL_new(context->ssl_ctx()));
-  if (!ssl_ || !context->SetClientSocketForSSL(ssl_.get(), this))
+  if (!ssl_ || !context->SetClientSocketForSSL(ssl_.get(), this)) {
     return ERR_UNEXPECTED;
+  }
+#if BUILDFLAG(XENON_GM)
+  if (ssl_config_.gm_rule) {
+    if (!SSL_set_gm_mode(ssl_.get(), SSL_GM_MODE_RFC8998)) {
+      return ERR_SSL_VERSION_OR_CIPHER_MISMATCH;
+    }
+    gm_tls13_client_ = std::make_unique<gm::Tls13Client>(
+        host_and_port_, ssl_config_.gm_rule, context_->GetGmClientContext(),
+        context_->gm_identity_provider(), ssl_config_.privacy_mode,
+        ssl_config_.gm_client_auth_context,
+        base::BindRepeating(&SSLClientSocketImpl::RetryAllOperations,
+                            weak_factory_.GetWeakPtr()),
+        base::BindRepeating(&SSLClientSocketImpl::OnGmIdentityInvalidated,
+                            weak_factory_.GetWeakPtr()));
+    if (IsCachingEnabled()) {
+      gm_tls13_client_->LoadCachedIdentity();
+      gm_session_identity_bound_ = gm_tls13_client_->identity() != nullptr;
+    }
+  }
+#endif
 
   const bool host_is_ip_address =
       HostIsIPAddressNoBrackets(host_and_port_.host());
@@ -701,14 +762,31 @@ int SSLClientSocketImpl::Init() {
     return ERR_UNEXPECTED;
   }
 
-  const std::vector<uint16_t> supported_groups =
+  std::vector<uint16_t> supported_groups =
       context_->config().GetSupportedGroups();
+#if BUILDFLAG(XENON_GM)
+  if (ssl_config_.gm_rule &&
+      !std::ranges::contains(supported_groups, SSL_GROUP_SM2)) {
+    supported_groups.push_back(SSL_GROUP_SM2);
+  }
+#endif  // BUILDFLAG(XENON_GM)
   if (!SSL_set1_group_ids(ssl_.get(), supported_groups.data(),
                           supported_groups.size())) {
     return ERR_UNEXPECTED;
   }
-  const std::vector<uint16_t> key_shares =
+  std::vector<uint16_t> key_shares =
       context_->config().GetSupportedGroups(/*key_shares_only=*/true);
+#if BUILDFLAG(XENON_GM)
+  if (ssl_config_.gm_rule &&
+      !std::ranges::contains(key_shares, SSL_GROUP_SM2)) {
+    // Preserve the ordinary first share when an empty configured list would
+    // otherwise delegate its selection to BoringSSL.
+    if (key_shares.empty() && supported_groups.front() != SSL_GROUP_SM2) {
+      key_shares.push_back(supported_groups.front());
+    }
+    key_shares.push_back(SSL_GROUP_SM2);
+  }
+#endif  // BUILDFLAG(XENON_GM)
   if (!key_shares.empty() &&
       !SSL_set1_client_key_shares(ssl_.get(), key_shares.data(),
                                   key_shares.size())) {
@@ -717,11 +795,21 @@ int SSLClientSocketImpl::Init() {
 
   if (IsCachingEnabled()) {
     initial_session_cache_generation_number_ =
-        context_->ssl_client_session_cache()->generation_number();
+        ssl_config_.gm_rule
+            ? context_->ssl_client_session_cache()->gm_generation_number()
+            : context_->ssl_client_session_cache()->generation_number();
 
     bssl::UniquePtr<SSL_SESSION> session =
         context_->ssl_client_session_cache()->Lookup(
             GetSessionCacheKey(/*dest_ip_addr=*/std::nullopt));
+#if BUILDFLAG(XENON_GM)
+    if (gm_tls13_client_ && gm_session_identity_bound_ && !session) {
+      // An available Key must not hide an anonymous/standard cached session.
+      gm_session_identity_bound_ = false;
+      session = context_->ssl_client_session_cache()->Lookup(
+          GetSessionCacheKey(/*dest_ip_addr=*/std::nullopt));
+    }
+#endif
     if (!session) {
       // If a previous session negotiated an RSA cipher suite then it may have
       // been inserted into the cache keyed by both hostname and resolved IP
@@ -732,13 +820,34 @@ int SSLClientSocketImpl::Init() {
             GetSessionCacheKey(peer_address.address()));
       }
     }
-    if (session)
-      SSL_set_session(ssl_.get(), session.get());
+    if (session && !SSL_set_session(ssl_.get(), session.get())) {
+      return ERR_UNEXPECTED;
+    }
+#if BUILDFLAG(XENON_GM)
+    if (gm_tls13_client_ && !session) {
+      gm_session_identity_bound_ = false;
+    }
+#endif
   }
 
+#if BUILDFLAG(XENON_GM)
+  if (gm_tls13_client_ && !gm_session_identity_bound_) {
+    // A prior authorization matters only when an identity-bound ticket was
+    // offered. A fresh CertificateRequest will resolve its own authorization.
+    gm_tls13_client_->ClearIdentity();
+  }
+#endif
   transport_adapter_ = std::make_unique<SocketBIOAdapter>(
       stream_socket_.get(), kDefaultOpenSSLBufferSize,
       kDefaultOpenSSLBufferSize, this);
+#if BUILDFLAG(XENON_GM)
+  const auto& gm_auto_config = context_->config().gm_auto_config;
+  if (gm_auto_config && gm_auto_config->enabled &&
+      ssl_config_.session_usage == SessionUsage::kDestination &&
+      ssl_config_.ech_config_list.empty()) {
+    transport_adapter_->EnableFirstReadPrefixCapture();
+  }
+#endif  // BUILDFLAG(XENON_GM)
   BIO* transport_bio = transport_adapter_->bio();
 
   BIO_up_ref(transport_bio);  // SSL_set0_rbio takes ownership.
@@ -756,12 +865,19 @@ int SSLClientSocketImpl::Init() {
     return ERR_UNEXPECTED;
   }
 
+  if (ssl_config_.gm_rule) {
+    if (version_max < TLS1_3_VERSION) {
+      return ERR_SSL_VERSION_OR_CIPHER_MISMATCH;
+    }
+    version_min = TLS1_3_VERSION;
+  }
   if (!SSL_set_min_proto_version(ssl_.get(), version_min) ||
       !SSL_set_max_proto_version(ssl_.get(), version_max)) {
     return ERR_UNEXPECTED;
   }
 
-  SSL_set_early_data_enabled(ssl_.get(), ssl_config_.early_data_enabled);
+  SSL_set_early_data_enabled(
+      ssl_.get(), ssl_config_.early_data_enabled && !ssl_config_.gm_rule);
 
   // TODO(crbug.com/41393419): Make this option not a no-op in BoringSSL and
   // then disable it.
@@ -774,8 +890,9 @@ int SSLClientSocketImpl::Init() {
   // These are the remaining CBC-mode ECDSA ciphers.
   std::string command("ALL:!aPSK:!ECDSA+SHA1:!3DES");
 
-  if (ssl_config_.require_ecdhe)
+  if (ssl_config_.require_ecdhe) {
     command.append(":!kRSA");
+  }
 
   // Remove any disabled ciphers.
   for (uint16_t id : context_->config().disabled_cipher_suites) {
@@ -812,6 +929,29 @@ int SSLClientSocketImpl::Init() {
     return ERR_UNEXPECTED;
   }
 
+#if BUILDFLAG(XENON_GM)
+  if (ssl_config_.gm_rule) {
+    std::vector<uint16_t> preferences(std::begin(kVerifyPrefs),
+                                      std::end(kVerifyPrefs));
+    preferences.push_back(SSL_SIGN_SM2_SM3);
+    if (!SSL_set_verify_algorithm_prefs(ssl_.get(), preferences.data(),
+                                        preferences.size())) {
+      return ERR_UNEXPECTED;
+    }
+    std::vector<uint16_t> suites;
+    for (uint16_t id : {uint16_t{0x00c6}, uint16_t{0x00c7}}) {
+      if (!std::ranges::contains(context_->config().disabled_cipher_suites,
+                                 id)) {
+        suites.push_back(id);
+      }
+    }
+    if (suites.empty() ||
+        !SSL_set1_gm_cipher_suites(ssl_.get(), suites.data(), suites.size())) {
+      return ERR_SSL_VERSION_OR_CIPHER_MISMATCH;
+    }
+  }
+
+#endif  // BUILDFLAG(XENON_GM)
   SSL_set_alps_use_new_codepoint(
       ssl_.get(),
       base::FeatureList::IsEnabled(features::kUseNewAlpsCodepointHttp2));
@@ -898,8 +1038,9 @@ int SSLClientSocketImpl::Init() {
 void SSLClientSocketImpl::DoReadCallback(int rv) {
   // Since Run may result in Read being called, clear |user_read_callback_|
   // up front.
-  if (rv > 0)
+  if (rv > 0) {
     was_ever_used_ = true;
+  }
   user_read_buf_ = nullptr;
   user_read_buf_len_ = 0;
   std::move(user_read_callback_).Run(rv);
@@ -908,8 +1049,9 @@ void SSLClientSocketImpl::DoReadCallback(int rv) {
 void SSLClientSocketImpl::DoWriteCallback(int rv) {
   // Since Run may result in Write being called, clear |user_write_callback_|
   // up front.
-  if (rv > 0)
+  if (rv > 0) {
     was_ever_used_ = true;
+  }
   user_write_buf_ = nullptr;
   user_write_buf_len_ = 0;
   std::move(user_write_callback_).Run(rv);
@@ -917,11 +1059,29 @@ void SSLClientSocketImpl::DoWriteCallback(int rv) {
 
 int SSLClientSocketImpl::DoHandshake() {
   crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
+  if (gm_identity_error_ != OK) {
+    return gm_identity_error_;
+  }
 
   int rv = SSL_do_handshake(ssl_.get());
+  if (gm_identity_error_ != OK) {
+    return gm_identity_error_;
+  }
   int net_error = OK;
   if (rv <= 0) {
     int ssl_error = SSL_get_error(ssl_.get(), rv);
+#if BUILDFLAG(XENON_GM)
+    if (ssl_error == SSL_ERROR_WANT_X509_LOOKUP && gm_tls13_client_ &&
+        IsGmNegotiated()) {
+      if (gm_tls13_client_->identity_error() != OK) {
+        return gm_tls13_client_->identity_error();
+      }
+      if (gm_tls13_client_->identity_pending()) {
+        next_handshake_state_ = STATE_HANDSHAKE;
+        return ERR_IO_PENDING;
+      }
+    }
+#endif
     if (ssl_error == SSL_ERROR_WANT_X509_LOOKUP && !send_client_cert_) {
       return ERR_SSL_CLIENT_AUTH_CERT_NEEDED;
     }
@@ -939,6 +1099,34 @@ int SSLClientSocketImpl::DoHandshake() {
 
     OpenSSLErrorInfo error_info;
     net_error = MapLastOpenSSLError(ssl_error, err_tracer, &error_info);
+#if BUILDFLAG(XENON_GM)
+    if (ssl_error == SSL_ERROR_SSL &&
+        ERR_GET_LIB(error_info.error_code) == ERR_LIB_SSL &&
+        !gm_peer_certificate_seen_ && !certificate_requested_ &&
+        !server_cert_ && ssl_config_.ech_config_list.empty() &&
+        !used_ech_name_override_ && !in_confirm_handshake_) {
+      switch (ERR_GET_REASON(error_info.error_code)) {
+        case SSL_R_WRONG_VERSION_NUMBER: {
+          // BoringSSL rejects a record's version before validating its type,
+          // length or body. Arbitrary plaintext is therefore insufficient.
+          // Require the complete first TLCP 1.1 fatal protocol_version alert.
+          // A truncated/fragmented header alone does not authorize fallback.
+          static constexpr uint8_t kTlcpVersionAlert[] = {
+              0x15, 0x01, 0x01, 0x00, 0x02, 0x02, 0x46};
+          gm_protocol_retry_allowed_ = std::ranges::equal(
+              transport_adapter_->first_read_prefix(), kTlcpVersionAlert);
+          break;
+        }
+        case SSL_R_UNSUPPORTED_PROTOCOL:
+        case SSL_R_TLSV1_ALERT_PROTOCOL_VERSION:
+        case SSL_R_NO_SHARED_CIPHER:
+          gm_protocol_retry_allowed_ = true;
+          break;
+        default:
+          break;
+      }
+    }
+#endif  // BUILDFLAG(XENON_GM)
     MaybeClearEarlyDataCache(net_error);
     if (net_error == ERR_IO_PENDING) {
       // If not done, stay in this state
@@ -957,8 +1145,9 @@ int SSLClientSocketImpl::DoHandshake() {
 }
 
 int SSLClientSocketImpl::DoHandshakeComplete(int result) {
-  if (result < 0)
+  if (result < 0) {
     return result;
+  }
 
   if (in_confirm_handshake_) {
     next_handshake_state_ = STATE_NONE;
@@ -970,6 +1159,22 @@ int SSLClientSocketImpl::DoHandshakeComplete(int result) {
   // BoringSSL will never complete the handshake in this case, so this should
   // not happen.
   CHECK(!used_ech_name_override_);
+#if BUILDFLAG(XENON_GM)
+  if (gm_tls13_client_) {
+    if (!IsGmNegotiated()) {
+      gm_session_identity_bound_ = false;
+      gm_tls13_client_->ClearIdentity();
+    } else if (!SSL_session_reused(ssl_.get()) &&
+               !gm_tls13_client_->identity_selected()) {
+      // A one-way server did not authenticate the cached client identity.
+      gm_session_identity_bound_ = false;
+    }
+    if (!ssl_config_.gm_rule->profile.client_identity_policy_id().empty() &&
+        (!IsGmNegotiated() || !gm_session_identity_bound_)) {
+      return ERR_BAD_SSL_CLIENT_AUTH_CERT;
+    }
+  }
+#endif
 
   const uint8_t* alpn_proto = nullptr;
   unsigned alpn_len = 0;
@@ -981,8 +1186,9 @@ int SSLClientSocketImpl::DoHandshakeComplete(int result) {
 
   RecordNegotiatedProtocol();
 
-  if (!IsRenegotiationAllowed())
+  if (!IsRenegotiationAllowed()) {
     SSL_set_renegotiate_mode(ssl_.get(), ssl_renegotiate_never);
+  }
 
   uint16_t signature_algorithm = SSL_get_peer_signature_algorithm(ssl_.get());
   if (signature_algorithm != 0) {
@@ -1105,6 +1311,33 @@ ssl_verify_result_t SSLClientSocketImpl::VerifyCert() {
         });
   }
 
+#if BUILDFLAG(XENON_GM)
+  if (gm_tls13_client_) {
+    if (IsGmNegotiated()) {
+      if (!SSL_session_reused(ssl_.get())) {
+        gm_session_identity_bound_ = false;
+        gm_tls13_client_->ClearIdentity();
+      }
+      server_cert_verify_result_.Reset();
+      server_cert_verify_result_.verified_cert = server_cert_;
+      const auto ech_name = GetECHNameOverride();
+      if (!ech_name.empty()) {
+        used_ech_name_override_ = true;
+      }
+      cert_verification_result_ = gm_tls13_client_->Verify(
+          server_cert_, ech_name.empty() ? host_and_port_.host() : ech_name,
+          &server_cert_verify_result_,
+          base::BindOnce(&SSLClientSocketImpl::OnVerifyComplete,
+                         base::Unretained(this)),
+          &cert_verifier_request_);
+      return HandleVerifyResult();
+    }
+    // Standard suites retain CertVerifier, CT, OCSP and ordinary root policy.
+    gm_session_identity_bound_ = false;
+    gm_tls13_client_->ClearIdentity();
+  }
+#endif
+
   // If the certificate is bad and has been previously accepted, use
   // the previous status and bypass the error.
   CertStatus cert_status;
@@ -1189,8 +1422,9 @@ ssl_verify_result_t SSLClientSocketImpl::HandleVerifyResult() {
   // callback later. The next call to VerifyCertCallback will be a
   // continuation of the same verification, so leave
   // cert_verification_result_ as-is.
-  if (cert_verification_result_ == ERR_IO_PENDING)
+  if (cert_verification_result_ == ERR_IO_PENDING) {
     return ssl_verify_retry;
+  }
 
   // In BoringSSL's calling convention for asynchronous callbacks,
   // after a callback returns a non-retry value, the operation has
@@ -1234,8 +1468,9 @@ ssl_verify_result_t SSLClientSocketImpl::HandleVerifyResult() {
   is_fatal_cert_error_ =
       IsCertStatusError(server_cert_verify_result_.cert_status) &&
       result != ERR_CERT_KNOWN_INTERCEPTION_BLOCKED &&
-      context_->transport_security_state()->ShouldSSLErrorsBeFatal(
-          host_and_port_.host());
+      (IsGmNegotiated() ||
+       context_->transport_security_state()->ShouldSSLErrorsBeFatal(
+           host_and_port_.host()));
 
   if (IsCertificateError(result)) {
     if (!GetECHNameOverride().empty()) {
@@ -1244,7 +1479,7 @@ ssl_verify_result_t SSLClientSocketImpl::HandleVerifyResult() {
       // and map all bypassable errors to fatal ones.
       result = ERR_ECH_FALLBACK_CERTIFICATE_INVALID;
     }
-    if (ssl_config_.ignore_certificate_errors) {
+    if (ssl_config_.ignore_certificate_errors && !IsGmNegotiated()) {
       result = OK;
     }
   }
@@ -1374,8 +1609,9 @@ int SSLClientSocketImpl::DoPayloadRead(base::span<uint8_t> buf) {
     // a connection, and instead terminate the TCP connection. This is reported
     // as ERR_CONNECTION_CLOSED. Because of this, map the unclean shutdown to a
     // graceful EOF, instead of treating it as an error as it should be.
-    if (pending_read_error_ == ERR_CONNECTION_CLOSED)
+    if (pending_read_error_ == ERR_CONNECTION_CLOSED) {
       pending_read_error_ = 0;
+    }
   }
 
   if (available_buffer.size() < buf.size()) {
@@ -1386,8 +1622,9 @@ int SSLClientSocketImpl::DoPayloadRead(base::span<uint8_t> buf) {
     // Do not treat insufficient data as an error to return in the next call to
     // DoPayloadRead() - instead, let the call fall through to check SSL_read()
     // again. The transport may have data available by then.
-    if (pending_read_error_ == ERR_IO_PENDING)
+    if (pending_read_error_ == ERR_IO_PENDING) {
       pending_read_error_ = kSSLClientSocketNoPendingResult;
+    }
   } else {
     // No bytes were returned. Return the pending read error immediately.
     DCHECK_NE(kSSLClientSocketNoPendingResult, pending_read_error_);
@@ -1419,8 +1656,9 @@ int SSLClientSocketImpl::DoPayloadWrite() {
   }
 
   int ssl_error = SSL_get_error(ssl_.get(), rv);
-  if (ssl_error == SSL_ERROR_WANT_PRIVATE_KEY_OPERATION)
+  if (ssl_error == SSL_ERROR_WANT_PRIVATE_KEY_OPERATION) {
     return ERR_IO_PENDING;
+  }
   OpenSSLErrorInfo error_info;
   int net_error = MapLastOpenSSLError(ssl_error, err_tracer, &error_info);
   MaybeClearEarlyDataCache(net_error);
@@ -1511,8 +1749,9 @@ void SSLClientSocketImpl::RetryAllOperations() {
     OnHandshakeIOComplete(OK);
   }
 
-  if (!guard.get())
+  if (!guard.get()) {
     return;
+  }
 
   DoPeek();
 
@@ -1526,17 +1765,70 @@ void SSLClientSocketImpl::RetryAllOperations() {
     rv_read = OK;
   }
 
-  if (user_write_buf_)
+  if (user_write_buf_) {
     rv_write = DoPayloadWrite();
+  }
 
-  if (rv_read != ERR_IO_PENDING)
+  if (rv_read != ERR_IO_PENDING) {
     DoReadCallback(rv_read);
+  }
 
-  if (!guard.get())
+  if (!guard.get()) {
     return;
+  }
 
-  if (rv_write != ERR_IO_PENDING)
+  if (rv_write != ERR_IO_PENDING) {
     DoWriteCallback(rv_write);
+  }
+}
+
+bool SSLClientSocketImpl::IsGmNegotiated() const {
+#if BUILDFLAG(XENON_GM)
+  return gm_tls13_client_ && ssl_ && gm::Tls13Client::IsGmCipher(ssl_.get());
+#else
+  return false;
+#endif
+}
+
+void SSLClientSocketImpl::OnGmIdentityInvalidated() {
+#if BUILDFLAG(XENON_GM)
+  if (ssl_ && SSL_get_current_cipher(ssl_.get()) && !IsGmNegotiated()) {
+    gm_session_identity_bound_ = false;
+    gm_tls13_client_->ClearIdentity();
+    return;
+  }
+#endif
+  gm_identity_error_ = ERR_SSL_CLIENT_AUTH_PRIVATE_KEY_ACCESS_DENIED;
+  gm_protocol_retry_allowed_ = false;
+  auto connect = std::move(user_connect_callback_);
+  auto read = std::move(user_read_callback_);
+  auto write = std::move(user_write_callback_);
+  auto* context = context_.get();
+  const HostPortPair server = host_and_port_;
+  Disconnect();
+  // Disconnect invalidates existing weak pointers. Observe lifetime again
+  // before notifying pools or users, just as RetryAllOperations does.
+  const auto alive = weak_factory_.GetWeakPtr();
+  // Pool notifications and callbacks may destroy this socket.
+  context->InvalidateGmSessionsForServers({server});
+  if (!alive) {
+    return;
+  }
+  if (connect) {
+    std::move(connect).Run(ERR_SSL_CLIENT_AUTH_PRIVATE_KEY_ACCESS_DENIED);
+    if (!alive) {
+      return;
+    }
+  }
+  if (read) {
+    std::move(read).Run(ERR_SSL_CLIENT_AUTH_PRIVATE_KEY_ACCESS_DENIED);
+    if (!alive) {
+      return;
+    }
+  }
+  if (write) {
+    std::move(write).Run(ERR_SSL_CLIENT_AUTH_PRIVATE_KEY_ACCESS_DENIED);
+  }
 }
 
 int SSLClientSocketImpl::ClientCertRequestCallback(SSL* ssl) {
@@ -1547,6 +1839,28 @@ int SSLClientSocketImpl::ClientCertRequestCallback(SSL* ssl) {
 
   // Clear any currently configured certificates.
   SSL_certs_clear(ssl_.get());
+#if BUILDFLAG(XENON_GM)
+  if (gm_tls13_client_) {
+    if (IsGmNegotiated()) {
+      const int selected = gm_tls13_client_->SelectIdentity(ssl);
+      if (selected != 1) {
+        return -1;
+      }
+      send_client_cert_ = true;
+      if (!gm_tls13_client_->GetCredential(&client_cert_,
+                                           &client_private_key_)) {
+        gm_identity_error_ = ERR_BAD_SSL_CLIENT_AUTH_CERT;
+        return -1;
+      }
+      gm_session_identity_bound_ = client_cert_ != nullptr;
+    } else if (!ssl_config_.gm_rule->profile.client_identity_policy_id()
+                    .empty()) {
+      // Required SM2 authorization cannot be replaced by an ordinary identity.
+      gm_identity_error_ = ERR_BAD_SSL_CLIENT_AUTH_CERT;
+      return -1;
+    }
+  }
+#endif
 
 #if !BUILDFLAG(ENABLE_CLIENT_CERTIFICATES)
   LOG(WARNING) << "Client auth is not supported";
@@ -1604,8 +1918,18 @@ int SSLClientSocketImpl::ClientCertRequestCallback(SSL* ssl) {
 }
 
 int SSLClientSocketImpl::NewSessionCallback(SSL_SESSION* session) {
-  if (!IsCachingEnabled())
+  if (ssl_config_.gm_rule &&
+      !ssl_config_.gm_rule->profile.client_identity_policy_id().empty() &&
+      (!IsGmNegotiated()
+#if BUILDFLAG(XENON_GM)
+       || !gm_session_identity_bound_
+#endif
+       )) {
     return 0;
+  }
+  if (!IsCachingEnabled()) {
+    return 0;
+  }
 
   std::optional<IPAddress> ip_addr;
   if (SSL_CIPHER_get_kx_nid(SSL_SESSION_get0_cipher(session)) == NID_kx_rsa) {
@@ -1640,6 +1964,16 @@ SSLClientSessionCache::Key SSLClientSocketImpl::GetSessionCacheKey(
   key.proxy_chain = ssl_config_.proxy_chain;
   key.proxy_chain_index = ssl_config_.proxy_chain_index;
   key.session_usage = ssl_config_.session_usage;
+  if (ssl_config_.gm_rule) {
+    key.gm_profile = ssl_config_.gm_rule->profile;
+#if BUILDFLAG(XENON_GM)
+    if (gm_tls13_client_ && gm_session_identity_bound_ &&
+        gm_tls13_client_->identity()) {
+      key.gm_identity_id = gm_tls13_client_->identity()->identity_id();
+      key.gm_identity_generation = gm_tls13_client_->identity()->generation();
+    }
+#endif
+  }
   return key;
 }
 
@@ -1649,13 +1983,18 @@ bool SSLClientSocketImpl::IsRenegotiationAllowed() const {
   }
 
   for (NextProto allowed : ssl_config_.renego_allowed_for_protos) {
-    if (negotiated_protocol_ == allowed)
+    if (negotiated_protocol_ == allowed) {
       return true;
+    }
   }
   return false;
 }
 
 bool SSLClientSocketImpl::IsCachingEnabled() const {
+  if (ssl_config_.gm_rule && (!ssl_config_.gm_rule->enable_session_resumption ||
+                              gm_identity_error_ != OK)) {
+    return false;
+  }
   return context_->ssl_client_session_cache() != nullptr;
 }
 
@@ -1704,8 +2043,9 @@ ssl_private_key_result_t SSLClientSocketImpl::PrivateKeyCompleteCallback(
   DCHECK_NE(kSSLClientSocketNoPendingResult, signature_result_);
   DCHECK(client_private_key_);
 
-  if (signature_result_ == ERR_IO_PENDING)
+  if (signature_result_ == ERR_IO_PENDING) {
     return ssl_private_key_retry;
+  }
   if (signature_result_ != OK) {
     OpenSSLPutNetError(FROM_HERE, signature_result_);
     return ssl_private_key_failure;
@@ -1730,8 +2070,9 @@ void SSLClientSocketImpl::OnPrivateKeyComplete(
   net_log_.EndEventWithNetErrorCode(NetLogEventType::SSL_PRIVATE_KEY_OP, error);
 
   signature_result_ = error;
-  if (signature_result_ == OK)
+  if (signature_result_ == OK) {
     signature_ = signature;
+  }
 
   // During a renegotiation, either Read or Write calls may be blocked on an
   // asynchronous private key operation.
@@ -1741,6 +2082,13 @@ void SSLClientSocketImpl::OnPrivateKeyComplete(
 void SSLClientSocketImpl::MessageCallback(int is_write,
                                           int content_type,
                                           base::span<const uint8_t> bytes) {
+  if (!is_write && content_type == SSL3_RT_HANDSHAKE && !bytes.empty() &&
+      (bytes[0] == SSL3_MT_CERTIFICATE ||
+       bytes[0] == SSL3_MT_CERTIFICATE_REQUEST ||
+       bytes[0] == SSL3_MT_COMPRESSED_CERTIFICATE)) {
+    gm_peer_certificate_seen_ = true;
+    gm_protocol_retry_allowed_ = false;
+  }
   switch (content_type) {
     case SSL3_RT_ALERT:
       net_log_.AddEvent(is_write ? NetLogEventType::SSL_ALERT_SENT
@@ -1764,6 +2112,11 @@ void SSLClientSocketImpl::MessageCallback(int is_write,
                         });
       break;
   }
+}
+
+void SSLClientSocketImpl::PopulateNetErrorDetails(
+    NetErrorDetails* details) const {
+  details->gm_protocol_retry_allowed = gm_protocol_retry_allowed_;
 }
 
 void SSLClientSocketImpl::LogConnectEndEvent(int rv) {

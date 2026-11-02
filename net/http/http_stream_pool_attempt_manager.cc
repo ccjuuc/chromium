@@ -249,6 +249,10 @@ HttpStreamPool::AttemptManager::AttemptManager(Group* group, NetLog* net_log)
     ssl_config.renego_allowed_default = true;
     ssl_config.renego_allowed_for_protos = {NextProto::kProtoHTTP11};
 
+    if (stream_key().gm_rule() && stream_key().gm_rule()->automatic) {
+      automatic_ech_alpns_ = ssl_config.alpn_protos;
+    }
+    gm::ApplyTlsRule(stream_key().gm_rule(), &ssl_config);
     base_ssl_config_.emplace(std::move(ssl_config));
   }
 }
@@ -426,10 +430,16 @@ bool HttpStreamPool::AttemptManager::IsEndpointUsableForTcpBasedAttempt(
   // See https://www.rfc-editor.org/rfc/rfc9460.html#section-9.3. Endpoints are
   // usable if there is an overlap between the endpoint's ALPNs and the
   // configured ones.
+  const bool automatic_ech = !automatic_ech_alpns_.empty() &&
+                             !endpoint.metadata.ech_config_list.empty() &&
+                             IsEchEnabled();
+  const auto& protocols = automatic_ech ? automatic_ech_alpns_
+                          : base_ssl_config_
+                              ? base_ssl_config_->alpn_protos
+                              : http_network_session()->GetAlpnProtos();
   return std::ranges::any_of(
       endpoint.metadata.supported_protocol_alpns, [&](const auto& alpn) {
-        return std::ranges::contains(http_network_session()->GetAlpnProtos(),
-                                     NextProtoFromString(alpn));
+        return std::ranges::contains(protocols, NextProtoFromString(alpn));
       });
 }
 
@@ -587,6 +597,19 @@ void HttpStreamPool::AttemptManager::OnJobCancelled(Job* job) {
   OnJobDone(job);
 }
 
+base::UnguessableToken
+HttpStreamPool::AttemptManager::ResolveGmClientAuthContext(
+    TcpBasedAttempt* attempt) {
+  Job* owner =
+      request_jobs_.empty() ? nullptr : request_jobs_.FirstMax().value().get();
+  attempt->SetGmClientAuthOwner(owner);
+  if (!owner) {
+    return {};
+  }
+  auto resolver = owner->gm_client_auth_context();
+  return resolver ? resolver.Run() : base::UnguessableToken();
+}
+
 void HttpStreamPool::AttemptManager::CancelJobs(
     int error,
     StreamSocketCloseReason cancel_reason) {
@@ -619,7 +642,11 @@ void HttpStreamPool::AttemptManager::CompleteQuicAttempt(
   }
 
   if (net_error_details.has_value()) {
+    const bool gm_retry = net_error_details_.gm_protocol_retry_allowed;
+    const bool gm_standard = net_error_details_.gm_standard_tls_required;
     net_error_details_ = *net_error_details;
+    net_error_details_.gm_protocol_retry_allowed = gm_retry;
+    net_error_details_.gm_standard_tls_required = gm_standard;
   }
   quic_attempt_result_ = result;
   quic_attempt_.reset();
@@ -771,6 +798,20 @@ void HttpStreamPool::AttemptManager::OnTcpBasedAttemptComplete(
       ExtractTcpBasedAttempt(raw_attempt, rv);
 
   if (rv != OK) {
+    net_error_details_.gm_protocol_retry_allowed =
+        tcp_based_attempt->attempt()
+            ->net_error_details()
+            .gm_protocol_retry_allowed;
+    net_error_details_.gm_standard_tls_required = tcp_based_attempt->attempt()
+                                                      ->net_error_details()
+                                                      .gm_standard_tls_required;
+    if (rv == ERR_ABORTED && net_error_details_.gm_standard_tls_required) {
+      // ECH requires a different pool key. Do not continue to another address
+      // or an authority A/AAAA fallback inside this GM attempt manager.
+      tcp_based_attempt.reset();
+      HandleFinalError(rv);
+      return;
+    }
     HandleTcpBasedAttemptFailure(std::move(tcp_based_attempt), rv);
     return;
   }
@@ -1585,6 +1626,9 @@ bool HttpStreamPool::AttemptManager::IsIpBasedPoolingEnabledForH2() const {
 }
 
 bool HttpStreamPool::AttemptManager::SupportsSpdy() const {
+  if (!stream_key().gm_profile().AllowsHttp2()) {
+    return false;
+  }
   if (!supports_spdy_.has_value()) {
     supports_spdy_ =
         http_network_session()->http_server_properties()->GetSupportsSpdy(
@@ -1662,6 +1706,13 @@ void HttpStreamPool::AttemptManager::HandleFinalError(int error) {
 
   CHECK(!final_error_to_notify_jobs_.has_value());
   final_error_to_notify_jobs_ = error;
+  if (error != ERR_SSL_PROTOCOL_ERROR &&
+      error != ERR_SSL_VERSION_OR_CIPHER_MISMATCH) {
+    net_error_details_.gm_protocol_retry_allowed = false;
+  }
+  if (error != ERR_ABORTED) {
+    net_error_details_.gm_standard_tls_required = false;
+  }
   availability_state_ = AvailabilityState::kFailing;
   service_endpoint_request_.reset();
 
@@ -1811,6 +1862,7 @@ void HttpStreamPool::AttemptManager::OnJobDone(Job* job) {
 
   limit_ignoring_jobs_.erase(job);
   ip_based_pooling_disabling_jobs_.erase(job);
+  const bool cancelled_gm_auth = CancelGmClientAuthAttempts(job);
   if (!job->is_preconnect()) {
     // MaybeStartDraining() is only called for non-preconnects. That does mean
     // slow QUIC attempts will never be cancelled at this layer unless there's a
@@ -1818,7 +1870,37 @@ void HttpStreamPool::AttemptManager::OnJobDone(Job* job) {
     // connected TCP stream).
     MaybeStartDraining();
   }
+  if (cancelled_gm_auth && !is_shutting_down()) {
+    // Defer starting a replacement until the caller has finished removing or
+    // notifying the job. Its cancellation is not an endpoint failure.
+    TaskRunner(GetPriority())
+        ->PostTask(FROM_HERE,
+                   base::BindOnce(&AttemptManager::MaybeAttemptTcpBased,
+                                  weak_ptr_factory_.GetWeakPtr()));
+  }
   MaybeCompleteLater();
+}
+
+bool HttpStreamPool::AttemptManager::CancelGmClientAuthAttempts(Job* job) {
+  if (!stream_key().gm_rule()) {
+    return false;
+  }
+  std::vector<TcpBasedAttempt*> owned_attempts;
+  for (const auto& slot : tcp_based_attempt_slots_) {
+    for (TcpBasedAttempt* attempt :
+         {slot->ipv4_attempt(), slot->ipv6_attempt()}) {
+      if (attempt && attempt->gm_client_auth_owner() == job) {
+        owned_attempts.push_back(attempt);
+      }
+    }
+  }
+  for (TcpBasedAttempt* attempt : owned_attempts) {
+    // Successful sockets have already been extracted and are not in this
+    // collection, so they remain available for normal connection sharing.
+    auto cancelled = ExtractTcpBasedAttempt(attempt, ERR_ABORTED);
+    cancelled->SetCancelReason(StreamSocketCloseReason::kAbort);
+  }
+  return !owned_attempts.empty();
 }
 
 bool HttpStreamPool::AttemptManager::HasAvailableSpdySession() const {
@@ -2061,6 +2143,15 @@ void HttpStreamPool::AttemptManager::HandleTcpBasedAttemptFailure(
     std::unique_ptr<TcpBasedAttempt> tcp_based_attempt,
     int rv) {
   CHECK_NE(rv, ERR_IO_PENDING);
+  if (tcp_based_attempt->gm_client_auth_without_owner() &&
+      !request_jobs_.empty() && !gm_ownerless_retry_used_ &&
+      (rv == ERR_SSL_CLIENT_AUTH_PRIVATE_KEY_ACCESS_DENIED ||
+       rv == ERR_BAD_SSL_CLIENT_AUTH_CERT)) {
+    gm_ownerless_retry_used_ = true;
+    tcp_based_attempt.reset();
+    MaybeAttemptTcpBased();
+    return;
+  }
   ip_endpoint_state_tracker_.OnEndpointFailed(tcp_based_attempt->ip_endpoint());
   connection_attempts_.emplace_back(tcp_based_attempt->ip_endpoint(), rv);
 
@@ -2171,7 +2262,8 @@ bool HttpStreamPool::AttemptManager::CanUseTcpBasedProtocols() const {
 }
 
 bool HttpStreamPool::AttemptManager::CanUseQuic() const {
-  return allowed_alpns_.HasAny(kQuicBasedProtocols);
+  return stream_key().gm_profile().AllowsQuic() &&
+         allowed_alpns_.HasAny(kQuicBasedProtocols);
 }
 
 bool HttpStreamPool::AttemptManager::CanUseExistingQuicSession() const {
@@ -2182,6 +2274,9 @@ bool HttpStreamPool::AttemptManager::CanUseExistingQuicSession() const {
 }
 
 bool HttpStreamPool::AttemptManager::IsEchEnabled() const {
+  if (stream_key().gm_rule() && !stream_key().gm_rule()->automatic) {
+    return false;
+  }
   SSLClientContext* ssl_client_context =
       pool()->stream_attempt_params()->ssl_client_context;
   if (!ssl_client_context->config().ech_enabled) {

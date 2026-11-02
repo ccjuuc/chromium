@@ -1,0 +1,19 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+source_set("secure_pin") {
+  sources = [
+    "secure_pin.cc",
+    "secure_pin.h",
+  ]
+}
+
+source_set("traits") {
+  sources = [ "secure_pin_mojom_traits.h" ]
+  public_deps = [
+    ":secure_pin",
+    "//mojo/public/cpp/bindings",
+    "//services/gm_key/public/mojom:mojom_shared",
+  ]
+}

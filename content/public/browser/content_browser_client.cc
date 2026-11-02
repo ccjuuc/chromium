@@ -69,6 +69,7 @@
 #include "media/mojo/mojom/speech_recognizer.mojom.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "net/base/isolation_info.h"
+#include "net/base/net_errors.h"
 #include "net/cookies/cookie_setting_override.h"
 #include "net/cookies/site_for_cookies.h"
 #include "net/ssl/client_cert_identity.h"
@@ -82,6 +83,7 @@
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "services/network/public/mojom/gm_identity.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/web_transport.mojom.h"
@@ -739,6 +741,19 @@ base::OnceClosure ContentBrowserClient::SelectClientCertificate(
     net::ClientCertIdentityList client_certs,
     std::unique_ptr<ClientCertificateDelegate> delegate) {
   return base::OnceClosure();
+}
+
+base::OnceClosure ContentBrowserClient::SelectGmClientCertificate(
+    WebContents* web_contents,
+    const url::Origin& origin,
+    const std::string& identity_policy_id,
+    uint64_t identity_generation,
+    network::mojom::GmClientCertificateRequestPtr certificate_request,
+    base::OnceCallback<void(int, network::mojom::GmIdentityGrantPtr)>
+        callback) {
+  std::move(callback).Run(net::ERR_SSL_CLIENT_AUTH_PRIVATE_KEY_ACCESS_DENIED,
+                          nullptr);
+  return {};
 }
 
 std::unique_ptr<device::LocationProvider>

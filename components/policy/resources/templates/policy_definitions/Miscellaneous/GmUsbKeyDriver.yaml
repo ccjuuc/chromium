@@ -1,0 +1,23 @@
+caption: Configure the trusted x64 SKF USBKey driver
+desc: |-
+  Sets the absolute local path and SHA-256 hash of an administrator-provisioned x64 SKF driver. The dedicated USBKey service also requires a valid Authenticode signature. A driver change revokes existing authorizations and restarts the isolated service. The driver is never downloaded by the browser. No PIN belongs in this policy. This policy requires a Windows x64 build with the national TLS backend.
+example_value:
+  path: 'C:\Program Files\Feitian\SKF.dll'
+  sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+features:
+  dynamic_refresh: true
+  per_profile: false
+owners:
+- file://net/OWNERS
+schema:
+  type: object
+  properties:
+    path:
+      type: string
+    sha256:
+      type: string
+  required: [path, sha256]
+supported_on:
+- chrome.win:153-
+tags: []
+type: dict

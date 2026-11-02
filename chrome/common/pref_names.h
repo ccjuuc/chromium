@@ -2145,6 +2145,10 @@ inline constexpr char kCertRevocationCheckingRequiredLocalAnchors[] =
 // are "tls1.2", "tls1.3".
 inline constexpr char kSSLVersionMin[] = "ssl.version_min";
 
+// Enterprise-only national TLS configuration; PINs are never preferences.
+inline constexpr char kGmTlsSiteRules[] = "gm_tls.site_rules";
+inline constexpr char kGmUsbKeyDriver[] = "gm_tls.usb_key_driver";
+
 // String specifying the maximum TLS version to negotiate. Supported values
 // are "tls1.2", "tls1.3"
 inline constexpr char kSSLVersionMax[] = "ssl.version_max";

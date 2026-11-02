@@ -16,6 +16,7 @@
 #include "net/base/proxy_chain.h"
 #include "net/base/session_usage.h"
 #include "net/dns/public/secure_dns_policy.h"
+#include "net/gm/gm_connection_profile.h"
 #include "net/socket/socket_tag.h"
 
 namespace net {
@@ -38,7 +39,8 @@ class NET_EXPORT_PRIVATE SpdySessionKey {
                  const NetworkAnonymizationKey& network_anonymization_key,
                  SecureDnsPolicy secure_dns_policy,
                  bool disable_cert_verification_network_fetches,
-                 handles::NetworkHandle target_network);
+                 handles::NetworkHandle target_network,
+                 gm::ConnectionProfile gm_profile = {});
 
   SpdySessionKey(const SpdySessionKey& other);
 
@@ -73,9 +75,7 @@ class NET_EXPORT_PRIVATE SpdySessionKey {
 
   const HostPortPair& host_port_pair() const { return host_port_pair_; }
 
-  PrivacyMode privacy_mode() const {
-    return privacy_mode_;
-  }
+  PrivacyMode privacy_mode() const { return privacy_mode_; }
 
   const ProxyChain& proxy_chain() const { return proxy_chain_; }
 
@@ -95,6 +95,8 @@ class NET_EXPORT_PRIVATE SpdySessionKey {
 
   handles::NetworkHandle target_network() const { return target_network_; }
 
+  const gm::ConnectionProfile& gm_profile() const { return gm_profile_; }
+
  private:
   HostPortPair host_port_pair_;
   // If enabled, then session cannot be tracked by the server.
@@ -108,6 +110,7 @@ class NET_EXPORT_PRIVATE SpdySessionKey {
   SecureDnsPolicy secure_dns_policy_ = SecureDnsPolicy::kAllow;
   bool disable_cert_verification_network_fetches_ = false;
   handles::NetworkHandle target_network_ = handles::kInvalidNetworkHandle;
+  gm::ConnectionProfile gm_profile_;
 };
 
 NET_EXPORT_PRIVATE std::ostream& operator<<(std::ostream& os,

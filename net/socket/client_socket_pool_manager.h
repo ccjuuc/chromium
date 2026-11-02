@@ -9,8 +9,11 @@
 #ifndef NET_SOCKET_CLIENT_SOCKET_POOL_MANAGER_H_
 #define NET_SOCKET_CLIENT_SOCKET_POOL_MANAGER_H_
 
+#include <memory>
 #include <vector>
 
+#include "base/functional/callback.h"
+#include "base/unguessable_token.h"
 #include "base/values.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/net_export.h"
@@ -97,7 +100,10 @@ int InitSocketHandleForHttpRequest(
     const NetLogWithSource& net_log,
     ClientSocketHandle* socket_handle,
     CompletionOnceCallback callback,
-    const ClientSocketPool::ProxyAuthCallback& proxy_auth_callback);
+    const ClientSocketPool::ProxyAuthCallback& proxy_auth_callback,
+    std::shared_ptr<const gm::TlsRule> gm_rule,
+    base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context =
+        {});
 
 // A helper method that uses the passed in proxy information to initialize a
 // ClientSocketHandle with the relevant socket pool. Use this method for
@@ -116,7 +122,10 @@ int InitSocketHandleForWebSocketRequest(
     const NetLogWithSource& net_log,
     ClientSocketHandle* socket_handle,
     CompletionOnceCallback callback,
-    const ClientSocketPool::ProxyAuthCallback& proxy_auth_callback);
+    const ClientSocketPool::ProxyAuthCallback& proxy_auth_callback,
+    std::shared_ptr<const gm::TlsRule> gm_rule,
+    base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context =
+        {});
 
 // Similar to InitSocketHandleForHttpRequest except that it initiates the
 // desired number of preconnect streams from the relevant socket pool.
@@ -133,7 +142,8 @@ int PreconnectSocketsForHttpRequest(
     handles::NetworkHandle target_network,
     const NetLogWithSource& net_log,
     int num_preconnect_streams,
-    ClientSocketPool::PreconnectCompletionCallback callback);
+    ClientSocketPool::PreconnectCompletionCallback callback,
+    std::shared_ptr<const gm::TlsRule> gm_rule);
 
 }  // namespace net
 

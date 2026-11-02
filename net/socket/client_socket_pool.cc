@@ -77,8 +77,10 @@ OnHostResolutionCallbackResult OnHostResolution(
 }  // namespace
 
 ClientSocketPool::SocketParams::SocketParams(
-    const std::vector<SSLConfig::CertAndStatus>& allowed_bad_certs)
-    : allowed_bad_certs_(allowed_bad_certs) {}
+    const std::vector<SSLConfig::CertAndStatus>& allowed_bad_certs,
+    base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context)
+    : allowed_bad_certs_(allowed_bad_certs),
+      gm_client_auth_context_(gm_client_auth_context) {}
 
 ClientSocketPool::SocketParams::~SocketParams() = default;
 
@@ -125,7 +127,8 @@ ClientSocketPool::GroupId::GroupId(
     NetworkAnonymizationKey network_anonymization_key,
     SecureDnsPolicy secure_dns_policy,
     bool disable_cert_network_fetches,
-    handles::NetworkHandle target_network)
+    handles::NetworkHandle target_network,
+    std::shared_ptr<const gm::TlsRule> gm_rule)
     : destination_(std::move(destination)),
       privacy_mode_(privacy_mode),
       network_anonymization_key_(
@@ -134,7 +137,9 @@ ClientSocketPool::GroupId::GroupId(
               : NetworkAnonymizationKey()),
       secure_dns_policy_(secure_dns_policy),
       disable_cert_network_fetches_(disable_cert_network_fetches),
-      target_network_(target_network) {
+      target_network_(target_network),
+      gm_profile_(gm::ProfileForRule(gm_rule)),
+      gm_rule_(std::move(gm_rule)) {
   DCHECK(destination_.IsValid());
 
   // ClientSocketPool only expected to be used for HTTP/HTTPS/WS/WSS cases, and
@@ -224,16 +229,18 @@ std::unique_ptr<ConnectJob> ClientSocketPool::CreateConnectJob(
   // opportunities. We don't perform H2 IP pooling to or through proxy servers,
   // so ignore those cases.
   OnHostResolutionCallback resolution_callback;
-  if (using_ssl && GetProxyChain().is_direct()) {
+  if (using_ssl && GetProxyChain().is_direct() &&
+      group_id.gm_profile().AllowsHttp2()) {
     resolution_callback = base::BindRepeating(
         &OnHostResolution, common_connect_job_params_->spdy_session_pool,
         // TODO(crbug.com/40181080): Pass along as SchemeHostPort.
-        SpdySessionKey(
-            HostPortPair::FromSchemeHostPort(group_id.destination()),
-            group_id.privacy_mode(), GetProxyChain(),
-            SessionUsage::kDestination, socket_tag,
-            group_id.network_anonymization_key(), group_id.secure_dns_policy(),
-            group_id.disable_cert_network_fetches(), group_id.target_network()),
+        SpdySessionKey(HostPortPair::FromSchemeHostPort(group_id.destination()),
+                       group_id.privacy_mode(), GetProxyChain(),
+                       SessionUsage::kDestination, socket_tag,
+                       group_id.network_anonymization_key(),
+                       group_id.secure_dns_policy(),
+                       group_id.disable_cert_network_fetches(),
+                       group_id.target_network(), group_id.gm_profile()),
         is_for_websockets_);
   }
 
@@ -260,7 +267,8 @@ std::unique_ptr<ConnectJob> ClientSocketPool::CreateConnectJob(
       group_id.privacy_mode(), resolution_callback, request_priority,
       socket_tag, group_id.network_anonymization_key(),
       group_id.secure_dns_policy(), group_id.disable_cert_network_fetches(),
-      common_connect_job_params_, group_id.target_network(), delegate);
+      common_connect_job_params_, group_id.target_network(), delegate,
+      group_id.gm_rule(), socket_params->gm_client_auth_context());
 }
 
 void ClientSocketPool::UpdateExpandabilityBeforeAllocation() {

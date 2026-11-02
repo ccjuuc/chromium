@@ -37,6 +37,16 @@ struct NET_EXPORT NetErrorDetails {
   bool quic_port_migration_detected = false;
   bool quic_connection_migration_attempted = false;
   bool quic_connection_migration_successful = false;
+
+  // An origin TLS handshake rejected the protocol/cipher before receiving a
+  // certificate or requesting a client identity. This is evidence from the
+  // TLS implementation, never inferred from a generic network error code.
+  bool gm_protocol_retry_allowed = false;
+
+  // Internal routing signal, paired only with ERR_ABORTED: fresh DNS requires
+  // ECH for a learned GM route. No GM SSL socket was created. Re-enter above
+  // the pools with Standard TLS, subject to the transaction's retry budget.
+  bool gm_standard_tls_required = false;
 };
 
 }  // namespace net

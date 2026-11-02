@@ -9,6 +9,7 @@
 #include <optional>
 #include <vector>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
@@ -64,6 +65,8 @@ class HttpStreamPool::JobController : public HttpStreamPool::Job::Delegate,
 
   // HttpStreamPool::Job::Delegate implementation:
   RequestPriority priority() const override;
+  base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context()
+      const override;
   RespectLimits respect_limits() const override;
   const std::vector<SSLConfig::CertAndStatus>& allowed_bad_certs()
       const override;
@@ -200,6 +203,8 @@ class HttpStreamPool::JobController : public HttpStreamPool::Job::Delegate,
   void MaybeMarkAlternativeServiceBroken();
 
   const raw_ptr<HttpStreamPool> pool_;
+  const base::RepeatingCallback<base::UnguessableToken()>
+      gm_client_auth_context_;
   RequestPriority priority_;
   const std::vector<SSLConfig::CertAndStatus> allowed_bad_certs_;
   const bool enable_ip_based_pooling_for_h2_;
@@ -233,6 +238,8 @@ class HttpStreamPool::JobController : public HttpStreamPool::Job::Delegate,
 
   std::unique_ptr<Job> origin_job_;
   std::optional<int> origin_job_result_;
+  NetErrorDetails gm_origin_error_details_;
+  ResolveErrorInfo gm_origin_resolve_error_info_;
 
   std::unique_ptr<Job> alternative_job_;
   // Set to `OK` when the alternative job is not needed.

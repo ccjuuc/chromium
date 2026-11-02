@@ -89,11 +89,20 @@ HttpStreamPool::TcpBasedAttempt::TcpBasedAttempt(AttemptManager* manager,
   TRACE_EVENT_BEGIN("net.stream", "TcpBasedAttempt::TcpBasedAttempt", track_,
                     flow_, "ip_endpoint", ip_endpoint.ToString());
   if (manager_->using_tls()) {
+    SSLConfig ssl_config = manager_->GetBaseSSLConfig();
+    if (ssl_config.gm_rule) {
+      ssl_config.gm_client_auth_context = base::BindRepeating(
+          [](base::WeakPtr<TcpBasedAttempt> attempt) {
+            return attempt ? attempt->ResolveGmClientAuthContext()
+                           : base::UnguessableToken();
+          },
+          weak_ptr_factory_.GetWeakPtr());
+    }
     attempt_ = std::make_unique<TlsStreamAttempt>(
         manager_->pool()->stream_attempt_params(), std::move(ip_endpoint),
         manager_->stream_key().target_network(), track_,
         HostPortPair::FromSchemeHostPort(manager_->stream_key().destination()),
-        manager_->GetBaseSSLConfig(),
+        std::move(ssl_config),
         /*delegate=*/this);
   } else {
     attempt_ = std::make_unique<TcpStreamAttempt>(
@@ -212,6 +221,11 @@ void HttpStreamPool::TcpBasedAttempt::SetCancelReason(
   if (attempt_) {
     attempt_->SetCancelReason(reason);
   }
+}
+
+base::UnguessableToken
+HttpStreamPool::TcpBasedAttempt::ResolveGmClientAuthContext() {
+  return manager_->ResolveGmClientAuthContext(this);
 }
 
 int HttpStreamPool::TcpBasedAttempt::WaitForTlsHandshakeReady(

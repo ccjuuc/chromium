@@ -13,6 +13,7 @@
 #include "net/base/net_error_details.h"
 #include "net/base/net_export.h"
 #include "net/base/request_priority.h"
+#include "net/gm/gm_tls_policy.h"
 #include "net/http/alternate_protocol_usage.h"
 #include "net/http/alternative_service.h"
 #include "net/http/http_response_info.h"
@@ -205,6 +206,16 @@ class NET_EXPORT_PRIVATE HttpStreamRequest {
 
   bool completed() const { return completion_details_.has_value(); }
 
+  // Certificate/client-auth callbacks do not carry ProxyInfo. Preserve the
+  // selected route here so its capability hint can still be invalidated.
+  void set_gm_route(std::shared_ptr<const gm::TlsRule> rule,
+                    const ProxyChain& proxy_chain) {
+    gm_rule_ = std::move(rule);
+    gm_proxy_chain_ = proxy_chain;
+  }
+  const std::shared_ptr<const gm::TlsRule>& gm_rule() const { return gm_rule_; }
+  const ProxyChain& gm_proxy_chain() const { return gm_proxy_chain_; }
+
   void SetDnsResolutionTimeOverrides(
       base::TimeTicks dns_resolution_start_time_override,
       base::TimeTicks dns_resolution_end_time_override);
@@ -240,6 +251,8 @@ class NET_EXPORT_PRIVATE HttpStreamRequest {
   const NetLogWithSource net_log_;
 
   std::optional<CompletionDetails> completion_details_;
+  std::shared_ptr<const gm::TlsRule> gm_rule_;
+  ProxyChain gm_proxy_chain_;
   ConnectionAttempts connection_attempts_;
   const StreamType stream_type_;
 

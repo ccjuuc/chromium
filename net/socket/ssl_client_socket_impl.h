@@ -43,6 +43,9 @@ class OpenSSLErrStackTracer;
 }
 
 namespace net {
+namespace gm {
+class Tls13Client;
+}
 
 class SSLCertRequestInfo;
 class SSLInfo;
@@ -96,6 +99,7 @@ class NET_EXPORT_PRIVATE SSLClientSocketImpl
   NextProto GetNegotiatedProtocol() const override;
   std::optional<std::string_view> GetPeerApplicationSettings() const override;
   bool GetSSLInfo(SSLInfo* ssl_info) override;
+  void PopulateNetErrorDetails(NetErrorDetails* details) const override;
   int64_t GetTotalReceivedBytes() const override;
   void GetSSLCertRequestInfo(
       SSLCertRequestInfo* cert_request_info) const override;
@@ -162,6 +166,8 @@ class NET_EXPORT_PRIVATE SSLClientSocketImpl
   // Callback from the SSL layer that indicates the remote server is requesting
   // a certificate for this client.
   int ClientCertRequestCallback(SSL* ssl);
+  bool IsGmNegotiated() const;
+  void OnGmIdentityInvalidated();
 
   // Called from the SSL layer whenever a new session is established.
   int NewSessionCallback(SSL_SESSION* session);
@@ -301,6 +307,13 @@ class NET_EXPORT_PRIVATE SSLClientSocketImpl
 
   // Set to true if a CertificateRequest was received.
   bool certificate_requested_ = false;
+  bool gm_peer_certificate_seen_ = false;
+  bool gm_protocol_retry_allowed_ = false;
+#if BUILDFLAG(XENON_GM)
+  std::unique_ptr<gm::Tls13Client> gm_tls13_client_;
+  bool gm_session_identity_bound_ = false;
+#endif
+  int gm_identity_error_ = OK;
 
   int signature_result_;
   std::vector<uint8_t> signature_;

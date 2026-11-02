@@ -45,6 +45,7 @@
 #include "net/dns/host_resolver.h"
 #include "net/dns/public/dns_config_overrides.h"
 #include "net/first_party_sets/first_party_set_metadata.h"
+#include "net/gm/gm_buildflags.h"
 #include "net/http/http_auth_preferences.h"
 #include "net/http/http_cache.h"
 #include "net/http/http_request_headers.h"
@@ -130,6 +131,8 @@ class SimpleUrlPatternMatcher;
 }
 
 namespace network {
+
+class GmIdentityProvider;
 class CookieManager;
 class HostResolver;
 class MdnsResponderManager;
@@ -216,6 +219,14 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
   static void SetCertVerifierForTesting(net::CertVerifier* cert_verifier);
 
   net::URLRequestContext* url_request_context() { return url_request_context_; }
+  GmIdentityProvider* gm_identity_provider() {
+#if BUILDFLAG(XENON_GM)
+    return gm_identity_provider_.get();
+
+#else
+    return nullptr;
+#endif  // BUILDFLAG(XENON_GM)
+  }
 
 #if BUILDFLAG(ENABLE_WEBSOCKETS)
   // Creates synthetic WEBSOCKET_ALIVE NetLog entries for pre-existing
@@ -962,6 +973,10 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
   // Holds owning pointer to |url_request_context_|. Will contain a nullptr for
   // |url_request_context| when the NetworkContextImpl doesn't own its own
   // URLRequestContext.
+#if BUILDFLAG(XENON_GM)
+  // Must outlive sockets owned by url_request_context_owner_.
+  std::unique_ptr<GmIdentityProvider> gm_identity_provider_;
+#endif
   URLRequestContextOwner url_request_context_owner_;
 
   raw_ptr<net::URLRequestContext> url_request_context_;

@@ -78,6 +78,8 @@ class NET_EXPORT SSLInfo {
   // True if a client certificate was sent to the server.  Note that sending
   // a Certificate message with no client certificate in it does not count.
   bool client_cert_sent = false;
+  // Runtime transport identity. Never serialized into the ordinary HTTP cache.
+  bool gm_tls = false;
 
   // True if data was received over early data on the server. This field is only
   // set for server sockets.

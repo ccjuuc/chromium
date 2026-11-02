@@ -1,0 +1,216 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+assert(is_win && target_cpu == "x64")
+
+import("//net/gm/gm.gni")
+
+group("gm_key_tests") {
+  testonly = true
+  deps = [
+    ":gm_fake_skf",
+    ":gm_skf_probe",
+    ":gm_skf_test",
+  ]
+  if (gm_tls_backend_enabled) {
+    deps += [ ":gm_key_service_tests" ]
+  }
+}
+
+source_set("skf_driver") {
+  sources = [
+    "compiler_compat.h",
+    "skf_abi.h",
+    "skf_driver.cc",
+    "skf_driver.h",
+  ]
+  deps = [ "//base:compiler_specific" ]
+  libs = [
+    "bcrypt.lib",
+    "wintrust.lib",
+  ]
+}
+
+executable("gm_skf_probe") {
+  sources = [ "skf_probe.cc" ]
+  deps = [
+    ":skf_driver",
+    "//base:compiler_specific",
+  ]
+}
+
+shared_library("gm_fake_skf") {
+  testonly = true
+  sources = [
+    "compiler_compat.h",
+    "skf_abi.h",
+    "test/fake_skf.cc",
+  ]
+  deps = [ "//base:compiler_specific" ]
+}
+
+shared_library("gm_fake_skf_missing") {
+  testonly = true
+  sources = [
+    "compiler_compat.h",
+    "skf_abi.h",
+    "test/fake_skf.cc",
+  ]
+  deps = [ "//base:compiler_specific" ]
+  defines = [ "GM_FAKE_MISSING_EXPORT" ]
+}
+
+# Compiles a separate adapter copy: its unsigned-loader test hook is absent
+# from the production source_set above.
+executable("gm_skf_test") {
+  testonly = true
+  sources = [
+    "compiler_compat.h",
+    "skf_abi.h",
+    "skf_driver.cc",
+    "skf_driver.h",
+    "test/skf_driver_test.cc",
+  ]
+  deps = [ "//base:compiler_specific" ]
+  defines = [ "GM_KEY_TESTING" ]
+  libs = [
+    "bcrypt.lib",
+    "wintrust.lib",
+  ]
+  data_deps = [
+    ":gm_fake_skf",
+    ":gm_fake_skf_missing",
+  ]
+}
+
+source_set("service") {
+  sources = [
+    "device_change_monitor_win.cc",
+    "device_change_monitor_win.h",
+    "gm_key_service.cc",
+    "gm_key_service.h",
+  ]
+  deps = [ ":skf_driver" ]
+  libs = [ "cfgmgr32.lib" ]
+  public_deps = [
+    "//base",
+    "//mojo/public/cpp/bindings",
+    "//services/gm_key/public/mojom",
+  ]
+}
+
+source_set("test_service") {
+  testonly = true
+  sources = [
+    "compiler_compat.h",
+    "device_change_monitor_win.cc",
+    "device_change_monitor_win.h",
+    "gm_key_service.cc",
+    "gm_key_service.h",
+    "skf_abi.h",
+    "skf_driver.cc",
+    "skf_driver.h",
+  ]
+  defines = [ "GM_KEY_TESTING" ]
+  public_configs = [ ":test_service_config" ]
+  libs = [
+    "bcrypt.lib",
+    "cfgmgr32.lib",
+    "wintrust.lib",
+  ]
+  public_deps = [
+    "//base",
+    "//mojo/public/cpp/bindings",
+    "//services/gm_key/public/mojom",
+  ]
+}
+
+config("test_service_config") {
+  defines = [ "GM_KEY_TESTING" ]
+}
+
+executable("gm_key_service_test_helper") {
+  testonly = true
+  sources = [ "test/service_test_helper.cc" ]
+  deps = [
+    ":test_service",
+    "//base",
+    "//mojo/core/embedder",
+    "//mojo/public/cpp/bindings",
+    "//mojo/public/cpp/platform",
+    "//mojo/public/cpp/system",
+    "//services/gm_key/public/mojom",
+    "//services/gm_key/test:mojom",
+  ]
+}
+
+source_set("test_client") {
+  testonly = true
+  sources = [
+    "test/key_service_test_client.cc",
+    "test/key_service_test_client.h",
+  ]
+  public_deps = [
+    "//base",
+    "//mojo/public/cpp/bindings",
+    "//services/gm_key/public/mojom",
+    "//services/gm_key/test:mojom",
+  ]
+  deps = [
+    "//mojo/public/cpp/platform",
+    "//mojo/public/cpp/system",
+  ]
+}
+
+if (gm_tls_backend_enabled) {
+  executable("gm_key_service_tests") {
+    testonly = true
+    sources = [ "test/gm_key_service_unittest.cc" ]
+    deps = [
+      ":test_client",
+      "//base",
+      "//base/test:test_support",
+      "//crypto",
+      "//mojo/core/embedder",
+      "//mojo/public/cpp/bindings",
+      "//services/gm_key/public/mojom",
+      "//services/gm_key/test:mojom",
+      "//testing/gtest",
+    ]
+    data_deps = [
+      ":gm_key_service_test_helper",
+      ":gm_sm2_simulator",
+    ]
+  }
+
+  # The software token uses the browser's BoringSSL. It remains a separate
+  # process/module to exercise the real SKF and Mojo lifetime boundaries.
+  foreach(_tool,
+          [
+            "gm_sm2_simulator",
+            "gm_sm2_verify",
+          ]) {
+    _target_type = "executable"
+    if (_tool == "gm_sm2_simulator") {
+      _target_type = "shared_library"
+    }
+    target(_target_type, _tool) {
+      testonly = true
+      configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+      if (_tool == "gm_sm2_simulator") {
+        sources = [
+          "skf_abi.h",
+          "test/sm2_skf_simulator.cc",
+        ]
+        data_deps = [ ":gm_sm2_verify" ]
+      } else {
+        sources = [ "test/sm2_verify.cc" ]
+      }
+      deps = [
+        "//base",
+        "//third_party/boringssl",
+      ]
+    }
+  }
+}

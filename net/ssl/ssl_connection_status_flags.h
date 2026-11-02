@@ -23,9 +23,10 @@ enum {
   // 1 << 18 was previously used for SSL_CONNECTION_VERSION_FALLBACK.
   // 1 << 19 was previously used for SSL_CONNECTION_NO_RENEGOTIATION_EXTENSION.
 
-  // The next three bits are reserved for the SSL version.
+  // Four bits encode the version. The original low three bits retain their
+  // persisted meaning; bit 23 was unused before adding TLCP.
   SSL_CONNECTION_VERSION_SHIFT = 20,
-  SSL_CONNECTION_VERSION_MASK = 7,
+  SSL_CONNECTION_VERSION_MASK = 15,
 
   // 1 << 31 (the sign bit) is reserved so that the SSL connection status will
   // never be negative.
@@ -43,6 +44,7 @@ enum SSLVersion {
   SSL_CONNECTION_VERSION_TLS1_2 = 5,
   SSL_CONNECTION_VERSION_TLS1_3 = 6,
   SSL_CONNECTION_VERSION_QUIC = 7,
+  SSL_CONNECTION_VERSION_TLCP = 8,
   SSL_CONNECTION_VERSION_MAX,
 };
 static_assert(SSL_CONNECTION_VERSION_MAX - 1 <= SSL_CONNECTION_VERSION_MASK,

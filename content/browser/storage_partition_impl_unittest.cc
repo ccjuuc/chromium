@@ -77,6 +77,7 @@
 #include "content/public/test/test_browser_context.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/test_utils.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "net/base/net_errors.h"
 #include "net/base/network_isolation_key.h"
 #include "net/base/schemeful_site.h"
@@ -85,9 +86,11 @@
 #include "net/cookies/cookie_access_params.h"
 #include "net/cookies/cookie_access_result.h"
 #include "net/cookies/cookie_inclusion_status.h"
+#include "net/gm/gm_buildflags.h"
 #include "net/net_buildflags.h"
 #include "services/network/cookie_manager.h"
 #include "services/network/public/cpp/features.h"
+#include "services/network/public/mojom/gm_identity.mojom.h"
 #include "services/network/test/mock_device_bound_session_manager.h"
 #include "storage/browser/quota/quota_client_type.h"
 #include "storage/browser/quota/quota_manager.h"
@@ -203,7 +206,6 @@ class RemoveCookieTester {
   raw_ptr<StoragePartition> storage_partition_;
 };
 
-
 class RemoveLocalStorageTester {
  public:
   explicit RemoveLocalStorageTester(TestBrowserContext* browser_context)
@@ -217,8 +219,9 @@ class RemoveLocalStorageTester {
   // Returns true, if the given origin URL exists.
   bool DOMStorageExistsForOrigin(const url::Origin& origin) {
     for (size_t i = 0; i < infos_.size(); ++i) {
-      if (origin == infos_[i].storage_key.origin())
+      if (origin == infos_[i].storage_key.origin()) {
         return true;
+      }
     }
     return false;
   }
@@ -551,18 +554,19 @@ void ClearCookiesMatchingInfo(content::StoragePartition* partition,
                               CookieDeletionFilterPtr delete_filter,
                               base::RunLoop* run_loop) {
   base::Time delete_begin;
-  if (delete_filter->created_after_time.has_value())
+  if (delete_filter->created_after_time.has_value()) {
     delete_begin = delete_filter->created_after_time.value();
+  }
   base::Time delete_end;
-  if (delete_filter->created_before_time.has_value())
+  if (delete_filter->created_before_time.has_value()) {
     delete_end = delete_filter->created_before_time.value();
+  }
   partition->ClearData(StoragePartition::REMOVE_DATA_MASK_COOKIES,
                        /*filter_builder=*/nullptr,
                        StoragePartition::StorageKeyPolicyMatcherFunction(),
                        std::move(delete_filter), false, delete_begin,
                        delete_end, run_loop->QuitClosure());
 }
-
 
 void ClearData(content::StoragePartition* partition, base::RunLoop* run_loop) {
   base::Time time;
@@ -1675,6 +1679,228 @@ TEST_F(StoragePartitionImplTest, RemoveDeviceBoundSessions) {
 }
 #endif
 
+class GmCertificateTestBrowserClient : public ContentBrowserClient {
+ public:
+  base::OnceClosure SelectGmClientCertificate(
+      WebContents* web_contents,
+      const url::Origin& origin,
+      const std::string& identity_policy_id,
+      uint64_t identity_generation,
+      network::mojom::GmClientCertificateRequestPtr certificate_request,
+      base::OnceCallback<void(int, network::mojom::GmIdentityGrantPtr)>
+          callback) override {
+    ++request_count;
+    requested_web_contents = web_contents;
+    requested_origin = origin;
+    requested_policy_id = identity_policy_id;
+    requested_generation = identity_generation;
+    requested_certificate = std::move(certificate_request);
+    if (complete_synchronously) {
+      std::move(callback).Run(net::ERR_FAILED, nullptr);
+      return {};
+    }
+    callback_ = std::move(callback);
+    return base::BindOnce(
+        [](GmCertificateTestBrowserClient* client) {
+          ++client->cancel_count;
+          if (client->callback_) {
+            std::move(client->callback_).Run(net::ERR_ABORTED, nullptr);
+          }
+        },
+        base::Unretained(this));
+  }
+
+  void Complete() { std::move(callback_).Run(net::ERR_FAILED, nullptr); }
+
+  bool complete_synchronously = false;
+  int request_count = 0;
+  int cancel_count = 0;
+  raw_ptr<WebContents> requested_web_contents = nullptr;
+  url::Origin requested_origin;
+  std::string requested_policy_id;
+  uint64_t requested_generation = 0;
+  network::mojom::GmClientCertificateRequestPtr requested_certificate;
+  base::OnceCallback<void(int, network::mojom::GmIdentityGrantPtr)> callback_;
+};
+
+class GmCertificateTestResponder
+    : public network::mojom::GmClientCertificateResponder {
+ public:
+  mojo::PendingRemote<network::mojom::GmClientCertificateResponder> Bind() {
+    return receiver.BindNewPipeAndPassRemote();
+  }
+
+  void Continue(int32_t net_error,
+                network::mojom::GmIdentityGrantPtr grant) override {
+    EXPECT_FALSE(grant);
+    result.SetValue(net_error);
+  }
+
+  mojo::Receiver<network::mojom::GmClientCertificateResponder> receiver{this};
+  base::test::TestFuture<int> result;
+};
+
+class StoragePartitionImplGmCertificateTest : public RenderViewHostTestHarness {
+ public:
+  void SetUp() override {
+    RenderViewHostTestHarness::SetUp();
+    old_client_ = SetBrowserClientForTesting(&client_);
+    NavigateAndCommit(GURL("https://page.test"));
+  }
+
+  void TearDown() override {
+    client_.requested_web_contents = nullptr;
+    DeleteContents();
+    base::RunLoop().RunUntilIdle();
+    SetBrowserClientForTesting(old_client_);
+    RenderViewHostTestHarness::TearDown();
+  }
+
+ protected:
+  StoragePartitionImpl* partition() {
+    return static_cast<StoragePartitionImpl*>(
+        browser_context()->GetDefaultStoragePartition());
+  }
+
+  mojo::Remote<network::mojom::URLLoaderNetworkServiceObserver>
+  FrameObserver() {
+    return mojo::Remote<network::mojom::URLLoaderNetworkServiceObserver>(
+        partition()->CreateURLLoaderNetworkObserverForFrame(
+            main_rfh()->GetGlobalId()));
+  }
+
+  void Request(
+      mojo::Remote<network::mojom::URLLoaderNetworkServiceObserver>& observer,
+      GmCertificateTestResponder& responder,
+      std::optional<base::UnguessableToken> window_id = std::nullopt) {
+    auto request = network::mojom::GmClientCertificateRequest::New();
+    request->protocol = network::mojom::GmTlsProtocol::kTlcp;
+    request->required_roles = 3;
+    request->certificate_authorities = {{1, 2, 3}};
+    observer->OnGmCertificateRequested(
+        window_id, url::Origin::Create(GURL("https://key.test")), "policy", 7,
+        std::move(request), responder.Bind());
+    observer.FlushForTesting();
+  }
+
+  GmCertificateTestBrowserClient client_;
+
+ private:
+  raw_ptr<ContentBrowserClient> old_client_ = nullptr;
+};
+
+#if BUILDFLAG(XENON_GM)
+TEST_F(StoragePartitionImplGmCertificateTest, ResolvesPageAndForwardsRequest) {
+  auto observer = FrameObserver();
+  GmCertificateTestResponder responder;
+  Request(observer, responder);
+  EXPECT_EQ(client_.requested_web_contents, web_contents());
+  EXPECT_EQ(client_.requested_origin,
+            url::Origin::Create(GURL("https://key.test")));
+  EXPECT_EQ(client_.requested_policy_id, "policy");
+  EXPECT_EQ(client_.requested_generation, 7u);
+  ASSERT_TRUE(client_.requested_certificate);
+  EXPECT_EQ(client_.requested_certificate->required_roles, 3u);
+  EXPECT_EQ(client_.requested_certificate->certificate_authorities,
+            std::vector<std::vector<uint8_t>>({{1, 2, 3}}));
+  client_.Complete();
+  EXPECT_EQ(responder.result.Get(), net::ERR_FAILED);
+  EXPECT_EQ(client_.cancel_count, 0);
+}
+
+TEST_F(StoragePartitionImplGmCertificateTest, SupportsSynchronousCompletion) {
+  client_.complete_synchronously = true;
+  auto observer = FrameObserver();
+  GmCertificateTestResponder responder;
+  Request(observer, responder);
+  EXPECT_EQ(responder.result.Get(), net::ERR_FAILED);
+  EXPECT_EQ(client_.request_count, 1);
+}
+
+TEST_F(StoragePartitionImplGmCertificateTest, CancelsOnRequestDisconnect) {
+  auto observer = FrameObserver();
+  GmCertificateTestResponder responder;
+  Request(observer, responder);
+  responder.receiver.reset();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(client_.cancel_count, 1);
+  EXPECT_FALSE(client_.callback_);
+}
+
+TEST_F(StoragePartitionImplGmCertificateTest, CancelsWhenPageIsDestroyed) {
+  auto observer = FrameObserver();
+  GmCertificateTestResponder responder;
+  Request(observer, responder);
+  client_.requested_web_contents = nullptr;
+  DeleteContents();
+  EXPECT_EQ(responder.result.Get(), net::ERR_ABORTED);
+  EXPECT_EQ(client_.cancel_count, 1);
+}
+
+TEST_F(StoragePartitionImplGmCertificateTest,
+       CancelsWhenNewMainNavigationStarts) {
+  auto observer = FrameObserver();
+  GmCertificateTestResponder responder;
+  Request(observer, responder);
+  auto navigation = NavigationSimulator::CreateBrowserInitiated(
+      GURL("https://next.test"), web_contents());
+  navigation->Start();
+  EXPECT_EQ(responder.result.Get(), net::ERR_ABORTED);
+  EXPECT_EQ(client_.cancel_count, 1);
+}
+
+TEST_F(StoragePartitionImplGmCertificateTest,
+       ResolvesNavigationBeforeCommitWithoutCancellingItself) {
+  auto navigation = NavigationSimulator::CreateBrowserInitiated(
+      GURL("https://next.test"), web_contents());
+  navigation->Start();
+  auto* request = NavigationRequest::From(navigation->GetNavigationHandle());
+  mojo::Remote<network::mojom::URLLoaderNetworkServiceObserver> observer(
+      partition()->CreateURLLoaderNetworkObserverForNavigationRequest(
+          *request));
+  GmCertificateTestResponder responder;
+  Request(observer, responder);
+  EXPECT_EQ(client_.requested_web_contents, web_contents());
+  EXPECT_EQ(client_.cancel_count, 0);
+  client_.Complete();
+  EXPECT_EQ(responder.result.Get(), net::ERR_FAILED);
+}
+
+TEST_F(StoragePartitionImplGmCertificateTest, RejectsWorkerWithoutPage) {
+  mojo::Remote<network::mojom::URLLoaderNetworkServiceObserver> observer(
+      partition()->CreateURLLoaderNetworkObserverForServiceOrSharedWorker(
+          network::OriginatingProcessId::renderer(
+              network::RendererProcessId(1)),
+          url::Origin::Create(GURL("https://worker.test"))));
+  GmCertificateTestResponder responder;
+  Request(observer, responder);
+  EXPECT_EQ(responder.result.Get(),
+            net::ERR_SSL_CLIENT_AUTH_PRIVATE_KEY_ACCESS_DENIED);
+  EXPECT_EQ(client_.request_count, 0);
+}
+
+TEST_F(StoragePartitionImplGmCertificateTest,
+       RejectsUnknownServiceWorkerWindow) {
+  auto observer = FrameObserver();
+  GmCertificateTestResponder responder;
+  Request(observer, responder, base::UnguessableToken::Create());
+  EXPECT_EQ(responder.result.Get(),
+            net::ERR_SSL_CLIENT_AUTH_PRIVATE_KEY_ACCESS_DENIED);
+  EXPECT_EQ(client_.request_count, 0);
+}
+
+#else
+TEST_F(StoragePartitionImplGmCertificateTest, DisabledGmRejectsWithoutPrompt) {
+  auto observer = FrameObserver();
+  GmCertificateTestResponder responder;
+  Request(observer, responder);
+  EXPECT_EQ(responder.result.Get(),
+            net::ERR_SSL_CLIENT_AUTH_PRIVATE_KEY_ACCESS_DENIED);
+  EXPECT_EQ(client_.request_count, 0);
+  EXPECT_EQ(client_.cancel_count, 0);
+}
+#endif  // BUILDFLAG(XENON_GM)
+
 // Local network access tests require there to be a (minimal) frame setup.
 using StoragePartitionImplLocalNetworkAccessTest = RenderViewHostTestHarness;
 
@@ -1906,16 +2132,16 @@ TEST_F(StoragePartitionImplTest, ClearDataStorageKeyDeletesPartitionedCookies) {
   EXPECT_TRUE(tester.ContainsCookie(kOrigin, kOtherPartitionKey));
 }
 
-
 class MockGpuDiskCacheFactory : public gpu::GpuDiskCacheFactory {
  public:
   MockGpuDiskCacheFactory() = default;
   ~MockGpuDiskCacheFactory() override = default;
 
-  MOCK_METHOD(void,
-              ClearByPath,
-              (const base::FilePath&, base::Time, base::Time, base::OnceClosure),
-              (override));
+  MOCK_METHOD(
+      void,
+      ClearByPath,
+      (const base::FilePath&, base::Time, base::Time, base::OnceClosure),
+      (override));
 };
 
 class StoragePartitionImplShaderCacheTest : public StoragePartitionImplTest {

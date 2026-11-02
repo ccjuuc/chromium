@@ -5,7 +5,6 @@
 #include "xenon_overlay/chrome/browser/ui/views/sidebar/xenon_sidebar_view.h"
 
 #include <algorithm>
-#include <limits>
 #include <memory>
 #include <string>
 
@@ -19,6 +18,7 @@
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
+#include "chrome/common/webui_url_constants.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
@@ -35,6 +35,7 @@
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/layout/box_layout.h"
 #include "url/gurl.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/sidebar/xenon_sidebar_service_factory.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 
@@ -63,15 +64,17 @@ struct SidebarShortcut {
 };
 
 constexpr SidebarShortcut kShortcuts[] = {
+    {"CRT", "证书诊断", "chrome://xenon-certificates/"},
     {"XO", "Xenon Overlay", "chrome://xenon-overlay/"},
-    {"AI", "Xenon AI", "chrome://xenon-ai-side-panel.top-chrome/"},
+#if BUILDFLAG(ENABLE_XENON_AI)
+    {"AI", "Xenon AI", chrome::kChromeUIXenonAISidePanelURL},
+#endif
     {"UI", "Xenon UI", "chrome://xenon-ui/"},
     {"N", "Xenon Node", "chrome://xenon-node/"},
     {"PC", "pc_addon", "chrome://xenon-node/#pc_addon"},
     {"XP", "Xenon Player", "chrome://xenon-player/"},
     {"XPE", "Electron Container Test", "chrome://xenon-player-by-elec/"},
-    {"PLE", "Player via Electron Container",
-     "chrome://xenon-player-electron/"},
+    {"PLE", "Player via Electron Container", "chrome://xenon-player-electron/"},
     {"TH", "Thunder 2025", "chrome://thunder-2025/"},
     {"CT", "跨端传输测试", "chrome://cross-transfer-test/"},
     {"UPD", "检查更新", "chrome://xenon-update/"},
@@ -229,31 +232,33 @@ XenonSidebarView::XenonSidebarView(Browser* browser)
   layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
-  // Keep every shortcut reachable on short windows while the alignment and
-  // auto-hide controls remain fixed at the bottom.
-  auto* shortcut_scroll = AddChildView(std::make_unique<views::ScrollView>());
-  shortcut_scroll->SetBackgroundColor(kColorSidePanelBackground);
-  shortcut_scroll->SetHorizontalScrollBarMode(
-      views::ScrollView::ScrollBarMode::kDisabled);
-  shortcut_scroll->SetVerticalScrollBarMode(
-      views::ScrollView::ScrollBarMode::kHiddenButEnabled);
-  shortcut_scroll->SetDrawOverflowIndicator(true);
-  shortcut_scroll->ClipHeightTo(0, std::numeric_limits<int>::max());
-  auto shortcuts = std::make_unique<views::View>();
+  auto shortcut_contents = std::make_unique<views::View>();
   auto* shortcut_layout =
-      shortcuts->SetLayoutManager(std::make_unique<views::BoxLayout>(
+      shortcut_contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kVertical, gfx::Insets(),
           kButtonSpacing));
   shortcut_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
   for (const SidebarShortcut& shortcut : kShortcuts) {
-    shortcuts->AddChildView(CreateShortcutButton(
+    shortcut_contents->AddChildView(CreateShortcutButton(
         shortcut, base::BindRepeating(&XenonSidebarView::OpenShortcut,
                                       weak_ptr_factory_.GetWeakPtr(),
                                       GURL(shortcut.url))));
   }
-  shortcut_scroll->SetContents(std::move(shortcuts));
-  layout->SetFlexForView(shortcut_scroll, 1);
+
+  auto* shortcuts = AddChildView(std::make_unique<views::ScrollView>());
+  shortcuts->SetBackgroundColor(kColorSidePanelBackground);
+  shortcuts->SetHorizontalScrollBarMode(
+      views::ScrollView::ScrollBarMode::kDisabled);
+  shortcuts->SetVerticalScrollBarMode(
+      views::ScrollView::ScrollBarMode::kHiddenButEnabled);
+  shortcuts->SetDrawOverflowIndicator(false);
+  // The buttons have fixed sizes. ScrollView does not size its contents when
+  // compositor scrolling is disabled, so initialize the strip's bounds here.
+  shortcut_contents->SizeToPreferredSize();
+  shortcuts->SetContents(std::move(shortcut_contents));
+  // Only the shortcuts scroll; alignment and auto-hide controls stay visible.
+  layout->SetFlexForView(shortcuts, 1);
 
   left_align_button_ = AddChildView(CreateSideOptionButton(
       u"\u5de6", u"\u4fa7\u8fb9\u680f\u9760\u5de6",
@@ -482,12 +487,14 @@ void XenonSidebarView::OpenShortcut(const GURL& url) {
     return;
   }
 
-  if (url.host() == "xenon-ai-side-panel.top-chrome") {
+#if BUILDFLAG(ENABLE_XENON_AI)
+  if (url == GURL(chrome::kChromeUIXenonAISidePanelURL)) {
     if (auto* side_panel = SidePanelUI::From(browser_)) {
       side_panel->Show(SidePanelEntryId::kXenonAI);
     }
     return;
   }
+#endif
 
   // Player HWND windows are created by packaged main.js BrowserWindow.
   // Sidebar only activates those widgets — do not open a second WebDialog.

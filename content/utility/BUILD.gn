@@ -56,6 +56,7 @@ source_set("utility") {
     "//media:media_buildflags",
     "//mojo/public/cpp/bindings",
     "//net",
+    "//net/gm:buildflags",
     "//printing/buildflags",
     "//sandbox",
     "//services/accessibility:buildflags",

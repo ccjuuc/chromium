@@ -999,6 +999,20 @@ int HttpCache::Transaction::DoLoop(int result) {
   DCHECK(reading_ || rv != OK || !entry_ ||
          state == STATE_FINISH_HEADERS_COMPLETE);
 
+  if (rv >= OK && cache_ && cache_->GetSession() &&
+      ((response_.ssl_info.gm_tls &&
+        gm_auto_config_ != cache_->GetSession()
+                               ->ssl_client_context()
+                               ->config()
+                               .gm_auto_config) ||
+       !gm::TlsRulesEqual(gm_rule_,
+                          cache_->GetSession()->GetGmTlsRule(
+                              url::SchemeHostPort(initial_request_->url))))) {
+    // Cache IO can yield between selecting an entry and returning headers or
+    // body bytes. Never complete that operation under a replaced TLS policy.
+    rv = ERR_NETWORK_CHANGED;
+  }
+
   if (rv != ERR_IO_PENDING && !callback_.is_null()) {
     read_buf_ = nullptr;  // Release the buffer before invoking the callback.
     std::move(callback_).Run(rv);
@@ -1973,6 +1987,18 @@ int HttpCache::Transaction::DoSendRequest() {
   DCHECK(mode_ & WRITE || mode_ == NONE);
   DCHECK(!network_trans_.get());
 
+  if (cache_->GetSession()) {
+    gm_auto_config_ =
+        cache_->GetSession()->ssl_client_context()->config().gm_auto_config;
+  }
+  if (mutable_request_) {
+    // Preserve this even while discovery is disabled: its system-trust
+    // snapshot may finish loading between cache lookup and network Start().
+    mutable_request_->gm_cache_original_headers =
+        initial_request_->extra_headers;
+    mutable_request_->gm_cache_original_url = initial_request_->url;
+  }
+
   send_request_since_ = TimeTicks::Now();
 
   // Create a network transaction.
@@ -2072,6 +2098,26 @@ int HttpCache::Transaction::DoSendRequestComplete(int result) {
 int HttpCache::Transaction::DoSuccessfulSendRequest() {
   DCHECK(!new_response_);
   const HttpResponseInfo* new_response = network_trans_->GetResponseInfo();
+  if (new_response->ssl_info.gm_tls) {
+    // Discovery may finish after an ordinary TLS cache entry was opened. Never
+    // merge GM 304/206 responses with that entry or persist the new response.
+    if (entry_) {
+      cache_->DoomActiveEntry(cache_key_);
+      DoneWithEntry(false);
+    }
+    mode_ = NONE;
+    effective_load_flags_ |= LOAD_DISABLE_CACHE;
+    partial_.reset();
+    handling_206_ = false;
+    truncated_ = false;
+    is_sparse_ = false;
+    if (reading_) {
+      // Some ordinary cached body bytes have already reached the caller.
+      ResetNetworkTransaction();
+      TransitionToState(STATE_FINISH_HEADERS);
+      return ERR_NETWORK_CHANGED;
+    }
+  }
   TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("net"),
                       "DoSuccessfulSendRequest", track_for_state_change_,
                       "response_code", new_response->headers->response_code());
@@ -2832,6 +2878,23 @@ void HttpCache::Transaction::SetRequest(const NetLogWithSource& net_log) {
 
   effective_load_flags_ = request_->load_flags;
   method_ = request_->method;
+  auto* session = cache_->GetSession();
+  gm_rule_ = session ? session->GetGmTlsRule(url::SchemeHostPort(request_->url))
+                     : nullptr;
+  gm_auto_config_ = session
+                        ? session->ssl_client_context()->config().gm_auto_config
+                        : nullptr;
+  if (gm_rule_ || (session && session->HasGmCapabilityHint(
+                                  url::SchemeHostPort(request_->url),
+                                  request_->network_anonymization_key,
+                                  request_->privacy_mode))) {
+    // A URL-only cache entry has no binding to national TLS trust, identity or
+    // device authorization. Bypass both reads and writes, for memory and disk
+    // backends, until a persistent security-profile-aware format is available.
+    // In particular, removing a GM rule cannot expose old GM response bodies
+    // under the ordinary TLS URL key because they are never stored there.
+    effective_load_flags_ |= LOAD_DISABLE_CACHE;
+  }
 
   if (cache_->mode() == DISABLE) {
     effective_load_flags_ |= LOAD_DISABLE_CACHE;

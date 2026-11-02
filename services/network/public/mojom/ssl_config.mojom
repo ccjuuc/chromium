@@ -4,6 +4,44 @@
 
 module network.mojom;
 
+enum GmTlsProtocol {
+  kTlcp = 0,
+  kRfc8998 = 1,
+  // Negotiate ordinary TLS 1.3 or RFC 8998 in one ClientHello. The selected
+  // protocol determines verification and client-auth; this is a policy mode.
+  kTls13Auto = 2,
+};
+
+// Enterprise-managed exact origin rule. Certificate data is DER; no file path,
+// PIN or private key crosses this configuration boundary.
+struct GmTlsRule {
+  string host;
+  uint16 port = 443;
+  GmTlsProtocol protocol;
+  string trust_profile_id;
+  uint64 trust_generation;
+  string identity_policy_id;
+  uint64 identity_generation;
+  uint64 policy_revision;
+  array<array<uint8>> trust_anchors;
+  array<array<uint8>> crls;
+  uint32 revocation_mode = 0;
+  bool enable_session_resumption = true;
+};
+
+// Browser-collected local Windows trust snapshot. CA-store certificates are
+// untrusted issuer candidates; only ROOT-store entries become trust anchors.
+// The epoch changes after certificate database notifications, even if the DER
+// is unchanged (for example, certificate properties may have changed).
+struct GmAutoConfig {
+  bool enabled = false;
+  array<array<uint8>> trust_anchors;
+  array<array<uint8>> untrusted_intermediates;
+  array<array<uint8>> disallowed_certificates;
+  array<array<uint8>> crls;
+  uint64 epoch;
+};
+
 enum SSLVersion {
   kTLS12,
   kTLS13,
@@ -43,6 +81,8 @@ enum SSLNamedGroupsPreset {
 // This is a combination of net::SSLContextConfig and
 // net::CertVerifier::Config's fields. See those two classes for descriptions.
 struct SSLConfig {
+  array<GmTlsRule> gm_tls_rules;
+  GmAutoConfig? gm_auto_config;
   bool rev_checking_enabled = false;
   bool rev_checking_required_local_anchors = false;
 

@@ -6,15 +6,19 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "base/check.h"
 #include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/run_loop.h"
 #include "base/strings/string_util.h"
+#include "base/task/thread_pool.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/common/chrome_features.h"
@@ -30,11 +34,20 @@
 #include "mojo/public/cpp/bindings/remote_set.h"
 #include "net/base/features.h"
 #include "net/cert/cert_verifier.h"
+#include "net/gm/gm_buildflags.h"
 #include "net/ssl/ssl_cipher_suite_names.h"
 #include "net/ssl/ssl_config_service.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/ssl_config.mojom.h"
 #include "url/url_canon.h"
+
+#if BUILDFLAG(XENON_GM)
+#include "chrome/browser/gm/gm_policy.h"  // nogncheck: XENON_GM conditional dependency.
+#endif
+
+#if BUILDFLAG(XENON_GM) && BUILDFLAG(IS_WIN) && defined(ARCH_CPU_X86_64)
+#include "chrome/browser/gm/gm_system_trust_win.h"  // nogncheck: XENON_GM conditional dependency.
+#endif
 
 #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
 #include "net/cert/internal/trust_store_chrome.h"
@@ -57,8 +70,9 @@ std::vector<std::string> ValueListToStringVector(const base::ListValue& list) {
   results.reserve(list.size());
   for (const auto& entry : list) {
     const std::string* s = entry.GetIfString();
-    if (s)
+    if (s) {
       results.push_back(*s);
+    }
   }
   return results;
 }
@@ -120,7 +134,14 @@ std::vector<std::string> CanonicalizeHostnamePatterns(
 
 }  // namespace
 
-SSLConfigServiceManager::SSLConfigServiceManager(PrefService* local_state) {
+SSLConfigServiceManager::SSLConfigServiceManager(
+    PrefService* local_state,
+    GmTrustSnapshotLoader gm_trust_loader_for_testing,
+    GmTrustMonitorFactory gm_trust_monitor_for_testing)
+#if BUILDFLAG(XENON_GM)
+    : gm_trust_loader_(std::move(gm_trust_loader_for_testing))
+#endif
+{
   DCHECK(local_state);
 
   PrefChangeRegistrar::NamedChangeCallback local_state_callback =
@@ -148,9 +169,39 @@ SSLConfigServiceManager::SSLConfigServiceManager(PrefService* local_state) {
   local_state_change_registrar_.Init(local_state);
   local_state_change_registrar_.Add(prefs::kCipherSuiteBlacklist,
                                     local_state_callback);
+#if BUILDFLAG(XENON_GM)
+  local_state_change_registrar_.Add(gm_browser::kSiteRulesPref,
+                                    local_state_callback);
+#endif
 
   // Populate |disabled_cipher_suites_| with the initial pref value.
   OnDisabledCipherSuitesChange(local_state);
+
+#if BUILDFLAG(XENON_GM)
+#if BUILDFLAG(IS_WIN) && defined(ARCH_CPU_X86_64)
+  if (!gm_trust_loader_) {
+    gm_trust_loader_ = base::BindRepeating(&gm_browser::ReadGmSystemTrust);
+    gm_trust_monitor_for_testing =
+        base::BindRepeating(&gm_browser::StartGmSystemTrustMonitoring);
+  }
+#endif
+  if (gm_trust_loader_) {
+    gm_auto_config_ = network::mojom::GmAutoConfig::New();
+    gm_auto_config_->enabled = true;
+    gm_auto_config_->epoch = ++gm_trust_epoch_;
+    net::CertDatabase::GetInstance()->AddObserver(this);
+    if (gm_trust_monitor_for_testing) {
+      gm_trust_monitor_starting_ = true;
+      gm_trust_monitor_stop_.ReplaceClosure(
+          gm_trust_monitor_for_testing.Run(base::BindRepeating(
+              &SSLConfigServiceManager::OnGmTrustMonitoringChanged,
+              weak_factory_.GetWeakPtr())));
+    } else {
+      StartGmTrustSnapshot();
+    }
+  }
+
+#endif  // BUILDFLAG(XENON_GM)
 
 #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
   // Populate initial trust anchor ID state from compiled-in values.
@@ -170,10 +221,19 @@ SSLConfigServiceManager::SSLConfigServiceManager(PrefService* local_state) {
 #endif
 }
 
-SSLConfigServiceManager::~SSLConfigServiceManager() = default;
+SSLConfigServiceManager::~SSLConfigServiceManager() {
+#if BUILDFLAG(XENON_GM)
+  if (gm_auto_config_) {
+    net::CertDatabase::GetInstance()->RemoveObserver(this);
+  }
+#endif
+}
 
 // static
 void SSLConfigServiceManager::RegisterPrefs(PrefRegistrySimple* registry) {
+#if BUILDFLAG(XENON_GM)
+  gm_browser::RegisterPrefs(registry);
+#endif
   net::CertVerifier::Config default_verifier_config;
   registry->RegisterBooleanPref(prefs::kCertRevocationCheckingEnabled,
                                 default_verifier_config.enable_rev_checking);
@@ -221,6 +281,14 @@ void SSLConfigServiceManager::UpdateTrustAnchorIDs(
 }
 
 void SSLConfigServiceManager::FlushForTesting() {
+#if BUILDFLAG(XENON_GM)
+  if (gm_trust_monitor_starting_ || gm_trust_load_in_progress_) {
+    CHECK(!gm_trust_flushed_for_testing_);
+    base::RunLoop loop;
+    gm_trust_flushed_for_testing_ = loop.QuitClosure();
+    loop.Run();
+  }
+#endif
   ssl_config_client_set_.FlushForTesting();
 }
 
@@ -228,8 +296,9 @@ void SSLConfigServiceManager::OnPreferenceChanged(
     PrefService* prefs,
     const std::string& pref_name_in) {
   DCHECK(prefs);
-  if (pref_name_in == prefs::kCipherSuiteBlacklist)
+  if (pref_name_in == prefs::kCipherSuiteBlacklist) {
     OnDisabledCipherSuitesChange(prefs);
+  }
 
   network::mojom::SSLConfigPtr new_config = GetNewSSLConfig();
   network::mojom::SSLConfig* raw_config = new_config.get();
@@ -243,13 +312,20 @@ void SSLConfigServiceManager::OnPreferenceChanged(
 
 network::mojom::SSLConfigPtr SSLConfigServiceManager::GetNewSSLConfig() const {
   network::mojom::SSLConfigPtr config = network::mojom::SSLConfig::New();
+#if BUILDFLAG(XENON_GM)
+  config->gm_auto_config = gm_auto_config_.Clone();
+  config->gm_tls_rules =
+      gm_browser::ReadPolicy(local_state_change_registrar_.prefs())
+          .ToNetworkRules();
+#endif
 
   // rev_checking_enabled was formerly a user-settable preference, but now
   // it is managed-only.
-  if (rev_checking_enabled_.IsManaged())
+  if (rev_checking_enabled_.IsManaged()) {
     config->rev_checking_enabled = rev_checking_enabled_.GetValue();
-  else
+  } else {
     config->rev_checking_enabled = false;
+  }
   config->rev_checking_required_local_anchors =
       rev_checking_required_local_anchors_.GetValue();
   std::string version_min_str = ssl_version_min_.GetValue();
@@ -280,6 +356,95 @@ network::mojom::SSLConfigPtr SSLConfigServiceManager::GetNewSSLConfig() const {
 
   return config;
 }
+
+void SSLConfigServiceManager::OnTrustStoreChanged() {
+#if BUILDFLAG(XENON_GM)
+  if (!gm_auto_config_) {
+    return;
+  }
+  // Publish a fresh epoch immediately, invalidating contexts, sessions, pools
+  // and discovery hints before doing any asynchronous store enumeration.
+  if (gm_trust_epoch_ != std::numeric_limits<uint64_t>::max()) {
+    ++gm_trust_epoch_;
+  }
+  gm_auto_config_ = network::mojom::GmAutoConfig::New();
+  gm_auto_config_->enabled =
+      !gm_trust_monitor_failed_ &&
+      gm_trust_epoch_ != std::numeric_limits<uint64_t>::max();
+  gm_auto_config_->epoch = gm_trust_epoch_;
+  SendUpdatedSSLConfig();
+  if (!gm_auto_config_->enabled || gm_trust_monitor_starting_) {
+    return;
+  }
+  if (gm_trust_load_in_progress_) {
+    gm_trust_refresh_pending_ = true;
+    return;
+  }
+  StartGmTrustSnapshot();
+#endif
+}
+
+#if BUILDFLAG(XENON_GM)
+void SSLConfigServiceManager::OnGmTrustMonitoringChanged(bool active) {
+  gm_trust_monitor_starting_ = false;
+  gm_trust_monitor_failed_ = !active;
+  OnTrustStoreChanged();
+  if (!gm_trust_load_in_progress_ && gm_trust_flushed_for_testing_) {
+    std::move(gm_trust_flushed_for_testing_).Run();
+  }
+}
+
+void SSLConfigServiceManager::StartGmTrustSnapshot() {
+  gm_trust_load_in_progress_ = true;
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::OnceCallback<network::mojom::GmAutoConfigPtr()>(gm_trust_loader_),
+      base::BindOnce(&SSLConfigServiceManager::OnGmTrustSnapshot,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void SSLConfigServiceManager::OnGmTrustSnapshot(
+    network::mojom::GmAutoConfigPtr snapshot) {
+  gm_trust_load_in_progress_ = false;
+  if (gm_trust_monitor_failed_) {
+    gm_trust_refresh_pending_ = false;
+    if (gm_trust_flushed_for_testing_) {
+      std::move(gm_trust_flushed_for_testing_).Run();
+    }
+    return;
+  }
+  if (gm_trust_epoch_ == std::numeric_limits<uint64_t>::max()) {
+    gm_trust_refresh_pending_ = false;
+    if (gm_trust_flushed_for_testing_) {
+      std::move(gm_trust_flushed_for_testing_).Run();
+    }
+    return;
+  }
+  if (gm_trust_refresh_pending_) {
+    gm_trust_refresh_pending_ = false;
+    StartGmTrustSnapshot();
+    return;
+  }
+  if (!snapshot) {
+    snapshot = network::mojom::GmAutoConfig::New();
+    snapshot->enabled = true;
+  }
+  snapshot->epoch = gm_trust_epoch_;
+  gm_auto_config_ = std::move(snapshot);
+  SendUpdatedSSLConfig();
+  if (gm_trust_flushed_for_testing_) {
+    std::move(gm_trust_flushed_for_testing_).Run();
+  }
+}
+
+void SSLConfigServiceManager::SendUpdatedSSLConfig() {
+  auto config = GetNewSSLConfig();
+  for (const auto& client : ssl_config_client_set_) {
+    client->OnSSLConfigUpdated(config.Clone());
+  }
+}
+
+#endif  // BUILDFLAG(XENON_GM)
 
 void SSLConfigServiceManager::OnDisabledCipherSuitesChange(
     PrefService* local_state) {

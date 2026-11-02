@@ -1,0 +1,11 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//mojo/public/tools/bindings/mojom.gni")
+
+mojom("mojom") {
+  testonly = true
+  sources = [ "gm_key_test_control.test-mojom" ]
+  deps = [ "//services/gm_key/public/mojom" ]
+}

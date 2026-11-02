@@ -1,0 +1,62 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//third_party/tongsuo/public_headers.gni")
+
+declare_args() {
+  # Build the isolated backend. Ordinary TLS continues to use BoringSSL.
+  enable_gm_tls_backend = false
+
+  # Pinned source ZIP, obtained during dependency provisioning, never by Ninja.
+  gm_tongsuo_archive = ""
+
+  # Deprecated migration aid. This no longer supplies precompiled libraries.
+  # If no archive is specified, look for ../source.zip beside this directory.
+  gm_tongsuo_root = ""
+
+  # Optional absolute path to jom (Windows) or make (POSIX). The selected tool
+  # is fingerprinted and tracked. Empty uses nmake from environment.x64 or make.
+  gm_tongsuo_make = ""
+  gm_tongsuo_jobs = 8
+}
+
+gm_tls_backend_enabled = enable_gm_tls_backend || gm_tongsuo_root != ""
+gm_tls_socket_supported = (current_os == "win" && current_cpu == "x64") ||
+                          ((current_os == "mac" || current_os == "linux") &&
+                           (current_cpu == "x64" || current_cpu == "arm64"))
+
+if (gm_tls_backend_enabled) {
+  assert(gm_tls_socket_supported,
+         "Tongsuo supports Windows x64 and macOS/Linux x64/arm64 here.")
+  assert(gm_tongsuo_jobs > 0, "gm_tongsuo_jobs must be positive")
+  if (gm_tongsuo_archive == "" && gm_tongsuo_root != "") {
+    gm_tongsuo_archive = get_path_info(gm_tongsuo_root, "dir") + "/source.zip"
+  }
+  assert(gm_tongsuo_archive != "" && path_exists(gm_tongsuo_archive),
+         "Set gm_tongsuo_archive to the pinned 8.5.0 source ZIP. " +
+             "Use third_party/tongsuo/fetch_source.py before building.")
+}
+
+# root_gen_dir is distinct for each output directory and GN toolchain.
+_gm_tongsuo_source = read_file("//third_party/tongsuo/source.json", "json")
+gm_tongsuo_output_dir = "$root_gen_dir/third_party/tongsuo/upstream"
+gm_tongsuo_build_root =
+    "$gm_tongsuo_output_dir/" + _gm_tongsuo_source.archive_root
+gm_tongsuo_manifest = "$gm_tongsuo_output_dir/build-manifest.json"
+gm_tongsuo_include_dir = "$gm_tongsuo_build_root/include"
+gm_tongsuo_generated_headers = []
+foreach(header, gm_tongsuo_header_names) {
+  gm_tongsuo_generated_headers += [ "$gm_tongsuo_include_dir/$header" ]
+}
+if (current_os == "win") {
+  gm_tongsuo_libraries = [
+    "$gm_tongsuo_build_root/libssl.lib",
+    "$gm_tongsuo_build_root/libcrypto.lib",
+  ]
+} else {
+  gm_tongsuo_libraries = [
+    "$gm_tongsuo_build_root/libssl.a",
+    "$gm_tongsuo_build_root/libcrypto.a",
+  ]
+}

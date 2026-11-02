@@ -1,0 +1,26 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//mojo/public/tools/bindings/mojom.gni")
+
+mojom("mojom") {
+  generate_java = true
+  sources = [ "gm_key_service.mojom" ]
+  deps = [ "//mojo/public/mojom/base" ]
+  public_deps = [ "//sandbox/policy/mojom" ]
+  cpp_typemaps = [
+    {
+      types = [
+        {
+          mojom = "gm_key.mojom.KeyPin"
+          cpp = "::gm_key::SecurePin"
+          move_only = true
+        },
+      ]
+      traits_headers =
+          [ "//services/gm_key/public/cpp/secure_pin_mojom_traits.h" ]
+      traits_public_deps = [ "//services/gm_key/public/cpp:traits" ]
+    },
+  ]
+}

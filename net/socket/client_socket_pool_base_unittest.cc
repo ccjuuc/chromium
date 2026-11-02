@@ -571,7 +571,10 @@ class TestConnectJobFactory : public ConnectJobFactory {
       bool disable_cert_network_fetches,
       const CommonConnectJobParams* common_connect_job_params,
       handles::NetworkHandle target_network,
-      ConnectJob::Delegate* delegate) const override {
+      ConnectJob::Delegate* delegate,
+      std::shared_ptr<const gm::TlsRule> gm_rule,
+      base::RepeatingCallback<base::UnguessableToken()> gm_client_auth_context)
+      const override {
     EXPECT_TRUE(!job_types_ || !job_types_->empty());
     TestConnectJob::JobType job_type = job_type_;
     if (job_types_ && !job_types_->empty()) {
