@@ -1,17 +1,55 @@
 #include "cross_transfer/tls_transport_channel.h"
 #include "cross_transfer/transfer_session.h"
+#include "test_arguments.h"
 
 #include <cassert>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <thread>
 
 using namespace cross_transfer;
 
+namespace {
+
+std::string ReadPem(const std::filesystem::path& path) {
+  std::ifstream file(path, std::ios::binary);
+  assert(file);
+  std::ostringstream contents;
+  contents << file.rdbuf();
+  return contents.str();
+}
+
+void ExpectClientHandshake(const TlsConfig& client_config,
+                           const TlsConfig& server_config,
+                           bool should_connect) {
+  LanTcpServer server;
+  assert(server.Start(0));
+  bool accepted = false;
+  std::thread thread([&] {
+    auto tcp = server.Accept(3000);
+    auto channel = TlsTransportChannel::Accept(std::move(tcp), server_config, 3000);
+    accepted = channel != nullptr;
+  });
+  TransportError error = TransportError::kNone;
+  auto client = TlsTransportChannel::Connect(
+      "127.0.0.1", server.listening_port(), client_config, 3000, nullptr, &error);
+  thread.join();
+  assert(static_cast<bool>(client) == should_connect);
+  if (should_connect) {
+    assert(accepted && error == TransportError::kNone);
+  } else {
+    assert(error == TransportError::kSecurity);
+  }
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
-  assert(argc == 2);
-  const std::filesystem::path directory(argv[1]);
+  const auto args = test::CommandLineArguments(argc, argv);
+  assert(args.size() == 2);
+  const std::filesystem::path directory(args[1]);
   const auto source = directory / "tls-payload.bin";
   {
     std::ofstream file(source, std::ios::binary);
@@ -76,6 +114,37 @@ int main(int argc, char** argv) {
          StreamingFileReader::ComputeFileSHA256(saved));
   channel->Close();
 
+  // Embedded roots work on both endpoints without a CA file, including PEM
+  // bundles with whitespace around entries.
+  const std::string ca_pem = ReadPem(directory / "ca.pem");
+  sender.ca_file.clear();
+  sender.ca_pem = "\r\n \t" + ca_pem + "\n\t";
+  receiver.ca_file.clear();
+  receiver.ca_pem = ca_pem;
+  ExpectClientHandshake(sender, receiver, true);
+
+  TlsConfig invalid = sender;
+  invalid.ca_pem = "-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----";
+  ExpectClientHandshake(invalid, receiver, false);
+  invalid.ca_pem = " \t\r\n";
+  ExpectClientHandshake(invalid, receiver, false);
+  invalid.ca_pem = ca_pem + "not a certificate";
+  ExpectClientHandshake(invalid, receiver, false);
+  invalid.ca_pem = std::string(256 * 1024 + 1, 'x');
+  ExpectClientHandshake(invalid, receiver, false);
+
+  // A valid but unrelated certificate cannot establish trust in the receiver.
+  invalid.ca_pem = ReadPem(directory / "sender.pem");
+  ExpectClientHandshake(invalid, receiver, false);
+  invalid = sender;
+  invalid.ca_file = (directory / "ca.pem").string();
+  ExpectClientHandshake(invalid, receiver, false);
+
+  // Supplying an embedded root must not bypass the expected server identity.
+  invalid = sender;
+  invalid.peer_name = "different-peer.test";
+  ExpectClientHandshake(invalid, receiver, false);
+
   // The server verifies client identity, not only the signing CA.
   receiver.peer_name = "different-peer.test";
   bool rejected = false;
@@ -88,5 +157,5 @@ int main(int argc, char** argv) {
   auto bad_peer = TlsTransportChannel::Connect("127.0.0.1", server.listening_port(), sender, 3000);
   reject_thread.join();
   assert(rejected);
-  std::cout << "[PASS] direct TLS mutual authentication, peer SAN and frame transport\n";
+  std::cout << "[PASS] direct TLS mutual authentication, embedded trust, peer SAN and frame transport\n";
 }

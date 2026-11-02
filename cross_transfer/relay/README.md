@@ -39,8 +39,22 @@ each token only to its authorized role through the application's authenticated
 pairing/control plane. Tokens are authorization capabilities, not user-facing
 short pairing codes. They must not appear in URLs, logs or analytics. Rotate or
 remove room credentials when the application revokes a transfer invitation.
-This reference service loads provisioning at startup; it does not implement an
-account system, user discovery or the application's pairing UI.
+Static rooms load at startup. An optional
+[account, device and transfer API](../account_service/README.md) runs in the same
+HTTPS process when `--account-database` is supplied. It provisions a temporary
+room only after the receiving same-account device accepts a file invitation.
+Clients obtain separate role credentials from the authenticated control plane;
+the account session token cannot be used directly on a relay route. No peer IP,
+certificate path or role token needs to be entered in the browser UI.
+
+At most 64 dynamic rooms coexist with the configured static rooms. Dynamic
+credentials and leases expire within 30 minutes, and cancellation, account
+session logout or device revocation invalidates them. File completion permits
+existing leases to drain the final ACK for at most 15 seconds. Dynamic secrets
+are not persisted: service restart marks accepted file invitations failed, while
+pending invitations and account/device state survive. Tests in
+`../tests/test_account_relay.py` cover role separation, confirmation, expiry,
+revocation during polling, final ACK delivery and restart behavior.
 
 ```sh
 python3 server.py --host 127.0.0.1 --port 8443 \

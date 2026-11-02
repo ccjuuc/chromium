@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>文件传输测试</title>
+    <title>我的设备与传输测试</title>
     <link rel="stylesheet" href="index.css">
     <script type="module" src="index.js"></script>
   </head>
@@ -13,15 +13,101 @@
       <header class="page-header">
         <div>
           <p class="eyebrow">CROSS TRANSFER · 开发测试</p>
-          <h1>把文件送到另一端。</h1>
-          <p class="subtitle">连接两台设备，测试真实的加密文件传输与断点续传。</p>
+          <h1>发到你的另一台设备。</h1>
+          <p class="subtitle">登录同一个账号，选择设备，发送文本或文件。</p>
         </div>
         <span id="bridgeBadge" class="badge" role="status">正在连接浏览器</span>
       </header>
 
       <div id="bridgeNotice" class="notice" role="alert" hidden></div>
 
-      <div class="workspace">
+      <section class="card account-card" aria-labelledby="accountHeading">
+        <div class="card-heading">
+          <div><p class="eyebrow">XENON ACCOUNT</p><h2 id="accountHeading">登录你的账号</h2></div>
+          <div id="accountActions" class="account-actions" hidden>
+            <button id="accountRefresh" class="button subtle" type="button">刷新设备</button>
+            <button id="accountLogout" class="text-button" type="button">退出登录</button>
+          </div>
+        </div>
+        <div id="accountSignedOut">
+          <p class="account-description">两台设备使用相同的用户名和密码登录，即可在这里看到彼此。</p>
+          <div class="account-modes" aria-label="账号操作">
+            <button id="accountLoginMode" class="text-button" type="button" aria-pressed="true">登录</button>
+            <button id="accountRegisterMode" class="text-button" type="button" aria-pressed="false">注册账号</button>
+          </div>
+          <form id="accountForm">
+            <fieldset id="accountFields" class="account-fields" disabled>
+              <div>
+                <label for="accountUsername">用户名</label>
+                <input id="accountUsername" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" pattern="[A-Za-z0-9._\-]{3,64}" minlength="3" maxlength="64" placeholder="3–64 位字母、数字或 . _ -" required>
+              </div>
+              <div>
+                <label for="accountPassword">密码</label>
+                <input id="accountPassword" name="password" type="password" autocomplete="current-password" minlength="12" maxlength="256" placeholder="至少 12 位" required>
+              </div>
+              <div id="accountConfirmField" hidden>
+                <label for="accountConfirm">确认密码</label>
+                <input id="accountConfirm" name="confirmPassword" type="password" autocomplete="new-password" minlength="12" maxlength="256" required disabled>
+              </div>
+              <button id="accountSubmit" type="submit" class="button primary" disabled>登录</button>
+            </fieldset>
+          </form>
+          <p class="field-help">登录后自动恢复会话，无需每次输入密码。</p>
+        </div>
+        <p id="accountStatus" class="account-status" role="status">正在读取账号状态…</p>
+        <p id="accountError" class="form-error" role="alert" hidden></p>
+        <div id="accountDevices" class="account-devices" hidden>
+          <div class="devices-heading"><h3>同账号设备</h3><span id="deviceCount" class="small-label"></span></div>
+          <ul id="deviceList" class="device-list" aria-label="同账号设备"></ul>
+          <p id="devicesEmpty" class="devices-empty" hidden>暂无已登记的设备。请稍后刷新。</p>
+          <p class="field-help">选择在线设备发送内容，对方接受后即可收到。</p>
+        </div>
+      </section>
+
+      <section id="ownTransferPanel" class="card own-transfer-card" aria-labelledby="ownTransferHeading" hidden>
+        <div class="card-heading">
+          <div><p class="eyebrow">SEND TO YOUR DEVICE</p><h2 id="ownTransferHeading">发送内容</h2></div>
+          <button id="ownTransferRefresh" class="button subtle" type="button">刷新传输</button>
+        </div>
+        <p id="ownRecipient" class="own-recipient" role="status">请在上方选择一台在线设备。</p>
+        <div class="own-compose-grid">
+          <form id="ownTextForm" class="own-compose">
+            <label for="ownText">文本</label>
+            <textarea id="ownText" rows="5" maxlength="16384" placeholder="输入要发送的内容…" required></textarea>
+            <div class="own-compose-actions">
+              <span id="ownTextCount" class="field-help">最多 16 KB</span>
+              <button id="ownSendText" class="button primary" type="submit" disabled>发送文本</button>
+            </div>
+          </form>
+          <div class="own-compose">
+            <label>文件</label>
+            <div class="own-file-selection">
+              <span id="ownFileName" class="own-file-name">尚未选择文件</span>
+              <span id="ownFileSize" class="field-help"></span>
+              <button id="ownChooseFile" class="button subtle" type="button" disabled>选择文件</button>
+            </div>
+            <div class="own-compose-actions">
+              <span class="field-help">每次发送一个文件</span>
+              <button id="ownSendFile" class="button primary" type="button" disabled>发送文件</button>
+            </div>
+          </div>
+        </div>
+        <p id="ownTransferError" class="form-error" role="alert" hidden></p>
+        <div id="ownJob" class="own-job" hidden>
+          <div class="own-job-heading"><strong id="ownJobStatus" role="status"></strong><button id="ownCancelJob" class="text-button" type="button">取消传输</button></div>
+          <progress id="ownJobProgress" max="100" value="0" aria-label="文件传输进度"></progress>
+          <p id="ownJobProgressText" class="field-help"></p>
+          <p id="ownJobSavedPath" class="own-saved-path" hidden></p>
+          <p id="ownJobError" class="form-error" role="alert" hidden></p>
+        </div>
+        <div class="own-inbox-heading"><h3>接收与发送记录</h3><span id="ownTransferCount" class="small-label"></span></div>
+        <p id="ownTransfersEmpty" class="devices-empty">暂无传输。另一台设备发送的内容会显示在这里。</p>
+        <ul id="ownTransferList" class="own-transfer-list" aria-label="接收与发送记录"></ul>
+      </section>
+
+      <details id="advancedDiagnostics" class="advanced-diagnostics">
+        <summary><span>高级传输诊断</span><small>手工连接、证书与断点续传测试</small></summary>
+        <div class="workspace">
         <form id="transferForm" class="card config-card">
           <div class="card-heading">
             <div><p class="eyebrow">01 / 配置连接</p><h2>这台设备做什么？</h2></div>
@@ -199,7 +285,8 @@
             <p class="guide-note">此页面会读写真实文件。路径均指当前这台设备，不支持目录传输。</p>
           </section>
         </aside>
-      </div>
+        </div>
+      </details>
       <footer>Cross Transfer <span aria-hidden="true">·</span> Chromium 内部测试页</footer>
     </main>
   </body>

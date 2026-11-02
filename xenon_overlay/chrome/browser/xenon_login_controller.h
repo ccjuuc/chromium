@@ -28,9 +28,9 @@ class Widget;
 
 namespace xenon {
 
-// Gates main browser window creation until the Xenon WebUI login page calls
-// SetAppSessionLoggedIn(true). Handles second-instance activation during login
-// and optional relogin presentation when the session flag is cleared.
+// Gates main browser window creation until the native account service verifies
+// the session. Handles second-instance activation during login and optional
+// relogin presentation when the session is cleared.
 class XenonLoginController : public BrowserCollectionObserver {
  public:
   static XenonLoginController* GetInstance();
@@ -145,6 +145,9 @@ class XenonLoginController : public BrowserCollectionObserver {
   raw_ptr<Profile> login_profile_ = nullptr;
   raw_ptr<Browser> login_anchor_browser_ = nullptr;
   bool login_ui_open_ = false;
+  // Authentication can complete before the page requests startup continuation.
+  // Closing in that interval still dismisses the gate and cancels the launch.
+  bool login_completion_requested_ = false;
   bool suppress_login_close_cleanup_ = false;
   bool quit_after_login_widget_destroy_ = false;
   base::CallbackListSubscription closing_all_browsers_subscription_;

@@ -23,6 +23,7 @@ struct HttpsRelayOptions {
   std::string bearer_token;  // Exactly 64 hex characters; never logged.
   std::string ca_file;       // Empty uses the TLS library's default trust store.
   int timeout_ms{30000};
+  std::string ca_pem;  // Optional embedded roots, mutually exclusive with ca_file.
 };
 
 // Own on one dedicated worker sequence. Send/receive are bounded operations,

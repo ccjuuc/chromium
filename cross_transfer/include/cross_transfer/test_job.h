@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace cross_transfer {
@@ -28,6 +29,10 @@ struct TestJobOptions {
   int connect_timeout_ms{30000};
   int io_timeout_ms{30000};
   int stage_timeout_ms{10 * 60 * 1000};
+  std::string ca_pem;
+  // Account transfers bind admission to the accepted invitation metadata.
+  std::string expected_file_name;
+  std::optional<uint64_t> expected_file_size;
 };
 
 // Only scalar display data is exposed to the WebUI. No TLS or relay credentials

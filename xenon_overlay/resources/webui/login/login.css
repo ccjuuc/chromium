@@ -1,133 +1,161 @@
-/* chrome://xenon-login/ — 独立资源；标题栏 -webkit-app-region: drag */
+/* Keep the native draggable title bar separate from interactive controls. */
+* { box-sizing: border-box; }
+
+[hidden] { display: none !important; }
+
 html,
-body {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  font-family: 'Segoe UI', system-ui, sans-serif;
-  background: transparent;
-  user-select: none;
-}
+ body { margin: 0;
+ width: 100%;
+ height: 100%;
+ font-family: 'Segoe UI', system-ui, sans-serif; }
 
-body {
-  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-  color: #fff;
-}
+body { color: #f3f5ff;
+ background: linear-gradient(135deg, #1a1a2e, #16213e); }
 
-.login-root {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-}
+.login-root { height: 100%;
+ display: flex;
+ flex-direction: column; }
 
-/* 可拖动区域（与 C++ XenonWebDialogView::DraggableRegionsChanged 一致） */
-.login-title-bar {
-  flex-shrink: 0;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 12px;
-  background: rgba(0, 0, 0, 0.25);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  -webkit-app-region: drag;
-}
+.login-title-bar { flex-shrink: 0;
+ height: 36px;
+ display: flex;
+ align-items: center;
+ justify-content: space-between;
+ padding: 0 12px;
+ background: #0003;
+ border-bottom: 1px solid #ffffff14;
+ -webkit-app-region: drag;
+ user-select: none; }
 
-.login-title-bar .title {
-  font-size: 14px;
-  font-weight: 600;
-  opacity: 0.9;
-}
+.title { font-size: 14px;
+ font-weight: 600; }
 
-.window-actions {
-  -webkit-app-region: no-drag;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
+.window-actions { display: flex;
+ -webkit-app-region: no-drag; }
 
-.login-close-btn {
-  -webkit-app-region: no-drag;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.85);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
+.login-close-btn { display: flex;
+ align-items: center;
+ justify-content: center;
+ width: 28px;
+ height: 28px;
+ padding: 0;
+ border: 0;
+ border-radius: 6px;
+ color: #ffffffd9;
+ background: transparent;
+ cursor: pointer; }
 
-.login-close-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-}
+.login-close-btn:hover { background: #ffffff1a; }
 
-.login-body {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px 28px;
-  min-height: 0;
-}
+.login-body { flex: 1;
+ min-height: 0;
+ overflow-y: auto;
+ padding: 30px 36px 24px; }
 
-.login-card {
-  max-width: 420px;
-  width: 100%;
-  text-align: center;
-}
+.login-card { width: 100%;
+ max-width: 420px;
+ margin: auto; }
 
-.login-heading {
-  margin: 0 0 8px;
-  font-size: 1.35rem;
-}
+.eyebrow { margin: 0 0 10px;
+ color: #a8c8ff;
+ font-size: 12px;
+ letter-spacing: 2px; }
 
-.login-hint {
-  margin: 0;
-  font-size: 0.85rem;
-  color: rgba(255, 255, 255, 0.75);
-  line-height: 1.4;
-}
+h1 { margin: 0 0 10px;
+ font-size: 27px;
+ font-weight: 650; }
 
-.login-actions {
-  margin-top: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
+.login-hint { margin: 0;
+ font-size: 13px;
+ color: #c1c9da;
+ line-height: 1.7; }
 
-.primary-btn {
-  -webkit-app-region: no-drag;
-  padding: 10px 16px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: linear-gradient(180deg, #3b82f6, #2563eb);
-  color: #fff;
-  font-size: 0.95rem;
-  font-weight: 600;
-  cursor: pointer;
-}
+.account-modes { display: flex;
+ gap: 8px;
+ margin: 22px 0 18px;
+ padding: 4px;
+ background: #0003;
+ border-radius: 9px; }
 
-.primary-btn:hover {
-  filter: brightness(1.06);
-}
+.account-modes button { flex: 1;
+ padding: 8px;
+ border: 0;
+ border-radius: 6px;
+ background: transparent;
+ color: #bec8dc;
+ font: inherit;
+ font-size: 13px;
+ cursor: pointer; }
 
-.primary-btn.secondary-outline {
-  background: transparent;
-  border-color: rgba(255, 255, 255, 0.35);
-}
+.account-modes button[aria-pressed='true'] { background: #ffffff1c;
+ color: white; }
+
+fieldset { min-width: 0;
+ margin: 0;
+ padding: 0;
+ border: 0; }
+
+label { display: block;
+ margin: 13px 0 7px;
+ font-size: 12px;
+ color: #d9dfec; }
+
+input { width: 100%;
+ height: 42px;
+ padding: 10px 12px;
+ border: 1px solid #ffffff38;
+ border-radius: 7px;
+ background: #0003;
+ color: white;
+ font: inherit;
+ font-size: 13px; }
+
+input::placeholder { color: #8d9ab3; }
+
+input:focus-visible,
+ button:focus-visible { outline: 2px solid #9cc5ff;
+ outline-offset: 3px; }
+
+.primary-btn { width: 100%;
+ min-height: 43px;
+ padding: 10px 16px;
+ border-radius: 8px;
+ border: 1px solid #fff3;
+ background: #337af1;
+ color: white;
+ font: inherit;
+ font-size: 14px;
+ font-weight: 600;
+ cursor: pointer; }
+
+.primary-btn:hover:not(:disabled) { background: #4389ff; }
+
+button:disabled { opacity: .5;
+ cursor: default; }
+
+.login-status { min-height: 19px;
+ margin: 14px 0 12px;
+ font-size: 12px;
+ line-height: 1.6;
+ color: #c1c9da; }
+
+.login-error { margin: 14px 0 0;
+ padding: 9px 11px;
+ border: 1px solid #d87f88;
+ border-radius: 7px;
+ background: #552530;
+ color: #ffd1d5;
+ font-size: 12px;
+ line-height: 1.6;
+ overflow-wrap: anywhere; }
+
+.session-hint { margin: 16px 0 0;
+ color: #a0abc1;
+ font-size: 11px;
+ line-height: 1.6;
+ text-align: center; }
 
 button,
-input,
-select,
-textarea,
-a {
-  -webkit-app-region: no-drag;
-}
+ input,
+ a { -webkit-app-region: no-drag; }
+@media (max-width: 400px) { .login-body { padding: 24px; } }

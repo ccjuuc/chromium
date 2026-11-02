@@ -17,6 +17,9 @@ struct TlsConfig {
   std::string certificate_file;
   std::string private_key_file;
   std::string peer_name;
+  // Embedded trust anchors. Mutually exclusive with ca_file; an empty pair
+  // uses the platform/library default trust store.
+  std::string ca_pem;
 };
 
 namespace internal {

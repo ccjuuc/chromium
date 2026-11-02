@@ -6,6 +6,8 @@ namespace xenon::prefs {
 
 void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterBooleanPref(kAppSessionLoggedIn, false);
+  registry->RegisterStringPref(kAccountCredentials, "");
+  registry->RegisterStringPref(kAccountDeviceIdentity, "");
   registry->RegisterIntegerPref(kReloginPresentation, 0);
   registry->RegisterBooleanPref(kAiSidePanelToolbarPinMigrated, false);
   registry->RegisterBooleanPref(kSidebarAutoHideEnabled, true);

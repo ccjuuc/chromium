@@ -30,6 +30,7 @@
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 #include "xenon_overlay/buildflags/buildflags.h"
+#include "xenon_overlay/chrome/browser/account/xenon_account_service.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
 #include "xenon_overlay/chrome/browser/xenon_prefs.h"
@@ -195,7 +196,7 @@ bool XenonLoginController::IsSessionLoggedIn(Profile* profile) {
     return false;
   }
   profile = profile->GetOriginalProfile();
-  return profile->GetPrefs()->GetBoolean(prefs::kAppSessionLoggedIn);
+  return XenonAccountService::GetForProfile(profile)->HasAuthenticatedSession();
 }
 
 // static
@@ -443,7 +444,8 @@ void XenonLoginController::NotifyLoginDialogClosed() {
   login_anchor_browser_ = nullptr;
 
   const bool logged_in_at_close =
-      login_profile_ && IsSessionLoggedIn(login_profile_);
+      login_completion_requested_ && login_profile_ &&
+      IsSessionLoggedIn(login_profile_);
   const bool had_deferred_launch = !pending_resume_launch_.is_null();
 
   // Logged-in close: ResumePendingLaunch() already moved the closure; do not
@@ -476,7 +478,8 @@ void XenonLoginController::OnLoginWidgetDestroying(views::Widget* widget) {
   }
 
   const bool logged_in_at_close =
-      login_profile_ && IsSessionLoggedIn(login_profile_);
+      login_completion_requested_ && login_profile_ &&
+      IsSessionLoggedIn(login_profile_);
   const bool should_quit =
       quit_after_login_widget_destroy_ ||
       (!logged_in_at_close && login_gate_keep_alive_);
@@ -508,7 +511,8 @@ void XenonLoginController::QuitAfterLoginGateDismissed() {
   if (browser_shutdown::HasShutdownStarted()) {
     return;
   }
-  if (login_profile_ && IsSessionLoggedIn(login_profile_)) {
+  if (login_completion_requested_ && login_profile_ &&
+      IsSessionLoggedIn(login_profile_)) {
     return;
   }
   if (!login_gate_keep_alive_) {
@@ -551,6 +555,7 @@ void XenonLoginController::ShowLoginDialog(Profile* profile, bool is_relogin) {
     return;
   }
   suppress_login_close_cleanup_ = false;
+  login_completion_requested_ = false;
   login_profile_ = profile->GetOriginalProfile();
 
   int presentation = 0;
@@ -764,10 +769,23 @@ void XenonLoginController::SetAppSessionLoggedIn(Profile* profile,
     return;
   }
   Profile* effective = profile->GetOriginalProfile();
+  auto* account = XenonAccountService::GetForProfile(effective);
+  if (logged_in && !account->HasAuthenticatedSession()) {
+    return;
+  }
   effective->GetPrefs()->SetBoolean(prefs::kAppSessionLoggedIn, logged_in);
+  // A page in another profile must not resume this profile's startup or close
+  // its login dialog. Logging out still clears that other profile's session.
+  const bool owns_login =
+      !login_profile_ || login_profile_->GetOriginalProfile() == effective;
   if (logged_in) {
-    ResumePendingLaunch();
+    if (owns_login) {
+      login_completion_requested_ = true;
+      ResumePendingLaunch();
+    }
   } else {
+    account->Logout(base::BindOnce([](base::DictValue) {}));
+    if (!owns_login && (login_widget_ || pending_resume_launch_)) return;
     pending_resume_launch_.Reset();
     ShowLoginDialog(effective, /*is_relogin=*/true);
   }

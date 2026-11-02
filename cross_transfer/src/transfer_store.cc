@@ -112,7 +112,8 @@ bool ReadState(const std::filesystem::path& path, std::vector<uint8_t>* output) 
   LARGE_INTEGER size{};
   bool ok = GetFileInformationByHandle(handle, &info) && GetFileSizeEx(handle, &size) &&
       !(info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) &&
-      info.nNumberOfLinks == 1 && size.QuadPart >= 0 && size.QuadPart <= kStateLimit;
+      info.nNumberOfLinks == 1 && size.QuadPart >= 0 &&
+      static_cast<uint64_t>(size.QuadPart) <= kStateLimit;
   if (ok) {
     output->resize(static_cast<size_t>(size.QuadPart));
     DWORD received = 0;

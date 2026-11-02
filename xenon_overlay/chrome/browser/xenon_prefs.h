@@ -7,8 +7,13 @@ class PrefRegistrySyncable;
 
 namespace xenon::prefs {
 
-// Session flag: main browser windows open only when true (after WebUI login).
+// Compatibility mirror only; the native account service authorizes the session.
 inline constexpr char kAppSessionLoggedIn[] = "xenon.app_session_logged_in";
+
+// Server session token/account metadata, stored directly per product policy.
+// Passwords are never persisted.
+inline constexpr char kAccountCredentials[] = "xenon.account.credentials";
+inline constexpr char kAccountDeviceIdentity[] = "xenon.account.device_identity";
 
 // 0 = standalone login window, 1 = hide all browser windows during relogin,
 // 2 = modal dialog on last active browser window.

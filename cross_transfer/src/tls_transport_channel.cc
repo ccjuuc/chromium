@@ -4,8 +4,10 @@
 #include <array>
 #include <climits>
 #include <cerrno>
+#include <string_view>
 
 #include <openssl/bio.h>
+#include <openssl/pem.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
@@ -91,6 +93,44 @@ bool ConfigurePeerName(SSL* ssl, const std::string& name) {
     return X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(ssl), name.c_str()) == 1;
   }
   return SSL_set1_host(ssl, name.c_str()) == 1;
+}
+
+bool LoadTrustAnchors(SSL_CTX* context, const TlsConfig& config) {
+  if (config.ca_pem.empty()) {
+    return config.ca_file.empty()
+               ? SSL_CTX_set_default_verify_paths(context) == 1
+               : SSL_CTX_load_verify_locations(
+                     context, config.ca_file.c_str(), nullptr) == 1;
+  }
+  if (!config.ca_file.empty() || config.ca_pem.size() > 256 * 1024) {
+    return false;
+  }
+  // Accept only a PEM certificate bundle, including whitespace between
+  // certificates. Do not silently ignore malformed entries or trailing data.
+  std::string_view remaining(config.ca_pem);
+  constexpr std::string_view kBegin = "-----BEGIN CERTIFICATE-----";
+  constexpr std::string_view kEnd = "-----END CERTIFICATE-----";
+  bool loaded = false;
+  while (true) {
+    const auto start = remaining.find_first_not_of(" \t\r\n");
+    if (start == std::string_view::npos) return loaded;
+    remaining.remove_prefix(start);
+    if (!remaining.starts_with(kBegin)) return false;
+    const auto end = remaining.find(kEnd);
+    if (end == std::string_view::npos) return false;
+    const auto pem = remaining.substr(0, end + kEnd.size());
+    std::unique_ptr<BIO, decltype(&BIO_free)> bio(
+        BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size())), BIO_free);
+    if (!bio) return false;
+    std::unique_ptr<X509, decltype(&X509_free)> certificate(
+        PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr), X509_free);
+    if (!certificate ||
+        X509_STORE_add_cert(SSL_CTX_get_cert_store(context), certificate.get()) != 1) {
+      return false;
+    }
+    loaded = true;
+    remaining.remove_prefix(pem.size());
+  }
 }
 
 }  // namespace
@@ -189,11 +229,7 @@ std::unique_ptr<TlsStream> TlsStream::Establish(
   SSL_CTX_set_verify(impl->context.get(),
                      SSL_VERIFY_PEER | (server ? SSL_VERIFY_FAIL_IF_NO_PEER_CERT : 0),
                      nullptr);
-  if (config.ca_file.empty()) {
-    if (SSL_CTX_set_default_verify_paths(impl->context.get()) != 1) return nullptr;
-  } else if (SSL_CTX_load_verify_locations(impl->context.get(), config.ca_file.c_str(), nullptr) != 1) {
-    return nullptr;
-  }
+  if (!LoadTrustAnchors(impl->context.get(), config)) return nullptr;
   if (config.certificate_file.empty() != config.private_key_file.empty()) return nullptr;
   if (server && config.certificate_file.empty()) return nullptr;
   if (!config.certificate_file.empty() &&

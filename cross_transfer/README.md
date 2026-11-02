@@ -152,9 +152,24 @@ rejects a target that appears after admission, preserving it and resumable data.
 
 After rebuilding the browser, open `chrome://cross-transfer-test/` on each
 device, or click **CT — 跨端传输测试** in the sidebar to open a new tab.
-The page calls the native transfer core on a worker and polls its real
-status. Closing or reloading the page cancels its active job; acknowledged file
-progress remains available for resuming.
+Register an account, then sign in with the same account on another device to
+see both devices and their online state. The browser restores its server token
+at startup and maintains device heartbeats without leaving this page open.
+Tokens are stored directly in the local Profile; passwords are not saved.
+See [account service](account_service/README.md) for the API and account tests.
+
+Select **发送** beside an online device, then enter text or choose a file using
+the native file picker. The other device accepts or rejects the invitation in
+this page. Accepted text can be copied; accepted files show progress and their
+saved location. Peer addresses, certificates and temporary relay credentials
+are supplied automatically. Account transfers and invitation polling belong to
+the Profile and continue when this page is closed or reloaded; signing out or
+ending the Profile cancels its local jobs.
+
+Expand **高级传输诊断** for the existing manual file transfer controls below.
+These diagnostic controls call the native transfer core on a worker and poll
+its real status. Closing or reloading the page cancels the diagnostic job;
+acknowledged file progress remains available for resuming.
 
 - Choose **接收文件** first, enter an absolute destination path, and start it
   after preparing the sender's configuration. **发送文件** takes the absolute
@@ -177,8 +192,8 @@ After cancellation or an interrupted relay connection, the room can remain
 leased until the server's idle timeout (60 seconds by default). Stop both peers
 before retrying, allow the idle lease to expire, and use a new connection ID.
 
-The page does not deploy a relay, change certificates, persist credentials, or
-simulate transfer progress. All paths refer to the local device. A static HTML
+The manual diagnostics do not deploy a relay, change certificates, persist
+relay credentials, or simulate transfer progress. All paths refer to the local device. A static HTML
 preview disables transfers because it has no native WebUI bridge.
 
 The standalone `test_test_job` verifies the job used by this page; the TLS
@@ -187,6 +202,26 @@ resumption through that job. Run `node cross_transfer/tests/webui_smoke_test.mjs
 to verify page interactions with an isolated test bridge in headless Chrome
 (Node.js 18+; set `CHROME_BINARY` if Chrome is not detected). This checks UI
 behavior; it does not exercise the browser's native message handler.
+
+Build `chrome xenon_account_unittests` and set `CHROME_BINARY` to the built
+browser for account transfer verification:
+
+```sh
+out/Release_64/xenon_account_unittests.exe --gtest_filter=XenonTransferServiceTest.*
+node cross_transfer/tests/account_webui_smoke_test.mjs
+node cross_transfer/tests/account_browser_integration.mjs --with-transfers
+node cross_transfer/tests/account_browser_integration.mjs --with-file
+```
+
+The live tests use two temporary Profiles and a generated server account.
+`--with-transfers` checks Unicode text reception, rejection and cancellation.
+`--with-file` also opens a visible native file picker: select the generated
+source named in `out/own_transfer_file_selection.json` when the script prints
+`WAIT_FILE_SELECTION`. It verifies a 1 MiB transfer and SHA-256 under an isolated
+download directory. Both modes retain the account restoration and logout
+checks. Temporary files and Profiles are removed automatically; remove the
+generated server account using the identity in
+`out/account_browser_integration_result.json` after testing.
 
 ### Native targets and tests
 

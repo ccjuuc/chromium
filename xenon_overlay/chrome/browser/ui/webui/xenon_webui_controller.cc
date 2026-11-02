@@ -7,28 +7,17 @@
 #include <mutex>
 #include <utility>
 
-#include "base/functional/bind.h"
-#include "base/memory/weak_ptr.h"
-#include "base/values.h"
-#include "chrome/browser/profiles/profile.h"
-#include "content/public/browser/browser_context.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_browser_interface_broker_registry.h"
 #include "content/public/browser/web_ui_data_source.h"
-#include "content/public/browser/web_ui_message_handler.h"
-#include "xenon_overlay/chrome/browser/xenon_login_controller.h"
+#include "xenon_overlay/chrome/browser/ui/webui/xenon_account_webui_handler.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_webui_dev_proxy.h"
 #include "xenon_overlay/resources/grit/xenon_resources.h"
 
 namespace xenon {
 
 namespace {
-
-constexpr char kLoginMessageDone[] = "xenonLoginDone";
-constexpr char kLoginMessageLogoutTest[] = "xenonLoginLogoutTest";
-constexpr char kLoginMessageClose[] = "xenonLoginClose";
 
 void EnsureTrustedBrokerKnowsPageHandler() {
   static std::once_flag once;
@@ -38,55 +27,6 @@ void EnsureTrustedBrokerKnowsPageHandler() {
         .Add<mojom::PageHandler>();
   });
 }
-
-class XenonLoginWebUIMessageHandler : public content::WebUIMessageHandler {
- public:
-  XenonLoginWebUIMessageHandler() = default;
-  XenonLoginWebUIMessageHandler(const XenonLoginWebUIMessageHandler&) = delete;
-  XenonLoginWebUIMessageHandler& operator=(const XenonLoginWebUIMessageHandler&) =
-      delete;
-  ~XenonLoginWebUIMessageHandler() override = default;
-
- private:
-  void RegisterMessages() override {
-    web_ui()->RegisterMessageCallback(
-        kLoginMessageDone,
-        base::BindRepeating(&XenonLoginWebUIMessageHandler::HandleLoginDone,
-                            base::Unretained(this)));
-    web_ui()->RegisterMessageCallback(
-        kLoginMessageLogoutTest,
-        base::BindRepeating(&XenonLoginWebUIMessageHandler::HandleLogoutTest,
-                            base::Unretained(this)));
-    web_ui()->RegisterMessageCallback(
-        kLoginMessageClose,
-        base::BindRepeating(&XenonLoginWebUIMessageHandler::HandleClose,
-                            base::Unretained(this)));
-  }
-
-  void HandleLoginDone(const base::ListValue& args) {
-    Profile* profile = Profile::FromWebUI(web_ui());
-    if (profile) {
-      XenonLoginController::GetInstance()->SetAppSessionLoggedIn(profile, true);
-    }
-  }
-
-  void HandleLogoutTest(const base::ListValue& args) {
-    Profile* profile = Profile::FromWebUI(web_ui());
-    if (profile) {
-      XenonLoginController::GetInstance()->SetAppSessionLoggedIn(profile, false);
-    }
-  }
-
-  void HandleClose(const base::ListValue& args) {
-    content::WebContents* contents = web_ui()->GetWebContents();
-    if (!contents) {
-      return;
-    }
-    if (content::WebContentsDelegate* delegate = contents->GetDelegate()) {
-      delegate->CloseContents(contents);
-    }
-  }
-};
 
 }  // namespace
 
@@ -100,7 +40,7 @@ XenonWebUIController::XenonWebUIController(content::WebUI* web_ui,
       web_ui->GetWebContents()->GetBrowserContext(), webui_host_);
 
   if (webui_host_ == kXenonLoginWebUIHost) {
-    web_ui->AddMessageHandler(std::make_unique<XenonLoginWebUIMessageHandler>());
+    web_ui->AddMessageHandler(std::make_unique<XenonAccountWebUIHandler>(true));
     source->AddResourcePath("login.css", IDR_XENON_LOGIN_CSS);
     source->AddResourcePath("login.js", IDR_XENON_LOGIN_JS);
     source->SetDefaultResource(IDR_XENON_LOGIN_HTML);

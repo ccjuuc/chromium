@@ -25,6 +25,8 @@
 #include "net/base/filename_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "xenon_overlay/buildflags/buildflags.h"
+#include "xenon_overlay/chrome/browser/account/xenon_account_service.h"
+#include "xenon_overlay/chrome/browser/account/xenon_transfer_service.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_app_config.h"
 #include "xenon_overlay/chrome/browser/managed_certificates/managed_certificate_service.h"
 #include "xenon_overlay/chrome/browser/reminder/xenon_reminder_notification_manager.h"
@@ -185,6 +187,13 @@ void XenonBrowserMainExtraParts::PreProfileInit() {
 
 void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
                                                  bool is_initial_profile) {
+  if (profile->IsRegularProfile() && !profile->IsOffTheRecord() &&
+      !profile->IsGuestSession()) {
+    // Restore the session and maintain device presence even when the login
+    // gate is disabled or no account WebUI is opened. Initialization is async.
+    XenonAccountService::GetForProfile(profile);
+    XenonTransferService::GetForProfile(profile);
+  }
   if (profile->IsRegularProfile()) {
     xenon::XenonExtensionManager::GetInstance()->LoadAllExtensions(profile);
   }

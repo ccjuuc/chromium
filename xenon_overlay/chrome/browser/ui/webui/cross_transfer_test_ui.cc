@@ -21,6 +21,8 @@
 #include "content/public/browser/web_ui_message_handler.h"
 #include "content/public/common/url_constants.h"
 #include "cross_transfer/test_job.h"
+#include "xenon_overlay/chrome/browser/ui/webui/xenon_account_webui_handler.h"
+#include "xenon_overlay/chrome/browser/ui/webui/xenon_transfer_webui_handler.h"
 #include "xenon_overlay/resources/grit/xenon_resources.h"
 
 namespace xenon {
@@ -223,6 +225,8 @@ CrossTransferTestUI::CrossTransferTestUI(content::WebUI* web_ui)
   source->AddResourcePath("index.css", IDR_CROSS_TRANSFER_TEST_CSS);
   source->AddResourcePath("index.js", IDR_CROSS_TRANSFER_TEST_JS);
   web_ui->AddMessageHandler(std::make_unique<CrossTransferTestHandler>());
+  web_ui->AddMessageHandler(std::make_unique<XenonAccountWebUIHandler>());
+  web_ui->AddMessageHandler(std::make_unique<XenonTransferWebUIHandler>());
 }
 
 CrossTransferTestUI::~CrossTransferTestUI() = default;

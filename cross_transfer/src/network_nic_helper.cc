@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <sstream>
 #include <string_view>
 #include <tuple>
@@ -137,25 +139,29 @@ std::vector<CandidateEndpoint> NetworkNicHelper::GetCandidateEndpoints(
     return candidates;
   }
   ULONG size = 32 * 1024;
-  std::vector<uint8_t> buffer(size);
+  std::unique_ptr<IP_ADAPTER_ADDRESSES, decltype(&std::free)> buffer(
+      nullptr, &std::free);
   ULONG result = ERROR_BUFFER_OVERFLOW;
   for (int attempt = 0; attempt < 3 && result == ERROR_BUFFER_OVERFLOW;
        ++attempt) {
     if (size > 4 * 1024 * 1024) {
       return candidates;
     }
-    buffer.resize(size);
+    // Allocate size bytes for the variable-length structures and strings.
+    buffer.reset(static_cast<IP_ADAPTER_ADDRESSES*>(std::calloc(1, size)));
+    if (!buffer) {
+      return candidates;
+    }
     result = GetAdaptersAddresses(
         AF_UNSPEC,
         GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST |
             GAA_FLAG_SKIP_DNS_SERVER,
-        nullptr, reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data()), &size);
+        nullptr, buffer.get(), &size);
   }
   if (result != NO_ERROR) {
     return candidates;
   }
-  for (auto* adapter = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
-       adapter; adapter = adapter->Next) {
+  for (auto* adapter = buffer.get(); adapter; adapter = adapter->Next) {
     if (adapter->OperStatus != IfOperStatusUp ||
         adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK) {
       continue;

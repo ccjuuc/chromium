@@ -73,6 +73,9 @@ foreach(name,
   executable("test_${name}") {
     testonly = true
     sources = [ "tests/test_${name}.cc" ]
+    if (name == "https_relay" || name == "tls_transport" || name == "test_job") {
+      sources += [ "tests/test_arguments.h" ]
+    }
     deps = [
       ":cross_transfer_core",
       "//third_party/boringssl",

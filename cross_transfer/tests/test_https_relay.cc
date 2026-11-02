@@ -1,6 +1,7 @@
 #include "cross_transfer/https_relay_channel.h"
 #include "cross_transfer/tls_transport_channel.h"
 #include "cross_transfer/transfer_session.h"
+#include "test_arguments.h"
 
 #include <atomic>
 #include <cassert>
@@ -13,11 +14,12 @@
 using namespace cross_transfer;
 
 int main(int argc, char** argv) {
-  assert(argc == 4);  // CA file, loopback relay port, isolated temporary directory.
+  const auto args = test::CommandLineArguments(argc, argv);
+  assert(args.size() == 4);  // CA file, relay port, temporary directory.
   HttpsRelayOptions options;
   options.host = "127.0.0.1";
-  options.port = static_cast<uint16_t>(std::stoi(argv[2]));
-  options.ca_file = argv[1];
+  options.port = static_cast<uint16_t>(std::stoi(args[2]));
+  options.ca_file = args[1];
   options.room_id = "integration";
   options.connection_id = std::string(32, 'a');
   options.bearer_token = std::string(64, '1');
@@ -29,12 +31,12 @@ int main(int argc, char** argv) {
   assert(!HttpsRelayChannel::Connect(denied, nullptr, &error));
   assert(error == TransportError::kSecurity);
   auto untrusted = options;
-  untrusted.ca_file = std::string(argv[3]) + "/missing-ca.pem";
+  untrusted.ca_file = std::string(args[3]) + "/missing-ca.pem";
   assert(!HttpsRelayChannel::Connect(untrusted, nullptr, &error));
   assert(error == TransportError::kSecurity);
 
   TlsConfig wrong_name;
-  wrong_name.ca_file = argv[1];
+  wrong_name.ca_file = args[1];
   wrong_name.peer_name = "unpaired.invalid";
   assert(!internal::TlsStream::Connect(options.host, options.port, wrong_name, 1000, nullptr, &error));
   assert(error == TransportError::kSecurity);
@@ -64,7 +66,7 @@ int main(int argc, char** argv) {
   assert(!sender->SendFrame(header, {}));
   assert(sender->LastError() == TransportError::kProtocol);
 
-  const std::filesystem::path directory(argv[3]);
+  const std::filesystem::path directory(args[3]);
   const auto source = directory / "relay-payload.bin";
   {
     std::ofstream file(source, std::ios::binary);

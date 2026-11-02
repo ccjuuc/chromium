@@ -1,0 +1,33 @@
+[Unit]
+Description=CrossTransfer HTTPS relay and account service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=crosstransfer
+Group=crosstransfer
+WorkingDirectory=/opt/cross-transfer/current
+ExecStart=/usr/bin/python3 /opt/cross-transfer/current/relay/server.py --host 0.0.0.0 --port 443 --certificate /etc/cross-transfer/server.pem --private-key /etc/cross-transfer/server.key --credentials /etc/cross-transfer/credentials.json --account-database /var/lib/cross-transfer/accounts.sqlite3
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=15
+UMask=0077
+StateDirectory=cross-transfer
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+ReadWritePaths=/var/lib/cross-transfer
+LimitNOFILE=4096
+TasksMax=64
+MemoryMax=384M
+
+[Install]
+WantedBy=multi-user.target

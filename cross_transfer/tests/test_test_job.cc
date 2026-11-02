@@ -1,6 +1,7 @@
 #include "cross_transfer/test_job.h"
 
 #include "cross_transfer/streaming_file_io.h"
+#include "test_arguments.h"
 
 #include <atomic>
 #include <cassert>
@@ -164,6 +165,8 @@ void TestRealMutualTls(const std::filesystem::path& certificates) {
   }
   auto receiver_options = ReceiveOptions(directory.path / "received");
   SetCertificates(&receiver_options, certificates, "receiver");
+  receiver_options.expected_file_name = "job-payload.bin";
+  receiver_options.expected_file_size = 1024 * 1024;
   TestTransferJob receiver(receiver_options);
   bool received = false;
   std::thread receive_thread([&] { received = receiver.Run(); });
@@ -228,6 +231,25 @@ void TestRealMutualTls(const std::filesystem::path& certificates) {
   assert(overwrite_sender.Run());
   overwrite_thread.join();
   assert(received && overwrite_receiver.snapshot().state == "completed");
+
+  // Account invitations authorize one exact file name and size. A valid TLS
+  // peer must not substitute another file after the user accepts the offer.
+  for (bool mismatch_name : {true, false}) {
+    auto bound = receiver_options;
+    bound.output_dir = (directory.path / (mismatch_name ? "name" : "size")).string();
+    bound.allow_overwrite = false;
+    if (mismatch_name) bound.expected_file_name = "different.bin";
+    else bound.expected_file_size = 7;
+    TestTransferJob bound_receiver(bound);
+    std::thread bound_thread([&] { received = bound_receiver.Run(); });
+    sender_options.port = WaitForListener(bound_receiver);
+    assert(sender_options.port);
+    TestTransferJob bound_sender(sender_options);
+    assert(!bound_sender.Run());
+    bound_thread.join();
+    assert(!received);
+    assert(!std::filesystem::exists(std::filesystem::path(bound.output_dir) / "job-payload.bin"));
+  }
 }
 
 void TestRealHttpsRelay(const std::string& ca_file, uint16_t port) {
@@ -242,6 +264,14 @@ void TestRealHttpsRelay(const std::string& ca_file, uint16_t port) {
   receiver_options.transport = "relay";
   receiver_options.port = port;
   receiver_options.ca_file = ca_file;
+  {
+    std::ifstream roots(ca_file, std::ios::binary);
+    receiver_options.ca_pem.assign(std::istreambuf_iterator<char>(roots), {});
+    assert(!receiver_options.ca_pem.empty());
+    receiver_options.ca_file.clear();
+  }
+  receiver_options.expected_file_name = "relay-job.bin";
+  receiver_options.expected_file_size = 64 * 1024;
   receiver_options.room_id = "jobs";
   receiver_options.connection_id = std::string(32, 'd');
   receiver_options.bearer_token = std::string(64, '2');
@@ -281,13 +311,14 @@ void TestRealHttpsRelay(const std::string& ca_file, uint16_t port) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  const auto args = test::CommandLineArguments(argc, argv);
   TestValidationAndStickyCancellation();
   TestCancelSourcePreparation();
   TestCancelListeningAndConcurrentSnapshots();
-  if (argc == 2) TestRealMutualTls(argv[1]);
-  if (argc == 4) {
-    TestRealMutualTls(argv[3]);
-    TestRealHttpsRelay(argv[1], static_cast<uint16_t>(std::stoi(argv[2])));
+  if (args.size() == 2) TestRealMutualTls(args[1]);
+  if (args.size() == 4) {
+    TestRealMutualTls(args[3]);
+    TestRealHttpsRelay(args[1], static_cast<uint16_t>(std::stoi(args[2])));
   }
   std::cout << "[PASS] native transfer test jobs, cancellation and safe snapshots\n";
 }

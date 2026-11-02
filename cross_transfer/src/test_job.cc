@@ -173,6 +173,10 @@ struct TestTransferJob::Impl {
   }
   bool Authorize(const FileMetadataPayload& metadata) {
     if (cancelled.load() || !ValidateFileMetadata(metadata)) return false;
+    if ((!options.expected_file_name.empty() &&
+         metadata.file_name != options.expected_file_name) ||
+        (options.expected_file_size &&
+         metadata.file_size != *options.expected_file_size)) return false;
     std::error_code error;
     auto target = Path(options.output_dir) / Path(metadata.file_name);
     const auto status = std::filesystem::symlink_status(target, error);
@@ -302,11 +306,13 @@ bool TestTransferJob::Run() {
     relay.role = sending ? RelayRole::kSender : RelayRole::kReceiver;
     relay.bearer_token = o.bearer_token;
     relay.ca_file = o.ca_file;
+    relay.ca_pem = o.ca_pem;
     relay.timeout_ms = o.connect_timeout_ms;
     connection = HttpsRelayChannel::Connect(std::move(relay), &impl_->cancelled,
                                             &connection_error);
   } else {
     TlsConfig tls{o.ca_file, o.certificate_file, o.private_key_file, o.peer_name};
+    tls.ca_pem = o.ca_pem;
     if (sending) {
       impl_->Status("connecting", "Connecting and authenticating the direct peer");
       connection = TlsTransportChannel::Connect(o.host, o.port, tls,

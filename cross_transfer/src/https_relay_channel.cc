@@ -92,6 +92,7 @@ struct HttpsRelayChannel::Impl {
         std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count()));
     TlsConfig tls;
     tls.ca_file = options.ca_file;
+    tls.ca_pem = options.ca_pem;
     tls.peer_name = options.host;
     auto stream = internal::TlsStream::Connect(options.host, options.port, tls,
                                                remaining, cancellation, &error);
