@@ -420,7 +420,7 @@ function renderAccountDevices(devices, currentDeviceId) {
       send.className = 'button subtle device-send';
       send.type = 'button';
       send.dataset.deviceId = device.id;
-      send.setAttribute('aria-label', `发送到 ${device.name}`);
+      send.setAttribute('aria-label', `选择 ${device.name} 作为接收设备`);
       send.addEventListener('click', () => {
         ownRecipientId = device.id;
         updateOwnTransferControls();
@@ -458,6 +458,10 @@ function renderAccountState(next) {
       next.devices.filter(device => device && typeof device.id === 'string') : [];
   devices.sort((a, b) => Number(b.id === next.deviceId) - Number(a.id === next.deviceId) ||
       Number(Boolean(b.online)) - Number(Boolean(a.online)));
+  if (!ownRecipientDevice()) {
+    ownRecipientId = devices.find(device =>
+      device.id !== next.deviceId && device.online)?.id || '';
+  }
   renderAccountDevices(devices, next.deviceId);
   $('deviceCount').textContent = `${devices.length} 台设备`;
   $('devicesEmpty').hidden = devices.length > 0;
@@ -501,7 +505,7 @@ function updateOwnTransferControls() {
       ownTransferPending || ownTransferState.busy;
   const payloadActive = Boolean(ownTransferState.job?.active);
   $('ownRecipient').textContent = recipient ?
-      `发送到：${recipient.displayName || '未命名设备'}` : '请在上方选择一台在线设备。';
+      `发送到：${recipient.displayName || '未命名设备'}` : '暂无在线的其他设备。';
   $('ownText').disabled = locked;
   const textBytes = new TextEncoder().encode($('ownText').value).length;
   $('ownTextCount').textContent = textBytes ? `${textBytes.toLocaleString()} / 16,384 字节` : '最多 16 KB';
@@ -517,23 +521,21 @@ function updateOwnTransferControls() {
   $('ownCancelJob').hidden = !payloadActive;
   for (const button of $('deviceList').querySelectorAll('.device-send')) {
     const selected = button.dataset.deviceId === ownRecipientId;
-    button.textContent = selected ? '已选择' : '发送';
+    button.textContent = selected ? '已选择' : '选择';
     button.setAttribute('aria-pressed', String(selected));
     button.disabled = locked;
   }
   for (const button of $('ownTransferList').querySelectorAll('[data-transfer-action]')) {
-    button.disabled = locked || (payloadActive && button.dataset.payloadAccept === 'true');
+    button.disabled = locked;
   }
 }
 
 function makeTransferAction(label, action, transfer) {
   const button = document.createElement('button');
   button.type = 'button';
-  button.className = action === 'accept' ? 'button primary' : 'button subtle';
+  button.className = 'button subtle';
   button.textContent = label;
   button.dataset.transferAction = action;
-  button.dataset.payloadAccept = String(action === 'accept' &&
-      (transfer.kind === 'file' || transfer.payloadMode === 'stream'));
   button.addEventListener('click', () => void mutateOwnTransfer(
       'ownTransferRespond', {id: transfer.id, action}));
   return button;
@@ -571,7 +573,7 @@ function renderOwnTransferState(next) {
         (incoming ? transfer.senderName : transfer.receiverName) || '另一台设备'}`;
       const status = document.createElement('span');
       status.className = 'own-transfer-status';
-      status.textContent = transfer.status === 'pending' && incoming ? '待你接收' :
+      status.textContent = transfer.status === 'pending' && incoming ? '等待自动接收' :
           invitationLabels.get(transfer.status) || '正在更新';
       heading.append(title, status);
       const content = document.createElement('p');
@@ -588,8 +590,7 @@ function renderOwnTransferState(next) {
       const actions = document.createElement('div');
       actions.className = 'own-transfer-item-actions';
       if (transfer.status === 'pending' && incoming) {
-        actions.append(makeTransferAction('接受', 'accept', transfer),
-            makeTransferAction('拒绝', 'reject', transfer));
+        actions.append(makeTransferAction('拒绝', 'reject', transfer));
       } else if (transfer.status === 'accepted' && incoming &&
           (transfer.kind === 'file' || transfer.payloadMode === 'stream') &&
           !(next.job.active && next.job.transferId === transfer.id)) {

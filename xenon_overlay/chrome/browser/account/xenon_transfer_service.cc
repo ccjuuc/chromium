@@ -1290,12 +1290,36 @@ void XenonTransferService::OnSignals(uint64_t generation,
     }
     acknowledgements.Append(*id);
   }
+  // Apply the whole batch first so a cancellation in the same poll wins over
+  // its offer. Pending incoming tasks share the existing single-transfer slot.
+  AcceptNextIncomingTransfer();
   PersistLocalTasks();
   // Consume only after the local transition and dedup key have reached disk.
   // A failed or lost ACK is harmless: the next poll acknowledges it again.
   profile_->GetPrefs()->CommitPendingWrite(base::BindOnce(
       &XenonTransferService::AcknowledgeSignals, weak_factory_.GetWeakPtr(),
       generation_, std::move(acknowledgements), std::move(callback)));
+}
+
+void XenonTransferService::AcceptNextIncomingTransfer() {
+  if (operation_busy_ || HasFileWork() || signal_outbox_.size() >= 128) {
+    return;
+  }
+  const auto now = base::Time::Now().InSecondsFSinceUnixEpoch();
+  const base::DictValue* next = nullptr;
+  for (const auto [id, value] : local_tasks_) {
+    const auto& task = value.GetDict();
+    if (*task.FindString("receiverDeviceId") == device_id_ &&
+        *task.FindString("status") == "pending" &&
+        *task.FindDouble("expiresAt") > now &&
+        (!next || *task.FindDouble("createdAt") <
+                      *next->FindDouble("createdAt"))) {
+      next = &task;
+    }
+  }
+  if (next) {
+    Respond(*next->FindString("id"), "accept", {});
+  }
 }
 
 void XenonTransferService::AcknowledgeSignals(uint64_t generation,
@@ -1816,9 +1840,12 @@ void XenonTransferService::OnJobPrepared(uint64_t generation,
   }
   job_ = prepared.job;
   job_running_ = true;
+  // WebRTC's synchronous channel API waits on its signaling thread during
+  // initialization, sends and teardown. MayBlock alone does not permit this.
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE,
-      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
+      {base::MayBlock(), base::WithBaseSyncPrimitives(),
+       base::TaskPriority::USER_VISIBLE,
        base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
       base::BindOnce(
           [](PreparedJob prepared, bool text_receiver) {

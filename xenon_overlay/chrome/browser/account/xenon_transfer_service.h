@@ -92,6 +92,7 @@ class XenonTransferService final : public base::SupportsUserData::Data {
                 std::string error,
                 bool notify_peer = true);
   void ApplySignal(const base::DictValue& signal);
+  void AcceptNextIncomingTransfer();
   void QueueSignal(const std::string& id, std::string type);
   void PumpSignalOutbox(bool retry_now = false);
   void OnOutboxPersisted(uint64_t generation, uint64_t revision);

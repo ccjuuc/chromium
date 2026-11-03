@@ -8,7 +8,7 @@
 // The result file records only the generated username/account ID so an operator
 // can remove that account from the server after this test; no password/token is
 // printed or written by this script. Native profile preferences are deleted.
-// --with-transfers also tests text acceptance, rejection and cancellation.
+// --with-transfers also tests automatic text reception without UI acceptance.
 // --with-file additionally opens a visible native chooser for operator-driven
 // selection, then verifies a real 1 MiB file transfer and its SHA-256.
 // --expect-transport=direct|relay also enables text tests and checks that both
@@ -270,23 +270,6 @@ const overallTimeout = setTimeout(() => {
   for (const browser of browsers) browser.child.kill();
 }, (withFile ? 600000 : 240000) + freshDirectRuns * 180000);
 
-async function waitTransfer(browser, id, expected, timeoutMs = 40000) {
-  const deadline = Date.now() + timeoutMs;
-  let nextProgress = Date.now() + 10000;
-  while (Date.now() < deadline) {
-    // Match the page's passive polling; Refresh explicitly retries finalization.
-    const state = await browser.transfer('ownTransferGetState');
-    const transfer = state.transfers.find(item => item.id === id);
-    if (transfer && expected.includes(transfer.status)) return {state, transfer};
-    if (Date.now() >= nextProgress) {
-      console.log(`WAIT: ${step}; invitation ${transfer?.status || 'not yet visible'}`);
-      nextProgress = Date.now() + 10000;
-    }
-    await new Promise(resolve => setTimeout(resolve, 350));
-  }
-  throw new Error(`Transfer did not reach ${expected.join('/')} within ${timeoutMs / 1000} seconds.`);
-}
-
 async function sendText(first, deviceA, deviceB, text) {
   const state = await first.transfer('ownTransferSendText', {deviceId: deviceB, text});
   assert.equal(state.error || '', '', 'Native text send failed.');
@@ -353,10 +336,6 @@ async function runTransfers(first, second, deviceA, deviceB, receiveDirectory) {
     const smallText = `小消息 👋 ${randomBytes(4).toString('hex')}`;
     assert.ok(Buffer.byteLength(smallText, 'utf8') < 1024);
     const smallId = await sendText(first, deviceA, deviceB, smallText);
-    const smallPending = await waitTransfer(second, smallId, ['pending']);
-    assert.equal(smallPending.transfer.text, '', 'Small text must not arrive in the invitation.');
-    const smallAccepted = await second.transfer('ownTransferRespond', {id: smallId, action: 'accept'});
-    assert.equal(smallAccepted.error || '', '', 'Receiver could not accept small text.');
     const smallReceived = await waitPayload(first, second, smallId, 'small_text', expectedSmallTransport);
     assert.equal(smallReceived.receiverRecord.text, smallText, 'Small text changed in transit.');
     assert.equal(smallReceived.senderRecord.text, smallText);
@@ -372,19 +351,16 @@ async function runTransfers(first, second, deviceA, deviceB, receiveDirectory) {
   const unicodeText = expectedTransport === 'direct' ?
       unicodeSample.repeat(Math.ceil(1024 / Buffer.byteLength(unicodeSample, 'utf8'))) : unicodeSample;
   const textId = await sendText(first, deviceA, deviceB, unicodeText);
-  const pending = await waitTransfer(second, textId, ['pending']);
-  assert.equal(pending.transfer.senderDeviceId, deviceA);
-  assert.equal(pending.transfer.receiverDeviceId, deviceB);
-  assert.equal(pending.transfer.payloadMode, 'stream');
-  assert.equal(pending.transfer.text, '', 'Text content must not arrive in the invitation.');
-  const accepted = await second.transfer('ownTransferRespond', {id: textId, action: 'accept'});
-  assert.equal(accepted.error || '', '', 'Receiver could not accept text.');
   const received = await waitPayload(first, second, textId, 'text');
+  assert.equal(received.receiverRecord.senderDeviceId, deviceA);
+  assert.equal(received.receiverRecord.receiverDeviceId, deviceB);
+  assert.equal(received.receiverRecord.payloadMode, 'stream');
   assert.equal(received.receiverRecord.text, unicodeText, 'Unicode text changed in transit.');
   assert.equal(received.senderRecord.text, unicodeText);
   assert.equal(received.receiverState.job.savedPath || '', '',
       'A text transfer must not expose its temporary payload path.');
   checkpoint('native_unicode_text_received');
+  checkpoint('native_text_received_without_ui_acceptance');
 
   if (expectedTransport === 'direct') {
     for (const reverse of [false, true]) {
@@ -395,8 +371,6 @@ async function runTransfers(first, second, deviceA, deviceB, receiveDirectory) {
       assert.ok(Buffer.byteLength(text, 'utf8') < 1024);
       const id = await sendText(sender, reverse ? deviceB : deviceA,
           reverse ? deviceA : deviceB, text);
-      await waitTransfer(receiver, id, ['pending']);
-      await receiver.transfer('ownTransferRespond', {id, action: 'accept'});
       const received = await waitPayload(sender, receiver, id,
           reverse ? 'reused_reverse_text' : 'reused_small_text', 'direct');
       assert.equal(received.receiverRecord.text, text);
@@ -411,31 +385,15 @@ async function runTransfers(first, second, deviceA, deviceB, receiveDirectory) {
     const hostText = `清空连接缓存后的小消息 ${randomBytes(4).toString('hex')}`;
     assert.ok(Buffer.byteLength(hostText, 'utf8') < 1024);
     const hostId = await sendText(first, deviceA, deviceB, hostText);
-    await waitTransfer(second, hostId, ['pending']);
-    await second.transfer('ownTransferRespond', {id: hostId, action: 'accept'});
     const hostReceived = await waitPayload(first, second, hostId, 'text_without_stun', 'direct');
     assert.equal(hostReceived.receiverRecord.text, hostText);
     checkpoint('native_stun_optional');
     checkpoint('native_small_text_prefers_direct_after_cache_clear');
   }
 
-  step = 'receiver rejects a text invitation';
-  const rejectId = await sendText(first, deviceA, deviceB,
-      `reject this test ${randomBytes(4).toString('hex')}`);
-  await waitTransfer(second, rejectId, ['pending']);
-  const rejected = await second.transfer('ownTransferRespond', {id: rejectId, action: 'reject'});
-  assert.equal(rejected.error || '', '', 'Receiver rejection failed.');
-  await waitTransfer(first, rejectId, ['rejected']);
-  checkpoint('native_receiver_rejects_invitation');
-
-  step = 'sender cancels a pending invitation';
-  const cancelId = await sendText(first, deviceA, deviceB,
-      `cancel this test ${randomBytes(4).toString('hex')}`);
-  await waitTransfer(second, cancelId, ['pending']);
-  const cancelled = await first.transfer('ownTransferRespond', {id: cancelId, action: 'cancel'});
-  assert.equal(cancelled.error || '', '', 'Sender cancellation failed.');
-  await waitTransfer(second, cancelId, ['cancelled']);
-  checkpoint('native_sender_cancels_invitation');
+  // Pending rejection/cancellation is covered by service tests that hold the
+  // receive slot busy. An idle receiver now accepts automatically, so racing
+  // a UI response against polling would make this integration test flaky.
 
   if (!withFile) return;
   step = 'native file selection';
@@ -464,7 +422,7 @@ async function runTransfers(first, second, deviceA, deviceB, receiveDirectory) {
   assert.equal(selectedFile.size, fileContents.length, 'Selected file has the wrong size.');
   checkpoint('native_file_picker_selected');
 
-  step = 'native file invitation and acceptance';
+  step = 'native file invitation and automatic reception';
   const offered = await first.transfer('ownTransferSendFile', {deviceId: deviceB});
   assert.equal(offered.error || '', '', 'Native file send failed.');
   const fileTransfer = offered.transfers.find(item => item.kind === 'file' &&
@@ -472,14 +430,10 @@ async function runTransfers(first, second, deviceA, deviceB, receiveDirectory) {
       item.fileName === path.basename(sourcePath));
   assert.ok(fileTransfer, 'File invitation was not returned.');
   assert.equal(fileTransfer.fileSize, fileContents.length);
-  await waitTransfer(second, fileTransfer.id, ['pending']);
-  const fileAccepted = await second.transfer('ownTransferRespond',
-      {id: fileTransfer.id, action: 'accept'});
-  assert.equal(fileAccepted.error || '', '', 'Receiver could not accept the file.');
-  checkpoint('native_file_invitation_accepted');
 
   step = 'native file transfer and SHA-256 verification';
   const {receiverState} = await waitPayload(first, second, fileTransfer.id, 'file');
+  checkpoint('native_file_received_without_ui_acceptance');
   const savedPath = receiverState.job.savedPath;
   assert.equal(typeof savedPath, 'string', 'The receiver did not report a saved file.');
   const relative = path.relative(receiveDirectory, savedPath);
@@ -513,9 +467,6 @@ async function runFreshDirectTransfers(first, second, deviceA, deviceB) {
     const id = await sendText(first, deviceA, deviceB, text);
     run.transferId = id;
     writeReport();
-    await waitTransfer(second, id, ['pending']);
-    const accepted = await second.transfer('ownTransferRespond', {id, action: 'accept'});
-    assert.equal(accepted.error || '', '', 'Receiver could not accept fresh direct text.');
     const kind = `fresh_direct_${String(round).padStart(3, '0')}`;
     const received = await waitPayload(first, second, id, kind, 'direct');
     assert.equal(received.senderRecord.text, text);
@@ -669,8 +620,6 @@ async function runScenario() {
     if (expectedTransport === 'direct') {
       const text = `本地直连偏好 ${randomBytes(4).toString('hex')}`;
       const id = await sendText(first, deviceA, deviceB, text);
-      await waitTransfer(second, id, ['pending']);
-      await second.transfer('ownTransferRespond', {id, action: 'accept'});
       const received = await waitPayload(first, second, id,
           'small_text_with_persisted_direct_preference', 'direct');
       assert.equal(received.receiverRecord.text, text);

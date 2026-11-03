@@ -31,10 +31,13 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "xenon_overlay/chrome/browser/xenon_prefs.h"
 
-// Inject only core outcomes and process restarts. Messages and acknowledgements
-// exercise the public service and account runner.
+// Inject busy state, core outcomes and process restarts. Messages and
+// acknowledgements exercise the public service and account runner.
 class XenonTransferServiceTestPeer {
  public:
+  static void SetOperationBusy(XenonTransferService* service, bool busy) {
+    service->operation_busy_ = busy;
+  }
   static void TrackRunningTask(XenonTransferService* service,
                                const std::string& id) {
     const auto* task = service->FindInvitation(id);
@@ -276,6 +279,16 @@ class FakeMailbox {
         ++exchange_requests;
         EXPECT_TRUE(body.FindDict("payload"));
         channel_exchanges.push_back(body.Clone());
+        if (relay_after_offer &&
+            body.FindDict("payload")->FindDict("description")) {
+          exchange_peer =
+              base::DictValue()
+                  .Set("sequence", 1)
+                  .Set("payload", base::DictValue()
+                                      .Set("route", "relay")
+                                      .Set("description", base::Value())
+                                      .Set("candidates", base::ListValue()));
+        }
         return {200,
                 base::DictValue()
                     .Set("peer", exchange_peer.empty()
@@ -325,6 +338,7 @@ class FakeMailbox {
   bool lose_publish_response = false;
   bool lose_ack_response = false;
   bool fail_polls = false;
+  bool relay_after_offer = false;
 
  private:
   std::mutex mutex_;
@@ -430,9 +444,12 @@ class XenonTransferServiceTest : public testing::Test {
         .Set("payload", std::move(payload));
   }
   void ReceiveOffer(XenonTransferService* service) {
+    // Keep the offer pending while testing explicit state transitions below.
+    XenonTransferServiceTestPeer::SetOperationBusy(service, true);
     server_.Queue(Signal(kMessageId, "offer"));
     EXPECT_EQ(Status(Refresh(service), kTaskId), "pending");
     task_environment_.RunUntilIdle();
+    XenonTransferServiceTestPeer::SetOperationBusy(service, false);
   }
   void PeerChoosesRelay() {
     server_.exchange_peer =
@@ -495,6 +512,44 @@ TEST_F(XenonTransferServiceTest,
       base::WriteJson(server_.publications.front())->find(private_directory),
       std::string::npos);
   EXPECT_EQ(server_.relay_requests, 0);
+}
+
+TEST_F(XenonTransferServiceTest, FileSendInitializesWebRtcOnWorker) {
+  auto* service = LoggedInService();
+  base::ScopedTempDir directory;
+  ASSERT_TRUE(directory.CreateUniqueTempDir());
+  const auto source = directory.GetPath().AppendASCII("direct.bin");
+  ASSERT_TRUE(base::WriteFile(source, std::string(1024 * 1024, 'x')));
+
+  // Switch to the failing test relay only after a real SDP offer is generated.
+  // This exercises WebRTC initialization and teardown on the service's worker
+  // without an external peer or a negotiation timeout.
+  server_.relay_after_offer = true;
+  base::test::TestFuture<base::DictValue> sent;
+  service->SendFile(kOtherDevice, source, sent.GetCallback());
+  const auto state = sent.Take();
+  ASSERT_TRUE(state.FindString("error")->empty());
+  const auto id = FirstTaskId(state);
+  task_environment_.RunUntilIdle();
+  server_.Queue(Signal(kMessageId, "accept", id));
+  Refresh(service);
+  task_environment_.RunUntilIdle();
+
+  bool offered = false;
+  for (const auto& exchange : server_.channel_exchanges) {
+    const auto* description =
+        exchange.FindDict("payload")->FindDict("description");
+    if (description) {
+      EXPECT_EQ(*description->FindString("type"), "offer");
+      EXPECT_FALSE(description->FindString("sdp")->empty());
+      offered = true;
+    }
+  }
+  EXPECT_TRUE(offered);
+  EXPECT_EQ(server_.relay_requests, 1);
+  EXPECT_EQ(server_.channel_releases, 1);
+  EXPECT_EQ(Status(service->GetState(), id), "failed");
+  EXPECT_FALSE(service->GetState().FindDict("job")->FindBool("active").value());
 }
 
 TEST_F(XenonTransferServiceTest, TaskAndOutboxPersistBeforePublishResponse) {
@@ -593,6 +648,7 @@ TEST_F(XenonTransferServiceTest, CannotAcceptAnAlreadyExpiredIncomingOffer) {
 
 TEST_F(XenonTransferServiceTest, DelayedOfferKeepsSendersOriginalDeadline) {
   auto* service = LoggedInService();
+  XenonTransferServiceTestPeer::SetOperationBusy(service, true);
   auto signal = Signal(kMessageId, "offer");
   const auto now = base::Time::Now();
   const double created = (now - base::Minutes(4)).InSecondsFSinceUnixEpoch();
@@ -760,6 +816,7 @@ TEST_F(XenonTransferServiceTest, PeerAcceptanceCanEnableDirectForSmallPayload) {
 
 TEST_F(XenonTransferServiceTest, IncomingPeerPreferenceSurvivesTaskReload) {
   auto* service = LoggedInService();
+  XenonTransferServiceTestPeer::SetOperationBusy(service, true);
   auto signal = Signal(kMessageId, "offer");
   signal.FindDict("payload")->FindDict("offer")->Set("preferDirect", true);
   server_.Queue(std::move(signal));
@@ -913,6 +970,7 @@ TEST_F(XenonTransferServiceTest, LateOfferRejectionCannotOverwritePeerConsent) {
 TEST_F(XenonTransferServiceTest,
        ReceivedTaskPersistsBeforeAckAndRedeliveryIsIdempotent) {
   auto* service = LoggedInService();
+  XenonTransferServiceTestPeer::SetOperationBusy(service, true);
   server_.Queue(Signal(kMessageId, "offer"));
   server_.ack_failures = 1;
   base::test::TestFuture<void> started;
@@ -960,8 +1018,85 @@ TEST_F(XenonTransferServiceTest, LostAckResponseDoesNotLoseLocalHistory) {
   ReceiveOffer(service);
   EXPECT_EQ(server_.ack_requests, 1);
   XenonTransferServiceTestPeer::ReloadSession(service);
-  EXPECT_EQ(Status(Refresh(service), kTaskId), "pending");
+  Refresh(service);
+  task_environment_.RunUntilIdle();
+  // The persisted pending offer is automatically received after restart,
+  // even though the mailbox already removed the acknowledged message.
+  EXPECT_EQ(Status(service->GetState(), kTaskId), "failed");
   EXPECT_EQ(server_.ack_requests, 1);
+  EXPECT_EQ(server_.relay_requests, 1);
+}
+
+TEST_F(XenonTransferServiceTest, AutomaticallyReceivesFilesAndTextOnce) {
+  auto* service = LoggedInService();
+  int attempts = 0;
+  for (const bool text : {false, true}) {
+    SCOPED_TRACE(text);
+    const std::string id = text ? kSecondTaskId : kTaskId;
+    auto signal = Signal(text ? kSecondMessageId : kMessageId, "offer", id);
+    if (text) {
+      auto* offer = signal.FindDict("payload")->FindDict("offer");
+      offer->Set("kind", "text");
+      offer->Set("fileName", "message.txt");
+    }
+    server_.Queue(std::move(signal));
+    Refresh(service);
+    task_environment_.RunUntilIdle();
+    // A real receive job reaches the test relay without a UI accept action.
+    // The unavailable relay fails it once; polling must not restart it.
+    EXPECT_EQ(server_.relay_requests, ++attempts);
+    EXPECT_EQ(Status(service->GetState(), id), "failed");
+    ASSERT_FALSE(server_.releases.empty());
+    EXPECT_EQ(*server_.releases.back().FindString("role"), "receiver");
+    Refresh(service);
+    task_environment_.FastForwardBy(base::Seconds(4));
+    EXPECT_EQ(server_.relay_requests, attempts);
+  }
+}
+
+TEST_F(XenonTransferServiceTest,
+       AutomaticReceiveWaitsForSlotAndUsesArrivalOrder) {
+  auto* service = LoggedInService();
+  const auto sending = FirstTaskId(SendText(service));
+  task_environment_.RunUntilIdle();
+  auto older = Signal(kSecondMessageId, "offer", kSecondTaskId);
+  older.FindDict("payload")->FindDict("offer")->Set(
+      "createdAt", (base::Time::Now() - base::Seconds(1))
+                       .InSecondsFSinceUnixEpoch());
+  // Keep the offer lifetime valid while making its creation precede the
+  // first task in map order and the first message in the mailbox batch.
+  older.FindDict("payload")->FindDict("offer")->Set(
+      "expiresAt", (base::Time::Now() + base::Minutes(4))
+                       .InSecondsFSinceUnixEpoch());
+  server_.Queue(Signal(kMessageId, "offer"));
+  server_.Queue(std::move(older));
+  auto state = Refresh(service);
+  EXPECT_EQ(Status(state, kTaskId), "pending");
+  EXPECT_EQ(Status(state, kSecondTaskId), "pending");
+  EXPECT_EQ(server_.relay_requests, 0);
+
+  XenonTransferServiceTestPeer::Complete(service, sending);
+  Refresh(service);
+  task_environment_.RunUntilIdle();
+  state = service->GetState();
+  EXPECT_EQ(Status(state, kSecondTaskId), "failed");
+  EXPECT_EQ(Status(state, kTaskId), "pending");
+  EXPECT_EQ(server_.relay_requests, 1);
+  Refresh(service);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(Status(service->GetState(), kTaskId), "failed");
+  EXPECT_EQ(server_.relay_requests, 2);
+}
+
+TEST_F(XenonTransferServiceTest, CancelInSameBatchPreventsAutomaticReceive) {
+  auto* service = LoggedInService();
+  server_.Queue(Signal(kMessageId, "offer"));
+  server_.Queue(Signal(kSecondMessageId, "cancel"));
+  const auto state = Refresh(service);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(Status(state, kTaskId), "cancelled");
+  EXPECT_FALSE(state.FindDict("job")->FindBool("active").value());
+  EXPECT_EQ(PublishedType("accept"), 0);
   EXPECT_EQ(server_.relay_requests, 0);
 }
 
@@ -1165,16 +1300,22 @@ TEST_F(XenonTransferServiceTest,
        RestartPreservesIncomingPendingAndCompletedHistory) {
   auto* service = LoggedInService();
   ReceiveOffer(service);
+  XenonTransferServiceTestPeer::SetOperationBusy(service, true);
   server_.Queue(Signal(kSecondMessageId, "offer", kSecondTaskId));
   Refresh(service);
   XenonTransferServiceTestPeer::TrackRunningTask(service, kSecondTaskId);
   XenonTransferServiceTestPeer::Complete(service, kSecondTaskId);
   XenonTransferServiceTestPeer::ReloadSession(service);
-  const auto state = Refresh(service);
+  const auto state = service->GetState();
   EXPECT_EQ(Status(state, kTaskId), "pending");
   EXPECT_EQ(Status(state, kSecondTaskId), "completed");
   EXPECT_FALSE(state.FindDict("job")->FindBool("active").value());
   EXPECT_EQ(server_.relay_requests, 0);
+  Refresh(service);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(Status(service->GetState(), kTaskId), "failed");
+  EXPECT_EQ(Status(service->GetState(), kSecondTaskId), "completed");
+  EXPECT_EQ(server_.relay_requests, 1);
 }
 
 TEST_F(XenonTransferServiceTest, RestartMarksOutgoingWithoutSourceInterrupted) {

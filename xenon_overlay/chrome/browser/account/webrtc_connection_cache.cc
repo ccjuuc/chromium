@@ -226,9 +226,12 @@ struct WebRtcConnectionCache::Impl
   bool accepting = true;
   bool maintenance_pending = false;
   std::map<std::string, Entry> entries;
+  // Destroying a WebRTC channel waits on its signaling thread before joining
+  // its threads. Cached channels are destroyed on this runner.
   const scoped_refptr<base::SequencedTaskRunner> cleanup_runner =
       base::ThreadPool::CreateSequencedTaskRunner(
-          {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+          {base::MayBlock(), base::WithBaseSyncPrimitives(),
+           base::TaskPriority::BEST_EFFORT,
            base::TaskShutdownBehavior::BLOCK_SHUTDOWN});
 };
 

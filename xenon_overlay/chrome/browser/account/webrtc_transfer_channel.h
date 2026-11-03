@@ -49,6 +49,8 @@ struct WebRtcConnectionOptions {
 // Blocks a worker until ICE/DTLS and the reliable ordered data channel are
 // ready, then commits the direct route through authenticated signaling. A
 // failure leaves the caller free to select the existing HTTPS relay.
+// The calling worker must allow base sync primitives, including when using or
+// destroying the returned channel: WebRTC synchronously calls its own threads.
 std::unique_ptr<cross_transfer::ITransportChannel> ConnectWebRtc(
     const WebRtcConnectionOptions& options,
     const std::atomic<bool>* cancellation,

@@ -361,6 +361,7 @@ try {
   `);
   assert.equal(await run(`$('deviceList').querySelectorAll('.device-send').length`), 1);
   assert.equal(await run(`$('ownTransferPanel').hidden`), false);
+  assert.equal(await run('ownRecipientId'), '2'.repeat(32));
   assert.equal(await run(`$('ownSendText').disabled`), true);
   assert.equal(await run(`!$('ownUseStun').checked && !$('ownUseStun').disabled`), true);
   assert.equal(await run(`$('ownUseStun').labels[0].textContent.includes('使用 STUN')`), true);
@@ -396,7 +397,6 @@ try {
   assert.equal(await run(`ownTransferState.job.active`), true);
   await run(`ownAnswer = {...ownAnswer, job: {active: false}}; renderOwnTransferState(ownAnswer)`);
   await run(`
-    $('deviceList').querySelector('.device-send').click();
     $('ownText').value = 'hello 另一台设备 👋';
     $('ownText').dispatchEvent(new Event('input'));
   `);
@@ -407,6 +407,27 @@ try {
   assert.equal(await run(`$('deviceList').querySelector('.device-send').textContent`), '已选择');
   assert.equal(await run(`$('deviceList').querySelector('.device-send')
       .getAttribute('aria-pressed')`), 'true');
+  // Keep an explicit selection across polls and fall back when it goes offline.
+  await run(`
+    globalThis.originalDevices = structuredClone(accountState.devices);
+    renderAccountState({...accountState, devices: [...originalDevices,
+      {id: '4'.repeat(32), displayName: 'third device', online: true}]});
+  `);
+  assert.equal(await run(`$('deviceList').querySelectorAll('.device-send')[1].textContent`), '选择');
+  await run(`
+    $('deviceList').querySelectorAll('.device-send')[1].click();
+    renderAccountState(structuredClone(accountState));
+  `);
+  assert.equal(await run('ownRecipientId'), '4'.repeat(32));
+  await run(`renderAccountState({...accountState, devices: accountState.devices.map(
+    device => device.id === '4'.repeat(32) ? {...device, online: false} : device)})`);
+  assert.equal(await run('ownRecipientId'), '2'.repeat(32));
+  await run(`renderAccountState({...accountState, devices: originalDevices.map(
+    device => ({...device, online: device.id === accountState.deviceId}))})`);
+  assert.equal(await run('ownRecipientId'), '');
+  assert.equal(await run(`$('ownSendText').disabled`), true);
+  await run('renderAccountState({...accountState, devices: originalDevices})');
+  assert.equal(await run('ownRecipientId'), '2'.repeat(32));
   await run(`$('ownTextForm').requestSubmit()`);
   await until(`!ownTransferPending && calls.some(call => call[0] === 'ownTransferSendText')`);
   assert.deepEqual(await run(`calls.find(call => call[0] === 'ownTransferSendText')`),
@@ -441,24 +462,29 @@ try {
   `);
   assert.equal(await run(`$('ownTransferList').firstElementChild.dataset.transferId`), 'a'.repeat(32));
   assert.equal(await run(`$('ownTransferList').querySelector('.own-transfer-content').textContent`), '文本消息');
-  assert.equal(await run(`$('ownTransferList').querySelectorAll('[data-transfer-action="accept"]').length`), 1);
+  assert.equal(await run(`$('ownTransferList').querySelectorAll('[data-transfer-action="accept"]').length`), 0);
+  assert.match(await run(`$('ownTransferList').firstElementChild.textContent`), /等待自动接收/);
   assert.match(await run(`$('ownTransferList').lastElementChild.textContent`), /传输已中断.*重新发送/);
   assert.equal(await run(`$('ownTransferList').lastElementChild.querySelectorAll('[data-transfer-action="accept"]').length`), 0);
   assert.equal(await run(`$('ownTransferList').lastElementChild.querySelector('[data-transfer-action="cancel"]').disabled`), false);
   await run(`
-    ownAnswer = {...ownAnswer, transfers: [{...incomingText, status: 'completed'}, incomingFile]};
-    $('ownTransferList').querySelector('[data-transfer-action="accept"]').click();
+    ownAnswer = {...ownAnswer, transfers: [{...incomingText, status: 'rejected'}, incomingFile]};
+    $('ownTransferList').querySelector('[data-transfer-action="reject"]').click();
   `);
   await until(`!ownTransferPending && calls.some(call => call[0] === 'ownTransferRespond')`);
   assert.deepEqual(await run(`calls.find(call => call[0] === 'ownTransferRespond')`),
-      ['ownTransferRespond', {id: 'a'.repeat(32), action: 'accept'}]);
+      ['ownTransferRespond', {id: 'a'.repeat(32), action: 'reject'}]);
+  await run(`
+    ownAnswer = {...ownAnswer, transfers: [{...incomingText, status: 'completed'}, incomingFile]};
+    renderOwnTransferState(ownAnswer);
+  `);
   assert.equal(await run(`$('ownTransferList').querySelector('.own-received-text').textContent`),
       '<img src=x onerror="globalThis.ownInjected=true">');
   assert.equal(await run(`$('ownTransferList').querySelectorAll('img,script').length`), 0);
   assert.equal(await run('Boolean(globalThis.ownInjected)'), false);
   assert.match(await run(`$('ownTransferList').textContent`), /复制文本/);
 
-  // Uncertain acceptance keeps the same file reserved and still cancellable.
+  // An active transfer keeps the file slot reserved and remains cancellable.
   await run(`
     ownSelectedFile = {name: 'another.txt', size: 1};
     ownAnswer = {...ownAnswer,
@@ -469,7 +495,7 @@ try {
   `);
   assert.equal(await run(`$('ownJobStatus').textContent`), '正在确认接收结果');
   assert.equal(await run(`$('ownChooseFile').disabled && $('ownSendFile').disabled`), true);
-  assert.equal(await run(`$('ownTransferList').querySelector('[data-payload-accept="true"]').disabled`), true);
+  assert.equal(await run(`$('ownTransferList').querySelectorAll('[data-transfer-action="accept"]').length`), 0);
   assert.equal(await run(`$('ownCancelJob').disabled`), false);
 
   await run(`
@@ -497,7 +523,7 @@ try {
       job: {active: true, transferId: incomingStream.id, kind: 'text',
         state: 'connecting', transport: 'auto', totalBytes: 42, transferredBytes: 0,
         savedPath: '/private/temp/message.txt'}};
-    $('ownTransferList').firstElementChild.querySelector('[data-transfer-action="accept"]').click();
+    renderOwnTransferState(ownAnswer);
   `);
   await until(`!ownTransferPending && ownTransferState.job.active`);
   assert.equal(await run(`$('ownJobTransport').textContent`), '正在选择连接方式');
@@ -505,7 +531,7 @@ try {
   await run(`$('ownText').value = 'next message'; $('ownText').dispatchEvent(new Event('input'))`);
   assert.equal(await run(`$('ownSendText').disabled && $('ownChooseFile').disabled`), true);
   assert.equal(await run(`$('ownTransferList')
-      .querySelector('[data-payload-accept="true"]').disabled`), true);
+      .querySelector('[data-transfer-action="reject"]').disabled`), false);
   await run(`
     ownAnswer = {...ownAnswer, transfers: [{...incomingStream,
       status: 'completed', text: '<b>received through direct TLS</b>'}, incomingFile],
@@ -587,8 +613,9 @@ try {
 
   console.log('PASS: account preview guards, restore/continue, login parameters, ' +
       'registration confirmation, duplicate submit, errors/password clearing, ' +
-      'device ordering, focus retention and XSS safety, refresh/logout, device-targeted text/files, ' +
-      'receive confirmation and interrupted-transfer guidance, streamed text and direct/relay routes, ' +
+      'default device selection, manual selection and offline fallback, focus retention and XSS safety, ' +
+      'refresh/logout, device-targeted text/files, automatic receive and interrupted-transfer guidance, ' +
+      'streamed text and direct/relay routes, ' +
       'transfer progress/cancel, byte limits, ' +
       'stale responses, mobile layout.');
 } finally {
