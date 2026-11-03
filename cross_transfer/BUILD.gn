@@ -9,6 +9,7 @@ config("cross_transfer_public") {
 
 source_set("cross_transfer_core") {
   sources = [
+    "include/cross_transfer/auto_transport.h",
     "include/cross_transfer/borrowed_ptr.h",
     "include/cross_transfer/chunk_bitmap.h",
     "include/cross_transfer/connection_manager.h",
@@ -22,6 +23,7 @@ source_set("cross_transfer_core") {
     "include/cross_transfer/transfer_session.h",
     "include/cross_transfer/transfer_store.h",
     "include/cross_transfer/transport_channel.h",
+    "src/auto_transport.cc",
     "src/chunk_bitmap.cc",
     "src/connection_manager.cc",
     "src/https_relay_channel.cc",

@@ -7,6 +7,8 @@ The service binds only ephemeral loopback ports and uses temporary databases.
 
 import base64
 import concurrent.futures
+import copy
+from contextlib import closing
 import http.client
 import importlib.util
 import json
@@ -122,138 +124,377 @@ class AccountServiceIntegrationTest(unittest.TestCase):
         self.assertEqual(result["device"]["id"], identity)
         return result["device"]
 
-    def transfer_pair(self):
+    def device_pair(self):
         session = self.register()
         sender, receiver = secrets.token_hex(16), secrets.token_hex(16)
-        self.put_device(session["token"], sender, self.device("发送设备"))
-        self.put_device(session["token"], receiver, self.device("接收设备"))
+        self.put_device(session["token"], sender, self.device("sender"))
+        self.put_device(session["token"], receiver, self.device("receiver"))
         return session, sender, receiver
 
-    def invite(self, token, sender, receiver, **overrides):
-        data = {"senderDeviceId": sender, "receiverDeviceId": receiver,
-                "kind": "text", "text": "你好，另一台设备 🌍", "fileName": "", "fileSize": 0}
-        data.update(overrides)
-        return self.api("POST", "/transfers", data, token=token)
+    def signal(self, sender, receiver, payload=None):
+        return {"id": secrets.token_hex(16), "fromDeviceId": sender,
+                "toDeviceId": receiver, "payload": payload if payload is not None else {"hello": "world"}}
 
-    def act(self, token, identity, device, action):
-        return self.api("POST", "/transfers/" + identity + "/" + action,
-                        {"deviceId": device}, token=token)
+    def exchange(self, token, identity, device, peer, role, sequence=0, payload=None):
+        return self.api("POST", "/channels/" + identity + "/exchange", {
+            "deviceId": device, "peerDeviceId": peer, "role": role, "sequence": sequence,
+            "payload": payload if payload is not None else {}}, token=token)
 
-    def test_text_invitation_requires_recipient_confirmation(self):
-        session, sender, receiver = self.transfer_pair()
+    def release(self, token, identity, device, peer, role):
+        return self.api("POST", "/channels/" + identity + "/release", {
+            "deviceId": device, "peerDeviceId": peer, "role": role}, token=token)
+
+    def test_opaque_mailbox_repeated_read_ack_and_send_retry(self):
+        session, sender, receiver = self.device_pair()
         token = session["token"]
-        status, value = self.invite(token, sender, receiver)
+        signal = self.signal(sender, receiver, {"anything": {"type": "unrecognized", "fileName": "private-name"}})
+        status, sent = self.api("POST", "/signals", signal, token=token)
         self.assertEqual(status, 201)
-        invitation = value["transfer"]
-        identity = invitation["id"]
-        self.assertEqual(invitation["status"], "pending")
-        self.assertEqual(invitation["senderName"], "发送设备")
-        self.assertEqual(invitation["receiverName"], "接收设备")
-        listing = self.api("GET", "/devices/" + receiver + "/transfers", token=token)
-        self.assertEqual(listing, (200, {"transfers": [invitation]}))
-        self.assert_error(self.act(token, identity, sender, "accept"), 403, "forbidden")
-        self.assert_error(self.act(token, identity, receiver, "relay"), 409, "transfer_state")
-        status, accepted = self.act(token, identity, receiver, "accept")
-        self.assertEqual(status, 200)
-        self.assertEqual(accepted["transfer"]["status"], "completed")
-        self.assertEqual(accepted["transfer"]["text"], invitation["text"])
-        self.assertEqual(self.act(token, identity, receiver, "accept"), (200, accepted))
-        self.assert_error(self.act(token, identity, sender, "cancel"), 409, "transfer_state")
-        serialized = json.dumps(accepted)
-        self.assertNotIn(token, serialized)
-        self.assertNotIn("sender_session", serialized)
-        self.assertNotIn("bearerToken", serialized)
+        envelope = sent["signal"]
+        self.assertEqual(set(envelope), set(signal) | {"fromName", "toName", "createdAt", "expiresAt"})
+        self.assertEqual(envelope["payload"], signal["payload"])
+        self.assertEqual(self.server.application.channels, {})
+        self.assertEqual((envelope["fromName"], envelope["toName"]), ("sender", "receiver"))
+        self.assertAlmostEqual(envelope["expiresAt"] - envelope["createdAt"], 300)
+        path = "/devices/" + receiver + "/signals"
+        for _ in range(2):
+            self.assertEqual(self.api("GET", path, token=token), (200, {"signals": [envelope]}))
+        self.assertEqual(self.api("POST", "/signals", signal, token=token), (200, sent))
+        # A different mailbox cannot acknowledge this message.
+        self.api("POST", "/devices/" + sender + "/signals/ack", {"messageIds": [signal["id"]]}, token=token)
+        self.assertEqual(len(self.api("GET", path, token=token)[1]["signals"]), 1)
+        self.assertEqual(self.api("POST", path + "/ack", {"messageIds": [signal["id"]]}, token=token),
+                         (200, {"ok": True}))
+        self.assertEqual(self.api("GET", path, token=token), (200, {"signals": []}))
+        self.assertEqual(self.api("POST", "/signals", signal, token=token), (200, sent))
+        self.assertEqual(self.api("GET", path, token=token), (200, {"signals": []}))
+        receipt = self.server.application.receipts[signal["id"]]
+        self.assertNotIn("payload", receipt)
+        self.assertNotIn("private-name", json.dumps(receipt))
+        signal["payload"] = {"changed": True}
+        self.assert_error(self.api("POST", "/signals", signal, token=token), 409, "signal_conflict")
 
-    def test_transfer_permission_checks_hide_other_accounts_and_devices(self):
-        session, sender, receiver = self.transfer_pair()
+    def test_signal_permissions_shape_and_payload_bounds(self):
+        session, sender, receiver = self.device_pair()
         token = session["token"]
-        identity = self.invite(token, sender, receiver)[1]["transfer"]["id"]
-        bob = self.register("bob")
-        other = secrets.token_hex(16)
-        self.put_device(bob["token"], other)
-        self.assert_error(self.invite(bob["token"], other, receiver), 404, "not_found")
-        self.assert_error(self.api("GET", "/devices/" + receiver + "/transfers",
-                                   token=bob["token"]), 404, "not_found")
-        for action in ("accept", "reject", "cancel", "complete", "relay"):
-            self.assert_error(self.act(bob["token"], identity, other, action), 404, "not_found")
-            self.assert_error(self.act(None, identity, receiver, action), 401, "unauthorized")
+        other = self.register("other")
+        signal = self.signal(sender, receiver)
+        self.assert_error(self.api("POST", "/signals", signal, token=other["token"]), 404, "not_found")
+        self.assert_error(self.api("GET", "/devices/" + receiver + "/signals", token=other["token"]), 404, "not_found")
+        self.assert_error(self.api("POST", "/devices/" + receiver + "/signals/ack",
+                                   {"messageIds": []}, token=other["token"]), 404, "not_found")
+        for fields in ({"id": "bad"}, {"toDeviceId": sender}, {"payload": []},
+                       {"taskId": "a" * 32}, {"type": "offer"}):
+            self.assert_error(self.api("POST", "/signals", {**signal, **fields}, token=token), 400, "invalid_request")
+        for ids in (["bad"], [signal["id"]] * 65, "not-a-list"):
+            self.assert_error(self.api("POST", "/devices/" + receiver + "/signals/ack",
+                                       {"messageIds": ids}, token=token), 400, "invalid_request")
+        signal["payload"] = {"x": "x" * (account_server.MAX_SIGNAL_PAYLOAD - 8)}
+        self.assertEqual(self.api("POST", "/signals", signal, token=token)[0], 201)
+        signal["id"] = secrets.token_hex(16)
+        signal["payload"]["x"] += "x"
+        self.assert_error(self.api("POST", "/signals", signal, token=token), 413, "invalid_request")
+
+    def test_wide_payloads_are_retained_as_bounded_serialized_bytes(self):
+        session, sender, receiver = self.device_pair()
+        token, app = session["token"], self.server.application
+        payload = {"nodes": [{} for _ in range(5457)]}
+        encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(len(encoded), 16382)
+        signal = self.signal(sender, receiver, payload)
+        self.assertEqual(self.api("POST", "/signals", signal, token=token)[1]["signal"]["payload"], payload)
+        retained = app.mailboxes[receiver][signal["id"]]["payload"]
+        self.assertIsInstance(retained, bytes)
+        self.assertEqual(retained, encoded)
+        # The former parsed tree occupied almost 400 KiB for this 16 KiB JSON.
+        self.assertLess(sys.getsizeof(retained), len(encoded) + 64)
+        self.assertEqual(self.api("GET", "/devices/" + receiver + "/signals", token=token)[1]
+                         ["signals"][0]["payload"], payload)
+        identity = secrets.token_hex(16)
+        wide = {"nodes": [{} for _ in range(38225)]}
+        body = {"deviceId": sender, "peerDeviceId": receiver, "role": "sender",
+                "sequence": 0, "payload": wide}
+        self.assertEqual(self.api("POST", "/channels/" + identity + "/exchange", token=token,
+                                 raw_body=json.dumps(body, separators=(",", ":")).encode("utf-8"))[0], 200)
+        retained = app.channels[identity]["slots"]["sender"]["payload"]
+        self.assertIsInstance(retained, bytes)
+        self.assertEqual(len(retained), 114686)
+        self.assertLess(sys.getsizeof(retained), len(retained) + 64)
+        self.assertEqual(self.exchange(token, identity, receiver, sender, "receiver")[1]["peer"]["payload"], wide)
+        self.assertEqual(app.opaque_bytes, 16382 + 114686 + 2)
+
+    def test_payload_budget_retries_ack_replacement_release_and_expiry(self):
+        session, sender, receiver = self.device_pair()
+        token, app = session["token"], self.server.application
+        identity = secrets.token_hex(16)
+        signal = self.signal(sender, receiver, {"a": 1, "b": 2})
+        size = len(b'{"a":1,"b":2}')
+        with mock.patch.object(account_server, "MAX_OPAQUE_BYTES", size * 2):
+            self.assertEqual(self.api("POST", "/signals", signal, token=token)[0], 201)
+            self.assertEqual(self.exchange(token, identity, sender, receiver, "sender", payload=signal["payload"])[0], 200)
+            self.assertEqual(app.opaque_bytes, size * 2)
+            # Canonically identical retries do not consume another reservation.
+            signal["payload"] = {"b": 2, "a": 1}
+            self.assertEqual(self.api("POST", "/signals", signal, token=token)[0], 200)
+            self.assertEqual(self.exchange(token, identity, sender, receiver, "sender", payload=signal["payload"])[0], 200)
+            self.assertEqual(app.opaque_bytes, size * 2)
+            self.assert_error(self.api("POST", "/signals", self.signal(sender, receiver), token=token), 429, "limit_exceeded")
+            rejected = secrets.token_hex(16)
+            self.assert_error(self.exchange(token, rejected, sender, receiver, "sender"), 429, "limit_exceeded")
+            self.assertNotIn(rejected, app.channels)
+            self.assert_error(self.exchange(token, identity, sender, receiver, "sender", 1, {"x": "x" * 20}),
+                              429, "limit_exceeded")
+            self.assertEqual(app.channels[identity]["slots"]["sender"]["sequence"], 0)
+            ack = "/devices/" + receiver + "/signals/ack"
+            self.assertEqual(self.api("POST", ack, {"messageIds": [signal["id"]] * 2}, token=token)[0], 200)
+            self.assertEqual(app.opaque_bytes, size)
+            self.assertEqual(self.exchange(token, identity, sender, receiver, "sender", 1, {"x": "x" * 15})[0], 200)
+            self.assertEqual(app.opaque_bytes, 23)
+            self.assertEqual(self.exchange(token, identity, sender, receiver, "sender", 2, {})[0], 200)
+            self.assertEqual(app.opaque_bytes, 2)
+            self.assertEqual(self.exchange(token, identity, sender, receiver, "sender", 1, {"x": "x" * 40})[0], 200)
+            self.assertEqual(app.opaque_bytes, 2)
+            signal = self.signal(sender, receiver, {"a": 1, "b": 2})
+            self.assertEqual(self.api("POST", "/signals", signal, token=token)[0], 201)
+            self.assertEqual(self.api("DELETE", "/channels/" + identity, token=token)[0], 200)
+            self.assertEqual(app.opaque_bytes, size)
+            with app.signal_lock:
+                app.receipts[signal["id"]]["expiresAt"] = time.time() - 1
+            self.server.service_actions()
+            self.assertEqual(app.opaque_bytes, 0)
+
+    def test_payload_depth_and_non_json_values_are_rejected_at_http_boundary(self):
+        session, sender, receiver = self.device_pair()
+        token = session["token"]
+        nested = {}
+        for _ in range(account_server.MAX_PAYLOAD_DEPTH + 1):
+            nested = {"child": nested}
+        # A null sibling cannot bypass the depth walk.
+        self.assert_error(self.api("POST", "/signals", self.signal(sender, receiver, {"null": None, "deep": nested}),
+                                   token=token), 400, "invalid_request")
+        self.assert_error(self.exchange(token, secrets.token_hex(16), sender, receiver, "sender", payload=nested),
+                          400, "invalid_request")
+        envelope = self.signal(sender, receiver)
+        prefix = json.dumps({key: value for key, value in envelope.items() if key != "payload"})[:-1] + ',"payload":'
+        for payload in ('{"x":NaN}', '{"x":1e400}', '{"x":"\\ud800"}', '{"x":1,"x":2}',
+                        '{"x":' + '[' * 1500 + '0' + ']' * 1500 + '}'):
+            self.assert_error(self.api("POST", "/signals", token=token,
+                                       raw_body=(prefix + payload + '}').encode("ascii")), 400, "invalid_request")
+        self.assertEqual(self.server.application.opaque_bytes, 0)
+
+    def test_mailbox_limits_pagination_and_tombstone_expiry(self):
+        session, sender, receiver = self.device_pair()
+        token = session["token"]
+        app = self.server.application
+        signals = [self.signal(sender, receiver) for _ in range(65)]
+        for signal in signals:
+            self.assertEqual(self.api("POST", "/signals", signal, token=token)[0], 201)
+        path = "/devices/" + receiver + "/signals"
+        first = self.api("GET", path, token=token)[1]["signals"]
+        self.assertEqual([item["id"] for item in first], [item["id"] for item in signals[:64]])
+        self.api("POST", path + "/ack", {"messageIds": [item["id"] for item in first]}, token=token)
+        self.assertEqual([item["id"] for item in self.api("GET", path, token=token)[1]["signals"]],
+                         [signals[-1]["id"]])
+        for limit, value in (("MAX_MAILBOX_MESSAGES", 1), ("MAX_PENDING_SIGNALS", 1), ("MAX_SIGNAL_RECEIPTS", 65)):
+            with mock.patch.object(account_server, limit, value):
+                self.assert_error(self.api("POST", "/signals", self.signal(sender, receiver), token=token),
+                                  429, "limit_exceeded")
+                self.assertEqual(self.api("POST", "/signals", signals[-1], token=token)[0], 200)
+        with app.signal_lock:
+            for receipt in app.receipts.values():
+                receipt["expiresAt"] = time.time() - 1
+        self.server.service_actions()
+        self.assertEqual((app.mailboxes, app.receipts), ({}, {}))
+
+    def test_opaque_channel_sequence_retries_stale_updates_and_role_binding(self):
+        session, sender, receiver = self.device_pair()
+        token, identity = session["token"], secrets.token_hex(16)
+        first = {"type": "accept", "route": "arbitrary", "sdp": ["opaque"]}
+        self.assertIsNone(self.exchange(token, identity, sender, receiver, "sender", 2, first)[1]["peer"])
+        reply = self.exchange(token, identity, receiver, sender, "receiver", 0, {"answer": 1})[1]
+        self.assertEqual(reply["peer"], {"sequence": 2, "payload": first})
+        self.assertEqual(self.exchange(token, identity, sender, receiver, "sender", 2, first)[1]["peer"],
+                         {"sequence": 0, "payload": {"answer": 1}})
+        self.assert_error(self.exchange(token, identity, sender, receiver, "sender", 2, {"changed": 1}),
+                          409, "channel_conflict")
+        self.assertEqual(self.exchange(token, identity, sender, receiver, "sender", 1, {"stale": 1})[0], 200)
+        self.assertEqual(self.exchange(token, identity, receiver, sender, "receiver", 0, {"answer": 1})[1]["peer"],
+                         {"sequence": 2, "payload": first})
+        self.assert_error(self.exchange(token, identity, receiver, sender, "sender"), 409, "channel_conflict")
         third = secrets.token_hex(16)
         self.put_device(token, third)
-        self.assert_error(self.act(token, identity, third, "accept"), 404, "not_found")
-        self.assertEqual(self.api("GET", "/devices/" + third + "/transfers", token=token),
-                         (200, {"transfers": []}))
+        self.assert_error(self.exchange(token, identity, sender, third, "sender"), 409, "channel_conflict")
+        self.assertEqual(set(self.server.application.channels[identity]),
+                         {"accountId", "senderDeviceId", "receiverDeviceId", "sessions", "slots", "expiresAt"})
 
-    def test_transfer_metadata_limits_and_file_names(self):
-        session, sender, receiver = self.transfer_pair()
+    def test_channel_session_permissions_limits_and_release(self):
+        session, sender, receiver = self.device_pair()
+        token, identity = session["token"], secrets.token_hex(16)
+        self.exchange(token, identity, sender, receiver, "sender")
+        second = self.api("POST", "/auth/login", {"username": "alice", "password": PASSWORD})[1]["token"]
+        self.assert_error(self.exchange(second, identity, sender, receiver, "sender"), 403, "forbidden")
+        self.assert_error(self.api("DELETE", "/channels/" + identity, token=second), 403, "forbidden")
+        self.assertEqual(self.exchange(second, identity, receiver, sender, "receiver")[0], 200)
+        other = self.register("other")
+        self.assert_error(self.api("DELETE", "/channels/" + identity, token=other["token"]), 404, "not_found")
+        for limit in ("MAX_CHANNELS", "MAX_ACCOUNT_CHANNELS"):
+            with mock.patch.object(account_server, limit, 1):
+                self.assert_error(self.exchange(token, secrets.token_hex(16), sender, receiver, "sender"),
+                                  429, "limit_exceeded")
+        for sequence in (-1, True, "1"):
+            self.assert_error(self.exchange(token, identity, sender, receiver, "sender", sequence), 400, "invalid_request")
+        self.assertEqual(self.api("DELETE", "/channels/" + identity, token=second), (200, {"ok": True}))
+        self.assertEqual(self.server.application.channels, {})
+
+    def test_channel_payload_bounds_and_no_business_lifecycle(self):
+        session, sender, receiver = self.device_pair()
+        token, identity = session["token"], secrets.token_hex(16)
+        payload = {"x": "x" * (account_server.MAX_EXCHANGE_PAYLOAD - 8)}
+        self.assertEqual(self.exchange(token, identity, sender, receiver, "sender", 0, payload)[0], 200)
+        payload["x"] += "x"
+        self.assert_error(self.exchange(token, identity, sender, receiver, "sender", 1, payload), 413, "invalid_request")
+        # Arbitrary signals do not create, accept, cancel or delete channels.
+        before = copy.deepcopy(self.server.application.channels)
+        for value in ("offer", "accept", "reject", "cancel", "complete", "unknown"):
+            signal = self.signal(sender, receiver, {"type": value, "taskId": identity})
+            self.assertEqual(self.api("POST", "/signals", signal, token=token)[0], 201)
+            self.assertEqual(self.server.application.channels, before)
+        with self.server.application.signal_lock:
+            self.server.application.channels[identity]["expiresAt"] = time.time() - 1
+        self.server.service_actions()
+        self.assertEqual(self.server.application.channels, {})
+
+    def test_channel_role_release_retains_peer_snapshots_and_is_idempotent(self):
+        session, sender, receiver = self.device_pair()
+        token, identity, app = session["token"], secrets.token_hex(16), self.server.application
+        payload = {"opaque": "sender snapshot"}
+        self.assertEqual(self.exchange(token, identity, sender, receiver, "sender", payload=payload)[0], 200)
+        bytes_before = app.opaque_bytes
+        for _ in range(2):
+            self.assertEqual(self.release(token, identity, sender, receiver, "sender"), (200, {"ok": True}))
+        self.assertEqual(app.opaque_bytes, bytes_before)
+        self.assertEqual(set(app.channels[identity]["sessions"]), {"sender"})
+        self.server.service_actions()
+        self.assertIn(identity, app.channels)
+        # The late peer must see the original snapshot, including when the
+        # first role finished before this role ever joined.
+        self.assertEqual(self.exchange(token, identity, receiver, sender, "receiver")[1]["peer"],
+                         {"sequence": 0, "payload": payload})
+        self.assertEqual(self.exchange(token, identity, sender, receiver, "sender", payload=payload)[0], 200)
+        self.assertEqual(self.release(token, identity, receiver, sender, "receiver"), (200, {"ok": True}))
+        self.assertNotIn(identity, app.channels)
+        self.assertEqual(app.opaque_bytes, 0)
+        # No release tombstone or new channel is needed once both roles left.
+        self.assert_error(self.release(token, identity, receiver, sender, "receiver"), 404, "not_found")
+        self.assertEqual(app.channels, {})
+
+    def test_channel_role_release_requires_existing_pair_role_and_session(self):
+        session, sender, receiver = self.device_pair()
+        token, identity, app = session["token"], secrets.token_hex(16), self.server.application
+        self.assert_error(self.release(token, identity, sender, receiver, "sender"), 404, "not_found")
+        self.assertEqual(app.channels, {})
+        self.exchange(token, identity, sender, receiver, "sender", payload={"opaque": 1})
+        other_session = self.api("POST", "/auth/login", {"username": "alice", "password": PASSWORD})[1]["token"]
+        other_account = self.register("other")
+        third = secrets.token_hex(16)
+        self.put_device(token, third)
+        before = copy.deepcopy(app.channels)
+        for value, device, peer, role, status, code in (
+                (other_account["token"], sender, receiver, "sender", 404, "not_found"),
+                (other_session, sender, receiver, "sender", 403, "forbidden"),
+                (token, receiver, sender, "receiver", 403, "forbidden"),
+                (token, sender, receiver, "receiver", 409, "channel_conflict"),
+                (token, sender, third, "sender", 409, "channel_conflict"),
+                (token, sender, receiver, "unknown", 400, "invalid_request")):
+            self.assert_error(self.release(value, identity, device, peer, role), status, code)
+        self.assertEqual(app.channels, before)
+        self.exchange(other_session, identity, receiver, sender, "receiver")
+        self.assert_error(self.release(token, identity, receiver, sender, "receiver"), 403, "forbidden")
+        self.assertEqual(self.release(token, identity, sender, receiver, "sender")[0], 200)
+        self.assertEqual(self.release(other_session, identity, receiver, sender, "receiver")[0], 200)
+        self.assertEqual((app.channels, app.opaque_bytes), ({}, 0))
+
+    def test_direct_channel_role_release_reuses_account_capacity(self):
+        session, sender, receiver = self.device_pair()
+        token, app = session["token"], self.server.application
+        # Exceed the real account limit without waiting for the 30-minute TTL.
+        for _ in range(account_server.MAX_ACCOUNT_CHANNELS + 3):
+            identity = secrets.token_hex(16)
+            self.assertEqual(self.exchange(token, identity, sender, receiver, "sender", payload={"route": "direct"})[0], 200)
+            self.assertEqual(self.exchange(token, identity, receiver, sender, "receiver", payload={"route": "direct"})[0], 200)
+            self.assertEqual(self.release(token, identity, sender, receiver, "sender")[0], 200)
+            self.assertEqual(self.release(token, identity, receiver, sender, "receiver")[0], 200)
+            self.assertEqual((app.channels, app.opaque_bytes), ({}, 0))
+
+    def test_logout_and_device_revocation_clean_ephemeral_resources(self):
+        session, sender, receiver = self.device_pair()
         token = session["token"]
-        for bad in ({"senderDeviceId": receiver}, {"text": ""}, {"text": "x" * 16385},
-                    {"text": "\0"}, {"text": 3}, {"fileSize": True}, {"kind": "unknown"},
-                    {"kind": "file", "text": "", "fileName": "../secret", "fileSize": 1},
-                    {"kind": "file", "text": "", "fileName": "C:\\a.txt", "fileSize": 1},
-                    {"kind": "file", "text": "", "fileName": "CON.txt", "fileSize": 1},
-                    {"kind": "file", "text": "", "fileName": "a.txt", "fileSize": -1},
-                    {"kind": "file", "text": "", "fileName": "a.txt", "fileSize": 2**34}):
-            with self.subTest(bad=bad.keys()):
-                self.assert_error(self.invite(token, sender, receiver, **bad), 400, "invalid_request")
-        self.assertEqual(self.invite(token, sender, receiver, text="中" * 5461)[0], 201)
-        status, value = self.invite(token, sender, receiver, kind="file", text="",
-                                    fileName="空文件.txt", fileSize=0)
-        self.assertEqual(status, 201)
-        # Standalone account HTTP tests intentionally have no relay attached.
-        self.assert_error(self.act(token, value["transfer"]["id"], receiver, "accept"),
-                          503, "unavailable")
-
-    def test_text_limit_allows_worst_case_json_escaping(self):
-        session, sender, receiver = self.transfer_pair()
-        text = "<" * account_server.MAX_TEXT_BYTES
-        payload = {"senderDeviceId": sender, "receiverDeviceId": receiver,
-                   "kind": "text", "text": text, "fileName": "", "fileSize": 0}
-        # Chromium escapes '<' to prevent accidental script interpretation.
-        encoded = json.dumps(payload).replace("<", "\\u003C").encode("ascii")
-        self.assertGreater(len(encoded), 64 * 1024)
-        status, value = self.api("POST", "/transfers", raw_body=encoded,
-                                 token=session["token"])
-        self.assertEqual(status, 201)
-        accepted = self.act(session["token"], value["transfer"]["id"], receiver, "accept")
-        self.assertEqual(accepted[1]["transfer"]["text"], text)
-
-    def test_rejection_cancellation_expiry_and_active_limit(self):
-        session, sender, receiver = self.transfer_pair()
-        token = session["token"]
-        identity = self.invite(token, sender, receiver)[1]["transfer"]["id"]
-        rejected = self.act(token, identity, receiver, "reject")
-        self.assertEqual(rejected[1]["transfer"]["status"], "rejected")
-        self.assertEqual(self.act(token, identity, receiver, "reject"), rejected)
-        self.assert_error(self.act(token, identity, receiver, "accept"), 409, "transfer_state")
-        cancelled = self.invite(token, sender, receiver)[1]["transfer"]["id"]
-        self.assertEqual(self.act(token, cancelled, sender, "cancel")[1]["transfer"]["status"], "cancelled")
-        self.assertEqual(self.act(token, cancelled, receiver, "cancel")[0], 200)
-        expiring = self.invite(token, sender, receiver)[1]["transfer"]["id"]
-        with self.server.application.store.connect() as connection:
-            connection.execute("UPDATE transfers SET expires_at=? WHERE id=?", (time.time() - 1, expiring))
-        self.assert_error(self.act(token, expiring, receiver, "accept"), 409, "transfer_state")
-        for _ in range(account_server.MAX_TRANSFERS):
-            self.assertEqual(self.invite(token, sender, receiver)[0], 201)
-        self.assert_error(self.invite(token, sender, receiver), 429, "limit_exceeded")
-        listing = self.api("GET", "/devices/" + receiver + "/transfers", token=token)[1]["transfers"]
-        self.assertEqual(len(listing), 32)
-        self.assertTrue(all(item["status"] == "pending" for item in listing))
-
-    def test_device_revocation_and_logout_cancel_related_transfers(self):
-        session, sender, receiver = self.transfer_pair()
-        token = session["token"]
-        identity = self.invite(token, sender, receiver)[1]["transfer"]["id"]
+        self.api("POST", "/signals", self.signal(sender, receiver), token=token)
+        self.exchange(token, secrets.token_hex(16), sender, receiver, "sender")
         self.assertEqual(self.api("DELETE", "/devices/" + receiver, token=token)[0], 200)
-        listing = self.api("GET", "/devices/" + sender + "/transfers", token=token)[1]["transfers"]
-        self.assertEqual(listing[0]["status"], "cancelled")
+        app = self.server.application
+        self.assertEqual((app.channels, app.mailboxes, app.receipts), ({}, {}, {}))
+        self.assertEqual(app.opaque_bytes, 0)
         self.put_device(token, receiver)
-        self.assert_error(self.act(token, identity, receiver, "accept"), 409, "transfer_state")
-        identity = self.invite(token, sender, receiver)[1]["transfer"]["id"]
-        other_session = self.api("POST", "/auth/login", {"username": "alice", "password": PASSWORD})[1]
+        self.api("POST", "/signals", self.signal(sender, receiver), token=token)
+        self.exchange(token, secrets.token_hex(16), sender, receiver, "sender")
         self.assertEqual(self.api("POST", "/auth/logout", {}, token=token)[0], 200)
-        listing = self.api("GET", "/devices/" + receiver + "/transfers",
-                           token=other_session["token"])[1]["transfers"]
-        self.assertEqual(next(item for item in listing if item["id"] == identity)["status"], "cancelled")
+        self.assertEqual((app.channels, app.mailboxes, app.receipts), ({}, {}, {}))
+        self.assertEqual(app.opaque_bytes, 0)
+
+    def test_schema_v4_drops_transfers_preserves_identity_and_forgets_transport(self):
+        session, sender, receiver = self.device_pair()
+        token = session["token"]
+        self.api("POST", "/signals", self.signal(sender, receiver), token=token)
+        self.exchange(token, secrets.token_hex(16), sender, receiver, "sender")
+        self.stop_server()
+        with closing(account_server.sqlite3.connect(self.database)) as db:
+            db.executescript("""
+                CREATE TABLE transfers (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES accounts(id),
+                    sender_device TEXT NOT NULL REFERENCES devices(id),
+                    receiver_device TEXT NOT NULL REFERENCES devices(id),
+                    sender_name TEXT NOT NULL, receiver_name TEXT NOT NULL,
+                    kind TEXT NOT NULL, text TEXT NOT NULL,
+                    file_name TEXT NOT NULL, file_size INTEGER NOT NULL,
+                    status TEXT NOT NULL, created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL, sender_session TEXT NOT NULL,
+                    receiver_session TEXT NOT NULL DEFAULT '',
+                    payload_mode TEXT NOT NULL DEFAULT 'inline');
+                CREATE INDEX transfers_account ON transfers(account_id, created_at);
+                CREATE INDEX transfers_sender ON transfers(sender_device, status);
+                CREATE INDEX transfers_receiver ON transfers(receiver_device, status);
+                PRAGMA user_version=3;
+            """)
+            with db:
+                db.execute("INSERT INTO transfers VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                           (secrets.token_hex(16), session["account"]["id"], sender, receiver,
+                            "sender", "receiver", "file", "", "discard-history.txt", 12,
+                            "accepted", time.time(), time.time() + 1800,
+                            account_server.hashlib.sha256(token.encode("ascii")).hexdigest(), "", "stream"))
+        self.start_server()
+        self.assertEqual(self.api("GET", "/auth/me", token=token)[1]["account"], session["account"])
+        self.assertEqual(len(self.api("GET", "/devices", token=token)[1]["devices"]), 2)
+        self.assertEqual(self.api("GET", "/devices/" + receiver + "/signals", token=token)[1], {"signals": []})
+        self.assertEqual(self.server.application.channels, {})
+        with self.server.store.connect() as db:
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 4)
+            self.assertEqual({row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")},
+                             {"accounts", "sessions", "devices"})
+        for path in ("/transfers", "/devices/" + receiver + "/transfers",
+                     "/transfers/" + "a" * 32 + "/complete", "/connections/" + "a" * 32 + "/webrtc"):
+            self.assert_error(self.api("GET", path, token=token), 404, "not_found")
+
+    def test_transport_configuration_is_read_only_and_validated(self):
+        for value in (-1, True, 1.5, "1024", 8 * 1024 * 1024 * 1024 + 2):
+            with self.assertRaises(ValueError):
+                account_server.AccountApplication(self.database, direct_min_bytes=value)
+        self.restart_server(direct_min_bytes=1024, stun_urls=["stun:example.com:443"])
+        token = self.register()["token"]
+        self.assertEqual(self.api("GET", "/transport-config", token=token),
+                         (200, {"directMinBytes": 1024, "iceServers": [{"urls": ["stun:example.com:443"]}]}))
+        self.assert_error(self.api("GET", "/transport-config"), 401, "unauthorized")
 
     def test_registration_login_logout_and_independent_sessions(self):
         initial = self.register("Alice")
@@ -275,22 +516,22 @@ class AccountServiceIntegrationTest(unittest.TestCase):
         self.assertEqual(self.api("GET", "/auth/me", token=login["token"])[0], 200)
 
     def test_logout_revokes_device_and_session_together(self):
-        session, sender, receiver = self.transfer_pair()
+        session, sender, receiver = self.device_pair()
         other_session = self.api("POST", "/auth/login", {
             "username": "alice", "password": PASSWORD})[1]
-        # Device-related invitations must be cancelled even if another session
-        # created them, while that independent session remains usable.
-        identity = self.invite(other_session["token"], sender, receiver)[1]["transfer"]["id"]
+        # Revoke resources bound by another session while leaving that session usable.
+        identity = secrets.token_hex(16)
+        self.exchange(other_session["token"], identity, sender, receiver, "sender")
+        self.api("POST", "/signals", self.signal(sender, receiver), token=other_session["token"])
         self.assertEqual(self.api("POST", "/auth/logout", {"deviceId": sender},
                                   token=session["token"]), (200, {"ok": True}))
         self.assert_error(self.api("GET", "/auth/me", token=session["token"]),
                           401, "unauthorized")
         listing = self.api("GET", "/devices", token=other_session["token"])[1]["devices"]
         self.assertEqual([device["id"] for device in listing], [receiver])
-        transfers = self.api("GET", "/devices/" + receiver + "/transfers",
-                             token=other_session["token"])[1]["transfers"]
-        self.assertEqual(next(item for item in transfers if item["id"] == identity)["status"],
-                         "cancelled")
+        self.assertEqual(self.server.application.channels, {})
+        self.assertEqual(self.api("GET", "/devices/" + receiver + "/signals",
+                                  token=other_session["token"])[1], {"signals": []})
 
     def test_logout_device_validation_does_not_revoke_other_accounts(self):
         alice = self.register()

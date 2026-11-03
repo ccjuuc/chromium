@@ -133,6 +133,37 @@ bool LoadTrustAnchors(SSL_CTX* context, const TlsConfig& config) {
   }
 }
 
+bool LoadIdentity(SSL_CTX* context, const TlsConfig& config, bool required) {
+  const bool embedded = !config.certificate_pem.empty() ||
+                        !config.private_key_pem.empty();
+  if (embedded) {
+    if (!config.certificate_file.empty() || !config.private_key_file.empty() ||
+        config.certificate_pem.empty() || config.private_key_pem.empty() ||
+        config.certificate_pem.size() > 8192 || config.private_key_pem.size() > 8192)
+      return false;
+    std::unique_ptr<BIO, decltype(&BIO_free)> certificate_bio(
+        BIO_new_mem_buf(config.certificate_pem.data(),
+                         static_cast<int>(config.certificate_pem.size())), BIO_free);
+    std::unique_ptr<BIO, decltype(&BIO_free)> key_bio(
+        BIO_new_mem_buf(config.private_key_pem.data(),
+                         static_cast<int>(config.private_key_pem.size())), BIO_free);
+    if (!certificate_bio || !key_bio) return false;
+    std::unique_ptr<X509, decltype(&X509_free)> certificate(
+        PEM_read_bio_X509(certificate_bio.get(), nullptr, nullptr, nullptr), X509_free);
+    std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(
+        PEM_read_bio_PrivateKey(key_bio.get(), nullptr, nullptr, nullptr), EVP_PKEY_free);
+    return certificate && key &&
+           SSL_CTX_use_certificate(context, certificate.get()) == 1 &&
+           SSL_CTX_use_PrivateKey(context, key.get()) == 1 &&
+           SSL_CTX_check_private_key(context) == 1;
+  }
+  if (config.certificate_file.empty() != config.private_key_file.empty()) return false;
+  if (config.certificate_file.empty()) return !required;
+  return SSL_CTX_use_certificate_chain_file(context, config.certificate_file.c_str()) == 1 &&
+         SSL_CTX_use_PrivateKey_file(context, config.private_key_file.c_str(), SSL_FILETYPE_PEM) == 1 &&
+         SSL_CTX_check_private_key(context) == 1;
+}
+
 }  // namespace
 
 namespace internal {
@@ -230,12 +261,7 @@ std::unique_ptr<TlsStream> TlsStream::Establish(
                      SSL_VERIFY_PEER | (server ? SSL_VERIFY_FAIL_IF_NO_PEER_CERT : 0),
                      nullptr);
   if (!LoadTrustAnchors(impl->context.get(), config)) return nullptr;
-  if (config.certificate_file.empty() != config.private_key_file.empty()) return nullptr;
-  if (server && config.certificate_file.empty()) return nullptr;
-  if (!config.certificate_file.empty() &&
-      (SSL_CTX_use_certificate_chain_file(impl->context.get(), config.certificate_file.c_str()) != 1 ||
-       SSL_CTX_use_PrivateKey_file(impl->context.get(), config.private_key_file.c_str(), SSL_FILETYPE_PEM) != 1 ||
-       SSL_CTX_check_private_key(impl->context.get()) != 1)) return nullptr;
+  if (!LoadIdentity(impl->context.get(), config, server)) return nullptr;
   impl->ssl.reset(SSL_new(impl->context.get()));
   if (!impl->ssl || !ConfigurePeerName(impl->ssl.get(), config.peer_name)) return nullptr;
   if (!server && SSL_set_tlsext_host_name(impl->ssl.get(), config.peer_name.c_str()) != 1) return nullptr;
@@ -310,7 +336,8 @@ bool TlsTransportChannel::IsSecure() const { return true; }
 std::unique_ptr<TlsTransportChannel> TlsTransportChannel::Connect(
     const std::string& host, uint16_t port, const TlsConfig& config,
     int timeout_ms, const std::atomic<bool>* cancellation, TransportError* error) {
-  if (config.certificate_file.empty() || config.private_key_file.empty()) {
+  if ((config.certificate_file.empty() || config.private_key_file.empty()) &&
+      (config.certificate_pem.empty() || config.private_key_pem.empty())) {
     if (error) *error = TransportError::kSecurity;
     return nullptr;
   }

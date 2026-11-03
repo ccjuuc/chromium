@@ -46,6 +46,10 @@ void XenonTransferWebUIHandler::RegisterMessages() {
       base::BindRepeating(&XenonTransferWebUIHandler::Refresh,
                           base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
+      "ownTransferSetUseStun",
+      base::BindRepeating(&XenonTransferWebUIHandler::SetUseStun,
+                          base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
       "ownTransferChooseFile",
       base::BindRepeating(&XenonTransferWebUIHandler::ChooseFile,
                           base::Unretained(this)));
@@ -109,7 +113,25 @@ void XenonTransferWebUIHandler::Refresh(const base::ListValue& args) {
   XenonTransferService::GetForProfile(Profile::FromWebUI(web_ui()))
       ->Refresh(base::BindOnce(&XenonTransferWebUIHandler::Reply,
                                weak_factory_.GetWeakPtr(), args[0].GetString()),
-                /*retry_finalization=*/true);
+                /*retry_signals=*/true);
+}
+
+void XenonTransferWebUIHandler::SetUseStun(const base::ListValue& args) {
+  if (!ValidateCallback(args, 2)) {
+    return;
+  }
+  const auto* input = args[1].GetIfDict();
+  const std::optional<bool> enabled =
+      input ? input->FindBool("enabled") : std::nullopt;
+  if (!input || input->size() != 1 || !enabled.has_value()) {
+    RejectJavascriptCallback(args[0], base::Value("无效的 STUN 设置。"));
+    return;
+  }
+  XenonTransferService::GetForProfile(Profile::FromWebUI(web_ui()))
+      ->SetUseStun(*enabled,
+                   base::BindOnce(&XenonTransferWebUIHandler::Reply,
+                                  weak_factory_.GetWeakPtr(),
+                                  args[0].GetString()));
 }
 
 void XenonTransferWebUIHandler::ChooseFile(const base::ListValue& args) {

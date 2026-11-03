@@ -28,6 +28,7 @@ class XenonTransferWebUIHandler final : public content::WebUIMessageHandler,
   bool ValidateCallback(const base::ListValue& args, size_t count);
   void GetState(const base::ListValue& args);
   void Refresh(const base::ListValue& args);
+  void SetUseStun(const base::ListValue& args);
   void ChooseFile(const base::ListValue& args);
   void OnFileInspected(std::string callback_id,
                        std::string account_id,

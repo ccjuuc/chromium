@@ -60,7 +60,7 @@
           <div class="devices-heading"><h3>同账号设备</h3><span id="deviceCount" class="small-label"></span></div>
           <ul id="deviceList" class="device-list" aria-label="同账号设备"></ul>
           <p id="devicesEmpty" class="devices-empty" hidden>暂无已登记的设备。请稍后刷新。</p>
-          <p class="field-help">选择在线设备发送内容，对方接受后即可收到。</p>
+          <p class="field-help">对方接受后开始传输。已建立的设备直连会优先复用；新连接按服务器策略选择，直连不通时自动使用中继。</p>
         </div>
       </section>
 
@@ -69,6 +69,11 @@
           <div><p class="eyebrow">SEND TO YOUR DEVICE</p><h2 id="ownTransferHeading">发送内容</h2></div>
           <button id="ownTransferRefresh" class="button subtle" type="button">刷新传输</button>
         </div>
+        <label class="checkbox-label" for="ownUseStun">
+          <input id="ownUseStun" type="checkbox" aria-describedby="ownUseStunHelp" disabled>
+          <span>使用 STUN 提高直连成功率</span>
+        </label>
+        <p id="ownUseStunHelp" class="field-help">开启后使用服务器配置的 STUN 探测公网映射地址，帮助跨网络直连。关闭或服务器未配置 STUN 时仍尝试设备直连，不通时自动使用中继。设置保存在当前浏览器个人资料中，从下一次传输起生效。</p>
         <p id="ownRecipient" class="own-recipient" role="status">请在上方选择一台在线设备。</p>
         <div class="own-compose-grid">
           <form id="ownTextForm" class="own-compose">
@@ -95,7 +100,8 @@
         <p id="ownTransferError" class="form-error" role="alert" hidden></p>
         <div id="ownJob" class="own-job" hidden>
           <div class="own-job-heading"><strong id="ownJobStatus" role="status"></strong><button id="ownCancelJob" class="text-button" type="button">取消传输</button></div>
-          <progress id="ownJobProgress" max="100" value="0" aria-label="文件传输进度"></progress>
+          <p id="ownJobTransport" class="small-label" hidden></p>
+          <progress id="ownJobProgress" max="100" value="0" aria-label="传输进度"></progress>
           <p id="ownJobProgressText" class="field-help"></p>
           <p id="ownJobSavedPath" class="own-saved-path" hidden></p>
           <p id="ownJobError" class="form-error" role="alert" hidden></p>

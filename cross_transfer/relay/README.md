@@ -11,6 +11,15 @@ Direct `TlsTransportChannel` connections authenticate both peer certificates and
 their expected SAN identities. HTTPS clients always verify the service's CA and
 hostname; there is no insecure TLS switch.
 
+The browser can also negotiate a native WebRTC DataChannel through the account
+API. ICE tests local IPv4/IPv6 and server-reflexive candidates collected using
+STUN, so peers behind compatible NATs can establish a direct connection. DTLS
+protects the direct DataChannel. Unsupported NAT/firewall paths fall back to the
+same HTTPS relay; this service does not implement TURN.
+The browser's local STUN setting is disabled by default and saved per Profile.
+Enabling it uses only server-advertised STUN URLs. A deployment without STUN
+still supports interface-address ICE checks and HTTPS fallback.
+
 ## Local integration test
 
 The normal `../build_and_test.sh` compiles and runs the C++ integration clients,
@@ -40,21 +49,22 @@ pairing/control plane. Tokens are authorization capabilities, not user-facing
 short pairing codes. They must not appear in URLs, logs or analytics. Rotate or
 remove room credentials when the application revokes a transfer invitation.
 Static rooms load at startup. An optional
-[account, device and transfer API](../account_service/README.md) runs in the same
-HTTPS process when `--account-database` is supplied. It provisions a temporary
-room only after the receiving same-account device accepts a file invitation.
-Clients obtain separate role credentials from the authenticated control plane;
-the account session token cannot be used directly on a relay route. No peer IP,
-certificate path or role token needs to be entered in the browser UI.
+[account, device and forwarding API](../account_service/README.md) runs in the
+same HTTPS process when `--account-database` is supplied. It provisions temporary
+rooms only when a client requests a relay channel, with two fixed same-account
+devices and separate role credentials. Account tokens cannot be used directly
+on relay frame routes. No peer IP, certificate path or role token needs to be
+entered in the browser UI.
 
-At most 64 dynamic rooms coexist with the configured static rooms. Dynamic
-credentials and leases expire within 30 minutes, and cancellation, account
-session logout or device revocation invalidates them. File completion permits
-existing leases to drain the final ACK for at most 15 seconds. Dynamic secrets
-are not persisted: service restart marks accepted file invitations failed, while
-pending invitations and account/device state survive. Tests in
-`../tests/test_account_relay.py` cover role separation, confirmation, expiry,
-revocation during polling, final ACK delivery and restart behavior.
+At most 64 dynamic rooms coexist with configured static rooms. Dynamic
+credentials and leases expire within 30 minutes; logout or device revocation
+invalidates associated resources. Explicit channel release permits existing
+leases to drain for at most 15 seconds. The server does not interpret invitation
+acceptance, cancellation or completion, and it does not maintain a task list.
+Service restart discards temporary messages and channels while preserving
+accounts, sessions and devices. Browsers own task history and results.
+Tests in `../tests/test_account_relay.py` cover role separation, expiry,
+revocation during polling, final-frame draining and restart behavior.
 
 ```sh
 python3 server.py --host 127.0.0.1 --port 8443 \
@@ -62,6 +72,26 @@ python3 server.py --host 127.0.0.1 --port 8443 \
   --private-key /protected/relay-key.pem \
   --credentials /protected/relay-rooms.json
 ```
+
+For the combined production service, `--stun-port 443` adds a UDP Binding
+listener to this same process alongside HTTPS on TCP 443. Announce its public
+address with `--stun-url stun:115.29.16.37:443` (repeatable for additional STUN
+servers). The UDP listener is disabled by default; advertised URLs support
+`stun:` and `stuns:` only. The built-in listener implements UDP STUN, so a
+`stuns:` URL must refer to a separately available TLS STUN server. Allow both
+TCP 443 and UDP 443 through the server firewall/security group. STUN reveals
+the source address and port to the requesting device; it carries no payload.
+
+The Binding listener accepts at most 1200-byte RFC 5389 requests with the
+correct cookie, exact aligned lengths and valid attribute boundaries. It
+returns only a minimal XOR-MAPPED-ADDRESS (32 bytes for IPv4, 44 for IPv6),
+verifies an optional FINGERPRINT, and silently ignores unsupported mandatory
+attributes or invalid packets. A source IP is limited to 20 replies/second
+with a burst of 40; the process allows 200 replies/second with a burst of 400.
+Source limiter state is capped at 4096 entries. One daemon thread services UDP;
+server shutdown closes the socket and joins the thread. Neither addresses nor
+request data are logged. Run `python3 ../tests/test_stun.py` to verify the wire
+format, input bounds, rate limits, and actual UDP socket lifetime.
 
 To operate on different networks, deploy the service on a reachable HTTPS
 endpoint with a certificate for that hostname, configure firewall access, and

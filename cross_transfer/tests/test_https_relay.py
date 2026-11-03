@@ -99,6 +99,8 @@ def main():
         credentials = {"integration": {"sender_token": "1" * 64, "receiver_token": "2" * 64},
                        "jobs": {"sender_token": "1" * 64, "receiver_token": "2" * 64},
                        "bounds": {"sender_token": "4" * 64, "receiver_token": "5" * 64}}
+        for room in ("auto-unreachable", "auto-certificate", "auto-agreement", "auto-resume", "auto-policy"):
+            credentials[room] = {"sender_token": "1" * 64, "receiver_token": "2" * 64}
         server = relay.create_server("127.0.0.1", 0, str(directory / "server.pem"),
                                      str(directory / "server.key"), credentials)
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)

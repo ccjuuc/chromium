@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <thread>
 
 using namespace cross_transfer;
@@ -14,6 +15,7 @@ class InspectChannel final : public ITransportChannel {
  public:
   explicit InspectChannel(std::unique_ptr<LanTcpConnection> conn) : conn_(std::move(conn)) {}
   bool SendFrame(const FrameHeader& h, std::span<const uint8_t> data) override {
+    if (h.cmd == FrameHeader::Command::kTransferFinish) ++finish_frames;
     if (h.cmd == FrameHeader::Command::kTransferFinish && finish_delay_ms > 0) {
       std::this_thread::sleep_for(std::chrono::milliseconds(finish_delay_ms));
     }
@@ -27,6 +29,13 @@ class InspectChannel final : public ITransportChannel {
         return conn_->SendFrame(modified, copy);
       }
     }
+    if (handshake_message && (h.cmd == FrameHeader::Command::kHandshakeReq ||
+                              h.cmd == FrameHeader::Command::kHandshakeResp)) {
+      auto header = h;
+      auto payload = std::vector<uint8_t>(data.begin(), data.end());
+      RewriteHandshake(header, payload);
+      return conn_->SendFrame(header, payload);
+    }
     return conn_->SendFrame(h, data);
   }
   bool ReadNextFrame(FrameHeader& h, std::vector<uint8_t>& data) override {
@@ -39,9 +48,19 @@ class InspectChannel final : public ITransportChannel {
   void SetIoTimeout(int ms) override { conn_->SetIoTimeout(ms); }
   TransportError LastError() const override { return conn_->LastError(); }
   bool corrupt = false;
+  std::optional<std::string> handshake_message;
+  int finish_frames = 0;
   int finish_delay_ms = 0;
   std::vector<uint64_t> chunks;
  private:
+  void RewriteHandshake(FrameHeader& h, std::vector<uint8_t>& data) {
+    auto handshake = HandshakePayload::Deserialize(data);
+    assert(handshake);
+    handshake->message = *handshake_message;
+    data = handshake->Serialize();
+    h.payload_len = static_cast<uint32_t>(data.size());
+    h.checksum = ComputeCRC32C(data);
+  }
   std::unique_ptr<LanTcpConnection> conn_;
 };
 
@@ -60,6 +79,64 @@ std::string Read(const fs::path& path) {
   return {std::istreambuf_iterator<char>(stream), {}};
 }
 
+void TestFinishProtocolAndSequentialReuse(const fs::path& root,
+                                         const fs::path& source) {
+  LanTcpServer server;
+  assert(server.Start(0, "127.0.0.1"));
+  InspectChannel sender_channel(
+      LanTcpClient::Connect("127.0.0.1", server.listening_port()));
+  InspectChannel receiver_channel(server.Accept(2000));
+  auto options = Options();
+  options.stage_timeout_ms = 3000;
+  // Two sessions on one connection detect leftover finish confirmations.
+  for (int round = 0; round < 2; ++round) {
+    const auto output = root / ("finish-" + std::to_string(round));
+    ReceiverSession receiver(options);
+    bool received = false;
+    std::thread worker([&] {
+      received = receiver.ReceiveFile(&receiver_channel, output.string());
+    });
+    SenderSession sender(options);
+    const bool sent = sender.SendFile(&sender_channel, source.string());
+    worker.join();
+    assert(sent && received && receiver.committed());
+    assert(Read(output / source.filename()) == Read(source));
+  }
+  assert(sender_channel.finish_frames == 4 && receiver_channel.finish_frames == 2);
+  assert(sender_channel.IsConnected() && receiver_channel.IsConnected());
+}
+
+void TestRejectsMissingOrMismatchedFinishProtocol(const fs::path& root,
+                                                const fs::path& source) {
+  int test_case = 0;
+  for (const auto& message : {"", "finish-confirm-v0", "finish-confirm-v1-extra"}) {
+    for (bool sending : {false, true}) {
+      LanTcpServer server;
+      assert(server.Start(0, "127.0.0.1"));
+      InspectChannel sender_channel(
+          LanTcpClient::Connect("127.0.0.1", server.listening_port()));
+      InspectChannel receiver_channel(server.Accept(2000));
+      (sending ? sender_channel : receiver_channel).handshake_message = message;
+      auto options = Options();
+      options.stage_timeout_ms = 3000;
+      const auto output = root / ("rejected-finish-" + std::to_string(test_case++));
+      ReceiverSession receiver(options);
+      bool received = true;
+      std::thread worker([&] {
+        received = receiver.ReceiveFile(&receiver_channel, output.string());
+      });
+      SenderSession sender(options);
+      const bool sent = sender.SendFile(&sender_channel, source.string());
+      worker.join();
+      assert(!sent && !received && !receiver.committed());
+      assert((sending ? receiver.error() : sender.error()) ==
+             "Unsupported finish confirmation protocol");
+      assert(sender_channel.chunks.empty() && !fs::exists(output / source.filename()));
+      assert(sender_channel.finish_frames == 0 && receiver_channel.finish_frames == 0);
+    }
+  }
+}
+
 int main() {
   TaskId unique;
   assert(RAND_bytes(unique.data(), unique.size()) == 1);
@@ -70,6 +147,8 @@ int main() {
   const auto source = root / "source" / "sample.bin";
   const std::string content(64 * 3 + 17, 's');
   std::ofstream(source, std::ios::binary) << content;
+  TestFinishProtocolAndSequentialReuse(root, source);
+  TestRejectsMissingOrMismatchedFinishProtocol(root, source);
   auto opts = Options();
   TaskId saved_id{};
   {

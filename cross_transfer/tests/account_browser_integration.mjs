@@ -11,6 +11,12 @@
 // --with-transfers also tests text acceptance, rejection and cancellation.
 // --with-file additionally opens a visible native chooser for operator-driven
 // selection, then verifies a real 1 MiB file transfer and its SHA-256.
+// --expect-transport=direct|relay also enables text tests and checks that both
+// endpoints used the requested route. File routes are checked with --with-file.
+// --expect-small-transport=direct|relay additionally verifies a separate text
+// payload below 1024 bytes against the server's configured small-payload policy.
+// --fresh-direct-runs=N requires --expect-transport=direct and exercises 1..64
+// new direct connections on the same account, clearing both caches each round.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {createHash, randomBytes} from 'node:crypto';
@@ -23,6 +29,30 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 const executable = process.env.CHROME_BINARY || path.join(root,
     'out', 'Release_64', process.platform === 'win32' ? 'xlb153.exe' : 'chrome');
 assert.ok(fs.existsSync(executable), 'CHROME_BINARY must point at a built Xenon executable.');
+const transportArguments = process.argv.filter(argument => argument.startsWith('--expect-transport='));
+assert.ok(transportArguments.length <= 1, 'Specify --expect-transport only once.');
+const expectedTransport = transportArguments[0]?.split('=')[1];
+assert.ok(expectedTransport === undefined || ['direct', 'relay'].includes(expectedTransport),
+    '--expect-transport must be direct or relay.');
+const smallTransportArguments = process.argv.filter(argument =>
+  argument.startsWith('--expect-small-transport='));
+assert.ok(smallTransportArguments.length <= 1, 'Specify --expect-small-transport only once.');
+const expectedSmallTransport = smallTransportArguments[0]?.split('=')[1];
+assert.ok(expectedSmallTransport === undefined || ['direct', 'relay'].includes(expectedSmallTransport),
+    '--expect-small-transport must be direct or relay.');
+const freshDirectArguments = process.argv.filter(argument =>
+  argument === '--fresh-direct-runs' || argument.startsWith('--fresh-direct-runs='));
+assert.ok(freshDirectArguments.length <= 1, 'Specify --fresh-direct-runs only once.');
+const freshDirectValue = freshDirectArguments[0]?.slice('--fresh-direct-runs='.length);
+const freshDirectRuns = freshDirectValue === undefined ? 0 : Number(freshDirectValue);
+if (freshDirectValue !== undefined) {
+  assert.ok(/^[1-9][0-9]?$/.test(freshDirectValue) && freshDirectRuns <= 64,
+      '--fresh-direct-runs must be an integer from 1 to 64.');
+  assert.equal(expectedTransport, 'direct',
+      '--fresh-direct-runs requires --expect-transport=direct.');
+  assert.equal(process.argv.includes('--initialize-only'), false,
+      '--fresh-direct-runs cannot be combined with --initialize-only.');
+}
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'xenon-account-native-'));
 const resultFile = path.join(root, 'out', 'account_browser_integration_result.json');
@@ -32,10 +62,14 @@ const report = {
   startedAt: new Date().toISOString(), username, accountId: null,
   passed: false, checks: {},
 };
+if (freshDirectRuns) {
+  report.freshDirect = {requestedRuns: freshDirectRuns, completedRuns: 0, runs: []};
+}
 const browsers = new Set();
 const initializeOnly = process.argv.includes('--initialize-only');
 const withFile = process.argv.includes('--with-file');
-const withTransfers = withFile || process.argv.includes('--with-transfers');
+const withTransfers = withFile || process.argv.includes('--with-transfers') ||
+    Boolean(expectedTransport) || Boolean(expectedSmallTransport);
 const selectionFile = path.join(root, 'out', 'own_transfer_file_selection.json');
 let selectionWritten = false;
 let step = 'startup';
@@ -231,15 +265,17 @@ class Browser {
 }
 
 writeReport();
+// Each extra round allows the 120-second payload wait plus invitation/setup.
 const overallTimeout = setTimeout(() => {
   for (const browser of browsers) browser.child.kill();
-}, withFile ? 600000 : 240000);
+}, (withFile ? 600000 : 240000) + freshDirectRuns * 180000);
 
 async function waitTransfer(browser, id, expected, timeoutMs = 40000) {
   const deadline = Date.now() + timeoutMs;
   let nextProgress = Date.now() + 10000;
   while (Date.now() < deadline) {
-    const state = await browser.transfer('ownTransferRefresh');
+    // Match the page's passive polling; Refresh explicitly retries finalization.
+    const state = await browser.transfer('ownTransferGetState');
     const transfer = state.transfers.find(item => item.id === id);
     if (transfer && expected.includes(transfer.status)) return {state, transfer};
     if (Date.now() >= nextProgress) {
@@ -257,25 +293,131 @@ async function sendText(first, deviceA, deviceB, text) {
   const transfer = state.transfers.find(item => item.kind === 'text' && item.text === text &&
       item.senderDeviceId === deviceA && item.receiverDeviceId === deviceB);
   assert.ok(transfer, 'Sent text invitation was not returned.');
+  assert.equal(transfer.payloadMode, 'stream', 'Text must use the device payload channel.');
+  assert.equal(transfer.fileSize, Buffer.byteLength(text, 'utf8'));
   assert.equal(transfer.status, 'pending', 'Text must wait for receiver acceptance.');
   return transfer.id;
 }
 
+async function waitPayload(first, second, id, kind, expectedRoute = expectedTransport) {
+  const deadline = Date.now() + 120000;
+  let nextProgress = 0;
+  while (Date.now() < deadline) {
+    const [senderState, receiverState] = await Promise.all([
+      first.transfer('ownTransferGetState'), second.transfer('ownTransferGetState'),
+    ]);
+    const senderRecord = senderState.transfers.find(item => item.id === id);
+    const receiverRecord = receiverState.transfers.find(item => item.id === id);
+    const senderJob = senderState.job;
+    const receiverJob = receiverState.job;
+    const completedJob = job => job.transferId === id && !job.active &&
+        ['completed', 'complete', 'succeeded'].includes(job.state);
+    if (completedJob(senderJob) && completedJob(receiverJob) &&
+        senderRecord?.status === 'completed' && receiverRecord?.status === 'completed') {
+      assert.ok(['direct', 'relay'].includes(senderJob.transport),
+          'The sender did not report its actual payload route.');
+      assert.equal(receiverJob.transport, senderJob.transport,
+          'The two endpoints did not agree on their payload route.');
+      assert.equal(senderJob.protocol, senderJob.transport === 'direct' ? 'webrtc' : 'https',
+          'The payload did not use the native WebRTC or HTTPS adapter.');
+      assert.equal(receiverJob.protocol, senderJob.protocol,
+          'The two endpoints did not agree on their payload protocol.');
+      if (expectedRoute) {
+        assert.equal(senderJob.transport, expectedRoute,
+            `${kind} did not use the expected route.`);
+      }
+      report.transports ||= {};
+      report.transports[kind] = senderJob.transport;
+      report.protocols ||= {};
+      report.protocols[kind] = senderJob.protocol;
+      checkpoint(`native_${kind}_transport_verified`);
+      return {senderState, receiverState, senderRecord, receiverRecord};
+    }
+    if ([senderJob.state, receiverJob.state, senderRecord?.status, receiverRecord?.status]
+        .some(value => ['failed', 'cancelled', 'expired'].includes(value))) {
+      throw new Error(`Native ${kind} transfer failed: ${redact(
+          senderJob.error || receiverJob.error || receiverRecord?.status || senderRecord?.status)}`);
+    }
+    if (Date.now() >= nextProgress) {
+      console.log(`WAIT: ${kind} sender=${senderJob.state || 'waiting'} receiver=${receiverJob.state || 'waiting'}`);
+      nextProgress = Date.now() + 10000;
+    }
+    await new Promise(resolve => setTimeout(resolve, 400));
+  }
+  throw new Error(`Both native ${kind} jobs did not complete within 120 seconds.`);
+}
+
 async function runTransfers(first, second, deviceA, deviceB, receiveDirectory) {
+  if (expectedSmallTransport) {
+    step = 'native small text without a cached direct connection';
+    const smallText = `小消息 👋 ${randomBytes(4).toString('hex')}`;
+    assert.ok(Buffer.byteLength(smallText, 'utf8') < 1024);
+    const smallId = await sendText(first, deviceA, deviceB, smallText);
+    const smallPending = await waitTransfer(second, smallId, ['pending']);
+    assert.equal(smallPending.transfer.text, '', 'Small text must not arrive in the invitation.');
+    const smallAccepted = await second.transfer('ownTransferRespond', {id: smallId, action: 'accept'});
+    assert.equal(smallAccepted.error || '', '', 'Receiver could not accept small text.');
+    const smallReceived = await waitPayload(first, second, smallId, 'small_text', expectedSmallTransport);
+    assert.equal(smallReceived.receiverRecord.text, smallText, 'Small text changed in transit.');
+    assert.equal(smallReceived.senderRecord.text, smallText);
+    assert.equal(smallReceived.receiverState.job.savedPath || '', '');
+    checkpoint('native_small_text_received');
+  }
+
   step = 'native Unicode text transfer';
   console.log(`STEP: ${step}`);
-  const unicodeText = `跨设备文本\nHello 👋 — <b>literal text</b> ${randomBytes(4).toString('hex')}`;
+  const unicodeSample = `跨设备文本\nHello 👋 — <b>literal text</b> ${randomBytes(4).toString('hex')}`;
+  // The default server policy sends payloads below 1024 bytes straight to
+  // relay. A requested direct check must exercise a larger payload.
+  const unicodeText = expectedTransport === 'direct' ?
+      unicodeSample.repeat(Math.ceil(1024 / Buffer.byteLength(unicodeSample, 'utf8'))) : unicodeSample;
   const textId = await sendText(first, deviceA, deviceB, unicodeText);
   const pending = await waitTransfer(second, textId, ['pending']);
   assert.equal(pending.transfer.senderDeviceId, deviceA);
   assert.equal(pending.transfer.receiverDeviceId, deviceB);
+  assert.equal(pending.transfer.payloadMode, 'stream');
+  assert.equal(pending.transfer.text, '', 'Text content must not arrive in the invitation.');
   const accepted = await second.transfer('ownTransferRespond', {id: textId, action: 'accept'});
   assert.equal(accepted.error || '', '', 'Receiver could not accept text.');
-  const received = await waitTransfer(second, textId, ['completed']);
-  assert.equal(received.transfer.text, unicodeText, 'Unicode text changed in transit.');
-  const senderDone = await waitTransfer(first, textId, ['completed']);
-  assert.equal(senderDone.transfer.text, unicodeText);
+  const received = await waitPayload(first, second, textId, 'text');
+  assert.equal(received.receiverRecord.text, unicodeText, 'Unicode text changed in transit.');
+  assert.equal(received.senderRecord.text, unicodeText);
+  assert.equal(received.receiverState.job.savedPath || '', '',
+      'A text transfer must not expose its temporary payload path.');
   checkpoint('native_unicode_text_received');
+
+  if (expectedTransport === 'direct') {
+    for (const reverse of [false, true]) {
+      step = reverse ? 'reuse direct connection in reverse' : 'reuse direct connection for small text';
+      const sender = reverse ? second : first;
+      const receiver = reverse ? first : second;
+      const text = `复用直连 ${randomBytes(4).toString('hex')}`;
+      assert.ok(Buffer.byteLength(text, 'utf8') < 1024);
+      const id = await sendText(sender, reverse ? deviceB : deviceA,
+          reverse ? deviceA : deviceB, text);
+      await waitTransfer(receiver, id, ['pending']);
+      await receiver.transfer('ownTransferRespond', {id, action: 'accept'});
+      const received = await waitPayload(sender, receiver, id,
+          reverse ? 'reused_reverse_text' : 'reused_small_text', 'direct');
+      assert.equal(received.receiverRecord.text, text);
+    }
+    checkpoint('native_direct_reuse_without_server_change');
+
+    step = 'native direct transfer with STUN disabled';
+    for (const browser of [first, second]) {
+      const state = await browser.transfer('ownTransferSetUseStun', {enabled: false});
+      assert.equal(state.useStun, false);
+    }
+    const hostText = `清空连接缓存后的小消息 ${randomBytes(4).toString('hex')}`;
+    assert.ok(Buffer.byteLength(hostText, 'utf8') < 1024);
+    const hostId = await sendText(first, deviceA, deviceB, hostText);
+    await waitTransfer(second, hostId, ['pending']);
+    await second.transfer('ownTransferRespond', {id: hostId, action: 'accept'});
+    const hostReceived = await waitPayload(first, second, hostId, 'text_without_stun', 'direct');
+    assert.equal(hostReceived.receiverRecord.text, hostText);
+    checkpoint('native_stun_optional');
+    checkpoint('native_small_text_prefers_direct_after_cache_clear');
+  }
 
   step = 'receiver rejects a text invitation';
   const rejectId = await sendText(first, deviceA, deviceB,
@@ -289,6 +431,7 @@ async function runTransfers(first, second, deviceA, deviceB, receiveDirectory) {
   step = 'sender cancels a pending invitation';
   const cancelId = await sendText(first, deviceA, deviceB,
       `cancel this test ${randomBytes(4).toString('hex')}`);
+  await waitTransfer(second, cancelId, ['pending']);
   const cancelled = await first.transfer('ownTransferRespond', {id: cancelId, action: 'cancel'});
   assert.equal(cancelled.error || '', '', 'Sender cancellation failed.');
   await waitTransfer(second, cancelId, ['cancelled']);
@@ -336,35 +479,7 @@ async function runTransfers(first, second, deviceA, deviceB, receiveDirectory) {
   checkpoint('native_file_invitation_accepted');
 
   step = 'native file transfer and SHA-256 verification';
-  const deadline = Date.now() + 120000;
-  let senderState;
-  let receiverState;
-  let nextProgress = 0;
-  let complete = false;
-  while (Date.now() < deadline) {
-    [senderState, receiverState] = await Promise.all([
-      first.transfer('ownTransferRefresh'), second.transfer('ownTransferRefresh'),
-    ]);
-    const fileRecord = receiverState.transfers.find(item => item.id === fileTransfer.id);
-    const senderRecord = senderState.transfers.find(item => item.id === fileTransfer.id);
-    const senderJob = senderState.job;
-    const receiverJob = receiverState.job;
-    const completedJob = job => job.transferId === fileTransfer.id && !job.active &&
-        ['completed', 'complete', 'succeeded'].includes(job.state);
-    complete = completedJob(senderJob) && completedJob(receiverJob) &&
-        senderRecord?.status === 'completed' && fileRecord?.status === 'completed';
-    if (complete) break;
-    if ([senderJob.state, receiverJob.state, fileRecord?.status].some(value =>
-      ['failed', 'cancelled', 'expired'].includes(value))) {
-      throw new Error(`Native file transfer failed: ${redact(senderJob.error || receiverJob.error || fileRecord.status)}`);
-    }
-    if (Date.now() >= nextProgress) {
-      console.log(`WAIT: file sender=${senderJob.state || 'waiting'} receiver=${receiverJob.state || 'waiting'}`);
-      nextProgress = Date.now() + 10000;
-    }
-    await new Promise(resolve => setTimeout(resolve, 400));
-  }
-  assert.equal(complete, true, 'Both native file jobs did not complete.');
+  const {receiverState} = await waitPayload(first, second, fileTransfer.id, 'file');
   const savedPath = receiverState.job.savedPath;
   assert.equal(typeof savedPath, 'string', 'The receiver did not report a saved file.');
   const relative = path.relative(receiveDirectory, savedPath);
@@ -375,6 +490,47 @@ async function runTransfers(first, second, deviceA, deviceB, receiveDirectory) {
   assert.equal(createHash('sha256').update(receivedFile).digest('hex') === sourceHash, true,
       'Received file SHA-256 differs.');
   checkpoint('native_file_saved_and_sha256_verified');
+}
+
+async function runFreshDirectTransfers(first, second, deviceA, deviceB) {
+  for (let round = 1; round <= freshDirectRuns; ++round) {
+    step = `fresh direct connection ${round}/${freshDirectRuns}`;
+    console.log(`STEP: ${step}`);
+    const run = {round, startedAt: new Date().toISOString(), passed: false};
+    report.freshDirect.runs.push(run);
+    writeReport();
+    // Setting false again would leave an already-disabled profile's cache
+    // intact. Toggle both ways while idle to force new ICE on every round.
+    for (const enabled of [true, false]) {
+      for (const browser of [first, second]) {
+        const state = await browser.transfer('ownTransferSetUseStun', {enabled});
+        assert.equal(state.useStun, enabled);
+        assert.equal(state.job.active, false, 'Cache reset requires an idle transfer.');
+      }
+    }
+    const text = `新直连 ${round}/${freshDirectRuns} ${randomBytes(8).toString('hex')}`;
+    assert.ok(Buffer.byteLength(text, 'utf8') < 1024);
+    const id = await sendText(first, deviceA, deviceB, text);
+    run.transferId = id;
+    writeReport();
+    await waitTransfer(second, id, ['pending']);
+    const accepted = await second.transfer('ownTransferRespond', {id, action: 'accept'});
+    assert.equal(accepted.error || '', '', 'Receiver could not accept fresh direct text.');
+    const kind = `fresh_direct_${String(round).padStart(3, '0')}`;
+    const received = await waitPayload(first, second, id, kind, 'direct');
+    assert.equal(received.senderRecord.text, text);
+    assert.equal(received.receiverRecord.text, text, 'Fresh direct text changed in transit.');
+    Object.assign(run, {
+      passed: true,
+      completedAt: new Date().toISOString(),
+      senderTransport: received.senderState.job.transport,
+      receiverTransport: received.receiverState.job.transport,
+      protocol: received.senderState.job.protocol,
+    });
+    report.freshDirect.completedRuns = round;
+    writeReport();
+  }
+  if (freshDirectRuns) checkpoint('native_fresh_direct_stress_completed');
 }
 
 async function runScenario() {
@@ -413,8 +569,13 @@ async function runScenario() {
   assert.equal(registered.devices[0].online, true);
   checkpoint('native_registration_and_device');
 
+  const initialTransfer = await first.transfer('ownTransferGetState');
+  assert.equal(initialTransfer.useStun, false, 'STUN must be optional and disabled by default.');
+  const enabledTransfer = await first.transfer('ownTransferSetUseStun', {enabled: true});
+  assert.equal(enabledTransfer.useStun, true);
+
   step = 'second independent profile login';
-  const second = await new Browser(profileB).open();
+  let second = await new Browser(profileB).open();
   await second.ready();
   const loggedIn = await second.account('xenonAccountLogin', {username, password});
   assert.equal(loggedIn.authenticated, true, 'Second profile login failed.');
@@ -424,11 +585,16 @@ async function runScenario() {
   assert.notEqual(deviceB, deviceA, 'Independent profiles must have independent device IDs.');
   assert.deepEqual(loggedIn.devices.map(device => device.id).sort(), [deviceA, deviceB].sort());
   checkpoint('same_account_two_devices');
+  const otherTransfer = await second.transfer('ownTransferGetState');
+  assert.equal(otherTransfer.useStun, false, 'STUN preference must be local to each profile.');
+  assert.equal((await second.transfer('ownTransferSetUseStun', {enabled: true})).useStun, true);
 
   step = 'stored session after clean browser exit';
   await first.close();
   const preferencesText = fs.readFileSync(path.join(profileA, 'Default', 'Preferences'), 'utf8');
   const preferences = JSON.parse(preferencesText);
+  assert.equal(preferences.xenon?.account?.transfer_use_stun, true,
+      'The STUN preference did not persist.');
   const storedSession = preferences.xenon?.account?.credentials;
   assert.equal(typeof storedSession, 'string', 'The profile session preference is missing.');
   const session = JSON.parse(storedSession);
@@ -449,9 +615,67 @@ async function runScenario() {
   assert.equal(restored.deviceId, deviceA, 'Restart must preserve the local device identity.');
   assert.deepEqual(restored.devices.map(device => device.id).sort(), [deviceA, deviceB].sort());
   checkpoint('restart_restores_same_device');
+  assert.equal((await first.transfer('ownTransferGetState')).useStun, true);
+  checkpoint('native_stun_setting_persists');
 
   if (withTransfers) {
     await runTransfers(first, second, deviceA, deviceB, receiveDirectory);
+    await runFreshDirectTransfers(first, second, deviceA, deviceB);
+
+    step = 'completed transfer records survive both browser restarts';
+    const states = await Promise.all([
+      first.transfer('ownTransferGetState'), second.transfer('ownTransferGetState'),
+    ]);
+    const completed = states.map(state => state.transfers.filter(
+        transfer => transfer.status === 'completed'));
+    assert.ok(completed.every(records => records.length > 0),
+        'Both profiles must have completed transfer records.');
+    await Promise.all([first.close(), second.close()]);
+    for (const [index, profile] of [profileA, profileB].entries()) {
+      const saved = JSON.parse(fs.readFileSync(path.join(profile, 'Default', 'Preferences'), 'utf8'));
+      const history = saved.xenon?.account?.transfer_history;
+      const deviceId = index === 0 ? deviceA : deviceB;
+      const scope = history?.[`${report.accountId}:${deviceId}`];
+      assert.ok(scope && typeof scope === 'object', 'Local task history was not saved.');
+      assert.equal(scope.accountId, report.accountId);
+      assert.equal(scope.deviceId, deviceId);
+      if (expectedTransport === 'direct') {
+        assert.ok(scope.directPeers?.[index === 0 ? deviceB : deviceA] > 0,
+            'Direct success must persist independently of live connections.');
+      }
+      for (const transfer of completed[index]) {
+        const task = scope.tasks?.[transfer.id];
+        assert.equal(task?.status, 'completed');
+      }
+    }
+    [first, second] = await Promise.all([
+      new Browser(profileA).open(), new Browser(profileB).open(),
+    ]);
+    const restoredAccounts = await Promise.all([first.ready(), second.ready()]);
+    assert.deepEqual(restoredAccounts.map(state => state.deviceId), [deviceA, deviceB]);
+    const restoredTransfers = await Promise.all([
+      first.transfer('ownTransferGetState'), second.transfer('ownTransferGetState'),
+    ]);
+    for (let index = 0; index < completed.length; ++index) {
+      assert.equal(restoredTransfers[index].job.active, false,
+          'Restoring completed transfers must not reserve a transfer slot.');
+      for (const transfer of completed[index]) {
+        const record = restoredTransfers[index].transfers.find(item => item.id === transfer.id);
+        assert.equal(record?.status, 'completed', 'A completed transfer was lost after restart.');
+        if (transfer.kind === 'text') assert.equal(record.text, transfer.text);
+      }
+    }
+    checkpoint('native_completed_transfers_survive_restart');
+    if (expectedTransport === 'direct') {
+      const text = `本地直连偏好 ${randomBytes(4).toString('hex')}`;
+      const id = await sendText(first, deviceA, deviceB, text);
+      await waitTransfer(second, id, ['pending']);
+      await second.transfer('ownTransferRespond', {id, action: 'accept'});
+      const received = await waitPayload(first, second, id,
+          'small_text_with_persisted_direct_preference', 'direct');
+      assert.equal(received.receiverRecord.text, text);
+      checkpoint('native_direct_preference_survives_cache_loss');
+    }
   }
 
   step = 'second profile logout and device removal';

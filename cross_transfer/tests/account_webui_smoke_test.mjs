@@ -343,11 +343,12 @@ try {
 
   // Same-account transfers never ask the page for connection credentials.
   await open('cross_transfer_test');
-  await run(`
-    globalThis.ownAnswer = {transfers: [], job: {active: false}, busy: false, error: ''};
+  await act(`
+    globalThis.ownAnswer = {transfers: [], job: {active: false}, busy: false, error: '', useStun: false};
     globalThis.fileAnswer = {name: '<img onerror=alert(1)>.txt', size: 1024};
     sendWithPromise = async (...args) => {
       calls.push(structuredClone(args));
+      if (args[0] === 'ownTransferSetUseStun') ownAnswer.useStun = args[1].enabled;
       return structuredClone(args[0] === 'ownTransferChooseFile' ? fileAnswer : ownAnswer);
     };
     renderAccountState({...signedIn, devices: [
@@ -355,11 +356,45 @@ try {
       {id: '2'.repeat(32), displayName: '<b>remote</b>', online: true},
       {id: '3'.repeat(32), displayName: 'offline', online: false},
     ]});
+    await readOwnTransferState();
     clearTimeout(ownTransferPollTimer);
   `);
   assert.equal(await run(`$('deviceList').querySelectorAll('.device-send').length`), 1);
   assert.equal(await run(`$('ownTransferPanel').hidden`), false);
   assert.equal(await run(`$('ownSendText').disabled`), true);
+  assert.equal(await run(`!$('ownUseStun').checked && !$('ownUseStun').disabled`), true);
+  assert.equal(await run(`$('ownUseStun').labels[0].textContent.includes('使用 STUN')`), true);
+  assert.match(await run(`$($('ownUseStun').getAttribute('aria-describedby')).textContent`),
+      /下一次传输/);
+  await run(`$('ownUseStun').click()`);
+  await until(`!ownTransferPending && calls.some(call => call[0] === 'ownTransferSetUseStun')`);
+  assert.deepEqual(await run(`calls.find(call => call[0] === 'ownTransferSetUseStun')`),
+      ['ownTransferSetUseStun', {enabled: true}]);
+  await act(`await readOwnTransferState(); clearTimeout(ownTransferPollTimer)`);
+  assert.equal(await run(`$('ownUseStun').checked`), true);
+  // A rejected preference write restores the last confirmed native state.
+  await run(`
+    globalThis.ownBridge = sendWithPromise;
+    sendWithPromise = async (...args) => {
+      if (args[0] === 'ownTransferSetUseStun') throw new Error('test rejection');
+      return ownBridge(...args);
+    };
+    $('ownUseStun').click();
+  `);
+  await until(`!ownTransferPending && !$('ownTransferError').hidden`);
+  assert.equal(await run(`$('ownUseStun').checked`), true);
+  // Changes remain available during a transfer and do not cancel that job.
+  await run(`
+    sendWithPromise = ownBridge;
+    ownAnswer = {...ownAnswer, job: {active: true}};
+    renderOwnTransferState(ownAnswer);
+  `);
+  assert.equal(await run(`$('ownUseStun').disabled`), false);
+  await run(`$('ownUseStun').click()`);
+  await until(`!ownTransferPending && ownTransferState.useStun === false`);
+  assert.equal(await run(`calls.some(call => call[0] === 'ownTransferCancel')`), false);
+  assert.equal(await run(`ownTransferState.job.active`), true);
+  await run(`ownAnswer = {...ownAnswer, job: {active: false}}; renderOwnTransferState(ownAnswer)`);
   await run(`
     $('deviceList').querySelector('.device-send').click();
     $('ownText').value = 'hello 另一台设备 👋';
@@ -434,20 +469,82 @@ try {
   `);
   assert.equal(await run(`$('ownJobStatus').textContent`), '正在确认接收结果');
   assert.equal(await run(`$('ownChooseFile').disabled && $('ownSendFile').disabled`), true);
-  assert.equal(await run(`$('ownTransferList').querySelector('[data-file-accept="true"]').disabled`), true);
+  assert.equal(await run(`$('ownTransferList').querySelector('[data-payload-accept="true"]').disabled`), true);
   assert.equal(await run(`$('ownCancelJob').disabled`), false);
 
   await run(`
     ownSelectedFile = null;
+    ownAnswer = {...ownAnswer, job: {active: false}};
+    renderOwnTransferState(ownAnswer);
+  `);
+
+  // Streamed text carries only metadata until the accepted payload arrives.
+  // It shares the active-job limit and route display with files.
+  await run(`
+    globalThis.incomingStream = {...incomingText, id: 'c'.repeat(32),
+      payloadMode: 'stream', text: '', fileName: 'message.txt', fileSize: 42,
+      status: 'pending', createdAt: 3};
     ownAnswer = {...ownAnswer,
-      transfers: ownAnswer.transfers.map(item => item.id === incomingFile.id ? incomingFile : item),
+      transfers: [incomingStream, {...incomingFile, status: 'pending'}]};
+    renderOwnTransferState(ownAnswer);
+  `);
+  assert.match(await run(`$('ownTransferList').firstElementChild.textContent`), /文本消息.*42 B/);
+  assert.equal(await run(`$('ownTransferList').firstElementChild.textContent.includes('message.txt')`), false);
+  assert.equal(await run(`$('ownTransferList').firstElementChild.querySelector('.own-received-text')`), null);
+  await run(`
+    ownAnswer = {...ownAnswer,
+      transfers: [{...incomingStream, status: 'accepted'}, {...incomingFile, status: 'pending'}],
+      job: {active: true, transferId: incomingStream.id, kind: 'text',
+        state: 'connecting', transport: 'auto', totalBytes: 42, transferredBytes: 0,
+        savedPath: '/private/temp/message.txt'}};
+    $('ownTransferList').firstElementChild.querySelector('[data-transfer-action="accept"]').click();
+  `);
+  await until(`!ownTransferPending && ownTransferState.job.active`);
+  assert.equal(await run(`$('ownJobTransport').textContent`), '正在选择连接方式');
+  assert.equal(await run(`$('ownJobSavedPath').hidden && $('ownJobSavedPath').textContent === ''`), true);
+  await run(`$('ownText').value = 'next message'; $('ownText').dispatchEvent(new Event('input'))`);
+  assert.equal(await run(`$('ownSendText').disabled && $('ownChooseFile').disabled`), true);
+  assert.equal(await run(`$('ownTransferList')
+      .querySelector('[data-payload-accept="true"]').disabled`), true);
+  await run(`
+    ownAnswer = {...ownAnswer, transfers: [{...incomingStream,
+      status: 'completed', text: '<b>received through direct TLS</b>'}, incomingFile],
+      job: {...ownAnswer.job, active: false, state: 'completed', transport: 'direct',
+        transferredBytes: 42, percent: 100}};
+    renderOwnTransferState(ownAnswer);
+  `);
+  assert.equal(await run(`$('ownJobTransport').textContent`), '设备直连');
+  assert.equal(await run(`$('ownTransferList').firstElementChild.querySelector('.own-received-text')
+      .textContent`), '<b>received through direct TLS</b>');
+  assert.equal(await run(`$('ownTransferList').firstElementChild.querySelector('b')`), null);
+  assert.match(await run(`$('ownTransferList').firstElementChild.textContent`), /复制文本/);
+  assert.equal(await run(`$('ownSendText').disabled`), false);
+  await run(`
+    renderOwnTransferState({...ownAnswer, transfers: [{...incomingStream, status: 'completed'}]});
+  `);
+  assert.match(await run(`$('ownTransferList').textContent`), /文本内容暂不可用/);
+  assert.equal(await run(`$('ownTransferList').textContent.includes('复制文本')`), false);
+
+  // Accepted streamed text without a live job follows the same interrupted
+  // transfer guidance as files; retrying a stale session is not offered.
+  await run(`
+    renderOwnTransferState({...ownAnswer,
+      transfers: [{...incomingStream, status: 'accepted'}], job: {active: false}});
+  `);
+  assert.match(await run(`$('ownTransferList').textContent`), /传输已中断.*重新发送/);
+  assert.equal(await run(`$('ownTransferList').querySelectorAll('[data-transfer-action="accept"]').length`), 0);
+  assert.equal(await run(`$('ownTransferList').querySelector('[data-transfer-action="cancel"]').disabled`), false);
+
+  await run(`
+    ownAnswer = {...ownAnswer, transfers: [incomingFile],
       job: {active: true, transferId: incomingFile.id,
-      state: 'receiving', role: 'receiver', totalBytes: 1000, transferredBytes: 420,
+      state: 'receiving', transport: 'relay', role: 'receiver', totalBytes: 1000, transferredBytes: 420,
       percent: 42, savedPath: '', error: ''}};
     renderOwnTransferState(ownAnswer);
   `);
   assert.equal(await run(`$('ownJob').hidden`), false);
   assert.equal(await run(`$('ownJobProgress').value`), 42);
+  assert.equal(await run(`$('ownJobTransport').textContent`), '中继传输');
   assert.equal(await run(`$('ownChooseFile').disabled && !$('ownCancelJob').disabled`), true);
   assert.equal(await run(`$('ownTransferList').querySelectorAll('[data-transfer-action="accept"]').length`), 0);
   await run(`$('ownCancelJob').click()`);
@@ -455,16 +552,26 @@ try {
   assert.deepEqual(await run(`calls.find(call => call[0] === 'ownTransferCancel')`), ['ownTransferCancel']);
   assert.equal(await run('document.documentElement.scrollWidth <= innerWidth'), true);
 
-  // Failed result notifications leave the existing manual refresh usable.
+  // A delayed control message leaves refresh and the next transfer usable.
   await run(`
-    ownAnswer = {...ownAnswer, error: '文件已保存，但完成确认失败；请点击刷新重试确认',
-      job: {...ownAnswer.job, active: true, state: 'completed', percent: 100}};
+    ownAnswer = {...ownAnswer, error: '消息暂未送达，稍后重试',
+      job: {...ownAnswer.job, active: false, state: 'completed', percent: 100}};
     renderOwnTransferState(ownAnswer);
   `);
   assert.equal(await run(`$('ownTransferRefresh').disabled`), false);
-  assert.match(await run(`$('ownTransferError').textContent`), /文件已保存.*点击刷新/);
+  assert.match(await run(`$('ownTransferError').textContent`), /消息暂未送达/);
+  assert.equal(await run(`$('ownChooseFile').disabled`), false);
   await run(`$('ownTransferRefresh').click()`);
   await until(`!ownTransferReadInFlight && calls.some(call => call[0] === 'ownTransferRefresh')`);
+
+  await run(`
+    renderOwnTransferState({...ownAnswer, transfers: [
+      {...incomingFile, status: 'completed', savedPath: 'C:/received/report.txt'},
+      {...incomingStream, status: 'failed', error: '接收结果未确认，请检查接收设备'}
+    ]});
+  `);
+  assert.match(await run(`$('ownTransferList').textContent`), /已保存到：C:\/received\/report.txt/);
+  assert.match(await run(`$('ownTransferList').textContent`), /接收结果未确认/);
 
   // Late transfer cache replies must not repopulate a signed-out profile.
   await run(`
@@ -481,7 +588,8 @@ try {
   console.log('PASS: account preview guards, restore/continue, login parameters, ' +
       'registration confirmation, duplicate submit, errors/password clearing, ' +
       'device ordering, focus retention and XSS safety, refresh/logout, device-targeted text/files, ' +
-      'receive confirmation and interrupted-transfer guidance, transfer progress/cancel, byte limits, ' +
+      'receive confirmation and interrupted-transfer guidance, streamed text and direct/relay routes, ' +
+      'transfer progress/cancel, byte limits, ' +
       'stale responses, mobile layout.');
 } finally {
   clearTimeout(timeout);

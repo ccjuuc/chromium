@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 import re
 import secrets
+import signal
 import socket
 import socketserver
 import ssl
@@ -27,7 +28,7 @@ MAX_QUEUE_BYTES = 8 * 1024 * 1024 + 76
 MAX_GLOBAL_BYTES = 32 * 1024 * 1024
 MAX_QUEUE_FRAMES = 64
 MAX_CONNECTIONS = 16
-# Includes worst-case JSON escaping for a 16 KiB text invitation.
+# Bounds account requests, including opaque messages and channel snapshots.
 MAX_ACCOUNT_BODY = 128 * 1024
 MAX_DYNAMIC_ROOMS = 64
 ROOM = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
@@ -123,6 +124,19 @@ class RelayState:
                 return None
             return {"roomId": name, "connectionId": room.fixed_connection_id,
                     "bearerToken": room.credentials[role + "_token"], "expiresAt": room.expires_at}
+
+    def active_dynamic_rooms(self):
+        with self.condition:
+            self.expire()
+            return {name for name, room in self.rooms.items() if room.expires_at is not None}
+
+    def limit_dynamic_expiry(self, name, expires_at):
+        with self.condition:
+            room = self.rooms.get(name)
+            if room is not None and room.expires_at is not None:
+                room.expires_at = min(room.expires_at, expires_at)
+                self.expire()
+                self.condition.notify_all()
 
     def revoke_dynamic(self, name):
         with self.condition:
@@ -390,6 +404,7 @@ class RelayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
         self.context = context
         self.state = state
         self.account_application = account_application
+        self.stun = None
         self.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
         super().__init__(address, RelayHandler)
 
@@ -410,8 +425,16 @@ class RelayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
             self.slots.release()
 
     def service_actions(self):
+        if self.account_application is not None:
+            self.account_application.expire(check_sessions=True)
         with self.state.condition:
             self.state.expire()
+
+    def server_close(self):
+        if self.stun is not None:
+            self.stun.close()
+            self.stun = None
+        super().server_close()
 
 
 class IPv6RelayServer(RelayServer):
@@ -419,7 +442,11 @@ class IPv6RelayServer(RelayServer):
 
 
 def create_server(host, port, certificate, private_key, credentials, idle_timeout=60,
-                  account_database=None):
+                  account_database=None, direct_min_bytes=0, stun_port=0, stun_urls=()):
+    if type(direct_min_bytes) is not int or not 0 <= direct_min_bytes <= 8 * 1024 * 1024 * 1024 + 1:
+        raise ValueError("direct_min_bytes must be an integer between 0 and 8 GiB + 1")
+    if type(stun_port) is not int or not 0 <= stun_port <= 65535:
+        raise ValueError("stun_port must be an integer between 0 and 65535")
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(certificate, private_key)
@@ -433,9 +460,22 @@ def create_server(host, port, certificate, private_key, credentials, idle_timeou
         spec = importlib.util.spec_from_file_location("cross_transfer_account_service", module_path)
         account_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(account_module)
-        application = account_module.AccountApplication(account_database, relay=state)
+        application = account_module.AccountApplication(account_database, relay=state,
+                                                        direct_min_bytes=direct_min_bytes,
+                                                        stun_urls=stun_urls)
     server_type = IPv6RelayServer if ":" in host else RelayServer
-    return server_type((host, port), context, state, application)
+    server = server_type((host, port), context, state, application)
+    if stun_port:
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "cross_transfer_stun", Path(__file__).with_name("stun.py"))
+            stun_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(stun_module)
+            server.stun = stun_module.StunListener(host, stun_port)
+        except BaseException:
+            server.server_close()
+            raise
+    return server
 
 
 def main():
@@ -449,16 +489,31 @@ def main():
     parser.add_argument("--idle-timeout", type=int, default=60)
     parser.add_argument("--account-database",
                         help="enable /api/v1/ account/device APIs in this HTTPS process")
+    parser.add_argument("--direct-min-bytes", type=int, default=0,
+                        help="stream payloads smaller than this byte count use relay directly; 0 always tries direct")
+    parser.add_argument("--stun-port", type=int, default=0,
+                        help="UDP Binding listener in this process; 0 disables it")
+    parser.add_argument("--stun-url", action="append", default=[],
+                        help="STUN URL advertised to authenticated WebRTC peers; repeatable")
     args = parser.parse_args()
     with open(args.credentials, encoding="utf-8") as f:
         credentials = json.load(f)
     server = create_server(args.host, args.port, args.certificate, args.private_key,
-                           credentials, args.idle_timeout, args.account_database)
+                           credentials, args.idle_timeout, args.account_database, args.direct_min_bytes,
+                           args.stun_port, args.stun_url)
     print(json.dumps({"host": server.server_address[0], "port": server.server_address[1]}), flush=True)
+    stop = threading.Event()
+
+    def request_stop(signum, frame):
+        stop.set()
+
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, request_stop)
+    server.timeout = 0.2
     try:
-        server.serve_forever(poll_interval=0.2)
-    except KeyboardInterrupt:
-        pass
+        while not stop.is_set():
+            server.handle_request()
+            server.service_actions()
     finally:
         server.server_close()
 

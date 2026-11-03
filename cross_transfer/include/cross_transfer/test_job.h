@@ -6,13 +6,15 @@
 #include <optional>
 #include <string>
 
+#include "cross_transfer/auto_transport.h"
+
 namespace cross_transfer {
 
-// Native test-page input. Paths are UTF-8. Direct connections always use mutual
-// TLS; relay connections always use the authenticated HTTPS relay protocol.
+// Native test-page input. Paths are UTF-8. Direct connections use mutual TLS
+// or WebRTC DTLS; relays use the authenticated HTTPS relay protocol.
 struct TestJobOptions {
   std::string role{"send"};                 // "send" or "receive"
-  std::string transport{"direct"};          // "direct" or "relay"
+  std::string transport{"direct"};          // "direct", "relay" or "auto"
   std::string source_path;
   std::string output_dir;
   std::string host;                          // Also the receiver's bind address.
@@ -33,6 +35,7 @@ struct TestJobOptions {
   // Account transfers bind admission to the accepted invitation metadata.
   std::string expected_file_name;
   std::optional<uint64_t> expected_file_size;
+  AutoConnectionOptions automatic;
 };
 
 // Only scalar display data is exposed to the WebUI. No TLS or relay credentials
@@ -43,11 +46,19 @@ struct TestJobSnapshot {
   std::string error;
   std::string task_id;
   std::string saved_path;
+  std::string transport;                    // Actual connection: direct/relay.
+  std::string protocol;                     // Actual protocol: tls/webrtc/https.
   uint64_t bytes{0};
   uint64_t total{0};
   double percent{0};
   uint16_t listening_port{0};
   bool active{false};
+  // The sender may have asked the receiver to commit, even if its send or the
+  // final acknowledgement failed. Remains true across relay fallback attempts.
+  bool completion_requested{false};
+  // The receiver has durably committed saved_path, even if confirmation or a
+  // later recovery connection fails. Such a job preserves its local success.
+  bool committed{false};
 };
 
 class TestTransferJob {

@@ -8,7 +8,9 @@ Type=simple
 User=crosstransfer
 Group=crosstransfer
 WorkingDirectory=/opt/cross-transfer/current
-ExecStart=/usr/bin/python3 /opt/cross-transfer/current/relay/server.py --host 0.0.0.0 --port 443 --certificate /etc/cross-transfer/server.pem --private-key /etc/cross-transfer/server.key --credentials /etc/cross-transfer/credentials.json --account-database /var/lib/cross-transfer/accounts.sqlite3
+Environment=CROSS_TRANSFER_DIRECT_MIN_BYTES=1024
+EnvironmentFile=-/etc/cross-transfer/service.env
+ExecStart=/usr/bin/python3 /opt/cross-transfer/current/relay/server.py --host 0.0.0.0 --port 443 --certificate /etc/cross-transfer/server.pem --private-key /etc/cross-transfer/server.key --credentials /etc/cross-transfer/credentials.json --account-database /var/lib/cross-transfer/accounts.sqlite3 --direct-min-bytes ${CROSS_TRANSFER_DIRECT_MIN_BYTES} --stun-port 443 --stun-url stun:115.29.16.37:443
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=15

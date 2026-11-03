@@ -42,6 +42,10 @@ namespace {
 constexpr char kUserDataKey[] = "xenon.native_account_service";
 constexpr char kSessionPref[] = "xenon.account.credentials";
 constexpr char kIdentityPref[] = "xenon.account.device_identity";
+// Preserve identities instead of evicting an account's local transfer history.
+// At capacity, existing accounts still work; a new account needs a new profile.
+constexpr size_t kMaxDeviceIdentities = 64;
+constexpr size_t kMaxIdentityBytes = 64 * 1024;
 constexpr char kHost[] = "115.29.16.37";
 constexpr size_t kMaxHeaderBytes = 8192;
 // A 16 KiB text can expand sixfold when JSON-escaped, plus request metadata.
@@ -88,6 +92,16 @@ bool IsLowerHex(std::string_view value, size_t length) {
   return value.size() == length && std::ranges::all_of(value, [](char c) {
            return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
          });
+}
+
+bool IsDeviceIdentity(const base::DictValue& identity,
+                      std::string_view account_id) {
+  const auto* owner = identity.FindString("accountId");
+  const auto* id = identity.FindString("deviceId");
+  const auto* encoded_seed = identity.FindString("seed");
+  auto seed = encoded_seed ? base::Base64Decode(*encoded_seed) : std::nullopt;
+  return owner && *owner == account_id && IsLowerHex(account_id, 32) && id &&
+         IsLowerHex(*id, 32) && seed && seed->size() == 32;
 }
 
 bool IsUsername(std::string_view value) {
@@ -340,12 +354,28 @@ void XenonAccountService::OnEncryptorReady(
   const std::string encoded = profile_->GetPrefs()->GetString(kIdentityPref);
   std::string encrypted;
   std::string cleartext;
-  if (!encoded.empty() && base::Base64Decode(encoded, &encrypted) &&
+  if (!encoded.empty() && encoded.size() <= kMaxIdentityBytes &&
+      base::Base64Decode(encoded, &encrypted) &&
       encryptor_->DecryptString(encrypted, &cleartext)) {
-    auto identity =
+    auto stored =
         base::JSONReader::ReadDict(cleartext, base::JSON_PARSE_RFC, 4);
-    if (identity) {
-      identity_ = std::move(*identity);
+    if (stored) {
+      const auto* accounts = stored->FindDict("accounts");
+      if (accounts && accounts->size() <= kMaxDeviceIdentities) {
+        for (const auto [account_id, value] : *accounts) {
+          const auto* identity = value.GetIfDict();
+          if (identity && IsDeviceIdentity(*identity, account_id)) {
+            identities_.Set(account_id, identity->Clone());
+          }
+        }
+      } else if (const auto* owner = stored->FindString("accountId");
+                 owner && IsDeviceIdentity(*stored, *owner)) {
+        // Retain the identity already issued to this profile when moving from
+        // the single-account preference to the per-account encrypted map.
+        const std::string account_id = *owner;
+        identities_.Set(account_id, std::move(*stored));
+        PersistDeviceIdentities(identities_);
+      }
     }
   }
   RestoreSession();
@@ -368,6 +398,22 @@ cross_transfer::TlsConfig XenonAccountService::GetTlsConfig() {
   config.ca_pem = kAccountCaPem;
   config.peer_name = kHost;
   return config;
+}
+
+XenonAccountService::SessionRequest XenonAccountService::GetSessionRequest()
+    const {
+  if (!HasAuthenticatedSession()) {
+    return {};
+  }
+  return base::BindRepeating(
+      [](std::string token, std::shared_ptr<std::atomic<bool>> cancellation,
+         RequestHandler handler, std::string method, std::string path,
+         base::DictValue body) {
+        return RequestHttps(std::move(method), std::move(path),
+                            std::move(token), std::move(body),
+                            std::move(cancellation), std::move(handler));
+      },
+      token_, cancellation_, TestRequestHandler());
 }
 
 base::CallbackListSubscription XenonAccountService::AddSessionChangedCallback(
@@ -542,12 +588,11 @@ bool XenonAccountService::EnsureDeviceIdentity() {
   if (!device_id_.empty() && !public_key_.empty()) {
     return true;
   }
-  const auto* owner = identity_.FindString("accountId");
-  const auto* id = identity_.FindString("deviceId");
-  const auto* encoded_seed = identity_.FindString("seed");
+  const auto* identity = identities_.FindDict(account_id_);
+  const auto* id = identity ? identity->FindString("deviceId") : nullptr;
+  const auto* encoded_seed = identity ? identity->FindString("seed") : nullptr;
   auto seed = encoded_seed ? base::Base64Decode(*encoded_seed) : std::nullopt;
-  if (owner && *owner == account_id_ && id && IsLowerHex(*id, 32) && seed &&
-      seed->size() == 32) {
+  if (identity && IsDeviceIdentity(*identity, account_id_) && id && seed) {
     auto key = crypto::keypair::PrivateKey::FromEd25519PrivateKey(
         base::span(*seed).first<32>());
     device_id_ = *id;
@@ -558,23 +603,41 @@ bool XenonAccountService::EnsureDeviceIdentity() {
     error_ = "设备密钥存储暂不可用，请稍后刷新";
     return false;
   }
+  if (identities_.size() >= kMaxDeviceIdentities) {
+    error_ =
+        "此个人资料已保存 64 "
+        "个账号的设备身份；请使用另一份浏览器个人资料登录新账号";
+    return false;
+  }
   std::array<uint8_t, 16> random_id;
   base::RandBytes(random_id);
   auto key = crypto::keypair::PrivateKey::GenerateEd25519();
-  base::DictValue identity;
-  identity.Set("accountId", account_id_);
-  identity.Set("deviceId", base::HexEncodeLower(random_id));
-  identity.Set("seed", base::Base64Encode(key.ToEd25519PrivateKey()));
-  const auto json = base::WriteJson(identity);
-  std::string encrypted;
-  if (!json || !encryptor_->EncryptString(*json, &encrypted)) {
+  auto updated = identities_.Clone();
+  const std::string device_id = base::HexEncodeLower(random_id);
+  updated.Set(account_id_,
+              base::DictValue()
+                  .Set("accountId", account_id_)
+                  .Set("deviceId", device_id)
+                  .Set("seed", base::Base64Encode(key.ToEd25519PrivateKey())));
+  if (!PersistDeviceIdentities(updated)) {
     error_ = "无法保存设备密钥，请稍后刷新";
     return false;
   }
-  profile_->GetPrefs()->SetString(kIdentityPref, base::Base64Encode(encrypted));
-  identity_ = std::move(identity);
-  device_id_ = *identity_.FindString("deviceId");
+  identities_ = std::move(updated);
+  device_id_ = device_id;
   public_key_ = base::Base64Encode(key.ToEd25519PublicKey());
+  return true;
+}
+
+bool XenonAccountService::PersistDeviceIdentities(
+    const base::DictValue& identities) {
+  const auto json =
+      base::WriteJson(base::DictValue().Set("accounts", identities.Clone()));
+  std::string encrypted;
+  if (!json || !encryptor_ || !encryptor_->EncryptString(*json, &encrypted)) {
+    return false;
+  }
+  profile_->GetPrefs()->SetString(kIdentityPref, base::Base64Encode(encrypted));
   return true;
 }
 

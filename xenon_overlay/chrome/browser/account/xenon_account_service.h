@@ -55,6 +55,11 @@ class XenonAccountService final : public base::SupportsUserData::Data {
   std::string GetDeviceId() const;
   std::string GetAccountId() const;
   static cross_transfer::TlsConfig GetTlsConfig();
+  // Snapshot for a dedicated transfer worker. Logout cancels all requests made
+  // through this callback; it never exposes the token to a WebUI.
+  using SessionRequest = base::RepeatingCallback<
+      Response(std::string, std::string, base::DictValue)>;
+  SessionRequest GetSessionRequest() const;
   base::CallbackListSubscription AddSessionChangedCallback(
       base::RepeatingClosure callback);
   // Native callers only. Credentials stay within the account worker.
@@ -81,6 +86,7 @@ class XenonAccountService final : public base::SupportsUserData::Data {
                        StateCallback callback,
                        Response reply);
   bool EnsureDeviceIdentity();
+  bool PersistDeviceIdentities(const base::DictValue& identities);
   void SyncDevice(StateCallback callback);
   void OnDeviceSynced(uint64_t generation,
                       bool was_registration,
@@ -119,7 +125,7 @@ class XenonAccountService final : public base::SupportsUserData::Data {
   base::Time expires_at_;
   std::string device_id_;
   std::string public_key_;
-  base::DictValue identity_;
+  base::DictValue identities_;
   base::ListValue devices_;
   std::string error_;
   base::RepeatingTimer heartbeat_timer_;

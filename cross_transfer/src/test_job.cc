@@ -70,23 +70,29 @@ class JobChannel final : public ITransportChannel {
  public:
   JobChannel(std::unique_ptr<ITransportChannel> channel,
              const std::atomic<bool>* cancellation,
-             std::function<void(const FrameHeader&, std::span<const uint8_t>)> observe)
+             std::function<void(const FrameHeader&, std::span<const uint8_t>, bool)> observe)
       : channel_(std::move(channel)), cancellation_(cancellation),
         observe_(std::move(observe)) {
     channel_->SetCancellationFlag(cancellation_);
   }
   ~JobChannel() override {
-    channel_->Close();
+    if (channel_) {
+      channel_->Close();
+      channel_->SetCancellationFlag(nullptr);
+    }
+  }
+  std::unique_ptr<ITransportChannel> Release() {
     channel_->SetCancellationFlag(nullptr);
+    return std::move(channel_);
   }
   bool SendFrame(const FrameHeader& header, std::span<const uint8_t> bytes) override {
     if (cancellation_->load()) return false;
-    observe_(header, bytes);
+    observe_(header, bytes, true);
     return channel_->SendFrame(header, bytes);
   }
   bool ReadNextFrame(FrameHeader& header, std::vector<uint8_t>& bytes) override {
     if (cancellation_->load() || !channel_->ReadNextFrame(header, bytes)) return false;
-    observe_(header, bytes);
+    observe_(header, bytes, false);
     return true;
   }
   void Close() override { channel_->Close(); }
@@ -104,7 +110,7 @@ class JobChannel final : public ITransportChannel {
  private:
   std::unique_ptr<ITransportChannel> channel_;
   BorrowedPtr<const std::atomic<bool>> cancellation_;
-  std::function<void(const FrameHeader&, std::span<const uint8_t>)> observe_;
+  std::function<void(const FrameHeader&, std::span<const uint8_t>, bool)> observe_;
 };
 
 }  // namespace
@@ -132,12 +138,14 @@ struct TestTransferJob::Impl {
   }
   bool Finish(bool success, const std::string& error = {}) {
     std::lock_guard lock(mutex);
+    success = success || view.committed;
     view.active = false;
     if (success) {
       view.state = "completed";
       view.status = "File transferred and verified";
       view.error.clear();
       view.percent = 100;
+      if (view.committed) view.bytes = view.total;
     } else if (cancelled.load()) {
       view.state = "cancelled";
       view.status = "Transfer cancelled; durable progress is kept for resuming";
@@ -149,12 +157,18 @@ struct TestTransferJob::Impl {
     }
     return success;
   }
-  void Observe(const FrameHeader& header, std::span<const uint8_t> bytes) {
+  void Observe(const FrameHeader& header, std::span<const uint8_t> bytes,
+               bool outgoing) {
     if (!ValidateFrameHeader(header) || header.payload_len != bytes.size() ||
         header.checksum != ComputeCRC32C(bytes) || !IsValidTaskId(header.task_id)) return;
     std::lock_guard lock(mutex);
     if (header.cmd == FrameHeader::Command::kHandshakeReq && view.task_id.empty())
       view.task_id = FormatTaskId(header.task_id);
+    // A failed send can still reach the receiver. Record the attempt before
+    // calling the transport, and never clear it when retrying this same task.
+    if (outgoing && options.role == "send" &&
+        header.cmd == FrameHeader::Command::kTransferFinish)
+      view.completion_requested = true;
     if (cancelled.load()) return;
     switch (header.cmd) {
       case FrameHeader::Command::kHandshakeReq:
@@ -246,19 +260,24 @@ bool TestTransferJob::Run() {
   auto fail = [&](const std::string& reason) { return impl_->Finish(false, reason); };
   if (impl_->cancelled.load()) return fail({});
   if ((o.role != "send" && o.role != "receive") ||
-      (o.transport != "direct" && o.transport != "relay"))
-    return fail("Choose send/receive and direct/relay");
+      (o.transport != "direct" && o.transport != "relay" && o.transport != "auto"))
+    return fail("Choose send/receive and direct/relay/auto");
   if (o.connect_timeout_ms <= 0 || o.io_timeout_ms <= 0 || o.stage_timeout_ms <= 0)
     return fail("Finite positive connection and transfer deadlines are required");
   const bool sending = o.role == "send";
   if ((sending && (o.source_path.empty() || !IsValidUtf8Path(o.source_path))) ||
       (!sending && (o.output_dir.empty() || !IsValidUtf8Path(o.output_dir))))
     return fail("A valid source file or destination directory is required");
-  if ((sending || o.transport == "relay") && (o.host.empty() || o.port == 0))
+  if (o.transport != "auto" && (sending || o.transport == "relay") &&
+      (o.host.empty() || o.port == 0))
     return fail("A host and nonzero port are required");
   if (o.transport == "direct" && (o.certificate_file.empty() ||
       o.private_key_file.empty() || o.peer_name.empty()))
     return fail("Direct transfer requires a certificate, private key and expected peer name");
+  if (o.transport == "auto" &&
+      (o.task_id.empty() || o.automatic.invitation_id != o.task_id))
+    return fail("Automatic connections must be bound to the invitation task ID");
+  o.automatic.sending = sending;
 
   TransferOptions transfer;
   transfer.io_timeout_ms = o.io_timeout_ms;
@@ -296,7 +315,10 @@ bool TestTransferJob::Run() {
 
   TransportError connection_error{TransportError::kNone};
   std::unique_ptr<ITransportChannel> connection;
-  if (o.transport == "relay") {
+  if (o.transport == "auto") {
+    impl_->Status("connecting", "Trying an authenticated direct connection before relay");
+    connection = ConnectAutomatically(o.automatic, &impl_->cancelled, &connection_error);
+  } else if (o.transport == "relay") {
     impl_->Status("connecting", "Connecting to the authenticated HTTPS relay");
     HttpsRelayOptions relay;
     relay.host = o.host;
@@ -334,22 +356,64 @@ bool TestTransferJob::Run() {
     }
   }
   if (!connection) return fail(ConnectionError(connection_error));
-  JobChannel channel(std::move(connection), &impl_->cancelled,
-      [&](const auto& header, auto bytes) { impl_->Observe(header, bytes); });
-  if (impl_->cancelled.load()) return fail({});
-  impl_->Status("handshaking", "Negotiating file transfer and durable resume progress");
-  if (sending) {
-    const bool success = sender->SendFile(&channel, o.source_path, progress, status);
-    return impl_->Finish(success, sender->error());
+  bool received_committed = false;
+  // A direct connection may fail after negotiation. Close it before selecting
+  // relay and reuse the same task identity/checkpoint for one bounded retry.
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    const auto type = connection->GetType();
+    const bool direct = type == TransportType::kLanDirectTcp ||
+                        type == TransportType::kWebRtcData;
+    {
+      std::lock_guard lock(impl_->mutex);
+      impl_->view.transport = direct ? "direct" : "relay";
+      impl_->view.protocol = type == TransportType::kWebRtcData ? "webrtc"
+                            : direct                          ? "tls"
+                                                              : "https";
+    }
+    bool success = false;
+    std::string session_error;
+    {
+      JobChannel channel(std::move(connection), &impl_->cancelled,
+          [&](const auto& header, auto bytes, bool outgoing) {
+            impl_->Observe(header, bytes, outgoing);
+          });
+      if (impl_->cancelled.load()) return fail({});
+      impl_->Status("handshaking", "Negotiating file transfer and durable resume progress");
+      if (sending) {
+        success = sender->SendFile(&channel, o.source_path, progress, status);
+        session_error = sender->error();
+      } else {
+        auto receive_options = transfer;
+        if (received_committed) {
+          // Only confirmation remains after a durable commit. The sender may
+          // already have succeeded and therefore never join this relay retry.
+          receive_options.stage_timeout_ms =
+              std::min(transfer.stage_timeout_ms, transfer.io_timeout_ms);
+        }
+        ReceiverSession receiver(receive_options);
+        std::string saved;
+        success = receiver.ReceiveFile(&channel, o.output_dir, &saved, progress, status);
+        session_error = receiver.error();
+        if (receiver.committed()) {
+          received_committed = true;
+          std::lock_guard lock(impl_->mutex);
+          impl_->view.saved_path = saved;
+          impl_->view.committed = true;
+        }
+      }
+      if (success && !impl_->cancelled.load() && o.transport == "auto" &&
+          type == TransportType::kWebRtcData && o.automatic.retain_direct &&
+          channel.IsConnected() && channel.IsSecure()) {
+        o.automatic.retain_direct(channel.Release());
+      }
+    }
+    if (success || impl_->cancelled.load() || o.transport != "auto" || !direct || attempt != 0)
+      return impl_->Finish(success, session_error);
+    impl_->Status("connecting", "Direct connection interrupted; resuming through relay");
+    connection = ConnectAutomaticRelay(o.automatic, &impl_->cancelled, &connection_error);
+    if (!connection) return fail(ConnectionError(connection_error));
   }
-  ReceiverSession receiver(transfer);
-  std::string saved;
-  const bool success = receiver.ReceiveFile(&channel, o.output_dir, &saved, progress, status);
-  if (success) {
-    std::lock_guard lock(impl_->mutex);
-    impl_->view.saved_path = saved;
-  }
-  return impl_->Finish(success, receiver.error());
+  return fail("Transfer did not complete");
 }
 
 }  // namespace cross_transfer

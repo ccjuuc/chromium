@@ -20,6 +20,10 @@ struct TlsConfig {
   // Embedded trust anchors. Mutually exclusive with ca_file; an empty pair
   // uses the platform/library default trust store.
   std::string ca_pem;
+  // Per-transfer identities may stay entirely in memory. A PEM identity is
+  // mutually exclusive with the corresponding file-based identity.
+  std::string certificate_pem;
+  std::string private_key_pem;
 };
 
 namespace internal {

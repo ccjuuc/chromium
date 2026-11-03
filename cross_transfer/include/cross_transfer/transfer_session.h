@@ -82,7 +82,9 @@ class ReceiverSession {
   ~ReceiverSession();
 
   // Receives an incoming file over the transport channel, saving to output_dir.
-  // Returns true on successful completion and checksum verification.
+  // Returns true after verification and the required finish exchange. A
+  // false result with committed() true still leaves a verified out_saved_path;
+  // reconnecting with the same task can recover the lost confirmation.
   bool ReceiveFile(ITransportChannel* channel, const std::string& output_dir,
                    std::string* out_saved_path = nullptr,
                    ProgressCallback on_progress = nullptr,
@@ -91,6 +93,8 @@ class ReceiverSession {
   void Cancel();
 
   const ChunkBitmap& bitmap() const { return bitmap_; }
+  // Durable local receipt is independent of delivery of the final confirmation.
+  bool committed() const { return committed_.load(); }
   TransferState state() const { return state_.load(); }
   const std::string& error() const { return error_; }
 
@@ -98,6 +102,7 @@ class ReceiverSession {
   std::atomic<bool>& CancellationFlag();
   TransferOptions options_;
   ChunkBitmap bitmap_;
+  std::atomic<bool> committed_{false};
   std::atomic<bool> cancelled_{false};
   std::atomic<TransferState> state_{TransferState::kIdle};
   std::string error_;

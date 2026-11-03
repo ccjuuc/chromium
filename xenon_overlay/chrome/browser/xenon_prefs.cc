@@ -8,6 +8,8 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterBooleanPref(kAppSessionLoggedIn, false);
   registry->RegisterStringPref(kAccountCredentials, "");
   registry->RegisterStringPref(kAccountDeviceIdentity, "");
+  registry->RegisterDictionaryPref(kTransferHistory);
+  registry->RegisterBooleanPref(kTransferUseStun, false);
   registry->RegisterIntegerPref(kReloginPresentation, 0);
   registry->RegisterBooleanPref(kAiSidePanelToolbarPinMigrated, false);
   registry->RegisterBooleanPref(kSidebarAutoHideEnabled, true);

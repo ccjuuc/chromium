@@ -13,7 +13,11 @@ inline constexpr char kAppSessionLoggedIn[] = "xenon.app_session_logged_in";
 // Server session token/account metadata, stored directly per product policy.
 // Passwords are never persisted.
 inline constexpr char kAccountCredentials[] = "xenon.account.credentials";
-inline constexpr char kAccountDeviceIdentity[] = "xenon.account.device_identity";
+inline constexpr char kAccountDeviceIdentity[] =
+    "xenon.account.device_identity";
+inline constexpr char kTransferHistory[] = "xenon.account.transfer_history";
+// Collect STUN server-reflexive candidates for future own-device transfers.
+inline constexpr char kTransferUseStun[] = "xenon.account.transfer_use_stun";
 
 // 0 = standalone login window, 1 = hide all browser windows during relogin,
 // 2 = modal dialog on last active browser window.

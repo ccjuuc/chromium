@@ -9,6 +9,7 @@
 namespace cross_transfer {
 namespace {
 using Command = FrameHeader::Command;
+constexpr char kFinishConfirmation[] = "finish-confirm-v1";
 
 // A session owns channel I/O for the worker call. An error closes the channel
 // so the peer cannot wait indefinitely for an ACK that will never arrive.
@@ -172,6 +173,7 @@ bool SenderSession::SendFile(ITransportChannel* channel, const std::string& path
   request.device_name = options_.device_name;
   request.device_os = options_.device_os;
   request.accepted = true;
+  request.message = kFinishConfirmation;
   auto data = request.Serialize();
   if (!Send(channel, Command::kHandshakeReq, task_id_, data)) return fail("Handshake send failed");
   FrameHeader header;
@@ -179,6 +181,8 @@ bool SenderSession::SendFile(ITransportChannel* channel, const std::string& path
     return fail("Invalid handshake response");
   auto response = HandshakePayload::Deserialize(data);
   if (!response || !response->accepted) return fail("Peer rejected handshake");
+  if (response->message != kFinishConfirmation)
+    return fail("Unsupported finish confirmation protocol");
   state_ = TransferState::kNegotiating;
   data = metadata.Serialize();
   if (!Send(channel, Command::kFileMetadata, task_id_, data) ||
@@ -226,7 +230,9 @@ bool SenderSession::SendFile(ITransportChannel* channel, const std::string& path
   if (!Send(channel, Command::kTransferFinish, task_id_) ||
       !Receive(channel, header, data, &task_id_, options_.stage_timeout_ms, options_.io_timeout_ms) || header.cmd != Command::kTransferFinish)
     return fail("Receiver did not commit a verified file");
-  scope.completed = true;
+  // Receipt of the receiver's durable commit is already success. If our last
+  // confirmation cannot be sent, close this channel instead of caching it.
+  scope.completed = Send(channel, Command::kTransferFinish, task_id_);
   state_ = TransferState::kCompleted;
   if (status) status("Transfer completed and verified");
   return true;
@@ -245,12 +251,14 @@ bool ReceiverSession::ReceiveFile(ITransportChannel* channel, const std::string&
   if (!options_.external_cancellation) cancelled_ = false;
   error_.clear();
   bitmap_.Reset(0);
+  committed_ = false;
   if (out_saved_path) out_saved_path->clear();
   TaskId task_id{};
   auto fail = [&](const std::string& message) {
     error_ = CancellationFlag().load() ? "Transfer cancelled" : message;
     state_ = CancellationFlag().load() ? TransferState::kCancelled : TransferState::kFailed;
-    if (channel && !CancellationFlag().load()) SendError(channel, task_id);
+    if (channel && !committed_.load() && !CancellationFlag().load())
+      SendError(channel, task_id);
     if (status) status(error_);
     return false;
   };
@@ -266,12 +274,15 @@ bool ReceiverSession::ReceiveFile(ITransportChannel* channel, const std::string&
   task_id = header.task_id;
   auto peer = HandshakePayload::Deserialize(data);
   if (!peer) return fail("Invalid handshake payload");
+  if (peer->message != kFinishConfirmation)
+    return fail("Unsupported finish confirmation protocol");
   if (IsValidTaskId(options_.task_id) && options_.task_id != task_id)
     return fail("Unexpected task identity");
   HandshakePayload response;
   response.device_name = options_.device_name;
   response.device_os = options_.device_os;
   response.accepted = true;
+  response.message = kFinishConfirmation;
   data = response.Serialize();
   if (!Send(channel, Command::kHandshakeResp, task_id, data)) return fail("Handshake response failed");
   state_ = TransferState::kNegotiating;
@@ -314,13 +325,19 @@ bool ReceiverSession::ReceiveFile(ITransportChannel* channel, const std::string&
   if (CancellationFlag().load()) return fail("Cancelled");
   state_ = TransferState::kVerifying;
   if (!StorageJob(CancellationFlag(), options_, [&](const auto* stop) {
-        return store.VerifyAndCommit(out_saved_path, stop, options_.allow_overwrite);
+        const bool committed =
+            store.VerifyAndCommit(out_saved_path, stop, options_.allow_overwrite);
+        committed_ = committed;
+        return committed;
       })) {
     auto saved = ChunkBitmap::Deserialize(store.bitmap().Serialize());
     if (saved) bitmap_ = std::move(*saved);
     return fail(store.error().empty() ? "Verification exceeded its deadline" : store.error());
   }
   if (!Send(channel, Command::kTransferFinish, task_id)) return fail("Commit ACK lost; reconnect to confirm");
+  if (!Receive(channel, header, data, &task_id, options_.io_timeout_ms,
+               options_.io_timeout_ms) || header.cmd != Command::kTransferFinish)
+    return fail("Commit confirmation lost; reconnect to confirm");
   scope.completed = true;
   state_ = TransferState::kCompleted;
   if (progress) progress(metadata->file_size, metadata->file_size, 100.0f);

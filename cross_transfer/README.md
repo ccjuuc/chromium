@@ -51,6 +51,14 @@ must also work locally if offline WLAN operation is a product requirement.
    only on success, and sends completion. If the completion ACK is lost, reconnect
    using the same task ID and metadata to confirm the committed file.
 
+Peers require `finish-confirm-v1` in both handshake messages. After the
+receiver's durable completion reply, the sender confirms that it received the
+reply. A receiver that loses this confirmation can join the same-task recovery;
+the completed checkpoint avoids retransmitting file contents. A peer with a
+different session protocol is rejected during the handshake. Local commit and delivery of the
+completion reply are tracked separately: a broken confirmation connection must
+not discard a saved file or received text.
+
 A connection attempt has a new relay `connection_id`, shared by the two peers.
 It is separate from the persistent file `task_id`. After a network change, obtain
 another channel and rerun the same file task; the application coordinates the new
@@ -107,9 +115,12 @@ must be trusted. This is not end-to-end encryption through an untrusted relay.
 LAN mutual TLS is encrypted directly between the paired peers. The reserved
 `public_key_hex` handshake field does not implement E2EE.
 
-WebRTC remains an optional adapter, not a claimed implementation. If added, use a
-mature ICE/STUN/TURN stack and keep the same session/store contracts. The reference
-HTTPS adapter currently opens one bounded TLS connection per HTTP request. It is
+The browser embeds Chromium's native libwebrtc for ICE and a reliable ordered
+DTLS/SCTP data channel, keeping the same session/store contracts. Account HTTPS
+signaling authenticates the SDP fingerprints and ICE candidates. It requires no
+page JavaScript connection and continues after the page closes. There is no TURN
+dependency: failed ICE uses the existing HTTPS relay. The reference HTTPS
+adapter currently opens one bounded TLS connection per HTTP request. It is
 intended to establish functional correctness; connection pooling and production
 network-stack integration should precede high-throughput deployment. Automatic
 HTTP proxy discovery/authentication is not implemented, and port 443 alone does
@@ -161,10 +172,61 @@ See [account service](account_service/README.md) for the API and account tests.
 Select **发送** beside an online device, then enter text or choose a file using
 the native file picker. The other device accepts or rejects the invitation in
 this page. Accepted text can be copied; accepted files show progress and their
-saved location. Peer addresses, certificates and temporary relay credentials
-are supplied automatically. Account transfers and invitation polling belong to
+saved location. The browser chooses the route using the advertised size threshold when a new
+connection is needed. By default, payloads below 1024 bytes go straight to the HTTPS relay;
+payloads of 1024 bytes or more first try an authenticated WebRTC data channel
+between the devices. If ICE cannot connect, both endpoints agree to use
+the HTTPS relay automatically. The page shows **设备直连** or
+**中继传输** for the active or most recent payload job. Text invitations contain
+metadata only; text content travels through the same payload channel as files.
+Peer addresses, DTLS fingerprints and relay credentials are supplied
+automatically. Account transfers and invitation polling belong to
 the Profile and continue when this page is closed or reloaded; signing out or
 ending the Profile cancels its local jobs.
+
+The browser owns the complete task list and recent history, scoped to the
+account and device. Invitations, acceptance, progress and terminal results are
+handled locally. The server only forwards opaque messages and supplies temporary
+transport resources; it has no task list, task-state transitions or completion
+report endpoint. Message delivery receipts do not mean a payload succeeded.
+Local cancellation releases the task slot even if its notification is delayed.
+Invitations keep their original sender deadline across retries; either endpoint
+notifies cancellation on expiry. Active payload jobs use their own I/O and stage
+timeouts, so the invitation deadline cannot interrupt a progressing transfer.
+
+Completion recovery uses the peer protocol and the receiver's checked local
+checkpoint. Discovery, invitations and fresh ICE negotiation still use the
+server for forwarding. Direct payloads and completion receipts travel between
+the devices. If a direct connection breaks, the HTTPS relay may carry recovery
+traffic; this does not provide offline direct reconnection after both browsers
+have lost their connection. Recent local history survives a Profile restart.
+
+After a successful direct transfer, each browser keeps the authenticated channel
+in its Profile for up to ten idle minutes (at most eight devices). The next
+accepted invitation first tries this channel, including small messages and
+reverse-direction sends, without repeating server connection negotiation.
+A fresh invitation-bound handshake authenticates the new task over that channel.
+Failed reuse closes the old connection before normal connection/relay fallback.
+Signing out, changing the STUN setting, or closing the browser clears this local
+cache. A separate local record keeps up to 32 successful direct peers per
+account/device. Once the cached channel expires or is cleared, those peers still
+try a fresh direct connection before the small-payload relay preference.
+
+Each worker releases its own temporary signaling resource asynchronously after
+use. Both roles must release before the server removes the shared snapshots;
+this resource cleanup carries no task state and cannot block local completion.
+
+The account service provides device discovery and generic message forwarding
+over TCP 443. Browsers interpret invitations and coordinate their own routes. ICE gathers IPv4/IPv6 interface candidates and
+tests candidate pairs in both directions. The local **使用 STUN** setting is
+disabled by default, saved per Profile, and affects the next transfer. Enabling
+it uses only STUN URLs advertised by the account server to discover NAT mappings
+and improve UDP hole punching. An absent or unreachable STUN service does not
+prevent interface-address checks or HTTPS fallback. The combined server can
+optionally serve STUN on UDP 443 in the same process; deployments without STUN
+omit `--stun-port` and `--stun-url`. STUN does not carry payload data, and symmetric
+NATs or restrictive firewalls may still require the relay. Only one text or file
+payload job runs per Profile at a time.
 
 Expand **高级传输诊断** for the existing manual file transfer controls below.
 These diagnostic controls call the native transfer core on a worker and poll
@@ -210,18 +272,40 @@ browser for account transfer verification:
 out/Release_64/xenon_account_unittests.exe --gtest_filter=XenonTransferServiceTest.*
 node cross_transfer/tests/account_webui_smoke_test.mjs
 node cross_transfer/tests/account_browser_integration.mjs --with-transfers
+node cross_transfer/tests/account_browser_integration.mjs --expect-transport=direct
+node cross_transfer/tests/account_browser_integration.mjs --expect-transport=direct --expect-small-transport=relay
+node cross_transfer/tests/account_browser_integration.mjs --expect-transport=direct --expect-small-transport=relay --fresh-direct-runs=35
 node cross_transfer/tests/account_browser_integration.mjs --with-file
 ```
 
 The live tests use two temporary Profiles and a generated server account.
 `--with-transfers` checks Unicode text reception, rejection and cancellation.
+The text check confirms that the invitation has no text content and that both
+native jobs report the same actual route. `--expect-transport=direct` or
+`--expect-transport=relay` additionally requires that route and enables the text
+checks. Use a network where the requested route is available; these flags do
+not alter the browser's connection policy. The direct check generates at least
+1024 bytes of Unicode text to clear the default small-payload threshold.
+`--expect-small-transport=relay` additionally sends a separate text below 1024
+bytes and verifies that both endpoints used relay. This check is opt-in so the
+ordinary smoke test does not assume a fixed server threshold; its route is
+recorded separately as `small_text` in the result.
+`--fresh-direct-runs=N` (1–64, with `--expect-transport=direct`) clears both
+connection caches before each small-text transfer and records every result.
+Use 35 rounds to exercise channel cleanup beyond the per-account limit of 32
+simultaneous signaling channels. The local successful-peer preference remains
+available, so each round must negotiate a new direct connection.
 `--with-file` also opens a visible native file picker: select the generated
 source named in `out/own_transfer_file_selection.json` when the script prints
 `WAIT_FILE_SELECTION`. It verifies a 1 MiB transfer and SHA-256 under an isolated
-download directory. Both modes retain the account restoration and logout
+download directory and checks the file route too. Both modes retain the account restoration and logout
 checks. Temporary files and Profiles are removed automatically; remove the
 generated server account using the identity in
 `out/account_browser_integration_result.json` after testing.
+
+Two Profiles on one machine exercise real browser and server code, but do not
+verify connectivity between separate devices or across NATs. A small payload
+using the server's size policy also does not test fallback after ICE failure.
 
 ### Native targets and tests
 

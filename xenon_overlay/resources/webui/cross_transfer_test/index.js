@@ -475,7 +475,8 @@ const invitationLabels = new Map([
 function resetOwnTransfers() {
   ++ownTransferVersion;
   clearTimeout(ownTransferPollTimer);
-  ownTransferState = {transfers: [], job: {active: false}, busy: false, error: ''};
+  ownTransferState = {transfers: [], job: {active: false}, busy: false, error: '',
+    useStun: ownTransferState.useStun};
   ownTransferListKey = '';
   ownRecipientId = '';
   ownSelectedFile = null;
@@ -498,21 +499,22 @@ function updateOwnTransferControls() {
   const recipient = authenticated && ownRecipientDevice();
   const locked = !sendWithPromise || !authenticated || accountPending ||
       ownTransferPending || ownTransferState.busy;
-  const fileActive = Boolean(ownTransferState.job?.active);
+  const payloadActive = Boolean(ownTransferState.job?.active);
   $('ownRecipient').textContent = recipient ?
       `发送到：${recipient.displayName || '未命名设备'}` : '请在上方选择一台在线设备。';
   $('ownText').disabled = locked;
   const textBytes = new TextEncoder().encode($('ownText').value).length;
   $('ownTextCount').textContent = textBytes ? `${textBytes.toLocaleString()} / 16,384 字节` : '最多 16 KB';
   $('ownText').setCustomValidity(textBytes > 16384 ? '文本不能超过 16 KB。' : '');
-  $('ownSendText').disabled = locked || !recipient || !$('ownText').value || textBytes > 16384;
-  $('ownChooseFile').disabled = locked || fileActive;
-  $('ownSendFile').disabled = locked || fileActive || !recipient || !ownSelectedFile;
+  $('ownSendText').disabled = locked || payloadActive || !recipient || !$('ownText').value || textBytes > 16384;
+  $('ownChooseFile').disabled = locked || payloadActive;
+  $('ownSendFile').disabled = locked || payloadActive || !recipient || !ownSelectedFile;
   $('ownFileName').textContent = ownSelectedFile?.name || '尚未选择文件';
   $('ownFileSize').textContent = ownSelectedFile ? formatBytes(ownSelectedFile.size) : '';
   $('ownTransferRefresh').disabled = locked || ownTransferReadInFlight;
-  $('ownCancelJob').disabled = locked || !fileActive;
-  $('ownCancelJob').hidden = !fileActive;
+  $('ownUseStun').disabled = locked || typeof ownTransferState.useStun !== 'boolean';
+  $('ownCancelJob').disabled = locked || !payloadActive;
+  $('ownCancelJob').hidden = !payloadActive;
   for (const button of $('deviceList').querySelectorAll('.device-send')) {
     const selected = button.dataset.deviceId === ownRecipientId;
     button.textContent = selected ? '已选择' : '发送';
@@ -520,7 +522,7 @@ function updateOwnTransferControls() {
     button.disabled = locked;
   }
   for (const button of $('ownTransferList').querySelectorAll('[data-transfer-action]')) {
-    button.disabled = locked || (fileActive && button.dataset.fileAccept === 'true');
+    button.disabled = locked || (payloadActive && button.dataset.payloadAccept === 'true');
   }
 }
 
@@ -530,7 +532,8 @@ function makeTransferAction(label, action, transfer) {
   button.className = action === 'accept' ? 'button primary' : 'button subtle';
   button.textContent = label;
   button.dataset.transferAction = action;
-  button.dataset.fileAccept = String(action === 'accept' && transfer.kind === 'file');
+  button.dataset.payloadAccept = String(action === 'accept' &&
+      (transfer.kind === 'file' || transfer.payloadMode === 'stream'));
   button.addEventListener('click', () => void mutateOwnTransfer(
       'ownTransferRespond', {id: transfer.id, action}));
   return button;
@@ -541,6 +544,7 @@ function renderOwnTransferState(next) {
     throw new Error('浏览器返回了无效的传输状态。');
   }
   ownTransferState = next;
+  $('ownUseStun').checked = next.useStun === true;
   showError('ownTransferError', typeof next.error === 'string' ? next.error : '');
   const list = $('ownTransferList');
   const transfers = next.transfers.filter(transfer => transfer &&
@@ -574,18 +578,20 @@ function renderOwnTransferState(next) {
       content.className = 'own-transfer-content';
       if (transfer.kind === 'file') {
         content.textContent = `${transfer.fileName || '文件'} · ${formatBytes(transfer.fileSize)}`;
-      } else if (transfer.status === 'completed') {
+      } else if (transfer.status === 'completed' && transfer.text) {
         content.classList.add('own-received-text');
         content.textContent = typeof transfer.text === 'string' ? transfer.text : '';
       } else {
-        content.textContent = '文本消息';
+        content.textContent = transfer.status === 'completed' ? '文本内容暂不可用' :
+            transfer.payloadMode === 'stream' ? `文本消息 · ${formatBytes(transfer.fileSize)}` : '文本消息';
       }
       const actions = document.createElement('div');
       actions.className = 'own-transfer-item-actions';
       if (transfer.status === 'pending' && incoming) {
         actions.append(makeTransferAction('接受', 'accept', transfer),
             makeTransferAction('拒绝', 'reject', transfer));
-      } else if (transfer.status === 'accepted' && incoming && transfer.kind === 'file' &&
+      } else if (transfer.status === 'accepted' && incoming &&
+          (transfer.kind === 'file' || transfer.payloadMode === 'stream') &&
           !(next.job.active && next.job.transferId === transfer.id)) {
         const interrupted = document.createElement('span');
         interrupted.textContent = '传输已中断，请让发送端重新发送。';
@@ -593,7 +599,8 @@ function renderOwnTransferState(next) {
       } else if ((transfer.status === 'pending' && !incoming) || transfer.status === 'accepted') {
         actions.append(makeTransferAction('取消', 'cancel', transfer));
       }
-      if (transfer.status === 'completed' && transfer.kind === 'text') {
+      if (transfer.status === 'completed' && transfer.kind === 'text' &&
+          typeof transfer.text === 'string' && transfer.text.length) {
         const copy = document.createElement('button');
         copy.type = 'button';
         copy.className = 'button subtle';
@@ -614,6 +621,19 @@ function renderOwnTransferState(next) {
         actions.append(copy);
       }
       item.append(heading, content, actions);
+      if (transfer.kind === 'file' && transfer.status === 'completed' &&
+          typeof transfer.savedPath === 'string' && transfer.savedPath) {
+        const saved = document.createElement('p');
+        saved.className = 'own-transfer-content';
+        saved.textContent = `已保存到：${transfer.savedPath}`;
+        item.append(saved);
+      }
+      if (typeof transfer.error === 'string' && transfer.error) {
+        const error = document.createElement('p');
+        error.className = 'own-transfer-content';
+        error.textContent = transfer.error;
+        item.append(error);
+      }
       list.append(item);
     }
   }
@@ -621,12 +641,20 @@ function renderOwnTransferState(next) {
   $('ownTransferCount').textContent = transfers.length ? `${transfers.length} 条` : '';
   const job = next.job;
   $('ownJob').hidden = !job.active && !job.transferId;
-  $('ownJobStatus').textContent = stateLabels.get(job.state) || (job.active ? '正在传输' : '文件传输');
+  $('ownJobStatus').textContent = job.state === 'confirming' &&
+      typeof job.status === 'string' && job.status ? job.status :
+      stateLabels.get(job.state) || (job.active ? '正在传输' : '传输');
+  const transportLabel = {direct: '设备直连', relay: '中继传输', auto: '正在选择连接方式'}[job.transport];
+  $('ownJobTransport').textContent = transportLabel || '';
+  $('ownJobTransport').hidden = !transportLabel;
   const percent = Math.max(0, Math.min(100, Number(job.percent) || 0));
   $('ownJobProgress').value = percent;
   $('ownJobProgressText').textContent = `${formatBytes(job.transferredBytes)} / ${formatBytes(job.totalBytes)} · ${Math.round(percent)}%`;
-  $('ownJobSavedPath').textContent = job.savedPath ? `已保存到：${job.savedPath}` : '';
-  $('ownJobSavedPath').hidden = !job.savedPath;
+  const textJob = job.kind === 'text' ||
+      transfers.some(transfer => transfer.id === job.transferId && transfer.kind === 'text');
+  const savedPath = !textJob && job.savedPath;
+  $('ownJobSavedPath').textContent = savedPath ? `已保存到：${savedPath}` : '';
+  $('ownJobSavedPath').hidden = !savedPath;
   showError('ownJobError', typeof job.error === 'string' ? job.error : '');
   updateOwnTransferControls();
 }
@@ -688,6 +716,11 @@ async function mutateOwnTransfer(method, options) {
 }
 
 $('ownText').addEventListener('input', updateOwnTransferControls);
+$('ownUseStun').addEventListener('change', async () => {
+  if ($('ownUseStun').disabled) return;
+  await mutateOwnTransfer('ownTransferSetUseStun', {enabled: $('ownUseStun').checked});
+  $('ownUseStun').checked = ownTransferState.useStun === true;
+});
 $('ownTextForm').addEventListener('submit', async event => {
   event.preventDefault();
   updateOwnTransferControls();
@@ -714,6 +747,7 @@ $('ownChooseFile').addEventListener('click', async () => {
     }
   } catch {
     if (version === ownTransferVersion && !pageClosed) {
+      ownSelectedFile = null;
       showError('ownTransferError', '无法读取所选文件，请重新选择。');
     }
   } finally {
