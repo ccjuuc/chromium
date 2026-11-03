@@ -108,8 +108,8 @@ void XenonTransferWebUIHandler::Refresh(const base::ListValue& args) {
   }
   XenonTransferService::GetForProfile(Profile::FromWebUI(web_ui()))
       ->Refresh(base::BindOnce(&XenonTransferWebUIHandler::Reply,
-                               weak_factory_.GetWeakPtr(),
-                               args[0].GetString()));
+                               weak_factory_.GetWeakPtr(), args[0].GetString()),
+                /*retry_finalization=*/true);
 }
 
 void XenonTransferWebUIHandler::ChooseFile(const base::ListValue& args) {

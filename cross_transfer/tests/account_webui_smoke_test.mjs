@@ -406,8 +406,10 @@ try {
   `);
   assert.equal(await run(`$('ownTransferList').firstElementChild.dataset.transferId`), 'a'.repeat(32));
   assert.equal(await run(`$('ownTransferList').querySelector('.own-transfer-content').textContent`), '文本消息');
-  assert.equal(await run(`$('ownTransferList').querySelectorAll('[data-transfer-action="accept"]').length`), 2);
-  assert.match(await run(`$('ownTransferList').lastElementChild.textContent`), /继续接收/);
+  assert.equal(await run(`$('ownTransferList').querySelectorAll('[data-transfer-action="accept"]').length`), 1);
+  assert.match(await run(`$('ownTransferList').lastElementChild.textContent`), /传输已中断.*重新发送/);
+  assert.equal(await run(`$('ownTransferList').lastElementChild.querySelectorAll('[data-transfer-action="accept"]').length`), 0);
+  assert.equal(await run(`$('ownTransferList').lastElementChild.querySelector('[data-transfer-action="cancel"]').disabled`), false);
   await run(`
     ownAnswer = {...ownAnswer, transfers: [{...incomingText, status: 'completed'}, incomingFile]};
     $('ownTransferList').querySelector('[data-transfer-action="accept"]').click();
@@ -421,8 +423,25 @@ try {
   assert.equal(await run('Boolean(globalThis.ownInjected)'), false);
   assert.match(await run(`$('ownTransferList').textContent`), /复制文本/);
 
+  // Uncertain acceptance keeps the same file reserved and still cancellable.
   await run(`
-    ownAnswer = {...ownAnswer, job: {active: true, transferId: incomingFile.id,
+    ownSelectedFile = {name: 'another.txt', size: 1};
+    ownAnswer = {...ownAnswer,
+      transfers: ownAnswer.transfers.map(item => item.id === incomingFile.id ?
+        {...item, status: 'pending'} : item),
+      job: {active: true, transferId: incomingFile.id, state: 'confirming'}};
+    renderOwnTransferState(ownAnswer);
+  `);
+  assert.equal(await run(`$('ownJobStatus').textContent`), '正在确认接收结果');
+  assert.equal(await run(`$('ownChooseFile').disabled && $('ownSendFile').disabled`), true);
+  assert.equal(await run(`$('ownTransferList').querySelector('[data-file-accept="true"]').disabled`), true);
+  assert.equal(await run(`$('ownCancelJob').disabled`), false);
+
+  await run(`
+    ownSelectedFile = null;
+    ownAnswer = {...ownAnswer,
+      transfers: ownAnswer.transfers.map(item => item.id === incomingFile.id ? incomingFile : item),
+      job: {active: true, transferId: incomingFile.id,
       state: 'receiving', role: 'receiver', totalBytes: 1000, transferredBytes: 420,
       percent: 42, savedPath: '', error: ''}};
     renderOwnTransferState(ownAnswer);
@@ -435,6 +454,17 @@ try {
   await until(`!ownTransferPending && calls.some(call => call[0] === 'ownTransferCancel')`);
   assert.deepEqual(await run(`calls.find(call => call[0] === 'ownTransferCancel')`), ['ownTransferCancel']);
   assert.equal(await run('document.documentElement.scrollWidth <= innerWidth'), true);
+
+  // Failed result notifications leave the existing manual refresh usable.
+  await run(`
+    ownAnswer = {...ownAnswer, error: '文件已保存，但完成确认失败；请点击刷新重试确认',
+      job: {...ownAnswer.job, active: true, state: 'completed', percent: 100}};
+    renderOwnTransferState(ownAnswer);
+  `);
+  assert.equal(await run(`$('ownTransferRefresh').disabled`), false);
+  assert.match(await run(`$('ownTransferError').textContent`), /文件已保存.*点击刷新/);
+  await run(`$('ownTransferRefresh').click()`);
+  await until(`!ownTransferReadInFlight && calls.some(call => call[0] === 'ownTransferRefresh')`);
 
   // Late transfer cache replies must not repopulate a signed-out profile.
   await run(`
@@ -451,7 +481,7 @@ try {
   console.log('PASS: account preview guards, restore/continue, login parameters, ' +
       'registration confirmation, duplicate submit, errors/password clearing, ' +
       'device ordering, focus retention and XSS safety, refresh/logout, device-targeted text/files, ' +
-      'receive confirmation and resume, transfer progress/cancel, byte limits, ' +
+      'receive confirmation and interrupted-transfer guidance, transfer progress/cancel, byte limits, ' +
       'stale responses, mobile layout.');
 } finally {
   clearTimeout(timeout);

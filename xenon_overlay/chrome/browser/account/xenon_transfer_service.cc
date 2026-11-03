@@ -173,9 +173,10 @@ void XenonTransferService::OnSessionChanged() {
   active_id_.clear();
   active_role_.clear();
   active_name_.clear();
+  file_error_.clear();
   source_files_.clear();
   accepted_receives_.clear();
-  attempted_files_.clear();
+  file_attempts_.clear();
   invitations_.clear();
   error_.clear();
 }
@@ -206,18 +207,22 @@ base::DictValue XenonTransferService::GetState() const {
   } else if (relay_pending_) {
     job.Set("state", "connecting");
     job.Set("status", "正在建立传输连接…");
+  } else if (accepted_receives_.contains(active_id_)) {
+    job.Set("state", "confirming");
+    job.Set("status", "正在确认接收结果…");
+  } else if (!file_error_.empty()) {
+    job.Set("state", "failed");
+    job.Set("error", file_error_);
   } else if (!source_files_.empty()) {
-    job.Set("id", source_files_.begin()->first);
-    job.Set("transferId", source_files_.begin()->first);
-    job.Set("role", "send");
-    job.Set("fileName", source_files_.begin()->second.name);
     job.Set("state", "waiting");
     job.Set("status", "等待对方接收");
     job.Set("totalBytes",
             static_cast<double>(source_files_.begin()->second.size));
   }
   if (pending_finalization_ && pending_finalization_->success) {
-    job.Set("status", "文件已保存，正在确认完成…");
+    job.Set("status", !finalization_in_flight_
+                          ? "文件已保存，点击刷新传输重试确认"
+                          : "文件已保存，正在确认完成…");
   }
   return base::DictValue()
       .Set("transfers", invitations_.Clone())
@@ -259,8 +264,17 @@ void XenonTransferService::Finish(StateCallback callback, std::string error) {
   }
 }
 
-void XenonTransferService::Refresh(StateCallback callback) {
+void XenonTransferService::Refresh(StateCallback callback,
+                                   bool retry_finalization) {
   OnSessionChanged();
+  if (pending_finalization_ &&
+      base::Time::Now() >= pending_finalization_->expires_at) {
+    ClearFinalization();
+  }
+  if (retry_finalization && pending_finalization_ && !finalization_in_flight_) {
+    pending_finalization_->error.clear();
+    FinalizeFile();
+  }
   if (polling_ || operation_busy_ || account_id_.empty() ||
       device_id_.empty()) {
     if (callback) {
@@ -325,11 +339,17 @@ void XenonTransferService::OnListed(uint64_t generation,
     return !invitation || IsTerminal(*invitation->FindString("status"));
   };
   if (pending_finalization_ && no_longer_pending(pending_finalization_->id)) {
-    ForgetFile(pending_finalization_->id);
     ClearFinalization();
   }
-  std::erase_if(attempted_files_, no_longer_pending);
-  std::erase_if(accepted_receives_, no_longer_pending);
+  std::erase_if(file_attempts_, [&](const auto& entry) {
+    return no_longer_pending(entry.first);
+  });
+  // A fresh list resolves an uncertain accept without submitting it again.
+  // Lists started before the accept were discarded by list_revision_ above.
+  std::erase_if(accepted_receives_, [&](const std::string& id) {
+    const auto* invitation = FindInvitation(id);
+    return !invitation || *invitation->FindString("status") != "accepted";
+  });
   for (auto it = source_files_.begin(); it != source_files_.end();) {
     const auto* invitation = FindInvitation(it->first);
     if (!invitation || IsTerminal(*invitation->FindString("status"))) {
@@ -472,8 +492,7 @@ void XenonTransferService::OnCreated(uint64_t generation,
   if (!source.path.empty()) {
     const auto id = *invitation->FindString("id");
     source_files_.emplace(id, std::move(source));
-    job_.reset();
-    active_id_.clear();
+    SetActiveFile(*invitation);
   }
   invitations_.Append(std::move(*invitation));
   Finish(std::move(callback));
@@ -493,26 +512,49 @@ void XenonTransferService::Respond(std::string invitation_id,
   }
   const auto* invitation = FindInvitation(invitation_id);
   if (pending_finalization_ && pending_finalization_->id == invitation_id) {
-    Finish(std::move(callback), "正在确认文件传输结果，请稍后重试");
+    Finish(std::move(callback),
+           "正在确认文件传输结果；若失败请点击刷新传输重试");
     return;
   }
   const bool accepting_file = invitation && action == "accept" &&
                               *invitation->FindString("kind") == "file";
+  const bool cancelling_file = invitation && action == "cancel" &&
+                               *invitation->FindString("kind") == "file";
   if (!IsId(invitation_id) || !invitation ||
       (action != "accept" && action != "reject" && action != "cancel") ||
       (action != "cancel" &&
        *invitation->FindString("receiverDeviceId") != device_id_) ||
-      (accepting_file && HasFileWork() && active_id_ != invitation_id)) {
+      (accepting_file && HasFileWork()) ||
+      (cancelling_file && HasFileWork() && active_id_ != invitation_id)) {
     Finish(std::move(callback), "传输状态已变化，或另一个文件正在传输");
+    return;
+  }
+  if (accepting_file && *invitation->FindString("status") != "pending") {
+    Finish(std::move(callback), "文件传输已中断，请让发送端重新发送");
     return;
   }
   operation_busy_ = true;
   ++list_revision_;
+  if (accepting_file) {
+    // Reserve the single file slot before submitting consent. If the response
+    // is lost, a fresh list either starts this receive or releases the slot.
+    SetActiveFile(*invitation);
+    accepted_receives_.insert(invitation_id);
+  }
   if (action == "cancel") {
     if (active_id_ == invitation_id) {
       StopLocalFile();
     }
-    ForgetFile(invitation_id);
+    if (cancelling_file) {
+      if (active_id_ != invitation_id) {
+        SetActiveFile(*invitation);
+      }
+      // A new user cancellation may retry a previously rejected notification.
+      file_attempts_.erase(invitation_id);
+      QueueFinalization(invitation_id, false);
+      Finish(std::move(callback));
+      return;
+    }
   }
   XenonAccountService::GetForProfile(profile_)->RequestForSession(
       "POST", "/transfers/" + invitation_id + "/" + action,
@@ -547,10 +589,7 @@ void XenonTransferService::OnResponded(uint64_t generation,
       break;
     }
   }
-  if (action == "accept" && *invitation->FindString("kind") == "file") {
-    accepted_receives_.insert(invitation_id);
-    attempted_files_.erase(invitation_id);
-  } else if (action == "reject" || action == "cancel") {
+  if (action == "reject" || action == "cancel") {
     ForgetFile(invitation_id);
   }
   ConsiderStartingFile();
@@ -558,16 +597,13 @@ void XenonTransferService::OnResponded(uint64_t generation,
 }
 
 void XenonTransferService::Cancel(StateCallback callback) {
-  const std::string id = !active_id_.empty()     ? active_id_
-                         : source_files_.empty() ? ""
-                                                 : source_files_.begin()->first;
-  if (id.empty()) {
+  if (active_id_.empty()) {
     if (callback) {
       std::move(callback).Run(GetState());
     }
     return;
   }
-  Respond(id, "cancel", std::move(callback));
+  Respond(active_id_, "cancel", std::move(callback));
 }
 
 const base::DictValue* XenonTransferService::FindInvitation(
@@ -582,7 +618,17 @@ const base::DictValue* XenonTransferService::FindInvitation(
 
 bool XenonTransferService::HasFileWork() const {
   return job_running_ || relay_pending_ || !source_files_.empty() ||
-         pending_finalization_.has_value();
+         !accepted_receives_.empty() || pending_finalization_.has_value();
+}
+
+void XenonTransferService::SetActiveFile(const base::DictValue& invitation) {
+  active_id_ = *invitation.FindString("id");
+  active_role_ = *invitation.FindString("senderDeviceId") == device_id_
+                     ? "send"
+                     : "receive";
+  active_name_ = *invitation.FindString("fileName");
+  job_.reset();
+  file_error_.clear();
 }
 
 void XenonTransferService::ConsiderStartingFile() {
@@ -592,15 +638,27 @@ void XenonTransferService::ConsiderStartingFile() {
   for (const auto& item : invitations_) {
     const auto& invitation = item.GetDict();
     const auto& id = *invitation.FindString("id");
-    if (*invitation.FindString("kind") != "file" ||
-        *invitation.FindString("status") != "accepted" ||
-        attempted_files_.contains(id)) {
+    const auto& status = *invitation.FindString("status");
+    if (*invitation.FindString("kind") != "file" || IsTerminal(status) ||
+        file_attempts_.contains(id)) {
       continue;
     }
     const bool sending = *invitation.FindString("senderDeviceId") == device_id_;
-    if ((sending && source_files_.contains(id)) ||
-        (!sending && accepted_receives_.contains(id))) {
-      RequestRelay(invitation, sending);
+    const bool local =
+        sending ? source_files_.contains(id) : accepted_receives_.contains(id);
+    if (local) {
+      if (status == "accepted") {
+        RequestRelay(invitation, sending);
+      }
+      return;
+    }
+    // File paths, consent and relay leases do not survive a profile restart.
+    // Do not advertise a resume that would conflict with the old peer's lease.
+    // Also cancel outgoing pending invitations whose source path was lost.
+    if (!HasFileWork() && (sending || status == "accepted")) {
+      SetActiveFile(invitation);
+      file_error_ = "文件传输已中断，请让发送端重新发送";
+      QueueFinalization(id, false);
       return;
     }
   }
@@ -608,12 +666,9 @@ void XenonTransferService::ConsiderStartingFile() {
 
 void XenonTransferService::RequestRelay(const base::DictValue& invitation,
                                         bool sending) {
-  active_id_ = *invitation.FindString("id");
-  active_role_ = sending ? "send" : "receive";
-  active_name_ = *invitation.FindString("fileName");
+  SetActiveFile(invitation);
   relay_pending_ = true;
-  attempted_files_.insert(active_id_);
-  job_.reset();
+  file_attempts_.emplace(active_id_, FileAttempt::kRelayRequested);
   XenonAccountService::GetForProfile(profile_)->RequestForSession(
       "POST", "/transfers/" + active_id_ + "/relay",
       base::DictValue().Set("deviceId", device_id_),
@@ -659,9 +714,11 @@ void XenonTransferService::OnRelayReady(uint64_t generation,
       !expires || !std::isfinite(*expires) ||
       *expires <= base::Time::Now().InSecondsFSinceUnixEpoch()) {
     error_ = ApiError(reply);
-    ForgetFile(id);
+    file_error_ = error_ + "；请重新发送";
+    QueueFinalization(id, false);
     return;
   }
+  error_.clear();
   cross_transfer::TestJobOptions options;
   options.transport = "relay";
   options.role = sending ? "send" : "receive";
@@ -727,11 +784,23 @@ void XenonTransferService::OnJobFinished(uint64_t generation,
 
 void XenonTransferService::QueueFinalization(std::string invitation_id,
                                              bool success) {
+  // Every file outcome enters here once. A late worker callback must neither
+  // replace a pending notification nor submit it again automatically.
+  if (pending_finalization_) {
+    return;
+  }
   const auto* invitation = FindInvitation(invitation_id);
   if (!invitation || IsTerminal(*invitation->FindString("status"))) {
     ForgetFile(invitation_id);
     return;
   }
+  auto [attempt, inserted] = file_attempts_.try_emplace(
+      invitation_id, FileAttempt::kFinalizationQueued);
+  if (!inserted && attempt->second == FileAttempt::kFinalizationQueued) {
+    return;
+  }
+  attempt->second = FileAttempt::kFinalizationQueued;
+  ForgetFile(invitation_id);
   pending_finalization_ =
       PendingFinalization{std::move(invitation_id),
                           success,
@@ -748,7 +817,6 @@ void XenonTransferService::FinalizeFile() {
     return;
   }
   if (base::Time::Now() >= pending_finalization_->expires_at) {
-    ForgetFile(pending_finalization_->id);
     ClearFinalization();
     Refresh({});
     return;
@@ -787,27 +855,24 @@ void XenonTransferService::OnFinalized(uint64_t generation,
         break;
       }
     }
-    ForgetFile(invitation_id);
     ClearFinalization();
     error_.clear();
   } else if (reply.status == 0 || reply.status == 200 || reply.status == 408 ||
              reply.status == 429 || reply.status >= 500) {
-    // Keep this single pending terminal update until acknowledged, expired,
-    // or superseded by a terminal list entry. Polling must not restart the
-    // already completed receive or hide the retry error.
-    pending_finalization_->error = ApiError(reply);
-    finalization_retry_timer_.Start(FROM_HERE, base::Seconds(2), this,
-                                    &XenonTransferService::FinalizeFile);
+    // File completion is already decided by the transfer protocol. Keep only
+    // the list update for an explicit refresh; polling never resubmits it.
+    pending_finalization_->error =
+        pending_finalization_->success
+            ? "文件已保存，但完成确认失败；请点击刷新传输重试确认"
+            : "未能通知对端取消传输；请点击刷新传输重试取消通知";
   } else {
     error_ = ApiError(reply);
-    ForgetFile(invitation_id);
     ClearFinalization();
   }
   Refresh({});
 }
 
 void XenonTransferService::ClearFinalization() {
-  finalization_retry_timer_.Stop();
   pending_finalization_.reset();
   finalization_in_flight_ = false;
 }

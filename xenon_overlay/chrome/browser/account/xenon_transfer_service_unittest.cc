@@ -22,16 +22,22 @@
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-// Inject only the file worker's completed result. The account requests and
-// their asynchronous callbacks still run through the normal service path.
+// Model a receive owned by this process and inject its completed file result.
+// Account requests and asynchronous callbacks still use the normal service
+// path.
 class XenonTransferServiceTestPeer {
  public:
-  static void CompleteReceivedFile(XenonTransferService* service,
-                                   const std::string& id) {
+  static void TrackReceivedFile(XenonTransferService* service,
+                                const std::string& id) {
     service->active_id_ = id;
     service->active_role_ = "receive";
-    service->attempted_files_.insert(id);
+    service->file_attempts_.emplace(
+        id, XenonTransferService::FileAttempt::kRelayRequested);
     service->accepted_receives_.insert(id);
+  }
+
+  static void CompleteReceivedFile(XenonTransferService* service,
+                                   const std::string& id) {
     service->QueueFinalization(id, true);
   }
 };
@@ -106,8 +112,14 @@ class FakeTransferServer {
     if (path.starts_with("/transfers/")) {
       ++action_requests;
       EXPECT_EQ(*body.FindString("deviceId"), device_id);
-      if (path.ends_with("/complete")) {
+      if (path.ends_with("/relay")) {
+        ++relay_requests;
+        return {relay_status, {}, {}};
+      } else if (path.ends_with("/complete")) {
         ++completion_requests;
+        if (completion_status != 200) {
+          return {completion_status, {}, {}};
+        }
         if (completion_failures > 0) {
           --completion_failures;
           return {503, {}, {}};
@@ -118,10 +130,24 @@ class FakeTransferServer {
           return {0, {}, "连接中断"};
         }
       } else if (path.ends_with("/accept")) {
+        ++accept_requests;
+        if (accept_failures > 0) {
+          --accept_failures;
+          return {503, {}, {}};
+        }
         invitation.Set("status", *invitation.FindString("kind") == "text"
                                      ? "completed"
                                      : "accepted");
+        if (lose_accept_response) {
+          lose_accept_response = false;
+          return {0, {}, "连接中断"};
+        }
       } else if (path.ends_with("/cancel")) {
+        ++cancel_requests;
+        if (cancel_failures > 0) {
+          --cancel_failures;
+          return {503, {}, {}};
+        }
         invitation.Set("status", "cancelled");
       } else if (path.ends_with("/reject")) {
         invitation.Set("status", "rejected");
@@ -170,8 +196,16 @@ class FakeTransferServer {
   std::atomic<int> create_requests{0};
   std::atomic<int> action_requests{0};
   std::atomic<int> completion_requests{0};
+  std::atomic<int> relay_requests{0};
+  std::atomic<int> accept_requests{0};
+  std::atomic<int> cancel_requests{0};
+  int relay_status = 503;
+  int completion_status = 200;
+  int accept_failures = 0;
+  int cancel_failures = 0;
   int completion_failures = 0;
   bool lose_completion_response = false;
+  bool lose_accept_response = false;
   bool fail_lists = false;
 };
 
@@ -201,10 +235,21 @@ class XenonTransferServiceTest : public testing::Test {
     return service;
   }
 
-  base::DictValue Refresh(XenonTransferService* service) {
+  base::DictValue Refresh(XenonTransferService* service,
+                          bool retry_finalization = false) {
     base::test::TestFuture<base::DictValue> result;
-    service->Refresh(result.GetCallback());
+    service->Refresh(result.GetCallback(), retry_finalization);
     return result.Take();
+  }
+
+  void AcceptIncomingFile(XenonTransferService* service) {
+    server_.SetAcceptedFile();
+    server_.invitation.Set("status", "pending");
+    Refresh(service);
+    base::test::TestFuture<base::DictValue> accepted;
+    service->Respond(kInvitationId, "accept", accepted.GetCallback());
+    ASSERT_TRUE(accepted.Wait());
+    task_environment_.RunUntilIdle();
   }
 
   content::BrowserTaskEnvironment task_environment_{
@@ -277,9 +322,10 @@ TEST_F(XenonTransferServiceTest, MaximumEscapedTextCanBeSent) {
   EXPECT_EQ(server_.create_requests, 1);
 }
 
-TEST_F(XenonTransferServiceTest, CompletedFileRetriesTemporaryFailure) {
+TEST_F(XenonTransferServiceTest, CompletedFileWaitsForManualNotificationRetry) {
   auto* service = LoggedInService();
   server_.SetAcceptedFile();
+  XenonTransferServiceTestPeer::TrackReceivedFile(service, kInvitationId);
   Refresh(service);
   server_.completion_failures = 1;
   XenonTransferServiceTestPeer::CompleteReceivedFile(service, kInvitationId);
@@ -294,9 +340,10 @@ TEST_F(XenonTransferServiceTest, CompletedFileRetriesTemporaryFailure) {
   service->Respond(kInvitationId, "accept", accepted.GetCallback());
   EXPECT_FALSE(accepted.Get().FindString("error")->empty());
   EXPECT_EQ(server_.action_requests, 1);
-  task_environment_.FastForwardBy(base::Seconds(1));
+  task_environment_.FastForwardBy(base::Seconds(30));
   EXPECT_EQ(server_.completion_requests, 1);
-  task_environment_.FastForwardBy(base::Seconds(1));
+  Refresh(service, /*retry_finalization=*/true);
+  task_environment_.RunUntilIdle();
   EXPECT_EQ(server_.completion_requests, 2);
   const auto state = service->GetState();
   EXPECT_EQ(
@@ -306,9 +353,11 @@ TEST_F(XenonTransferServiceTest, CompletedFileRetriesTemporaryFailure) {
   EXPECT_FALSE(state.FindDict("job")->FindBool("active").value());
 }
 
-TEST_F(XenonTransferServiceTest, LostCompletionResponseRetriesIdempotently) {
+TEST_F(XenonTransferServiceTest,
+       LostCompletionResponseRetriesManuallyAndIdempotently) {
   auto* service = LoggedInService();
   server_.SetAcceptedFile();
+  XenonTransferServiceTestPeer::TrackReceivedFile(service, kInvitationId);
   Refresh(service);
   server_.lose_completion_response = true;
   server_.fail_lists = true;
@@ -319,6 +368,9 @@ TEST_F(XenonTransferServiceTest, LostCompletionResponseRetriesIdempotently) {
   EXPECT_TRUE(service->GetState().FindDict("job")->FindBool("active").value());
 
   task_environment_.FastForwardBy(base::Seconds(2));
+  EXPECT_EQ(server_.completion_requests, 1);
+  Refresh(service, /*retry_finalization=*/true);
+  task_environment_.RunUntilIdle();
   EXPECT_EQ(server_.completion_requests, 2);
   server_.fail_lists = false;
   const auto state = Refresh(service);
@@ -334,6 +386,7 @@ TEST_F(XenonTransferServiceTest,
        TerminalListAcknowledgesLostCompletionResponse) {
   auto* service = LoggedInService();
   server_.SetAcceptedFile();
+  XenonTransferServiceTestPeer::TrackReceivedFile(service, kInvitationId);
   Refresh(service);
   server_.lose_completion_response = true;
   XenonTransferServiceTestPeer::CompleteReceivedFile(service, kInvitationId);
@@ -345,9 +398,10 @@ TEST_F(XenonTransferServiceTest,
   EXPECT_EQ(server_.completion_requests, 1);
 }
 
-TEST_F(XenonTransferServiceTest, CompletedFileRetryStopsAtInvitationExpiry) {
+TEST_F(XenonTransferServiceTest, PendingCompletionStopsAtInvitationExpiry) {
   auto* service = LoggedInService();
   server_.SetAcceptedFile();
+  XenonTransferServiceTestPeer::TrackReceivedFile(service, kInvitationId);
   server_.invitation.Set(
       "expiresAt",
       (base::Time::Now() + base::Seconds(3)).InSecondsFSinceUnixEpoch());
@@ -356,15 +410,17 @@ TEST_F(XenonTransferServiceTest, CompletedFileRetryStopsAtInvitationExpiry) {
   XenonTransferServiceTestPeer::CompleteReceivedFile(service, kInvitationId);
   task_environment_.RunUntilIdle();
   task_environment_.FastForwardBy(base::Seconds(4));
-  EXPECT_EQ(server_.completion_requests, 2);
+  EXPECT_EQ(server_.completion_requests, 1);
   EXPECT_FALSE(service->GetState().FindDict("job")->FindBool("active").value());
+  Refresh(service, /*retry_finalization=*/true);
   task_environment_.FastForwardBy(base::Seconds(4));
-  EXPECT_EQ(server_.completion_requests, 2);
+  EXPECT_EQ(server_.completion_requests, 1);
 }
 
-TEST_F(XenonTransferServiceTest, LogoutStopsCompletedFileRetry) {
+TEST_F(XenonTransferServiceTest, LogoutClearsPendingCompletion) {
   auto* service = LoggedInService();
   server_.SetAcceptedFile();
+  XenonTransferServiceTestPeer::TrackReceivedFile(service, kInvitationId);
   Refresh(service);
   server_.completion_failures = 1;
   XenonTransferServiceTestPeer::CompleteReceivedFile(service, kInvitationId);
@@ -379,6 +435,7 @@ TEST_F(XenonTransferServiceTest, LogoutStopsCompletedFileRetry) {
 TEST_F(XenonTransferServiceTest, LogoutDiscardsLateCompletionResponse) {
   auto* service = LoggedInService();
   server_.SetAcceptedFile();
+  XenonTransferServiceTestPeer::TrackReceivedFile(service, kInvitationId);
   Refresh(service);
   base::test::TestFuture<void> request_started;
   auto release = std::make_shared<base::WaitableEvent>();
@@ -439,7 +496,9 @@ TEST_F(XenonTransferServiceTest, FileWaitsForConsentAndKeepsSourcePathNative) {
   EXPECT_EQ(server_.action_requests, 0);
   base::test::TestFuture<base::DictValue> cancelled;
   service->Cancel(cancelled.GetCallback());
-  state = cancelled.Take();
+  ASSERT_TRUE(cancelled.Wait());
+  task_environment_.RunUntilIdle();
+  state = service->GetState();
   EXPECT_FALSE(state.FindDict("job")->FindBool("active").value_or(true));
   EXPECT_EQ(server_.action_requests, 1);
 }
@@ -453,6 +512,184 @@ TEST_F(XenonTransferServiceTest, InvalidMetadataIsNotExposed) {
   const auto state = Refresh(service);
   EXPECT_FALSE(state.FindString("error")->empty());
   EXPECT_TRUE(state.FindList("transfers")->empty());
+}
+
+TEST_F(XenonTransferServiceTest,
+       RelayFailureEndsInvitationWithoutReconnecting) {
+  auto* service = LoggedInService();
+  base::ScopedTempDir directory;
+  ASSERT_TRUE(directory.CreateUniqueTempDir());
+  const auto source = directory.GetPath().AppendASCII("retry.txt");
+  ASSERT_TRUE(base::WriteFile(source, "retry contents"));
+  base::test::TestFuture<base::DictValue> sent;
+  service->SendFile(kOtherDevice, source, sent.GetCallback());
+  ASSERT_TRUE(sent.Wait());
+  server_.invitation.Set("status", "accepted");
+  Refresh(service);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(server_.relay_requests, 1);
+  EXPECT_EQ(server_.cancel_requests, 1);
+  EXPECT_EQ(*server_.invitation.FindString("status"), "cancelled");
+  const auto state = service->GetState();
+  EXPECT_FALSE(state.FindDict("job")->FindBool("active").value());
+  EXPECT_EQ(*state.FindDict("job")->FindString("state"), "failed");
+  EXPECT_NE(state.FindDict("job")->FindString("error")->find("重新发送"),
+            std::string::npos);
+  EXPECT_TRUE(base::PathExists(source));
+  task_environment_.FastForwardBy(base::Seconds(30));
+  EXPECT_EQ(server_.relay_requests, 1);
+  EXPECT_EQ(server_.cancel_requests, 1);
+}
+
+TEST_F(XenonTransferServiceTest, CancelNotificationDoesNotRetryAutomatically) {
+  auto* service = LoggedInService();
+  server_.cancel_failures = 10;
+  AcceptIncomingFile(service);
+  EXPECT_EQ(server_.cancel_requests, 1);
+  task_environment_.FastForwardBy(base::Seconds(30));
+  EXPECT_EQ(server_.cancel_requests, 1);
+  EXPECT_EQ(server_.relay_requests, 1);
+  EXPECT_NE(service->GetState().FindString("error")->find("点击刷新"),
+            std::string::npos);
+  Refresh(service);
+  task_environment_.FastForwardBy(base::Seconds(10));
+  EXPECT_EQ(server_.cancel_requests, 1);
+
+  server_.cancel_failures = 0;
+  base::test::TestFuture<base::DictValue> refreshed;
+  service->Refresh(refreshed.GetCallback(), /*retry_finalization=*/true);
+  ASSERT_TRUE(refreshed.Wait());
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(server_.cancel_requests, 2);
+  EXPECT_EQ(server_.relay_requests, 1);
+  EXPECT_EQ(*server_.invitation.FindString("status"), "cancelled");
+  EXPECT_FALSE(service->GetState().FindDict("job")->FindBool("active").value());
+}
+
+TEST_F(XenonTransferServiceTest,
+       CompletionNotificationDoesNotRetryAutomatically) {
+  auto* service = LoggedInService();
+  server_.SetAcceptedFile();
+  XenonTransferServiceTestPeer::TrackReceivedFile(service, kInvitationId);
+  Refresh(service);
+  server_.completion_failures = 10;
+  XenonTransferServiceTestPeer::CompleteReceivedFile(service, kInvitationId);
+  task_environment_.FastForwardBy(base::Seconds(30));
+  EXPECT_EQ(server_.completion_requests, 1);
+  EXPECT_EQ(server_.relay_requests, 0);
+  EXPECT_NE(service->GetState().FindString("error")->find("文件已保存"),
+            std::string::npos);
+  Refresh(service);
+  task_environment_.FastForwardBy(base::Seconds(10));
+  EXPECT_EQ(server_.completion_requests, 1);
+
+  server_.completion_failures = 0;
+  base::test::TestFuture<base::DictValue> refreshed;
+  service->Refresh(refreshed.GetCallback(), /*retry_finalization=*/true);
+  ASSERT_TRUE(refreshed.Wait());
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(server_.completion_requests, 2);
+  EXPECT_EQ(server_.relay_requests, 0);
+  EXPECT_EQ(*server_.invitation.FindString("status"), "completed");
+  EXPECT_FALSE(service->GetState().FindDict("job")->FindBool("active").value());
+}
+
+TEST_F(XenonTransferServiceTest, LogoutClearsPendingCancellation) {
+  auto* service = LoggedInService();
+  server_.cancel_failures = 10;
+  AcceptIncomingFile(service);
+  XenonAccountService::GetForProfile(profile_.get())->Logout({});
+  task_environment_.FastForwardBy(base::Seconds(4));
+  EXPECT_EQ(server_.cancel_requests, 1);
+  EXPECT_EQ(server_.relay_requests, 1);
+  EXPECT_TRUE(service->GetState().FindList("transfers")->empty());
+  EXPECT_FALSE(service->GetState().FindDict("job")->FindBool("active").value());
+}
+
+TEST_F(XenonTransferServiceTest, PeerCancellationClearsPendingNotification) {
+  auto* service = LoggedInService();
+  server_.cancel_failures = 10;
+  AcceptIncomingFile(service);
+  server_.invitation.Set("status", "cancelled");
+  Refresh(service);
+  task_environment_.FastForwardBy(base::Seconds(4));
+  EXPECT_EQ(server_.relay_requests, 1);
+  EXPECT_EQ(server_.cancel_requests, 1);
+  EXPECT_FALSE(service->GetState().FindDict("job")->FindBool("active").value());
+}
+
+TEST_F(XenonTransferServiceTest, LostAcceptResponseKeepsExplicitConsent) {
+  auto* service = LoggedInService();
+  server_.lose_accept_response = true;
+  AcceptIncomingFile(service);
+  EXPECT_EQ(server_.accept_requests, 1);
+  EXPECT_EQ(server_.relay_requests, 0);
+  const auto confirming = service->GetState();
+  EXPECT_TRUE(confirming.FindDict("job")->FindBool("active").value());
+  EXPECT_EQ(*confirming.FindDict("job")->FindString("transferId"),
+            kInvitationId);
+  EXPECT_EQ(*confirming.FindDict("job")->FindString("state"), "confirming");
+  base::ScopedTempDir directory;
+  ASSERT_TRUE(directory.CreateUniqueTempDir());
+  const auto source = directory.GetPath().AppendASCII("other.txt");
+  ASSERT_TRUE(base::WriteFile(source, "another transfer"));
+  base::test::TestFuture<base::DictValue> sent;
+  service->SendFile(kOtherDevice, source, sent.GetCallback());
+  EXPECT_FALSE(sent.Get().FindString("error")->empty());
+  EXPECT_EQ(server_.create_requests, 0);
+  server_.fail_lists = true;
+  Refresh(service);
+  EXPECT_TRUE(service->GetState().FindDict("job")->FindBool("active").value());
+  server_.fail_lists = false;
+  Refresh(service);
+  task_environment_.RunUntilIdle();
+  // Consent survived the lost response, so the client tried the relay once.
+  // The fake relay fails, and the normal failure path cancels this invitation.
+  EXPECT_EQ(server_.relay_requests, 1);
+  EXPECT_EQ(server_.cancel_requests, 1);
+  EXPECT_EQ(*server_.invitation.FindString("status"), "cancelled");
+}
+
+TEST_F(XenonTransferServiceTest,
+       RestartedReceiverCancelsInsteadOfReusingLease) {
+  auto* service = LoggedInService();
+  // The server has an accepted invitation from the previous browser process;
+  // this service has neither its consent nor its relay lease.
+  server_.SetAcceptedFile();
+  server_.cancel_failures = 1;
+  Refresh(service);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(server_.relay_requests, 0);
+  EXPECT_EQ(server_.cancel_requests, 1);
+  base::test::TestFuture<base::DictValue> accepted;
+  service->Respond(kInvitationId, "accept", accepted.GetCallback());
+  EXPECT_FALSE(accepted.Get().FindString("error")->empty());
+  EXPECT_EQ(server_.accept_requests, 0);
+  task_environment_.FastForwardBy(base::Seconds(2));
+  EXPECT_EQ(server_.cancel_requests, 1);
+  Refresh(service, /*retry_finalization=*/true);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(server_.cancel_requests, 2);
+  EXPECT_EQ(*server_.invitation.FindString("status"), "cancelled");
+  EXPECT_EQ(*service->GetState().FindDict("job")->FindString("state"),
+            "failed");
+  EXPECT_NE(service->GetState().FindDict("job")->FindString("error")->find(
+                "重新发送"),
+            std::string::npos);
+}
+
+TEST_F(XenonTransferServiceTest,
+       RestartedSenderCancelsInvitationWithoutSource) {
+  auto* service = LoggedInService();
+  server_.SetAcceptedFile();
+  server_.invitation.Set("senderDeviceId", server_.device_id);
+  server_.invitation.Set("receiverDeviceId", kOtherDevice);
+  server_.invitation.Set("status", "pending");
+  Refresh(service);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(server_.cancel_requests, 1);
+  EXPECT_EQ(server_.relay_requests, 0);
+  EXPECT_EQ(*server_.invitation.FindString("status"), "cancelled");
 }
 
 TEST_F(XenonTransferServiceTest, LogoutImmediatelyClearsInvitations) {
@@ -493,6 +730,118 @@ TEST_F(XenonTransferServiceTest, LogoutDiscardsLateInvitationCreation) {
   release->Signal();
   EXPECT_TRUE(result.Get().FindList("transfers")->empty());
   EXPECT_TRUE(service->GetState().FindList("transfers")->empty());
+}
+
+TEST_F(XenonTransferServiceTest,
+       OrphanCancellationDoesNotLoopOnPermanentError) {
+  auto* service = LoggedInService();
+  server_.SetAcceptedFile();
+  XenonAccountService::SetRequestHandlerForTesting(base::BindRepeating(
+      [](FakeTransferServer* server, std::string method, std::string path,
+         std::string token, base::DictValue body) -> Response {
+        if (method == "GET" && path.ends_with("/transfers")) {
+          base::ListValue list;
+          // Stop after ten requests so a broken retry loop cannot hang the
+          // test.
+          if (server->cancel_requests < 10) {
+            list.Append(server->invitation.Clone());
+            auto second = server->invitation.Clone();
+            second.Set("id", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+            list.Append(std::move(second));
+          }
+          return {200, base::DictValue().Set("transfers", std::move(list)), {}};
+        }
+        if (path.ends_with("/cancel")) {
+          ++server->cancel_requests;
+          return {403, {}, {}};
+        }
+        return server->Handle(std::move(method), std::move(path),
+                              std::move(token), std::move(body));
+      },
+      base::Unretained(&server_)));
+  Refresh(service);
+  task_environment_.RunUntilIdle();
+  // A permanent rejection must not repeatedly recreate the same notification.
+  EXPECT_EQ(server_.cancel_requests, 2);
+  task_environment_.FastForwardBy(base::Seconds(30));
+  EXPECT_EQ(server_.cancel_requests, 2);
+  EXPECT_EQ(server_.relay_requests, 0);
+  base::test::TestFuture<base::DictValue> cancelled;
+  service->Respond(kInvitationId, "cancel", cancelled.GetCallback());
+  ASSERT_TRUE(cancelled.Wait());
+  task_environment_.RunUntilIdle();
+  task_environment_.FastForwardBy(base::Seconds(30));
+  EXPECT_EQ(server_.cancel_requests, 3);
+}
+
+TEST_F(XenonTransferServiceTest,
+       UnacceptedFileReleasesSlotForManualAcceptance) {
+  auto* service = LoggedInService();
+  server_.accept_failures = 1;
+  AcceptIncomingFile(service);
+  EXPECT_TRUE(service->GetState().FindDict("job")->FindBool("active").value());
+  EXPECT_EQ(*server_.invitation.FindString("status"), "pending");
+  const auto state = Refresh(service);
+  EXPECT_FALSE(state.FindDict("job")->FindBool("active").value());
+  task_environment_.FastForwardBy(base::Seconds(10));
+  EXPECT_EQ(server_.accept_requests, 1);
+  EXPECT_EQ(server_.relay_requests, 0);
+  EXPECT_EQ(server_.cancel_requests, 0);
+  base::test::TestFuture<base::DictValue> accepted;
+  service->Respond(kInvitationId, "accept", accepted.GetCallback());
+  ASSERT_TRUE(accepted.Wait());
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(server_.accept_requests, 2);
+  EXPECT_EQ(server_.relay_requests, 1);
+  EXPECT_EQ(server_.cancel_requests, 1);
+}
+
+TEST_F(XenonTransferServiceTest, CanCancelWhileAcceptResultIsUnknown) {
+  auto* service = LoggedInService();
+  server_.lose_accept_response = true;
+  AcceptIncomingFile(service);
+  base::test::TestFuture<base::DictValue> cancelled;
+  service->Cancel(cancelled.GetCallback());
+  ASSERT_TRUE(cancelled.Wait());
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(server_.cancel_requests, 1);
+  EXPECT_EQ(server_.relay_requests, 0);
+  EXPECT_EQ(*server_.invitation.FindString("status"), "cancelled");
+  EXPECT_FALSE(service->GetState().FindDict("job")->FindBool("active").value());
+}
+
+TEST_F(XenonTransferServiceTest,
+       DuplicateFileResultDoesNotResubmitNotification) {
+  auto* service = LoggedInService();
+  server_.SetAcceptedFile();
+  XenonTransferServiceTestPeer::TrackReceivedFile(service, kInvitationId);
+  Refresh(service);
+  server_.completion_failures = 10;
+  XenonTransferServiceTestPeer::CompleteReceivedFile(service, kInvitationId);
+  task_environment_.RunUntilIdle();
+  XenonTransferServiceTestPeer::CompleteReceivedFile(service, kInvitationId);
+  task_environment_.FastForwardBy(base::Seconds(30));
+  EXPECT_EQ(server_.completion_requests, 1);
+  EXPECT_EQ(server_.relay_requests, 0);
+  Refresh(service, /*retry_finalization=*/true);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(server_.completion_requests, 2);
+}
+
+TEST_F(XenonTransferServiceTest,
+       LateFileResultDoesNotRepeatPermanentlyRejectedNotification) {
+  auto* service = LoggedInService();
+  server_.SetAcceptedFile();
+  XenonTransferServiceTestPeer::TrackReceivedFile(service, kInvitationId);
+  Refresh(service);
+  server_.completion_status = 403;
+  XenonTransferServiceTestPeer::CompleteReceivedFile(service, kInvitationId);
+  task_environment_.RunUntilIdle();
+  XenonTransferServiceTestPeer::CompleteReceivedFile(service, kInvitationId);
+  task_environment_.FastForwardBy(base::Seconds(30));
+  EXPECT_EQ(server_.completion_requests, 1);
+  EXPECT_EQ(server_.relay_requests, 0);
+  EXPECT_FALSE(service->GetState().FindDict("job")->FindBool("active").value());
 }
 
 }  // namespace

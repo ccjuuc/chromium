@@ -33,6 +33,7 @@ const stateLabels = new Map([
   ['preparing', '正在准备'],
   ['listening', '正在监听'],
   ['waiting', '等待另一端'],
+  ['confirming', '正在确认接收结果'],
   ['connecting', '正在连接'],
   ['handshaking', '正在验证连接'],
   ['negotiating', '正在协商传输'],
@@ -586,8 +587,9 @@ function renderOwnTransferState(next) {
             makeTransferAction('拒绝', 'reject', transfer));
       } else if (transfer.status === 'accepted' && incoming && transfer.kind === 'file' &&
           !(next.job.active && next.job.transferId === transfer.id)) {
-        actions.append(makeTransferAction('继续接收', 'accept', transfer),
-            makeTransferAction('取消', 'cancel', transfer));
+        const interrupted = document.createElement('span');
+        interrupted.textContent = '传输已中断，请让发送端重新发送。';
+        actions.append(interrupted, makeTransferAction('取消', 'cancel', transfer));
       } else if ((transfer.status === 'pending' && !incoming) || transfer.status === 'accepted') {
         actions.append(makeTransferAction('取消', 'cancel', transfer));
       }

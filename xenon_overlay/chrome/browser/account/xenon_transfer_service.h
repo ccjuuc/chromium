@@ -38,7 +38,7 @@ class XenonTransferService final : public base::SupportsUserData::Data {
   ~XenonTransferService() override;
 
   base::DictValue GetState() const;
-  void Refresh(StateCallback callback);
+  void Refresh(StateCallback callback, bool retry_finalization = false);
   void SendText(std::string receiver_id,
                 std::string text,
                 StateCallback callback);
@@ -66,6 +66,7 @@ class XenonTransferService final : public base::SupportsUserData::Data {
     base::Time expires_at;
     std::string error;
   };
+  enum class FileAttempt { kRelayRequested, kFinalizationQueued };
 
   explicit XenonTransferService(Profile* profile);
   void Initialize();
@@ -94,6 +95,7 @@ class XenonTransferService final : public base::SupportsUserData::Data {
                    std::string action,
                    StateCallback callback,
                    Response reply);
+  void SetActiveFile(const base::DictValue& invitation);
   void ConsiderStartingFile();
   void RequestRelay(const base::DictValue& invitation, bool sending);
   void OnRelayReady(uint64_t generation,
@@ -124,17 +126,20 @@ class XenonTransferService final : public base::SupportsUserData::Data {
   std::string active_id_;
   std::string active_role_;
   std::string active_name_;
+  std::string file_error_;
   std::string error_;
   base::ListValue invitations_;
   std::map<std::string, SourceFile> source_files_;
+  // Explicit acceptance reserves the file slot until a response or fresh list
+  // resolves it, then remains as consent for the running receive.
   std::set<std::string> accepted_receives_;
-  std::set<std::string> attempted_files_;
+  // Each invitation automatically progresses to finalization at most once.
+  std::map<std::string, FileAttempt> file_attempts_;
   std::shared_ptr<cross_transfer::TestTransferJob> job_;
   std::optional<PendingFinalization> pending_finalization_;
   bool finalization_in_flight_ = false;
   base::CallbackListSubscription session_subscription_;
   base::RepeatingTimer poll_timer_;
-  base::OneShotTimer finalization_retry_timer_;
   base::WeakPtrFactory<XenonTransferService> weak_factory_{this};
 };
 
