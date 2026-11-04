@@ -16,6 +16,7 @@
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_id.h"
 #include "ui/gfx/image/image_skia.h"
+#include "url/origin.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -60,6 +61,10 @@ struct InstallApproval : public base::SupportsUserData::Data {
 
   // The extension id that was approved for installation.
   ExtensionId extension_id;
+
+  // Browser-validated origin of the page that obtained the approval. Opaque
+  // for internal installation flows that do not originate from a store page.
+  url::Origin webstore_origin;
 
   // The BrowserContext the extension should be installed into.
   raw_ptr<content::BrowserContext> browser_context = nullptr;

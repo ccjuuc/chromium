@@ -258,7 +258,8 @@ std::queue<Operation> MakeOperations(
     base::RepeatingCallback<
         void(base::OnceCallback<
              void(base::expected<base::FilePath, UnpackerError>)>)> cache_check,
-    const std::string& install_data) {
+    const std::string& install_data,
+    const std::vector<std::vector<uint8_t>>& accepted_publisher_key_hashes) {
   std::queue<Operation> ops;
   ops.push(SkipIfCached(cache_check,
                         base::BindOnce(&SpaceCheckOperation, pipeline,
@@ -320,8 +321,8 @@ std::queue<Operation> MakeOperations(
       }
       ops.push(base::BindOnce(
           &InstallOperation, crx_cache, config->GetUnzipperFactory()->Create(),
-          crx_format, id, config->GetProdId(), operation.sha256_in, pk_hash,
-          installer,
+          crx_format, accepted_publisher_key_hashes, id, config->GetProdId(),
+          operation.sha256_in, pk_hash, installer,
           operation.path.empty()
               ? nullptr
               : std::make_unique<CrxInstaller::InstallParams>(
@@ -376,7 +377,8 @@ void MakePipeline(
     base::OnceCallback<void(
         base::expected<base::OnceCallback<base::OnceClosure(
                            base::OnceCallback<void(const CategorizedError&)>)>,
-                       CategorizedError>)> callback) {
+                       CategorizedError>)> callback,
+    const std::vector<std::vector<uint8_t>>& accepted_publisher_key_hashes) {
   if (result.status == "noupdate") {
     // With a noupdate, there's nothing to do.
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
@@ -444,7 +446,7 @@ void MakePipeline(
                 event_adder, pipeline.pipeline_id),
             download_progress_callback, install_progress_callback,
             install_complete_callback, action_handler, pipeline, cache_check,
-            install_data),
+            install_data, accepted_publisher_key_hashes),
         fallback);
   }
 

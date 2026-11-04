@@ -33,6 +33,7 @@ base::OnceClosure InstallOperation(
     scoped_refptr<CrxCache> crx_cache,
     std::unique_ptr<Unzipper> unzipper,
     crx_file::VerifierFormat crx_format,
+    const std::vector<std::vector<uint8_t>>& accepted_publisher_key_hashes,
     const std::string& id,
     const std::string& prod_id,
     const std::string& file_hash,

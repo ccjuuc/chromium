@@ -324,6 +324,10 @@ struct CrxComponent {
   crx_file::VerifierFormat crx_format_requirement =
       crx_file::VerifierFormat::CRX3_WITH_PUBLISHER_PROOF;
 
+  // Optional publisher SPKI SHA256 hashes with OR semantics. A non-empty list
+  // replaces the publisher trust implied by `crx_format_requirement`.
+  std::vector<std::vector<uint8_t>> accepted_publisher_key_hashes;
+
   // True if and only if this item may be updated.
   bool updates_enabled = true;
 

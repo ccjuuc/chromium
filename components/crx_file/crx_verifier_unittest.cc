@@ -11,8 +11,15 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/numerics/byte_conversions.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_view_util.h"
+#include "components/crx_file/crx3.pb.h"
+#include "components/crx_file/crx_file.h"
+#include "crypto/hash.h"
+#include "crypto/keypair.h"
+#include "crypto/sign.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -54,6 +61,130 @@ constexpr char kJlnKey[] =
 namespace crx_file {
 
 using CrxVerifierTest = ::testing::Test;
+
+// Add a fresh publisher proof to a package with a valid developer proof. No
+// publisher private key is stored in the source tree or shared between tests.
+class CustomPublisherCrxVerifierTest : public CrxVerifierTest {
+ protected:
+  void WritePackage(bool include_developer = true,
+                    bool tamper_archive = false) {
+    ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+    package_path_ = temp_dir_.GetPath().AppendASCII("custom_publisher.crx3");
+
+    std::string original;
+    ASSERT_TRUE(
+        base::ReadFileToString(TestFile("valid_no_publisher.crx3"), &original));
+    ASSERT_GE(original.size(), 12u);
+    const uint32_t header_size =
+        base::U32FromLittleEndian(base::as_byte_span(original).subspan<8, 4>());
+    ASSERT_LE(header_size, original.size() - 12);
+    CrxFileHeader header;
+    ASSERT_TRUE(header.ParseFromString(original.substr(12, header_size)));
+    std::string archive = original.substr(12 + header_size);
+    if (!include_developer) {
+      header.clear_sha256_with_rsa();
+      header.clear_sha256_with_ecdsa();
+    }
+
+    auto publisher_key = crypto::keypair::PrivateKey::GenerateEcP256();
+    const auto publisher_spki = publisher_key.ToSubjectPublicKeyInfo();
+    const auto publisher_hash = crypto::hash::Sha256(publisher_spki);
+    accepted_publishers_ = {GetProductionPublisherKeyHash(),
+                            {publisher_hash.begin(), publisher_hash.end()}};
+
+    crypto::sign::Signer signer(crypto::sign::SignatureKind::ECDSA_SHA256,
+                                publisher_key);
+    signer.Update(base::as_byte_span(kSignatureContext));
+    signer.Update(base::I32ToLittleEndian(header.signed_header_data().size()));
+    signer.Update(base::as_byte_span(header.signed_header_data()));
+    signer.Update(base::as_byte_span(archive));
+    auto* proof = header.add_sha256_with_ecdsa();
+    proof->set_public_key(base::as_string_view(publisher_spki));
+    proof->set_signature(base::as_string_view(signer.Finish()));
+
+    const std::string serialized_header = header.SerializeAsString();
+    const auto size_bytes = base::I32ToLittleEndian(serialized_header.size());
+    std::string package = original.substr(0, 8);
+    package.append(base::as_string_view(size_bytes));
+    package.append(serialized_header);
+    package.append(archive);
+    if (tamper_archive) {
+      package.push_back('x');
+    }
+    ASSERT_TRUE(base::WriteFile(package_path_, package));
+  }
+
+  VerifierResult VerifyWithPublishers(const base::FilePath& path) {
+    return Verify(path, VerifierFormat::CRX3_WITH_PUBLISHER_PROOF,
+                  /*required_key_hashes=*/{}, /*required_file_hash=*/{},
+                  /*public_key=*/nullptr, /*crx_id=*/nullptr,
+                  /*compressed_verified_contents=*/nullptr,
+                  accepted_publishers_);
+  }
+
+  base::ScopedTempDir temp_dir_;
+  base::FilePath package_path_;
+  std::vector<std::vector<uint8_t>> accepted_publishers_;
+};
+
+TEST_F(CustomPublisherCrxVerifierTest, AcceptsProductionOrCustomPublisher) {
+  WritePackage();
+  ASSERT_FALSE(HasFatalFailure());
+  EXPECT_EQ(VerifierResult::OK_FULL,
+            VerifyWithPublishers(TestFile("valid_publisher.crx3")));
+  EXPECT_EQ(VerifierResult::OK_FULL, VerifyWithPublishers(package_path_));
+
+  // The default Google policy remains unchanged for the same custom package.
+  EXPECT_EQ(VerifierResult::ERROR_REQUIRED_PROOF_MISSING,
+            Verify(package_path_, VerifierFormat::CRX3_WITH_PUBLISHER_PROOF,
+                   /*required_key_hashes=*/{}, /*required_file_hash=*/{},
+                   /*public_key=*/nullptr, /*crx_id=*/nullptr,
+                   /*compressed_verified_contents=*/nullptr));
+}
+
+TEST_F(CustomPublisherCrxVerifierTest, RejectsMissingAndTestPublisher) {
+  WritePackage();
+  ASSERT_FALSE(HasFatalFailure());
+  EXPECT_EQ(VerifierResult::ERROR_REQUIRED_PROOF_MISSING,
+            VerifyWithPublishers(TestFile("valid_no_publisher.crx3")));
+  EXPECT_EQ(VerifierResult::ERROR_REQUIRED_PROOF_MISSING,
+            VerifyWithPublishers(TestFile("valid_test_publisher.crx3")));
+
+  // An explicit publisher set also requires a publisher proof in plain CRX3.
+  EXPECT_EQ(
+      VerifierResult::ERROR_REQUIRED_PROOF_MISSING,
+      Verify(TestFile("valid_no_publisher.crx3"), VerifierFormat::CRX3,
+             /*required_key_hashes=*/{}, /*required_file_hash=*/{},
+             /*public_key=*/nullptr, /*crx_id=*/nullptr,
+             /*compressed_verified_contents=*/nullptr, accepted_publishers_));
+}
+
+TEST_F(CustomPublisherCrxVerifierTest, StillRequiresDeveloperProof) {
+  WritePackage(/*include_developer=*/false);
+  ASSERT_FALSE(HasFatalFailure());
+  EXPECT_EQ(VerifierResult::ERROR_REQUIRED_PROOF_MISSING,
+            VerifyWithPublishers(package_path_));
+}
+
+TEST_F(CustomPublisherCrxVerifierTest, RejectsTamperedArchive) {
+  WritePackage(/*include_developer=*/true, /*tamper_archive=*/true);
+  ASSERT_FALSE(HasFatalFailure());
+  EXPECT_EQ(VerifierResult::ERROR_SIGNATURE_VERIFICATION_FAILED,
+            VerifyWithPublishers(package_path_));
+}
+
+TEST_F(CustomPublisherCrxVerifierTest, PublisherSetDoesNotRelaxRequiredKeys) {
+  WritePackage();
+  ASSERT_FALSE(HasFatalFailure());
+  const std::vector<std::vector<uint8_t>> required_keys = {
+      std::vector<uint8_t>(crypto::hash::kSha256Size, 0)};
+  EXPECT_EQ(
+      VerifierResult::ERROR_REQUIRED_PROOF_MISSING,
+      Verify(package_path_, VerifierFormat::CRX3_WITH_PUBLISHER_PROOF,
+             required_keys, /*required_file_hash=*/{},
+             /*public_key=*/nullptr, /*crx_id=*/nullptr,
+             /*compressed_verified_contents=*/nullptr, accepted_publishers_));
+}
 
 TEST_F(CrxVerifierTest, ValidFullCrx3) {
   const std::vector<std::vector<uint8_t>> keys;

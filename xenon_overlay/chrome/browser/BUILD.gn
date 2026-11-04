@@ -50,6 +50,8 @@ source_set("managed_certificate_types") {
 
 source_set("managed_certificates") {
   sources = [
+    "managed_certificates/builtin_store_certificate.cc",
+    "managed_certificates/builtin_store_certificate.h",
     "managed_certificates/managed_certificate_merger.cc",
     "managed_certificates/managed_certificate_merger.h",
     "managed_certificates/managed_certificate_service.cc",
@@ -65,6 +67,7 @@ source_set("managed_certificates") {
   deps = [
     "//content/public/browser",
     "//net",
+    "//third_party/boringssl",
   ]
   if (is_win) {
     libs = [ "advapi32.lib" ]
@@ -73,6 +76,7 @@ source_set("managed_certificates") {
 
 test("managed_certificate_unittests") {
   sources = [
+    "managed_certificates/builtin_store_certificate_unittest.cc",
     "managed_certificates/managed_certificate_merger_unittest.cc",
     "managed_certificates/managed_certificate_service_unittest.cc",
     "managed_certificates/managed_certificate_types_unittest.cc",
@@ -81,12 +85,20 @@ test("managed_certificate_unittests") {
     ":managed_certificates",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
+    "//components/network_time/time_tracker",
     "//crypto",
     "//mojo/core/embedder",
+    "//net",
+    "//services/cert_verifier:lib",
     "//services/network:test_support",
     "//testing/gtest",
+    "//third_party/boringssl",
   ]
-  data = [ "//xenon_overlay/tools/updater/xenon_update_tool/managed_certificates/certificates/" ]
+  data = [
+    "//tools/xl_extension_store/xl_store_root_ca.pem",
+    "//xenon_overlay/chrome/browser/managed_certificates/testdata/",
+    "//xenon_overlay/tools/updater/xenon_update_tool/managed_certificates/certificates/",
+  ]
 }
 
 # Reuse the native verifier fixture without building every net unit test.
@@ -558,8 +570,6 @@ source_set("browser") {
     "ui/webui/video_sniffer_webui_controller.h",
     "ui/webui/xenon_account_webui_handler.cc",
     "ui/webui/xenon_account_webui_handler.h",
-    "ui/webui/xenon_transfer_webui_handler.cc",
-    "ui/webui/xenon_transfer_webui_handler.h",
     "ui/webui/xenon_certificates_ui_controller.cc",
     "ui/webui/xenon_certificates_ui_controller.h",
     "ui/webui/xenon_node_controller.cc",
@@ -574,6 +584,8 @@ source_set("browser") {
     "ui/webui/xenon_remote_ui_controller.h",
     "ui/webui/xenon_thunder_2025_controller.cc",
     "ui/webui/xenon_thunder_2025_controller.h",
+    "ui/webui/xenon_transfer_webui_handler.cc",
+    "ui/webui/xenon_transfer_webui_handler.h",
     "ui/webui/xenon_ui_controller.cc",
     "ui/webui/xenon_ui_controller.h",
     "ui/webui/xenon_update_ui_controller.cc",

@@ -24,6 +24,24 @@ export async function checkCertificatePageActions(
   const initialTargets = new Set((await send('Target.getTargets')).targetInfos
       .map(target => target.targetId));
 
+  const builtin = await evaluate(`({
+    visible: !document.getElementById('builtin-store-section').hidden,
+    title: document.getElementById('builtin-store-heading').textContent,
+    rows: document.getElementById('builtin-store-certificate-body').rows.length,
+    constraints: document.querySelector(
+      '#builtin-store-certificate-body tr td:nth-child(3)')?.textContent,
+    fingerprint: document.querySelector(
+      '#builtin-store-certificate-body tr td:nth-child(4)')?.textContent,
+    separate: !document.getElementById('snapshot-section').contains(
+      document.getElementById('builtin-store-section')),
+  })`);
+  assert(builtin.visible && builtin.separate,
+      'Built-in CA trust must be displayed independently of managed snapshots');
+  assert.equal(builtin.title, '内置 CA 证书');
+  assert.equal(builtin.rows, 1);
+  assert.equal(builtin.constraints, '无额外约束');
+  assert.match(builtin.fingerprint, /^[a-f0-9]{64}$/i);
+
   await setUrl('https://test2.gmssl.cn');
   const mutualPreset = await evaluate(`({
     preset: document.getElementById('test-preset').value,

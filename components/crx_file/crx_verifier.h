@@ -35,6 +35,9 @@ enum class VerifierResult {
   ERROR_REQUIRED_PROOF_MISSING,           // RequireKeyProof was unsatisfied.
 };
 
+// Returns the SHA256 hash of the production Chrome Web Store publisher's SPKI.
+std::vector<uint8_t> GetProductionPublisherKeyHash();
+
 // Verify the file at `crx_path` as a valid Crx of `format`. The Crx must be
 // well-formed, contain no invalid proofs, match the `required_file_hash` (if
 // non-empty), and contain a proof with each of the `required_key_hashes`.
@@ -44,6 +47,11 @@ enum class VerifierResult {
 // base16 using the characters [a-p]). `compressed_verified_contents` will be
 // updated if it is non-null and if the verified contents are present in the
 // unsigned section of the header.
+// If `accepted_publisher_key_hashes` is non-empty, it replaces the publisher
+// trust implied by `format`: at least one proof must use a key whose SPKI
+// SHA256 hash is in this list. Unlike `required_key_hashes`, this list has OR
+// semantics. The developer proof and all cryptographic signatures are still
+// verified.
 VerifierResult Verify(
     const base::FilePath& crx_path,
     const VerifierFormat& format,
@@ -51,7 +59,9 @@ VerifierResult Verify(
     const std::vector<uint8_t>& required_file_hash,
     std::string* public_key,
     std::string* crx_id,
-    std::vector<uint8_t>* compressed_verified_contents);
+    std::vector<uint8_t>* compressed_verified_contents,
+    const std::vector<std::vector<uint8_t>>& accepted_publisher_key_hashes =
+        {});
 
 }  // namespace crx_file
 

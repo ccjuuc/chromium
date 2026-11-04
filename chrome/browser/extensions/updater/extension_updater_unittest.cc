@@ -15,6 +15,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -24,6 +25,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
@@ -40,6 +42,7 @@
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/extensions/fake_crx_installer.h"
 #include "chrome/browser/extensions/mock_crx_installer.h"
 #include "chrome/browser/extensions/sync/extension_sync_data.h"
@@ -47,13 +50,16 @@
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/browser/extensions/updater/chrome_extension_downloader_factory.h"
 #include "chrome/browser/google/google_brand.h"
+#include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "components/crx_file/crx_verifier.h"
 #include "components/crx_file/id_util.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/sync_preferences/pref_service_syncable.h"
+#include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/update_client/update_query_params.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
@@ -2947,6 +2953,178 @@ TEST_F(ExtensionUpdaterTest, TestProfileDestruction) {
   base::RunLoop().RunUntilIdle();
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
+
+// Exercise a real XML download and production policy parsing. Only the final
+// installer is replaced so the test can inspect the verifier inputs without
+// installing an extension in a unit-test profile.
+class XlPublisherUpdatePolicyTest
+    : public ExtensionUpdaterTest,
+      public testing::WithParamInterface<std::tuple<bool, bool, bool>> {};
+
+TEST_P(XlPublisherUpdatePolicyTest,
+       RequiresPublisherProofAfterUpdateUrlOverrideIsRemoved) {
+  const auto [remove_override, default_google_update_url, has_xl_publisher] =
+      GetParam();
+  constexpr char kExtensionId[] = "mcjbgmlghdgeocallnajjfbblpondljm";
+  const GURL update_url("https://updates.example.com/updates.xml");
+  const GURL crx_url("https://updates.example.com/update.crx");
+  base::FilePath test_data_dir;
+  ASSERT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir));
+  const base::FilePath fixture_path =
+      test_data_dir.AppendASCII("extensions/xl_webstore")
+          .AppendASCII(has_xl_publisher ? "xl-signed-1.0.1.crx"
+                                       : "developer-only-1.0.1.crx");
+  std::string crx_data;
+  ASSERT_TRUE(base::ReadFileToString(fixture_path, &crx_data));
+
+  // Both fixtures have a valid developer signature for the same extension ID.
+  // Derive the installed extension's key from that public proof. No private key
+  // or verification override is needed for this test.
+  std::string public_key;
+  std::string crx_id;
+  ASSERT_EQ(crx_file::VerifierResult::OK_FULL,
+            crx_file::Verify(fixture_path, crx_file::VerifierFormat::CRX3, {},
+                             {}, &public_key, &crx_id, nullptr));
+  ASSERT_EQ(kExtensionId, crx_id);
+  base::DictValue manifest;
+  manifest.Set("name", "XL publisher update policy test");
+  manifest.Set("version", "1.0.0");
+  manifest.Set("manifest_version", 3);
+  manifest.Set("key", public_key);
+  if (!default_google_update_url) {
+    manifest.Set("update_url",
+                 extension_urls::GetDefaultWebstoreUpdateUrl().spec());
+  }
+  const auto extension =
+      prefs_->AddExtensionWithManifest(manifest, ManifestLocation::kInternal);
+  ASSERT_TRUE(extension);
+  ASSERT_EQ(kExtensionId, extension->id());
+  SetExtensions({extension}, {});
+  extension_prefs()->SetFromXlWebstore(kExtensionId, true);
+
+  auto set_update_override = [&](bool enabled) {
+    base::DictValue settings;
+    settings.Set(kExtensionId, base::DictValue()
+                                   .Set("installation_mode", "normal_installed")
+                                   .Set("update_url", update_url.spec())
+                                   .Set("override_update_url", enabled));
+    static_cast<TestingProfile*>(profile())
+        ->GetTestingPrefService()
+        ->SetManagedPref(pref_names::kExtensionManagement,
+                         base::Value(std::move(settings)));
+  };
+  set_update_override(true);
+  auto* management =
+      ExtensionManagementFactory::GetForBrowserContext(profile());
+  ASSERT_EQ(update_url, management->GetEffectiveUpdateURL(*extension));
+
+  // Existing updater tests use a separate service-backed profile for mock
+  // installers; the updater and policy still use this fixture's own profile.
+  TestingProfile installer_profile;
+  static_cast<TestExtensionSystem*>(ExtensionSystem::Get(&installer_profile))
+      ->CreateExtensionService(base::CommandLine::ForCurrentProcess(),
+                               base::FilePath(), false);
+  auto installer = base::MakeRefCounted<MockCrxInstaller>(&installer_profile);
+  std::optional<CRXFileInfo> installer_input;
+  CrxInstaller::InstallerResultCallback install_complete;
+  base::RunLoop install_reached;
+  EXPECT_CALL(*installer, AddInstallerCallback(_))
+      .WillOnce([&](CrxInstaller::InstallerResultCallback callback) {
+        install_complete = std::move(callback);
+      });
+  EXPECT_CALL(*installer, InstallCrxFile(_))
+      .WillOnce([&](const CRXFileInfo& info) {
+        installer_input = info;
+        install_reached.Quit();
+      });
+
+  ExtensionUpdater::ScopedSkipScheduledCheckForTest skip_scheduled_checks;
+  ExtensionDownloaderTestHelper helper;
+  TestDownloaderFactory factory(helper.url_loader_factory());
+  TestCrxInstallerFactory installer_factory;
+  installer_factory.AddFakeCrxInstaller(kExtensionId, installer);
+  ExtensionUpdater updater(profile());
+  updater.InitAndEnable(extension_prefs(), pref_service(), kUpdateFrequency,
+                        nullptr, factory.GetDownloaderFactory());
+  updater.set_crx_installer_factory_for_test(&installer_factory);
+  updater.SetBackoffPolicyForTesting(kNoBackoffPolicy);
+  updater.Start();
+  ExtensionUpdater::CheckParams params;
+  params.ids = {kExtensionId};
+  params.fetch_priority = DownloadFetchPriority::kForeground;
+  updater.CheckNow(std::move(params));
+  content::RunAllTasksUntilIdle();
+
+  auto* request = helper.GetPendingRequest();
+  ASSERT_TRUE(request);
+  ASSERT_EQ(update_url.GetHost(), request->request.url.GetHost());
+  ASSERT_EQ(update_url.path(), request->request.url.path());
+  const std::string update_manifest =
+      CreateUpdateManifest({UpdateManifestItem(kExtensionId)
+                                .version("1.0.1")
+                                .codebase(crx_url.spec())});
+  ASSERT_TRUE(
+      helper.test_url_loader_factory().SimulateResponseForPendingRequest(
+          request->request.url.spec(), update_manifest));
+  content::RunAllTasksUntilIdle();
+  request = helper.GetPendingRequest();
+  ASSERT_TRUE(request);
+  ASSERT_EQ(crx_url, request->request.url);
+
+  // The package download is pending. Removing just override_update_url is
+  // valid production policy and restores explicit or default Google updates.
+  if (remove_override) {
+    set_update_override(false);
+    ASSERT_EQ(default_google_update_url
+                  ? GURL()
+                  : extension_urls::GetDefaultWebstoreUpdateUrl(),
+              management->GetEffectiveUpdateURL(*extension));
+  }
+  ASSERT_TRUE(
+      helper.test_url_loader_factory().SimulateResponseForPendingRequest(
+          crx_url.spec(), crx_data));
+  install_reached.Run();
+  ASSERT_TRUE(installer_input);
+  EXPECT_EQ(kExtensionId, installer_input->extension_id);
+  EXPECT_EQ(base::Version("1.0.1"), installer_input->expected_version);
+
+  // Use exactly the verifier settings that production passed to the installer.
+  // Developer-only updates always fail. A valid XL publisher is accepted while
+  // the private override remains, but must not satisfy Google's requirement
+  // after that override is removed.
+  EXPECT_EQ(
+      has_xl_publisher && !remove_override
+          ? crx_file::VerifierResult::OK_FULL
+          : crx_file::VerifierResult::ERROR_REQUIRED_PROOF_MISSING,
+      crx_file::Verify(installer_input->path, installer_input->required_format,
+                       {}, {}, nullptr, nullptr, nullptr,
+                       installer_input->accepted_publisher_key_hashes));
+
+  // Both publisher policies continue accepting production Google signatures.
+  // This separate package probes publisher trust only; its developer ID is not
+  // presented as an update for kExtensionId.
+  const base::FilePath google_fixture = test_data_dir.AppendASCII(
+      "extensions/signin_screen_manual_test_extension/"
+      "extension_signed_by_webstore.crx");
+  EXPECT_EQ(
+      crx_file::VerifierResult::OK_FULL,
+      crx_file::Verify(google_fixture, installer_input->required_format, {}, {},
+                       nullptr, nullptr, nullptr,
+                       installer_input->accepted_publisher_key_hashes));
+
+  // Complete the intercepted installation and remove only its temporary file.
+  ASSERT_FALSE(install_complete.is_null());
+  std::move(install_complete)
+      .Run(CrxInstallError(CrxInstallErrorType::OTHER,
+                           CrxInstallErrorDetail::NONE));
+  EXPECT_TRUE(base::DeleteFile(installer_input->path));
+}
+
+INSTANTIATE_TEST_SUITE_P(UpdateUrlOverride,
+                         XlPublisherUpdatePolicyTest,
+                         testing::Combine(testing::Bool(),
+                                          testing::Bool(),
+                                          testing::Bool()));
 
 class CanUseUpdateServiceTest : public ExtensionUpdaterTest {
  public:

@@ -4,6 +4,8 @@
 
 #include "extensions/browser/api/webstore_private/extension_install_status.h"
 
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "base/json/json_reader.h"
@@ -43,6 +45,7 @@
 #include "extensions/strings/grit/extensions_strings.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "url/gurl.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -150,11 +153,13 @@ class ExtensionInstallStatusTest : public ExtensionServiceTestWithInstall {
       base::Version extension_version,
       const Manifest::Type manifest_type,
       const PermissionSet& required_permission_set,
-      int manifest_version = 3) {
+      int manifest_version = 3,
+      const std::optional<std::string>& update_url = std::nullopt) {
     base::test::TestFuture<ExtensionInstallStatus, std::u16string> future;
     GetWebstoreExtensionInstallStatus(extension_id, profile, extension_version,
                                       manifest_type, required_permission_set,
-                                      manifest_version, future.GetCallback());
+                                      manifest_version, future.GetCallback(),
+                                      update_url);
     return {future.Get<ExtensionInstallStatus>(), future.Get<std::u16string>()};
   }
 
@@ -166,10 +171,11 @@ class ExtensionInstallStatusTest : public ExtensionServiceTestWithInstall {
       base::Version extension_version,
       const Manifest::Type manifest_type,
       const PermissionSet& required_permission_set,
-      int manifest_version = 3) {
+      int manifest_version = 3,
+      const std::optional<std::string>& update_url = std::nullopt) {
     return GetInstallStatusAndMessageSynchronously(
                extension_id, profile, extension_version, manifest_type,
-               required_permission_set, manifest_version)
+               required_permission_set, manifest_version, update_url)
         .status;
   }
 
@@ -239,6 +245,97 @@ TEST_F(ExtensionInstallStatusTest, ExtensionBlockedByUpdateUrl) {
   SetExtensionSettings(kExtensionSettingsWithUpdateUrlBlocking);
   EXPECT_EQ(ExtensionInstallStatus::kBlockedByPolicy,
             GetWebstoreExtensionInstallStatus(kExtensionId, profile()));
+}
+
+TEST_F(ExtensionInstallStatusTest,
+       KnownEmptyUpdateUrlDoesNotUseGoogleFallback) {
+  SetExtensionSettings(kExtensionSettingsWithUpdateUrlBlocking);
+  EXPECT_EQ(ExtensionInstallStatus::kBlockedByPolicy,
+            GetWebstoreExtensionInstallStatus(kExtensionId, profile()));
+  EXPECT_EQ(ExtensionInstallStatus::kInstallable,
+            GetWebstoreExtensionInstallStatus(kExtensionId, profile(),
+                                              std::string()));
+  EXPECT_EQ(ExtensionInstallStatus::kBlockedByPolicy,
+            GetInstallStatusSynchronously(
+                kExtensionId, profile(), base::Version(),
+                Manifest::Type::kExtension, PermissionSet()));
+  EXPECT_EQ(ExtensionInstallStatus::kInstallable,
+            GetInstallStatusSynchronously(
+                kExtensionId, profile(), base::Version(),
+                Manifest::Type::kExtension, PermissionSet(), 3, std::string()));
+}
+
+TEST_F(ExtensionInstallStatusTest, XlXmlUpdateUrlControlsInstallationMode) {
+  SetExtensionSettings(R"({
+    "*": {"installation_mode": "blocked"},
+    "update_url:https://xl.extensions.test.com/updates/extension.xml": {
+      "installation_mode": "allowed"
+    }
+  })");
+  constexpr char kUpdateUrl[] =
+      "https://xl.extensions.test.com/updates/extension.xml";
+  EXPECT_EQ(ExtensionInstallStatus::kInstallable,
+            GetWebstoreExtensionInstallStatus(kExtensionId, profile(),
+                                              std::string(kUpdateUrl)));
+  EXPECT_EQ(
+      ExtensionInstallStatus::kInstallable,
+      GetInstallStatusSynchronously(kExtensionId, profile(), base::Version(),
+                                    Manifest::Type::kExtension, PermissionSet(),
+                                    3, std::string(kUpdateUrl)));
+  EXPECT_EQ(
+      ExtensionInstallStatus::kBlockedByPolicy,
+      GetWebstoreExtensionInstallStatus(
+          kExtensionId, profile(),
+          std::string("https://xl.extensions.test.com/service/update2/crx")));
+}
+
+TEST_F(ExtensionInstallStatusTest, XlXmlUpdateUrlControlsBlockedPermissions) {
+  SetExtensionSettings(R"({
+    "update_url:https://xl.extensions.test.com/updates/extension.xml": {
+      "blocked_permissions": ["storage"]
+    }
+  })");
+  APIPermissionSet api_permissions;
+  api_permissions.insert(APIPermissionID::kStorage);
+  PermissionSet required_permissions(std::move(api_permissions),
+                                     ManifestPermissionSet(), URLPatternSet(),
+                                     URLPatternSet());
+  EXPECT_EQ(
+      ExtensionInstallStatus::kBlockedByPolicy,
+      GetInstallStatusSynchronously(
+          kExtensionId, profile(), base::Version(), Manifest::Type::kExtension,
+          required_permissions, 3,
+          std::string("https://xl.extensions.test.com/updates/extension.xml")));
+  EXPECT_EQ(ExtensionInstallStatus::kInstallable,
+            GetInstallStatusSynchronously(
+                kExtensionId, profile(), base::Version(),
+                Manifest::Type::kExtension, required_permissions));
+  EXPECT_EQ(
+      ExtensionInstallStatus::kInstallable,
+      GetInstallStatusSynchronously(kExtensionId, profile(), base::Version(),
+                                    Manifest::Type::kExtension,
+                                    required_permissions, 3, std::string()));
+}
+
+TEST_F(ExtensionInstallStatusTest, UpdateUrlPolicyUsesRawString) {
+  // ExtensionManagement matches the raw manifest string against policy keys.
+  constexpr char kRawUpdateUrl[] =
+      "https://XL.extensions.test.com:443/updates/extension.xml";
+  SetExtensionSettings(R"({
+    "*": {"installation_mode": "blocked"},
+    "update_url:https://XL.extensions.test.com:443/updates/extension.xml": {
+      "installation_mode": "allowed"
+    }
+  })");
+  const GURL canonical_url(kRawUpdateUrl);
+  ASSERT_TRUE(canonical_url.is_valid());
+  ASSERT_NE(kRawUpdateUrl, canonical_url.spec());
+  EXPECT_EQ(ExtensionInstallStatus::kInstallable,
+            GetWebstoreExtensionInstallStatus(kExtensionId, profile(),
+                                              std::string(kRawUpdateUrl)));
+  EXPECT_EQ(ExtensionInstallStatus::kBlockedByPolicy,
+            GetWebstoreExtensionInstallStatus(kExtensionId, profile(),
+                                              canonical_url.spec()));
 }
 
 TEST_F(ExtensionInstallStatusTest, ExtensionBlockedByWildcard) {

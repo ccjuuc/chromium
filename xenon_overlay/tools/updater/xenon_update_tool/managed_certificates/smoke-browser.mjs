@@ -255,6 +255,69 @@ async function waitGeneration(generation) {
   });
 }
 
+async function checkCertificatePageStatusUpdates(releaseSnapshot, expectedFingerprint) {
+  const cdp = browser.cdp;
+  const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
+  let sessionId;
+  const exceptions = [];
+  const listener = message => {
+    if (message.sessionId === sessionId && message.method === 'Runtime.exceptionThrown') {
+      exceptions.push(message.params.exceptionDetails);
+    }
+  };
+  cdp.listeners.add(listener);
+  try {
+    ({ sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true }));
+    await cdp.send('Runtime.enable', {}, sessionId);
+    await cdp.send('Page.enable', {}, sessionId);
+    const navigation = await cdp.send('Page.navigate', { url: 'chrome://xenon-certificates/' }, sessionId);
+    assert(!navigation.errorText, navigation.errorText);
+    // Observe only the rendered page. In particular, never query its backend,
+    // click Refresh or navigate again after releasing the server response.
+    const readStatus = async () => {
+      const result = await cdp.send('Runtime.evaluate', {
+        expression: `({
+          loaded: document.readyState === 'complete',
+          timeOrigin: performance.timeOrigin,
+          label: document.getElementById('status-badge')?.textContent,
+          queryFinished: document.getElementById('refresh-status')?.disabled === false,
+          snapshotHidden: document.getElementById('snapshot-details')?.hidden,
+          source: document.getElementById('snapshot-source')?.textContent,
+          generation: document.getElementById('snapshot-generation')?.textContent,
+          rows: document.getElementById('certificate-table-body')?.rows.length,
+          name: document.querySelector('#certificate-table-body tr td')?.textContent,
+          fingerprint: document.querySelector('#certificate-table-body tr td:nth-child(4)')?.textContent,
+          builtinVisible: document.getElementById('builtin-store-section')?.hidden === false,
+        })`, returnByValue: true,
+      }, sessionId);
+      assert(!result.exceptionDetails, JSON.stringify(result.exceptionDetails));
+      return result.result?.value;
+    };
+    const pending = await until('diagnostics waiting for its first managed snapshot', async () => {
+      const state = await readStatus();
+      return state?.loaded && state.queryFinished && state.label === '正在拉取' &&
+        state.snapshotHidden === true && state;
+    });
+    assert(pending.builtinVisible, 'Built-in CA trust must not wait for the managed snapshot');
+    releaseSnapshot();
+    const accepted = await until('diagnostics updated automatically after snapshot delivery', async () => {
+      const state = await readStatus();
+      return state?.label === '已就绪' && state.snapshotHidden === false &&
+        state.generation === '1' && state.rows === 1 && state;
+    });
+    assert.equal(accepted.timeOrigin, pending.timeOrigin, 'Status must update in the same document');
+    assert.equal(accepted.source, sourceId);
+    assert.equal(accepted.name, 'Chromium smoke fixture root');
+    assert.equal(accepted.fingerprint.toLowerCase(), expectedFingerprint.toLowerCase());
+    assert(accepted.builtinVisible, 'Managed delivery must preserve the independent built-in certificate display');
+    assert.equal(exceptions.length, 0, JSON.stringify(exceptions));
+    console.log('PASS: certificate diagnostics updates the first snapshot automatically without refresh');
+  } finally {
+    cdp.listeners.delete(listener);
+    await cdp.send('Target.closeTarget', { targetId }).catch(() => {});
+  }
+}
+
 // Keep WebUI checks separate so the TLS probes above never depend on the
 // diagnostics page's own interpretation of a connection result.
 async function checkCertificatePage(siteUrl, expectedTrusted,
@@ -461,9 +524,11 @@ try {
   assert.equal((await probe(siteUrl)).error, 'net::ERR_CERT_AUTHORITY_INVALID',
     'Bootstrap must not trust the website before a managed snapshot is accepted');
   console.log('PASS: bootstrap reaches control HTTPS while website remains untrusted');
-  holdRequests = false;
-  for (const [request, response] of pendingResponses) respondSnapshot(request, response);
-  pendingResponses = [];
+  await checkCertificatePageStatusUpdates(() => {
+    holdRequests = false;
+    for (const [request, response] of pendingResponses) respondSnapshot(request, response);
+    pendingResponses = [];
+  }, root.fingerprint256.replaceAll(':', ''));
   await waitGeneration(1);
   await until('managed trust applied to normal context', async () => (await probe(siteUrl)).trusted);
   assert((await probe(siteUrl, true)).trusted, 'Managed trust must reach incognito');

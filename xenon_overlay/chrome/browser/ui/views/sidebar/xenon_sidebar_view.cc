@@ -65,6 +65,7 @@ struct SidebarShortcut {
 
 constexpr SidebarShortcut kShortcuts[] = {
     {"CRT", "证书诊断", "chrome://xenon-certificates/"},
+    {"EXT", "扩展商店测试", "chrome://xenon-extension-store/"},
     {"XO", "Xenon Overlay", "chrome://xenon-overlay/"},
 #if BUILDFLAG(ENABLE_XENON_AI)
     {"AI", "Xenon AI", chrome::kChromeUIXenonAISidePanelURL},

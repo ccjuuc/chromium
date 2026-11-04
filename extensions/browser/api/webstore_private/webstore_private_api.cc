@@ -8,6 +8,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -68,6 +69,7 @@
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_features.h"
+#include "extensions/common/extension_urls.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/manifest_handlers/permissions_parser.h"
@@ -165,8 +167,10 @@ class PendingApprovals {
   ~PendingApprovals() = default;
 
   void PushApproval(std::unique_ptr<InstallApproval> approval);
-  std::unique_ptr<InstallApproval> PopApproval(content::BrowserContext* context,
-                                               const std::string& id);
+  std::unique_ptr<InstallApproval> PopApproval(
+      content::BrowserContext* context,
+      const std::string& id,
+      const url::Origin* origin = nullptr);
   void Clear();
 
   int GetCount() const { return approvals_.size(); }
@@ -217,9 +221,12 @@ void PendingApprovals::PushApproval(std::unique_ptr<InstallApproval> approval) {
 
 std::unique_ptr<InstallApproval> PendingApprovals::PopApproval(
     content::BrowserContext* context,
-    const std::string& id) {
+    const std::string& id,
+    const url::Origin* origin) {
   for (auto iter = approvals_.begin(); iter != approvals_.end(); ++iter) {
     if (iter->get()->extension_id == id &&
+        (!origin || iter->get()->webstore_origin.IsSameOriginWith(*origin) ||
+         (origin->opaque() && iter->get()->webstore_origin.opaque())) &&
         ExtensionsBrowserClient::Get()->IsSameContext(
             context, iter->get()->browser_context)) {
       std::unique_ptr<InstallApproval> approval = std::move(*iter);
@@ -330,18 +337,36 @@ ConvertExtensionInstallStatusForAPI(ExtensionInstallStatus status) {
   return api::webstore_private::ExtensionInstallStatus::kNone;
 }
 
+std::optional<std::string> GetXlWebstoreUpdateUrlForPolicy(
+    const GURL& source_url,
+    const Extension* extension) {
+  if (!extension_urls::IsXlWebstoreOrigin(url::Origin::Create(source_url))) {
+    return std::nullopt;
+  }
+  if (!extension) {
+    return extension_urls::GetXlWebstoreUpdateUrl().spec();
+  }
+  // XL can serve packages with different update URLs. Match the native
+  // installation policy's raw manifest string, including an absent URL.
+  // Other stores retain the original Chrome Web Store policy behavior.
+  const std::string* update_url =
+      extension->manifest()->FindStringPath(manifest_keys::kUpdateURL);
+  return update_url ? *update_url : std::string();
+}
+
 // Requests extension by adding the id into the pending list in Profile Prefs if
 // available. Returns |kRequestPending| if the request has been added
 // successfully. Otherwise, returns the initial extension install status.
 ExtensionInstallStatus AddExtensionToPendingList(
     const ExtensionId& id,
     content::BrowserContext* browser_context,
-    const std::string& justification) {
+    const std::string& justification,
+    const std::optional<std::string>& policy_update_url) {
   // There is no need to check whether the extension's required permissions or
   // manifest type are blocked  by the enterprise policy because extensions
   // blocked by those are still requestable.
   ExtensionInstallStatus status =
-      GetWebstoreExtensionInstallStatus(id, browser_context);
+      GetWebstoreExtensionInstallStatus(id, browser_context, policy_update_url);
   // We put the |id| into the pending request list if it can be requested.
   // Ideally we should not get here if the status is not |kCanRequest|. However
   // policy might be updated between the client calling |requestExtension| or
@@ -375,7 +400,7 @@ ExtensionInstallStatus AddExtensionToPendingList(
   // |kCanRequest| to |kRequestPending| if the id has been added into pending
   // list successfully. Otherwise, it shouldn't be changed.
   ExtensionInstallStatus new_status =
-      GetWebstoreExtensionInstallStatus(id, browser_context);
+      GetWebstoreExtensionInstallStatus(id, browser_context, policy_update_url);
 #if DCHECK_IS_ON()
   if (status == kCanRequest) {
     DCHECK_EQ(kRequestPending, new_status);
@@ -600,7 +625,8 @@ void WebstorePrivateBeginInstallWithManifest3Function::OnWebstoreParseFinished(
       dummy_extension_->manifest_version(),
       base::BindOnce(&WebstorePrivateBeginInstallWithManifest3Function::
                          OnInstallStatusCheckDone,
-                     this));
+                     this),
+      GetXlWebstoreUpdateUrlForPolicy(source_url(), dummy_extension_.get()));
 }
 
 void WebstorePrivateBeginInstallWithManifest3Function::OnInstallStatusCheckDone(
@@ -949,7 +975,9 @@ void WebstorePrivateBeginInstallWithManifest3Function::OnRequestPromptDone(
   switch (payload.result) {
     case ExtensionInstallPromptClient::Result::ACCEPTED:
       AddExtensionToPendingList(details().id, browser_context_,
-                                payload.justification);
+                                payload.justification,
+                                GetXlWebstoreUpdateUrlForPolicy(
+                                    source_url(), dummy_extension_.get()));
       break;
     case ExtensionInstallPromptClient::Result::USER_CANCELED:
     case ExtensionInstallPromptClient::Result::ABORTED:
@@ -999,6 +1027,7 @@ void WebstorePrivateBeginInstallWithManifest3Function::HandleInstallProceed(
   std::unique_ptr<InstallApproval> approval(
       InstallApproval::CreateWithNoInstallPrompt(
           browser_context_, details().id, std::move(*parsed_manifest_), false));
+  approval->webstore_origin = url::Origin::Create(source_url());
   approval->use_app_installed_bubble = !!details().app_install_bubble;
   // If we are enabling the launcher, we should not show the app list in order
   // to train the user to open it themselves at least once.
@@ -1214,8 +1243,9 @@ WebstorePrivateCompleteInstallFunction::Run() {
     return RespondNow(Error(kWebstoreInvalidIdError));
   }
 
-  approval_ = g_pending_approvals.Get().PopApproval(browser_context(),
-                                                    params->expected_id);
+  const url::Origin origin = url::Origin::Create(source_url());
+  approval_ = g_pending_approvals.Get().PopApproval(
+      browser_context(), params->expected_id, &origin);
   if (!approval_) {
     return RespondNow(
         Error(kNoPreviousBeginInstallWithManifestError, params->expected_id));
@@ -1535,7 +1565,8 @@ WebstorePrivateGetExtensionStatusFunction::Run() {
       dummy_extension->manifest_version(),
       base::BindOnce(
           &WebstorePrivateGetExtensionStatusFunction::OnInstallStatusCheckDone,
-          this));
+          this),
+      GetXlWebstoreUpdateUrlForPolicy(source_url(), dummy_extension.get()));
 
   return RespondLater();
 }
@@ -1543,8 +1574,15 @@ WebstorePrivateGetExtensionStatusFunction::Run() {
 ExtensionFunction::ResponseValue
 WebstorePrivateGetExtensionStatusFunction::BuildResponseWithoutManifest(
     const ExtensionId& extension_id) {
-  ExtensionInstallStatus status =
-      GetWebstoreExtensionInstallStatus(extension_id, browser_context());
+  std::optional<std::string> policy_update_url;
+  if (extension_urls::IsXlWebstoreOrigin(url::Origin::Create(source_url()))) {
+    const Extension* installed = ExtensionRegistry::Get(browser_context())
+                                     ->GetInstalledExtension(extension_id);
+    policy_update_url =
+        GetXlWebstoreUpdateUrlForPolicy(source_url(), installed);
+  }
+  ExtensionInstallStatus status = GetWebstoreExtensionInstallStatus(
+      extension_id, browser_context(), policy_update_url);
   api::webstore_private::ExtensionInstallStatus api_status =
       ConvertExtensionInstallStatusForAPI(status);
   return ArgumentList(GetExtensionStatus::Results::Create(api_status));

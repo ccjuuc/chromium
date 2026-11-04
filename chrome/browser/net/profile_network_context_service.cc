@@ -104,6 +104,7 @@
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "third_party/blink/public/common/features.h"
+#include "xenon_overlay/chrome/browser/managed_certificates/builtin_store_certificate.h"
 #include "xenon_overlay/chrome/browser/managed_certificates/managed_certificate_merger.h"
 #include "xenon_overlay/chrome/browser/managed_certificates/managed_certificate_service.h"
 
@@ -964,6 +965,7 @@ void ProfileNetworkContextService::UpdateAdditionalCertificates() {
   profile_->ForEachLoadedStoragePartition([&](content::StoragePartition*
                                                   storage_partition) {
     auto additional_certs = GetCertificatePolicy(storage_partition->GetPath());
+    xenon::certificates::MergeBuiltinStoreCertificate(additional_certs.get());
     xenon::certificates::MergeManagedCertificates(
         xenon::certificates::XenonManagedCertificateService::Get()->snapshot(),
         additional_certs.get());
@@ -1031,6 +1033,7 @@ void ProfileNetworkContextService::
           break;
       }
     }
+    xenon::certificates::MergeBuiltinStoreCertificate(additional_certs.get());
     xenon::certificates::MergeManagedCertificates(
         xenon::certificates::XenonManagedCertificateService::Get()->snapshot(),
         additional_certs.get());
@@ -1575,12 +1578,14 @@ void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
       net::ServerCertificateDatabaseServiceFactory::GetForBrowserContext(
           profile_) != nullptr;
 #endif
+  cert_verifier_creation_params->initial_additional_certificates =
+      GetCertificatePolicy(GetPartitionPath(relative_partition_path));
+  xenon::certificates::MergeBuiltinStoreCertificate(
+      cert_verifier_creation_params->initial_additional_certificates.get());
   if (wait_for_certificates) {
     cert_verifier_creation_params->wait_for_update = true;
     UpdateAdditionalCertificates();
   } else {
-    cert_verifier_creation_params->initial_additional_certificates =
-        GetCertificatePolicy(GetPartitionPath(relative_partition_path));
     xenon::certificates::MergeManagedCertificates(
         xenon::certificates::XenonManagedCertificateService::Get()->snapshot(),
         cert_verifier_creation_params->initial_additional_certificates.get());

@@ -13,14 +13,19 @@
 #include "base/path_service.h"
 #include "chrome/common/chrome_paths.h"
 #include "extensions/buildflags/buildflags.h"
+#include "extensions/common/cors_util.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_builder.h"
 #include "extensions/common/file_util.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_handler.h"
 #include "extensions/common/manifest_handler_registry.h"
 #include "extensions/common/mojom/context_type.mojom.h"
+#include "extensions/common/webstore_override.h"
 #include "extensions/test/test_context_data.h"
+#include "services/network/public/cpp/cors/origin_access_list.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/origin.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -92,6 +97,77 @@ TEST_F(ChromeExtensionsClientTest, FeatureDelegatedAvailabilityCheckMap) {
                  /*check_developer_mode=*/false, TestContextData());
     EXPECT_FALSE(disallowed_result);
   }
+}
+
+TEST_F(ChromeExtensionsClientTest, WebstoresCannotBeScripted) {
+  auto* client = ExtensionsClient::Get();
+  for (const char* url : {"https://chromewebstore.google.com/detail/test",
+                          "https://chrome.google.com/webstore/detail/test",
+                          "https://xl.extensions.test.com/detail/test"}) {
+    SCOPED_TRACE(url);
+    std::string error;
+    EXPECT_FALSE(client->IsScriptableURL(GURL(url), &error));
+    EXPECT_FALSE(error.empty());
+  }
+  for (const char* url : {"https://extensions.test.com/",
+                          "https://xl.extensions.test.com.evil.test/"}) {
+    SCOPED_TRACE(url);
+    std::string error;
+    EXPECT_TRUE(client->IsScriptableURL(GURL(url), &error));
+  }
+}
+
+TEST_F(ChromeExtensionsClientTest, XlWebstoreDelegatedAvailability) {
+  auto checks = webstore_override::CreateAvailabilityCheckMap();
+  for (const char* feature : {"webstorePrivate", "management"}) {
+    SCOPED_TRACE(feature);
+    const auto& check = checks.at(feature);
+    auto is_available = [&](const GURL& url, mojom::ContextType context,
+                            const Extension* extension) {
+      return check.Run(feature, extension, context, url,
+                       Feature::Platform::UNSPECIFIED_PLATFORM,
+                       /*context_id=*/0,
+                       /*check_developer_mode=*/false, TestContextData());
+    };
+    EXPECT_TRUE(is_available(GURL("https://xl.extensions.test.com/detail/test"),
+                             mojom::ContextType::kWebPage, nullptr));
+    for (const char* url : {"http://xl.extensions.test.com/",
+                            "https://xl.extensions.test.com:8443/",
+                            "https://sub.xl.extensions.test.com/",
+                            "https://xl.extensions.test.com.evil.test/"}) {
+      SCOPED_TRACE(url);
+      EXPECT_FALSE(
+          is_available(GURL(url), mojom::ContextType::kWebPage, nullptr));
+    }
+    const GURL store_url("https://xl.extensions.test.com/");
+    EXPECT_FALSE(
+        is_available(store_url, mojom::ContextType::kContentScript, nullptr));
+    auto extension = ExtensionBuilder("store impersonator").Build();
+    EXPECT_FALSE(
+        is_available(store_url, mojom::ContextType::kWebPage, extension.get()));
+  }
+}
+
+TEST_F(ChromeExtensionsClientTest, WebstoreCorsProtectionOverridesAllHosts) {
+  auto extension =
+      ExtensionBuilder("all hosts").AddHostPermission("<all_urls>").Build();
+  const url::Origin source_origin = extension->origin();
+  network::cors::OriginAccessList access_list;
+  access_list.SetAllowListForOrigin(
+      source_origin, CreateCorsOriginAccessAllowList(*extension));
+  access_list.SetBlockListForOrigin(
+      source_origin, CreateCorsOriginAccessBlockList(*extension));
+
+  for (const char* url : {"https://chromewebstore.google.com/",
+                          "https://chrome.google.com/webstore/",
+                          "https://xl.extensions.test.com/"}) {
+    SCOPED_TRACE(url);
+    EXPECT_EQ(network::cors::OriginAccessList::AccessState::kBlocked,
+              access_list.CheckAccessState(source_origin, GURL(url)));
+  }
+  EXPECT_EQ(network::cors::OriginAccessList::AccessState::kAllowed,
+            access_list.CheckAccessState(source_origin,
+                                         GURL("https://extensions.test.com/")));
 }
 
 // Test that a browser action extension returns a path to an icon.

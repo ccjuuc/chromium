@@ -5,6 +5,10 @@
 #ifndef EXTENSIONS_COMMON_VERIFIER_FORMATS_H_
 #define EXTENSIONS_COMMON_VERIFIER_FORMATS_H_
 
+#include <stdint.h>
+
+#include <vector>
+
 #include "base/auto_reset.h"
 
 namespace crx_file {
@@ -17,6 +21,10 @@ namespace extensions {
 // originates or updates from the Webstore. `test_publisher_enabled` indicates
 // whether items from a test instance of Webstore are permitted.
 crx_file::VerifierFormat GetWebstoreVerifierFormat(bool test_publisher_enabled);
+
+// XL accepts production Google packages and packages signed by its own
+// publisher, while continuing to require the extension's identity proof.
+std::vector<std::vector<uint8_t>> GetXlWebstorePublisherKeyHashes();
 
 // Returns the default format requirement for installing an extension that
 // is force-installed by policy.

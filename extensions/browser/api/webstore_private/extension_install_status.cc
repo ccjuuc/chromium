@@ -84,10 +84,12 @@ ExtensionInstallStatus PerformSynchronousChecks(
     content::BrowserContext* browser_context,
     Manifest::Type manifest_type,
     const PermissionSet& required_permission_set,
-    int manifest_version) {
+    int manifest_version,
+    const std::optional<std::string>& policy_update_url) {
   DCHECK(crx_file::id_util::IdIsValid(extension_id));
 
-  const GURL update_url = extension_urls::GetWebstoreUpdateUrl();
+  const std::string update_url =
+      policy_update_url.value_or(extension_urls::GetWebstoreUpdateUrl().spec());
 
   auto* supervised_user_extensions_delegate =
       ManagementAPI::GetFactoryInstance()
@@ -97,13 +99,12 @@ ExtensionInstallStatus PerformSynchronousChecks(
       ExtensionsBrowserClient::Get()->GetExtensionManagementClient(
           browser_context);
 
-  // Always use webstore update url to check the installation mode because this
-  // function is used by webstore private API only and there may not be any
-  // |Extension| instance. Note that we don't handle the case where an offstore
-  // extension with an identical ID is installed.
+  // An explicit store override matches the native policy's raw manifest URL,
+  // including an empty URL. Without an override, retain the original Chrome
+  // Web Store policy behavior.
   ManagedInstallationMode mode =
       extension_management_client->GetInstallationMode(extension_id,
-                                                       update_url.spec());
+                                                       update_url);
 
   if (mode == ManagedInstallationMode::kForced ||
       mode == ManagedInstallationMode::kRecommended) {
@@ -146,7 +147,7 @@ ExtensionInstallStatus PerformSynchronousChecks(
   }
 
   bool is_blocked_by_policy = IsExtensionInstallBlockedByPolicy(
-      extension_management_client, mode, extension_id, update_url.spec(),
+      extension_management_client, mode, extension_id, update_url,
       manifest_type, required_permission_set);
 
   // Check if it's possible for the extension to be requested.
@@ -232,12 +233,13 @@ std::u16string GetBlockedErrorMessage(
 
 ExtensionInstallStatus GetWebstoreExtensionInstallStatus(
     const ExtensionId& extension_id,
-    content::BrowserContext* browser_context) {
+    content::BrowserContext* browser_context,
+    const std::optional<std::string>& policy_update_url) {
   // We don't know the extension's version, so we can't check
   // ExtensionInstallPolicyService. Only perform the other checks.
   return PerformSynchronousChecks(extension_id, browser_context,
                                   Manifest::Type::kUnknown, PermissionSet(),
-                                  /*manifest_version=*/3);
+                                  /*manifest_version=*/3, policy_update_url);
 }
 
 void GetWebstoreExtensionInstallStatus(
@@ -248,10 +250,11 @@ void GetWebstoreExtensionInstallStatus(
     const PermissionSet& required_permission_set,
     int manifest_version,
     base::OnceCallback<void(ExtensionInstallStatus,
-                            std::u16string blocked_message)> callback) {
-  ExtensionInstallStatus status =
-      PerformSynchronousChecks(extension_id, browser_context, manifest_type,
-                               required_permission_set, manifest_version);
+                            std::u16string blocked_message)> callback,
+    const std::optional<std::string>& policy_update_url) {
+  ExtensionInstallStatus status = PerformSynchronousChecks(
+      extension_id, browser_context, manifest_type, required_permission_set,
+      manifest_version, policy_update_url);
 
   if (status == kBlockedByPolicy) {
     std::move(callback).Run(

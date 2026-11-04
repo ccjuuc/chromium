@@ -77,7 +77,9 @@ class Unpacker : public base::RefCountedThreadSafe<Unpacker> {
                      std::unique_ptr<Unzipper> unzipper,
                      crx_file::VerifierFormat crx_format,
                      bool is_foreground,
-                     base::OnceCallback<void(const Result& result)> callback);
+                     base::OnceCallback<void(const Result& result)> callback,
+                     const std::vector<std::vector<uint8_t>>&
+                         accepted_publisher_key_hashes = {});
 
  private:
   friend class base::RefCountedThreadSafe<Unpacker>;
@@ -98,8 +100,10 @@ class Unpacker : public base::RefCountedThreadSafe<Unpacker> {
   // The first step of unpacking is to verify the file. Triggers
   // `BeginUnzipping` if successful. Triggers `EndUnpacking` if an early error
   // is encountered.
-  void Verify(const std::vector<uint8_t>& pk_hash,
-              crx_file::VerifierFormat crx_format);
+  void Verify(
+      const std::vector<uint8_t>& pk_hash,
+      crx_file::VerifierFormat crx_format,
+      const std::vector<std::vector<uint8_t>>& accepted_publisher_key_hashes);
 
   // The next step of unpacking is to unzip. Triggers `EndUnzipping` if
   // successful. Triggers `EndUnpacking` if an early error is encountered.

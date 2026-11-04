@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>扩展商店测试 - Xenon</title>
+  <link rel="stylesheet" href="index.css">
+  <script type="module" src="index.js"></script>
+</head>
+<body>
+  <main class="page">
+    <header class="page-header">
+      <div class="page-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+          <path d="M4 10v10h16V10M3 10l2-6h14l2 6M3 10c0 3 4.5 3 4.5 0 0 3 4.5 3 4.5 0 0 3 4.5 3 4.5 0 0 3 4.5 3 4.5 0M9 20v-6h6v6"/>
+        </svg>
+      </div>
+      <div>
+        <p class="eyebrow">XENON · 开发与测试</p>
+        <h1>扩展商店测试</h1>
+        <p class="intro">在 PowerShell 中启动本地服务，再打开商店验证 XL 与 Google 签名扩展的安装、卸载。</p>
+      </div>
+    </header>
+
+    <section class="card" aria-labelledby="store-heading">
+      <div class="section-heading">
+        <div>
+          <h2 id="store-heading">打开测试商店</h2>
+          <p class="section-description">商店地址：<code>https://xl.extensions.test.com/</code></p>
+        </div>
+        <a id="store-link" class="button primary" href="https://xl.extensions.test.com/" target="_blank" rel="noopener">打开商店</a>
+      </div>
+      <div class="package-grid">
+        <a id="xl-package-link" class="package-link" href="https://xl.extensions.test.com/" target="_blank" rel="noopener">
+          <span class="badge">XL 签名示例</span>
+          <strong>测试 XL 发布者签名</strong>
+          <code>XL local install test</code>
+          <span class="link-label">打开商店并选择此示例 ↗</span>
+        </a>
+        <a id="google-package-link" class="package-link" href="https://xl.extensions.test.com/detail/ngjobkbdodapjbbncmagbccommkggmnj" target="_blank" rel="noopener">
+          <span class="badge">Google 原始签名</span>
+          <strong>测试 Google 商店原包</strong>
+          <code>ngjobkbdodapjbbncmagbccommkggmnj</code>
+          <span class="link-label">打开扩展详情 ↗</span>
+        </a>
+      </div>
+      <p class="hint">先准备并导入示例包。安装与卸载在 HTTPS 商店中操作，由浏览器显示原生确认对话框。</p>
+    </section>
+
+    <section class="card" aria-labelledby="runtime-heading">
+      <div class="section-heading">
+        <div>
+          <h2 id="runtime-heading">启动本地服务与浏览器</h2>
+          <p class="section-description">命令使用绝对路径，可在任意工作目录下的 PowerShell 中运行。</p>
+        </div>
+        <span class="badge">PowerShell</span>
+      </div>
+      <label for="source-root">Chromium 源码根目录</label>
+      <input id="source-root" type="text" placeholder="请输入 Chromium 源码根目录的绝对路径" spellcheck="false" autocomplete="off" aria-describedby="source-root-hint source-root-error">
+      <p id="source-root-hint" class="hint">目录中应包含 tools/xl_extension_store/store.mjs。浏览器位于源码的 out/&lt;构建目录&gt; 时会自动填写，可手动修改。</p>
+      <p id="source-root-error" class="field-error" role="status" hidden></p>
+      <dl class="browser-location">
+        <dt>当前浏览器可执行文件</dt>
+        <dd><code id="browser-executable"></code></dd>
+      </dl>
+
+      <div class="command-block">
+        <div class="command-heading">
+          <h3>1. 启动 HTTPS 服务</h3>
+          <button id="copy-serve-command" class="button secondary" type="button" data-copy="serve-command" disabled>复制服务命令</button>
+        </div>
+        <pre tabindex="0" aria-label="PowerShell 服务启动命令"><code id="serve-command"></code></pre>
+        <p class="hint">需要 Node.js 24，以及已初始化的证书、TLS 私钥和扩展目录。保持终端运行，按 Ctrl+C 停止服务；导入新包后重启服务。</p>
+      </div>
+
+      <div class="command-block">
+        <div class="command-heading">
+          <h3>2. 启动专用测试浏览器</h3>
+          <button id="copy-browser-command" class="button secondary" type="button" data-copy="browser-command" disabled>复制浏览器命令</button>
+        </div>
+        <pre tabindex="0" aria-label="PowerShell 浏览器启动命令"><code id="browser-command"></code></pre>
+        <dl class="parameter-list">
+          <div><dt><code>--data-dir</code></dt><dd>服务读取源码目录下 out/xl_extension_store 的证书和扩展包。</dd></div>
+          <div><dt><code>--user-data-dir</code></dt><dd>使用独立的 browser-profile 测试配置，保留测试安装状态。</dd></div>
+          <div><dt><code>--proxy-bypass-list</code></dt><dd>商店域名直连本机，避免经过系统代理。</dd></div>
+          <div><dt><code>--disable-xenon-sidebar-auto-hide</code></dt><dd>保持侧栏可见，便于使用 EXT 入口。</dd></div>
+          <div><dt><code>chrome://xenon-extension-store/</code></dt><dd>启动后打开本测试页。</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="hosts-heading">
+      <div class="section-heading">
+        <div>
+          <h2 id="hosts-heading">本地域名映射</h2>
+          <p class="section-description">以管理员权限编辑 Windows 的 %SystemRoot%\System32\drivers\etc\hosts，添加一行：</p>
+        </div>
+        <button id="copy-hosts-entry" class="button secondary" type="button" data-copy="hosts-entry">复制映射</button>
+      </div>
+      <pre tabindex="0" aria-label="hosts 域名映射"><code id="hosts-entry">127.0.0.1 xl.extensions.test.com</code></pre>
+      <p class="hint">服务监听 127.0.0.1:443。浏览器已内置商店 CA 公共证书，无需安装到系统证书库；使用 HTTPS 默认端口 443。</p>
+    </section>
+
+    <section class="card" aria-labelledby="checks-heading">
+      <div class="section-heading">
+        <div>
+          <h2 id="checks-heading">安装与卸载检查</h2>
+          <p class="section-description">分别使用上方 XL 和 Google 示例包完成以下操作。</p>
+        </div>
+      </div>
+      <ol class="check-list">
+        <li>打开扩展详情，未安装时应显示可点击的“添加至 Chrome”。</li>
+        <li>点击安装并接受浏览器确认，完成后按钮自动变为“卸载”。</li>
+        <li>点击卸载后先取消，按钮保持“卸载”；再次点击并确认，按钮自动恢复为“添加至 Chrome”。</li>
+        <li>再次安装，再从 <a id="extensions-link" href="chrome://extensions/" target="_blank" rel="noopener">扩展管理页</a>移除。返回商店详情后，应直接显示“添加至 Chrome”，无需刷新。</li>
+      </ol>
+      <details id="native-tests">
+        <summary>原生浏览器回归测试（6 项）</summary>
+        <p class="hint">先构建 xl_extension_store_browsertests，再运行下方命令。测试使用自己的 HTTPS 服务，覆盖真实安装、卸载与重装、无发布者证明拒绝和更新校验。</p>
+        <div class="command-heading">
+          <h3>运行 XlExtensionStoreBrowserTest</h3>
+          <button id="copy-native-test-command" class="button secondary" type="button" data-copy="native-test-command" disabled>复制回归命令</button>
+        </div>
+        <pre tabindex="0" aria-label="PowerShell 原生回归测试命令"><code id="native-test-command"></code></pre>
+      </details>
+    </section>
+    <p id="copy-status" class="copy-status" role="status" aria-live="polite"></p>
+    <footer>源码说明：tools/xl_extension_store/README.md</footer>
+  </main>
+</body>
+</html>

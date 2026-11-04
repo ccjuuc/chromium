@@ -4,6 +4,8 @@
 
 #include "xenon_overlay/chrome/browser/managed_certificates/managed_certificate_service.h"
 
+#include <vector>
+
 #include "base/base_paths.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -217,6 +219,83 @@ TEST_F(ManagedCertificateServiceTest,
   EXPECT_FALSE(service_.GetStatus().last_success.is_null());
   service_.Shutdown();
   EXPECT_FALSE(service_.GetStatus().started);
+}
+
+TEST_F(ManagedCertificateServiceTest,
+       StatusObserversReceiveStartupAndConfigurationFailure) {
+  ASSERT_TRUE(base::WriteFile(config_path_, "{invalid"));
+  std::vector<ServiceStatus> statuses;
+  auto subscription = service_.AddStatusObserver(base::BindLambdaForTesting(
+      [&] { statuses.push_back(service_.GetStatus()); }));
+
+  service_.Start(config_path_, directory_.GetPath());
+  ASSERT_FALSE(statuses.empty());
+  EXPECT_TRUE(statuses.back().started);
+  EXPECT_FALSE(statuses.back().ready);
+  task_environment_.RunUntilIdle();
+  EXPECT_TRUE(statuses.back().ready);
+  EXPECT_FALSE(statuses.back().configuration_error.empty());
+  EXPECT_FALSE(statuses.back().downloading);
+  EXPECT_FALSE(factory_.IsPending(kEndpoint));
+
+  service_.Shutdown();
+  EXPECT_FALSE(statuses.back().started);
+  EXPECT_TRUE(statuses.back().ready);
+}
+
+TEST_F(ManagedCertificateServiceTest,
+       StatusChangesDoNotRepublishCertificateTrust) {
+  Start();
+  int trust_changes = 0;
+  auto trust_subscription = service_.AddObserver(
+      base::BindLambdaForTesting([&] { ++trust_changes; }));
+  std::vector<ServiceStatus> statuses;
+  auto status_subscription =
+      service_.AddStatusObserver(base::BindLambdaForTesting(
+          [&] { statuses.push_back(service_.GetStatus()); }));
+
+  Respond(Body(1));
+  ASSERT_FALSE(statuses.empty());
+  EXPECT_FALSE(statuses.back().downloading);
+  EXPECT_FALSE(statuses.back().last_success.is_null());
+  ASSERT_TRUE(service_.snapshot());
+  EXPECT_EQ(trust_changes, 1);
+  trust_changes = 0;
+
+  task_environment_.FastForwardBy(base::Seconds(1));
+  const auto previous_success = statuses.back().last_success;
+  statuses.clear();
+  Refresh();
+  ASSERT_FALSE(statuses.empty());
+  EXPECT_TRUE(statuses.back().downloading);
+  Respond("", 304);
+  EXPECT_FALSE(statuses.back().downloading);
+  EXPECT_GT(statuses.back().last_success, previous_success);
+  EXPECT_EQ(trust_changes, 0);
+
+  Refresh();
+  FailNetwork();
+  EXPECT_FALSE(statuses.back().downloading);
+  EXPECT_FALSE(statuses.back().refresh_error.empty());
+  EXPECT_EQ(trust_changes, 0);
+  ASSERT_TRUE(service_.snapshot());
+
+  Refresh();
+  Respond("{invalid");
+  EXPECT_FALSE(statuses.back().refresh_error.empty());
+  EXPECT_EQ(trust_changes, 0);
+
+  Refresh();
+  Respond(Body(2, std::nullopt, false));
+  EXPECT_TRUE(statuses.back().refresh_error.empty());
+  ASSERT_TRUE(service_.snapshot());
+  EXPECT_TRUE(service_.snapshot()->certificates.empty());
+  EXPECT_EQ(trust_changes, 1);
+
+  status_subscription = {};
+  const size_t notifications = statuses.size();
+  service_.Shutdown();
+  EXPECT_EQ(statuses.size(), notifications);
 }
 
 TEST_F(ManagedCertificateServiceTest, PublishesOnlyAfterPersistence) {

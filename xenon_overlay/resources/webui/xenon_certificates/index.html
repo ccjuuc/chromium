@@ -20,15 +20,33 @@
       <div>
         <p class="eyebrow">XENON · 网络与安全</p>
         <h1>证书诊断</h1>
-        <p class="intro">查看托管证书快照，测试当前浏览器的 HTTPS 连接与证书校验。</p>
+        <p class="intro">查看内置 CA 与托管证书，测试当前浏览器的 HTTPS 连接与证书校验。</p>
       </div>
     </header>
+
+    <section class="card" id="builtin-store-section" aria-labelledby="builtin-store-heading" hidden>
+      <div class="section-heading">
+        <div>
+          <h2 id="builtin-store-heading">内置 CA 证书</h2>
+          <p class="section-description">随浏览器提供，启动时即可用于证书链验证。</p>
+        </div>
+        <span class="badge neutral">浏览器内置</span>
+      </div>
+      <div class="table-container" tabindex="0" aria-label="内置 CA 证书，可横向滚动">
+        <table>
+          <caption class="visually-hidden">浏览器内置的 CA 证书及其额外约束</caption>
+          <thead><tr><th scope="col">证书名称</th><th scope="col">用途</th><th scope="col">额外约束</th><th scope="col">SHA-256 指纹</th></tr></thead>
+          <tbody id="builtin-store-certificate-body"></tbody>
+        </table>
+      </div>
+      <p class="notice">此证书随浏览器更新，不属于下方的托管快照。撤回托管快照不会删除此证书；网站仍须通过域名、有效期与证书链校验。</p>
+    </section>
 
     <section class="card" id="snapshot-section" aria-labelledby="snapshot-heading">
       <div class="section-heading">
         <div>
-          <h2 id="snapshot-heading">证书下发状态</h2>
-          <p class="section-description">查看本地诊断；刷新状态不会触发远程下载</p>
+          <h2 id="snapshot-heading">托管证书下发状态</h2>
+          <p class="section-description">状态会自动更新；查看状态不会触发远程下载。</p>
         </div>
         <button id="refresh-status" type="button" class="button secondary">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">

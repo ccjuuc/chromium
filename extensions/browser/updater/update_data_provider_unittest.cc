@@ -9,6 +9,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/containers/flat_set.h"
@@ -18,8 +19,10 @@
 #include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
+#include "components/crx_file/crx_verifier.h"
 #include "components/update_client/update_client.h"
 #include "extensions/browser/disable_reason.h"
+#include "extensions/browser/extension_management_client.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
@@ -28,10 +31,84 @@
 #include "extensions/browser/updater/extension_installer.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/extension_id.h"
+#include "extensions/common/extension_urls.h"
+#include "extensions/common/manifest_handlers/manifest_url_handlers.h"
+#include "extensions/common/url_pattern_set.h"
+#include "extensions/common/verifier_formats.h"
+#include "url/gurl.h"
 
 using extensions::mojom::ManifestLocation;
 
 namespace extensions {
+
+namespace {
+
+// Match the browser's effective-URL lookup, including policy overrides, without
+// depending on Chrome's ExtensionManagement implementation in extensions tests.
+class UpdateUrlExtensionManagementClient : public ExtensionManagementClient {
+ public:
+  explicit UpdateUrlExtensionManagementClient(
+      std::optional<GURL> policy_update_url)
+      : policy_update_url_(std::move(policy_update_url)) {}
+
+  GURL GetEffectiveUpdateURL(const Extension& extension) override {
+    return policy_update_url_.value_or(ManifestURL::GetUpdateURL(&extension));
+  }
+
+  bool UpdatesFromWebstore(const Extension& extension) override { return true; }
+  bool IsInstallationExplicitlyAllowed(const ExtensionId& id) override {
+    return false;
+  }
+  bool IsForceInstalledInLowTrustEnvironment(
+      const Extension& extension) override {
+    return false;
+  }
+  const URLPatternSet& GetPolicyBlockedHosts(
+      const Extension* extension) override {
+    return URLPatternSet::Empty();
+  }
+  const URLPatternSet& GetPolicyAllowedHosts(
+      const Extension* extension) override {
+    return URLPatternSet::Empty();
+  }
+  bool UsesDefaultPolicyHostRestrictions(const Extension* extension) override {
+    return false;
+  }
+  bool BlocklistedByDefault() const override { return false; }
+  bool IsAllowedManifestType(Manifest::Type manifest_type,
+                             const std::string& extension_id) const override {
+    return false;
+  }
+  ManagedInstallationMode GetInstallationMode(
+      const Extension* extension) override {
+    return ManagedInstallationMode::kBlocked;
+  }
+  ManagedInstallationMode GetInstallationMode(
+      const ExtensionId& extension_id,
+      const std::string& update_url) override {
+    return ManagedInstallationMode::kBlocked;
+  }
+  bool IsInstallationExplicitlyBlocked(const ExtensionId& id) override {
+    return false;
+  }
+  const std::string BlockedInstallMessage(const ExtensionId& id) override {
+    return {};
+  }
+  bool IsPermissionSetAllowed(const Extension* extension,
+                              const PermissionSet& permissions) override {
+    return false;
+  }
+  bool IsPermissionSetAllowed(const ExtensionId& extension_id,
+                              const std::string& update_url,
+                              const PermissionSet& permissions) override {
+    return false;
+  }
+
+ private:
+  std::optional<GURL> policy_update_url_;
+};
+
+}  // namespace
 
 class UpdateDataProviderExtensionsBrowserClient
     : public TestExtensionsBrowserClient {
@@ -200,6 +277,91 @@ TEST_F(UpdateDataProviderTest, GetData_EnabledExtension) {
   EXPECT_NE(nullptr, data[0]->installer.get());
   EXPECT_EQ(0UL, data[0]->disabled_reasons.size());
   EXPECT_EQ("internal", data[0]->install_location);
+}
+
+TEST_F(UpdateDataProviderTest, PublisherRequirementsFollowInstallProvenance) {
+  constexpr char kXlUpdateUrl[] =
+      "https://xl.extensions.test.com/service/update2/crx";
+  constexpr char kThirdPartyUpdateUrl[] = "https://updates.example.com/crx";
+  constexpr char kGoogleUpdateUrl[] =
+      "https://clients2.google.com/service/update2/crx";
+  struct TestCase {
+    const char* name;
+    const char* manifest_update_url;
+    const char* policy_update_url;
+    bool from_xl;
+    bool from_google;
+    bool require_xl_publisher;
+    bool require_google_publisher;
+  };
+  const TestCase cases[] = {
+      {"xl", kXlUpdateUrl, nullptr, true, false, true, false},
+      {"third_party", kThirdPartyUpdateUrl, nullptr, true, false, true, false},
+      {"not_xl", kXlUpdateUrl, nullptr, false, false, false, false},
+      {"not_xl_third_party", kThirdPartyUpdateUrl, nullptr, false, false, false,
+       false},
+      {"xl_google_package", kGoogleUpdateUrl, nullptr, true, false, false,
+       true},
+      {"google", kGoogleUpdateUrl, nullptr, false, true, false, true},
+      {"xl_and_google", kGoogleUpdateUrl, nullptr, true, true, false, true},
+      {"xl_default_google", nullptr, nullptr, true, false, false, true},
+      {"google_default", nullptr, nullptr, false, true, false, true},
+      {"policy_to_google", kXlUpdateUrl, kGoogleUpdateUrl, true, false, false,
+       true},
+      {"policy_to_xl", kGoogleUpdateUrl, kXlUpdateUrl, true, false, true,
+       false},
+      {"policy_to_third_party", kGoogleUpdateUrl, kThirdPartyUpdateUrl, true,
+       false, true, false},
+      {"policy_overrides_google_flag", kGoogleUpdateUrl, kXlUpdateUrl, true,
+       true, true, false},
+      {"policy_default_google", kXlUpdateUrl, "", true, false, false, true},
+      {"policy_does_not_create_xl_provenance", kGoogleUpdateUrl, kXlUpdateUrl,
+       false, true, false, true},
+  };
+  auto provider = base::MakeRefCounted<UpdateDataProvider>(browser_context());
+  for (const auto& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
+    static_cast<TestExtensionsBrowserClient*>(extensions_browser_client())
+        ->set_extension_management_client(
+            std::make_unique<UpdateUrlExtensionManagementClient>(
+                test_case.policy_update_url
+                    ? std::make_optional(GURL(test_case.policy_update_url))
+                    : std::nullopt));
+    ExtensionBuilder builder("update provenance");
+    builder.SetID(kExtensionId1).SetVersion("1.0");
+    if (test_case.manifest_update_url) {
+      builder.SetManifestKey("update_url", test_case.manifest_update_url);
+    }
+    if (test_case.from_google) {
+      builder.AddFlags(Extension::FROM_WEBSTORE);
+    }
+    extension_registry()->AddEnabled(builder.Build());
+    static_cast<UpdateDataProviderExtensionsBrowserClient*>(
+        extensions_browser_client())
+        ->AddEnabledExtension(kExtensionId1);
+    ExtensionPrefs::Get(browser_context())
+        ->SetFromXlWebstore(kExtensionId1, test_case.from_xl);
+
+    ExtensionUpdateDataMap update_data;
+    update_data[kExtensionId1] = {};
+    std::vector<std::optional<update_client::CrxComponent>> data;
+    provider->GetData(
+        /*install_immediately=*/false, update_data, {kExtensionId1},
+        base::BindLambdaForTesting(
+            [&](const std::vector<std::optional<update_client::CrxComponent>>&
+                    output) { data = output; }));
+    ASSERT_EQ(1u, data.size());
+    ASSERT_TRUE(data[0]);
+    EXPECT_EQ(test_case.require_xl_publisher
+                  ? GetXlWebstorePublisherKeyHashes()
+                  : std::vector<std::vector<uint8_t>>(),
+              data[0]->accepted_publisher_key_hashes);
+    EXPECT_EQ(test_case.require_google_publisher
+                  ? GetWebstoreVerifierFormat(false)
+                  : crx_file::VerifierFormat::CRX3,
+              data[0]->crx_format_requirement);
+    extension_registry()->RemoveEnabled(kExtensionId1);
+  }
 }
 
 TEST_F(UpdateDataProviderTest, GetData_EnabledExtensionWithData) {

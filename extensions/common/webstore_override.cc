@@ -16,6 +16,7 @@
 #include "base/no_destructor.h"
 #include "extensions/common/context_data.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_urls.h"
 #include "extensions/common/features/feature.h"
 #include "extensions/common/mojom/context_type.mojom.h"
 #include "extensions/common/switches.h"
@@ -33,13 +34,11 @@ constexpr static std::array<std::string_view, 2> kWebstoreOverrideFeatureList =
         // LINT.ThenChange(chrome/common/extensions/extension_test_util.cc)
 };
 
-// Returns true if the "apps-gallery-url" command line flag has been used to
-// specify a webstore override URL and if that URL is the same origin with the
-// `url` this function is called with.
+// Returns true for the trusted XL store origin, or for a test store selected
+// with the "apps-gallery-url" command line flag.
 //
-// Normally the APIs used by the webstore are only exposed to the actual domain
-// used by the store, but this delegated availability check allows them to be
-// exposed on a specified override URL. This is used both for our own API test
+// The XL store check enforces an exact HTTPS origin because URL match patterns
+// alone do not restrict ports. The override is used both for our own API tests
 // and externally by the webstore team.
 //
 // Called by `SimpleFeature::IsAvailableToContextImpl()`, once that function
@@ -54,6 +53,15 @@ bool AreWebstoreFeaturesAvailable(const std::string& api_full_name,
                                   int context_id,
                                   bool check_developer_mode,
                                   const extensions::ContextData& context_data) {
+  if (extension || context != extensions::mojom::ContextType::kWebPage ||
+      !std::ranges::contains(kWebstoreOverrideFeatureList, api_full_name)) {
+    return false;
+  }
+
+  if (extension_urls::IsXlWebstoreOrigin(url::Origin::Create(url))) {
+    return true;
+  }
+
   // We use a static local variable here to save on recreating it for repeated
   // calls. This is safe since the command line flags are constant for the
   // duration of the process.
@@ -72,16 +80,6 @@ bool AreWebstoreFeaturesAvailable(const std::string& api_full_name,
 
   if (!override_url->is_valid()) {
     // No override URL was specified. Early out.
-    return false;
-  }
-
-  if (extension) {
-    return false;
-  }
-  if (context != extensions::mojom::ContextType::kWebPage) {
-    return false;
-  }
-  if (!std::ranges::contains(kWebstoreOverrideFeatureList, api_full_name)) {
     return false;
   }
 

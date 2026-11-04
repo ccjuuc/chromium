@@ -29,6 +29,7 @@ namespace {
 
 // URL the new webstore is associated with in production.
 constexpr char kNewWebstoreURL[] = "https://chromewebstore.google.com/";
+constexpr char kXlWebstoreURL[] = "https://xl.extensions.test.com/";
 // URL the webstore hosted app is associated with in production, minus the
 // /webstore/ path which is added in the tests themselves.
 constexpr char kWebstoreAppBaseURL[] = "https://chrome.google.com/";
@@ -98,14 +99,15 @@ IN_PROC_BROWSER_TEST_P(WebstoreDomainBrowserTest, ExpectedAvailability) {
   EXPECT_EQ(web_contents->GetPrimaryMainFrame()->GetLastCommittedURL(),
             webstore_url);
 
-  // The webstorePrivate and management APIs are only available on the new
-  // webstore domain. The old site gained access to them via the hosted app,
+  // The webstorePrivate and management APIs are only available on trusted
+  // webstore domains. The old site gained access to them via the hosted app,
   // which is no longer allowed to access webstorePrivate or management (since
   // the hosted app isn't used).
   // The runtime API is still available since it's always available to all
   // items, but it doesn't really have any capabilities (and the hosted app is
   // still safe; just unused).
   bool expect_fun_apis = GetParam() == GURL(kNewWebstoreURL) ||
+                         GetParam() == GURL(kXlWebstoreURL) ||
                          GetParam() == GURL(kWebstoreOverrideURL);
 
   EXPECT_EQ(expect_fun_apis, is_api_available("webstorePrivate"));
@@ -115,6 +117,7 @@ IN_PROC_BROWSER_TEST_P(WebstoreDomainBrowserTest, ExpectedAvailability) {
   // hosted app isn't installed.
   bool expect_runtime =
       GetParam() == GURL(kNewWebstoreURL) ||
+      GetParam() == GURL(kXlWebstoreURL) ||
       GetParam() == GURL(kWebstoreOverrideURL) ||
       (GetParam() == GURL(kWebstoreAppBaseURL) &&
        base::FeatureList::IsEnabled(extensions_features::kWebstoreHostedApp));
@@ -154,6 +157,7 @@ IN_PROC_BROWSER_TEST_P(WebstoreDomainBrowserTest, CanReceiveEvents) {
 
   // The webstore hosted app no longer has access to the management API.
   bool expect_management = GetParam() == GURL(kNewWebstoreURL) ||
+                           GetParam() == GURL(kXlWebstoreURL) ||
                            GetParam() == GURL(kWebstoreOverrideURL);
 
   std::string js_result =
@@ -179,6 +183,24 @@ IN_PROC_BROWSER_TEST_P(WebstoreDomainBrowserTest, CanReceiveEvents) {
   } else {
     ASSERT_EQ("Error registering", js_result);
   }
+}
+
+IN_PROC_BROWSER_TEST_P(WebstoreDomainBrowserTest,
+                       XlStoreRejectsNonstandardPort) {
+  if (GetParam() != GURL(kXlWebstoreURL)) {
+    GTEST_SKIP();
+  }
+  const GURL untrusted_url(
+      "https://xl.extensions.test.com:8443/webstore/mock_store.html");
+  content::WebContents* web_contents = GetActiveWebContents();
+  ASSERT_TRUE(NavigateToURL(web_contents, untrusted_url));
+  EXPECT_EQ(untrusted_url, web_contents->GetLastCommittedURL());
+  EXPECT_FALSE(
+      content::EvalJs(web_contents, "chrome.hasOwnProperty('webstorePrivate')")
+          .ExtractBool());
+  EXPECT_FALSE(
+      content::EvalJs(web_contents, "chrome.hasOwnProperty('management')")
+          .ExtractBool());
 }
 
 // Tests that a webstore page with misconfigured or missing X-Frame-Options
@@ -279,6 +301,9 @@ IN_PROC_BROWSER_TEST_P(WebstoreDomainBrowserTest, FrameWebstorePageBlocked) {
 INSTANTIATE_TEST_SUITE_P(WebstoreNewURL,
                          WebstoreDomainBrowserTest,
                          testing::Values(GURL(kNewWebstoreURL)));
+INSTANTIATE_TEST_SUITE_P(XlWebstoreURL,
+                         WebstoreDomainBrowserTest,
+                         testing::Values(GURL(kXlWebstoreURL)));
 INSTANTIATE_TEST_SUITE_P(WebstoreHostedAppURL,
                          WebstoreDomainBrowserTest,
                          testing::Values(GURL(kWebstoreAppBaseURL)));

@@ -91,6 +91,7 @@
 #include "services/proxy_resolver/public/mojom/proxy_resolver.mojom.h"
 #include "third_party/blink/public/common/features.h"
 #include "url/gurl.h"
+#include "xenon_overlay/chrome/browser/managed_certificates/builtin_store_certificate.h"
 #include "xenon_overlay/chrome/browser/managed_certificates/managed_certificate_merger.h"
 #include "xenon_overlay/chrome/browser/managed_certificates/managed_certificate_service.h"
 
@@ -1040,6 +1041,7 @@ SystemNetworkContextManager::CreateDefaultNetworkContextParams(
     auto* managed = xenon::certificates::XenonManagedCertificateService::Get();
     cert_verifier_creation_params->wait_for_update = !managed->ready();
     auto certs = cert_verifier::mojom::AdditionalCertificates::New();
+    xenon::certificates::MergeBuiltinStoreCertificate(certs.get());
     xenon::certificates::MergeManagedCertificates(managed->snapshot(),
                                                  certs.get());
     cert_verifier_creation_params->initial_additional_certificates =
@@ -1070,6 +1072,7 @@ void SystemNetworkContextManager::UpdateManagedCertificates() {
     return;
   }
   auto certificates = cert_verifier::mojom::AdditionalCertificates::New();
+  xenon::certificates::MergeBuiltinStoreCertificate(certificates.get());
   xenon::certificates::MergeManagedCertificates(managed->snapshot(),
                                                certificates.get());
   managed_certificates_updater_->UpdateAdditionalCertificates(

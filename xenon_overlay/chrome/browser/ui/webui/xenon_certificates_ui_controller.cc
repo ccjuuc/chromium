@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/i18n/time_formatting.h"
@@ -44,6 +45,7 @@
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
+#include "xenon_overlay/chrome/browser/managed_certificates/builtin_store_certificate.h"
 #include "xenon_overlay/chrome/browser/managed_certificates/managed_certificate_service.h"
 #include "xenon_overlay/chrome/browser/managed_certificates/managed_certificate_types.h"
 #include "xenon_overlay/resources/grit/xenon_resources.h"
@@ -84,6 +86,26 @@ base::DictValue CertificateDetails(const net::SSLInfo& ssl_info) {
   return result;
 }
 
+base::DictValue TrustCertificateDetails(const certificates::Certificate& cert) {
+  base::DictValue result;
+  result.Set("name", cert.name);
+  result.Set("role", cert.trust_anchor ? "trust_anchor" : "intermediate");
+  result.Set("sha256", certificates::Sha256Hex(
+                           base::as_string_view(base::span(cert.der))));
+  base::ListValue dns;
+  for (const auto& name : cert.permitted_dns_names) {
+    dns.Append(name);
+  }
+  result.Set("dns", std::move(dns));
+  base::ListValue cidrs;
+  for (const auto& cidr : cert.permitted_cidrs) {
+    cidrs.Append(cidr.address.ToString() + "/" +
+                 base::NumberToString(cidr.prefix_length));
+  }
+  result.Set("cidrs", std::move(cidrs));
+  return result;
+}
+
 class XenonCertificatesMessageHandler : public content::WebUIMessageHandler {
  public:
   XenonCertificatesMessageHandler() = default;
@@ -101,9 +123,24 @@ class XenonCertificatesMessageHandler : public content::WebUIMessageHandler {
                             base::Unretained(this)));
   }
 
+  void OnJavascriptAllowed() override {
+    status_subscription_ =
+        certificates::XenonManagedCertificateService::Get()->AddStatusObserver(
+            base::BindRepeating(
+                &XenonCertificatesMessageHandler::OnStatusChanged,
+                weak_factory_.GetWeakPtr()));
+  }
+
   void OnJavascriptDisallowed() override {
+    status_subscription_ = {};
     loader_.reset();
     weak_factory_.InvalidateWeakPtrs();
+  }
+
+  void OnStatusChanged() {
+    if (IsJavascriptAllowed()) {
+      FireWebUIListener("managed-certificate-status-changed", BuildStatus());
+    }
   }
 
   void GetStatus(const base::ListValue& args) {
@@ -111,6 +148,10 @@ class XenonCertificatesMessageHandler : public content::WebUIMessageHandler {
       return;
     }
     AllowJavascript();
+    ResolveJavascriptCallback(args[0], BuildStatus());
+  }
+
+  base::DictValue BuildStatus() {
     auto* service = certificates::XenonManagedCertificateService::Get();
     const auto status = service->GetStatus();
     base::DictValue result;
@@ -123,6 +164,9 @@ class XenonCertificatesMessageHandler : public content::WebUIMessageHandler {
     result.Set("refreshError", status.refresh_error);
     result.Set("lastAttempt", StatusTime(status.last_attempt));
     result.Set("lastSuccess", StatusTime(status.last_success));
+    result.Set(
+        "builtinStoreCertificate",
+        TrustCertificateDetails(certificates::GetBuiltinStoreCertificate()));
     result.Set("snapshot", base::Value());
     if (const auto* snapshot = service->snapshot()) {
       base::DictValue details;
@@ -132,28 +176,12 @@ class XenonCertificatesMessageHandler : public content::WebUIMessageHandler {
       details.Set("issuedAt", base::TimeFormatAsIso8601(snapshot->issued_at));
       base::ListValue certs;
       for (const auto& cert : snapshot->certificates) {
-        base::DictValue entry;
-        entry.Set("name", cert.name);
-        entry.Set("role", cert.trust_anchor ? "trust_anchor" : "intermediate");
-        entry.Set("sha256", certificates::Sha256Hex(
-                                base::as_string_view(base::span(cert.der))));
-        base::ListValue dns;
-        for (const auto& name : cert.permitted_dns_names) {
-          dns.Append(name);
-        }
-        entry.Set("dns", std::move(dns));
-        base::ListValue cidrs;
-        for (const auto& cidr : cert.permitted_cidrs) {
-          cidrs.Append(cidr.address.ToString() + "/" +
-                       base::NumberToString(cidr.prefix_length));
-        }
-        entry.Set("cidrs", std::move(cidrs));
-        certs.Append(std::move(entry));
+        certs.Append(TrustCertificateDetails(cert));
       }
       details.Set("certificates", std::move(certs));
       result.Set("snapshot", std::move(details));
     }
-    ResolveJavascriptCallback(args[0], result);
+    return result;
   }
 
   void TestUrl(const base::ListValue& args) {
@@ -306,6 +334,7 @@ class XenonCertificatesMessageHandler : public content::WebUIMessageHandler {
     ResolveJavascriptCallback(base::Value(callback_id), result);
   }
 
+  base::CallbackListSubscription status_subscription_;
   std::unique_ptr<network::SimpleURLLoader> loader_;
   base::WeakPtrFactory<XenonCertificatesMessageHandler> weak_factory_{this};
 };

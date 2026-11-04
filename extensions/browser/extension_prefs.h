@@ -374,6 +374,10 @@ class ExtensionPrefs : public KeyedService {
                            std::string_view key,
                            std::optional<base::Value> value);
 
+  // Installation provenance set by the browser after a verified XL install.
+  bool IsFromXlWebstore(const ExtensionId& id) const;
+  void SetFromXlWebstore(const ExtensionId& id, bool from_xl_webstore);
+
   void DeleteExtensionPrefs(const ExtensionId& id);
 
   void DeleteExtensionPrefsIfPrefEmpty(const ExtensionId& id);

@@ -124,11 +124,54 @@ TEST_F(InstallVerifierTest, TestIsFromStoreAndMustRemainDisabled) {
 
     EXPECT_EQ(test_case.expected_from_store_status == FROM_STORE,
               InstallVerifier::IsFromStore(*extension, profile()));
+    EXPECT_EQ(test_case.expected_from_store_status == FROM_STORE,
+              InstallVerifier::NeedsVerification(*extension, profile()));
     disable_reason::DisableReason disable_reason;
     EXPECT_EQ(
         test_case.expected_must_remain_disabled_status == MUST_REMAIN_DISABLED,
         install_verifier()->MustRemainDisabled(extension.get(),
                                                &disable_reason));
+  }
+}
+
+TEST_F(InstallVerifierTest, XlPublisherProvenanceAllowsInstallation) {
+  struct TestCase {
+    const char* name;
+    const char* update_url;
+    bool from_xl;
+    bool from_google;
+  };
+  const TestCase test_cases[] = {
+      {"xl", "https://xl.extensions.test.com/updates/test.xml", true, false},
+      {"xl_google_original", "https://clients2.google.com/service/update2/crx",
+       true, true},
+      {"xl_third_party", "https://updates.example.com/test.xml", true, false},
+      {"xl_no_update_url", nullptr, true, false},
+      {"offstore_with_xl_url",
+       "https://xl.extensions.test.com/updates/test.xml", false, false},
+      {"offstore", "https://updates.example.com/test.xml", false, false},
+      {"offstore_no_update_url", nullptr, false, false},
+  };
+  ASSERT_TRUE(InstallVerifier::ShouldEnforce());
+  for (const auto& test_case : test_cases) {
+    SCOPED_TRACE(test_case.name);
+    ExtensionBuilder builder(test_case.name);
+    builder.SetLocation(ManifestLocation::kInternal);
+    if (test_case.update_url) {
+      builder.SetManifestKey("update_url", test_case.update_url);
+    }
+    scoped_refptr<const Extension> extension = builder.Build();
+    ExtensionPrefs::Get(profile())->SetFromXlWebstore(extension->id(),
+                                                      test_case.from_xl);
+    EXPECT_EQ(test_case.from_google,
+              InstallVerifier::IsFromStore(*extension, profile()));
+    EXPECT_FALSE(InstallVerifier::NeedsVerification(*extension, profile()));
+    disable_reason::DisableReason reason = disable_reason::DISABLE_NONE;
+    EXPECT_EQ(!test_case.from_xl,
+              install_verifier()->MustRemainDisabled(extension.get(), &reason));
+    EXPECT_EQ(test_case.from_xl ? disable_reason::DISABLE_NONE
+                                : disable_reason::DISABLE_NOT_VERIFIED,
+              reason);
   }
 }
 

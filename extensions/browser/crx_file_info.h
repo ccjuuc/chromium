@@ -5,7 +5,10 @@
 #ifndef EXTENSIONS_BROWSER_CRX_FILE_INFO_H_
 #define EXTENSIONS_BROWSER_CRX_FILE_INFO_H_
 
+#include <stdint.h>
+
 #include <string>
+#include <vector>
 
 #include "base/files/file_path.h"
 #include "base/version.h"
@@ -34,6 +37,10 @@ struct CRXFileInfo {
   ExtensionId extension_id;
   std::string expected_hash;
   base::Version expected_version;
+
+  // Optional publisher SPKI SHA256 hashes with OR semantics. A non-empty list
+  // replaces the publisher trust implied by `required_format`.
+  std::vector<std::vector<uint8_t>> accepted_publisher_key_hashes;
 };
 
 }  // namespace extensions

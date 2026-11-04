@@ -602,6 +602,17 @@ void ExtensionPrefs::UpdateExtensionPref(
   }
 }
 
+bool ExtensionPrefs::IsFromXlWebstore(const ExtensionId& id) const {
+  bool from_xl = false;
+  ReadPrefAsBoolean(id, "from_xl_webstore", &from_xl);
+  return from_xl;
+}
+
+void ExtensionPrefs::SetFromXlWebstore(const ExtensionId& id,
+                                       bool from_xl_webstore) {
+  UpdateExtensionPref(id, "from_xl_webstore", base::Value(from_xl_webstore));
+}
+
 void ExtensionPrefs::DeleteExtensionPrefs(const ExtensionId& extension_id) {
   extension_pref_value_map_->UnregisterExtension(extension_id);
   for (auto& observer : observer_list_)

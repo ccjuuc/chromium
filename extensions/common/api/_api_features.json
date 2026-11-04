@@ -344,8 +344,13 @@
     "contexts": ["web_page"],
     "matches": ["https://chromewebstore.google.com/*"]
   }, {
-    // Used for webstore testing. See comment in
-    // chrome/common/extensions/webstore_override.cc
+    // Require the exact XL store origin, including its HTTPS port.
+    "channel": "stable",
+    "contexts": ["web_page"],
+    "requires_delegated_availability_check": true,
+    "matches": ["https://xl.extensions.test.com/*"]
+  }, {
+    // Used for webstore testing. See extensions/common/webstore_override.cc.
     "channel": "stable",
     "contexts": ["web_page"],
     "requires_delegated_availability_check": true,
@@ -963,8 +968,13 @@
     "contexts": ["web_page"],
     "matches": ["https://chromewebstore.google.com/*"]
   }, {
-    // Used for webstore testing. See comment in
-    // chrome/common/extensions/webstore_override.cc
+    // Require the exact XL store origin, including its HTTPS port.
+    "channel": "stable",
+    "contexts": ["web_page"],
+    "requires_delegated_availability_check": true,
+    "matches": ["https://xl.extensions.test.com/*"]
+  }, {
+    // Used for webstore testing. See extensions/common/webstore_override.cc.
     "channel": "stable",
     "contexts": ["web_page"],
     "requires_delegated_availability_check": true,

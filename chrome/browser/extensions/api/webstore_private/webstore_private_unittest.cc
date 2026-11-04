@@ -37,6 +37,7 @@
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/event_router_factory.h"
 #include "extensions/browser/extension_dialog_auto_confirm.h"
+#include "extensions/browser/extension_function_constants.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/install_approval.h"
@@ -47,6 +48,7 @@
 #include "extensions/common/extension_features.h"
 #include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/origin.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "components/enterprise/promotion_types.h"
@@ -65,6 +67,40 @@ constexpr char kExtensionManifest[] = R"({
   \"version\": \"0.1\",
   \"permissions\": [ \"example.com\", \"cookies\"],
   \"optional_permissions\" : [\"notifications\"]})";
+
+// The XL store can serve an unchanged Google package. Its enterprise policy
+// identity remains the update URL in the package's manifest.
+constexpr char kGoogleUpdateUrlManifest[] = R"({
+  \"name\": \"Google update URL fixture\",
+  \"manifest_version\": 3,
+  \"version\": \"1.0\",
+  \"update_url\": \"https://clients2.google.com/service/update2/crx\"})";
+constexpr char kAllowGoogleUpdateUrlSettings[] = R"({
+  "*": {"installation_mode": "blocked"},
+  "update_url:https://clients2.google.com/service/update2/crx": {
+    "installation_mode": "allowed"
+  }
+})";
+constexpr char kXlUpdateUrlManifest[] = R"({
+  \"name\": \"XL update URL fixture\",
+  \"manifest_version\": 3,
+  \"version\": \"1.0\",
+  \"update_url\": \"https://xl.extensions.test.com/updates/test.xml\"})";
+constexpr char kAllowXlUpdateUrlSettings[] = R"({
+  "*": {"installation_mode": "blocked"},
+  "update_url:https://xl.extensions.test.com/updates/test.xml": {
+    "installation_mode": "allowed"
+  }
+})";
+constexpr char kAllowStoreFallbacksSettings[] = R"({
+  "*": {"installation_mode": "blocked"},
+  "update_url:https://clients2.google.com/service/update2/crx": {
+    "installation_mode": "allowed"
+  },
+  "update_url:https://xl.extensions.test.com/service/update2/crx": {
+    "installation_mode": "allowed"
+  }
+})";
 
 constexpr char kBlockAllExtensionSettings[] = R"({
   "*": {
@@ -356,6 +392,125 @@ TEST_F(WebstorePrivateGetExtensionStatusTest,
   VerifyResponse(ExtensionInstallStatus::kInstallable, *response);
 }
 
+TEST_F(WebstorePrivateGetExtensionStatusTest,
+       XlStoreUsesGoogleManifestUpdateUrlPolicy) {
+  SetExtensionSettings(kAllowGoogleUpdateUrlSettings, profile());
+  // The Google origin is a positive control for the same manifest and policy.
+  for (const char* source_url :
+       {"https://chromewebstore.google.com/detail/test",
+        "https://xl.extensions.test.com/detail/test"}) {
+    SCOPED_TRACE(source_url);
+    auto function =
+        base::MakeRefCounted<WebstorePrivateGetExtensionStatusFunction>();
+    function->set_source_url(GURL(source_url));
+    std::optional<base::Value> response = RunFunctionAndReturnValue(
+        function.get(), GenerateArgs(kExtensionId, kGoogleUpdateUrlManifest));
+    ASSERT_TRUE(response);
+    VerifyResponse(ExtensionInstallStatus::kInstallable, *response);
+  }
+}
+
+TEST_F(WebstorePrivateGetExtensionStatusTest,
+       XlStoreUsesXmlManifestUpdateUrlPolicy) {
+  SetExtensionSettings(kAllowXlUpdateUrlSettings, profile());
+  struct TestCase {
+    const char* source_url;
+    ExtensionInstallStatus expected;
+  };
+  constexpr TestCase kTestCases[] = {
+      {"https://chromewebstore.google.com/detail/test",
+       ExtensionInstallStatus::kBlockedByPolicy},
+      {"https://xl.extensions.test.com/detail/test",
+       ExtensionInstallStatus::kInstallable}};
+  for (const auto& test : kTestCases) {
+    SCOPED_TRACE(test.source_url);
+    auto function =
+        base::MakeRefCounted<WebstorePrivateGetExtensionStatusFunction>();
+    function->set_source_url(GURL(test.source_url));
+    auto response = RunFunctionAndReturnValue(
+        function.get(), GenerateArgs(kExtensionId, kXlUpdateUrlManifest));
+    ASSERT_TRUE(response);
+    VerifyResponse(test.expected, *response);
+  }
+}
+
+TEST_F(WebstorePrivateGetExtensionStatusTest,
+       OnlyXlDistinguishesMissingAndEmptyManifestUpdateUrl) {
+  struct TestCase {
+    const char* source_url;
+    const char* fallback_url;
+    ExtensionInstallStatus known_manifest_status;
+  };
+  constexpr TestCase kTestCases[] = {
+      {"https://chromewebstore.google.com/detail/test",
+       "https://clients2.google.com/service/update2/crx",
+       ExtensionInstallStatus::kInstallable},
+      {"https://chrome.google.com/webstore/detail/test",
+       "https://clients2.google.com/service/update2/crx",
+       ExtensionInstallStatus::kInstallable},
+      {"", "https://clients2.google.com/service/update2/crx",
+       ExtensionInstallStatus::kInstallable},
+      {"https://xl.extensions.test.com/detail/test",
+       "https://xl.extensions.test.com/service/update2/crx",
+       ExtensionInstallStatus::kBlockedByPolicy}};
+  for (const auto& test : kTestCases) {
+    SCOPED_TRACE(test.source_url);
+    SetExtensionSettings(base::StringPrintf(R"({
+      "*": {"installation_mode": "blocked"},
+      "update_url:%s": {"installation_mode": "allowed"}
+    })",
+                                            test.fallback_url),
+                         profile());
+    auto unknown_manifest =
+        base::MakeRefCounted<WebstorePrivateGetExtensionStatusFunction>();
+    unknown_manifest->set_source_url(GURL(test.source_url));
+    auto response = RunFunctionAndReturnValue(unknown_manifest.get(),
+                                              GenerateArgs(kExtensionId));
+    ASSERT_TRUE(response);
+    VerifyResponse(ExtensionInstallStatus::kInstallable, *response);
+
+    auto known_manifest =
+        base::MakeRefCounted<WebstorePrivateGetExtensionStatusFunction>();
+    known_manifest->set_source_url(GURL(test.source_url));
+    response = RunFunctionAndReturnValue(
+        known_manifest.get(), GenerateArgs(kExtensionId, kExtensionManifest));
+    ASSERT_TRUE(response);
+    VerifyResponse(test.known_manifest_status, *response);
+  }
+}
+
+TEST_F(WebstorePrivateGetExtensionStatusTest,
+       OnlyXlManifestlessRequestUsesInstalledManifestUpdateUrl) {
+  SetExtensionSettings(kAllowXlUpdateUrlSettings, profile());
+  ExtensionRegistry::Get(profile())->AddDisabled(
+      ExtensionBuilder("extension")
+          .SetID(kExtensionId)
+          .SetManifestKey("update_url",
+                          "https://xl.extensions.test.com/updates/test.xml")
+          .Build());
+  struct TestCase {
+    const char* source_url;
+    ExtensionInstallStatus expected;
+  };
+  constexpr TestCase kTestCases[] = {
+      {"https://chromewebstore.google.com/detail/test",
+       ExtensionInstallStatus::kBlockedByPolicy},
+      {"https://chrome.google.com/webstore/detail/test",
+       ExtensionInstallStatus::kBlockedByPolicy},
+      {"https://xl.extensions.test.com/detail/test",
+       ExtensionInstallStatus::kDisabled}};
+  for (const auto& test : kTestCases) {
+    SCOPED_TRACE(test.source_url);
+    auto function =
+        base::MakeRefCounted<WebstorePrivateGetExtensionStatusFunction>();
+    function->set_source_url(GURL(test.source_url));
+    auto response =
+        RunFunctionAndReturnValue(function.get(), GenerateArgs(kExtensionId));
+    ASSERT_TRUE(response);
+    VerifyResponse(test.expected, *response);
+  }
+}
+
 TEST_F(WebstorePrivateGetExtensionStatusTest, ExtensionCorrupted) {
   ExtensionRegistry::Get(profile())->AddDisabled(CreateExtension(kExtensionId));
   ExtensionPrefs::Get(profile())->AddDisableReason(
@@ -447,12 +602,134 @@ class WebstorePrivateBeginInstallWithManifest3Test
     return ExtensionBuilder("extension").SetID(id).Build();
   }
 
+  void VerifySuccessfulBeginInstall(
+      const char* manifest,
+      const char* source_url = "https://xl.extensions.test.com/detail/test") {
+    WebstorePrivateApi::ClearPendingApprovalsForTesting();
+    auto web_contents =
+        content::WebContentsTester::CreateTestWebContents(profile(), nullptr);
+    auto function = base::MakeRefCounted<
+        WebstorePrivateBeginInstallWithManifest3Function>();
+    function->SetRenderFrameHost(web_contents->GetPrimaryMainFrame());
+    function->set_source_url(GURL(source_url));
+    ScopedTestDialogAutoConfirm auto_confirm(
+        ScopedTestDialogAutoConfirm::ACCEPT);
+
+    api_test_utils::RunFunction(
+        function.get(), GenerateArgs(kExtensionId, manifest), profile());
+    EXPECT_TRUE(function->GetError().empty()) << function->GetError();
+    EXPECT_EQ(1, WebstorePrivateApi::GetPendingApprovalsCountForTesting());
+    WebstorePrivateApi::ClearPendingApprovalsForTesting();
+    ASSERT_TRUE(function->GetResultListForTest());
+    ASSERT_FALSE(function->GetResultListForTest()->empty());
+    const base::Value& result = (*function->GetResultListForTest())[0];
+    ASSERT_TRUE(result.is_string());
+    EXPECT_TRUE(result.GetString().empty()) << result.GetString();
+  }
+
+  void VerifyApprovalBoundToStore(const GURL& store_url,
+                                  const GURL& other_store_url) {
+    WebstorePrivateApi::ClearPendingApprovalsForTesting();
+    auto web_contents =
+        content::WebContentsTester::CreateTestWebContents(profile(), nullptr);
+    auto begin = base::MakeRefCounted<
+        WebstorePrivateBeginInstallWithManifest3Function>();
+    begin->SetRenderFrameHost(web_contents->GetPrimaryMainFrame());
+    begin->set_source_url(store_url);
+    {
+      ScopedTestDialogAutoConfirm auto_confirm(
+          ScopedTestDialogAutoConfirm::ACCEPT);
+      auto response = RunFunctionAndReturnValue(
+          begin, GenerateArgs(kExtensionId, kExtensionManifest));
+      ASSERT_TRUE(response);
+      ASSERT_TRUE(response->is_string());
+      EXPECT_TRUE(response->GetString().empty());
+    }
+    ASSERT_EQ(1, WebstorePrivateApi::GetPendingApprovalsCountForTesting());
+
+    GURL::Replacements different_port;
+    different_port.SetPortStr("8443");
+    for (const GURL& caller_url :
+         {other_store_url, store_url.ReplaceComponents(different_port),
+          GURL()}) {
+      SCOPED_TRACE(caller_url.spec());
+      auto complete =
+          base::MakeRefCounted<WebstorePrivateCompleteInstallFunction>();
+      complete->set_source_url(caller_url);
+      EXPECT_EQ(
+          base::StringPrintf(
+              "%s does not match a previous call to beginInstallWithManifest3",
+              kExtensionId),
+          RunFunctionAndReturnError(
+              complete,
+              WebstorePrivateApiTestBase::GenerateArgs(kExtensionId)));
+      EXPECT_EQ(1, WebstorePrivateApi::GetPendingApprovalsCountForTesting());
+    }
+
+    // A matching origin consumes the approval. Omit a sender frame so that the
+    // test stops before starting a network download.
+    auto complete =
+        base::MakeRefCounted<WebstorePrivateCompleteInstallFunction>();
+    complete->set_source_url(store_url);
+    EXPECT_EQ(
+        function_constants::kCouldNotFindSenderWebContents,
+        RunFunctionAndReturnError(
+            complete, WebstorePrivateApiTestBase::GenerateArgs(kExtensionId)));
+    EXPECT_EQ(0, WebstorePrivateApi::GetPendingApprovalsCountForTesting());
+  }
+
  private:
   // This test does not create a root window. Because of this,
   // ScopedDisableRootChecking needs to be used (which disables the root window
   // check).
   test::ScopedDisableRootChecking disable_root_checking_;
 };
+
+TEST_F(WebstorePrivateBeginInstallWithManifest3Test,
+       XlApprovalCannotBeCompletedByGoogleStore) {
+  VerifyApprovalBoundToStore(GURL("https://xl.extensions.test.com/detail/test"),
+                             GURL("https://chromewebstore.google.com/"));
+}
+
+TEST_F(WebstorePrivateBeginInstallWithManifest3Test,
+       GoogleApprovalCannotBeCompletedByXlStore) {
+  VerifyApprovalBoundToStore(
+      GURL("https://chromewebstore.google.com/detail/test"),
+      GURL("https://xl.extensions.test.com/"));
+}
+
+TEST_F(WebstorePrivateBeginInstallWithManifest3Test,
+       XlStoreUsesGoogleManifestUpdateUrlPolicy) {
+  SetExtensionSettings(kAllowGoogleUpdateUrlSettings);
+  VerifySuccessfulBeginInstall(kGoogleUpdateUrlManifest);
+}
+
+TEST_F(WebstorePrivateBeginInstallWithManifest3Test,
+       XlStoreUsesXmlManifestUpdateUrlPolicy) {
+  SetExtensionSettings(kAllowXlUpdateUrlSettings);
+  VerifySuccessfulBeginInstall(kXlUpdateUrlManifest);
+}
+
+TEST_F(WebstorePrivateBeginInstallWithManifest3Test,
+       OnlyXlManifestWithoutUpdateUrlAvoidsStoreFallback) {
+  SetExtensionSettings(kAllowStoreFallbacksSettings);
+  WebstorePrivateApi::ClearPendingApprovalsForTesting();
+  auto web_contents =
+      content::WebContentsTester::CreateTestWebContents(profile(), nullptr);
+  auto function =
+      base::MakeRefCounted<WebstorePrivateBeginInstallWithManifest3Function>();
+  function->SetRenderFrameHost(web_contents->GetPrimaryMainFrame());
+  function->set_source_url(GURL("https://xl.extensions.test.com/detail/test"));
+  ScopedTestDialogAutoConfirm auto_confirm(ScopedTestDialogAutoConfirm::ACCEPT);
+  api_test_utils::RunFunction(function.get(),
+                              GenerateArgs(kExtensionId, kExtensionManifest),
+                              profile());
+  VerifyBlockedByPolicyFunctionResult(function.get(), std::u16string());
+  EXPECT_EQ(0, WebstorePrivateApi::GetPendingApprovalsCountForTesting());
+  function.reset();
+  VerifySuccessfulBeginInstall(kExtensionManifest,
+                               "https://chromewebstore.google.com/detail/test");
+}
 
 TEST_F(WebstorePrivateBeginInstallWithManifest3Test,
        RequestExtensionWithConfirmThenShowPendingDialog) {

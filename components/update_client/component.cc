@@ -211,7 +211,8 @@ void Component::SetUpdateCheckResult(std::optional<ProtocolParser::App> result,
                   return false;
                 },
                 weak_ptr_factory_.GetWeakPtr()))
-            .Then(std::move(callback)));
+            .Then(std::move(callback)),
+        crx_component_->accepted_publisher_key_hashes);
   } else {
     pipeline_ = base::unexpected(
         CategorizedError({.category = error_category, .code = error}));

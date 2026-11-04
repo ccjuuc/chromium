@@ -77,6 +77,24 @@ GURL GetNewWebstoreLaunchURL() {
   return GURL(kNewChromeWebstoreBaseURL);
 }
 
+GURL GetXlWebstoreLaunchURL() {
+  return GURL("https://xl.extensions.test.com/");
+}
+
+GURL GetXlWebstoreUpdateUrl() {
+  return GetXlWebstoreLaunchURL().Resolve("service/update2/crx");
+}
+
+bool IsXlWebstoreOrigin(const url::Origin& origin) {
+  return origin.IsSameOriginWith(GetXlWebstoreLaunchURL());
+}
+
+bool IsXlWebstoreUpdateUrl(const GURL& update_url) {
+  return IsXlWebstoreOrigin(url::Origin::Create(update_url)) &&
+         (update_url.path() == GetXlWebstoreUpdateUrl().path() ||
+          base::StartsWith(update_url.path(), "/updates/"));
+}
+
 GURL AppendUtmSource(const GURL& url, std::string_view utm_source_value) {
   return net::AppendQueryParameter(url, "utm_source", utm_source_value);
 }
@@ -144,12 +162,14 @@ GURL GetNewWebstoreItemRecommendationsUrl(
 
 bool IsWebstoreDomain(const GURL& url) {
   return url.DomainIs(GetWebstoreLaunchURL().host()) ||
-         url.DomainIs(GetNewWebstoreLaunchURL().host());
+         url.DomainIs(GetNewWebstoreLaunchURL().host()) ||
+         IsXlWebstoreOrigin(url::Origin::Create(url));
 }
 
 bool IsWebstoreOrigin(const url::Origin& origin) {
   return origin.IsSameOriginWith(GetWebstoreLaunchURL()) ||
-         origin.IsSameOriginWith(GetNewWebstoreLaunchURL());
+         origin.IsSameOriginWith(GetNewWebstoreLaunchURL()) ||
+         IsXlWebstoreOrigin(origin);
 }
 
 bool IsWebstoreUpdateUrl(const GURL& update_url) {

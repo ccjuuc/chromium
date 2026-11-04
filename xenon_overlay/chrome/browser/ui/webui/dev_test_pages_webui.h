@@ -13,6 +13,28 @@
 
 namespace xenon {
 
+// chrome://xenon-extension-store/ — local extension-store test instructions.
+class XlExtensionStoreTestWebUIController : public content::WebUIController {
+ public:
+  explicit XlExtensionStoreTestWebUIController(content::WebUI* web_ui);
+  ~XlExtensionStoreTestWebUIController() override;
+
+  XlExtensionStoreTestWebUIController(
+      const XlExtensionStoreTestWebUIController&) = delete;
+  XlExtensionStoreTestWebUIController& operator=(
+      const XlExtensionStoreTestWebUIController&) = delete;
+};
+
+class XlExtensionStoreTestWebUIConfig : public content::WebUIConfig {
+ public:
+  XlExtensionStoreTestWebUIConfig();
+  ~XlExtensionStoreTestWebUIConfig() override;
+
+  std::unique_ptr<content::WebUIController> CreateWebUIController(
+      content::WebUI* web_ui,
+      const GURL& url) override;
+};
+
 // chrome://local-video-test/ — remote mp4 playback smoke test.
 class LocalVideoTestWebUIController : public content::WebUIController {
  public:

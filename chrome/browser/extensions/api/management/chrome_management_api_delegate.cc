@@ -21,6 +21,7 @@
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_urls.h"
 #include "extensions/common/mojom/context_type.mojom.h"
+#include "url/origin.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -93,7 +94,9 @@ class ManagementUninstallFunctionUninstallDialogDelegate
         (function->extension() &&
          function->extension()->id() == kWebStoreAppId) ||
         function->source_url().DomainIs(
-            extension_urls::GetNewWebstoreLaunchURL().GetHost());
+            extension_urls::GetNewWebstoreLaunchURL().GetHost()) ||
+        extension_urls::IsXlWebstoreOrigin(
+            url::Origin::Create(function->source_url()));
     UninstallSource source;
     UninstallReason reason;
     if (uninstall_from_webstore) {

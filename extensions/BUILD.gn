@@ -265,6 +265,67 @@ repack("shell_and_test_pak") {
   }
 }
 
+# Run the store trust checks without compiling the full extensions test suite.
+# The sources remain in their regular unit_tests targets as well.
+test("xl_extension_store_unittests") {
+  use_xvfb = use_xvfb_in_this_config
+
+  sources = [
+    "browser/api/web_request/web_request_permissions_unittest.cc",
+    "browser/updater/update_data_provider_unittest.cc",
+    "common/extension_unittest.cc",
+    "common/extension_urls_unittest.cc",
+    "common/manifest_handlers/extension_action_handler_unittest.cc",
+    "common/manifest_handlers/manifest_v3_permissions_unittest.cc",
+    "test/extensions_unittests_main.cc",
+  ]
+
+  data = [
+    "test/data/",
+    "//chrome/test/data/extensions/",
+    "$root_out_dir/content_shell.pak",
+    "$root_out_dir/extensions_shell_and_test.pak",
+  ]
+
+  deps = [
+    ":shell_and_test_pak",
+    ":test_support",
+    "//base",
+    "//base/test:test_support",
+    "//build:android_buildflags",
+    "//components/crx_file",
+    "//components/safe_browsing/core/common",
+    "//components/safe_browsing/core/common/hashprefix_realtime:hash_realtime_utils",
+    "//components/update_client",
+    "//content/public/common",
+    "//content/test:test_support",
+    "//extensions/browser",
+    "//extensions/browser/api:extensions_api_client",
+    "//extensions/browser/updater",
+    "//extensions/common",
+    "//extensions/common:mojom",
+    "//extensions/common:test_support",
+    "//extensions/common/api",
+    "//services/data_decoder/public/cpp:test_support",
+    "//services/network/public/mojom",
+    "//services/service_manager/public/cpp/test:test_support",
+    "//testing/gtest",
+    "//ui/gl:test_support",
+    "//url",
+  ]
+
+  data_deps = [ "//third_party/angle:includes" ]
+
+  if (is_android) {
+    deps += [
+      "//components/signin/public/android:signin_java_test_support",
+      "//content/public/android:content_full_java",
+      "//gin:v8_snapshot_assets",
+      "//ui/android:ui_full_java",
+    ]
+  }
+}
+
 test("extensions_unittests") {
   use_xvfb = use_xvfb_in_this_config
 

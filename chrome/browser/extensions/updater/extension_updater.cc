@@ -32,6 +32,7 @@
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
+#include "components/crx_file/crx_verifier.h"
 #include "components/prefs/pref_service.h"
 #include "components/update_client/update_query_params.h"
 #include "content/public/browser/browser_context.h"
@@ -62,6 +63,7 @@
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/manifest_handlers/manifest_url_handlers.h"
+#include "extensions/common/verifier_formats.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "base/time/time.h"
@@ -828,6 +830,25 @@ void ExtensionUpdater::InstallCRXFile(FetchedCRXFile crx_file) {
 
     crx_file.installer = installer;
     CRXFileInfo crx_info = crx_file.info;
+    const Extension* installed =
+        registry_->GetInstalledExtension(crx_info.extension_id);
+    if (installed &&
+        extension_prefs_->IsFromXlWebstore(crx_info.extension_id)) {
+      const GURL update_url = GetEffectiveUpdateURL(*installed);
+      // Policy can change while an XML download is in flight. Always set the
+      // publisher requirement, including when an override was removed and the
+      // extension now uses Google updates, instead of retaining the downloader's
+      // external-install format.
+      if (update_url.is_empty() ||
+          extension_urls::IsWebstoreUpdateUrl(update_url)) {
+        crx_info.required_format = GetWebstoreVerifierFormat(false);
+        crx_info.accepted_publisher_key_hashes.clear();
+      } else {
+        crx_info.required_format = crx_file::VerifierFormat::CRX3;
+        crx_info.accepted_publisher_key_hashes =
+            GetXlWebstorePublisherKeyHashes();
+      }
+    }
     running_crx_installs_[token] = std::move(crx_file);
     installer->InstallCrxFile(crx_info);
   } else {

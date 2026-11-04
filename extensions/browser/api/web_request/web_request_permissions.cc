@@ -319,13 +319,15 @@ bool WebRequestPermissions::HideRequest(
     return true;
   }
 
-  // Hide requests initiated by the new Webstore domain, including requests that
-  // may be on subframes which have an opaque origin.
+  // Hide requests initiated by trusted webstore domains, including requests
+  // that may be on subframes which have an opaque origin.
   if (request.initiator) {
     const auto& request_tuple_or_precursor_tuple =
         request.initiator->GetTupleOrPrecursorTupleIfOpaque();
     if (request_tuple_or_precursor_tuple ==
-        url::SchemeHostPort(extension_urls::GetNewWebstoreLaunchURL())) {
+            url::SchemeHostPort(extension_urls::GetNewWebstoreLaunchURL()) ||
+        request_tuple_or_precursor_tuple ==
+            url::SchemeHostPort(extension_urls::GetXlWebstoreLaunchURL())) {
       return true;
     }
   }
@@ -400,7 +402,8 @@ bool WebRequestPermissions::HideRequest(
       (url.DomainIs("chrome.google.com") &&
        base::StartsWith(url.path(), "/webstore",
                         base::CompareCase::SENSITIVE)) ||
-      url.DomainIs(extension_urls::GetNewWebstoreLaunchURL().host())) {
+      url.DomainIs(extension_urls::GetNewWebstoreLaunchURL().host()) ||
+      url.DomainIs(extension_urls::GetXlWebstoreLaunchURL().host())) {
     return true;
   }
 

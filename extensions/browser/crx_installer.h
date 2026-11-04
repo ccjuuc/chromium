@@ -29,6 +29,7 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/manifest.h"
+#include "url/origin.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -198,15 +199,10 @@ class CrxInstaller : public SandboxedUnpackerClient {
   void set_is_update(bool val) { is_update_ = val; }
 
   bool is_gallery_install() const {
-    return (creation_flags_ & Extension::FROM_WEBSTORE) > 0;
+    return is_xl_webstore_install_ ||
+           (creation_flags_ & Extension::FROM_WEBSTORE) > 0;
   }
-  void set_is_gallery_install(bool val) {
-    if (val) {
-      creation_flags_ |= Extension::FROM_WEBSTORE;
-    } else {
-      creation_flags_ &= ~Extension::FROM_WEBSTORE;
-    }
-  }
+  void set_is_gallery_install(bool val);
   void set_withhold_permissions();
 
   // If `apps_require_extension_mime_type_` is set to true, be sure to set
@@ -429,6 +425,10 @@ class CrxInstaller : public SandboxedUnpackerClient {
   // installed. If true, `expected_manifest_` and `expected_id_` must match
   // those of the CRX.
   bool approved_;
+
+  // Non-opaque only for an installation approved by a store webpage.
+  url::Origin webstore_origin_;
+  bool is_xl_webstore_install_ = false;
 
   // For updates, external and webstore installs we have an ID we're expecting
   // the extension to contain.

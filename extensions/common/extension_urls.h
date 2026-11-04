@@ -69,6 +69,13 @@ extern const char kNtpPromoSlUtmSource[];
 GURL GetWebstoreLaunchURL();
 GURL GetNewWebstoreLaunchURL();
 
+// The independently trusted XL extension store. These URLs are not affected by
+// the Chrome Web Store testing overrides.
+GURL GetXlWebstoreLaunchURL();
+GURL GetXlWebstoreUpdateUrl();
+bool IsXlWebstoreOrigin(const url::Origin& origin);
+bool IsXlWebstoreUpdateUrl(const GURL& update_url);
+
 // Returns the URL to the Chrome Web Store's "Modern Web Guidance" page for
 // extensions.
 GURL GetModernWebGuidanceURL();

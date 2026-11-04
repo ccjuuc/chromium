@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "XL local install test",
+  "version": "1.0.0",
+  "description": "Local extension store installation test.",
+  "update_url": "https://xl.extensions.test.com/updates/mcjbgmlghdgeocallnajjfbblpondljm.xml",
+  "action": {
+    "default_title": "XL local test",
+    "default_popup": "popup.html"
+  }
+}

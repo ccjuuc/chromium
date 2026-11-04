@@ -292,6 +292,9 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
       std::make_unique<xenon::XenonCertificatesUIConfig>());
 
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
+      std::make_unique<xenon::XlExtensionStoreTestWebUIConfig>());
+
+  content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<xenon::XenonRemoteUIConfig>());
 
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(

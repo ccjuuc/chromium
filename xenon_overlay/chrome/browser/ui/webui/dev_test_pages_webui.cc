@@ -4,7 +4,12 @@
 
 #include "xenon_overlay/chrome/browser/ui/webui/dev_test_pages_webui.h"
 
+#include <string>
+
+#include "base/base_paths.h"
+#include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/path_service.h"
 #include "base/values.h"
 #include "chrome/common/beijing/render_dll_names.h"
 #include "content/public/browser/browser_context.h"
@@ -19,6 +24,7 @@ namespace xenon {
 namespace {
 
 constexpr char kLocalVideoTestHost[] = "local-video-test";
+constexpr char kXlExtensionStoreTestHost[] = "xenon-extension-store";
 
 void ApplyInlinePageCsp(content::WebUIDataSource* source, bool allow_https_media) {
   source->DisableTrustedTypesCSP();
@@ -39,6 +45,44 @@ void ApplyInlinePageCsp(content::WebUIDataSource* source, bool allow_https_media
 }
 
 }  // namespace
+
+XlExtensionStoreTestWebUIController::XlExtensionStoreTestWebUIController(
+    content::WebUI* web_ui)
+    : content::WebUIController(web_ui) {
+  auto* source = content::WebUIDataSource::CreateAndAdd(
+      web_ui->GetWebContents()->GetBrowserContext(), kXlExtensionStoreTestHost);
+  source->SetDefaultResource(IDR_XENON_EXTENSION_STORE_HTML);
+  source->AddResourcePath("index.css", IDR_XENON_EXTENSION_STORE_CSS);
+  source->AddResourcePath("index.js", IDR_XENON_EXTENSION_STORE_JS);
+
+  base::FilePath executable;
+  base::PathService::Get(base::FILE_EXE, &executable);
+  source->AddString("browserExecutable", executable.AsUTF8Unsafe());
+  // Source builds normally live in src/out/<configuration>. Packaged builds
+  // leave the suggestion empty so the page can ask for the source location.
+  const base::FilePath output_root = executable.DirName().DirName();
+  source->AddString(
+      "suggestedSourceRoot",
+      output_root.BaseName() == base::FilePath(FILE_PATH_LITERAL("out"))
+          ? output_root.DirName().AsUTF8Unsafe()
+          : std::string());
+  source->UseStringsJs();
+}
+
+XlExtensionStoreTestWebUIController::~XlExtensionStoreTestWebUIController() =
+    default;
+
+XlExtensionStoreTestWebUIConfig::XlExtensionStoreTestWebUIConfig()
+    : content::WebUIConfig(content::kChromeUIScheme,
+                           kXlExtensionStoreTestHost) {}
+
+XlExtensionStoreTestWebUIConfig::~XlExtensionStoreTestWebUIConfig() = default;
+
+std::unique_ptr<content::WebUIController>
+XlExtensionStoreTestWebUIConfig::CreateWebUIController(content::WebUI* web_ui,
+                                                       const GURL& url) {
+  return std::make_unique<XlExtensionStoreTestWebUIController>(web_ui);
+}
 
 LocalVideoTestWebUIController::LocalVideoTestWebUIController(
     content::WebUI* web_ui)

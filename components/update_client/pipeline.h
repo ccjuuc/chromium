@@ -62,8 +62,10 @@ void MakePipeline(
         install_complete_callback,
     scoped_refptr<ActionHandler> action_handler,
     const ProtocolParser::App& result,
-    base::OnceCallback<void(
-        base::expected<PipelineStartCallback, CategorizedError>)> callback);
+    base::OnceCallback<
+        void(base::expected<PipelineStartCallback, CategorizedError>)> callback,
+    const std::vector<std::vector<uint8_t>>& accepted_publisher_key_hashes =
+        {});
 
 }  // namespace update_client
 

@@ -174,9 +174,11 @@ class SandboxedUnpacker : public ImageSanitizer::Client {
 
   // Validates the signature of the extension and extract the key to
   // `public_key_`. True if the signature validates, false otherwise.
-  bool ValidateSignature(const base::FilePath& crx_path,
-                         const std::string& expected_hash,
-                         const crx_file::VerifierFormat required_format);
+  bool ValidateSignature(
+      const base::FilePath& crx_path,
+      const std::string& expected_hash,
+      const crx_file::VerifierFormat required_format,
+      const std::vector<std::vector<uint8_t>>& accepted_publisher_key_hashes);
 
   // Unzips the extension into directory.
   void Unzip(const base::FilePath& crx_path,

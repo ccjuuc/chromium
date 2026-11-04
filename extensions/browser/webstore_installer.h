@@ -167,6 +167,8 @@ class WebstoreInstaller : public ExtensionRegistryObserver,
   FailureCallback failure_callback_;
   std::string id_;
   InstallSource install_source_;
+  // Fixed at approval time, before approval_ is transferred to the download.
+  bool is_xl_webstore_install_ = false;
   // The DownloadItem is owned by the DownloadManager and is valid from when
   // OnDownloadStarted is called (with no error) until OnDownloadDestroyed().
   raw_ptr<download::DownloadItem, DanglingUntriaged> download_item_ = nullptr;

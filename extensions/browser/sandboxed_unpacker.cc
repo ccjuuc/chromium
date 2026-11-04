@@ -327,7 +327,8 @@ void SandboxedUnpacker::StartWithCrx(const CRXFileInfo& crx_info) {
   // Extract the public key and validate the package.
   if (!ValidateSignature(
           temp_crx_path, expected_hash,
-          format_verifier_override_.value_or(crx_info.required_format))) {
+          format_verifier_override_.value_or(crx_info.required_format),
+          crx_info.accepted_publisher_key_hashes)) {
     return;  // ValidateSignature() already reported the error.
   }
 
@@ -903,7 +904,8 @@ void SandboxedUnpacker::FailWithPackageError(
 bool SandboxedUnpacker::ValidateSignature(
     const base::FilePath& crx_path,
     const std::string& expected_hash,
-    const crx_file::VerifierFormat required_format) {
+    const crx_file::VerifierFormat required_format,
+    const std::vector<std::vector<uint8_t>>& accepted_publisher_key_hashes) {
   std::vector<uint8_t> hash;
   if (!expected_hash.empty()) {
     if (!base::HexStringToBytes(expected_hash, &hash)) {
@@ -915,7 +917,8 @@ bool SandboxedUnpacker::ValidateSignature(
 
   const crx_file::VerifierResult result = crx_file::Verify(
       crx_path, required_format, std::vector<std::vector<uint8_t>>(), hash,
-      &public_key_, &extension_id_, &compressed_verified_contents_);
+      &public_key_, &extension_id_, &compressed_verified_contents_,
+      accepted_publisher_key_hashes);
 
   switch (result) {
     case crx_file::VerifierResult::OK_FULL: {

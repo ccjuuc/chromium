@@ -5,6 +5,7 @@
 #ifndef EXTENSIONS_BROWSER_API_WEBSTORE_PRIVATE_EXTENSION_INSTALL_STATUS_H_
 #define EXTENSIONS_BROWSER_API_WEBSTORE_PRIVATE_EXTENSION_INSTALL_STATUS_H_
 
+#include <optional>
 #include <string>
 
 #include "base/version.h"
@@ -57,15 +58,21 @@ enum ExtensionInstallStatus {
 // whether the extension's manifest type, required permissions are blocked by
 // enterprise policy. type blocking or permission blocking or manifest version.
 // Please use this function only if manifest file is not available.
+// XL callers can override `policy_update_url` with the raw manifest update_url,
+// or their store fallback when the manifest is unknown. An empty string means
+// a known manifest without an update URL. nullopt keeps the original Chrome Web
+// Store policy behavior, even when a manifest is available.
 ExtensionInstallStatus GetWebstoreExtensionInstallStatus(
     const ExtensionId& extension_id,
-    content::BrowserContext* browser_context);
+    content::BrowserContext* browser_context,
+    const std::optional<std::string>& policy_update_url = std::nullopt);
 
 // Calls `callback` with the Extension install status for a Chrome web store
 // extension with `extension_id` in `browser_context`. Also checks if
 // `manifest_type`, any permission in `required_permission_set` is blocked by
 // enterprise policy or `manifest_version` is allowed. `manifest_version` is
 // only valid for TYPE_EXTENSION.
+// `policy_update_url` has the same semantics as in the synchronous overload.
 //
 // If `extension_version` is valid, and the
 // ExtensionInstallCloudPolicyChecksEnabled policy is enabled, this uses
@@ -79,7 +86,8 @@ void GetWebstoreExtensionInstallStatus(
     const PermissionSet& required_permission_set,
     int manifest_version,
     base::OnceCallback<void(ExtensionInstallStatus,
-                            std::u16string blocked_message)> callback);
+                            std::u16string blocked_message)> callback,
+    const std::optional<std::string>& policy_update_url = std::nullopt);
 
 }  // namespace extensions
 

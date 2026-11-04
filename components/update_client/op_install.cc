@@ -166,15 +166,17 @@ void Install(base::OnceCallback<void(const CrxInstaller::Result&)> callback,
 }
 
 // Runs on the original sequence.
-void Unpack(base::OnceCallback<void(const Unpacker::Result&)> callback,
-            const std::string& id,
-            const std::string& prod_id,
-            const base::FilePath& crx_file,
-            std::unique_ptr<Unzipper> unzipper,
-            const std::vector<uint8_t>& pk_hash,
-            crx_file::VerifierFormat crx_format,
-            bool is_foreground,
-            base::expected<base::FilePath, UnpackerError> cache_result) {
+void Unpack(
+    base::OnceCallback<void(const Unpacker::Result&)> callback,
+    const std::string& id,
+    const std::string& prod_id,
+    const base::FilePath& crx_file,
+    std::unique_ptr<Unzipper> unzipper,
+    const std::vector<uint8_t>& pk_hash,
+    crx_file::VerifierFormat crx_format,
+    const std::vector<std::vector<uint8_t>>& accepted_publisher_key_hashes,
+    bool is_foreground,
+    base::expected<base::FilePath, UnpackerError> cache_result) {
   if (!cache_result.has_value()) {
     // Caching is optional: continue with the install, but add a task to clean
     // up crx_file.
@@ -203,7 +205,8 @@ void Unpack(base::OnceCallback<void(const Unpacker::Result&)> callback,
               // If and only if cached, the original path no longer exists.
               cache_result.has_value() ? cache_result.value() : crx_file,
               std::move(unzipper), crx_format, is_foreground,
-              base::BindPostTaskToCurrentDefault(std::move(callback))));
+              base::BindPostTaskToCurrentDefault(std::move(callback)),
+              accepted_publisher_key_hashes));
 }
 
 }  // namespace
@@ -212,6 +215,7 @@ base::OnceClosure InstallOperation(
     scoped_refptr<CrxCache> crx_cache,
     std::unique_ptr<Unzipper> unzipper,
     crx_file::VerifierFormat crx_format,
+    const std::vector<std::vector<uint8_t>>& accepted_publisher_key_hashes,
     const std::string& id,
     const std::string& prod_id,
     const std::string& file_hash,
@@ -239,7 +243,7 @@ base::OnceClosure InstallOperation(
                              std::move(callback), event_adder, crx_file),
               std::move(install_params), installer, progress_callback),
           id, prod_id, crx_file, std::move(unzipper), pk_hash, crx_format,
-          is_foreground));
+          accepted_publisher_key_hashes, is_foreground));
   return base::DoNothing();
 }
 

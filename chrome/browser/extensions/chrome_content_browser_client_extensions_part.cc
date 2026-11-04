@@ -569,16 +569,22 @@ bool ChromeContentBrowserClientExtensionsPart::
   // check is just doing the same for top-level frames.  See
   // https://crbug.com/41241280.
 
-  // First we check for navigations which are transitioning to/from the URL
-  // associated with the new Webstore.
-  bool current_url_matches_new_webstore =
-      url::Origin::Create(current_effective_url)
-          .IsSameOriginWith(extension_urls::GetNewWebstoreLaunchURL());
-  bool dest_url_matches_new_webstore =
-      url::Origin::Create(destination_effective_url)
-          .IsSameOriginWith(extension_urls::GetNewWebstoreLaunchURL());
-  if (current_url_matches_new_webstore != dest_url_matches_new_webstore)
+  // Swap when entering, leaving, or moving between trusted webstore origins.
+  const url::Origin current_origin = url::Origin::Create(current_effective_url);
+  const url::Origin destination_origin =
+      url::Origin::Create(destination_effective_url);
+  bool current_url_matches_webstore =
+      current_origin.IsSameOriginWith(
+          extension_urls::GetNewWebstoreLaunchURL()) ||
+      extension_urls::IsXlWebstoreOrigin(current_origin);
+  bool dest_url_matches_webstore =
+      destination_origin.IsSameOriginWith(
+          extension_urls::GetNewWebstoreLaunchURL()) ||
+      extension_urls::IsXlWebstoreOrigin(destination_origin);
+  if ((current_url_matches_webstore || dest_url_matches_webstore) &&
+      !current_origin.IsSameOriginWith(destination_origin)) {
     return true;
+  }
 
   // Next we do a process check, looking to see if the Web Store hosted app ID
   // is associated with the URLs.
@@ -689,6 +695,7 @@ std::vector<url::Origin> ChromeContentBrowserClientExtensionsPart::
   list.push_back(url::Origin::Create(extension_urls::GetWebstoreLaunchURL()));
   list.push_back(
       url::Origin::Create(extension_urls::GetNewWebstoreLaunchURL()));
+  list.push_back(url::Origin::Create(extension_urls::GetXlWebstoreLaunchURL()));
 
   return list;
 }

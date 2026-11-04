@@ -127,6 +127,7 @@ void XenonManagedCertificateService::Start(
   user_data_dir_ = user_data_dir;
   net::NetworkChangeNotifier::AddNetworkChangeObserver(this);
   observers_.Notify();
+  status_observers_.Notify();
   // Configuration, credentials, bootstrap roots, and cache are read once per
   // browser start. Subsequent refreshes use this in-memory configuration.
   io_busy_ = true;
@@ -164,6 +165,7 @@ void XenonManagedCertificateService::Shutdown() {
   state_usable_ = false;
   failures_ = 0;
   observers_.Notify();
+  status_observers_.Notify();
 }
 
 bool XenonManagedCertificateService::ready() const {
@@ -195,6 +197,13 @@ base::CallbackListSubscription XenonManagedCertificateService::AddObserver(
     base::RepeatingClosure observer) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return observers_.Add(std::move(observer));
+}
+
+base::CallbackListSubscription
+XenonManagedCertificateService::AddStatusObserver(
+    base::RepeatingClosure observer) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return status_observers_.Add(std::move(observer));
 }
 
 std::unique_ptr<ServiceReadResult> XenonManagedCertificateService::ReadInputs(
@@ -243,6 +252,7 @@ void XenonManagedCertificateService::OnRead(
     // Release verification waiters even if there is no usable cached snapshot.
     observers_.Notify();
   }
+  status_observers_.Notify();
   fetch_pending_ = true;
   FinishIO();
 }
@@ -351,6 +361,7 @@ void XenonManagedCertificateService::Fetch() {
       base::BindOnce(&XenonManagedCertificateService::OnDownloaded,
                      weak_factory_.GetWeakPtr(), epoch_),
       kMaxSnapshotBytes);
+  status_observers_.Notify();
 }
 
 void XenonManagedCertificateService::OnDownloaded(
@@ -414,6 +425,7 @@ void XenonManagedCertificateService::OnDownloaded(
     LOG(WARNING) << "Managed certificate response rejected: status=" << code
                  << ", network_error=" << network_error;
     ScheduleRefresh(false, retry_after);
+    status_observers_.Notify();
     FinishIO();
     return;
   }
@@ -422,6 +434,7 @@ void XenonManagedCertificateService::OnDownloaded(
     refresh_error_.clear();
     last_success_ = base::Time::Now();
     ScheduleRefresh(true);
+    status_observers_.Notify();
     FinishIO();
     return;
   }
@@ -433,6 +446,7 @@ void XenonManagedCertificateService::OnDownloaded(
                      std::move(*body), std::move(etag), request_context_),
       base::BindOnce(&XenonManagedCertificateService::OnSaved,
                      weak_factory_.GetWeakPtr(), epoch_));
+  status_observers_.Notify();
 }
 
 std::unique_ptr<ServiceWriteResult>
@@ -480,6 +494,7 @@ void XenonManagedCertificateService::OnSaved(
     LOG(WARNING) << "Managed certificate refresh rejected: " << result->error;
   }
   ScheduleRefresh(result->success);
+  status_observers_.Notify();
   FinishIO();
 }
 
@@ -535,6 +550,7 @@ void XenonManagedCertificateService::OnNetworkDisconnected(uint64_t epoch) {
   CancelNetwork();
   refresh_error_ = "network_service_disconnected";
   ScheduleRefresh(false);
+  status_observers_.Notify();
   if (!io_busy_) {
     FinishIO();
   }

@@ -189,6 +189,7 @@ CrxInstaller::CrxInstaller(content::BrowserContext* context,
 
   CHECK(ExtensionsBrowserClient::Get()->IsSameContext(
       browser_context(), approval->browser_context));
+  webstore_origin_ = approval->webstore_origin;
   if (client_) {
     client_->SetUseAppInstalledBubble(approval->use_app_installed_bubble);
     client_->SetSkipPostInstallUI(approval->skip_post_install_ui);
@@ -220,6 +221,18 @@ CrxInstaller::~CrxInstaller() {
   // Ensure |client_| data member is destroyed on the UI thread. The |client_|
   // dialog has a weak reference as |this| is its delegate, so must be destroyed
   // on the same thread that created it.
+}
+
+void CrxInstaller::set_is_gallery_install(bool val) {
+  is_xl_webstore_install_ =
+      val && extension_urls::IsXlWebstoreOrigin(webstore_origin_);
+  // FROM_WEBSTORE also selects Google's installation and content verification
+  // services. XL has its own provenance and publisher trust instead.
+  if (val && !is_xl_webstore_install_) {
+    creation_flags_ |= Extension::FROM_WEBSTORE;
+  } else {
+    creation_flags_ &= ~Extension::FROM_WEBSTORE;
+  }
 }
 
 void CrxInstaller::InstallCrx(const base::FilePath& source_file) {
@@ -1060,6 +1073,12 @@ void CrxInstaller::ReportSuccessFromUIThread() {
                               true);
   }
 
+  if (!webstore_origin_.opaque()) {
+    ExtensionPrefs::Get(browser_context())
+        ->SetFromXlWebstore(
+            extension()->id(),
+            extension_urls::IsXlWebstoreOrigin(webstore_origin_));
+  }
   registrar_->OnExtensionInstalled(extension(), page_ordinal_, install_flags_,
                                    std::move(ruleset_install_prefs_));
 

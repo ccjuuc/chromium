@@ -53,7 +53,8 @@ class InstallVerifier : public KeyedService,
   // Returns whether install verification should be enforced.
   static bool ShouldEnforce();
 
-  // Returns whether `extension` is of a type that needs verification.
+  // Returns whether `extension` needs Google installation verification.
+  // Browser-verified XL installations use their local publisher proof instead.
   static bool NeedsVerification(const Extension& extension,
                                 content::BrowserContext* context);
 

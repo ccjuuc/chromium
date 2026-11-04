@@ -1,7 +1,7 @@
 // Copyright 2026 The Xenon Overlay Authors. All rights reserved.
 import '/strings.m.js';
 
-import {sendWithPromise} from 'chrome://resources/js/cr.js';
+import {addWebUiListener, sendWithPromise} from 'chrome://resources/js/cr.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 
 const $ = id => document.getElementById(id);
@@ -20,6 +20,7 @@ const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
 let refreshing = false;
 let testing = false;
 let receivedStatus = false;
+let statusUpdateSequence = 0;
 
 function text(value, fallback = '—') {
   return typeof value === 'string' && value.length ? value : fallback;
@@ -57,7 +58,7 @@ function addCell(row, value, className = '') {
   return cell;
 }
 
-function renderCertificateTable(certificates) {
+function renderCertificateRows(certificates, body) {
   const rows = document.createDocumentFragment();
   for (const certificate of certificates) {
     const row = document.createElement('tr');
@@ -82,13 +83,23 @@ function renderCertificateTable(certificates) {
     addCell(row, text(certificate.sha256), 'monospace fingerprint');
     rows.appendChild(row);
   }
-  $('certificate-table-body').replaceChildren(rows);
+  body.replaceChildren(rows);
+}
+
+function renderCertificateTable(certificates) {
+  renderCertificateRows(certificates, $('certificate-table-body'));
   $('certificate-count').textContent = `${certificates.length} 张`;
   $('certificate-table-container').hidden = !certificates.length;
   $('snapshot-revoked').hidden = !!certificates.length;
 }
 
 function renderStatus(status) {
+  const builtinStoreCertificate = status.builtinStoreCertificate;
+  $('builtin-store-section').hidden = !builtinStoreCertificate;
+  if (builtinStoreCertificate) {
+    renderCertificateRows(
+        [builtinStoreCertificate], $('builtin-store-certificate-body'));
+  }
   const snapshot = status.snapshot;
   const configurationError = text(status.configurationError, '');
   const refreshError = text(status.refreshError, '');
@@ -101,11 +112,11 @@ function renderStatus(status) {
   $('refresh-error-code').textContent = refreshError;
   $('refresh-error-row').hidden = !refreshError;
 
-  let label = '已就绪';
-  let tone = 'success';
+  let label = snapshot ? '已就绪' : '等待快照';
+  let tone = snapshot ? 'success' : 'neutral';
   let description = snapshot ?
       '证书服务已就绪，下方显示当前已接受的快照。' :
-      '证书服务已就绪，当前尚无可用快照。请结合最近尝试及成功时间判断更新进度。';
+      '证书服务已启动，正在等待可用的托管快照。状态会自动更新。';
   let emptyTitle = '暂无可用的托管证书快照';
   let emptyDescription = '尚未返回已接受的快照。其他来源的证书信任不由此列表表示。';
   if (status.started === false) {
@@ -125,7 +136,7 @@ function renderStatus(status) {
   } else if (status.ready === false) {
     label = '正在准备';
     tone = 'neutral';
-    description = '正在读取本地配置与缓存，请稍后刷新状态。';
+    description = '正在读取本地配置与缓存，完成后将自动显示结果。';
     emptyTitle = '证书服务正在准备';
     emptyDescription = '当前尚未返回可展示的快照。';
   } else if (status.enabled === false) {
@@ -139,7 +150,7 @@ function renderStatus(status) {
     tone = 'neutral';
     description = snapshot ?
         '正在拉取最新配置；下方仍显示当前已接受的快照。' :
-        '正在向配置的服务端拉取证书，稍后可刷新状态查看结果。';
+        '正在向配置的服务端拉取证书，完成后将自动显示结果。';
     emptyTitle = '正在等待证书快照';
     emptyDescription = '拉取结果尚未返回，当前没有可展示的快照。';
   } else if (refreshError) {
@@ -168,6 +179,16 @@ function renderStatus(status) {
   renderCertificateTable(certificates);
 }
 
+function acceptStatus(status) {
+  if (!status || typeof status !== 'object') {
+    throw new Error('Invalid status response');
+  }
+  renderStatus(status);
+  receivedStatus = true;
+  showError('status-error', '');
+  $('status-checked-at').textContent = `更新于 ${dateFormatter.format(new Date())}`;
+}
+
 async function refreshStatus() {
   if (refreshing) {
     return;
@@ -177,22 +198,24 @@ async function refreshStatus() {
   $('refresh-label').textContent = '读取中…';
   $('snapshot-section').setAttribute('aria-busy', 'true');
   showError('status-error', '');
+  const sequence = statusUpdateSequence;
   try {
     const status = await sendWithPromise('getManagedCertificateStatus');
-    if (!status || typeof status !== 'object') {
-      throw new Error('Invalid status response');
+    // A pushed state can arrive while an explicit query is pending. Keep the
+    // newer state instead of repainting it with the earlier query's snapshot.
+    if (sequence === statusUpdateSequence) {
+      acceptStatus(status);
     }
-    renderStatus(status);
-    receivedStatus = true;
-    $('status-checked-at').textContent = `读取于 ${dateFormatter.format(new Date())}`;
   } catch {
-    badge('status-badge', '状态读取失败', 'error');
-    showError('status-error', receivedStatus ?
-        '未能读取最新状态，下方保留上次读取结果。请稍后重试。' :
-        '未能读取浏览器状态，请稍后重试或重新打开此页面。');
-    if (!receivedStatus) {
-      $('snapshot-empty-title').textContent = '状态暂不可用';
-      $('snapshot-empty-description').textContent = '此结果不表示证书信任已经改变。';
+    if (sequence === statusUpdateSequence) {
+      badge('status-badge', '状态读取失败', 'error');
+      showError('status-error', receivedStatus ?
+          '未能读取最新状态，下方保留上次读取结果。' :
+          '暂未取得浏览器状态。');
+      if (!receivedStatus) {
+        $('snapshot-empty-title').textContent = '状态暂不可用';
+        $('snapshot-empty-description').textContent = '此结果不表示证书信任已经改变。';
+      }
     }
   } finally {
     refreshing = false;
@@ -358,5 +381,9 @@ $('test-url').addEventListener('input', () => {
   updatePresetHint();
   showError('url-error', '');
   $('test-url').removeAttribute('aria-invalid');
+});
+addWebUiListener('managed-certificate-status-changed', status => {
+  ++statusUpdateSequence;
+  acceptStatus(status);
 });
 refreshStatus();

@@ -27,6 +27,7 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "components/crx_file/crx_verifier.h"
 #include "components/crx_file/id_util.h"
 #include "components/download/public/common/download_url_parameters.h"
 #include "components/update_client/update_query_params.h"
@@ -57,6 +58,7 @@
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/manifest_handlers/shared_module_info.h"
 #include "extensions/common/switches.h"
+#include "extensions/common/verifier_formats.h"
 #include "extensions/strings/grit/extensions_strings.h"
 #include "net/base/url_util.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -225,6 +227,8 @@ WebstoreInstaller::WebstoreInstaller(content::BrowserContext* browser_context,
   DCHECK(web_contents);
   CHECK(success_callback_);
   CHECK(failure_callback_);
+  is_xl_webstore_install_ = approval_ && extension_urls::IsXlWebstoreOrigin(
+                                             approval_->webstore_origin);
 
   extension_registry_observation_.Observe(
       ExtensionRegistry::Get(browser_context));
@@ -261,9 +265,11 @@ void WebstoreInstaller::Start() {
   for (i = pending_modules_.begin(); i != pending_modules_.end(); ++i) {
     ids.insert(i->extension_id);
   }
-  ExtensionsBrowserClient::Get()
-      ->GetInstallVerifier(browser_context_)
-      ->AddProvisional(ids);
+  if (!is_xl_webstore_install_) {
+    ExtensionsBrowserClient::Get()
+        ->GetInstallVerifier(browser_context_)
+        ->AddProvisional(ids);
+  }
 
   const std::string* name =
       approval_->manifest->available_values().FindString(manifest_keys::kName);
@@ -397,6 +403,10 @@ void WebstoreInstaller::OnDownloadStarted(
         InstallApproval::CreateForSharedModule(browser_context_);
     const SharedModuleInfo::ImportInfo& info = pending_modules_.front();
     approval->extension_id = info.extension_id;
+    if (is_xl_webstore_install_) {
+      approval->webstore_origin =
+          url::Origin::Create(extension_urls::GetXlWebstoreLaunchURL());
+    }
     const base::Version version_required(info.minimum_version);
 
     if (version_required.IsValid()) {
@@ -481,7 +491,10 @@ void WebstoreInstaller::DownloadNextPendingModule() {
 
 void WebstoreInstaller::DownloadCrx(const ExtensionId& extension_id,
                                     InstallSource source) {
-  download_url_ = GetWebstoreInstallURL(extension_id, source);
+  download_url_ = is_xl_webstore_install_
+                      ? extension_urls::GetXlWebstoreLaunchURL().Resolve(
+                            "crx/" + extension_id + ".crx")
+                      : GetWebstoreInstallURL(extension_id, source);
   MaybeAppendAuthUserParameter(approval_->authuser, download_url_);
 
   base::FilePath user_data_dir =
@@ -667,7 +680,14 @@ void WebstoreInstaller::StartCrxInstaller(const DownloadItem& download) {
     crx_installer_->set_withhold_permissions();
   }
 
-  crx_installer_->InstallCrx(download.GetFullPath());
+  if (is_xl_webstore_install_) {
+    CRXFileInfo crx_info(download.GetFullPath(),
+                         crx_file::VerifierFormat::CRX3);
+    crx_info.accepted_publisher_key_hashes = GetXlWebstorePublisherKeyHashes();
+    crx_installer_->InstallCrxFile(crx_info);
+  } else {
+    crx_installer_->InstallCrx(download.GetFullPath());
+  }
 }
 
 void WebstoreInstaller::ReportFailure(const std::string& error,

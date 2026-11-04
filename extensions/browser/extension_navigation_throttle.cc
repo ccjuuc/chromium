@@ -202,11 +202,12 @@ ExtensionNavigationThrottle::WillStartOrRedirectRequest() {
       if (hosted_app && hosted_app->id() == kWebStoreAppId) {
         return content::NavigationThrottle::BLOCK_REQUEST;
       }
-      // Also apply the same blocking if the URL maps to the new webstore
+      // Also apply the same blocking if the URL maps to a trusted webstore
       // domain. Note: We can't use the extension_urls::IsWebstoreDomain check
       // here, as the webstore hosted app is associated with a specific path and
       // we don't want to block navigations to other paths on that domain.
-      if (url.DomainIs(extension_urls::GetNewWebstoreLaunchURL().GetHost())) {
+      if (url.DomainIs(extension_urls::GetNewWebstoreLaunchURL().GetHost()) ||
+          url.DomainIs(extension_urls::GetXlWebstoreLaunchURL().GetHost())) {
         return content::NavigationThrottle::BLOCK_REQUEST;
       }
     }

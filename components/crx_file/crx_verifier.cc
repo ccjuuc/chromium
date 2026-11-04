@@ -120,7 +120,8 @@ VerifierResult VerifyCrx3(
     std::string* crx_id,
     std::vector<uint8_t>* compressed_verified_contents,
     bool require_publisher_key,
-    bool accept_publisher_test_key) {
+    bool accept_publisher_test_key,
+    const std::vector<std::vector<uint8_t>>& accepted_publisher_key_hashes) {
   // Parse [header-size] and [header].
   int header_size =
       base::saturated_cast<int>(ReadAndHashLittleEndianUInt32(file, hash));
@@ -208,9 +209,16 @@ VerifierResult VerifyCrx3(
       }
       auto key_hash = crypto::hash::Sha256(key);
       required_key_set.erase(key_hash);
-      found_publisher_key =
-          found_publisher_key || key_hash == kPublisherKeyHash ||
-          (accept_publisher_test_key && key_hash == kPublisherTestKeyHash);
+      if (accepted_publisher_key_hashes.empty()) {
+        found_publisher_key =
+            found_publisher_key || key_hash == kPublisherKeyHash ||
+            (accept_publisher_test_key && key_hash == kPublisherTestKeyHash);
+      } else {
+        found_publisher_key |= std::ranges::any_of(
+            accepted_publisher_key_hashes, [&key_hash](const auto& accepted) {
+              return std::ranges::equal(key_hash, accepted);
+            });
+      }
       std::optional<crypto::keypair::PublicKey> pub_key =
           crypto::keypair::PublicKey::FromSubjectPublicKeyInfo(
               base::as_byte_span(key));
@@ -241,7 +249,8 @@ VerifierResult VerifyCrx3(
     return VerifierResult::ERROR_REQUIRED_PROOF_MISSING;
   }
 
-  if (require_publisher_key && !found_publisher_key) {
+  if ((require_publisher_key || !accepted_publisher_key_hashes.empty()) &&
+      !found_publisher_key) {
     return VerifierResult::ERROR_REQUIRED_PROOF_MISSING;
   }
 
@@ -257,6 +266,10 @@ VerifierResult VerifyCrx3(
 
 }  // namespace
 
+std::vector<uint8_t> GetProductionPublisherKeyHash() {
+  return {kPublisherKeyHash.begin(), kPublisherKeyHash.end()};
+}
+
 VerifierResult Verify(
     const base::FilePath& crx_path,
     const VerifierFormat& format,
@@ -264,7 +277,8 @@ VerifierResult Verify(
     const std::vector<uint8_t>& required_file_hash,
     std::string* public_key,
     std::string* crx_id,
-    std::vector<uint8_t>* compressed_verified_contents) {
+    std::vector<uint8_t>* compressed_verified_contents,
+    const std::vector<std::vector<uint8_t>>& accepted_publisher_key_hashes) {
   std::string public_key_local;
   std::string crx_id_local;
   base::File file(crx_path, base::File::FLAG_OPEN | base::File::FLAG_READ);
@@ -297,7 +311,8 @@ VerifierResult Verify(
     result = VerifyCrx3(
         &file, file_hash, required_key_hashes, &public_key_local, &crx_id_local,
         compressed_verified_contents, require_publisher_key,
-        format == VerifierFormat::CRX3_WITH_TEST_PUBLISHER_PROOF);
+        format == VerifierFormat::CRX3_WITH_TEST_PUBLISHER_PROOF,
+        accepted_publisher_key_hashes);
   } else {
     result = VerifierResult::ERROR_HEADER_INVALID;
   }

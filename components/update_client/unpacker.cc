@@ -67,21 +67,25 @@ Unpacker::~Unpacker() {
               perfetto::TerminatingFlow::FromPointer(this));
 }
 
-void Unpacker::Unpack(const std::string& app_id,
-                      const std::string& prod_id,
-                      const std::vector<uint8_t>& pk_hash,
-                      const base::FilePath& path,
-                      std::unique_ptr<Unzipper> unzipper,
-                      crx_file::VerifierFormat crx_format,
-                      bool is_foreground,
-                      base::OnceCallback<void(const Result& result)> callback) {
+void Unpacker::Unpack(
+    const std::string& app_id,
+    const std::string& prod_id,
+    const std::vector<uint8_t>& pk_hash,
+    const base::FilePath& path,
+    std::unique_ptr<Unzipper> unzipper,
+    crx_file::VerifierFormat crx_format,
+    bool is_foreground,
+    base::OnceCallback<void(const Result& result)> callback,
+    const std::vector<std::vector<uint8_t>>& accepted_publisher_key_hashes) {
   base::WrapRefCounted(new Unpacker(app_id, prod_id, path, std::move(unzipper),
                                     is_foreground, std::move(callback)))
-      ->Verify(pk_hash, crx_format);
+      ->Verify(pk_hash, crx_format, accepted_publisher_key_hashes);
 }
 
-void Unpacker::Verify(const std::vector<uint8_t>& pk_hash,
-                      crx_file::VerifierFormat crx_format) {
+void Unpacker::Verify(
+    const std::vector<uint8_t>& pk_hash,
+    crx_file::VerifierFormat crx_format,
+    const std::vector<std::vector<uint8_t>>& accepted_publisher_key_hashes) {
   TRACE_EVENT("update_client", "Unpacker::Verify",
               perfetto::Flow::FromPointer(this));
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -96,7 +100,8 @@ void Unpacker::Verify(const std::vector<uint8_t>& pk_hash,
   }
   const crx_file::VerifierResult result = crx_file::Verify(
       path_, crx_format, required_keys, std::vector<uint8_t>(), &public_key_,
-      /*crx_id=*/nullptr, &compressed_verified_contents_);
+      /*crx_id=*/nullptr, &compressed_verified_contents_,
+      accepted_publisher_key_hashes);
   if (result != crx_file::VerifierResult::OK_FULL) {
     EndUnpacking(UnpackerError::kInvalidFile, static_cast<int>(result));
     return;

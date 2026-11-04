@@ -23,7 +23,8 @@ CRXFileInfo::CRXFileInfo(const CRXFileInfo& other)
       required_format(other.required_format),
       extension_id(other.extension_id),
       expected_hash(other.expected_hash),
-      expected_version(other.expected_version) {
+      expected_version(other.expected_version),
+      accepted_publisher_key_hashes(other.accepted_publisher_key_hashes) {
   DCHECK(!path.empty());
 }
 
@@ -33,7 +34,8 @@ bool CRXFileInfo::operator==(const CRXFileInfo& that) const {
   return path == that.path && required_format == that.required_format &&
          extension_id == that.extension_id &&
          expected_hash == that.expected_hash &&
-         expected_version == that.expected_version;
+         expected_version == that.expected_version &&
+         accepted_publisher_key_hashes == that.accepted_publisher_key_hashes;
 }
 
 }  // namespace extensions

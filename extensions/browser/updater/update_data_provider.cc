@@ -23,6 +23,7 @@
 #include "crypto/hash.h"
 #include "extensions/browser/content_verifier/content_verifier.h"
 #include "extensions/browser/disable_reason.h"
+#include "extensions/browser/extension_management_client.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
@@ -111,6 +112,22 @@ void UpdateDataProvider::GetData(
     crx_component->crx_format_requirement =
         extension->from_webstore() ? GetWebstoreVerifierFormat(allow_dev)
                                    : GetPolicyVerifierFormat();
+    const GURL update_url = ExtensionsBrowserClient::Get()
+                                ->GetExtensionManagementClient(browser_context_)
+                                ->GetEffectiveUpdateURL(*extension);
+    if (extension_prefs->IsFromXlWebstore(id)) {
+      if (update_url.is_empty() ||
+          extension_urls::IsWebstoreUpdateUrl(update_url)) {
+        // XL can install an unmodified Google package without marking it as a
+        // Google install. Its Google updates must still carry Google's proof.
+        crx_component->crx_format_requirement =
+            GetWebstoreVerifierFormat(allow_dev);
+      } else {
+        crx_component->crx_format_requirement = crx_file::VerifierFormat::CRX3;
+        crx_component->accepted_publisher_key_hashes =
+            GetXlWebstorePublisherKeyHashes();
+      }
+    }
     crx_component->installer = base::MakeRefCounted<ExtensionInstaller>(
         id, install_immediately,
         base::BindRepeating(&UpdateDataProvider::RunInstallCallback, this));

@@ -68,7 +68,13 @@ class XenonManagedCertificateService
   bool ready() const;
   ServiceStatus GetStatus() const;
   const Snapshot* snapshot() const;
+  // Trust consumers observe only readiness and published snapshot changes.
   base::CallbackListSubscription AddObserver(base::RepeatingClosure observer);
+  // Diagnostic consumers also observe download progress, errors and timestamps.
+  // Registering does not emit an initial notification; read GetStatus() after
+  // subscribing to obtain the current state.
+  base::CallbackListSubscription AddStatusObserver(
+      base::RepeatingClosure observer);
 
  private:
   friend class base::NoDestructor<XenonManagedCertificateService>;
@@ -123,6 +129,7 @@ class XenonManagedCertificateService
   std::optional<Snapshot> published_;
   scoped_refptr<base::SequencedTaskRunner> io_runner_;
   base::RepeatingClosureList observers_;
+  base::RepeatingClosureList status_observers_;
   base::OneShotTimer refresh_timer_;
   mojo::Remote<network::mojom::NetworkContext> network_context_;
   mojo::Remote<network::mojom::URLLoaderFactory> factory_;

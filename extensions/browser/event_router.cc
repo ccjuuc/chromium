@@ -1374,6 +1374,8 @@ void EventRouter::DispatchEventToProcess(const ExtensionId& extension_id,
     bool is_new_webstore_origin =
         url::Origin::Create(extension_urls::GetNewWebstoreLaunchURL())
             .IsSameOriginWith(*url);
+    bool is_xl_webstore_origin =
+        extension_urls::IsXlWebstoreOrigin(url::Origin::Create(*url));
     const Feature* feature =
         ExtensionAPI::GetSharedInstance()->GetFeatureDependency(
             event->event_name);
@@ -1381,7 +1383,7 @@ void EventRouter::DispatchEventToProcess(const ExtensionId& extension_id,
                                               base::CompareCase::SENSITIVE);
     CHECK(
         feature->RequiresDelegatedAvailabilityCheck() ||
-        is_new_webstore_origin ||
+        is_new_webstore_origin || is_xl_webstore_origin ||
         // The `chrome.test` API can send events to web pages during tests.
         (is_test_api_event && base::CommandLine::ForCurrentProcess()->HasSwitch(
                                   switches::kExtensionTestApiOnWebPages)))

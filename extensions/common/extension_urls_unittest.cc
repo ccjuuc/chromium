@@ -5,6 +5,7 @@
 #include "extensions/common/extension_urls.h"
 
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/origin.h"
 
 namespace extension_urls {
 
@@ -30,6 +31,33 @@ TEST(ExtensionWebstoreURLsTest, GetWebstoreBlockStatusURL) {
       "https://chromewebstore.googleapis.com/v2/items:"
       "batchFetchItemBlockStatusForEnterprise",
       GetWebstoreBlockStatusURL().spec());
+}
+
+TEST(ExtensionWebstoreURLsTest, XlStoreTrustRequiresExactHttpsOrigin) {
+  const GURL xl("https://xl.extensions.test.com/detail/test");
+  EXPECT_TRUE(IsXlWebstoreOrigin(url::Origin::Create(xl)));
+  EXPECT_TRUE(IsWebstoreDomain(xl));
+  EXPECT_TRUE(IsWebstoreOrigin(url::Origin::Create(xl)));
+  for (const char* spec : {"http://xl.extensions.test.com/",
+                           "https://xl.extensions.test.com:8443/",
+                           "https://sub.xl.extensions.test.com/",
+                           "https://xl.extensions.test.com.evil.test/"}) {
+    const GURL url(spec);
+    EXPECT_FALSE(IsXlWebstoreOrigin(url::Origin::Create(url))) << spec;
+    EXPECT_FALSE(IsWebstoreDomain(url)) << spec;
+    EXPECT_FALSE(IsWebstoreOrigin(url::Origin::Create(url))) << spec;
+  }
+  EXPECT_TRUE(IsWebstoreOrigin(
+      url::Origin::Create(GURL("https://chromewebstore.google.com/"))));
+}
+
+TEST(ExtensionWebstoreURLsTest, XlXmlUpdatesRemainSeparateFromGoogleProtocol) {
+  const GURL xl("https://xl.extensions.test.com/updates/test.xml?x=version");
+  EXPECT_TRUE(IsXlWebstoreUpdateUrl(xl));
+  EXPECT_FALSE(IsWebstoreUpdateUrl(xl));
+  EXPECT_FALSE(IsXlWebstoreUpdateUrl(
+      GURL("http://xl.extensions.test.com/updates/test.xml")));
+  EXPECT_FALSE(IsXlWebstoreUpdateUrl(GetWebstoreUpdateUrl()));
 }
 
 }  // namespace extension_urls

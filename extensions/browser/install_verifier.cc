@@ -130,7 +130,8 @@ bool InstallVerifier::ShouldEnforce() {
 // static
 bool InstallVerifier::NeedsVerification(const Extension& extension,
                                         content::BrowserContext* context) {
-  return IsFromStore(extension, context) && CanUseExtensionApis(extension);
+  return !ExtensionPrefs::Get(context)->IsFromXlWebstore(extension.id()) &&
+         IsFromStore(extension, context) && CanUseExtensionApis(extension);
 }
 
 // static
@@ -188,14 +189,20 @@ void InstallVerifier::VerifyExtension(const std::string& extension_id) {
 }
 
 void InstallVerifier::AddMany(const ExtensionIdSet& ids, OperationType type) {
-  if (!ShouldFetchSignature()) {
+  ExtensionIdSet ids_requiring_verification;
+  for (const ExtensionId& id : ids) {
+    if (!prefs_->IsFromXlWebstore(id)) {
+      ids_requiring_verification.insert(id);
+    }
+  }
+  if (ids_requiring_verification.empty() || !ShouldFetchSignature()) {
     OnVerificationComplete(true, type);  // considered successful.
     return;
   }
 
   if (signature_.get()) {
-    ExtensionIdSet not_allowed_yet =
-        base::STLSetDifference<ExtensionIdSet>(ids, signature_->ids);
+    ExtensionIdSet not_allowed_yet = base::STLSetDifference<ExtensionIdSet>(
+        ids_requiring_verification, signature_->ids);
     if (not_allowed_yet.empty()) {
       OnVerificationComplete(true, type);  // considered successful.
       return;
@@ -204,7 +211,7 @@ void InstallVerifier::AddMany(const ExtensionIdSet& ids, OperationType type) {
 
   std::unique_ptr<InstallVerifier::PendingOperation> operation(
       new InstallVerifier::PendingOperation(type));
-  operation->ids.insert(ids.begin(), ids.end());
+  operation->ids = std::move(ids_requiring_verification);
 
   operation_queue_.push(std::move(operation));
 
@@ -274,6 +281,12 @@ bool InstallVerifier::MustRemainDisabled(
   bool verified = true;
   if (InstallSigner::GetForcedNotFromWebstore().contains(extension->id())) {
     verified = false;
+  } else if (prefs_->IsFromXlWebstore(extension->id())) {
+    // The browser writes this provenance only after checking the developer ID,
+    // approved manifest and a trusted XL or Google publisher proof. It is
+    // recorded before the registrar queries this policy for a fresh install.
+    // Google need not attest these installations, including unchanged Google
+    // packages downloaded through XL. Their update verification is independent.
   } else if (!IsFromStore(*extension, context_)) {
     verified = false;
   } else if (!signature_ && (!bootstrap_check_complete_ ||
@@ -414,6 +427,12 @@ void InstallVerifier::BeginFetch() {
   } else {  // All other operation types are some form of "ADD".
     ids_to_sign.insert(operation.ids.begin(), operation.ids.end());
   }
+
+  // An extension previously signed by Google may since have been installed
+  // through XL. Do not include its old signature entry in unrelated requests.
+  std::erase_if(ids_to_sign, [this](const ExtensionId& id) {
+    return prefs_->IsFromXlWebstore(id);
+  });
 
   auto url_loader_factory = context_->GetDefaultStoragePartition()
                                 ->GetURLLoaderFactoryForBrowserProcess();

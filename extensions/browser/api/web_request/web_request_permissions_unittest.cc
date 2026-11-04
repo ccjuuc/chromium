@@ -139,6 +139,11 @@ TEST_P(ExtensionWebRequestPermissionsWithHashRealTimeDependenceTest,
       {"https://chromewebstore.google.com./", HIDE_ALL},
       {"https://chromewebstore.google.com:80/", HIDE_ALL},
       {"https://chromewebstore.google.com/?query", HIDE_ALL},
+      {"https://xl.extensions.test.com/", HIDE_ALL},
+      {"https://xl.extensions.test.com/detail/test", HIDE_ALL},
+      {"https://xl.extensions.test.com/service/update2/crx", HIDE_ALL},
+      {"https://xl.extensions.test.com.evil.test/",
+       HIDE_BROWSER_SUB_RESOURCE_REQUEST},
       // Unsupported scheme.
       {"blob:https://chrome.google.com/fc3f440b-78ed-469f-8af8-7a1717ff39ae",
        HIDE_ALL},
@@ -272,13 +277,14 @@ TEST_P(ExtensionWebRequestPermissionsWithHashRealTimeDependenceTest,
     EXPECT_TRUE(WebRequestPermissions::HideRequest(permission_helper,
                                                    sensitive_request_info));
   }
-  // If the request is initiated by the new webstore domain it becomes
-  // protected.
-  {
+  // Requests initiated by either webstore are protected, even if the target
+  // URL itself is not sensitive.
+  for (const char* webstore_url : {"https://chromewebstore.google.com/",
+                                   "https://xl.extensions.test.com/"}) {
+    SCOPED_TRACE(webstore_url);
     auto request_init_params = create_request_params(
         non_sensitive_url, WebRequestResourceType::SCRIPT, kRendererProcessId);
-    GURL webstore_url("https://chromewebstore.google.com/");
-    request_init_params.initiator = url::Origin::Create(webstore_url);
+    request_init_params.initiator = url::Origin::Create(GURL(webstore_url));
 
     WebRequestInfo sensitive_request_info(std::move(request_init_params));
     EXPECT_TRUE(WebRequestPermissions::HideRequest(permission_helper,
@@ -286,18 +292,33 @@ TEST_P(ExtensionWebRequestPermissionsWithHashRealTimeDependenceTest,
   }
   // Requests initiated in opaque origins with the webstore as a precursor will
   // also be protected.
-  {
+  for (const char* webstore_url : {"https://chromewebstore.google.com/",
+                                   "https://xl.extensions.test.com/"}) {
+    SCOPED_TRACE(webstore_url);
     auto request_init_params = create_request_params(
         non_sensitive_url, WebRequestResourceType::SCRIPT, kRendererProcessId);
-    GURL webstore_url("https://chromewebstore.google.com/");
     auto opaque_origin =
-        url::Origin::Create(webstore_url).DeriveNewOpaqueOrigin();
+        url::Origin::Create(GURL(webstore_url)).DeriveNewOpaqueOrigin();
     EXPECT_TRUE(opaque_origin.opaque());
     request_init_params.initiator = std::move(opaque_origin);
 
     WebRequestInfo sensitive_request_info(std::move(request_init_params));
     EXPECT_TRUE(WebRequestPermissions::HideRequest(permission_helper,
                                                    sensitive_request_info));
+  }
+
+  // Merely resembling the XL store must not protect unrelated initiators.
+  for (const char* non_webstore_url :
+       {"http://xl.extensions.test.com/",
+        "https://xl.extensions.test.com:8443/",
+        "https://xl.extensions.test.com.evil.test/"}) {
+    SCOPED_TRACE(non_webstore_url);
+    auto request_init_params = create_request_params(
+        non_sensitive_url, WebRequestResourceType::SCRIPT, kRendererProcessId);
+    request_init_params.initiator = url::Origin::Create(GURL(non_webstore_url));
+    WebRequestInfo request(std::move(request_init_params));
+    EXPECT_FALSE(
+        WebRequestPermissions::HideRequest(permission_helper, request));
   }
 }
 

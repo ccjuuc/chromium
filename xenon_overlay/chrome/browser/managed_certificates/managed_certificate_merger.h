@@ -12,6 +12,8 @@ struct Snapshot;
 
 // Append a validated snapshot after native policies and user certificates have
 // been assembled. This never modifies their trust, constraints or distrust.
+// Existing trust also takes precedence over a reissued certificate with the
+// same public key, so a later snapshot cannot broaden its constraints.
 void MergeManagedCertificates(
     const Snapshot* snapshot,
     cert_verifier::mojom::AdditionalCertificates* certificates);
