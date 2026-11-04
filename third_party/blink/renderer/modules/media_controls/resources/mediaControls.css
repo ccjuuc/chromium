@@ -1569,6 +1569,55 @@ video::-internal-media-controls-right-side-enclosure {
   align-items: center;
 }
 
+/* Promote only the existing XL side enclosures, never the native control bar.
+ * Anchor positioning preserves the video's geometry without copying viewport
+ * coordinates on scroll. */
+video::-webkit-media-controls-xl-overlay div[data-xl-top-layer] {
+  overlay: auto !important;
+  position: fixed !important;
+  position-visibility: anchors-visible;
+  top: anchor(top);
+  bottom: auto;
+  right: auto;
+  width: 48px;
+  height: calc(anchor-size(height) - 80px);
+  pointer-events: none;
+}
+
+video::-webkit-media-controls-xl-overlay.sizing-large div[data-xl-top-layer] {
+  bottom: auto;
+  height: calc(anchor-size(height) - 96px);
+}
+
+video:not([controls])::-webkit-media-controls-xl-overlay div[data-xl-top-layer] {
+  top: calc(anchor(top) + 8px);
+  bottom: auto;
+  height: calc(anchor-size(height) - 16px);
+}
+
+video::-webkit-media-controls-xl-overlay div[data-xl-top-layer][pseudo="-internal-media-controls-left-side-enclosure" i] {
+  left: calc(anchor(left) + 34px);
+}
+
+video::-webkit-media-controls-xl-overlay div[data-xl-top-layer][pseudo="-internal-media-controls-right-side-enclosure" i] {
+  left: calc(anchor(right) - 82px);
+}
+
+video::-webkit-media-controls-xl-overlay div[data-xl-top-layer] [pseudo="-internal-media-controls-xl3-anchor" i] {
+  pointer-events: none;
+}
+
+video::-webkit-media-controls-xl-overlay div[data-xl-top-layer]:not(.transparent) input {
+  pointer-events: auto;
+}
+
+/* The speed anchor/menu already opt into pointer events. During the fade-out,
+ * neither they nor the side buttons may leave an invisible hit target. */
+video::-webkit-media-controls-xl-overlay div[data-xl-top-layer].transparent,
+video::-webkit-media-controls-xl-overlay div[data-xl-top-layer].transparent * {
+  pointer-events: none !important;
+}
+
 video::-internal-media-controls-xl1-button,
 video::-internal-media-controls-xl2-button,
 video::-internal-media-controls-xl3-button,

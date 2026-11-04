@@ -29,6 +29,7 @@
 #include <array>
 
 #include "base/auto_reset.h"
+#include "base/feature_list.h"
 #include "media/base/media_switches.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
@@ -40,6 +41,7 @@
 #include "third_party/blink/renderer/core/css_value_keywords.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/dom/events/event_dispatch_forbidden_scope.h"
+#include "third_party/blink/renderer/core/dom/events/native_event_listener.h"
 #include "third_party/blink/renderer/core/dom/mutation_observer.h"
 #include "third_party/blink/renderer/core/dom/mutation_record.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
@@ -48,6 +50,7 @@
 #include "third_party/blink/renderer/core/events/pointer_event.h"
 #include "third_party/blink/renderer/core/events/touch_event.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
@@ -121,6 +124,10 @@
 namespace blink {
 
 namespace {
+
+#if defined(FOR_XL)
+BASE_FEATURE(kXlMediaControlsOverlay, base::FEATURE_ENABLED_BY_DEFAULT);
+#endif
 
 // (2px left border + 6px left padding + 56px button + 6px right padding + 2px
 // right border) = 72px.
@@ -454,6 +461,191 @@ class MediaControlsImpl::MediaElementMutationCallback
   Member<MutationObserver> observer_;
 };
 
+#if defined(FOR_XL)
+// Keep the DOM and action handlers in the video's UA shadow tree. Only the
+// side enclosures' layout boxes escape player-local overlays. CSS anchors do
+// the positioning, including scrolling and changes to the video's geometry.
+class MediaControlsImpl::XlSideOverlay final
+    : public NativeEventListener,
+      public LocalFrameView::LifecycleNotificationObserver {
+ public:
+  explicit XlSideOverlay(MediaControlsImpl& controls)
+      : controls_(&controls),
+        update_timer_(
+            controls.GetDocument().GetTaskRunner(TaskType::kInternalMedia),
+            this,
+            &XlSideOverlay::Update) {
+    const String anchor =
+        "--xl-controls-" + String::Number(controls.GetDomNodeId());
+    controls.SetInlineStyleProperty(CSSPropertyID::kAnchorName, anchor);
+    controls.left_side_enclosure_->SetInlineStyleProperty(
+        CSSPropertyID::kPositionAnchor, anchor);
+    controls.right_side_enclosure_->SetInlineStyleProperty(
+        CSSPropertyID::kPositionAnchor, anchor);
+  }
+
+  void Attach() {
+    Document& document = controls_->GetDocument();
+    LocalFrameView* view = document.View();
+    if (!view || (view_ == view && document_ == &document)) {
+      return;
+    }
+    Detach();
+    update_timer_.MoveToNewTaskRunner(
+        document.GetTaskRunner(TaskType::kInternalMedia));
+    view_ = view;
+    document_ = &document;
+    view_->RegisterForLifecycleNotifications(this);
+    document_->addEventListener(event_type_names::kPointermove, this,
+                                /*use_capture=*/true);
+    ScheduleUpdate();
+  }
+
+  void Detach() {
+    update_timer_.Stop();
+    if (view_) {
+      view_->UnregisterFromLifecycleNotifications(this);
+      view_.Clear();
+    }
+    if (document_) {
+      document_->removeEventListener(event_type_names::kPointermove, this,
+                                     /*use_capture=*/true);
+      document_.Clear();
+    }
+    SetPromoted(false);
+  }
+
+  void DidFinishLifecycleUpdate(const LocalFrameView&) override {
+    ScheduleUpdate();
+  }
+
+  void Trace(Visitor* visitor) const override {
+    visitor->Trace(controls_);
+    visitor->Trace(view_);
+    visitor->Trace(document_);
+    visitor->Trace(update_timer_);
+    NativeEventListener::Trace(visitor);
+    LocalFrameView::LifecycleNotificationObserver::Trace(visitor);
+  }
+
+ private:
+  void ScheduleUpdate() {
+    if (view_ && !updating_ && !update_timer_.IsActive()) {
+      update_timer_.StartOneShot(base::TimeDelta(), FROM_HERE);
+    }
+  }
+
+  void Update(TimerBase*) {
+    base::AutoReset<bool> updating(&updating_, true);
+    HTMLMediaElement& video = controls_->MediaElement();
+    if (!view_ || !video.isConnected()) {
+      SetPromoted(false);
+      return;
+    }
+    const gfx::RectF rect = video.GetBoundingClientRectNoLifecycleUpdate();
+    const ComputedStyle* style = video.GetComputedStyle();
+    if (rect.IsEmpty() || !style ||
+        style->Visibility() != EVisibility::kVisible || style->IsInert()) {
+      SetPromoted(false);
+      return;
+    }
+    // Top-layer boxes escape ancestor effects. Preserve the original rendering
+    // for scaled/rotated or fading players rather than changing their
+    // appearance.
+    if (std::abs(rect.width() - video.OffsetWidth()) > 1 ||
+        std::abs(rect.height() - video.OffsetHeight()) > 1) {
+      SetPromoted(false);
+      return;
+    }
+    for (Element* ancestor = &video; ancestor;
+         ancestor = ancestor->ParentOrShadowHostElement()) {
+      const ComputedStyle* ancestor_style = ancestor->GetComputedStyle();
+      if (ancestor_style &&
+          (ancestor_style->Opacity() != 1 || ancestor_style->HasFilter())) {
+        SetPromoted(false);
+        return;
+      }
+    }
+    bool has_enabled_button = false;
+    for (MediaControlSideButtonElement* button :
+         {controls_->xl1_button_.Get(), controls_->xl2_button_.Get(),
+          controls_->xl3_button_.Get(), controls_->xr1_button_.Get()}) {
+      if (button && button->IsWanted() && button->DoesFit() &&
+          !button->GetBoundingClientRectNoLifecycleUpdate().IsEmpty()) {
+        has_enabled_button = true;
+        break;
+      }
+    }
+    SetPromoted(has_enabled_button);
+  }
+
+  void SetPromoted(bool promoted) {
+    DEFINE_STATIC_LOCAL(const QualifiedName, promoted_attribute,
+                        (AtomicString("data-xl-top-layer")));
+    for (MediaControlSideEnclosureElement* enclosure :
+         {controls_->left_side_enclosure_.Get(),
+          controls_->right_side_enclosure_.Get()}) {
+      // A player can enter fullscreen (or a containing popover) after its
+      // controls were promoted. Append them after that new top-layer entry.
+      if (promoted && enclosure && enclosure->IsInTopLayer()) {
+        bool after_enclosure = false;
+        bool reorder = false;
+        for (const auto& entry : enclosure->GetDocument().TopLayerElements()) {
+          if (entry == enclosure) {
+            after_enclosure = true;
+          } else if (after_enclosure &&
+                     entry->IsShadowIncludingInclusiveAncestorOf(
+                         controls_->MediaElement())) {
+            reorder = true;
+            break;
+          }
+        }
+        if (reorder) {
+          enclosure->GetDocument().RemoveFromTopLayerImmediately(enclosure);
+        }
+      }
+      if (!enclosure ||
+          (enclosure->IsInTopLayer() == promoted &&
+           enclosure->hasAttribute(promoted_attribute) == promoted)) {
+        continue;
+      }
+      if (promoted) {
+        enclosure->setAttribute(promoted_attribute, g_empty_atom);
+        enclosure->GetDocument().AddToTopLayer(enclosure);
+      } else {
+        enclosure->GetDocument().RemoveFromTopLayerImmediately(enclosure);
+        enclosure->removeAttribute(promoted_attribute);
+      }
+    }
+  }
+
+  void Invoke(ExecutionContext*, Event* event) override {
+    auto* pointer = DynamicTo<PointerEvent>(event);
+    Node* target = event->RawTarget() ? event->RawTarget()->ToNode() : nullptr;
+    if (!pointer || !pointer->isTrusted() || !target ||
+        controls_->MediaElement().IsShadowIncludingInclusiveAncestorOf(
+            *target)) {
+      return;
+    }
+    base::AutoReset<bool> updating(&updating_, true);
+    const gfx::RectF rect =
+        controls_->MediaElement().GetBoundingClientRectNoLifecycleUpdate();
+    const gfx::PointF point(pointer->clientX(), pointer->clientY());
+    if (rect.Contains(point)) {
+      // Reuse only pointer visibility handling. Do not synthesize clicks,
+      // cancel the page event, or run any XL action here.
+      controls_->DefaultEventHandler(*event);
+    }
+  }
+
+  Member<MediaControlsImpl> controls_;
+  Member<LocalFrameView> view_;
+  Member<Document> document_;
+  HeapTaskRunnerTimer<XlSideOverlay> update_timer_;
+  bool updating_ = false;
+};
+#endif
+
 bool MediaControlsImpl::IsTouchEvent(Event* event) {
   if (auto* pointer_event = DynamicTo<PointerEvent>(event)) {
     return pointer_event->pointerType() == pointer_type_names::kTouch ||
@@ -722,6 +914,9 @@ void MediaControlsImpl::InitializeControls() {
     xl2_button_->SetIsWanted(false);
     xl3_button_->SetIsWanted(false);
     left_side_enclosure_->SetIsWanted(false);
+    if (base::FeatureList::IsEnabled(kXlMediaControlsOverlay)) {
+      xl_side_overlay_ = MakeGarbageCollected<XlSideOverlay>(*this);
+    }
 #endif
   }
 
@@ -930,6 +1125,12 @@ Node::InsertionNotificationRequest MediaControlsImpl::InsertedInto(
   if (!MediaElement().isConnected())
     return HTMLDivElement::InsertedInto(root);
 
+#if defined(FOR_XL)
+  if (xl_side_overlay_) {
+    xl_side_overlay_->Attach();
+  }
+#endif
+
   // TODO(mlamouri): we should show the controls instead of having
   // HTMLMediaElement do it.
 
@@ -1101,6 +1302,12 @@ MediaControlsImpl::ControlsState MediaControlsImpl::State() const {
 
 void MediaControlsImpl::RemovedFrom(ContainerNode& insertion_point) {
   DCHECK(!MediaElement().isConnected());
+
+#if defined(FOR_XL)
+  if (xl_side_overlay_) {
+    xl_side_overlay_->Detach();
+  }
+#endif
 
   HTMLDivElement::RemovedFrom(insertion_point);
 
@@ -2742,6 +2949,9 @@ HTMLVideoElement& MediaControlsImpl::VideoElement() {
 }
 
 void MediaControlsImpl::Trace(Visitor* visitor) const {
+#if defined(FOR_XL)
+  visitor->Trace(xl_side_overlay_);
+#endif
   visitor->Trace(native_controls_container_);
   visitor->Trace(element_mutation_callback_);
   visitor->Trace(element_size_changed_timer_);

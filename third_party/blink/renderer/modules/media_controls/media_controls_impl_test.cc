@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
@@ -23,8 +24,10 @@
 #include "third_party/blink/renderer/core/dom/dom_token_list.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
+#include "third_party/blink/renderer/core/dom/events/native_event_listener.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/dom/text.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect.h"
@@ -33,6 +36,7 @@
 #include "third_party/blink/renderer/core/html/shadow/shadow_element_names.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/input/event_handler.h"
+#include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/loader/empty_clients.h"
 #include "third_party/blink/renderer/core/pointer_type_names.h"
@@ -409,6 +413,75 @@ class MediaControlsImplTest
     element->DispatchEvent(*CreatePointerEvent(event_type_names::kClick));
   }
 
+#if defined(FOR_XL)
+  void MakeMediaControlsTransparent() { media_controls_->MakeTransparent(); }
+
+  void FlushXlOverlay() {
+    UpdateAllLifecyclePhasesForTest();
+    test::RunPendingTasks();
+    UpdateAllLifecyclePhasesForTest();
+    test::RunPendingTasks();
+    UpdateAllLifecyclePhasesForTest();
+  }
+
+  void PrepareXlOverlay(bool show_pip = false) {
+    SetBodyInnerHTML(R"HTML(
+      <style>
+        body { margin: 0; }
+        #player { position: relative; width: 640px; height: 360px; }
+        video { display: block; width: 100%; height: 100%; }
+        #cover { position: absolute; inset: 0; z-index: 5; }
+      </style>
+      <div id="player">
+        <video controls data-xl-download-btn-show="1"
+               data-xl-speed-btn-show="1" data-xl-pip-btn-show="0"></video>
+        <div id="cover"></div>
+      </div>
+    )HTML");
+    auto& video = To<HTMLVideoElement>(
+        *GetDocument().QuerySelector(AtomicString("video")));
+    SetMediaControlsFromElement(video);
+    video.SetSrc(AtomicString("https://example.com/video.mp4"));
+    test::RunPendingTasks();
+    if (show_pip) {
+      video.setAttribute(AtomicString("data-xl-pip-btn-show"), AtomicString("1"));
+      video.SetReadyState(HTMLMediaElement::kHaveMetadata);
+      ASSERT_TRUE(video.SupportsPictureInPicture());
+    }
+    video.removeAttribute(html_names::kControlsAttr);
+    SimulateLoadedMetadata();
+    EnsureSizing();
+    FlushXlOverlay();
+  }
+
+  Element& XlElement(const char* pseudo) {
+    return *GetElementByShadowPseudoId(MediaControls(), pseudo);
+  }
+
+  void ExpectXlOverlayAlignedWithVideo() {
+    Element& left = XlElement("-internal-media-controls-left-side-enclosure");
+    Element& right = XlElement("-internal-media-controls-right-side-enclosure");
+    ASSERT_TRUE(left.IsInTopLayer());
+    ASSERT_TRUE(right.IsInTopLayer());
+    const DOMRect* video_rect =
+        MediaControls().MediaElement().GetBoundingClientRect();
+    const DOMRect* left_rect = left.GetBoundingClientRect();
+    const DOMRect* right_rect = right.GetBoundingClientRect();
+    EXPECT_NEAR(video_rect->left() + 34, left_rect->left(), 0.1);
+    EXPECT_NEAR(video_rect->right() - 82, right_rect->left(), 0.1);
+    EXPECT_NEAR(video_rect->top() + 8, left_rect->top(), 0.1);
+    EXPECT_NEAR(video_rect->top() + 8, right_rect->top(), 0.1);
+    EXPECT_NEAR(video_rect->height() - 16, left_rect->height(), 0.1);
+    EXPECT_NEAR(video_rect->height() - 16, right_rect->height(), 0.1);
+    EXPECT_NEAR(48, left_rect->width(), 0.1);
+    EXPECT_NEAR(48, right_rect->width(), 0.1);
+  }
+
+  Node* HitAt(const gfx::PointF& point) {
+    return HitTestInDocument(&GetDocument(), point.x(), point.y()).InnerNode();
+  }
+#endif
+
  private:
   Persistent<MediaControlsImpl> media_controls_;
   base::HistogramTester histogram_tester_;
@@ -478,6 +551,234 @@ TEST_F(MediaControlsImplTest, HideAndShow) {
   MediaControls().MaybeShow();
   ASSERT_TRUE(IsElementVisible(*panel));
 }
+
+#if defined(FOR_XL)
+TEST_F(MediaControlsImplTest, XlOverlayHitsOriginalButtonAbovePlayerCover) {
+  PrepareXlOverlay();
+  Element& left = XlElement("-internal-media-controls-left-side-enclosure");
+  Element& button = XlElement("-internal-media-controls-xl1-button");
+  EXPECT_TRUE(left.IsInTopLayer());
+  EXPECT_EQ(&MediaControls(), left.parentNode());
+  EXPECT_EQ(&button, HitAt(button.GetBoundingClientRect()->Center()));
+  EXPECT_FALSE(XlElement("-webkit-media-controls").IsInTopLayer());
+
+  class CancelAction final : public NativeEventListener {
+   public:
+    void Invoke(ExecutionContext*, Event* event) override {
+      ++count;
+      event->preventDefault();
+    }
+    int count = 0;
+  };
+  auto* listener = MakeGarbageCollected<CancelAction>();
+  auto& video = MediaControls().MediaElement();
+  video.addEventListener(AtomicString("xlcontrolaction"), listener, false);
+  const auto point = button.GetBoundingClientRect()->Center();
+  MouseDownAt(point);
+  MouseUpAt(point);
+  EXPECT_EQ(1, listener->count);
+  EXPECT_EQ("xl1", video.getAttribute(AtomicString("data-xl-control")));
+}
+
+TEST_F(MediaControlsImplTest, XlOverlayPassesThroughGapsAndHiddenButtons) {
+  PrepareXlOverlay();
+  Element& button = XlElement("-internal-media-controls-xl1-button");
+  const DOMRect* rect = button.GetBoundingClientRect();
+  const gfx::PointF gap(rect->left() + 24, rect->bottom() + 10);
+  Element* cover = GetDocument().getElementById(AtomicString("cover"));
+  EXPECT_EQ(cover, HitAt(gap));
+
+  const gfx::PointF center = rect->Center();
+  MakeMediaControlsTransparent();
+  FlushXlOverlay();
+  EXPECT_EQ(cover, HitAt(center));
+  MouseMoveTo(gfx::PointF(320, 160));
+  FlushXlOverlay();
+  EXPECT_EQ(&button, HitAt(center));
+}
+
+TEST_F(MediaControlsImplTest, XlOverlayTracksGeometryAndRemoval) {
+  PrepareXlOverlay();
+  Element& left = XlElement("-internal-media-controls-left-side-enclosure");
+  Element& button = XlElement("-internal-media-controls-xl1-button");
+  const auto before = button.GetBoundingClientRect()->Center();
+  Element* player = GetDocument().getElementById(AtomicString("player"));
+  player->SetInlineStyleProperty(CSSPropertyID::kMarginLeft, "60px");
+  FlushXlOverlay();
+  const auto after = button.GetBoundingClientRect()->Center();
+  EXPECT_NEAR(before.x() + 60, after.x(), 0.1);
+  EXPECT_EQ(&button, HitAt(after));
+
+  GetDocument().body()->SetInlineStyleProperty(CSSPropertyID::kHeight,
+                                             "1600px");
+  player->SetInlineStyleProperty(CSSPropertyID::kMarginTop, "200px");
+  player->SetInlineStyleProperty(CSSPropertyID::kHeight, "420px");
+  FlushXlOverlay();
+  const auto before_scroll = button.GetBoundingClientRect()->Center();
+  GetDocument().domWindow()->scrollToForTesting(0, 100);
+  FlushXlOverlay();
+  const auto after_scroll = button.GetBoundingClientRect()->Center();
+  EXPECT_NEAR(before_scroll.y() - 100, after_scroll.y(), 0.1);
+  EXPECT_EQ(&button, HitAt(after_scroll));
+
+  auto& video = MediaControls().MediaElement();
+  video.remove();
+  FlushXlOverlay();
+  EXPECT_FALSE(left.IsInTopLayer());
+  EXPECT_FALSE(left.hasAttribute(AtomicString("data-xl-top-layer")));
+  player->InsertBefore(&video, player->firstChild());
+  FlushXlOverlay();
+  EXPECT_TRUE(left.IsInTopLayer());
+}
+
+TEST_F(MediaControlsImplTest, XlOverlayTracksCenteredVideoTranslation) {
+  PrepareXlOverlay(/*show_pip=*/true);
+  Element* player = GetDocument().getElementById(AtomicString("player"));
+  player->SetInlineStyleProperty(CSSPropertyID::kMarginLeft, "40px");
+  player->SetInlineStyleProperty(CSSPropertyID::kMarginTop, "60px");
+  auto& video = MediaControls().MediaElement();
+  video.setAttribute(
+      html_names::kStyleAttr,
+      AtomicString("position:absolute;left:50%;top:50%;"
+                   "transform:translate(-50%,-50%)"));
+  FlushXlOverlay();
+  ExpectXlOverlayAlignedWithVideo();
+  Element& button = XlElement("-internal-media-controls-xl1-button");
+  EXPECT_EQ(&button, HitAt(button.GetBoundingClientRect()->Center()));
+  const auto before = video.GetBoundingClientRect()->Center();
+
+  // A transform-only change must invalidate the top-layer anchor geometry.
+  video.SetInlineStyleProperty(
+      CSSPropertyID::kTransform,
+      "translate(calc(-50% + 24px), calc(-50% + 12px))");
+  FlushXlOverlay();
+  const auto after = video.GetBoundingClientRect()->Center();
+  EXPECT_NEAR(before.x() + 24, after.x(), 0.1);
+  EXPECT_NEAR(before.y() + 12, after.y(), 0.1);
+  ExpectXlOverlayAlignedWithVideo();
+  EXPECT_EQ(&button, HitAt(button.GetBoundingClientRect()->Center()));
+}
+
+TEST_F(MediaControlsImplTest, XlOverlayTracksTranslatedAncestorAndScroll) {
+  PrepareXlOverlay(/*show_pip=*/true);
+  GetDocument().body()->SetInlineStyleProperty(CSSPropertyID::kHeight,
+                                             "1600px");
+  Element* player = GetDocument().getElementById(AtomicString("player"));
+  player->SetInlineStyleProperty(CSSPropertyID::kMarginTop, "120px");
+  player->SetInlineStyleProperty(CSSPropertyID::kTransform,
+                                "translate(40px, 30px)");
+  auto& video = MediaControls().MediaElement();
+  video.setAttribute(
+      html_names::kStyleAttr,
+      AtomicString("position:absolute;left:50%;top:50%;"
+                   "transform:translate(-50%,-50%)"));
+  FlushXlOverlay();
+  ExpectXlOverlayAlignedWithVideo();
+  const auto before = video.GetBoundingClientRect()->Center();
+
+  player->SetInlineStyleProperty(CSSPropertyID::kTransform,
+                                "translate(70px, 50px)");
+  FlushXlOverlay();
+  const auto after = video.GetBoundingClientRect()->Center();
+  EXPECT_NEAR(before.x() + 30, after.x(), 0.1);
+  EXPECT_NEAR(before.y() + 20, after.y(), 0.1);
+  ExpectXlOverlayAlignedWithVideo();
+
+  player->SetInlineStyleProperty(CSSPropertyID::kWidth, "600px");
+  player->SetInlineStyleProperty(CSSPropertyID::kHeight, "320px");
+  FlushXlOverlay();
+  EXPECT_NEAR(600, video.GetBoundingClientRect()->width(), 0.1);
+  EXPECT_NEAR(320, video.GetBoundingClientRect()->height(), 0.1);
+  ExpectXlOverlayAlignedWithVideo();
+  const double before_scroll = video.GetBoundingClientRect()->top();
+  GetDocument().domWindow()->scrollToForTesting(0, 100);
+  FlushXlOverlay();
+  EXPECT_NEAR(before_scroll - 100, video.GetBoundingClientRect()->top(), 0.1);
+  ExpectXlOverlayAlignedWithVideo();
+  Element& button = XlElement("-internal-media-controls-xl1-button");
+  EXPECT_EQ(&button, HitAt(button.GetBoundingClientRect()->Center()));
+}
+
+TEST_F(MediaControlsImplTest, XlOverlayPreservesAuthorAnchorTransforms) {
+  // Chromium 153 includes transforms for ordinary author anchors as well.
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      body { margin: 0; }
+      #anchor {
+        position: absolute; left: 100px; top: 100px;
+        width: 100px; height: 60px; anchor-name: --author;
+        transform: translate(40px, 30px);
+      }
+      #target {
+        position: fixed; position-anchor: --author;
+        left: anchor(left); top: anchor(bottom); width: 20px; height: 20px;
+      }
+    </style>
+    <div id="anchor"></div>
+    <div id="target"></div>
+  )HTML");
+  FlushXlOverlay();
+  Element* anchor = GetDocument().getElementById(AtomicString("anchor"));
+  Element* target = GetDocument().getElementById(AtomicString("target"));
+  EXPECT_NEAR(140, anchor->GetBoundingClientRect()->left(), 0.1);
+  EXPECT_NEAR(130, anchor->GetBoundingClientRect()->top(), 0.1);
+  EXPECT_NEAR(140, target->GetBoundingClientRect()->left(), 0.1);
+  EXPECT_NEAR(190, target->GetBoundingClientRect()->top(), 0.1);
+
+  anchor->SetInlineStyleProperty(CSSPropertyID::kTransform,
+                                "translate(70px, 50px)");
+  FlushXlOverlay();
+  EXPECT_NEAR(170, anchor->GetBoundingClientRect()->left(), 0.1);
+  EXPECT_NEAR(150, anchor->GetBoundingClientRect()->top(), 0.1);
+  EXPECT_NEAR(170, target->GetBoundingClientRect()->left(), 0.1);
+  EXPECT_NEAR(210, target->GetBoundingClientRect()->top(), 0.1);
+}
+
+TEST_F(MediaControlsImplTest, XlOverlayCanBeDisabled) {
+  base::test::ScopedFeatureList features;
+  features.InitFromCommandLine("", "XlMediaControlsOverlay");
+  PrepareXlOverlay();
+  Element& button = XlElement("-internal-media-controls-xl1-button");
+  EXPECT_FALSE(
+      XlElement("-internal-media-controls-left-side-enclosure").IsInTopLayer());
+  EXPECT_EQ(GetDocument().getElementById(AtomicString("cover")),
+            HitAt(button.GetBoundingClientRect()->Center()));
+}
+
+TEST_F(MediaControlsImplTest, XlOverlayStaysAbovePlayerEnteringTopLayer) {
+  PrepareXlOverlay();
+  auto* player =
+      To<HTMLElement>(GetDocument().getElementById(AtomicString("player")));
+  player->setAttribute(html_names::kPopoverAttr, AtomicString("manual"));
+  player->setAttribute(
+      html_names::kStyleAttr,
+      AtomicString("position:fixed;inset:0;margin:0;padding:0;border:0"));
+  player->ShowPopoverInternal(nullptr, nullptr);
+  FlushXlOverlay();
+  ASSERT_TRUE(player->IsInTopLayer());
+  Element& button = XlElement("-internal-media-controls-xl1-button");
+  EXPECT_EQ(&button, HitAt(button.GetBoundingClientRect()->Center()));
+}
+
+TEST_F(MediaControlsImplTest, XlOverlayPreservesTransformedAndHiddenPlayers) {
+  PrepareXlOverlay();
+  Element& left = XlElement("-internal-media-controls-left-side-enclosure");
+  Element* player = GetDocument().getElementById(AtomicString("player"));
+  player->SetInlineStyleProperty(CSSPropertyID::kTransform, "translateZ(0)");
+  FlushXlOverlay();
+  EXPECT_TRUE(left.IsInTopLayer());
+  player->SetInlineStyleProperty(CSSPropertyID::kTransform, "scale(0.5)");
+  FlushXlOverlay();
+  EXPECT_FALSE(left.IsInTopLayer());
+  player->RemoveInlineStyleProperty(CSSPropertyID::kTransform);
+  player->SetInlineStyleProperty(CSSPropertyID::kOpacity, "0");
+  FlushXlOverlay();
+  EXPECT_FALSE(left.IsInTopLayer());
+  player->RemoveInlineStyleProperty(CSSPropertyID::kOpacity);
+  FlushXlOverlay();
+  EXPECT_TRUE(left.IsInTopLayer());
+}
+#endif
 
 TEST_F(MediaControlsImplTest, Reset) {
   Element* panel = GetElementByShadowPseudoId(MediaControls(),

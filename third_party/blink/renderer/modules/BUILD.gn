@@ -11,6 +11,7 @@ import("//third_party/blink/renderer/bindings/bindings.gni")
 import("//third_party/blink/renderer/build/scripts/scripts.gni")
 import("//third_party/blink/renderer/modules/modules.gni")
 import("//third_party/blink/renderer/platform/blink_fuzzer_test.gni")
+import("//xenon_overlay/buildflags/features.gni")
 
 if (is_android) {
   import("//build/config/android/rules.gni")
@@ -398,6 +399,11 @@ blink_modules_sources("modules_generated") {
 
 source_set("unit_tests") {
   testonly = true
+
+  if (enable_xenon_service) {
+    # Match the media_controls target's XL code and class declarations.
+    defines = [ "FOR_XL" ]
+  }
 
   sources = [
     "accessibility/ax_layout_object_test.cc",

@@ -500,6 +500,8 @@ class MODULES_EXPORT MediaControlsImpl final : public HTMLDivElement,
 #if defined(FOR_XL)
   // Last overlay-visible state passed to UpdateSideButtonVisibility().
   bool xl_side_buttons_overlay_visible_ = false;
+  class XlSideOverlay;
+  Member<XlSideOverlay> xl_side_overlay_;
 #endif
 
   bool is_test_mode_ = false;
