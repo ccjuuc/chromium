@@ -10,11 +10,13 @@
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_management_internal.h"
 #include "chrome/browser/extensions/external_provider_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/test/browser_test.h"
+#include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
@@ -24,6 +26,7 @@
 #include "extensions/browser/test_extension_registry_observer.h"
 #include "extensions/browser/unpacked_installer.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_features.h"
 #include "extensions/common/feature_switch.h"
 #include "extensions/common/mojom/manifest.mojom.h"
 #include "extensions/test/test_extension_dir.h"
@@ -48,7 +51,10 @@ const Extension* GetExtensionByName(std::string_view name,
 
 class ManifestV2HandlerBrowserTest : public ExtensionBrowserTest {
  public:
-  ManifestV2HandlerBrowserTest() = default;
+  ManifestV2HandlerBrowserTest() {
+    feature_list_.InitAndDisableFeature(
+        extensions_features::kExtensionManifestV2Support);
+  }
   ~ManifestV2HandlerBrowserTest() override = default;
 
   // Since this is testing the handling of MV2 extensions, we probably don't
@@ -113,6 +119,7 @@ class ManifestV2HandlerBrowserTest : public ExtensionBrowserTest {
   base::HistogramTester& histogram_tester() { return histogram_tester_; }
 
  private:
+  base::test::ScopedFeatureList feature_list_;
   base::HistogramTester histogram_tester_;
 };
 
@@ -307,6 +314,164 @@ IN_PROC_BROWSER_TEST_F(ManifestV2HandlerBrowserTest,
       u"Cannot install extension because it uses an unsupported "
       u"manifest version.",
       install_error);
+}
+
+// Exercise the production compatibility path without the test-only MV2 bypass.
+class ManifestV2SupportBrowserTest : public ExtensionBrowserTest {
+ public:
+  ManifestV2SupportBrowserTest() {
+    feature_list_.InitAndEnableFeature(
+        extensions_features::kExtensionManifestV2Support);
+  }
+
+  bool ShouldAllowMV2Extensions() override { return false; }
+
+ protected:
+  void WaitForExtensionSystemReady() {
+    base::RunLoop run_loop;
+    ExtensionSystem::Get(profile())->ready().Post(
+        FROM_HERE, run_loop.QuitWhenIdleClosure());
+    run_loop.Run();
+  }
+
+  const Extension* InstallMV2Extension(std::string_view name) {
+    TestExtensionDir test_dir;
+    test_dir.WriteManifest(base::StringPrintf(
+        R"({"name": "%s", "manifest_version": 2, "version": "1.0"})",
+        name.data()));
+    return InstallExtension(test_dir.Pack(), /*expected_change=*/1);
+  }
+
+  void ExpectEnabled(const Extension& extension) {
+    EXPECT_TRUE(
+        extension_registry()->enabled_extensions().Contains(extension.id()));
+    EXPECT_TRUE(extension_prefs()->GetDisableReasons(extension.id()).empty());
+    disable_reason::DisableReason reason = disable_reason::DISABLE_NONE;
+    EXPECT_FALSE(ExtensionSystem::Get(profile())
+                     ->management_policy()
+                     ->MustRemainDisabled(&extension, &reason));
+  }
+
+  ExtensionPrefs* extension_prefs() { return ExtensionPrefs::Get(profile()); }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(ManifestV2SupportBrowserTest,
+                       PackedExtensionsCanInstallAndUpdate) {
+  WaitForExtensionSystemReady();
+
+  static constexpr char kManifestTemplate[] =
+      R"({"name": "MV2 update test",
+          "manifest_version": %d,
+          "version": "%s"})";
+  TestExtensionDir test_dir;
+  test_dir.WriteManifest(base::StringPrintf(kManifestTemplate, 2, "1.0"));
+  const base::FilePath mv2_crx = test_dir.Pack("mv2.crx");
+  test_dir.WriteManifest(base::StringPrintf(kManifestTemplate, 2, "2.0"));
+  const base::FilePath mv2_update_crx = test_dir.Pack("mv2_update.crx");
+  test_dir.WriteManifest(base::StringPrintf(kManifestTemplate, 3, "3.0"));
+  const base::FilePath mv3_crx = test_dir.Pack("mv3.crx");
+
+  const Extension* extension = InstallExtension(mv2_crx, /*expected_change=*/1);
+  ASSERT_TRUE(extension);
+  const ExtensionId extension_id = extension->id();
+  EXPECT_EQ(2, extension->manifest_version());
+  ExpectEnabled(*extension);
+
+  // Classification remains independent of whether compatibility is enabled.
+  auto* handler = ManifestV2Handler::Get(profile());
+  EXPECT_TRUE(handler->IsExtensionAffected(*extension));
+  handler->DisableAffectedExtensionsForTesting();
+  ExpectEnabled(*extension);
+
+  extension = UpdateExtension(extension_id, mv2_update_crx,
+                              /*expected_change=*/0);
+  ASSERT_TRUE(extension);
+  EXPECT_EQ(extension_id, extension->id());
+  EXPECT_EQ("2.0", extension->version().GetString());
+  EXPECT_EQ(2, extension->manifest_version());
+  ExpectEnabled(*extension);
+
+  extension = UpdateExtension(extension_id, mv3_crx, /*expected_change=*/0);
+  ASSERT_TRUE(extension);
+  EXPECT_EQ(extension_id, extension->id());
+  EXPECT_EQ("3.0", extension->version().GetString());
+  EXPECT_EQ(3, extension->manifest_version());
+  ExpectEnabled(*extension);
+}
+
+IN_PROC_BROWSER_TEST_F(ManifestV2SupportBrowserTest,
+                       UnpackedExtensionsCanInstall) {
+  WaitForExtensionSystemReady();
+
+  TestExtensionDir test_dir;
+  test_dir.WriteManifest(
+      R"({"name": "Unpacked MV2", "manifest_version": 2, "version": "1.0"})");
+  const Extension* extension = LoadExtension(test_dir.UnpackedPath());
+  ASSERT_TRUE(extension);
+  EXPECT_EQ(mojom::ManifestLocation::kUnpacked, extension->location());
+  EXPECT_EQ(2, extension->manifest_version());
+  EXPECT_TRUE(extension->install_warnings().empty());
+  ExpectEnabled(*extension);
+}
+
+IN_PROC_BROWSER_TEST_F(
+    ManifestV2SupportBrowserTest,
+    PRE_StartupPreservesEnabledStateAndMigratesDisableReasons) {
+  WaitForExtensionSystemReady();
+
+  ASSERT_TRUE(InstallMV2Extension("Enabled MV2"));
+
+  // Persist the disable reasons left by builds that retired MV2 support.
+  const Extension* unsupported = InstallMV2Extension("Unsupported MV2");
+  ASSERT_TRUE(unsupported);
+  const ExtensionId unsupported_id = unsupported->id();
+  extension_registrar()->DisableExtension(
+      unsupported_id, {disable_reason::DISABLE_UNSUPPORTED_MANIFEST_VERSION});
+  EXPECT_TRUE(
+      extension_registry()->disabled_extensions().Contains(unsupported_id));
+  EXPECT_THAT(extension_prefs()->GetDisableReasons(unsupported_id),
+              testing::UnorderedElementsAre(
+                  disable_reason::DISABLE_UNSUPPORTED_MANIFEST_VERSION));
+
+  const Extension* user_disabled = InstallMV2Extension("User-disabled MV2");
+  ASSERT_TRUE(user_disabled);
+  const ExtensionId user_disabled_id = user_disabled->id();
+  extension_registrar()->DisableExtension(
+      user_disabled_id, {disable_reason::DISABLE_UNSUPPORTED_MANIFEST_VERSION,
+                         disable_reason::DISABLE_USER_ACTION});
+  EXPECT_THAT(extension_prefs()->GetDisableReasons(user_disabled_id),
+              testing::UnorderedElementsAre(
+                  disable_reason::DISABLE_UNSUPPORTED_MANIFEST_VERSION,
+                  disable_reason::DISABLE_USER_ACTION));
+}
+
+IN_PROC_BROWSER_TEST_F(ManifestV2SupportBrowserTest,
+                       StartupPreservesEnabledStateAndMigratesDisableReasons) {
+  WaitForExtensionSystemReady();
+
+  const ExtensionSet installed =
+      extension_registry()->GenerateInstalledExtensionsSet();
+  for (std::string_view name : {"Enabled MV2", "Unsupported MV2"}) {
+    SCOPED_TRACE(name);
+    const Extension* extension = GetExtensionByName(name, installed);
+    ASSERT_TRUE(extension);
+    EXPECT_EQ(2, extension->manifest_version());
+    ExpectEnabled(*extension);
+  }
+
+  const Extension* user_disabled =
+      GetExtensionByName("User-disabled MV2", installed);
+  ASSERT_TRUE(user_disabled);
+  EXPECT_TRUE(extension_registry()->disabled_extensions().Contains(
+      user_disabled->id()));
+  EXPECT_FALSE(
+      extension_registry()->enabled_extensions().Contains(user_disabled->id()));
+  EXPECT_THAT(
+      extension_prefs()->GetDisableReasons(user_disabled->id()),
+      testing::UnorderedElementsAre(disable_reason::DISABLE_USER_ACTION));
 }
 
 }  // namespace extensions

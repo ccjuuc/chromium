@@ -6,6 +6,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/extensions/extension_service_user_test_base.h"
 #include "chrome/browser/profiles/profile.h"
@@ -15,6 +16,7 @@
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/pref_names.h"
 #include "extensions/common/extension_builder.h"
+#include "extensions/common/extension_features.h"
 #include "extensions/common/mojom/manifest.mojom.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -26,7 +28,7 @@ namespace extensions {
 
 class ManifestV2HandlerUnitTest : public ExtensionServiceUserTestBase {
  public:
-  ManifestV2HandlerUnitTest() = default;
+  ManifestV2HandlerUnitTest() : ManifestV2HandlerUnitTest(false) {}
   ~ManifestV2HandlerUnitTest() override = default;
 
   void SetUp() override {
@@ -59,7 +61,14 @@ class ManifestV2HandlerUnitTest : public ExtensionServiceUserTestBase {
 
   ManifestV2Handler* handler() { return handler_.get(); }
 
+ protected:
+  explicit ManifestV2HandlerUnitTest(bool mv2_support_enabled) {
+    mv2_support_feature_list_.InitWithFeatureState(
+        extensions_features::kExtensionManifestV2Support, mv2_support_enabled);
+  }
+
  private:
+  base::test::ScopedFeatureList mv2_support_feature_list_;
   raw_ptr<ManifestV2Handler> handler_;
 };
 
@@ -362,6 +371,47 @@ TEST_F(ManifestV2HandlerUnitTest, MV2ExtensionsCannotBeEnabled) {
 
     EXPECT_EQ(test_case.should_block_enable,
               handler()->ShouldBlockExtensionEnable(*extension));
+  }
+}
+
+class ManifestV2SupportUnitTest : public ManifestV2HandlerUnitTest {
+ public:
+  ManifestV2SupportUnitTest() : ManifestV2HandlerUnitTest(true) {}
+};
+
+TEST_F(ManifestV2SupportUnitTest, ExtensionsCanBeInstalledAndRemainEnabled) {
+  constexpr mojom::ManifestLocation kLocations[] = {
+      mojom::ManifestLocation::kInternal,
+      mojom::ManifestLocation::kUnpacked,
+      mojom::ManifestLocation::kCommandLine,
+      mojom::ManifestLocation::kExternalPref,
+      mojom::ManifestLocation::kExternalRegistry,
+      mojom::ManifestLocation::kExternalPrefDownload,
+      mojom::ManifestLocation::kExternalPolicy,
+      mojom::ManifestLocation::kExternalPolicyDownload,
+  };
+
+  for (auto location : kLocations) {
+    SCOPED_TRACE(static_cast<int>(location));
+    for (int manifest_version : {2, 3}) {
+      SCOPED_TRACE(manifest_version);
+      auto extension = ExtensionBuilder("Supported Extension")
+                           .SetManifestVersion(manifest_version)
+                           .SetLocation(location)
+                           .Build();
+      EXPECT_FALSE(handler()->ShouldBlockExtensionInstallation(
+          manifest_version, extension->GetType(), location));
+      EXPECT_FALSE(handler()->ShouldBlockExtensionEnable(*extension));
+
+      registrar()->AddExtension(extension.get());
+      handler()->DisableAffectedExtensionsForTesting();
+      EXPECT_TRUE(registry()->enabled_extensions().Contains(extension->id()));
+      EXPECT_TRUE(ExtensionPrefs::Get(profile())
+                      ->GetDisableReasons(extension->id())
+                      .empty());
+      registrar()->RemoveExtension(extension->id(),
+                                   UnloadedExtensionReason::UNINSTALL);
+    }
   }
 }
 

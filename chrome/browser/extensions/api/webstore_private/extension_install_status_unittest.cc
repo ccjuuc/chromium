@@ -10,6 +10,7 @@
 #include "base/json/values_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/gmock_callback_support.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -36,6 +37,7 @@
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_builder.h"
+#include "extensions/common/extension_features.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/permissions/permission_set.h"
 #include "extensions/strings/grit/extensions_strings.h"
@@ -776,10 +778,25 @@ TEST_F(ExtensionInstallStatusTest, ExtensionCorrupted) {
 }
 
 TEST_F(ExtensionInstallStatusTest, UnsupportedManifestVersion) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      extensions_features::kExtensionManifestV2Support);
   const ExtensionId kTestId(32, 'a');
   // Manifest V2 extensions are not installable.
   EXPECT_EQ(
       ExtensionInstallStatus::kDeprecatedManifestVersion,
+      GetInstallStatusSynchronously(kTestId, profile(), base::Version(),
+                                    Manifest::Type::kExtension, PermissionSet(),
+                                    /*manifest_version=*/2));
+}
+
+TEST_F(ExtensionInstallStatusTest, SupportedManifestV2IsInstallable) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      extensions_features::kExtensionManifestV2Support);
+  const ExtensionId kTestId(32, 'a');
+  EXPECT_EQ(
+      ExtensionInstallStatus::kInstallable,
       GetInstallStatusSynchronously(kTestId, profile(), base::Version(),
                                     Manifest::Type::kExtension, PermissionSet(),
                                     /*manifest_version=*/2));

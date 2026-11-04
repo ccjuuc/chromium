@@ -174,6 +174,10 @@ BASE_DECLARE_FEATURE(kExtensionLocalizationGuid);
 // A replacement key for declaring icons, in addition to supporting dark mode.
 BASE_DECLARE_FEATURE(kExtensionIconVariants);
 
+// Allows Manifest V2 extensions to be installed and enabled, and suppresses
+// their unpacked-extension deprecation warning.
+BASE_DECLARE_FEATURE(kExtensionManifestV2Support);
+
 // If enabled, allows an extension to specify protocol_handlers keys in the
 // Manifest, registering a group of custom handlers so that the browser can
 // handle navigation requests to URLs with unknown schemes. This feature

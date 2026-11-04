@@ -16,6 +16,7 @@
 #include "base/base64.h"
 #include "base/command_line.h"
 #include "base/containers/map_util.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/i18n/rtl.h"
 #include "base/json/json_writer.h"
@@ -32,6 +33,7 @@
 #include "content/public/common/url_constants.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/error_utils.h"
+#include "extensions/common/extension_features.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/file_util.h"
 #include "extensions/common/manifest.h"
@@ -97,10 +99,11 @@ bool IsManifestSupported(int manifest_version,
   // Supported versions are always safe.
   if (manifest_version >= kMinimumSupportedManifestVersion &&
       manifest_version <= kMaximumSupportedManifestVersion) {
-    // Emit a warning for unpacked extensions on Manifest V2 warning that
-    // MV2 is deprecated.
+    // Warn about unpacked Manifest V2 extensions only when support is disabled.
     if (type == Manifest::Type::kExtension && manifest_version == 2 &&
-        Manifest::IsUnpackedLocation(location)) {
+        Manifest::IsUnpackedLocation(location) &&
+        !base::FeatureList::IsEnabled(
+            extensions_features::kExtensionManifestV2Support)) {
       *warning = errors::kManifestV2IsDeprecatedWarning;
     }
     return true;

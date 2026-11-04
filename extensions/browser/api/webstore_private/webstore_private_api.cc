@@ -17,6 +17,7 @@
 #include "base/base64.h"
 #include "base/callback_list.h"
 #include "base/check_is_test.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/values_util.h"
@@ -1577,9 +1578,13 @@ WebstorePrivateGetMV2DeprecationStatusFunction::
 
 ExtensionFunction::ResponseAction
 WebstorePrivateGetMV2DeprecationStatusFunction::Run() {
+  const auto status =
+      base::FeatureList::IsEnabled(
+          extensions_features::kExtensionManifestV2Support)
+          ? api::webstore_private::MV2DeprecationStatus::kInactive
+          : api::webstore_private::MV2DeprecationStatus::kHardDisable;
   return RespondNow(ArgumentList(
-      api::webstore_private::GetMV2DeprecationStatus::Results::Create(
-          api::webstore_private::MV2DeprecationStatus::kHardDisable)));
+      api::webstore_private::GetMV2DeprecationStatus::Results::Create(status)));
 }
 
 #if !BUILDFLAG(IS_ANDROID)

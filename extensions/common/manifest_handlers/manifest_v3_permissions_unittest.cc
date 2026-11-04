@@ -5,7 +5,6 @@
 #include <memory>
 #include <utility>
 
-#include "extensions/common/manifest_constants.h"
 #include "extensions/common/manifest_test.h"
 #include "extensions/common/mojom/manifest.mojom-shared.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -56,12 +55,10 @@ TEST_F(ManifestV3PermissionsTest, DisallowNaClTest) {
     ASSERT_TRUE(extension);
   }
   {
-    // Manifest V2 extension should produce warning about manifest version.
+    // Supported Manifest V2 extensions only warn about the unrecognized key.
     scoped_refptr<Extension> extension(
-        LoadAndExpectWarnings("nacl_module_v2.json",
-                              {manifest_errors::kManifestV2IsDeprecatedWarning,
-                               kUnrecognizedKeyNaClModules},
-                              ManifestLocation::kUnpacked));
+        LoadAndExpectWarning("nacl_module_v2.json", kUnrecognizedKeyNaClModules,
+                             ManifestLocation::kUnpacked));
     ASSERT_TRUE(extension);
   }
 }

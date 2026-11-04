@@ -5,6 +5,7 @@
 #include "extensions/browser/manifest_v2_handler.h"
 
 #include "base/auto_reset.h"
+#include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/one_shot_event.h"
 #include "base/strings/stringprintf.h"
@@ -24,6 +25,7 @@
 #include "extensions/browser/pref_types.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_features.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -114,7 +116,8 @@ bool ShouldDisableLegacyExtensions() {
     return false;
   }
 
-  return true;
+  return !base::FeatureList::IsEnabled(
+      extensions_features::kExtensionManifestV2Support);
 }
 
 }  // namespace

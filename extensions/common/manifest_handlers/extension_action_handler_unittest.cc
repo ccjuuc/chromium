@@ -340,11 +340,7 @@ TEST_P(ExtensionActionManifestTest, ValidDefaultPopup) {
       valid_popup_file_name, manifest_version, &test_extension_dir, &error);
   ASSERT_TRUE(test_extension) << error;
 
-  std::vector<InstallWarning> warnings;
-  if (manifest_version == 2) {
-    warnings.emplace_back(manifest_errors::kManifestV2IsDeprecatedWarning);
-  }
-  EXPECT_EQ(warnings, test_extension->install_warnings());
+  EXPECT_TRUE(test_extension->install_warnings().empty());
 
   const ActionInfo* action_info =
       GetActionInfoOfType(*test_extension, GetParam());
@@ -363,11 +359,7 @@ TEST_P(ExtensionActionManifestTest, EmptyDefaultPopup) {
       empty_popup_file_name, manifest_version, &test_extension_dir, &error);
   ASSERT_TRUE(test_extension) << error;
 
-  std::vector<InstallWarning> warnings;
-  if (manifest_version == 2) {
-    warnings.emplace_back(manifest_errors::kManifestV2IsDeprecatedWarning);
-  }
-  EXPECT_EQ(warnings, test_extension->install_warnings());
+  EXPECT_TRUE(test_extension->install_warnings().empty());
 
   const ActionInfo* action_info =
       GetActionInfoOfType(*test_extension, GetParam());
@@ -401,9 +393,6 @@ TEST_P(ExtensionActionManifestTest, NonexistentDefaultPopup) {
   ASSERT_TRUE(test_extension) << error;
 
   std::vector<InstallWarning> warnings;
-  if (manifest_version == 2) {
-    warnings.emplace_back(manifest_errors::kManifestV2IsDeprecatedWarning);
-  }
   warnings.emplace_back(manifest_errors::kNonexistentDefaultPopup);
   EXPECT_EQ(warnings, test_extension->install_warnings());
 

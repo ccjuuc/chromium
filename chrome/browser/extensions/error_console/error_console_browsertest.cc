@@ -12,6 +12,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/scoped_test_mv2_enabler.h"
@@ -26,6 +27,7 @@
 #include "extensions/common/constants.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_features.h"
 #include "extensions/common/extension_urls.h"
 #include "extensions/common/manifest_constants.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -141,7 +143,11 @@ void CheckDeprecatedManifestVersionError(const ExtensionError* error,
 
 class ErrorConsoleBrowserTest : public ExtensionBrowserTest {
  public:
-  ErrorConsoleBrowserTest() : error_console_(nullptr) {}
+  ErrorConsoleBrowserTest() : error_console_(nullptr) {
+    // Keep exercising deprecation warnings alongside runtime errors.
+    feature_list_.InitAndDisableFeature(
+        extensions_features::kExtensionManifestV2Support);
+  }
   ~ErrorConsoleBrowserTest() override = default;
 
  protected:
@@ -294,6 +300,8 @@ class ErrorConsoleBrowserTest : public ExtensionBrowserTest {
   ErrorConsole* error_console() { return error_console_; }
 
  private:
+  base::test::ScopedFeatureList feature_list_;
+
   // The URL used in testing for simple page navigations.
   GURL test_url_;
 

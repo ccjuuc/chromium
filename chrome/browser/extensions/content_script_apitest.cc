@@ -58,7 +58,6 @@
 #include "extensions/common/api/content_scripts.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_features.h"
-#include "extensions/common/manifest_constants.h"
 #include "extensions/common/manifest_handlers/externally_connectable.h"
 #include "extensions/common/switches.h"
 #include "extensions/common/utils/content_script_utils.h"
@@ -1410,8 +1409,6 @@ IN_PROC_BROWSER_TEST_P(ContentScriptApiTestWithContextType, Messaging) {
       {.ignore_manifest_warnings = true});
   ASSERT_TRUE(extension);
   std::vector<InstallWarning> expected_warnings;
-  expected_warnings.emplace_back(
-      manifest_errors::kManifestV2IsDeprecatedWarning);
   expected_warnings.emplace_back(
       externally_connectable_errors::kErrorNothingSpecified);
   EXPECT_EQ(extension->install_warnings(), expected_warnings);

@@ -227,11 +227,28 @@ TEST(ExtensionTest, ExtensionManifestVersions) {
   EXPECT_TRUE(RunManifestVersionSuccess(get_manifest(4), kType, 4,
                                         GetVersionTooHighWarning(3, 4)));
 
-  // Loading an unpacked MV2 extension should emit a warning.
-  EXPECT_TRUE(RunManifestVersionSuccess(
-      get_manifest(2), kType, 2,
-      manifest_errors::kManifestV2IsDeprecatedWarning, Extension::NO_FLAGS,
-      ManifestLocation::kUnpacked));
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(
+        extensions_features::kExtensionManifestV2Support);
+    // Supported MV2 extensions should load without a deprecation warning.
+    EXPECT_TRUE(RunManifestVersionSuccess(get_manifest(2), kType, 2, "",
+                                          Extension::NO_FLAGS,
+                                          ManifestLocation::kUnpacked));
+  }
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndDisableFeature(
+        extensions_features::kExtensionManifestV2Support);
+    // Preserve the warning when MV2 support is disabled.
+    EXPECT_TRUE(RunManifestVersionSuccess(
+        get_manifest(2), kType, 2,
+        manifest_errors::kManifestV2IsDeprecatedWarning, Extension::NO_FLAGS,
+        ManifestLocation::kUnpacked));
+    EXPECT_TRUE(RunManifestVersionSuccess(get_manifest(3), kType, 3, "",
+                                          Extension::NO_FLAGS,
+                                          ManifestLocation::kUnpacked));
+  }
 
   // Manifest v1 is deprecated, and should not load.
   EXPECT_TRUE(RunManifestVersionFailure(get_manifest(1)));

@@ -13,6 +13,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "base/version_info/version_info.h"
@@ -43,6 +44,7 @@
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_builder.h"
+#include "extensions/common/extension_features.h"
 #include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -884,6 +886,9 @@ using WebstorePrivateManifestV2DeprecationUnitTest = WebstorePrivateApiTestBase;
 // Tests the behavior of the webstorePrivate.getMV2DeprecationStatus() function.
 TEST_F(WebstorePrivateManifestV2DeprecationUnitTest,
        TestGetMV2DeprecationStatus) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      extensions_features::kExtensionManifestV2Support);
   auto function =
       base::MakeRefCounted<WebstorePrivateGetMV2DeprecationStatusFunction>();
   std::optional<base::Value> response =
@@ -891,6 +896,20 @@ TEST_F(WebstorePrivateManifestV2DeprecationUnitTest,
           function.get(), /*args*/ "[]", profile());
   ASSERT_TRUE(response);
   EXPECT_EQ("hard_disable", *response);
+}
+
+TEST_F(WebstorePrivateManifestV2DeprecationUnitTest,
+       TestGetMV2DeprecationStatusWithSupport) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      extensions_features::kExtensionManifestV2Support);
+  auto function =
+      base::MakeRefCounted<WebstorePrivateGetMV2DeprecationStatusFunction>();
+  std::optional<base::Value> response =
+      api_test_utils::RunFunctionAndReturnSingleResult(
+          function.get(), /*args*/ "[]", profile());
+  ASSERT_TRUE(response);
+  EXPECT_EQ("inactive", *response);
 }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
