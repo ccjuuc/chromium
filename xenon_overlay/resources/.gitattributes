@@ -1,2 +1,12 @@
 # Public host configuration stays separate from locally generated app releases.
 *.asar-public-key.pem text eol=lf
+
+# Preserve vendor payload bytes, including unpacked scripts and license text.
+drawio/** -text !eol
+marktext/** -text !eol
+motrix/** -text !eol
+
+# Keep large, unchanged application archives in Git LFS.
+drawio/resources/app.asar filter=lfs diff=lfs merge=lfs -text !eol
+marktext/resources/app.asar filter=lfs diff=lfs merge=lfs -text !eol
+motrix/resources/app.asar filter=lfs diff=lfs merge=lfs -text !eol

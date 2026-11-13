@@ -1,0 +1,4 @@
+owner: marktext
+repo: marktext
+provider: github
+updaterCacheDirName: marktext-updater

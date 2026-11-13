@@ -1,0 +1,617 @@
+{
+  "schema_version": 1,
+  "application": "marktext",
+  "version": "0.23.0",
+  "artifact": {
+    "kind": "xenon-hosted-electron-payload",
+    "platform": "win32",
+    "architecture": "x64",
+    "directory": "marktext",
+    "standalone_electron": false
+  },
+  "upstream": {
+    "project_url": "https://github.com/marktext/marktext",
+    "archive_name": "marktext-win-x64-0.23.0.zip",
+    "archive_url": "https://github.com/marktext/marktext/releases/download/v0.23.0/marktext-win-x64-0.23.0.zip",
+    "archive_bytes": 181482586,
+    "archive_sha256": "10ff69f91303f1009e7bdb1f490a4b30d716804ebc95b9e98c12b0c84cffa16f",
+    "release_file_count": 108,
+    "release_bytes": 512302707
+  },
+  "projection": {
+    "kind": "explicit-versioned-file-list",
+    "review": "../docs/Electron示例应用宿主裁剪评估.md",
+    "review_date": "2026-11-12",
+    "scope": "Applies only to this audited upstream Windows x64 archive. This is not a generic filename removal policy for other Electron applications or versions.",
+    "retained_bytes_unchanged": true,
+    "asar_repacked": false,
+    "retained_file_count": 79,
+    "retained_bytes": 207208643,
+    "removed_file_count": 29,
+    "removed_bytes": 305094064,
+    "retained_directories": [
+      "resources",
+      "resources/app.asar.unpacked",
+      "resources/app.asar.unpacked/node_modules",
+      "resources/app.asar.unpacked/node_modules/@vscode",
+      "resources/app.asar.unpacked/node_modules/@vscode/ripgrep-win32-x64",
+      "resources/app.asar.unpacked/node_modules/@vscode/ripgrep-win32-x64/bin",
+      "resources/app.asar.unpacked/node_modules/ced",
+      "resources/app.asar.unpacked/node_modules/ced/bin",
+      "resources/app.asar.unpacked/node_modules/ced/bin/win32-x64-146",
+      "resources/app.asar.unpacked/node_modules/ced/build",
+      "resources/app.asar.unpacked/node_modules/ced/build/Release",
+      "resources/app.asar.unpacked/node_modules/ced/build/vendor",
+      "resources/app.asar.unpacked/node_modules/ced/build/vendor/compact_enc_det",
+      "resources/app.asar.unpacked/node_modules/ced/build/vendor/compact_enc_det/Release",
+      "resources/app.asar.unpacked/node_modules/ced/build/vendor/compact_enc_det/Release/obj",
+      "resources/app.asar.unpacked/node_modules/ced/build/vendor/compact_enc_det/Release/obj/compact_enc_det",
+      "resources/app.asar.unpacked/node_modules/ced/build/vendor/compact_enc_det/Release/obj/compact_enc_det/compact_enc_det.tlog",
+      "resources/app.asar.unpacked/node_modules/font-list",
+      "resources/app.asar.unpacked/node_modules/font-list/libs",
+      "resources/app.asar.unpacked/node_modules/font-list/libs/darwin",
+      "resources/app.asar.unpacked/node_modules/font-list/libs/linux",
+      "resources/app.asar.unpacked/node_modules/font-list/libs/win32",
+      "resources/app.asar.unpacked/node_modules/keytar",
+      "resources/app.asar.unpacked/node_modules/keytar/build",
+      "resources/app.asar.unpacked/node_modules/keytar/build/Release",
+      "resources/app.asar.unpacked/node_modules/keytar/lib",
+      "resources/app.asar.unpacked/node_modules/native-keymap",
+      "resources/app.asar.unpacked/node_modules/native-keymap/bin",
+      "resources/app.asar.unpacked/node_modules/native-keymap/bin/win32-x64-146",
+      "resources/app.asar.unpacked/node_modules/native-keymap/build",
+      "resources/app.asar.unpacked/node_modules/native-keymap/build/Release",
+      "resources/app.asar.unpacked/node_modules/native-keymap/deps",
+      "resources/app.asar.unpacked/node_modules/native-keymap/deps/chromium",
+      "resources/app.asar.unpacked/node_modules/native-keymap/deps/chromium/x",
+      "resources/app.asar.unpacked/node_modules/native-keymap/src",
+      "resources/icons",
+      "resources/static",
+      "resources/static/locales"
+    ],
+    "retained_files": [
+      {
+        "path": "LICENSE.electron.txt",
+        "bytes": 1096,
+        "sha256": "5154e165bd6c2cc0cfbcd8916498c7abab0497923bafcd5cb07673fe8480087d"
+      },
+      {
+        "path": "LICENSES.chromium.html",
+        "bytes": 20367095,
+        "sha256": "e3c8a6093358521d4512d68945e16338755e687619196e63948d46c9267537b6"
+      },
+      {
+        "path": "resources/app-update.yml",
+        "bytes": 86,
+        "sha256": "6c8f6dccaed63b44eadc4374f52438c613196928209bba1f345aaed984ff4eee"
+      },
+      {
+        "path": "resources/app.asar",
+        "bytes": 178635027,
+        "sha256": "8b5ff1efe06d907722899bffafd96189156672b336ce303d1d3741c023bef053"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/@vscode/ripgrep-win32-x64/LICENSE",
+        "bytes": 1113,
+        "sha256": "ccf06b70760761ae1437395117bcf911501e3dc85385d84c7eba20d5dfab55dd"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/@vscode/ripgrep-win32-x64/bin/rg.exe",
+        "bytes": 5429760,
+        "sha256": "f9dde63498b3193f098355dbec97af99dc4f6b8fa0df5ed04114a03012c042cb"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/@vscode/ripgrep-win32-x64/package.json",
+        "bytes": 341,
+        "sha256": "30ace0312c036e473902c568312c1ff1190f0e9f40640d95e6695b2fad893301"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/ced/LICENSE",
+        "bytes": 12257,
+        "sha256": "7530fb623e13c2572893fa69ca0891239d7308e3be68e14cfec23629c6640d42"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/ced/bin/win32-x64-146/ced.node",
+        "bytes": 371200,
+        "sha256": "eca2bc0c2520dd3e22295ce1041758ad22ad6b9d8cc2e13109666df70317d1a3"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/ced/build/Release/ced.node",
+        "bytes": 371200,
+        "sha256": "eca2bc0c2520dd3e22295ce1041758ad22ad6b9d8cc2e13109666df70317d1a3"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/ced/build/vendor/compact_enc_det/Release/obj/compact_enc_det/compact_enc_det.lib.recipe",
+        "bytes": 152,
+        "sha256": "e68192ea7180a53ff41b201936b074c7189f62533bd0b6a3087354b3df6ed73c"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/ced/build/vendor/compact_enc_det/Release/obj/compact_enc_det/compact_enc_det.tlog/CL.command.1.tlog",
+        "bytes": 17182,
+        "sha256": "f83a518c9a29521b141722c461fd73c22a7dd6f866501d64cdff2cd5b4e9beaf"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/ced/build/vendor/compact_enc_det/Release/obj/compact_enc_det/compact_enc_det.tlog/CL.read.1.tlog",
+        "bytes": 83008,
+        "sha256": "6ecd97036bb27479b5233248f2fe930ee320f8ef9344bc411bd320f316bc94ef"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/ced/build/vendor/compact_enc_det/Release/obj/compact_enc_det/compact_enc_det.tlog/CL.write.1.tlog",
+        "bytes": 3026,
+        "sha256": "00d785022b88630fb3f5782d9223a96fa517eca0afd50fa79705556b2ea96627"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/ced/build/vendor/compact_enc_det/Release/obj/compact_enc_det/compact_enc_det.tlog/Cl.items.tlog",
+        "bytes": 1502,
+        "sha256": "1171457417549c25133c51b14e4ede0718f6c7b61af10e43a135be25fd50a141"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/ced/build/vendor/compact_enc_det/Release/obj/compact_enc_det/compact_enc_det.tlog/Lib-link.read.1.tlog",
+        "bytes": 3722,
+        "sha256": "0f83dff3e1655c9006107164d76aa180612588c2b509f957ae1abbd7120c78dc"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/ced/build/vendor/compact_enc_det/Release/obj/compact_enc_det/compact_enc_det.tlog/Lib-link.write.1.tlog",
+        "bytes": 1986,
+        "sha256": "d9517bab0bb8d62b55afcc6eacf8f419512813daaace635b5fb3b69848f88204"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/ced/build/vendor/compact_enc_det/Release/obj/compact_enc_det/compact_enc_det.tlog/Lib.command.1.tlog",
+        "bytes": 2886,
+        "sha256": "6057cc87e3dbc407742a65c2f290db4c25301a7e2f23a93cffa1a2a3d64edf1e"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/ced/build/vendor/compact_enc_det/Release/obj/compact_enc_det/compact_enc_det.tlog/compact_enc_det.lastbuildstate",
+        "bytes": 355,
+        "sha256": "7cbba0b0ded64f251383a3fe774c04871951689940194595c459c498603de797"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/ced/ced.cpp",
+        "bytes": 1832,
+        "sha256": "6a81ac4a167cf40fe68991a0a86f9eeafe7ca203de4a42bf986ac12709491c8a"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/ced/index.js",
+        "bytes": 211,
+        "sha256": "5baf03699892bc162d18b86c00a0eadbfff54c675f4e14b899dcf44c26f43e24"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/ced/package.json",
+        "bytes": 546,
+        "sha256": "aabe391301b14da8ccdb26328248861ccf23a01b1a393bc2a5830ee0ebf0de19"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/font-list/LICENSE",
+        "bytes": 1061,
+        "sha256": "dc30c81d5b085c711e1f97f47c8446da285b67b1415bbd1f4d3231a1a96ea29d"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/font-list/index.d.cts",
+        "bytes": 561,
+        "sha256": "049c93ee049e4c5bd54d3d3c097abc621419bb6793a311a86c331f0f1590c30b"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/font-list/index.d.mts",
+        "bytes": 591,
+        "sha256": "3899f9a15102c4031059dbd4860a6681b4c4730554ae267677fb946fd415c3a6"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/font-list/index.js",
+        "bytes": 202,
+        "sha256": "fdbc4daf79e02182aff068ebf90fd7b6ce79ac1aa79f1827fa183b648438c5e6"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/font-list/index.mjs",
+        "bytes": 376,
+        "sha256": "7bb3e7a34fa54d815ba5f5c5f9d82077255036a91edc41809e94518a4c5f6885"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/font-list/libs/core.js",
+        "bytes": 2422,
+        "sha256": "c098c3559c1dc0d872ec7092692ead9f788ac0fa1412306799e230f14d049b6f"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/font-list/libs/darwin/fontlist",
+        "bytes": 85544,
+        "sha256": "15cb6f99034a81b347aa821945c1d15e311bbfc807907ba9a27bd797bd3cb8e9"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/font-list/libs/darwin/fontlist.m",
+        "bytes": 5904,
+        "sha256": "bb9e96876265cb9b84d4efb68e98ccd5e2853abb85b0877489cc5c707531e6a8"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/font-list/libs/darwin/index.js",
+        "bytes": 3302,
+        "sha256": "3da31ea29b1d3fe3c3ea4044edf5e17e5d190415bbbfac5ca760a68c0dc32a50"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/font-list/libs/linux/index.js",
+        "bytes": 4089,
+        "sha256": "586848496f193ead7fb5a6bc7c587d0a0f052e96f35c59ab854118bb98da3979"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/font-list/libs/standardize.js",
+        "bytes": 671,
+        "sha256": "d882ba2f54459bd15373857fc5f4af38fb17604feae5f4d7635f86881337a119"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/font-list/libs/win32/fonts.vbs",
+        "bytes": 663,
+        "sha256": "a292b00efd2ad22a57900886065eb2dba008f526c3b3b161d44f7c620667241d"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/font-list/libs/win32/getByPowerShell.js",
+        "bytes": 1317,
+        "sha256": "dd40e6272b46cfd1d538ea6110e2aae8678e42193418de2266fd749edde0f4d9"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/font-list/libs/win32/getByVBS.js",
+        "bytes": 1740,
+        "sha256": "6921d2d58ec908c4bafda5b256c4faf0e90124a716fd53eb36b4480a86665036"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/font-list/libs/win32/getDetailedFontsByPowerShell.js",
+        "bytes": 5583,
+        "sha256": "70924b1ecfe454da17e7928bd3aa726967ce7b4911a6c8571d72a246fe6bcb83"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/font-list/libs/win32/index.js",
+        "bytes": 1825,
+        "sha256": "6cd6219684e8f25a817847e303b52ca59b68bb911fef25fc757386c829f3d984"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/font-list/package.json",
+        "bytes": 670,
+        "sha256": "d1b5eb872d9928f2ba4c07f394f4174b5847bdb3114ca9a9279f9f1bd11e915f"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/keytar/LICENSE.md",
+        "bytes": 1055,
+        "sha256": "224fcc506ef97afd088b487edab374abcad7e3d4de55fb8cce4f04328397213f"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/keytar/build/Release/keytar.node",
+        "bytes": 707584,
+        "sha256": "90e35de89ab5e5f9290e4ff1bbadcf221a82b2aa0d9b922187dc980adff3c831"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/keytar/lib/keytar.js",
+        "bytes": 1038,
+        "sha256": "e858194902d632e217b60b913829865749568fd43aee2d65bf7ffcefd7b1d6ae"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/keytar/package.json",
+        "bytes": 891,
+        "sha256": "01669e30d6ab8090eec8461ebbce8d65828e0e9b182021b603ad42e87820027c"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/native-keymap/License.txt",
+        "bytes": 1094,
+        "sha256": "31bec773a6a3d56327cdc6149027250e6730014ba46a0ad432e8e11914baae52"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/native-keymap/PoliCheckExclusions.xml",
+        "bytes": 733,
+        "sha256": "7f42c163d03659b5c8b2a7a571c35759520e9db090215e893328c2a0be8a6478"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/native-keymap/SECURITY.md",
+        "bytes": 2780,
+        "sha256": "81ed58e26769508df9a2f761dad55b52c6c9de62fff06195b2702fcb7a97e883"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/native-keymap/ThirdPartyNotices.txt",
+        "bytes": 2514,
+        "sha256": "fd50d26182cc2badb20bfe6a7a4f3b522efe440ea7b67aeacd51e762bc5fd71b"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/native-keymap/bin/win32-x64-146/native-keymap.node",
+        "bytes": 168448,
+        "sha256": "90b263a5336a45bb5778b8d368e8769338092b7aedd9a8e1408f00db72b3b718"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/native-keymap/build/Release/keymapping.node",
+        "bytes": 168448,
+        "sha256": "90b263a5336a45bb5778b8d368e8769338092b7aedd9a8e1408f00db72b3b718"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/native-keymap/deps/chromium/dom_code_data.inc",
+        "bytes": 36298,
+        "sha256": "c5d1825155d67badfd3f344e81988f323a656e2acc78dde237faeb830b707660"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/native-keymap/deps/chromium/keyboard_codes.h",
+        "bytes": 823,
+        "sha256": "73639ef2274cf7145c7c3b81a55b105d0fd6095e81b23192cf75157ef46f5fb7"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/native-keymap/deps/chromium/macros.h",
+        "bytes": 895,
+        "sha256": "260555d803979aa1d2e1d1213cb790ec34e0c560055c45403c7a9e6e6858e3a3"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/native-keymap/deps/chromium/x/keysym_to_unicode.h",
+        "bytes": 1034,
+        "sha256": "c06c0e3b6a850d5e5df6590c182c2212d291289ec59c5e8c03342a8279e44c40"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/native-keymap/index.js",
+        "bytes": 1896,
+        "sha256": "4e5aaf2b1661850fb01e90a72720c99ff8976c9c9304ee7cd84755ac43ed9299"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/native-keymap/package.json",
+        "bytes": 379,
+        "sha256": "4598e0dcfef60364cad4f3694f71de625c77b5d11223714db3d99e93649c1437"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/native-keymap/src/common.h",
+        "bytes": 5109,
+        "sha256": "2b6039af9b0e0574bf19f1c0d1f372d360cffb02046617416487cddb8c3dacb2"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/native-keymap/src/keyboard_mac.mm",
+        "bytes": 7970,
+        "sha256": "f814e7555fb0c16ad8aec37914e6eb4e6e32dce899fd9cdb601b4a699845f0a8"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/native-keymap/src/keymapping.h",
+        "bytes": 2240,
+        "sha256": "e942e42200819d1854aaace7e01b376315dcbbe70d6b0167224ece3c43cc11bf"
+      },
+      {
+        "path": "resources/app.asar.unpacked/node_modules/native-keymap/src/string_conversion.h",
+        "bytes": 625,
+        "sha256": "8d80b4e386777a6baf6de79e5936ace45623183221273285fdbfb0361db87c5d"
+      },
+      {
+        "path": "resources/icons/icon.ico",
+        "bytes": 47321,
+        "sha256": "66fbf4986a6f06ff17b0206a5e9f3eeb620bc5d5c4b831a6fb86cb8df5d714b0"
+      },
+      {
+        "path": "resources/icons/md.ico",
+        "bytes": 104936,
+        "sha256": "afdb3e0adb95c8c256ce49dbb7d4b01818fa00cd7464cec8ccecf0a7cc6b5d4d"
+      },
+      {
+        "path": "resources/static/icon.icns",
+        "bytes": 4768,
+        "sha256": "a4f7dffc685de4d3e2791cd50fc4d6fc8c5b885719ed0b86e6d3b5a0712c0577"
+      },
+      {
+        "path": "resources/static/icon.ico",
+        "bytes": 31435,
+        "sha256": "1977e101236ba5ac4a8c8a08cbd13c31247a3f6dc89c491ec130e71c5e72eb4e"
+      },
+      {
+        "path": "resources/static/icon.png",
+        "bytes": 30688,
+        "sha256": "5e58c5e8409df05888a0ecdd4cc9f1487f49eb7adb85bc8d63177cfd7c53732e"
+      },
+      {
+        "path": "resources/static/locales/de.min.json",
+        "bytes": 35200,
+        "sha256": "769094b81d074ecd4af22fca2d98c79d9dcfebdafcac6df6cf3979cabb2e9127"
+      },
+      {
+        "path": "resources/static/locales/en.min.json",
+        "bytes": 31306,
+        "sha256": "d8c400323a8bb3a948fee07b68be23215340e6178f8c7b0f65a16ef7387997f7"
+      },
+      {
+        "path": "resources/static/locales/es.min.json",
+        "bytes": 35399,
+        "sha256": "d81d2dd3facfb43d002a675c418cb5dd786e437bf21c82587ac1483c8c9bacd2"
+      },
+      {
+        "path": "resources/static/locales/fr.min.json",
+        "bytes": 36554,
+        "sha256": "299652b4f5034c6dd7f5c3bfbbdbd6e7f349deb2c9c0d5ee7432e19e7d6fcb14"
+      },
+      {
+        "path": "resources/static/locales/ja.min.json",
+        "bytes": 38573,
+        "sha256": "3bee45cf914146033c1624ce3ff235a015e196f26d2da31ece50cd30517f271d"
+      },
+      {
+        "path": "resources/static/locales/ko.min.json",
+        "bytes": 34368,
+        "sha256": "fc8f0f0e0508aca2a2f47b172a94321066ca51ac127c463c988294b7c3c51e61"
+      },
+      {
+        "path": "resources/static/locales/nl.min.json",
+        "bytes": 33223,
+        "sha256": "e076549269fd74d2e43989c22bc715455bfd6b7e4fd720eab2cffdf098f08aa7"
+      },
+      {
+        "path": "resources/static/locales/pt.min.json",
+        "bytes": 34724,
+        "sha256": "30245d711460ccaf36e14f8a55af9788b8bc9063c7c6ea1519271bd998baf343"
+      },
+      {
+        "path": "resources/static/locales/ru.min.json",
+        "bytes": 48590,
+        "sha256": "797d7fb18032287355871c9aff0f64f0b7438556d0f937b55b0236a96f44a761"
+      },
+      {
+        "path": "resources/static/locales/tr.min.json",
+        "bytes": 34908,
+        "sha256": "7a4c93b39f0f31edfd307b5bf28203978baddeaea122148c9c8def5ca1da2eaa"
+      },
+      {
+        "path": "resources/static/locales/zh-CN.min.json",
+        "bytes": 30841,
+        "sha256": "0eecf913f51cb6f8dc7d20f54ef5af36f0dade1a17f636d1dc7b402639e1e88b"
+      },
+      {
+        "path": "resources/static/locales/zh-TW.min.json",
+        "bytes": 30963,
+        "sha256": "08629907409391ec58d8cc5cf4ee8a797cd44ddd70b3579a9b2150d29ae85f29"
+      },
+      {
+        "path": "resources/static/logo-96px.png",
+        "bytes": 4768,
+        "sha256": "a4f7dffc685de4d3e2791cd50fc4d6fc8c5b885719ed0b86e6d3b5a0712c0577"
+      },
+      {
+        "path": "resources/static/logo-small.png",
+        "bytes": 23629,
+        "sha256": "53e9fb3cfe5efb2ca0e77ad7dcbf56835373ae797d36a87479f207ed8a8d90d4"
+      },
+      {
+        "path": "resources/static/preference.json",
+        "bytes": 2491,
+        "sha256": "09f13534ddece48db8533536c21f89c814e39c12c6aa2e8695b7fcb733dce716"
+      }
+    ],
+    "removed_files": [
+      {
+        "path": "chrome_100_percent.pak",
+        "bytes": 119889,
+        "sha256": "15a5bcb49a5c02d6a4e736e8dfa11dabb0bac0589641a4e25f0c06472ccaae6d"
+      },
+      {
+        "path": "chrome_200_percent.pak",
+        "bytes": 197073,
+        "sha256": "b7acfb068fa681f4ecb8f782bd4e3926590076c61fd0de3de4a12dde227cf52b"
+      },
+      {
+        "path": "d3dcompiler_47.dll",
+        "bytes": 4741488,
+        "sha256": "a05f99734f7c4822fefc12b367af21fd0976ed6608752fb1e1e80b6ece7ecbbb"
+      },
+      {
+        "path": "dxcompiler.dll",
+        "bytes": 25722880,
+        "sha256": "9feb01af5460d69042b715dd2dc8d23faa3a409b07b811e07b7195c044aac1c7"
+      },
+      {
+        "path": "dxil.dll",
+        "bytes": 1509760,
+        "sha256": "77e039c905030a641e53658a008b74e90635a5ea9b6b79eabd0f2003bdfca59a"
+      },
+      {
+        "path": "ffmpeg.dll",
+        "bytes": 3046912,
+        "sha256": "568b4a799381c45e34f7ecdc73d7ffc4340688153766f5e6d15b7d99ca8a47ee"
+      },
+      {
+        "path": "icudtl.dat",
+        "bytes": 10876464,
+        "sha256": "c5da2fc389d1bb0ecb13fe22a8e069b7abc491f8aa5d16eb65d4ff32c85a46b6"
+      },
+      {
+        "path": "libEGL.dll",
+        "bytes": 507904,
+        "sha256": "6f7c54b18fd4db3bf1b6ecdb0a013c557fef8b69d3ddc58c1413015830833436"
+      },
+      {
+        "path": "libGLESv2.dll",
+        "bytes": 8106496,
+        "sha256": "4edc26548b5d22ff932257ff59e468b9119d6f4c691fa4e1683d94b25d5b46ba"
+      },
+      {
+        "path": "locales/de.pak",
+        "bytes": 700770,
+        "sha256": "7fb0ec938ace5ddc1d094c7877facb94ed33758652d0f4262e2fb1fd2bd34c8f"
+      },
+      {
+        "path": "locales/en-US.pak",
+        "bytes": 571518,
+        "sha256": "bce3ec06227dba2273c4ff12482cba37b709cc8bf5fd29c4380f9a07b92bf821"
+      },
+      {
+        "path": "locales/es.pak",
+        "bytes": 686798,
+        "sha256": "cdc1127ed91118648d10a2f3ca71bf1c26ba99ab134426de3f1d1058ca2eccf9"
+      },
+      {
+        "path": "locales/fr.pak",
+        "bytes": 746462,
+        "sha256": "83ff7dcb48d70e5d3d4880eb3aaa3abebbde6b84e8524fde415701a342946cf0"
+      },
+      {
+        "path": "locales/ja.pak",
+        "bytes": 824124,
+        "sha256": "423b2562b1ed7c5af8fc3ecd495af1d2437e70d27bc6fdde2d5eec6608ae7151"
+      },
+      {
+        "path": "locales/ko.pak",
+        "bytes": 701209,
+        "sha256": "471d660f4099f066ab5cb3b262932645cda59f7e47731ec9ca73381ca49398e3"
+      },
+      {
+        "path": "locales/nl.pak",
+        "bytes": 649224,
+        "sha256": "756cb19043f21eefa77f64d274d950412ef7b0a7d3012da7f12f6821c6eb4c67"
+      },
+      {
+        "path": "locales/pt-BR.pak",
+        "bytes": 680477,
+        "sha256": "38fee1950ec36b95160aee6a30e76653196afefad085274a77d47746a5255db1"
+      },
+      {
+        "path": "locales/pt-PT.pak",
+        "bytes": 684179,
+        "sha256": "8ef7b3105657e21db66cc07a41cb06addb859c788e0f038797c5d08cbef29eb8"
+      },
+      {
+        "path": "locales/ru.pak",
+        "bytes": 1177875,
+        "sha256": "03bd75e603d68c3a29a55f5887bc6d0b921f4365e266f25d579de8810953e823"
+      },
+      {
+        "path": "locales/tr.pak",
+        "bytes": 679647,
+        "sha256": "e427e99465f1fb5e6628868f550d845db79379ed4cd58994d2e5ea3b1881ee6b"
+      },
+      {
+        "path": "locales/zh-CN.pak",
+        "bytes": 577808,
+        "sha256": "157222d970a2cf1d51a63860bffb6d71f0a6161472a6f3eca3b08fe681ef075c"
+      },
+      {
+        "path": "locales/zh-TW.pak",
+        "bytes": 570087,
+        "sha256": "37d183b679fe4a5a0a204ac3b8e5f3e0110e99a784ed0e20ea2eced574142b8f"
+      },
+      {
+        "path": "marktext.exe",
+        "bytes": 226508288,
+        "sha256": "44a60d509c3981d9b147da68babeedc29716cc1dbd94138eeb390369bbd77e80"
+      },
+      {
+        "path": "resources.pak",
+        "bytes": 6873130,
+        "sha256": "74c4be8feca65976312f9ddd6ed8f06b669f6a551c91c9b67f9dc76d84e7e97b"
+      },
+      {
+        "path": "snapshot_blob.bin",
+        "bytes": 346432,
+        "sha256": "df9a17d5d9929ec6eff408acb080ecd0f2a3a6f4b093a760ef962ec47ae91946"
+      },
+      {
+        "path": "v8_context_snapshot.bin",
+        "bytes": 721176,
+        "sha256": "a04efc1404d85595fb2c9c00268f6d49aee41cb63897ecb9ce5408a68dbb041f"
+      },
+      {
+        "path": "vk_swiftshader.dll",
+        "bytes": 5611520,
+        "sha256": "6be6d3b872a55209e842aae41584d409db3596c72911356fddffc405c3754887"
+      },
+      {
+        "path": "vk_swiftshader_icd.json",
+        "bytes": 106,
+        "sha256": "32d83ff113fef532a9f97e0d2831f8656628ab1c99e9060f0332b1532839afd9"
+      },
+      {
+        "path": "vulkan-1.dll",
+        "bytes": 954368,
+        "sha256": "1c01a7dc24b5b6b9cb88026adbdf5e99551e091fbdd9d552e6d472d2692a6aa5"
+      }
+    ]
+  }
+}

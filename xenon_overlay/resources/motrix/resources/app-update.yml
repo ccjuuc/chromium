@@ -1,0 +1,3 @@
+provider: generic
+url: https://dl.motrix.app/releases/
+updaterCacheDirName: motrix-turbo-updater

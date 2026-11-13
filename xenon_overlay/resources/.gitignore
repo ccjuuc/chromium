@@ -3,3 +3,12 @@
 # See ../docs/电子应用目录接入.md for the build and import workflow.
 /thunder_2025/
 /xenon_player/
+
+# Public hosted application payloads (drawio/marktext/motrix) are tracked.
+# Their adjacent release manifests record upstream and retained file hashes.
+!/drawio/
+!/drawio/**
+!/marktext/
+!/marktext/**
+!/motrix/
+!/motrix/**
