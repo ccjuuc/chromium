@@ -4,6 +4,14 @@
 
 import("//testing/test.gni")
 
+source_set("async_keyboard_event_queue") {
+  sources = [
+    "xenon_async_keyboard_event_queue.cc",
+    "xenon_async_keyboard_event_queue.h",
+  ]
+  public_deps = [ "//base" ]
+}
+
 source_set("privileged_schemes") {
   sources = [
     "xenon_app_descriptor_paths.cc",
@@ -28,6 +36,29 @@ source_set("runtime_platform") {
   sources = [ "xenon_runtime_platform.h" ]
 }
 
+source_set("renderer_command_line") {
+  sources = [
+    "xenon_renderer_command_line.cc",
+    "xenon_renderer_command_line.h",
+  ]
+  public_deps = [
+    "//base",
+    "//url",
+  ]
+}
+
+source_set("crash_reporter_annotations") {
+  sources = [
+    "xenon_crash_reporter_annotations.cc",
+    "xenon_crash_reporter_annotations.h",
+  ]
+  public_deps = [
+    "//base",
+    "//xenon_overlay/public/mojom",
+  ]
+  deps = [ "//components/crash/core/common:crash_key" ]
+}
+
 source_set("value_codec") {
   sources = [
     "xenon_ipc_value_codec.cc",
@@ -40,4 +71,41 @@ source_set("value_codec") {
     "//base",
     "//v8",
   ]
+}
+
+source_set("message_port_codec") {
+  sources = [
+    "xenon_message_port_codec.cc",
+    "xenon_message_port_codec.h",
+  ]
+  public_deps = [
+    "//base",
+    "//content/public/common",
+    "//third_party/blink/public/common",
+    "//v8",
+  ]
+}
+
+source_set("crypto_primitives") {
+  sources = [
+    "xenon_crypto_primitives.cc",
+    "xenon_crypto_primitives.h",
+    "xenon_x509_certificate.cc",
+    "xenon_x509_certificate.h",
+  ]
+  public_deps = [ "//v8" ]
+  deps = [
+    "//base",
+    "//crypto",
+    "//gin",
+    "//third_party/boringssl",
+  ]
+}
+
+source_set("v8_statistics") {
+  sources = [
+    "xenon_v8_statistics.cc",
+    "xenon_v8_statistics.h",
+  ]
+  public_deps = [ "//v8" ]
 }

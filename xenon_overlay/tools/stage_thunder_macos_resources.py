@@ -241,6 +241,10 @@ def inspect_source(source):
             'executable' in config or config.get('main') != 'out.asar/main.js'):
         raise ValueError('Expected the exported resource descriptor for ./Thunder.app')
     config['application'] = HOST_APPLICATION
+    # Older exported resource bundles predate the explicit compatibility
+    # policy. Preserve this existing integration's files when staging them;
+    # the generic runtime itself has no application-name exceptions.
+    config.setdefault('userDataPolicy', 'legacy-host')
 
     inputs = [descriptor, bundle]
     for directory, directories, files in os.walk(bundle, followlinks=False):

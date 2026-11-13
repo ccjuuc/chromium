@@ -328,14 +328,18 @@ CommonJS 模块在执行前入缓存以支持循环依赖，缓存命中读取�
 
 ### 异步上下文
 
-**当前生产 V8 未启用 JavaScript Promise hooks，因此本轮明确不支持激活 AsyncLocalStorage 异步上下文。** `require('async_hooks')`、构造 AsyncLocalStorage、`getStore` 和 `disable` 仍可使用；`run`、`enterWith`、snapshot、bind 和 AsyncResource 构造在需要原生能力时抛出 `ERR_NOT_SUPPORTED`，不会返回只在同步代码中有效的假上下文。
+主进程、Node Worker 和 Electron Utility 进程支持真实 AsyncLocalStorage 异步上下文。它们各自拥有独立 V8 isolate，使用始终可用的原生 `v8::Isolate::SetPromiseHook` 传递 Promise 与原生 `await` 的上下文，无需修改全局 V8 编译配置。
 
-V8 在编译时关闭该能力的情况下调用 `SetPromiseHooks` 会直接终止进程。两端原生入口均用 `V8_ENABLE_JAVASCRIPT_PROMISE_HOOKS` 编译条件保护，缺少能力时在进入该 API 前返回明确错误；本轮未修改全局 V8 编译选项，也未替换 Blink 的 isolate hooks。以下传播实现及行为测试为支持该能力的构建保留，不能据此宣称当前生产构建已经支持 ALS：
+渲染进程共享 Blink 的 isolate，不能替换其任务归属钩子，仍使用受 `V8_ENABLE_JAVASCRIPT_PROMISE_HOOKS` 保护的 `v8::Context::SetPromiseHooks` 路径。当前生产 V8 未启用该可选能力，因此渲染进程中 `require('async_hooks')`、构造 AsyncLocalStorage、`getStore` 和 `disable` 可用，激活 `run`、`enterWith`、snapshot、bind 或 AsyncResource 时明确抛出 `ERR_NOT_SUPPORTED`。直接调用不受支持的 V8 Context API 会终止进程，不能通过硬加编译宏或返回假上下文规避。
 
-- AsyncLocalStorage 使用 `v8::Context::SetPromiseHooks` 跟踪 Promise 与原生 `await`，在 reaction 前后恢复对应上下文；不通过覆盖 `Promise.then` 模拟，也不占用 Blink 已用于任务归属的 isolate continuation data。
+- 两条原生路径均跟踪 Promise 与原生 `await`，在 reaction 前后恢复对应上下文；不通过覆盖 `Promise.then` 模拟，也不占用 Blink 已用于任务归属的 isolate continuation data。
+- 独占 isolate 的原生钩子按线程及 isolate 查找所属容器；派发持有状态引用和局部 V8 句柄，禁止递归钩子和嵌套微任务检查点，并隔离钩子异常。退出时先解除钩子和注册，再释放持久句柄、Context 和 isolate，避免旧容器影响后续实例。
 - 定时器、`queueMicrotask`、`process.nextTick` 保留注册时的上下文。独立 IPC 消息以新的根作用域执行，防止一次 `enterWith` 污染后续无关消息；通过 IPC 返回的 net socket/server 事件和 NAPI 回调则恢复所属资源或注册时的上下文。应用手工调用 EventEmitter 的 `emit` 仍使用当前调用者的作用域。
 - Promise 上下文保存在 WeakMap 中，实例使用独立键，不再用全局 Set 永久保留 AsyncLocalStorage 实例。`disable` 使旧异步帧中的 store 失效；snapshot、bind、嵌套作用域和异常退出均恢复调用前的状态。
 - AsyncResource 的作用域执行和 bind 使用实际捕获的上下文；尚未实现的 `createHook`、异步资源 ID/生命周期查询和 `emitDestroy` 明确 `ERR_NOT_SUPPORTED`。原生 Promise hooks 缺失或安装失败时，首次需要异步上下文的操作明确失败，不降级成仅同步保存 store 的实现。新 isolate 重建时重新初始化 hooks 安装状态。
+
+2026-11-12 的 Windows 构建在未开启 JavaScript Promise hooks 的配置下通过 7 项原生专项，覆盖真实 `await`/嵌套/并发、定时器/微任务/nextTick、disable/snapshot、IPC 根作用域、多个容器关闭重建、钩子递归与异常隔离，以及尚未实现接口的明确报错。完整 IPC 原生回归通过 596 项。
+同一正式产物的真实 Worker/Utility 探针通过 6 项，覆盖共享 Promise、并发 await、定时器、嵌套作用域及同步/异步异常恢复；两个运行时和浏览器宿主均退出码 0，无残留进程和崩溃转储。
 
 ### 本轮范围与验证
 

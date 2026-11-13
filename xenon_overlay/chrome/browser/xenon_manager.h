@@ -12,7 +12,10 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/singleton.h"
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/threading/sequence_bound.h"
+#include "base/types/expected.h"
 #include "base/values.h"
 #include "build/buildflag.h"
 #include "chrome/browser/profiles/profile_observer.h"
@@ -41,12 +44,22 @@ class Origin;
 
 namespace content {
 class BrowserContext;
+class WebContents;
 }  // namespace content
 
 namespace xenon {
 
+namespace ipc {
+class ElectronPowerSaveBlocker;
+class ElectronSafeStorage;
+class ElectronSandboxPolicy;
+class XenonAppSingleInstanceBroker;
+class XenonUtilityProcessHost;
+}  // namespace ipc
+
 FORWARD_DECLARE_TEST(XenonManagerTest, ClearsContextBeforeProfileDestruction);
-FORWARD_DECLARE_TEST(XenonManagerTest, SwitchingContextObservesOnlyCurrentProfile);
+FORWARD_DECLARE_TEST(XenonManagerTest,
+                     SwitchingContextObservesOnlyCurrentProfile);
 FORWARD_DECLARE_TEST(XenonManagerTest, DestructionUnregistersProfileObserver);
 FORWARD_DECLARE_TEST(XenonManagerTest, Ping_WhenDisconnected_ReturnsNotRunning);
 FORWARD_DECLARE_TEST(XenonManagerTest,
@@ -165,15 +178,16 @@ class XenonManager : public ProfileObserver {
   ipc::mojom::IpcRendererConfigPtr GetElectronIpcRendererConfigForContainer(
       const std::string& container_id,
       const std::string& document_url = std::string()) const;
-  void RegisterElectronIpcRenderer(
+  bool RegisterElectronIpcRenderer(
       const std::string& container_id,
       const std::string& endpoint_id,
       mojo::PendingRemote<ipc::mojom::IpcRenderer> renderer,
       int32_t process_id,
       int32_t frame_id,
       int32_t window_id,
-      const std::string& document_url = std::string(),
-      bool is_main_frame = true);
+      const std::string& document_url,
+      bool is_main_frame,
+      base::OnceCallback<void(bool)> registered);
   void UpdateElectronIpcRendererFrame(const std::string& container_id,
                                       const std::string& endpoint_id,
                                       const std::string& document_url);
@@ -195,6 +209,11 @@ class XenonManager : public ProfileObserver {
                        const std::string& channel,
                        base::Value arguments,
                        uint64_t expected_generation = 0);
+  void ElectronIpcPostMessage(const std::string& container_id,
+                              const std::string& endpoint_id,
+                              const std::string& channel,
+                              blink::TransferableMessage message,
+                              uint64_t expected_generation);
   void ElectronIpcInvoke(const std::string& container_id,
                          const std::string& endpoint_id,
                          const std::string& channel,
@@ -210,8 +229,19 @@ class XenonManager : public ProfileObserver {
   void DispatchElectronWindowEvent(int32_t window_id,
                                    const std::string& event_name,
                                    base::Value arguments);
+  void FilterElectronKeyboardEvent(const std::string& container_id,
+                                   uint64_t generation,
+                                   int32_t window_id,
+                                   base::Value input,
+                                   base::OnceCallback<void(bool)> callback);
   void DispatchElectronSessionEvent(const std::string& container_id,
                                     base::Value arguments);
+  base::expected<base::DictValue, std::string> NormalizeElectronWebPreferences(
+      const std::string& container_id,
+      const base::DictValue& preferences,
+      bool hosted = true);
+  void NoteElectronSandboxDocument(const std::string& container_id);
+  bool CanBindLegacyElectronNodeInterface(content::WebContents* contents);
 
   // Disconnects all Utility services and prevents further launches during
   // browser shutdown, including login dismissal before any Browser exists.
@@ -237,6 +267,18 @@ class XenonManager : public ProfileObserver {
   void OnElectronAppExit(const std::string& container_id,
                          int32_t exit_code) override;
   void OnThreadCallback(const std::string& message) override;
+  void CreateElectronNetworkFactory(
+      const std::string& partition,
+      mojo::PendingRemote<ipc::mojom::ElectronNetworkHeadersObserver> headers,
+      CreateElectronNetworkFactoryCallback callback) override;
+  void GetElectronNetworkOnline(
+      GetElectronNetworkOnlineCallback callback) override;
+  void ForkUtilityProcess(
+      ipc::mojom::UtilityProcessOptionsPtr options,
+      blink::MessagePortDescriptor parent_port,
+      mojo::PendingReceiver<ipc::mojom::UtilityProcessControl> control,
+      mojo::PendingRemote<ipc::mojom::UtilityProcessClient> client,
+      ForkUtilityProcessCallback callback) override;
   void CreateElectronWindow(int32_t width,
                             int32_t height,
                             bool show,
@@ -254,12 +296,6 @@ class XenonManager : public ProfileObserver {
                           base::Value arguments,
                           ElectronWindowCallCallback callback) override;
   void CloseElectronWindow(int32_t window_id) override;
-  void ShowElectronOpenDialog(const std::string& title,
-                              bool directory,
-                              bool allow_multi,
-                              const std::vector<std::string>& extensions,
-                              ShowElectronOpenDialogCallback callback) override;
-
   // WebUI: wait for the next Utility→Browser `OnServiceEvent` payload (tests
   // XenonBrowserObserver / SetBrowserObserver). Empty `message` means timeout,
   // disconnect, or no observer build.
@@ -269,11 +305,11 @@ class XenonManager : public ProfileObserver {
  private:
   friend struct base::DefaultSingletonTraits<XenonManager>;
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
-                          ClearsContextBeforeProfileDestruction);
+                           ClearsContextBeforeProfileDestruction);
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
-                          SwitchingContextObservesOnlyCurrentProfile);
+                           SwitchingContextObservesOnlyCurrentProfile);
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
-                          DestructionUnregistersProfileObserver);
+                           DestructionUnregistersProfileObserver);
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
                            Ping_WhenDisconnected_ReturnsNotRunning);
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
@@ -306,6 +342,14 @@ class XenonManager : public ProfileObserver {
       AppExitDisconnectsAllCopiesAndPreservesConfiguration);
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
                            AppExitRejectsOtherAndStaleObservers);
+  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
+                           WindowCreationRejectsForeignContainer);
+  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
+                           WindowOperationsRejectStaleObserverAndGeneration);
+  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
+                           DialogCommandsRejectInvalidOptionsAndOwners);
+  FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
+                           OpenDialogRejectsPermissionCheckReentry);
 #endif
   FRIEND_TEST_ALL_PREFIXES(XenonManagerTest,
                            RuntimeMetadataIsCapturedOnceBeforeRendererRequests);
@@ -328,6 +372,37 @@ class XenonManager : public ProfileObserver {
                                       uint64_t generation);
   void CloseContainerService(const std::string& container_id);
   void ResetServiceConnection();
+  ipc::ElectronSafeStorage* GetElectronSafeStorage();
+  ipc::ElectronSandboxPolicy* GetElectronSandboxPolicy();
+  void ReleaseElectronPowerAndStorageOwner(const std::string& container_id,
+                                           uint64_t generation);
+#if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
+  // Retains authenticated identity across asynchronous Profile initialization.
+  void EnsureContainerStorage(const std::string& container,
+                              uint64_t generation,
+                              base::OnceCallback<void(std::string)> callback);
+  void ElectronStorageWindowCall(const std::string& authenticated_container,
+                                 uint64_t expected_generation,
+                                 mojo::ReceiverId authenticated_receiver,
+                                 const std::string& command,
+                                 base::Value arguments,
+                                 ElectronWindowCallCallback callback);
+  void CreateContainerNetworkFactory(
+      const std::string& container,
+      uint64_t generation,
+      const std::string& partition,
+      mojo::PendingRemote<ipc::mojom::ElectronNetworkHeadersObserver> headers,
+      CreateElectronNetworkFactoryCallback callback);
+  void ForkUtilityProcessForOwner(
+      const std::string& container,
+      uint64_t generation,
+      mojo::ReceiverId receiver,
+      ipc::mojom::UtilityProcessOptionsPtr options,
+      blink::MessagePortDescriptor parent_port,
+      mojo::PendingReceiver<ipc::mojom::UtilityProcessControl> control,
+      mojo::PendingRemote<ipc::mojom::UtilityProcessClient> client,
+      ForkUtilityProcessCallback callback);
+#endif
 
 #if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
   using ServiceRemote = mojo::SharedRemote<mojom::XenonMainService>;
@@ -335,8 +410,18 @@ class XenonManager : public ProfileObserver {
   using ServiceRemote = mojo::Remote<mojom::XenonMainService>;
 #endif
   struct ContainerServiceConnection {
+    ContainerServiceConnection();
+    ~ContainerServiceConnection();
     ServiceRemote remote;
     uint64_t generation = 0;
+    // Keep Session requests in the Profile that launched this Utility, even
+    // after another Profile becomes the manager's current browser context.
+    base::WeakPtr<content::BrowserContext> browser_context;
+    bool storage_ready = false;
+    // Window-scoped on Windows; never changes the browser process App ID.
+    std::string app_user_model_id;
+    uint64_t next_utility_id = 0;
+    std::map<uint64_t, std::unique_ptr<ipc::XenonUtilityProcessHost>> utilities;
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
     mojo::ReceiverId observer_receiver_id = 0;
 #endif
@@ -368,6 +453,9 @@ class XenonManager : public ProfileObserver {
   void SetupAssociatedSide();
 #endif
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
+  bool AuthorizeElectronWindowOperation(int32_t window_id,
+                                        std::string* container,
+                                        std::string* error);
   mojo::ReceiverId SetupBrowserObserver(ServiceRemote* remote,
                                         const std::string& service_id);
 #endif
@@ -401,6 +489,12 @@ class XenonManager : public ProfileObserver {
       renderer_addon_services_;
   uint64_t renderer_addon_service_generation_ = 0;
   uint64_t service_generation_ = 0;
+  base::SequenceBound<ipc::XenonAppSingleInstanceBroker>
+      single_instance_broker_;
+  std::unique_ptr<ipc::ElectronPowerSaveBlocker> electron_power_save_blocker_;
+  std::unique_ptr<ipc::ElectronSafeStorage> electron_safe_storage_;
+  std::unique_ptr<ipc::ElectronSandboxPolicy> electron_sandbox_policy_;
+  base::WeakPtrFactory<XenonManager> weak_factory_{this};
 };
 
 }  // namespace xenon

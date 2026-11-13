@@ -70,7 +70,7 @@ function fixture(kind, t, autoListen = false) {
 }
 
 for (const kind of ['main', 'renderer']) {
-  test(`${kind} net client events retain connect context across native IPC`, t => {
+  test(`${kind} net client events retain connect context across native IPC`, async t => {
     const runtime = fixture(kind, t);
     runtime.evaluate(`
       globalThis.values = [];
@@ -85,9 +85,11 @@ for (const kind of ['main', 'renderer']) {
       }));`);
     const id = runtime.sent[0].value.fromId;
     runtime.deliver('__xenon:net:connected', {toId: id, peerId: 'native-peer'});
+    await new Promise(resolve => setImmediate(resolve));
     runtime.deliver('__xenon:net:data', {toId: id, wire: {t: 's', d: 'fixture'}});
     runtime.evaluate(`storage.run('caller', () => socket.emit('manual'));`);
     runtime.deliver('__xenon:net:close', {toId: id});
+    await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(JSON.parse(runtime.evaluate('JSON.stringify(values)')), [
       ['connect', 'client'], ['callback', 'client', true], ['data', 'client'],
       ['manual', 'caller'], ['end', 'client'], ['close', 'client'],
@@ -95,7 +97,7 @@ for (const kind of ['main', 'renderer']) {
     assert.equal(runtime.evaluate('storage.getStore()'), undefined);
   });
 
-  test(`${kind} native net server and accepted sockets retain listen context`, t => {
+  test(`${kind} native net server and accepted sockets retain listen context`, async t => {
     const runtime = fixture(kind, t);
     runtime.evaluate(`
       globalThis.values = [];
@@ -112,8 +114,10 @@ for (const kind of ['main', 'renderer']) {
     assert.ok(serverId);
     runtime.deliver('__xenon:net:listening', {serverId});
     runtime.deliver('__xenon:net:connection', {serverId, socketId: 'accepted'});
+    await new Promise(resolve => setImmediate(resolve));
     runtime.deliver('__xenon:net:data', {toId: 'accepted', wire: {t: 's', d: 'fixture'}});
     runtime.deliver('__xenon:net:error', {toId: 'accepted', code: 'EPIPE'});
+    await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(JSON.parse(runtime.evaluate('JSON.stringify(values)')), [
       ['listening', 'server', true], ['connection', 'server'],
       ['data', 'server'], ['error', 'server'],

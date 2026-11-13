@@ -25,8 +25,10 @@
 #include "content/public/browser/service_worker_context.h"
 #include "content/public/browser/service_worker_context_observer.h"
 #include "content/public/browser/service_worker_running_info.h"
+#include "content/public/browser/site_instance.h"
 #include "content/public/browser/storage_partition.h"
 #include "crypto/hash.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_app_storage.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_session_shutdown_notifier_factory.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_file_system_bridge.h"
 
@@ -78,6 +80,15 @@ class SessionState : public content::ServiceWorkerContextObserver {
     }
   }
   const ElectronSessionIdentity& identity() const { return identity_; }
+  bool active() const { return active_; }
+  void Activate() { active_ = true; }
+  void Retire() {
+    active_ = false;
+    scripts_.clear();
+    statuses_.clear();
+    event_callback_.Reset();
+    weak_factory_.InvalidateWeakPtrs();
+  }
   const std::vector<ElectronSessionPreloadScript>& scripts() const {
     return scripts_;
   }
@@ -217,6 +228,9 @@ class SessionState : public content::ServiceWorkerContextObserver {
 
  private:
   void Emit(int64_t id, const char* status) {
+    if (!active_) {
+      return;
+    }
     if (std::string_view(status) == "stopped") {
       statuses_.erase(id);
     } else {
@@ -233,6 +247,7 @@ class SessionState : public content::ServiceWorkerContextObserver {
     }
   }
   ElectronSessionIdentity identity_;
+  bool active_ = true;
   raw_ptr<content::StoragePartition> partition_;
   raw_ptr<content::ServiceWorkerContext> workers_;
   std::vector<ElectronSessionPreloadScript> scripts_;
@@ -305,6 +320,10 @@ content::StoragePartitionConfig GetElectronSessionPartitionConfig(
     content::BrowserContext* context,
     const std::string& container_id,
     const std::string& partition) {
+  if (auto redirected =
+          GetElectronAppStorageSessionConfig(context, container_id, partition)) {
+    return *redirected;
+  }
   return content::StoragePartitionConfig::Create(
       context,
       "xenon" + base::HexEncodeLower(crypto::hash::Sha256(container_id)),
@@ -333,10 +352,33 @@ content::StoragePartition* ResolveElectronSessionPartition(
         key, std::make_unique<SessionState>(
                  ElectronSessionIdentity{container_id, partition}, storage));
   }
+  sessions.at(key)->Activate();
   return storage;
 }
 
+scoped_refptr<content::SiteInstance> CreateElectronSessionSiteInstance(
+    content::BrowserContext* context,
+    const std::string& container_id,
+    const std::string& partition,
+    const GURL& url) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  const auto config =
+      GetElectronSessionPartitionConfig(context, container_id, partition);
+  return config.is_default()
+             ? content::SiteInstance::CreateForURL(context, url)
+             : content::SiteInstance::CreateForFixedStoragePartition(
+                   context, url, config);
+}
+
 std::optional<ElectronSessionIdentity> FindElectronSessionIdentity(
+    content::StoragePartition* partition) {
+  const auto found = PartitionSessions().find(partition);
+  return found == PartitionSessions().end() || !found->second->active()
+             ? std::nullopt
+             : std::make_optional(found->second->identity());
+}
+
+std::optional<ElectronSessionIdentity> FindElectronSessionProvenance(
     content::StoragePartition* partition) {
   const auto found = PartitionSessions().find(partition);
   return found == PartitionSessions().end()
@@ -384,9 +426,11 @@ void CallElectronSession(content::BrowserContext* context,
 void RemoveElectronSessionsForContainer(const std::string& container_id) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   for (auto* registry : SessionRegistries()) {
-    std::erase_if(registry->sessions, [&](const auto& entry) {
-      return entry.first.first == container_id;
-    });
+    for (auto& [key, session] : registry->sessions) {
+      if (key.first == container_id) {
+        session->Retire();
+      }
+    }
   }
 }
 

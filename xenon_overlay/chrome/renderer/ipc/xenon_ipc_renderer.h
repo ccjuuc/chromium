@@ -9,8 +9,10 @@
 #include <map>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
@@ -19,8 +21,10 @@
 #include "gin/arguments.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "third_party/blink/public/common/messaging/transferable_message.h"
 #include "v8/include/v8-forward.h"
 #include "v8/include/v8-persistent-handle.h"
+#include "xenon_overlay/common/ipc/xenon_crash_reporter_annotations.h"
 #include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
 
 namespace content {
@@ -29,6 +33,7 @@ class RenderFrame;
 
 namespace xenon::ipc {
 class XenonContextBridge;
+class XenonScriptExecutor;
 
 // Document-scoped JavaScript binding installed as window.xenonIpcRenderer.
 // The Electron compatibility bootstrap uses this object as the transport for
@@ -54,11 +59,18 @@ class XenonIpcRenderer final : public xenon::ipc::mojom::IpcRenderer,
 
   void WillReleaseScriptContext(v8::Local<v8::Context> context,
                                 int32_t world_id) override;
+  void DidMeaningfulLayout(blink::WebMeaningfulLayout layout_type) override;
   void OnDestruct() override;
 
   // JavaScript API.
   void GetRuntimeConfig(gin::Arguments* args);
+  void IsPromise(gin::Arguments* args);
+  void IsNativeError(gin::Arguments* args);
+  void CrashReporterCall(gin::Arguments* args);
+  void ExecuteJavaScript(gin::Arguments* args);
+  void CancelExecuteJavaScript(gin::Arguments* args);
   void InstallAsyncContextHooks(gin::Arguments* args);
+  void RegisterIpcRenderer(gin::Arguments* args);
   void AttachGuest(gin::Arguments* args);
   void Send(gin::Arguments* args);
   void Invoke(gin::Arguments* args);
@@ -80,6 +92,8 @@ class XenonIpcRenderer final : public xenon::ipc::mojom::IpcRenderer,
 
   // xenon::ipc::mojom::IpcRenderer:
   void Dispatch(const std::string& channel, base::Value arguments) override;
+  void DispatchPostMessage(const std::string& channel,
+                           blink::TransferableMessage message) override;
 
   bool EnsureHostConnected();
   bool EnsureRuntimeConfig();
@@ -90,6 +104,8 @@ class XenonIpcRenderer final : public xenon::ipc::mojom::IpcRenderer,
                                base::Value* arguments,
                                bool* serialized);
   void DispatchNow(const std::string& channel, const base::Value& arguments);
+  void DispatchPostMessageNow(const std::string& channel,
+                              blink::TransferableMessage message);
   void OnHostDisconnected();
   uint64_t AddPendingInvoke(v8::Local<v8::Promise::Resolver> resolver,
                             bool serialized);
@@ -107,7 +123,9 @@ class XenonIpcRenderer final : public xenon::ipc::mojom::IpcRenderer,
   const raw_ptr<v8::Isolate> isolate_;
   v8::Global<v8::Context> context_;
   scoped_refptr<XenonContextBridge> context_bridge_;
+  scoped_refptr<XenonScriptExecutor> script_executor_;
   bool context_isolated_ = false;
+  base::ScopedClosureRunner undrawn_frame_throttling_scope_;
   const std::string context_id_;
   mojo::Remote<xenon::ipc::mojom::IpcHost> host_;
   xenon::ipc::mojom::IpcRendererConfigPtr runtime_config_;
@@ -115,9 +133,12 @@ class XenonIpcRenderer final : public xenon::ipc::mojom::IpcRenderer,
   mojo::Receiver<xenon::ipc::mojom::IpcRenderer> receiver_{this};
   mojo::Receiver<xenon::ipc::mojom::IpcRenderer> node_addon_receiver_{this};
   v8::Global<v8::Function> dispatch_handler_;
-  std::vector<std::pair<std::string, base::Value>> queued_events_;
+  using QueuedPayload = std::variant<base::Value, blink::TransferableMessage>;
+  std::vector<std::pair<std::string, QueuedPayload>> queued_events_;
+  size_t queued_port_message_bytes_ = 0;
   uint64_t next_invoke_id_ = 1;
   bool async_context_hooks_installed_ = false;
+  ElectronCrashReporterAnnotations crash_reporter_annotations_;
   std::map<uint64_t, PendingInvoke> pending_invokes_;
 
   base::WeakPtrFactory<XenonIpcRenderer> weak_factory_{this};

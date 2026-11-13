@@ -104,9 +104,14 @@
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "third_party/blink/public/common/features.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/managed_certificates/builtin_store_certificate.h"
 #include "xenon_overlay/chrome/browser/managed_certificates/managed_certificate_merger.h"
 #include "xenon_overlay/chrome/browser/managed_certificates/managed_certificate_service.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_cookie_encryption.h"
+#endif
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
@@ -1447,9 +1452,16 @@ void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
     network_context_params->file_paths->cookie_database_name =
         base::FilePath(chrome::kCookieFilename);
 
-    g_browser_process->system_network_context_manager()
-        ->AddCookieEncryptionManagerToNetworkContextParams(
-            network_context_params);
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    if (!xenon::ipc::ElectronCookieEncryption::ConfigureNetworkContext(
+            profile_, network_context_params)) {
+#endif
+      g_browser_process->system_network_context_manager()
+          ->AddCookieEncryptionManagerToNetworkContextParams(
+              network_context_params);
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    }
+#endif
 
 #if BUILDFLAG(ENTERPRISE_CACHE_ENCRYPTION)
     if (enterprise_encryption::ShouldEncryptHttpCache(profile_->GetPrefs())) {

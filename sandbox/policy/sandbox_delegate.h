@@ -10,6 +10,15 @@
 
 #include "base/process/process.h"
 #include "build/build_config.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "sandbox/policy/export.h"
+
+namespace base {
+struct LaunchOptions;
+}
+#endif
 
 namespace sandbox {
 namespace mojom {
@@ -21,13 +30,24 @@ class TargetPolicy;
 
 namespace policy {
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+// The out-of-line launch hook owns the vtable in component builds.
+class SANDBOX_POLICY_EXPORT SandboxDelegate {
+#else
 class SandboxDelegate {
+#endif
  public:
   virtual ~SandboxDelegate() {}
 
   // Returns the Sandbox to enforce on the process, or
   // Sandbox::kNoSandbox to run without a sandbox policy.
   virtual sandbox::mojom::Sandbox GetSandboxType() = 0;
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // Default delegates leave launch state untouched. The dedicated Xenon
+  // utility delegate validates its unsandboxed identity before applying it.
+  virtual bool ApplyXenonUtilityProcessOptions(base::LaunchOptions*);
+#endif
 
 #if BUILDFLAG(IS_WIN)
   // Returns a tag for the sandbox. All targets with the same tag will share

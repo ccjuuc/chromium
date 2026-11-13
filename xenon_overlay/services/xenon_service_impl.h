@@ -5,6 +5,7 @@
 #include <deque>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -22,7 +23,9 @@
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
+#include "xenon_overlay/public/mojom/xenon_permission_check.mojom.h"
 #include "xenon_overlay/public/mojom/xenon_service.mojom.h"
+#include "xenon_overlay/public/mojom/xenon_utility_process.mojom.h"
 
 #if BUILDFLAG(ENABLE_XENON_ASSOCIATED_SIDE)
 #include "mojo/public/cpp/bindings/associated_receiver.h"
@@ -38,23 +41,47 @@ class XenonIpcMainContainer;
 }
 
 class XenonServiceImpl : public mojom::XenonMainService,
-                         public ipc::mojom::NodeAddonHost
+                         public ipc::mojom::ElectronPermissionCheck,
+                         public ipc::mojom::NodeAddonHost,
+                         public ipc::mojom::UtilityProcessService
 #if BUILDFLAG(ENABLE_XENON_ASSOCIATED_SIDE)
     ,
                          public mojom::XenonAssociatedSide
 #endif
 {
  public:
-  explicit XenonServiceImpl(mojo::PendingReceiver<mojom::XenonMainService> receiver);
+  explicit XenonServiceImpl(
+      mojo::PendingReceiver<mojom::XenonMainService> receiver);
+  explicit XenonServiceImpl(
+      mojo::PendingReceiver<ipc::mojom::UtilityProcessService> receiver);
   ~XenonServiceImpl() override;
+  void SetNativeRetirementHooks(
+      base::RepeatingCallback<base::OnceClosure()> acquire_keepalive,
+      base::RepeatingCallback<void(std::string)> stalled);
+  void SetUtilityExitHandler(base::RepeatingCallback<void(int)> handler);
+  void Start(
+      ipc::mojom::UtilityProcessBootstrapPtr config,
+      mojo::PendingRemote<ipc::mojom::UtilityProcessServiceObserver> observer,
+      ipc::mojom::UtilityProcessService::StartCallback callback) override;
+  void Shutdown(int32_t exit_code) override;
 
-  void Initialize(
-      mojo::PendingRemote<network::mojom::URLLoaderFactory> url_loader_factory) override;
+  void Initialize(mojo::PendingRemote<network::mojom::URLLoaderFactory>
+                      url_loader_factory) override;
   void Ping(PingCallback callback) override;
   void BindAssociatedSide(
-      mojo::PendingAssociatedReceiver<mojom::XenonAssociatedSide> receiver) override;
+      mojo::PendingAssociatedReceiver<mojom::XenonAssociatedSide> receiver)
+      override;
   void SetBrowserObserver(
       mojo::PendingRemote<mojom::XenonBrowserObserver> observer) override;
+  void BindElectronPermissionCheck(
+      const std::string& container_id,
+      mojo::PendingReceiver<ipc::mojom::ElectronPermissionCheck> receiver)
+      override;
+  void Check(
+      base::Value request,
+      ipc::mojom::ElectronPermissionCheck::CheckCallback callback) override;
+  void DispatchElectronPermissionRequest(const std::string& container_id,
+                                         base::Value request) override;
   void SetNodeAddonObserver(
       const std::string& context_id,
       int32_t client_id,
@@ -66,16 +93,23 @@ class XenonServiceImpl : public mojom::XenonMainService,
       mojo::PendingRemote<ipc::mojom::IpcRenderer> callback_renderer) override;
   void InitializeNodeAddonRuntime(
       const std::string& context_id,
-      const std::string& runtime_directory) override;
+      const std::string& runtime_directory,
+      const std::string& app_path,
+      std::vector<ipc::mojom::IpcArchivePublicKeyPtr> archive_public_keys)
+      override;
   void DispatchElectronWindowEvent(int32_t window_id,
                                    const std::string& event_name,
                                    base::Value arguments) override;
+  void FilterElectronKeyboardEvent(
+      const std::string& container_id,
+      int32_t window_id,
+      base::Value input,
+      FilterElectronKeyboardEventCallback callback) override;
   void DispatchElectronAppEvent(const std::string& container_id,
                                 const std::string& event_name,
                                 base::Value arguments) override;
-  void InitializeElectronIpc(
-      ipc::mojom::IpcMainConfigPtr config,
-      InitializeElectronIpcCallback callback) override;
+  void InitializeElectronIpc(ipc::mojom::IpcMainConfigPtr config,
+                             InitializeElectronIpcCallback callback) override;
   void RegisterElectronIpcRenderer(
       const std::string& container_id,
       const std::string& endpoint_id,
@@ -84,11 +118,11 @@ class XenonServiceImpl : public mojom::XenonMainService,
       int32_t frame_id,
       int32_t window_id,
       const std::string& document_url,
-      bool is_main_frame) override;
-  void UpdateElectronIpcRendererFrame(
-      const std::string& container_id,
-      const std::string& endpoint_id,
-      const std::string& document_url) override;
+      bool is_main_frame,
+      RegisterElectronIpcRendererCallback callback) override;
+  void UpdateElectronIpcRendererFrame(const std::string& container_id,
+                                      const std::string& endpoint_id,
+                                      const std::string& document_url) override;
   void RegisterElectronIpcServiceWorker(
       const std::string& container_id,
       const std::string& endpoint_id,
@@ -101,6 +135,10 @@ class XenonServiceImpl : public mojom::XenonMainService,
                        const std::string& endpoint_id,
                        const std::string& channel,
                        base::Value arguments) override;
+  void ElectronIpcPostMessage(const std::string& container_id,
+                              const std::string& endpoint_id,
+                              const std::string& channel,
+                              blink::TransferableMessage message) override;
   void ElectronIpcInvoke(const std::string& container_id,
                          const std::string& endpoint_id,
                          const std::string& channel,
@@ -120,6 +158,15 @@ class XenonServiceImpl : public mojom::XenonMainService,
                               HandleElectronProtocolCallback callback) override;
   void CancelElectronProtocol(const std::string& container_id,
                               const std::string& request_id) override;
+  void HandleElectronWebRequest(
+      const std::string& container_id,
+      base::Value request,
+      HandleElectronWebRequestCallback callback) override;
+  void CancelElectronWebRequest(const std::string& container_id,
+                                const std::string& request_id) override;
+  void ReleaseElectronWebRequestRegistration(
+      const std::string& container_id,
+      const std::string& registration_id) override;
 
   void LoadAddon(const std::string& context_id,
                  const std::string& path,
@@ -179,17 +226,15 @@ class XenonServiceImpl : public mojom::XenonMainService,
 
   // ipc::mojom::NodeAddonHost. These receivers connect renderers directly to
   // this Utility sequence, keeping Browser UI out of synchronous N-API calls.
-  void RequireNodeModuleSync(
-      const std::string& module_path,
-      RequireNodeModuleSyncCallback callback) override;
+  void RequireNodeModuleSync(const std::string& module_path,
+                             RequireNodeModuleSyncCallback callback) override;
   void InspectNodeExportSync(const std::string& module_path,
                              const std::string& export_path,
                              InspectNodeExportSyncCallback callback) override;
-  void InvokeNodeExportSync(
-      const std::string& module_path,
-      const std::string& function_name,
-      base::Value arguments,
-      InvokeNodeExportSyncCallback callback) override;
+  void InvokeNodeExportSync(const std::string& module_path,
+                            const std::string& function_name,
+                            base::Value arguments,
+                            InvokeNodeExportSyncCallback callback) override;
   void ConstructNodeExportSync(
       const std::string& module_path,
       const std::string& export_path,
@@ -244,7 +289,13 @@ class XenonServiceImpl : public mojom::XenonMainService,
     base::Value arguments;
     ElectronIpcInvokeCallback callback;
   };
-  using PendingIpcCall = std::variant<PendingIpcSend, PendingIpcInvoke>;
+  struct PendingIpcPostMessage {
+    std::string endpoint_id;
+    std::string channel;
+    blink::TransferableMessage message;
+  };
+  using PendingIpcCall =
+      std::variant<PendingIpcSend, PendingIpcInvoke, PendingIpcPostMessage>;
 
   void MarkElectronIpcReady(const std::string& container_id);
   void FlushPendingElectronIpc(const std::string& container_id);
@@ -258,6 +309,17 @@ class XenonServiceImpl : public mojom::XenonMainService,
   };
 
   XenonNodeExecutor* EnsureNodeExecutor(const std::string& context_id);
+  void RetireContext(const std::string& context_id);
+  void RetireContext(const std::string& context_id,
+                     std::unique_ptr<ipc::XenonIpcMainContainer> failed);
+  void MaybeCompleteUtilityExit();
+  void CreateUtilityNetworkFactory(
+      const std::string& partition,
+      mojo::PendingRemote<ipc::mojom::ElectronNetworkHeadersObserver> headers,
+      base::OnceCallback<
+          void(mojo::PendingRemote<network::mojom::URLLoaderFactory>,
+               std::string)> callback);
+  bool GetUtilityNetworkOnline(bool* online, std::string* error);
   XenonNodeExecutor* GetNodeExecutor(const std::string& context_id);
   void OnNodeAddonHostDisconnected();
   void OnNodeCallbackRendererDisconnected(const NodeClientKey& client_key,
@@ -278,12 +340,11 @@ class XenonServiceImpl : public mojom::XenonMainService,
                                        int32_t client_id);
   void FlushPendingNodeCallbacks(const std::string& context_id,
                                  int32_t client_id);
-  void HandleRendererNodeAddonInvoke(
-      const std::string& context_id,
-      const std::string& endpoint_id,
-      const std::string& channel,
-      base::Value arguments,
-      ElectronIpcInvokeCallback callback);
+  void HandleRendererNodeAddonInvoke(const std::string& context_id,
+                                     const std::string& endpoint_id,
+                                     const std::string& channel,
+                                     base::Value arguments,
+                                     ElectronIpcInvokeCallback callback);
   int32_t GetOrCreateRendererNodeClient(const std::string& context_id,
                                         const std::string& endpoint_id);
   uint64_t GetNodeInstanceOwner(const std::string& context_id,
@@ -311,17 +372,26 @@ class XenonServiceImpl : public mojom::XenonMainService,
                                const std::string& endpoint_id,
                                const base::DictValue& request);
   void DispatchChildProcessEvent(const std::string& container_id,
-                                  const std::string& endpoint_id,
-                                  base::Value event);
-  void DeliverChildProcessEvent(const std::string& container_id,
                                  const std::string& endpoint_id,
                                  base::Value event);
+  void DeliverChildProcessEvent(const std::string& container_id,
+                                const std::string& endpoint_id,
+                                base::Value event);
 
   mojo::Receiver<mojom::XenonMainService> receiver_;
+  mojo::ReceiverSet<ipc::mojom::ElectronPermissionCheck, std::string>
+      permission_check_receivers_;
+  mojo::Receiver<ipc::mojom::UtilityProcessService> utility_receiver_{this};
+  mojo::Remote<ipc::mojom::UtilityProcessServiceObserver> utility_observer_;
+  ipc::mojom::UtilityProcessBootstrapPtr utility_bootstrap_;
+  base::RepeatingCallback<void(int)> utility_exit_handler_;
+  std::optional<int> utility_exit_code_;
+  bool utility_exit_completed_ = false;
   mojo::ReceiverSet<ipc::mojom::NodeAddonHost, NodeAddonConnection>
       node_addon_host_receivers_;
 #if BUILDFLAG(ENABLE_XENON_ASSOCIATED_SIDE)
-  mojo::AssociatedReceiver<mojom::XenonAssociatedSide> associated_receiver_{this};
+  mojo::AssociatedReceiver<mojom::XenonAssociatedSide> associated_receiver_{
+      this};
 #endif
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
   mojo::Remote<mojom::XenonBrowserObserver> browser_observer_;
@@ -333,6 +403,10 @@ class XenonServiceImpl : public mojom::XenonMainService,
   // destroyed last (containers may still hold Unlocker callbacks during
   // teardown).
   std::map<std::string, std::unique_ptr<XenonNodeExecutor>> node_executors_;
+  std::set<std::string> retiring_contexts_;
+  base::RepeatingCallback<base::OnceClosure()> acquire_native_keepalive_;
+  base::RepeatingCallback<void(std::string)> native_retirement_stalled_;
+  const std::string archive_key_namespace_;
   std::unique_ptr<XenonChildProcessBridge> child_process_bridge_;
   std::unique_ptr<XenonNetPipeBridge> net_pipe_bridge_;
   std::map<std::string, std::unique_ptr<ipc::XenonIpcMainContainer>>

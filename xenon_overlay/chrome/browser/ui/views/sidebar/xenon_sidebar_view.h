@@ -5,6 +5,8 @@
 #ifndef XENON_OVERLAY_CHROME_BROWSER_UI_VIEWS_SIDEBAR_XENON_SIDEBAR_VIEW_H_
 #define XENON_OVERLAY_CHROME_BROWSER_UI_VIEWS_SIDEBAR_XENON_SIDEBAR_VIEW_H_
 
+#include <string>
+
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
@@ -68,6 +70,7 @@ class XenonSidebarView : public views::View,
   void ScheduleHideSidebar();
   void ToggleSidebarAutoHide();
   void SetSidebarRightAligned(bool right_aligned);
+  void OpenElectronApp(const std::string& application);
   void OpenShortcut(const GURL& url);
 
   raw_ptr<Browser> browser_ = nullptr;

@@ -21,6 +21,8 @@
 #include "base/values.h"
 #include "gin/public/isolate_holder.h"
 #include "v8/include/v8.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+#include "xenon_overlay/chrome/browser/napi/native_runtime_retirement.h"
 #include "xenon_overlay/public/mojom/xenon_service.mojom.h"
 
 struct napi_env__;
@@ -33,11 +35,15 @@ namespace xenon {
 
 struct LoadedNodeAddon;
 class NativeAddonResourceRedirect;
+class NativeAddonEventLoop;
 
-class XenonNodeExecutor {
+class XenonNodeExecutor : public NativeRuntimeShutdown {
  public:
   XenonNodeExecutor();
-  ~XenonNodeExecutor();
+  ~XenonNodeExecutor() override;
+  void BeginNativeShutdown() override;
+  bool PollNativeShutdown() override;
+  std::string DescribeNativeShutdown() const override;
 
   XenonNodeExecutor(const XenonNodeExecutor&) = delete;
   XenonNodeExecutor& operator=(const XenonNodeExecutor&) = delete;
@@ -90,6 +96,11 @@ class XenonNodeExecutor {
   // executable. Xenon runs those addons in a shared executable image, so the
   // loader redirects such paths to this per-container directory.
   void SetRuntimeDirectory(const base::FilePath& runtime_directory);
+  // Grants this executor access to the selected application's native modules.
+  // A directory grants its canonical descendants; an ASAR grants only its
+  // declared unpacked members. This is separate from DLL resource redirection.
+  // Replacing or clearing the scope also affects subsequent cached loads.
+  void SetApplicationPath(const base::FilePath& application_path);
   // Metadata is optional for callers that request an exact root descriptor.
   void LoadAddon(const std::string& path,
                  LoadAddonCallback callback,
@@ -306,6 +317,8 @@ class XenonNodeExecutor {
                                           uint64_t owner = 0);
   void EnsureUvLoopPolling();
   void PumpUvLoops();
+  bool EnsureNativeLoop(std::string* error);
+  void FinalizeNativeShutdown();
 
   bool EnsureIsolate();
   bool IsInstanceOwnerActive(uint64_t owner) const;
@@ -320,6 +333,14 @@ class XenonNodeExecutor {
   RAW_PTR_EXCLUSION v8::Isolate* addon_isolate_ = nullptr;
   v8::Global<v8::Context> addon_context_;
   std::map<base::FilePath, AddonModule> addon_modules_;
+  std::vector<AddonModule> failed_addons_;
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+  std::unique_ptr<NativeAddonEventLoop> native_loop_;
+  bool native_loop_draining_ = false;
+#endif
+  bool shutting_down_ = false;
+  bool shutdown_complete_ = false;
+  std::shared_ptr<size_t> pending_addon_loads_ = std::make_shared<size_t>(0);
   std::map<base::FilePath, base::FilePath> addon_path_aliases_;
   std::map<int32_t, AddonInstance> addon_instances_;
   // V8 identity hashes may collide; validate owner, module, and StrictEquals.
@@ -328,6 +349,8 @@ class XenonNodeExecutor {
   std::map<std::pair<int32_t, int32_t>, std::unique_ptr<AddonCallback>>
       addon_callbacks_;
   base::FilePath runtime_directory_;
+  base::FilePath application_directory_;
+  base::FilePath application_archive_;
   // Captured from macOS bundle overrides on the main thread, never from an
   // application-provided runtime path. Empty on other platforms/unbundled tests.
   base::FilePath outer_bundle_path_;

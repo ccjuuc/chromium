@@ -91,6 +91,7 @@ resources/                         # 构建后对应宿主 exe 所在目录
   "versionFromExecutable": true,
   "main": "out.asar/main.js",
   "archivePublicKey": "thunder_2025.asar-public-key.pem",
+  "nativeAddonExecution": "shared",
   "privilegedSchemes": [
     {
       "scheme": "miniapp",

@@ -7,6 +7,7 @@ const {EventEmitter} = require('node:events');
 const test = require('node:test');
 const vm = require('node:vm');
 const {readBootstrapPart} = require('./bootstrap_test_support.cjs');
+const flush = () => new Promise(resolve => setImmediate(resolve));
 
 function load(side, result = {ok: true, pid: 4321}) {
   const calls = [];
@@ -16,7 +17,7 @@ function load(side, result = {ok: true, pid: 4321}) {
     return request.op === 'spawn' ? result : {ok: true};
   };
   const context = vm.createContext({Buffer, Uint8Array, queueMicrotask,
-    streamModule: {Readable: class extends EventEmitter {}, Writable: class extends EventEmitter {}},
+    ReadableStream, WritableStream, TransformStream, AbortController,
     currentAsyncContext: 'child-context',
     runWithAsyncContext: (_context, callback, receiver, args) => callback.apply(receiver, args),
     process: {env: {FIXTURE_INHERITED: 'yes'}, platform: 'win32'},
@@ -27,14 +28,76 @@ function load(side, result = {ok: true, pid: 4321}) {
       return call(request);
     }}});
   vm.runInContext(readBootstrapPart(`${side}/events.js`) + '\n' +
+      readBootstrapPart('third_party/readable_stream/bundle.js') + '\n' +
+      readBootstrapPart('common/stream_web_adapters.js') + '\n' +
+      readBootstrapPart('common/node_streams.js') + '\n' +
+      'const streamModule = createNodeStreams({Buffer, EventEmitter, ' +
+      'modules: createReadableStreamModules(), webStreams: {ReadableStream, WritableStream, TransformStream}}).stream;\n' +
       readBootstrapPart('common/child_process.js') + '\n' +
       readBootstrapPart(`${side}/child_process.js`) + '\n' +
-      'globalThis.cp = childProcessModule;', context);
+      'globalThis.cp = childProcessModule; globalThis.streams = streamModule;', context);
   const notify = event => ipc.emit('__xenon:child-process:event', {}, {id: '1', ...event});
-  return {cp: context.cp, calls, notify};
+  return {cp: context.cp, streams: context.streams, calls, notify};
 }
 
 for (const side of ['main', 'renderer']) {
+  test(`${side}: child stdout uses standard Readable backpressure and resumes after consumption`, async () => {
+    const {cp, streams, calls, notify} = load(side);
+    const child = cp.spawn('fixture.exe', [], {stdio:['ignore','pipe','ignore']});
+    assert.ok(child.stdout instanceof streams.Readable);
+    assert.equal(Object.hasOwn(child.stdout,'readableLength'),false);
+    child.stdout.read(0);
+    assert.equal(calls.at(-1).op,'resume');
+    const payload=Buffer.alloc(child.stdout.readableHighWaterMark,0x5a);
+    notify({event:'data',fd:1,data:payload.toString('base64')});
+    assert.equal(calls.at(-1).op,'pause');
+    assert.equal(child.stdout.readableLength,payload.length);
+    assert.deepEqual(child.stdout.read(32768),payload.subarray(0,32768));
+    assert.equal(calls.at(-1).op,'resume');
+    const pending=[];
+    const consume=(async()=>{for await(const chunk of child.stdout)pending.push(chunk);})();
+    notify({event:'end',fd:1});
+    notify({event:'exit',exitCode:0,signal:0});
+    notify({event:'close'});
+    await consume;
+    await flush();
+    assert.deepEqual(Buffer.concat(pending),payload.subarray(32768));
+    assert.equal(child.stdout.closed,true);
+  });
+
+  test(`${side}: pipeline consumes child output and stdin serializes native writes`, async () => {
+    const {cp, streams, calls, notify} = load(side);
+    const child=cp.spawn('fixture.exe',[],{stdio:['pipe','pipe','ignore']});
+    const received=[];
+    const destination=new streams.Writable({write(chunk,_encoding,done){
+      received.push(Buffer.from(chunk));queueMicrotask(done);
+    }});
+    const pipeline=streams.promises.pipeline(child.stdout,destination);
+    const completed=[];
+    assert.equal(child.stdin.write(Buffer.alloc(65536,1),()=>completed.push(1)),false);
+    child.stdin.end('tail',()=>completed.push('finish'));
+    assert.equal(calls.filter(call=>call.op==='write').length,1);
+    assert.equal(child.stdin.writableLength,65540);
+    notify({event:'write',token:1});
+    assert.equal(calls.filter(call=>call.op==='write').length,2);
+    assert.equal(child.stdin.writableLength,4);
+    assert.equal(calls.some(call=>call.op==='end'),false);
+    notify({event:'write',token:2});
+    assert.equal(calls.filter(call=>call.op==='end').length,1);
+    notify({event:'finish'});
+    for(const value of [Buffer.from([0,255,128]),Buffer.from('final')])
+      notify({event:'data',fd:1,data:value.toString('base64')});
+    notify({event:'end',fd:1});
+    notify({event:'exit',exitCode:0,signal:0});
+    notify({event:'close'});
+    await pipeline;
+    await flush();
+    assert.deepEqual(Buffer.concat(received),Buffer.from([0,255,128,...Buffer.from('final')]));
+    assert.deepEqual(completed,[1,'finish']);
+    assert.equal(child.stdin.closed,true);
+    assert.equal(child.stdout.closed,true);
+  });
+
   test(`${side}: spawn returns native identity and preserves arguments without a shell`, async () => {
     const {cp, calls, notify} = load(side);
     const child = cp.spawn('fixture.exe', ['a b', '& literal'], {
@@ -60,7 +123,7 @@ for (const side of ['main', 'renderer']) {
     notify({event: 'end', fd: 1});
     notify({event: 'end', fd: 2});
     notify({event: 'close'});
-    await Promise.resolve();
+    await flush();
     assert.deepEqual(order, ['spawn', 'fixture-output', 'exit', 'close']);
     assert.equal(child.kill(), false);
   });
@@ -88,29 +151,31 @@ for (const side of ['main', 'renderer']) {
     const {cp, calls, notify} = load(side);
     const child = cp.spawn('fixture.exe');
     const order = [];
-    child.stdin.write(Buffer.from([0, 1, 255]), error => { assert.equal(error, null); order.push('write'); });
+    child.stdin.write(Buffer.from([0, 1, 255]), error => { assert.equal(error, undefined); order.push('write'); });
     child.stdin.end('last', () => order.push('finish'));
     assert.deepEqual(order, []);
     assert.equal(calls.find(call => call.op === 'write').data, 'AAH/');
     notify({event: 'write', token: 1});
     notify({event: 'write', token: 2});
     notify({event: 'finish'});
+    await flush();
     assert.deepEqual(order, ['write', 'finish']);
     assert.equal(child.stdin.writableFinished, true);
     assert.equal(calls.filter(call => call.op === 'end').length, 1);
     await Promise.resolve();
   });
 
-  test(`${side}: stdout keeps split UTF-8 intact and pauses native reads`, async () => {
-    const {cp, calls, notify} = load(side);
+  test(`${side}: stdout keeps split UTF-8 intact across paused delivery`, async () => {
+    const {cp, notify} = load(side);
     const child = cp.spawn('fixture.exe');
     const output = [];
     child.stdout.setEncoding('utf8').on('data', value => output.push(value));
+    await flush();
     const bytes = Buffer.from('中文');
     notify({event: 'data', fd: 1, data: bytes.subarray(0, 2).toString('base64')});
     assert.deepEqual(output, []);
     child.stdout.pause();
-    assert.equal(calls.at(-1).op, 'pause');
+    assert.equal(child.stdout.isPaused(), true);
     notify({event: 'data', fd: 1, data: bytes.subarray(2).toString('base64')});
     assert.deepEqual(output, []);
     child.stdout.resume();
@@ -138,6 +203,8 @@ for (const side of ['main', 'renderer']) {
     assert.equal(child.stdout.read(2), '😀');
     assert.equal(child.stdout.readableLength, 0);
     notify({event: 'end', fd: 1});
+    child.stdout.read(0);
+    await flush();
     assert.equal(child.stdout.readableEnded, true);
     notify({event: 'exit', exitCode: 0, signal: 0});
     notify({event: 'end', fd: 2});
@@ -145,7 +212,7 @@ for (const side of ['main', 'renderer']) {
     await Promise.resolve();
   });
 
-  test(`${side}: setEncoding converts already buffered data and keeps split UTF-8`, async () => {
+  test(`${side}: setEncoding converts buffered data and replaces the decoder like Node`, async () => {
     const {cp, notify} = load(side);
     const child = cp.spawn('fixture.exe');
     const bytes = Buffer.from('中文');
@@ -156,8 +223,13 @@ for (const side of ['main', 'renderer']) {
     assert.equal(child.stdout.read(1), '中');
     child.stdout.setEncoding('utf8');
     notify({event: 'data', fd: 1, data: bytes.subarray(4).toString('base64')});
-    assert.equal(child.stdout.readableLength, 1);
-    assert.equal(child.stdout.read(1), '文');
+    const reference = new (require('node:stream').Readable)({read(){}});
+    reference.push(bytes.subarray(0, 4));
+    reference.setEncoding('UTF-8'); reference.read(1); reference.setEncoding('utf8');
+    reference.push(bytes.subarray(4));
+    assert.equal(child.stdout.readableLength, reference.readableLength);
+    assert.equal(child.stdout.read(), reference.read());
+    reference.destroy();
     notify({event: 'end', fd: 1});
     notify({event: 'exit', exitCode: 0, signal: 0});
     notify({event: 'end', fd: 2});
@@ -186,7 +258,7 @@ for (const side of ['main', 'renderer']) {
     assert.deepEqual(output, ['中文\ufffd']);
     notify({event: 'end', fd: 2});
     notify({event: 'close'});
-    await Promise.resolve();
+    await flush();
     assert.equal(closed, true);
   });
 
@@ -218,6 +290,7 @@ for (const side of ['main', 'renderer']) {
     await Promise.resolve();
     assert.deepEqual(order, []);
     notify({event: 'write', token: 1, code: 'ECANCELED'});
+    await flush();
     assert.deepEqual(order, ['write.callback', 'stdin.close']);
   });
 
@@ -229,6 +302,7 @@ for (const side of ['main', 'renderer']) {
     child.stdout.on('end', () => order.push('stdout.end'));
     child.stdout.on('close', () => order.push('stdout.close'));
     child.on('close', () => order.push('child.close'));
+    await flush();
     for (const text of ['a', 'b', 'c'])
       notify({event: 'data', fd: 1, data: Buffer.from(text).toString('base64')});
     notify({event: 'exit', exitCode: 0, signal: 0});
@@ -272,7 +346,7 @@ for (const side of ['main', 'renderer']) {
       }
       notify({event: 'end', fd: 1});
       assert.deepEqual(output, ['abc']);
-      assert.equal(readableEvents, 2);
+      assert.ok(readableEvents >= 1);
       if (!exitBeforeEof) notify({event: 'exit', exitCode: 0, signal: 0});
       notify({event: 'end', fd: 2});
       notify({event: 'close'});

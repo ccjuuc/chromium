@@ -14,12 +14,17 @@ const source = readBootstrapPart('main/http.js');
 // installing the production native-host instance in the test VM.
 const factoryEnd = source.indexOf('  const mainNetwork = createMainNetwork(');
 assert.ok(factoryEnd > 0, 'The native-host installation boundary must exist');
-const factory = readBootstrapPart('common/http_server.js') + source.slice(0, factoryEnd);
+const factory = readBootstrapPart('main/event_target.js') + `
+  Object.assign(globalThis, createMainEventClasses(error => {
+    queueMicrotask(() => { throw error; });
+  }, () => Date.now()));
+` + readBootstrapPart('common/http_server.js') +
+readBootstrapPart('common/http_upgrade.js') + source.slice(0, factoryEnd);
 
 async function fixture(t) {
   let pendingId = 1, cancellations = 0;
   const active = new Map();
-  const seen = [];
+  const seen = [], nativeRequests = [];
   const server = http.createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
@@ -41,6 +46,7 @@ async function fixture(t) {
   const context = vm.createContext({Buffer, URL, URLSearchParams, EventEmitter, netModule,
     queueMicrotask, setTimeout, clearTimeout,
     nativeRequest(request) {
+      nativeRequests.push(request);
       const id = pendingId++;
       const controller = new globalThis.AbortController();
       active.set(id, controller);
@@ -56,7 +62,7 @@ async function fixture(t) {
     nativeAbort(id) { ++cancellations; active.get(id)?.abort(); },
   });
   const api = vm.runInContext(factory + '\ncreateMainNetwork(nativeRequest, nativeAbort)', context);
-  return {api, seen, active, cancellations: () => cancellations,
+  return {api, seen, nativeRequests, active, eventClasses: context, cancellations: () => cancellations,
     url: 'http://127.0.0.1:' + server.address().port};
 }
 
@@ -71,6 +77,28 @@ test('main fetch sends real headers and preserves HTTP errors and binary bodies'
   assert.equal(Buffer.from(await response.arrayBuffer()).toString('hex'), '00ff8041');
   assert.equal(Buffer.from(await clone.arrayBuffer()).toString('hex'), '00ff8041');
   await assert.rejects(response.text(), {name: 'TypeError'});
+});
+
+test('Node fetch credentials never opt into browser cookies and explicit Cookie headers survive', async t => {
+  const {api, url, seen, nativeRequests} = await fixture(t);
+  for (const credentials of ['omit', 'same-origin', 'include']) {
+    const request = new api.globals.Request(url + '/binary', {
+      credentials, headers: {Cookie: 'explicit=' + credentials},
+    });
+    assert.equal(request.credentials, credentials);
+    await (await api.globals.fetch(request)).arrayBuffer();
+  }
+  await new Promise((resolve, reject) => api.http.get(url + '/binary', {
+    useSessionCookies: true, headers: {Cookie: 'explicit=http'},
+  }, response => {
+    response.on('data', () => {});
+    response.on('end', resolve);
+  }).on('error', reject));
+  assert.deepEqual(seen.map(request => request.headers.cookie), [
+    'explicit=omit', 'explicit=same-origin', 'explicit=include', 'explicit=http',
+  ]);
+  assert.equal(nativeRequests.length, 4);
+  assert.ok(nativeRequests.every(request => !Object.hasOwn(request, 'useSessionCookies')));
 });
 
 test('main fetch Request matches Axios capability checks and snapshots POST input', async t => {
@@ -111,6 +139,39 @@ test('main AbortController cancels the real active fetch and preserves reason', 
   assert.equal(active.size, 0);
   await assert.rejects(api.globals.fetch(url, {signal: controller.signal}), value => value === reason);
   assert.equal(cancellations(), 1);
+});
+
+test('main AbortSignal dispatches real events and preserves onabort registration order', async t => {
+  const {api, eventClasses} = await fixture(t);
+  const controller = new api.globals.AbortController();
+  const signal = controller.signal;
+  assert.ok(signal instanceof eventClasses.EventTarget);
+  const order = [];
+  signal.addEventListener('abort', event => {
+    order.push('first');
+    assert.ok(event instanceof eventClasses.Event);
+    assert.equal(event.target, signal);
+    assert.equal(event.currentTarget, signal);
+  });
+  signal.onabort = () => order.push('old');
+  signal.addEventListener('abort', () => order.push('last'));
+  signal.onabort = () => order.push('onabort');
+  controller.abort('reason');
+  controller.abort('ignored');
+  assert.deepEqual(order, ['first', 'onabort', 'last']);
+  assert.equal(signal.reason, 'reason');
+});
+
+test('main EventTarget signal cleanup survives stopImmediatePropagation on abort', async t => {
+  const {api, eventClasses} = await fixture(t);
+  const controller = new api.globals.AbortController();
+  controller.signal.addEventListener('abort', event => event.stopImmediatePropagation());
+  const target = new eventClasses.EventTarget();
+  let calls = 0;
+  target.addEventListener('change', () => ++calls, {signal: controller.signal});
+  controller.abort();
+  target.dispatchEvent(new eventClasses.Event('change'));
+  assert.equal(calls, 0);
 });
 
 test('main HTTP get emits actual status, data and completion in order', async t => {

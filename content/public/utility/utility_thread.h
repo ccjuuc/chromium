@@ -9,6 +9,11 @@
 #include "build/build_config.h"
 #include "content/common/content_export.h"
 #include "content/public/child/child_thread.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "base/functional/callback_forward.h"
+#endif
 
 namespace content {
 
@@ -23,6 +28,14 @@ class CONTENT_EXPORT UtilityThread : virtual public ChildThread {
 
   // Releases the process.
   virtual void ReleaseProcess() = 0;
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // Retains an out-of-process Utility until the returned closure is run.
+  // Native application cleanup may outlive its Mojo service receiver. The
+  // release is posted to the owning sequence; in-process utilities return an
+  // empty closure and never change the browser process lifetime.
+  virtual base::OnceClosure AcquireXenonProcessKeepAlive();
+#endif
 
   // Initializes blink if it hasn't already been initialized.
   virtual void EnsureBlinkInitialized() = 0;

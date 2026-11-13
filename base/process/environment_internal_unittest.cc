@@ -168,4 +168,35 @@ TEST_F(EnvironmentInternalTest, AlterEnvironment) {
 
 #endif  // BUILDFLAG(IS_WIN)
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+TEST_F(EnvironmentInternalTest, PreserveEmptyValuesWithoutChangingDefaultRemoval) {
+#if BUILDFLAG(IS_WIN)
+  const auto inherited = MakeBlock({L"REPLACE=old", L"KEEP=retained"});
+  const EnvironmentMap changes = {{L"EMPTY", L""}, {L"REPLACE", L""}};
+  ExpectEnvironmentBlock({L"KEEP=retained", L"EMPTY=", L"REPLACE="},
+                         AlterEnvironment(inherited, changes, true));
+  ExpectEnvironmentBlock({L"KEEP=retained"},
+                         AlterEnvironment(inherited, changes));
+  ExpectEnvironmentBlock({L"EMPTY=", L"REPLACE="},
+                         AlterEnvironment({}, changes, true));
+#else
+  const std::vector<const char*> inherited = {"REPLACE=old", "KEEP=retained"};
+  const EnvironmentMap changes = {{"EMPTY", ""}, {"REPLACE", ""}};
+  // SAFETY: The input entries are NUL-terminated static strings.
+  auto retained = UNSAFE_BUFFERS(AlterEnvironment(inherited, changes, true));
+  EXPECT_STREQ("KEEP=retained", retained[0]);
+  EXPECT_STREQ("EMPTY=", retained[1]);
+  EXPECT_STREQ("REPLACE=", retained[2]);
+  EXPECT_EQ(nullptr, retained[3]);
+  auto removed = UNSAFE_BUFFERS(AlterEnvironment(inherited, changes));
+  EXPECT_STREQ("KEEP=retained", removed[0]);
+  EXPECT_EQ(nullptr, removed[1]);
+  auto explicit_environment = UNSAFE_BUFFERS(AlterEnvironment({}, changes, true));
+  EXPECT_STREQ("EMPTY=", explicit_environment[0]);
+  EXPECT_STREQ("REPLACE=", explicit_environment[1]);
+  EXPECT_EQ(nullptr, explicit_environment[2]);
+#endif
+}
+#endif
+
 }  // namespace base::internal

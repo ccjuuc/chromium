@@ -21,9 +21,11 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "base/auto_reset.h"
@@ -54,6 +56,8 @@ struct NapiFinalizerData {
   napi_finalize callback;
   NAPI_RAW_PTR_EXCLUSION void* hint;
   v8::Global<v8::Value> persistent;
+  uintptr_t external_token = 0;
+  std::optional<napi_type_tag> type_tag = std::nullopt;
 };
 
 struct napi_async_context__ {
@@ -63,6 +67,51 @@ struct napi_async_context__ {
 };
 
 namespace {
+
+void BeginNapiAsyncShutdown(napi_env env);
+void DeleteIdleAsyncWork(napi_env env);
+
+struct NapiExternalRegistry {
+  std::mutex mutex;
+  uintptr_t next_token = 1;
+  std::unordered_map<uintptr_t, NapiFinalizerData*> values;
+};
+
+NapiExternalRegistry& GetExternalRegistry() {
+  static base::NoDestructor<NapiExternalRegistry> registry;
+  return *registry;
+}
+
+NapiFinalizerData* FindExternal(napi_env env, v8::Local<v8::Value> value) {
+  if (!value->IsExternal()) {
+    return nullptr;
+  }
+  auto& registry = GetExternalRegistry();
+  std::lock_guard lock(registry.mutex);
+  const auto token = reinterpret_cast<uintptr_t>(
+      value.As<v8::External>()->Value(v8::kExternalPointerTypeTagDefault));
+  const auto it = registry.values.find(token);
+  // Match both realm ownership and the External itself, never an arbitrary
+  // embedder pointer that happens to have the same numerical value as a token.
+  return it != registry.values.end() &&
+                 it->second->env->isolate == env->isolate &&
+                 it->second->persistent.Get(env->isolate) == value
+             ? it->second
+             : nullptr;
+}
+
+void ForgetExternal(const NapiFinalizerData& finalizer) {
+  if (finalizer.external_token) {
+    auto& registry = GetExternalRegistry();
+    std::lock_guard lock(registry.mutex);
+    registry.values.erase(finalizer.external_token);
+  }
+}
+
+v8::Local<v8::Private> GetTypeTagPrivateKey(napi_env env) {
+  return v8::Private::ForApi(env->isolate, v8::String::NewFromUtf8Literal(
+                                               env->isolate, "napi::type_tag"));
+}
 
 struct NapiAsyncContextRegistry {
   std::mutex mutex;
@@ -182,6 +231,7 @@ void RunNapiFinalizer(NapiFinalizerData* finalizer) {
     return;
   }
   owned->persistent.Reset();
+  ForgetExternal(*owned);
   if (owned->callback) {
     NapiValueScope value_scope(owned->env);
     owned->callback(owned->env, owned->data, owned->hint);
@@ -228,6 +278,15 @@ static void CallbackDispatcher(const v8::FunctionCallbackInfo<v8::Value>& info) 
       v8::Local<v8::External>::Cast(data_val)->Value(
           v8::kExternalPointerTypeTagDefault));
 
+  if (cbd->env->IsClosing()) {
+    info.GetIsolate()->ThrowException(
+        v8::Exception::Error(v8::String::NewFromUtf8Literal(
+            info.GetIsolate(), "Native environment is closing")));
+    return;
+  }
+  base::AutoReset<size_t> callback_depth(&cbd->env->native_callback_depth,
+                                         cbd->env->native_callback_depth + 1);
+
   NapiValueScope value_scope(cbd->env);
   napi_callback_info__ cb_info{info, cbd->data};
   cbd->env->last_error_info = {nullptr, nullptr, 0, napi_ok};
@@ -248,12 +307,26 @@ static void CallbackDispatcher(const v8::FunctionCallbackInfo<v8::Value>& info) 
   info.GetReturnValue().Set(return_value);
 }
 
-napi_env__::napi_env__(v8::Isolate* iso, v8::Local<v8::Context> ctx)
-    : isolate(iso) {
+napi_env__::napi_env__(v8::Isolate* iso,
+                       v8::Local<v8::Context> ctx,
+                       int32_t api_version)
+    : isolate(iso),
+      module_api_version(std::max(api_version, kDefaultModuleApiVersion)) {
   context.Reset(isolate, ctx);
 }
 
-napi_env__::~napi_env__() {
+void napi_env__::BeginShutdown() {
+  if (closing_) {
+    return;
+  }
+  closing_ = true;
+  base::AutoReset<size_t> depth(&native_callback_depth,
+                                native_callback_depth + 1);
+  BeginNapiAsyncShutdown(this);
+  RunCleanupHooks();
+}
+
+void napi_env__::RunCleanupHooks() {
   while (!cleanup_hooks.empty()) {
     // 与 Node 一致：本批逆序执行，回调中新加的钩子留到下一批；被移除的跳过。
     const auto pending_hooks = cleanup_hooks;
@@ -267,22 +340,51 @@ napi_env__::~napi_env__() {
       std::erase(cleanup_hooks, *it);
     }
   }
-  while (!finalizers.empty()) {
-    std::unique_ptr<NapiFinalizerData> finalizer = std::move(finalizers.back());
-    finalizers.pop_back();
-    finalizer->persistent.Reset();
-    if (finalizer->callback) {
-      NapiValueScope value_scope(this);
-      finalizer->callback(this, finalizer->data, finalizer->hint);
+}
+
+bool napi_env__::HasPendingWork() const {
+  return pending_async_work || !threadsafe_functions.empty() ||
+         native_callback_depth || async_callback_depth || finalizing_;
+}
+
+bool napi_env__::PollShutdown() {
+  CHECK(closing_);
+  if (HasPendingWork()) {
+    return false;
+  }
+  base::AutoReset<bool> finalizing(&finalizing_, true);
+  DeleteIdleAsyncWork(this);
+  // Finalizers and libuv close callbacks can register additional cleanup hooks
+  // or finalizers. Recheck on every poll, including after the loop was pumped.
+  do {
+    RunCleanupHooks();
+    while (!finalizers.empty()) {
+      std::unique_ptr<NapiFinalizerData> finalizer =
+          std::move(finalizers.back());
+      finalizers.pop_back();
+      finalizer->persistent.Reset();
+      ForgetExternal(*finalizer);
+      if (finalizer->callback) {
+        NapiValueScope value_scope(this);
+        finalizer->callback(this, finalizer->data, finalizer->hint);
+      }
     }
-  }
-  if (instance_data_finalize) {
-    NapiValueScope value_scope(this);
-    instance_data_finalize(this, instance_data, instance_data_finalize_hint);
-  }
-  instance_data = nullptr;
-  instance_data_finalize = nullptr;
-  instance_data_finalize_hint = nullptr;
+    auto callback = std::exchange(instance_data_finalize, nullptr);
+    void* data = std::exchange(instance_data, nullptr);
+    void* hint = std::exchange(instance_data_finalize_hint, nullptr);
+    if (callback) {
+      NapiValueScope value_scope(this);
+      callback(this, data, hint);
+    }
+  } while (!cleanup_hooks.empty() || !finalizers.empty() ||
+           instance_data_finalize);
+  return true;
+}
+
+napi_env__::~napi_env__() {
+  BeginShutdown();
+  CHECK(PollShutdown())
+      << "Destroying a native environment with pending callbacks";
   {
     auto& registry = GetAsyncContextRegistry();
     std::lock_guard lock(registry.mutex);
@@ -333,7 +435,11 @@ bool napi_env__::IsLiveValue(napi_value v) const {
   return v && live_values.contains(v);
 }
 
-napi_ref__::napi_ref__(napi_env env) : isolate(env->isolate), env(env) {}
+napi_ref__::napi_ref__(napi_env env, v8::Local<v8::Value> value)
+    : isolate(env->isolate),
+      env(env),
+      global_value(isolate, value),
+      can_be_weak(value->IsObject() || value->IsSymbol()) {}
 
 napi_ref__::~napi_ref__() {
   global_value.Reset();
@@ -341,6 +447,12 @@ napi_ref__::~napi_ref__() {
 
 void napi_ref__::SetWeak() {
   if (global_value.IsEmpty() || is_weak) {
+    return;
+  }
+  if (!can_be_weak) {
+    // Node-API 10 permits strong references to every value. Other primitives
+    // cannot be held weakly by V8, so reaching zero releases them immediately.
+    global_value.Reset();
     return;
   }
   global_value.SetWeak(this, OnReferenceCollected,
@@ -1776,18 +1888,17 @@ napi_status napi_create_reference(napi_env env,
     return napi_invalid_arg;
   }
   v8::Local<v8::Value> local_value = value->Get();
-  // The stable Node-API contract permits references only to objects, functions
-  // and symbols. In particular, an omitted optional callback is undefined and
-  // must leave the caller's reference output untouched, not create a truthy
-  // reference that later tries to invoke undefined.
+  // Node-API 10 introduced references to primitive values. Keep the legacy
+  // rejection for older addons, including undefined optional callbacks whose
+  // failed reference output must remain untouched.
   if (local_value.IsEmpty() ||
-      !(local_value->IsObject() || local_value->IsFunction() ||
-        local_value->IsSymbol())) {
+      (env->module_api_version < 10 &&
+       !(local_value->IsObject() || local_value->IsFunction() ||
+         local_value->IsSymbol()))) {
     env->last_error_info = {"Invalid argument", nullptr, 0, napi_invalid_arg};
     return napi_invalid_arg;
   }
-  auto ref = std::make_unique<napi_ref__>(env);
-  ref->global_value.Reset(env->isolate, local_value);
+  auto ref = std::make_unique<napi_ref__>(env, local_value);
   ref->ref_count = initial_refcount;
   if (initial_refcount == 0) {
     ref->SetWeak();
@@ -2356,29 +2467,126 @@ napi_status napi_get_last_error_info(
 
 napi_status napi_create_external(napi_env env, void* data, napi_finalize finalize_cb, void* finalize_hint, napi_value* result) {
   if (!env || !result) return napi_invalid_arg;
-  v8::Local<v8::External> ext = v8::External::New(
-      env->isolate, data, v8::kExternalPointerTypeTagDefault);
-  
-  if (finalize_cb) {
-    auto finalizer = std::make_unique<NapiFinalizerData>(
-        NapiFinalizerData{env, data, finalize_cb, finalize_hint, {}});
-    NapiFinalizerData* finalizer_ptr = finalizer.get();
-    finalizer_ptr->persistent.Reset(env->isolate, ext);
-    finalizer_ptr->persistent.SetWeak(finalizer_ptr, OnNapiFinalizerFirstPass,
-                                      v8::WeakCallbackType::kParameter);
-    env->finalizers.push_back(std::move(finalizer));
+  auto finalizer = std::make_unique<NapiFinalizerData>(
+      NapiFinalizerData{env, data, finalize_cb, finalize_hint, {}});
+  NapiFinalizerData* finalizer_ptr = finalizer.get();
+  {
+    auto& registry = GetExternalRegistry();
+    std::lock_guard lock(registry.mutex);
+    CHECK_NE(registry.next_token, 0u);
+    finalizer->external_token = registry.next_token++;
+    registry.values.emplace(finalizer->external_token, finalizer_ptr);
   }
+  v8::Local<v8::External> ext = v8::External::New(
+      env->isolate, reinterpret_cast<void*>(finalizer->external_token),
+      v8::kExternalPointerTypeTagDefault);
+  finalizer_ptr->persistent.Reset(env->isolate, ext);
+  finalizer_ptr->persistent.SetWeak(finalizer_ptr, OnNapiFinalizerFirstPass,
+                                    v8::WeakCallbackType::kParameter);
+  env->finalizers.push_back(std::move(finalizer));
 
   *result = env->CreateValue(ext);
   return napi_ok;
 }
 
 napi_status napi_get_value_external(napi_env env, napi_value value, void** result) {
-  if (!env || !value || !result) return napi_invalid_arg;
-  if (!value->Get()->IsExternal()) return napi_invalid_arg;
-  *result = v8::Local<v8::External>::Cast(value->Get())
-                ->Value(v8::kExternalPointerTypeTagDefault);
+  if (!env || !env->IsLiveValue(value) || !result) {
+    return napi_invalid_arg;
+  }
+  const auto* external = FindExternal(env, value->Get());
+  if (!external) {
+    return napi_invalid_arg;
+  }
+  *result = external->data;
   return napi_ok;
+}
+
+napi_status napi_type_tag_object(napi_env env,
+                                 napi_value object,
+                                 const napi_type_tag* type_tag) {
+  if (!env || !env->IsLiveValue(object) || !type_tag) {
+    return FinishAsyncApi(env, napi_invalid_arg);
+  }
+  if (!env->last_exception.IsEmpty()) {
+    return FinishAsyncApi(env, napi_pending_exception);
+  }
+  const auto value = object->Get();
+  if (value->IsExternal()) {
+    auto* external = FindExternal(env, value);
+    if (!external || external->type_tag) {
+      return FinishAsyncApi(env, napi_invalid_arg);
+    }
+    external->type_tag = *type_tag;
+    return FinishAsyncApi(env, napi_ok);
+  }
+  if (!value->IsObject()) {
+    return FinishAsyncApi(env, napi_object_expected);
+  }
+  auto context = env->GetContext();
+  auto target = value.As<v8::Object>();
+  auto key = GetTypeTagPrivateKey(env);
+  v8::TryCatch caught(env->isolate);
+  const auto has_tag = target->HasPrivate(context, key);
+  if (has_tag.IsNothing()) {
+    CaptureAsyncException(env, caught);
+    return FinishAsyncApi(env, napi_pending_exception);
+  }
+  if (has_tag.FromJust()) {
+    return FinishAsyncApi(env, napi_invalid_arg);
+  }
+  const uint64_t words[] = {type_tag->lower, type_tag->upper};
+  v8::Local<v8::BigInt> tag;
+  if (!v8::BigInt::NewFromWords(context, 0, 2, words).ToLocal(&tag) ||
+      !target->SetPrivate(context, key, tag).FromMaybe(false)) {
+    CaptureAsyncException(env, caught);
+    return FinishAsyncApi(env, caught.HasCaught() ? napi_pending_exception
+                                                  : napi_generic_failure);
+  }
+  return FinishAsyncApi(env, napi_ok);
+}
+
+napi_status napi_check_object_type_tag(napi_env env,
+                                       napi_value object,
+                                       const napi_type_tag* type_tag,
+                                       bool* result) {
+  if (!env || !env->IsLiveValue(object) || !type_tag || !result) {
+    return FinishAsyncApi(env, napi_invalid_arg);
+  }
+  if (!env->last_exception.IsEmpty()) {
+    return FinishAsyncApi(env, napi_pending_exception);
+  }
+  const auto value = object->Get();
+  if (value->IsExternal()) {
+    const auto* external = FindExternal(env, value);
+    if (!external) {
+      return FinishAsyncApi(env, napi_invalid_arg);
+    }
+    *result = external->type_tag &&
+              external->type_tag->lower == type_tag->lower &&
+              external->type_tag->upper == type_tag->upper;
+    return FinishAsyncApi(env, napi_ok);
+  }
+  if (!value->IsObject()) {
+    return FinishAsyncApi(env, napi_object_expected);
+  }
+  v8::TryCatch caught(env->isolate);
+  v8::Local<v8::Value> tag;
+  if (!value.As<v8::Object>()
+           ->GetPrivate(env->GetContext(), GetTypeTagPrivateKey(env))
+           .ToLocal(&tag)) {
+    CaptureAsyncException(env, caught);
+    return FinishAsyncApi(env, napi_pending_exception);
+  }
+  *result = false;
+  if (tag->IsBigInt()) {
+    uint64_t words[2] = {0, 0};
+    int sign = 0;
+    int count = 2;
+    tag.As<v8::BigInt>()->ToWordsArray(&sign, &count, words);
+    *result = sign == 0 && count <= 2 && words[0] == type_tag->lower &&
+              words[1] == type_tag->upper;
+  }
+  return FinishAsyncApi(env, napi_ok);
 }
 
 // --- Execution ---
@@ -3012,6 +3220,14 @@ NAPI_EXTERN napi_module* xenon_napi_get_last_registered_module(void) {
 }
 
 struct napi_async_work__ {
+  enum class State {
+    kCreated,
+    kQueued,
+    kRunning,
+    kCancelled,
+    kCompleting,
+    kComplete
+  };
   napi_async_work__(napi_env env,
                     napi_async_execute_callback execute,
                     napi_async_complete_callback complete,
@@ -3023,6 +3239,8 @@ struct napi_async_work__ {
   napi_async_complete_callback complete;
   NAPI_RAW_PTR_EXCLUSION void* data;
   scoped_refptr<base::SingleThreadTaskRunner> main_task_runner;
+  std::atomic<State> state{State::kCreated};
+  bool delete_after_completion = false;
 };
 
 napi_async_work__::napi_async_work__(napi_env env,
@@ -3040,44 +3258,108 @@ napi_status napi_create_async_work(napi_env env,
                                    void* data,
                                    napi_async_work* result) {
   if (!env || !execute || !result) return napi_invalid_arg;
+  if (env->IsClosing()) {
+    return napi_closing;
+  }
   auto* work = new napi_async_work__(env, execute, complete, data);
+  env->async_work.insert(work);
   *result = work;
   return napi_ok;
 }
 
 napi_status napi_delete_async_work(napi_env env, napi_async_work work) {
-  if (!env || !work) return napi_invalid_arg;
+  if (!env || !env->async_work.contains(work)) {
+    return napi_invalid_arg;
+  }
+  using State = napi_async_work__::State;
+  const auto state = work->state.load();
+  if (state == State::kCompleting) {
+    work->delete_after_completion = true;
+    return napi_ok;
+  }
+  if (state != State::kCreated && state != State::kComplete) {
+    return napi_generic_failure;
+  }
+  env->async_work.erase(work);
   delete work;
   return napi_ok;
 }
 
 napi_status napi_queue_async_work(napi_env env, napi_async_work work) {
-  if (!env || !work) return napi_invalid_arg;
+  if (!env || !env->async_work.contains(work) ||
+      !base::SingleThreadTaskRunner::HasCurrentDefault()) {
+    return napi_invalid_arg;
+  }
+  if (env->IsClosing()) {
+    return napi_closing;
+  }
+  using State = napi_async_work__::State;
+  const auto state = work->state.load();
+  if (state != State::kCreated && state != State::kComplete) {
+    return napi_generic_failure;
+  }
   work->main_task_runner = base::SingleThreadTaskRunner::GetCurrentDefault();
-  
-  base::ThreadPool::PostTaskAndReply(
+  work->state.store(State::kQueued);
+  ++env->pending_async_work;
+  const bool queued = base::ThreadPool::PostTaskAndReply(
       FROM_HERE,
-      {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-      base::BindOnce([](napi_async_work work) {
-        work->execute(work->env, work->data);
-      }, work),
-      base::BindOnce([](napi_async_work work) {
-        if (work->complete) {
-          v8::Isolate* isolate = work->env->isolate;
-          v8::Locker locker(isolate);
-          v8::Isolate::Scope isolate_scope(isolate);
-          v8::HandleScope handle_scope(isolate);
-          v8::Context::Scope context_scope(work->env->GetContext());
-          NapiValueScope value_scope(work->env);
-
-          work->complete(work->env, napi_ok, work->data);
-        }
-      }, work));
+      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
+       base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
+      base::BindOnce(
+          [](napi_async_work work) {
+            auto expected = State::kQueued;
+            if (work->state.compare_exchange_strong(expected,
+                                                    State::kRunning)) {
+              work->execute(work->env, work->data);
+            }
+          },
+          work),
+      base::BindOnce(
+          [](napi_async_work work) {
+            napi_env env = work->env;
+            const bool cancelled =
+                work->state.exchange(State::kCompleting) == State::kCancelled;
+            if (work->complete) {
+              v8::Isolate* isolate = env->isolate;
+              v8::Locker locker(isolate);
+              v8::Isolate::Scope isolate_scope(isolate);
+              v8::HandleScope handle_scope(isolate);
+              v8::Context::Scope context_scope(env->GetContext());
+              NapiValueScope value_scope(env);
+              base::AutoReset<size_t> depth(&env->native_callback_depth,
+                                            env->native_callback_depth + 1);
+              work->complete(env, cancelled ? napi_cancelled : napi_ok,
+                             work->data);
+            }
+            // complete is allowed to call delete_async_work. Deletion is
+            // deferred until its native stack and all V8/value scopes above
+            // have unwound.
+            work->state.store(State::kComplete);
+            CHECK_GT(env->pending_async_work, 0u);
+            --env->pending_async_work;
+            if (work->delete_after_completion) {
+              env->async_work.erase(work);
+              delete work;
+            }
+          },
+          work));
+  if (!queued) {
+    work->state.store(state);
+    --env->pending_async_work;
+    return napi_generic_failure;
+  }
   return napi_ok;
 }
 
 napi_status napi_cancel_async_work(napi_env env, napi_async_work work) {
-  return napi_generic_failure;
+  if (!env || !env->async_work.contains(work)) {
+    return napi_invalid_arg;
+  }
+  auto expected = napi_async_work__::State::kQueued;
+  return work->state.compare_exchange_strong(
+             expected, napi_async_work__::State::kCancelled)
+             ? napi_ok
+             : napi_generic_failure;
 }
 
 struct napi_threadsafe_function__ {
@@ -3095,9 +3377,14 @@ struct napi_threadsafe_function__ {
   size_t max_queue_size = 0;
   size_t queue_size = 0;
   size_t thread_count = 0;
+  size_t active_calls = 0;
   bool closing = false;
   bool aborting = false;
+  bool environment_shutdown = false;
   bool finalize_posted = false;
+  bool finalizer_started = false;
+  bool finalizer_finished = false;
+  bool referenced = true;
 
   NAPI_RAW_PTR_EXCLUSION void* thread_finalize_data;
   napi_finalize thread_finalize_cb;
@@ -3108,35 +3395,85 @@ napi_threadsafe_function__::~napi_threadsafe_function__() = default;
 
 namespace {
 
-void FinalizeThreadsafeFunction(napi_threadsafe_function func) {
-  v8::Isolate* isolate = func->env->isolate;
-  v8::Locker locker(isolate);
-  v8::Isolate::Scope isolate_scope(isolate);
-  v8::HandleScope handle_scope(isolate);
-  v8::Context::Scope context_scope(func->env->GetContext());
-  NapiValueScope value_scope(func->env);
+void FinalizeThreadsafeFunction(napi_threadsafe_function func);
 
-  if (func->thread_finalize_cb) {
-    func->thread_finalize_cb(func->env, func->thread_finalize_data,
-                             func->context);
+// Caller holds mutex. Posting while locked prevents the owner from deleting
+// the object between the final producer's unlock and its last access.
+void ScheduleThreadsafeFunctionFinalizerLocked(napi_threadsafe_function func) {
+  if (!func->closing || func->queue_size || func->active_calls ||
+      func->finalize_posted ||
+      (!func->finalizer_started && func->thread_count && !func->aborting) ||
+      (func->finalizer_started &&
+       (!func->finalizer_finished ||
+        (func->thread_count && !func->environment_shutdown)))) {
+    return;
   }
-  func->js_callback.Reset();
-  delete func;
+  func->finalize_posted = true;
+  CHECK(func->main_task_runner->PostTask(
+      FROM_HERE, base::BindOnce(&FinalizeThreadsafeFunction, func)));
 }
 
-void ScheduleThreadsafeFunctionFinalizer(napi_threadsafe_function func) {
-  bool should_post = false;
-  {
-    std::lock_guard<std::mutex> lock(func->mutex);
-    if (func->closing && func->thread_count == 0 && func->queue_size == 0 &&
-        !func->finalize_posted) {
-      func->finalize_posted = true;
-      should_post = true;
-    }
+class ThreadsafeFunctionCallScope {
+ public:
+  explicit ThreadsafeFunctionCallScope(napi_threadsafe_function func)
+      : func_(func) {
+    std::lock_guard lock(func_->mutex);
+    ++func_->active_calls;
   }
-  if (should_post) {
-    func->main_task_runner->PostTask(
-        FROM_HERE, base::BindOnce(&FinalizeThreadsafeFunction, func));
+  ~ThreadsafeFunctionCallScope() {
+    std::lock_guard lock(func_->mutex);
+    CHECK_GT(func_->active_calls, 0u);
+    --func_->active_calls;
+    ScheduleThreadsafeFunctionFinalizerLocked(func_);
+  }
+
+ private:
+  napi_threadsafe_function func_;
+};
+
+void FinalizeThreadsafeFunction(napi_threadsafe_function func) {
+  bool run_finalizer;
+  {
+    std::lock_guard lock(func->mutex);
+    if (func->active_calls || func->queue_size) {
+      func->finalize_posted = false;
+      return;
+    }
+    run_finalizer = !func->finalizer_started;
+    func->finalizer_started = true;
+  }
+  if (run_finalizer) {
+    napi_env env = func->env;
+    v8::Isolate* isolate = env->isolate;
+    v8::Locker locker(isolate);
+    v8::Isolate::Scope isolate_scope(isolate);
+    v8::HandleScope handle_scope(isolate);
+    v8::Context::Scope context_scope(env->GetContext());
+    NapiValueScope value_scope(env);
+    base::AutoReset<size_t> depth(&env->native_callback_depth,
+                                  env->native_callback_depth + 1);
+    // This callback may join producers woken by the closing notification.
+    // Do not hold mutex or wait for their token count before invoking it.
+    if (func->thread_finalize_cb) {
+      func->thread_finalize_cb(env, func->thread_finalize_data, func->context);
+    }
+    func->js_callback.Reset();
+  }
+  bool can_delete;
+  {
+    std::lock_guard lock(func->mutex);
+    func->finalizer_finished = true;
+    func->finalize_posted = false;
+    // Environment cleanup hooks and the finalizer have stopped or joined the
+    // event sources. Like Node, do not let unused logical owner tokens keep
+    // the environment alive after that forced shutdown.
+    can_delete =
+        (!func->thread_count || func->environment_shutdown) &&
+        !func->queue_size && !func->active_calls;
+  }
+  if (can_delete) {
+    func->env->threadsafe_functions.erase(func);
+    delete func;
   }
 }
 
@@ -3158,6 +3495,8 @@ void RunThreadsafeFunctionCall(napi_threadsafe_function func, void* data) {
     v8::HandleScope handle_scope(isolate);
     v8::Context::Scope context_scope(func->env->GetContext());
     NapiValueScope value_scope(func->env);
+    base::AutoReset<size_t> depth(&func->env->native_callback_depth,
+                                  func->env->native_callback_depth + 1);
 
     v8::Local<v8::Function> callback;
     if (!func->js_callback.IsEmpty()) {
@@ -3179,9 +3518,33 @@ void RunThreadsafeFunctionCall(napi_threadsafe_function func, void* data) {
     std::lock_guard<std::mutex> lock(func->mutex);
     CHECK_GT(func->queue_size, 0u);
     --func->queue_size;
+    ScheduleThreadsafeFunctionFinalizerLocked(func);
+    func->queue_condition.notify_all();
   }
-  func->queue_condition.notify_all();
-  ScheduleThreadsafeFunctionFinalizer(func);
+}
+
+void BeginNapiAsyncShutdown(napi_env env) {
+  for (napi_async_work work : env->async_work) {
+    auto expected = napi_async_work__::State::kQueued;
+    work->state.compare_exchange_strong(expected,
+                                        napi_async_work__::State::kCancelled);
+  }
+  for (napi_threadsafe_function func : env->threadsafe_functions) {
+    std::lock_guard lock(func->mutex);
+    func->closing = true;
+    func->aborting = true;
+    func->environment_shutdown = true;
+    func->queue_condition.notify_all();
+    ScheduleThreadsafeFunctionFinalizerLocked(func);
+  }
+}
+
+void DeleteIdleAsyncWork(napi_env env) {
+  CHECK_EQ(env->pending_async_work, 0u);
+  for (napi_async_work work : env->async_work) {
+    delete work;
+  }
+  env->async_work.clear();
 }
 
 v8::Local<v8::Private> GetBufferPrivateKey(v8::Isolate* isolate) {
@@ -3227,7 +3590,10 @@ napi_status napi_create_threadsafe_function(
       !base::SingleThreadTaskRunner::HasCurrentDefault()) {
     return napi_invalid_arg;
   }
-  if (func && !func->Get()->IsFunction()) {
+  if (env->IsClosing()) {
+    return napi_closing;
+  }
+  if (func && (!env->IsLiveValue(func) || !func->Get()->IsFunction())) {
     return napi_function_expected;
   }
 
@@ -3243,6 +3609,7 @@ napi_status napi_create_threadsafe_function(
   tsfn->thread_count = initial_thread_count;
   tsfn->thread_finalize_data = thread_finalize_data;
   tsfn->thread_finalize_cb = thread_finalize_cb;
+  env->threadsafe_functions.insert(tsfn);
 
   *result = tsfn;
   return napi_ok;
@@ -3250,16 +3617,22 @@ napi_status napi_create_threadsafe_function(
 
 napi_status napi_get_threadsafe_function_context(napi_threadsafe_function func, void** result) {
   if (!func || !result) return napi_invalid_arg;
+  ThreadsafeFunctionCallScope call_scope(func);
   *result = func->context;
   return napi_ok;
 }
 
 napi_status napi_call_threadsafe_function(napi_threadsafe_function func, void* data, napi_threadsafe_function_call_mode is_blocking) {
   if (!func) return napi_invalid_arg;
+  ThreadsafeFunctionCallScope call_scope(func);
 
   {
     std::unique_lock<std::mutex> lock(func->mutex);
     if (func->closing) {
+      if (!func->thread_count) {
+        return napi_invalid_arg;
+      }
+      --func->thread_count;
       return napi_closing;
     }
     if (func->max_queue_size > 0) {
@@ -3276,6 +3649,10 @@ napi_status napi_call_threadsafe_function(napi_threadsafe_function func, void* d
           return func->closing || func->queue_size < func->max_queue_size;
         });
         if (func->closing) {
+          if (!func->thread_count) {
+            return napi_invalid_arg;
+          }
+          --func->thread_count;
           return napi_closing;
         }
       }
@@ -3298,6 +3675,7 @@ napi_status napi_call_threadsafe_function(napi_threadsafe_function func, void* d
 
 napi_status napi_acquire_threadsafe_function(napi_threadsafe_function func) {
   if (!func) return napi_invalid_arg;
+  ThreadsafeFunctionCallScope call_scope(func);
   std::lock_guard<std::mutex> lock(func->mutex);
   if (func->closing) {
     return napi_closing;
@@ -3308,6 +3686,7 @@ napi_status napi_acquire_threadsafe_function(napi_threadsafe_function func) {
 
 napi_status napi_release_threadsafe_function(napi_threadsafe_function func, napi_threadsafe_function_release_mode mode) {
   if (!func) return napi_invalid_arg;
+  ThreadsafeFunctionCallScope call_scope(func);
   {
     std::lock_guard<std::mutex> lock(func->mutex);
     if (func->thread_count == 0) {
@@ -3323,7 +3702,6 @@ napi_status napi_release_threadsafe_function(napi_threadsafe_function func, napi
     }
   }
   func->queue_condition.notify_all();
-  ScheduleThreadsafeFunctionFinalizer(func);
   return napi_ok;
 }
 
@@ -3331,6 +3709,12 @@ napi_status napi_ref_threadsafe_function(napi_env env, napi_threadsafe_function 
   if (!env || !func) {
     return napi_invalid_arg;
   }
+  ThreadsafeFunctionCallScope call_scope(func);
+  if (func->env != env) {
+    return napi_invalid_arg;
+  }
+  std::lock_guard lock(func->mutex);
+  func->referenced = true;
   return napi_ok;
 }
 
@@ -3338,6 +3722,12 @@ napi_status napi_unref_threadsafe_function(napi_env env, napi_threadsafe_functio
   if (!env || !func) {
     return napi_invalid_arg;
   }
+  ThreadsafeFunctionCallScope call_scope(func);
+  if (func->env != env) {
+    return napi_invalid_arg;
+  }
+  std::lock_guard lock(func->mutex);
+  func->referenced = false;
   return napi_ok;
 }
 
@@ -3360,6 +3750,23 @@ napi_status napi_create_buffer(napi_env env, size_t length, void** data, napi_va
   }
   *result = env->CreateValue(buffer);
   return napi_ok;
+}
+
+napi_status napi_create_external_buffer(napi_env env,
+                                        size_t length,
+                                        void* data,
+                                        napi_finalize finalize_cb,
+                                        void* finalize_hint,
+                                        napi_value* result) {
+  if (!env || !result || (length && !data)) {
+    return FinishAsyncApi(env, napi_invalid_arg);
+  }
+  // This host only accepts V8-managed backing stores. In particular, Chromium's
+  // V8 sandbox cannot expose an arbitrary native allocation to JavaScript.
+  // Ownership stays with the caller; node-addon-api's NewOrCopy may explicitly
+  // choose napi_create_buffer_copy after this status. A silent copy here would
+  // violate the aliasing and finalizer contract of an external Buffer.
+  return FinishAsyncApi(env, napi_no_external_buffers_allowed);
 }
 
 napi_status napi_create_buffer_copy(napi_env env,
@@ -3465,6 +3872,16 @@ napi_status napi_get_node_version(napi_env env,
 
 napi_status napi_get_uv_event_loop(napi_env env, uv_loop_t** loop) {
   if (!env || !loop) return napi_invalid_arg;
+  if (env->uv_loop) {
+    *loop = env->uv_loop;
+    return FinishAsyncApi(env, napi_ok);
+  }
+  if (!env->allow_default_uv_loop) {
+    *loop = nullptr;
+    return FinishAsyncApi(
+        env, napi_generic_failure,
+        "This native environment has no host-owned libuv event loop");
+  }
 #if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
   env->uv_loop = uv_default_loop();
   env->uv_run_function = reinterpret_cast<XenonUvRunFunction>(&uv_run);

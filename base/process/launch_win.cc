@@ -422,8 +422,14 @@ Process LaunchProcess(const CommandLine::StringType& cmdline,
         current_env = internal::GetEnvironment();
       }
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+      env_storage = internal::AlterEnvironment(
+          current_env, options.environment,
+          options.preserve_empty_environment_values);
+#else
       env_storage =
           internal::AlterEnvironment(current_env, options.environment);
+#endif
       new_environment = data(env_storage);
       flags |= CREATE_UNICODE_ENVIRONMENT;
     }

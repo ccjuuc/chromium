@@ -456,6 +456,8 @@ source_set("browser_sources") {
     "storage_partition.h",
     "storage_partition_config.cc",
     "storage_partition_config.h",
+    "storage_partition_path.h",
+    "storage_service_context.h",
     "storage_usage_info.h",
     "stored_payment_app.cc",
     "stored_payment_app.h",
@@ -510,6 +512,7 @@ source_set("browser_sources") {
     "web_contents_user_data.h",
     "web_contents_view_delegate.cc",
     "web_contents_view_delegate.h",
+    "web_contents_visibility_policy.h",
     "web_drag_dest_delegate.h",
     "web_exposed_isolation_level.h",
     "web_ui.h",
@@ -612,6 +615,8 @@ source_set("browser_sources") {
     "//services/webnn/public/cpp",
     "//services/webnn/public/mojom:webnn_service_introspection",
     "//url",
+    "//xenon_overlay/buildflags",
+    "//xenon_overlay/public:utility_process_launch_options",
 
     # We expose skia headers in the public API.
     "//skia",

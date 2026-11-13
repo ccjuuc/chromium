@@ -4,9 +4,12 @@
 
 #include "xenon_overlay/chrome/browser/ipc/xenon_app_runtime.h"
 
+#include <algorithm>
 #include <utility>
+#include <vector>
 
 #include "base/base_paths.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/path_service.h"
@@ -36,6 +39,70 @@ base::FilePath ApplicationUnderResources(const base::FilePath& resources) {
   }
   const auto directory = resources.AppendASCII("app");
   return base::DirectoryExists(directory) ? directory : base::FilePath();
+}
+
+// Some releases keep their engine and resources below a version directory.
+// Search only this one level of standard layouts, never arbitrary descendants.
+// A caller can always select the actual app directory when several versions
+// coexist; picking the lexically newest name would guess the launcher policy.
+bool FindNestedResources(const base::FilePath& root,
+                         base::FilePath* resources,
+                         std::string* error) {
+  std::vector<base::FilePath> candidates;
+  base::FileEnumerator children(
+      root, false, base::FileEnumerator::DIRECTORIES,
+      base::FilePath::StringType(),
+      base::FileEnumerator::FolderSearchPolicy::MATCH_ONLY,
+      base::FileEnumerator::ErrorPolicy::STOP_ENUMERATION);
+  size_t inspected = 0;
+  for (auto child = children.Next(); !child.empty(); child = children.Next()) {
+    if (++inspected > 1024) {
+      *error = "Electron release has too many subdirectories to discover an "
+               "application; specify its resources or application directory";
+      return false;
+    }
+    const auto candidate = child.AppendASCII("resources");
+    if (base::IsLink(child) || base::IsLink(candidate)) {
+      continue;
+    }
+    const auto app = ApplicationUnderResources(candidate);
+    if (app.empty() || base::IsLink(app)) {
+      continue;
+    }
+    if (base::DirectoryExists(app)) {
+      const auto manifest = app.AppendASCII("package.json");
+      if (!base::PathExists(manifest) || base::IsLink(manifest)) {
+        continue;
+      }
+    }
+    base::FilePath canonical_app;
+    base::FilePath canonical_resources;
+    if (!base::NormalizeFilePath(app, &canonical_app) ||
+        !base::NormalizeFilePath(candidate, &canonical_resources) ||
+        !root.IsParent(canonical_resources) ||
+        !canonical_resources.IsParent(canonical_app)) {
+      continue;
+    }
+    candidates.push_back(std::move(canonical_resources));
+  }
+  if (children.GetError() != base::File::FILE_OK) {
+    *error = "Unable to enumerate Electron release subdirectories: " +
+             root.AsUTF8Unsafe();
+    return false;
+  }
+  if (candidates.size() > 1) {
+    std::sort(candidates.begin(), candidates.end());
+    *error = "Multiple Electron applications found; specify an application "
+             "directory explicitly:";
+    for (const auto& candidate : candidates) {
+      *error += " " + ApplicationUnderResources(candidate).AsUTF8Unsafe();
+    }
+    return false;
+  }
+  if (!candidates.empty()) {
+    *resources = std::move(candidates.front());
+  }
+  return true;
 }
 
 }  // namespace
@@ -74,6 +141,18 @@ bool ResolveElectronApplication(const base::FilePath& requested,
         result.resources_directory = resources;
         result.is_packaged = true;
         break;
+      }
+    }
+    if (result.resources_directory.empty() &&
+        !base::PathExists(normalized.AppendASCII("package.json"))) {
+      if (!FindNestedResources(normalized, &result.resources_directory,
+                               error)) {
+        return false;
+      }
+      if (!result.resources_directory.empty()) {
+        result.app_path =
+            ApplicationUnderResources(result.resources_directory);
+        result.is_packaged = true;
       }
     }
   } else if (!normalized.MatchesExtension(FILE_PATH_LITERAL(".asar"))) {

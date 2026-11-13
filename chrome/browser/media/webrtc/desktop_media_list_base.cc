@@ -78,6 +78,18 @@ void DesktopMediaListBase::Update(UpdateCallback callback) {
   Refresh(false);
 }
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+void DesktopMediaListBase::UpdateWithThumbnails(UpdateCallback callback) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  DCHECK(sources_.empty());
+  DCHECK(!refresh_callback_);
+  DCHECK(!observer_);
+  DCHECK(!IsSourceListDelegated());
+  refresh_callback_ = std::move(callback);
+  Refresh(true);
+}
+#endif
+
 int DesktopMediaListBase::GetSourceCount() const {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   return sources_.size();

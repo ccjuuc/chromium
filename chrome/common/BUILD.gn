@@ -267,6 +267,7 @@ static_library("common_lib") {
     "//ui/native_theme",
     "//ui/resources",
     "//url",
+    "//xenon_overlay/buildflags",
   ]
 
   deps = [
@@ -282,11 +283,11 @@ static_library("common_lib") {
     "//components/page_load_metrics/common",
     "//components/pdf/common:constants",
     "//components/pdf/common:util",
-    "//xenon_overlay/buildflags",
   ]
 
   if (enable_xenon_service) {
     deps += [ "//xenon_overlay/common/ipc:privileged_schemes" ]
+    public_deps += [ "//xenon_overlay/common/ipc:renderer_command_line" ]
   }
 
   if (is_mac || is_win || is_linux || is_chromeos) {

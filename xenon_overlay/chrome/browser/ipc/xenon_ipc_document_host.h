@@ -6,12 +6,15 @@
 #define XENON_OVERLAY_CHROME_BROWSER_IPC_XENON_IPC_DOCUMENT_HOST_H_
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include "base/memory/weak_ptr.h"
 #include "base/threading/sequence_bound.h"
 #include "base/unguessable_token.h"
+#include "base/values.h"
 #include "content/public/browser/document_service.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
 
@@ -27,7 +30,8 @@ class XenonSqliteBridge;
 // cross-document navigation commits, while XenonIpcMainContainer remains
 // alive in the Utility process.
 class XenonIpcDocumentHost final
-    : public content::DocumentService<xenon::ipc::mojom::IpcHost> {
+    : public content::DocumentService<xenon::ipc::mojom::IpcHost>,
+      public content::WebContentsObserver {
  public:
   static void Create(
       content::RenderFrameHost* render_frame_host,
@@ -42,6 +46,9 @@ class XenonIpcDocumentHost final
   XenonIpcDocumentHost& operator=(const XenonIpcDocumentHost&) = delete;
 
  private:
+  // content::WebContentsObserver:
+  void DidFinishNavigation(content::NavigationHandle* navigation) override;
+
   // xenon::ipc::mojom::IpcHost:
   void AttachGuest(const base::UnguessableToken& frame_token,
                    base::Value preferences,
@@ -51,12 +58,16 @@ class XenonIpcDocumentHost final
                             content::RenderFrameHost* frame);
   void GetRuntimeConfig(GetRuntimeConfigCallback callback) override;
   void BindRenderer(
-      mojo::PendingRemote<xenon::ipc::mojom::IpcRenderer> renderer) override;
+      mojo::PendingRemote<xenon::ipc::mojom::IpcRenderer> renderer,
+      BindRendererCallback callback) override;
   void BindNodeAddonHost(
       mojo::PendingReceiver<xenon::ipc::mojom::NodeAddonHost> receiver,
       mojo::PendingRemote<xenon::ipc::mojom::IpcRenderer> callback_renderer)
       override;
+  void DidFirstNonEmptyLayout() override;
   void Send(const std::string& channel, base::Value arguments) override;
+  void PostMessage(const std::string& channel,
+                   blink::TransferableMessage message) override;
   void Invoke(const std::string& channel,
               base::Value arguments,
               InvokeCallback callback) override;
@@ -65,6 +76,10 @@ class XenonIpcDocumentHost final
                 SendSyncCallback callback) override;
   bool IsAllowedDocument() const;
   bool IsCurrentRenderer() const;
+  bool InitializeSandboxPolicy();
+  bool AllowsSandboxChannel(const std::string& channel,
+                            const base::Value& arguments);
+  xenon::ipc::mojom::IpcResultPtr SandboxDeniedResult() const;
   std::string ResolveContainerId() const;
   void UpdateRendererFrameUrl();
   xenon::ipc::mojom::IpcResultPtr UnavailableResult() const;
@@ -73,6 +88,7 @@ class XenonIpcDocumentHost final
   std::string container_id_;
   std::string renderer_frame_url_;
   uint64_t service_generation_ = 0;
+  std::optional<base::DictValue> effective_preferences_;
   base::SequenceBound<XenonSqliteBridge> sqlite_bridge_;
   base::WeakPtrFactory<XenonIpcDocumentHost> weak_factory_{this};
 };

@@ -34,6 +34,7 @@
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/permission_controller.h"
 #include "content/public/browser/session_storage_usage_info.h"
+#include "content/public/browser/storage_service_context.h"
 #include "content/public/browser/storage_usage_info.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_features.h"
@@ -351,7 +352,13 @@ void DOMStorageContextWrapper::MaybeBindSessionStorageControl(
   if (!partition_)
     return;
   session_storage_control_.reset();
-  partition_->GetStorageService()->BindSessionStorageControl(
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  auto& service =
+      GetStorageServiceForBrowserContext(partition_->browser_context());
+#else
+  auto& service = partition_->GetStorageService();
+#endif
+  service->BindSessionStorageControl(
       partition_->GetStoragePartitionPath(), clear_on_open,
       session_storage_control_.BindNewPipeAndPassReceiver());
   session_storage_control_.set_disconnect_handler(
@@ -371,7 +378,13 @@ void DOMStorageContextWrapper::MaybeBindLocalStorageControl() {
     return;
   }
   local_storage_control_.reset();
-  partition_->GetStorageService()->BindLocalStorageControl(
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  auto& service =
+      GetStorageServiceForBrowserContext(partition_->browser_context());
+#else
+  auto& service = partition_->GetStorageService();
+#endif
+  service->BindLocalStorageControl(
       partition_->GetStoragePartitionPath(),
       local_storage_control_.BindNewPipeAndPassReceiver());
   local_storage_control_.set_disconnect_handler(

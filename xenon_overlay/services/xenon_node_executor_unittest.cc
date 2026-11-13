@@ -23,9 +23,14 @@
 #include "build/build_config.h"
 #include "gin/function_template.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "xenon_overlay/chrome/browser/napi/napi_loader.h"
 #include "xenon_overlay/chrome/browser/napi/napi_switches.h"
 #include "xenon_overlay/common/asar/archive.h"
 #include "xenon_overlay/common/asar/test_support.h"
+
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+#endif
 
 namespace xenon {
 
@@ -516,6 +521,242 @@ TEST_F(XenonNodeArchiveTest, UnpackedResolutionPreservesNativeDirectoryPolicy) {
   std::string error;
   EXPECT_FALSE(executor_->LoadAddonFromCurrentThread(virtual_path_, &error));
   EXPECT_NE(std::string::npos, error.find("outside the executable directory"));
+}
+
+class XenonNodeApplicationTest : public XenonNodePromiseTest {
+ protected:
+  void SetUp() override {
+    XenonNodePromiseTest::SetUp();
+    ASSERT_FALSE(HasFatalFailure());
+    command_line_.GetProcessCommandLine()->RemoveSwitch(
+        napi_switches::kAllowExternalNodeAddons);
+    ASSERT_TRUE(temporary_.CreateUniqueTempDir());
+    application_ = temporary_.GetPath().AppendASCII("application");
+    ASSERT_TRUE(base::CreateDirectory(application_));
+    executor_->SetApplicationPath(application_);
+  }
+
+  void TearDown() override {
+    executor_.reset();
+    task_environment_.RunUntilIdle();
+  }
+
+  base::FilePath CopyAddon(const base::FilePath& directory) {
+    EXPECT_TRUE(base::CreateDirectory(directory));
+    const auto destination = directory.AppendASCII("test_addon.node");
+    EXPECT_TRUE(base::CopyFile(base::FilePath::FromUTF8Unsafe(addon_path_),
+                               destination));
+    return destination;
+  }
+
+  void ExpectBlocked(XenonNodeExecutor& executor, const base::FilePath& path) {
+    std::string error;
+    EXPECT_FALSE(
+        executor.LoadAddonFromCurrentThread(path.AsUTF8Unsafe(), &error));
+    EXPECT_TRUE(error.starts_with("ERR_ACCESS_DENIED:")) << error;
+    LoadFuture asynchronous;
+    executor.LoadAddon(path.AsUTF8Unsafe(), asynchronous.GetCallback(), false);
+    EXPECT_FALSE(asynchronous.Get<0>());
+    EXPECT_TRUE(asynchronous.Get<1>().starts_with("ERR_ACCESS_DENIED:"))
+        << asynchronous.Get<1>();
+  }
+
+  base::FilePath WriteArchive() {
+    std::string native_bytes;
+    EXPECT_TRUE(base::ReadFileToString(
+        base::FilePath::FromUTF8Unsafe(addon_path_), &native_bytes));
+    // Exercise the macOS Resources layout on every platform as well.
+    const auto resources =
+        application_.AppendASCII("Contents").AppendASCII("Resources");
+    EXPECT_TRUE(base::CreateDirectory(resources));
+    const auto archive = resources.AppendASCII("app.asar");
+    asar::TestArchiveBuilder builder;
+    EXPECT_TRUE(builder.Write(
+        archive, {{"bin/addon.node", native_bytes, false, true}}, false));
+    executor_->SetApplicationPath(archive);
+    return archive;
+  }
+
+  bool CreateLink(const base::FilePath& target,
+                  const base::FilePath& link,
+                  bool directory = false) {
+#if BUILDFLAG(IS_WIN)
+    return ::CreateSymbolicLinkW(
+        link.value().c_str(), target.value().c_str(),
+        SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE |
+            (directory ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0));
+#elif BUILDFLAG(IS_POSIX)
+    return base::CreateSymbolicLink(target, link);
+#else
+    return false;
+#endif
+  }
+
+  base::test::ScopedCommandLine command_line_;
+  base::ScopedTempDir temporary_;
+  base::FilePath application_;
+};
+
+TEST_F(XenonNodeApplicationTest, LoadsSelectedDirectoryInBothLoadPaths) {
+  const auto synchronous = CopyAddon(application_.AppendASCII("sync"));
+  std::string error;
+  ASSERT_TRUE(
+      executor_->LoadAddonFromCurrentThread(synchronous.AsUTF8Unsafe(), &error))
+      << error;
+  const auto asynchronous = CopyAddon(application_.AppendASCII("async"));
+  LoadFuture loaded;
+  executor_->LoadAddon(asynchronous.AsUTF8Unsafe(), loaded.GetCallback(),
+                       false);
+  EXPECT_TRUE(loaded.Get<0>()) << loaded.Get<1>();
+}
+
+TEST_F(XenonNodeApplicationTest, RuntimeDirectoryDoesNotGrantAddonAccess) {
+  const auto runtime = temporary_.GetPath().AppendASCII("runtime");
+  const auto outside = CopyAddon(runtime);
+  executor_->SetRuntimeDirectory(runtime);
+  ExpectBlocked(*executor_, outside);
+}
+
+TEST_F(XenonNodeApplicationTest, RejectsSiblingDirectoryAndTraversal) {
+  const auto outside = CopyAddon(temporary_.GetPath().AppendASCII("sibling"));
+  ExpectBlocked(*executor_, outside);
+  ExpectBlocked(
+      *executor_,
+      application_.AppendASCII("..").AppendASCII("sibling").AppendASCII(
+          "test_addon.node"));
+}
+
+TEST_F(XenonNodeApplicationTest, ApplicationScopesArePerExecutor) {
+  const auto first = CopyAddon(application_);
+  const auto second_directory = temporary_.GetPath().AppendASCII("second");
+  const auto second = CopyAddon(second_directory);
+  XenonNodeExecutor other;
+  other.SetApplicationPath(second_directory);
+  std::string error;
+  ASSERT_TRUE(
+      executor_->LoadAddonFromCurrentThread(first.AsUTF8Unsafe(), &error))
+      << error;
+  ExpectBlocked(*executor_, second);
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+  EXPECT_FALSE(other.LoadAddonFromCurrentThread(second.AsUTF8Unsafe(), &error));
+  EXPECT_TRUE(error.starts_with("ERR_RESOURCE_BUSY:")) << error;
+#endif
+  // Retain the OS image after the first runtime releases its exclusive loop.
+  // An already mapped library still cannot grant the next runtime access to
+  // another application's exports.
+  base::NativeLibraryLoadError load_error;
+  auto retained_library = LoadNodeAddonLibrary(first, &load_error);
+  ASSERT_TRUE(retained_library.is_valid()) << load_error.ToString();
+  executor_.reset();
+  ExpectBlocked(other, first);
+  ASSERT_TRUE(other.LoadAddonFromCurrentThread(second.AsUTF8Unsafe(), &error))
+      << error;
+}
+
+TEST_F(XenonNodeApplicationTest, ReplacingAndClearingScopeChecksCachedLoads) {
+  const auto first = CopyAddon(application_);
+  std::string error;
+  ASSERT_TRUE(
+      executor_->LoadAddonFromCurrentThread(first.AsUTF8Unsafe(), &error))
+      << error;
+  const auto second_directory = temporary_.GetPath().AppendASCII("second");
+  const auto second = CopyAddon(second_directory);
+  executor_->SetApplicationPath(second_directory);
+  ExpectBlocked(*executor_, first);
+  ASSERT_TRUE(
+      executor_->LoadAddonFromCurrentThread(second.AsUTF8Unsafe(), &error))
+      << error;
+  executor_->SetApplicationPath({});
+  ExpectBlocked(*executor_, first);
+  ExpectBlocked(*executor_, second);
+}
+
+TEST_F(XenonNodeApplicationTest, PendingLoadDoesNotPublishUnderClearedScope) {
+  const auto addon = CopyAddon(application_);
+  LoadFuture loaded;
+  {
+    base::ScopedThreadPoolExecutionFence fence;
+    executor_->LoadAddon(addon.AsUTF8Unsafe(), loaded.GetCallback(), false);
+    executor_->SetApplicationPath({});
+  }
+  EXPECT_FALSE(loaded.Get<0>());
+  EXPECT_TRUE(loaded.Get<1>().starts_with("ERR_ACCESS_DENIED:"))
+      << loaded.Get<1>();
+  EXPECT_FALSE(executor_->HasModule(addon.AsUTF8Unsafe()));
+}
+
+TEST_F(XenonNodeApplicationTest, LoadsOnlyDeclaredUnpackedArchiveMembers) {
+  const auto archive = WriteArchive();
+  const auto physical = archive.AddExtension(FILE_PATH_LITERAL("unpacked"))
+                            .AppendASCII("bin")
+                            .AppendASCII("addon.node");
+  const auto virtual_path =
+      archive.AppendASCII("bin").AppendASCII("addon.node");
+  LoadFuture loaded;
+  executor_->LoadAddon(virtual_path.AsUTF8Unsafe(), loaded.GetCallback(),
+                       false);
+  ASSERT_TRUE(loaded.Get<0>()) << loaded.Get<1>();
+  std::string error;
+  ASSERT_TRUE(
+      executor_->LoadAddonFromCurrentThread(physical.AsUTF8Unsafe(), &error))
+      << error;
+  const auto undeclared = CopyAddon(physical.DirName());
+  ExpectBlocked(*executor_, undeclared);
+  const auto sibling =
+      CopyAddon(archive.DirName().AppendASCII("other.asar.unpacked"));
+  ExpectBlocked(*executor_, sibling);
+}
+
+TEST_F(XenonNodeApplicationTest, RejectsSymlinkEscapingApplication) {
+  const auto outside = CopyAddon(temporary_.GetPath().AppendASCII("outside"));
+  const auto link = application_.AppendASCII("linked.node");
+  if (!CreateLink(outside, link)) {
+    GTEST_SKIP() << "Symbolic links are unavailable";
+  }
+  ExpectBlocked(*executor_, link);
+}
+
+#if BUILDFLAG(IS_WIN)
+TEST_F(XenonNodeApplicationTest, AllowsDifferentUnpackedPathLetterCase) {
+  const auto archive = WriteArchive();
+  const auto unpacked = archive.AddExtension(FILE_PATH_LITERAL("unpacked"));
+  const auto temporary = archive.DirName().AppendASCII("rename-unpacked");
+  ASSERT_TRUE(base::Move(unpacked, temporary));
+  ASSERT_TRUE(base::Move(temporary,
+                         archive.AddExtension(FILE_PATH_LITERAL("UNPACKED"))));
+  std::string error;
+  EXPECT_TRUE(executor_->LoadAddonFromCurrentThread(
+      archive.AppendASCII("bin").AppendASCII("addon.node").AsUTF8Unsafe(),
+      &error))
+      << error;
+}
+#endif
+
+TEST_F(XenonNodeApplicationTest, RejectsUnpackedMemberSymlinkEscapingArchive) {
+  const auto archive = WriteArchive();
+  const auto member = archive.AddExtension(FILE_PATH_LITERAL("unpacked"))
+                          .AppendASCII("bin")
+                          .AppendASCII("addon.node");
+  const auto outside = CopyAddon(temporary_.GetPath().AppendASCII("outside"));
+  ASSERT_TRUE(base::DeleteFile(member));
+  if (!CreateLink(outside, member)) {
+    GTEST_SKIP() << "Symbolic links are unavailable";
+  }
+  ExpectBlocked(*executor_, member);
+  ExpectBlocked(*executor_,
+                archive.AppendASCII("bin").AppendASCII("addon.node"));
+}
+
+TEST_F(XenonNodeApplicationTest, RejectsUnpackedRootSymlinkEscapingArchive) {
+  const auto archive = WriteArchive();
+  const auto unpacked = archive.AddExtension(FILE_PATH_LITERAL("unpacked"));
+  const auto outside = temporary_.GetPath().AppendASCII("outside");
+  ASSERT_TRUE(base::Move(unpacked, outside));
+  if (!CreateLink(outside, unpacked, true)) {
+    GTEST_SKIP() << "Symbolic links are unavailable";
+  }
+  ExpectBlocked(*executor_,
+                archive.AppendASCII("bin").AppendASCII("addon.node"));
 }
 
 #if BUILDFLAG(IS_MAC)

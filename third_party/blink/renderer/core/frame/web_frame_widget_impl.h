@@ -65,6 +65,7 @@
 #include "third_party/blink/public/platform/cross_variant_mojo_util.h"
 #include "third_party/blink/public/platform/web_drag_data.h"
 #include "third_party/blink/public/web/web_frame_widget.h"
+#include "third_party/blink/public/web/web_frame_widget_rendering_policy.h"
 #include "third_party/blink/public/web/web_meaningful_layout.h"
 #include "third_party/blink/renderer/core/clipboard/data_object.h"
 #include "third_party/blink/renderer/core/core_export.h"
@@ -362,6 +363,9 @@ class CORE_EXPORT WebFrameWidgetImpl
   void SetLayerTreeDebugState(const cc::LayerTreeDebugState& state) override;
   void SetMayThrottleIfUndrawnFrames(
       bool may_throttle_if_undrawn_frames) override;
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  base::ScopedClosureRunner SuppressUndrawnFrameThrottling();
+#endif
   std::unique_ptr<cc::ScopedRequestHighFramerate> RequestHighFramerate()
       override;
   int GetVirtualKeyboardResizeHeight() const override;
@@ -883,6 +887,9 @@ class CORE_EXPORT WebFrameWidgetImpl
   bool doing_drag_and_drop_ = false;
 
  private:
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  void ReleaseUndrawnFrameThrottlingSuppression();
+#endif
   friend class WebFrameWidgetSimTest;
   friend class WebViewImpl;
   friend class ReportTimeSwapPromise;
@@ -1220,6 +1227,10 @@ class CORE_EXPORT WebFrameWidgetImpl
   // Base functionality all widgets have. This is a member as to avoid
   // complicated inheritance structures.
   std::unique_ptr<WidgetBase> widget_base_;
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  size_t undrawn_frame_throttling_suppression_count_ = 0;
+  bool requested_undrawn_frame_throttling_ = true;
+#endif
 
   // Compositing scale factor for all frames attached to this widget sent from
   // the remote parent frame.

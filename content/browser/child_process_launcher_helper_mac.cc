@@ -107,6 +107,11 @@ bool ChildProcessLauncherHelper::BeforeLaunchOnLauncherThread(
       'mojo', base::MachRendezvousPort(endpoint.TakeMachReceiveRight())));
 
   options->environment = delegate_->GetEnvironment();
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (!delegate_->ApplyXenonUtilityProcessOptions(options)) {
+    return false;
+  }
+#endif
 
   options->disclaim_responsibility = delegate_->DisclaimResponsibility();
   options->enable_cpu_security_mitigations =

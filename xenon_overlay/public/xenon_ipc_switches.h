@@ -12,7 +12,14 @@ inline constexpr char kElectronApp[] = "xenon-electron-app";
 inline constexpr char kEnable[] = "xenon-electron-ipc";
 inline constexpr char kAllowAllOrigins[] = "xenon-ipc-allow-all-origins";
 inline constexpr char kAllowedOrigins[] = "xenon-ipc-allowed-origins";
+// Browser-set eligibility hint for a renderer in an Electron storage partition.
+// It only avoids unnecessary probes; document IPC still authorizes every call.
+inline constexpr char kRendererIpcCandidate[] = "xenon-renderer-ipc-candidate";
 inline constexpr char kHostedAppName[] = "xenon-hosted-app-name";
+// Browser-set marker for a Utility dedicated to one Electron application.
+inline constexpr char kIsolatedElectronService[] = "xenon-isolated-electron-service";
+// Browser-set marker for an independent Electron utilityProcess.fork child.
+inline constexpr char kUtilityProcess[] = "xenon-utility-process";
 
 }  // namespace xenon::ipc::switches
 

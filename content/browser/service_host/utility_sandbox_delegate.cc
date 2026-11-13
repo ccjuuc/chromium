@@ -14,6 +14,16 @@
 #include "media/gpu/buildflags.h"
 #include "sandbox/policy/mojom/sandbox.mojom.h"
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "base/logging.h"
+#include "base/process/launch.h"
+#include "content/public/common/content_switches.h"
+#include "xenon_overlay/public/xenon_ipc_switches.h"
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+#endif
+#endif
+
 #if BUILDFLAG(IS_WIN)
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/common/content_client.h"
@@ -113,6 +123,61 @@ sandbox::mojom::Sandbox
 UtilitySandboxedProcessLauncherDelegate::GetSandboxType() {
   return sandbox_type_;
 }
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+bool UtilitySandboxedProcessLauncherDelegate::SetXenonUtilityProcessOptions(
+    std::unique_ptr<xenon::UtilityProcessLaunchOptions> options) {
+  std::string error;
+  if (!options || !options->Validate(&error) ||
+      sandbox_type_ != sandbox::mojom::Sandbox::kNoSandbox ||
+      cmd_line_.GetSwitchValueASCII(switches::kProcessType) !=
+          switches::kUtilityProcess ||
+      !cmd_line_.HasSwitch(xenon::ipc::switches::kUtilityProcess) ||
+      cmd_line_.GetSwitchValueASCII(switches::kUtilitySubType) !=
+          "xenon.ipc.mojom.UtilityProcessService") {
+    LOG(ERROR) << "Invalid dedicated utilityProcess launch options: " << error;
+    return false;
+  }
+  xenon_utility_options_ = std::move(options);
+  return true;
+}
+
+bool UtilitySandboxedProcessLauncherDelegate::ApplyXenonUtilityProcessOptions(
+    base::LaunchOptions* options) {
+  if (!xenon_utility_options_) {
+    return true;
+  }
+  CHECK_EQ(sandbox_type_, sandbox::mojom::Sandbox::kNoSandbox);
+  options->environment = xenon_utility_options_->environment;
+  options->clear_environment = true;
+  options->preserve_empty_environment_values = true;
+  options->current_directory = xenon_utility_options_->working_directory;
+#if BUILDFLAG(IS_WIN)
+  options->start_hidden = true;
+  for (const auto& file : xenon_utility_options_->stdio) {
+    HANDLE handle = file.GetPlatformFile();
+    if (!::SetHandleInformation(handle, HANDLE_FLAG_INHERIT,
+                                HANDLE_FLAG_INHERIT)) {
+      return false;
+    }
+    options->handles_to_inherit.push_back(handle);
+  }
+  options->stdin_handle = xenon_utility_options_->stdio[0].GetPlatformFile();
+  options->stdout_handle = xenon_utility_options_->stdio[1].GetPlatformFile();
+  options->stderr_handle = xenon_utility_options_->stdio[2].GetPlatformFile();
+#elif BUILDFLAG(IS_POSIX)
+  for (size_t index = 0; index < xenon_utility_options_->stdio.size();
+       ++index) {
+    options->fds_to_remap.emplace_back(
+        xenon_utility_options_->stdio[index].GetPlatformFile(),
+        static_cast<int>(index));
+  }
+#else
+  return false;
+#endif
+  return true;
+}
+#endif
 
 #if BUILDFLAG(IS_POSIX)
 base::EnvironmentMap UtilitySandboxedProcessLauncherDelegate::GetEnvironment() {

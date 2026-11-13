@@ -1,11 +1,44 @@
   let hostedCjsLoadingFile = '';
   let rendererHttpServerModule;
-  const moduleModule = createModuleModule(pathModule, urlModule, filename => {
-    const boundRequire = request => electronRequire(request, filename);
-    boundRequire.resolve = request => resolveHostedCjs(request, filename);
+  const moduleModule = createModuleModule(pathModule, urlModule,
+      filename => bindHostedRequire(filename, createHostedModuleParent(filename)),
+      name => builtinModuleNames.has(name.startsWith('node:') ? name.slice(5) : name));
+  const defaultModuleLookupPaths = moduleModule._resolveLookupPaths;
+  const defaultNodeModulePaths = moduleModule._nodeModulePaths;
+  const hostedModuleParents = new Map();
+  const hostedModuleParentIds = new WeakMap();
+  let nextHostedModuleParentId = 0;
+
+  function createHostedModuleParent(filename) {
+    return {filename, id: filename, path: pathModule.dirname(filename),
+      paths: moduleModule._nodeModulePaths(pathModule.dirname(filename))};
+  }
+
+  function hostedModuleParent(filename) {
+    if (hostedCjsCache[filename]) return hostedCjsCache[filename];
+    if (!hostedModuleParents.has(filename)) {
+      hostedModuleParents.set(filename, createHostedModuleParent(filename));
+    }
+    return hostedModuleParents.get(filename);
+  }
+
+  function hostedResolutionCacheKey(parent, request) {
+    // A custom lookup must run on every lookup: its closure and returned roots
+    // can change even while the function identity remains the same.
+    if (moduleModule._resolveLookupPaths !== defaultModuleLookupPaths) return null;
+    if (!hostedModuleParentIds.has(parent)) {
+      hostedModuleParentIds.set(parent, ++nextHostedModuleParentId);
+    }
+    return `${hostedModuleParentIds.get(parent)}\0${request}\0${JSON.stringify(parent.paths)}`;
+  }
+
+  function bindHostedRequire(filename, parent) {
+    const boundRequire = request => electronRequire(request, filename, parent);
+    boundRequire.resolve = request => resolveHostedCjs(request, filename, undefined, parent);
+    boundRequire.resolve.paths = request => moduleModule._resolveLookupPaths(request, parent);
     boundRequire.cache = hostedCjsCache;
     return boundRequire;
-  });
+  }
 
   function moduleError(code, message) {
     return Object.assign(new Error(message), {code});
@@ -160,14 +193,12 @@
 
   // Callers convert source URLs before resolving so the successful-load cache
   // uses the same parent filename for both lookup and insertion.
-  function resolveHostedCjs(request, parentFile) {
+  function resolveHostedCjs(request, parentFile, resolutionContext, parentModule) {
     const builtin = builtinModuleId(request);
     if (builtin) return request.startsWith('node:') ? request : builtin;
-    if (request.startsWith('#')) {
-      throw moduleError('ERR_NOT_SUPPORTED', 'Package imports are not supported');
-    }
-    const cacheKey = `${parentFile}\0${request}`;
-    const cachedPath = moduleResolutionCache.get(cacheKey);
+    parentModule ||= hostedModuleParent(parentFile);
+    const cacheKey = hostedResolutionCacheKey(parentModule, request);
+    const cachedPath = cacheKey && moduleResolutionCache.get(cacheKey);
     if (cachedPath) {
       // A deleted or failed module must be resolved again, including realpath
       // and the permitted-root check. Successful cached modules need no IPC.
@@ -284,47 +315,138 @@
       }
       return '';
     };
-    let resolved = '';
-    const relativeRequest = runtimePlatform === 'win32' ?
-        /^\.\.?([\\/]|$)/.test(request) : /^\.\.?(\/|$)/.test(request);
-    if (pathModule.isAbsolute(request) || relativeRequest) {
-      resolved = asPath(pathModule.resolve(pathModule.dirname(parentFile), request));
-    } else {
-      const parts = (runtimePlatform === 'win32' ? request.replace(/\\/g, '/') : request).split('/');
-      const packageName = parts[0].startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
-      let directory = pathModule.dirname(parentFile);
-      while (inRoot(directory)) {
-        if (modulePathKey(pathModule.basename(directory)) !== 'node_modules') {
-          const modules = pathModule.join(directory, 'node_modules');
-          const pkg = packageJson(pathModule.join(modules, packageName));
-          if (pkg && Object.prototype.hasOwnProperty.call(pkg, 'exports')) {
-            throw moduleError('ERR_NOT_SUPPORTED',
-                              `Package exports are not supported: ${packageName}`);
-          }
-          resolved = asPath(pathModule.join(modules, request));
-          if (resolved) break;
-        }
+    const hasExports = pkg => pkg && pkg.exports !== null &&
+        (typeof pkg.exports === 'string' || typeof pkg.exports === 'object');
+    const packageScope = start => {
+      let directory = start;
+      while (inRoot(directory) && modulePathKey(pathModule.basename(directory)) !== 'node_modules') {
+        const pkg = packageJson(directory);
+        if (pkg) return {directory, pkg};
         const parent = pathModule.dirname(directory);
         if (parent === directory) break;
         directory = parent;
       }
+      return null;
+    };
+    // Keep metadata and canonical-path checks within this one load operation;
+    // format selection can reuse them without a second filesystem round trip.
+    if (resolutionContext) resolutionContext.packageScope = packageScope;
+    const mappedTarget = (directory, pkg, key, isImports = false) => {
+      const target = resolvePackageMap(pkg, key, ['node', 'require', 'node-addons'], isImports);
+      if (isImports && !target.startsWith('./')) {
+        // Bare imports targets use package resolution, not imports resolution:
+        // an alias whose target starts with # is not another imports alias.
+        const builtin = builtinModuleId(target);
+        return builtin ? target : barePackage(target, directory, true);
+      }
+      const packageUrl = urlModule.pathToFileURL(pathModule.join(directory, 'package.json'));
+      const filename = urlModule.fileURLToPath(new URL(target, packageUrl));
+      const entry = inspect(filename);
+      if (!entry || entry.type !== 'file') {
+        throw moduleError('MODULE_NOT_FOUND', `Cannot find module '${filename}'`);
+      }
+      return entry.filename;
+    };
+    const barePackage = (specifier, start, fromImports = false) => {
+      const parts = (runtimePlatform === 'win32' ? specifier.replace(/\\/g, '/') : specifier).split('/');
+      const packageParts = parts[0].startsWith('@') ? 2 : 1;
+      const packageName = parts.slice(0, packageParts).join('/');
+      const subpath = parts.length > packageParts ? './' + parts.slice(packageParts).join('/') : '.';
+      const rawParts = specifier.split('/');
+      const rawName = rawParts.slice(0, rawParts[0].startsWith('@') ? 2 : 1).join('/');
+      if (fromImports && (!rawName || rawName.startsWith('.') || /[%\\:]/.test(rawName) ||
+          (rawName.startsWith('@') && (!rawParts[1] || rawParts[0] === '@')))) {
+        throw moduleError('ERR_INVALID_MODULE_SPECIFIER', `Invalid package name '${rawName}'`);
+      }
+      const scope = packageScope(start);
+      if (scope && scope.pkg.name === packageName && hasExports(scope.pkg)) {
+        return mappedTarget(scope.directory, scope.pkg, subpath);
+      }
+      const lookupPaths = fromImports ? defaultNodeModulePaths(start) :
+          moduleModule._resolveLookupPaths(specifier, parentModule);
+      if (lookupPaths !== null && (!Array.isArray(lookupPaths) ||
+          lookupPaths.some(directory => typeof directory !== 'string' ||
+              directory.includes('\0') || !pathModule.isAbsolute(directory)))) {
+        throw moduleError('ERR_INVALID_ARG_VALUE', 'Module lookup paths must be an array of absolute paths');
+      }
+      for (const lookupPath of lookupPaths || []) {
+        const modules = pathModule.resolve(lookupPath);
+        if (inRoot(modules)) {
+          const packageDirectory = pathModule.join(modules, packageName);
+          const pkg = packageJson(packageDirectory);
+          if (hasExports(pkg)) return mappedTarget(packageDirectory, pkg, subpath);
+          if (fromImports && inspect(packageDirectory)?.type === 'dir') {
+            // imports targets use PACKAGE_RESOLVE even when invoked by require:
+            // legacy package mains may probe extensions, package subpaths cannot.
+            if (subpath === '.') {
+              const resolved = asPath(packageDirectory);
+              if (resolved) return resolved;
+            } else {
+              if (/%(?:2f|5c)/i.test(subpath)) {
+                throw moduleError('ERR_INVALID_MODULE_SPECIFIER',
+                    `Encoded separator in package subpath '${specifier}'`);
+              }
+              const packageUrl = urlModule.pathToFileURL(pathModule.join(packageDirectory, 'package.json'));
+              const filename = urlModule.fileURLToPath(new URL(subpath, packageUrl));
+              const entry = inspect(filename);
+              if (entry?.type === 'file') return entry.filename;
+            }
+            throw moduleError('MODULE_NOT_FOUND', `Cannot find module '${specifier}'`);
+          }
+          const resolved = asPath(pathModule.join(modules, specifier));
+          if (resolved) return resolved;
+        }
+      }
+      return '';
+    };
+    let resolved = '';
+    const relativeRequest = runtimePlatform === 'win32' ?
+        /^\.\.?([\\/]|$)/.test(request) : /^\.\.?(\/|$)/.test(request);
+    if (request.startsWith('#')) {
+      const scope = packageScope(pathModule.dirname(parentFile));
+      resolved = mappedTarget(scope?.directory || pathModule.dirname(parentFile),
+          scope?.pkg || {}, request, true);
+    } else if (pathModule.isAbsolute(request) || relativeRequest) {
+      resolved = asPath(pathModule.resolve(pathModule.dirname(parentFile), request));
+    } else {
+      resolved = barePackage(request, pathModule.dirname(parentFile));
     }
     if (!resolved) throw moduleError('MODULE_NOT_FOUND', `Cannot find module '${request}'`);
-    if (hostedCjsCache[resolved]) moduleResolutionCache.set(cacheKey, resolved);
+    if (cacheKey && hostedCjsCache[resolved]) moduleResolutionCache.set(cacheKey, resolved);
     return resolved;
   }
 
-  function loadHostedCjsModule(resolved, registeredSource) {
+  function hostedModuleHasEsmFormat(filename, preloadEntry, packageScope) {
+    const extension = pathModule.extname(filename);
+    if (extension === '.mjs') return true;
+    // Electron preloads only opt into ESM with .mjs. Ordinary require follows
+    // package.type for .js; unknown and extensionless CommonJS files do not.
+    if (extension !== '.js' || preloadEntry) return false;
+    return packageScope(pathModule.dirname(filename))?.pkg.type === 'module';
+  }
+
+  function loadHostedPreload(filename, registeredSource) {
+    const resolved = registeredSource === undefined ?
+        resolveHostedCjs(filename, moduleFilenameFromSource(globalThis.__filename)) : filename;
+    return loadHostedCjsModule(resolved, registeredSource, true);
+  }
+
+  function loadHostedCjsModule(resolved, registeredSource, preloadEntry = false, packageScope) {
     if (hostedCjsCache[resolved]) return hostedCjsCache[resolved].exports;
+    if (hostedModuleHasEsmFormat(resolved, preloadEntry, packageScope)) {
+      throw moduleError('ERR_REQUIRE_ESM',
+          `The renderer CommonJS loader does not support ES module ${resolved}`);
+    }
     installBindingsFileNameShim();
     const moduleObject = {
       exports: {},
       filename: resolved,
       id: resolved,
+      path: pathModule.dirname(resolved),
       loaded: false,
       children: [],
       parent: null,
-      paths: [],
+      paths: moduleModule._nodeModulePaths(pathModule.dirname(resolved)),
     };
     hostedCjsCache[resolved] = moduleObject;
     const previousLoading = hostedCjsLoadingFile;
@@ -332,16 +454,14 @@
     try {
       // Bind relative requires to this module, including requires called by
       // exported functions after the module's initial evaluation has finished.
-      const moduleRequire = request => electronRequire(request, resolved);
-      moduleRequire.resolve = request => resolveHostedCjs(request, resolved);
-      moduleRequire.cache = hostedCjsCache;
+      const moduleRequire = bindHostedRequire(resolved, moduleObject);
       moduleObject.require = moduleRequire;
-      if (/\.node$/i.test(resolved)) {
+      if (pathModule.extname(resolved) === '.node') {
         moduleObject.exports = loadNativeNodeModule(resolved);
       } else {
         const code = (registeredSource === undefined ? readHostedCjsSource(resolved) :
             registeredSource).replace(/^\uFEFF/, '');
-        if (/\.json$/i.test(resolved)) {
+        if (pathModule.extname(resolved) === '.json') {
           moduleObject.exports = JSON.parse(code);
         } else {
           const fn = new Function(
@@ -376,6 +496,10 @@
 
     const norm = request;
     if (norm === 'module') return moduleModule;
+    if (norm === 'original-fs') return getOriginalFsModule();
+    if (norm === 'original-fs/promises') return getOriginalFsModule().promises;
+    if (norm === 'stream/promises') return streamModule.promises;
+    if (norm === 'stream/web') return webStreamsModule;
     if (norm === 'http2') return http2Module;
     if (norm === 'path/win32') return pathModule.win32;
     if (norm === 'path/posix') return pathModule.posix;
@@ -386,6 +510,7 @@
     }
 
     if (norm === 'process') return process;
+    if (norm === 'console') return consoleModule;
 
     // Path
     if (norm === 'path' || norm === 'node:path') {
@@ -409,7 +534,7 @@
 
     // Buffer
     if (norm === 'buffer' || norm === 'node:buffer') {
-      return { Buffer };
+      return createBufferModule(Buffer, injectedPaths.bufferLimits);
     }
 
     // Util
@@ -484,16 +609,21 @@
     }
 
     // Timers
+    if (norm === 'timers/promises') return electronRequire('timers').promises;
     if (norm === 'timers' || norm === 'node:timers') {
-      return {
-        setTimeout: globalThis.setTimeout.bind(globalThis),
-        clearTimeout: globalThis.clearTimeout.bind(globalThis),
-        setInterval: globalThis.setInterval.bind(globalThis),
-        clearInterval: globalThis.clearInterval.bind(globalThis),
-        setImmediate: (fn, ...args) =>
-            globalThis.setTimeout(() => fn(...args), 0),
-        clearImmediate: (id) => globalThis.clearTimeout(id),
-      };
+      if (!rendererNodeTimers) {
+        const immediateTasks = createImmediateTaskScheduler(globalThis.MessageChannel);
+        rendererNodeTimers = createNodeTimers({
+          setTimeout: globalThis.setTimeout.bind(globalThis),
+          clearTimeout: globalThis.clearTimeout.bind(globalThis),
+          setInterval: globalThis.setInterval.bind(globalThis),
+          clearInterval: globalThis.clearInterval.bind(globalThis),
+          setImmediate: callback => immediateTasks.setImmediate(captureAsyncCallback(callback)),
+          clearImmediate: immediateTasks.clearImmediate,
+        });
+        rendererNodeTimers.promises = createTimersPromises(rendererNodeTimers);
+      }
+      return rendererNodeTimers;
     }
 
     // Querystring
@@ -508,12 +638,7 @@
 
     // StringDecoder
     if (norm === 'string_decoder' || norm === 'node:string_decoder') {
-      const cls = class StringDecoder {
-        constructor(enc = 'utf8') { this.encoding = enc; }
-        write(buf) { return new TextDecoder(this.encoding).decode(buf); }
-        end(buf) { return buf ? new TextDecoder(this.encoding).decode(buf) : ''; }
-      };
-      return { StringDecoder: cls, default: cls };
+      return stringDecoderModule;
     }
 
     // TLS
@@ -544,14 +669,43 @@
         return `${protocol}//${host}${port}${path}`;
       };
 
-      const createClientRequest = (opt, cb) => {
+      const createClientRequest = (opt, settings, cb) => {
+        if (typeof settings === 'function') { cb = settings; settings = undefined; }
         const req = new EventEmitter();
+        req.maxHeadersCount = null;
         if (typeof cb === 'function') req.once('response', cb);
         const bodyChunks = [];
         let finished = false;
         let timeoutId = null;
         let aborted = false;
-        const options = typeof opt === 'string' ? {href: opt} : (opt || {});
+        const options = {...(typeof opt === 'string' || opt instanceof URL ?
+          {href: String(opt)} : opt || {}), ...settings};
+        const headers = Object.create(null);
+        for (const [name, value] of Object.entries(options.headers || {})) {
+          serverModule.validateHeaderName(name); serverModule.validateHeaderValue(name, value);
+          headers[name.toLowerCase()] = value;
+        }
+        let upgradeTimeout = Number(options.timeout) || 0;
+        let upgradeAbort;
+        const closeUpgrade = () => {
+          if (req._closed) return;
+          req._closed = true;
+          if (timeoutId !== null) { clearTimeout(timeoutId); timeoutId = null; }
+          if (upgradeAbort) options.signal.removeEventListener('abort', upgradeAbort);
+          req.emit('close');
+        };
+        req.setHeader = (name, value) => {
+          if (finished) throw moduleError('ERR_HTTP_HEADERS_SENT', 'Headers already sent');
+          serverModule.validateHeaderName(name); serverModule.validateHeaderValue(name, value);
+          headers[name.toLowerCase()] = value; return req;
+        };
+        req.getHeader = name => headers[String(name).toLowerCase()];
+        req.getHeaders = () => ({...headers});
+        req.hasHeader = name => Object.hasOwn(headers, String(name).toLowerCase());
+        req.removeHeader = name => {
+          if (finished) throw moduleError('ERR_HTTP_HEADERS_SENT', 'Headers already sent');
+          delete headers[String(name).toLowerCase()];
+        };
 
         const cancelPendingRequest = () => {
           aborted = true;
@@ -605,6 +759,11 @@
             timeoutId = null;
           }
           const delay = Number(ms);
+          upgradeTimeout = delay;
+          if (typeof onTimeout === 'function') req.once('timeout', onTimeout);
+          if (req._upgradeTransport || isHttpUpgradeRequest(headers)) {
+            req._upgradeTransport?.setTimeout(delay); return req;
+          }
           if (!(delay > 0)) {
             return req;
           }
@@ -614,31 +773,77 @@
             const err = new Error('Request timeout');
             err.code = 'ETIMEDOUT';
             req.emit('timeout');
-            if (typeof onTimeout === 'function') {
-              onTimeout();
-            }
             req.emit('error', err);
           }, delay);
           return req;
         };
         req.abort = () => {
+          if (req._upgradeTransport) {
+            if (!req.aborted) { req.aborted = true; req.emit('abort'); req.destroy(); }
+            return req;
+          }
           cancelPendingRequest();
           return req;
         };
         req.destroy = (err) => {
+          if (req._upgradeTransport) {
+            if (req.destroyed || req._upgradeTransport.detached) return req;
+            req.destroyed = true; aborted = true;
+            req._upgradeTransport.destroy();
+            queueMicrotask(() => { if (err) req.emit('error', err); closeUpgrade(); });
+            return req;
+          }
           cancelPendingRequest();
           if (err) {
             req.emit('error', err);
           }
           return req;
         };
-        req.end = (chunk, encoding) => {
+        req.end = (chunk, encoding, callback) => {
+          if (typeof chunk === 'function') { callback = chunk; chunk = undefined; }
+          else if (typeof encoding === 'function') { callback = encoding; encoding = undefined; }
           if (finished || aborted) {
             return req;
           }
           finished = true;
           if (chunk != null) {
             req.write(chunk, encoding);
+          }
+          if (isHttpUpgradeRequest(headers)) {
+            req.writableEnded = true;
+            if (callback) req.once('finish', callback);
+            if (timeoutId !== null) { clearTimeout(timeoutId); timeoutId = null; }
+            try {
+              req._upgradeTransport = startHttpUpgradeRequest(netModule, serverModule, {
+                url: buildRequestUrl(options), method: String(options.method || 'GET').toUpperCase(),
+                headers, body: Buffer.concat(bodyChunks.map(part =>
+                  typeof part === 'string' ? Buffer.from(part) : part)),
+                settings: options, timeout: upgradeTimeout,
+                getMaxHeadersCount: () => req.maxHeadersCount,
+              }, {
+                socket: socket => { req.socket = req.connection = socket; req.emit('socket', socket); },
+                finish: () => { req.writableFinished = true; req.emit('finish'); },
+                information: response => { if (response.statusCode === 100) req.emit('continue'); req.emit('information', response); },
+                response: response => { req.res = response; req.emit('response', response); },
+                upgrade: (response, socket, head) => {
+                  req.res = response;
+                  if (!req.emit('upgrade', response, socket, head)) socket.destroy();
+                },
+                error: reason => req.destroy(reason), close: closeUpgrade,
+                timeout: () => req.emit('timeout'),
+              });
+              if (options.signal) {
+                upgradeAbort = () => req.destroy(options.signal.reason ||
+                  moduleError('ABORT_ERR', 'The operation was aborted'));
+                if (options.signal.aborted) upgradeAbort();
+                else options.signal.addEventListener('abort', upgradeAbort, {once: true});
+              }
+            } catch (reason) {
+              aborted = true; req.destroyed = true;
+              queueMicrotask(() => { req.emit('error', reason); closeUpgrade(); });
+            }
+            bodyChunks.length = 0;
+            return req;
           }
           const timeoutMs = Number(options.timeout);
           if (timeoutMs > 0 && !timeoutId) {
@@ -650,7 +855,6 @@
                 return;
               }
               const method = String(options.method || 'GET').toUpperCase();
-              const headers = Object.assign({}, options.headers || {});
               let bodyBuffer = Buffer.alloc(0);
               if (method !== 'GET' && method !== 'HEAD' && bodyChunks.length) {
                 bodyBuffer = Buffer.concat(bodyChunks.map(part =>
@@ -659,15 +863,14 @@
               // The encoded request owns its payload after submission. Do not
               // keep the caller's queued upload snapshots on the request.
               bodyChunks.length = 0;
-              // Electron/Node requests use the browser network service rather
-              // than renderer fetch. This preserves caller headers and avoids
-              // applying renderer CORS policy to a Node networking API.
+              // Node requests use the browser network service with its cookie
+              // jar and HTTP cache disabled. This preserves caller headers and
+              // avoids applying renderer CORS to a Node networking API.
               const response = await transport.invoke('__xenon:net-request', {
                 url: buildRequestUrl(options),
                 method,
-                headers,
+                headers: {...headers},
                 bodyBase64: bodyBuffer.toString('base64'),
-                useSessionCookies: Boolean(options.useSessionCookies),
               });
               if (timeoutId) {
                 clearTimeout(timeoutId);
@@ -721,9 +924,9 @@
 
       return {
         ...(norm.replace(/^node:/, '') === 'http' ? serverModule : {}),
-        request: (opt, cb) => createClientRequest(opt, cb),
-        get: (url, cb) => {
-          const req = createClientRequest(url, cb);
+        request: (opt, settings, cb) => createClientRequest(opt, settings, cb),
+        get: (url, settings, cb) => {
+          const req = createClientRequest(url, settings, cb);
           req.end();
           return req;
         },
@@ -742,12 +945,27 @@
     // Zlib
     if (norm === 'zlib' || norm === 'node:zlib') {
       return createZlibModule((operation, data, options, asynchronous) => {
+        if (options.dictionary) options = {...options,
+          dictionary: Buffer.from(options.dictionary).toString('base64')};
         const request = {operation, dataBase64: data.toString('base64'), options};
         if (asynchronous) {
           return transport.invoke('__xenon:zlib', request)
               .then(value => Buffer.from(value, 'base64'));
         }
         return Buffer.from(transport.sendSync('__xenon:zlib', request), 'base64');
+      }, {
+        Transform: streamModule.Transform,
+        streamCall(request, asynchronous) {
+          request = {...request};
+          if (request.data) request.data = Buffer.from(request.data).toString('base64');
+          if (request.options?.dictionary) request.options = {...request.options,
+            dictionary: Buffer.from(request.options.dictionary).toString('base64')};
+          const decode = value => request.action === 'process'
+            ? {...value, output: Buffer.from(value.output, 'base64')} : value;
+          return asynchronous
+            ? transport.invoke('__xenon:zlib-stream', request).then(decode)
+            : decode(transport.sendSync('__xenon:zlib-stream', request));
+        },
       });
     }
 
@@ -780,7 +998,7 @@
     throw moduleError('ERR_NOT_SUPPORTED', `Module '${request}' is not supported by this runtime`);
   }
 
-  const electronRequire = globalThis.require = function(request, parentFile = globalThis.__filename) {
+  const electronRequire = globalThis.require = function(request, parentFile = globalThis.__filename, parentModule) {
     const builtin = builtinModuleId(request);
     if (builtin) {
       if (!builtinModuleCache.has(builtin)) {
@@ -789,15 +1007,21 @@
       return builtinModuleCache.get(builtin);
     }
     parentFile = moduleFilenameFromSource(parentFile);
-    const resolved = resolveHostedCjs(request, parentFile);
-    const exports = loadHostedCjsModule(resolved);
-    moduleResolutionCache.set(`${parentFile}\0${request}`, resolved);
+    parentModule ||= hostedModuleParent(parentFile);
+    const resolutionContext = {};
+    const resolved = resolveHostedCjs(request, parentFile, resolutionContext, parentModule);
+    if (builtinModuleId(resolved)) return electronRequire(resolved, parentFile);
+    const exports = loadHostedCjsModule(resolved, undefined, false, resolutionContext.packageScope);
+    const cacheKey = hostedResolutionCacheKey(parentModule, request);
+    if (cacheKey) moduleResolutionCache.set(cacheKey, resolved);
     return exports;
   };
 
   globalThis.Buffer = Buffer;
   globalThis.require.resolve = request => resolveHostedCjs(
       request, moduleFilenameFromSource(globalThis.__filename));
+  globalThis.require.resolve.paths = request => moduleModule._resolveLookupPaths(
+      request, hostedModuleParent(moduleFilenameFromSource(globalThis.__filename)));
   globalThis.require.cache = hostedCjsCache;
   globalThis.require.main = undefined;
   globalThis.require.extensions = { '.js': () => {}, '.json': () => {}, '.node': () => {} };

@@ -169,6 +169,15 @@ NotificationPlatformBridgeDelegator::GetBridgeForType(
   return message_center_bridge_;
 }
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+bool NotificationPlatformBridgeDelegator::CanDisplayType(
+    NotificationHandler::Type notification_type) const {
+  return (system_bridge_ &&
+          NotificationPlatformBridge::CanHandleType(notification_type)) ||
+         message_center_bridge_;
+}
+#endif
+
 void NotificationPlatformBridgeDelegator::
     OnSystemNotificationPlatformBridgeReady(bool success) {
   if (!success) {

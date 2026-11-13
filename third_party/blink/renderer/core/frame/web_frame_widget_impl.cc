@@ -5723,11 +5723,43 @@ void WebFrameWidgetImpl::ApplyLocalSurfaceIdUpdate(
 
 void WebFrameWidgetImpl::SetMayThrottleIfUndrawnFrames(
     bool may_throttle_if_undrawn_frames) {
-  if (!View()->does_composite())
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  requested_undrawn_frame_throttling_ = may_throttle_if_undrawn_frames;
+  may_throttle_if_undrawn_frames &=
+      undrawn_frame_throttling_suppression_count_ == 0;
+  if (!widget_base_ || !local_root_) {
     return;
+  }
+#endif
+  if (!View()->does_composite()) {
+    return;
+  }
   widget_base_->LayerTreeHost()->SetMayThrottleIfUndrawnFrames(
       may_throttle_if_undrawn_frames);
 }
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+base::ScopedClosureRunner WebFrameWidgetImpl::SuppressUndrawnFrameThrottling() {
+  ++undrawn_frame_throttling_suppression_count_;
+  SetMayThrottleIfUndrawnFrames(requested_undrawn_frame_throttling_);
+  return base::ScopedClosureRunner(
+      BindOnce(&WebFrameWidgetImpl::ReleaseUndrawnFrameThrottlingSuppression,
+               WrapWeakPersistent(this)));
+}
+
+void WebFrameWidgetImpl::ReleaseUndrawnFrameThrottlingSuppression() {
+  CHECK_GT(undrawn_frame_throttling_suppression_count_, 0u);
+  --undrawn_frame_throttling_suppression_count_;
+  SetMayThrottleIfUndrawnFrames(requested_undrawn_frame_throttling_);
+}
+
+base::ScopedClosureRunner SuppressUndrawnFrameThrottling(
+    WebFrameWidget* widget) {
+  CHECK(widget);
+  return static_cast<WebFrameWidgetImpl*>(widget)
+      ->SuppressUndrawnFrameThrottling();
+}
+#endif
 
 std::unique_ptr<cc::ScopedRequestHighFramerate>
 WebFrameWidgetImpl::RequestHighFramerate() {

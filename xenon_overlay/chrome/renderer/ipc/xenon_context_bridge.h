@@ -29,6 +29,9 @@ class XenonContextBridge final : public base::RefCounted<XenonContextBridge> {
   XenonContextBridge(v8::Local<v8::Context> preload_context,
                      v8::Local<v8::Context> main_context);
   v8::Local<v8::Object> GetApi();
+  // Register the actual preload singleton, not a public shape or property
+  // name. Electron does not expose ipcRenderer through contextBridge.
+  void SetIpcRenderer(v8::Local<v8::Object> ipc_renderer);
   void Shutdown();
 
  private:
@@ -66,6 +69,7 @@ class XenonContextBridge final : public base::RefCounted<XenonContextBridge> {
   const raw_ptr<v8::Isolate> isolate_;
   v8::Global<v8::Context> main_context_;
   v8::Global<v8::Context> preload_context_;
+  v8::Global<v8::Object> ipc_renderer_;
   v8::Global<v8::Private> original_function_key_;
   std::map<size_t, std::unique_ptr<BridgedFunction>> functions_;
   std::map<uint64_t, BridgedPromise> promises_;

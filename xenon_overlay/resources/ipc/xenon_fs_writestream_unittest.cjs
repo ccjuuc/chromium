@@ -179,7 +179,8 @@ for (const kind of ['main', 'renderer']) {
       assert.throws(() => r.fs.createWriteStream(filename, options), {code: 'ERR_NOT_SUPPORTED'});
     }
     const stream = r.fs.createWriteStream(filename), done = closed(stream);
-    assert.throws(() => stream.write('a', 'utf8', 3), {code: 'ERR_INVALID_ARG_TYPE'});
+    // Node ignores a non-function optional write callback.
+    assert.doesNotThrow(() => stream.write('a', 'utf8', 3));
     assert.throws(() => stream.write('a', 'bad-encoding'), {code: 'ERR_UNKNOWN_ENCODING'});
     stream.destroy(); await done;
     assert.equal(r.calls.length, 0);
@@ -203,8 +204,10 @@ for (const kind of ['main', 'renderer']) {
       stream.write('data', error => codes.push(error.code));
       await operationStarted;
       stream.destroy(); release(); await done;
-      assert.deepEqual(errors, ['EACCES']);
-      assert.deepEqual(codes, ['EACCES']);
+      // Node reports an opening failure through error, but a failed write after
+      // explicit destruction only reaches that write's callback.
+      assert.deepEqual(errors, failIndex === 0 ? ['EACCES'] : []);
+      assert.deepEqual(codes, failIndex === 0 ? ['ERR_STREAM_DESTROYED'] : ['EACCES']);
       assert.equal(stream.closed, true);
       assert.equal(stream.writableFinished, false);
     });

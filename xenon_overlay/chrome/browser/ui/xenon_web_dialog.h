@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
@@ -99,8 +100,15 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   // Activates thunder_2025 BrowserWindows from the IPC container (sidebar TH).
   static void ShowThunder2025(Profile* profile);
 
-  // Single source of truth for the WebUI URL shown by ShowXenonOverlay(). The WebUI
-  // page exercises `window.xenon` (XenonPageHost) in resources/webui/xenon/index.ts.
+  // Loads an external host descriptor from the platform's application resource
+  // directory and activates its container without reexecuting a running main.
+  static void ShowElectronApp(Profile* profile,
+                              const std::string& descriptor_name,
+                              const std::string& container_id);
+
+  // Single source of truth for the WebUI URL shown by ShowXenonOverlay(). The
+  // WebUI page exercises `window.xenon` (XenonPageHost) in
+  // resources/webui/xenon/index.ts.
   static GURL GetXenonOverlayWebUIUrl();
 
   // Login gate WebUI (`chrome://xenon-login/`)：独立 login HTML/CSS/JS，`chrome.send`。
@@ -216,6 +224,13 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   bool ShouldShowDialogTitle() const override;
   bool ShouldShowCloseButton() const override;
   FrameKind GetWebDialogFrameKind() const override;
+  void RequestMediaAccessPermission(
+      content::WebContents* contents,
+      const content::MediaStreamRequest& request,
+      content::MediaResponseCallback callback) override;
+  bool CheckMediaAccessPermission(content::RenderFrameHost* frame,
+                                  const url::Origin& origin,
+                                  blink::mojom::MediaStreamType type) override;
 
   GURL url_;
   int width_;

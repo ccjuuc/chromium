@@ -24,6 +24,7 @@ function run(binary, options) {
 }
 
 console.log(`IPC compatibility: ${tests.length} JS suites; Node ${process.version}, V8 ${process.versions.v8}`);
+run(process.execPath, [path.join(__dirname, 'bundle_readable_stream.cjs'), '--check']);
 run(process.execPath, ['--js-base-64', '--expose-gc', '--test', ...tests]);
 if (args.length) {
   run(path.resolve(args[1]), ['--test-launcher-jobs=1', '--test-launcher-retry-limit=0']);

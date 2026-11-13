@@ -24,6 +24,11 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "sandbox/policy/mojom/sandbox.mojom.h"
 #include "url/gurl.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/public/utility_process_launch_options.h"
+#endif
 
 #if BUILDFLAG(IS_WIN)
 #include "base/files/file_path.h"
@@ -141,6 +146,13 @@ class CONTENT_EXPORT ServiceProcessHost {
     // Specifies the process priority of the launched service process.
     Options& WithPriority(base::Process::Priority priority);
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    // Only valid for the dedicated, unsandboxed Electron utilityProcess
+    // service. Applies OS environment/cwd/stdio before any child threads run.
+    Options& WithXenonUtilityProcessOptions(
+        std::unique_ptr<xenon::UtilityProcessLaunchOptions> options);
+#endif
+
     // Passes the contents of this Options object to a newly returned Options
     // value. This must be called when moving a built Options object into a call
     // to |Launch()|.
@@ -158,6 +170,9 @@ class CONTENT_EXPORT ServiceProcessHost {
 #endif  // BUILDFLAG(IS_WIN)
     std::optional<bool> allow_gpu_client;
     std::optional<base::Process::Priority> priority;
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    std::unique_ptr<xenon::UtilityProcessLaunchOptions> xenon_utility_options;
+#endif
   };
 
   // An interface which can be implemented and used with

@@ -26,6 +26,7 @@
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
@@ -120,6 +121,7 @@
 #include "content/public/browser/shared_cors_origin_access_list.h"
 #include "content/public/browser/storage_notification_service.h"
 #include "content/public/browser/storage_partition_config.h"
+#include "content/public/browser/storage_service_context.h"
 #include "content/public/browser/storage_usage_info.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -282,6 +284,106 @@ mojo::Remote<storage::mojom::StorageService>& GetStorageServiceRemote() {
   }
   return remote;
 }
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+const char kDedicatedStorageService[] = "dedicated-storage-service";
+
+class StorageServiceProcessLifetime
+    : public base::RefCounted<StorageServiceProcessLifetime>,
+      public ServiceProcessHost::Observer {
+ public:
+  base::WeakPtr<ServiceProcessHost::Observer> GetObserver() {
+    return weak_factory_.GetWeakPtr();
+  }
+  void OnServiceProcessLaunched(const ServiceProcessInfo&) override {
+    ++active_processes_;
+    keep_alive_ = base::WrapRefCounted(this);
+  }
+  void OnServiceProcessTerminatedNormally(const ServiceProcessInfo&) override {
+    ProcessTerminated();
+  }
+  void OnServiceProcessCrashed(const ServiceProcessInfo&) override {
+    ProcessTerminated();
+  }
+  void CompleteAfterExit(base::OnceClosure callback) {
+    CHECK(!callback_);
+    callback_ = std::move(callback);
+  }
+
+ private:
+  friend class base::RefCounted<StorageServiceProcessLifetime>;
+  ~StorageServiceProcessLifetime() override {
+    if (callback_) {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, std::move(callback_));
+    }
+  }
+  void ProcessTerminated() {
+    CHECK_GT(active_processes_, 0u);
+    scoped_refptr keep_alive(this);
+    if (--active_processes_ == 0) {
+      keep_alive_.reset();
+    }
+  }
+  size_t active_processes_ = 0;
+  scoped_refptr<StorageServiceProcessLifetime> keep_alive_;
+  base::OnceClosure callback_;
+  base::WeakPtrFactory<StorageServiceProcessLifetime> weak_factory_{this};
+};
+
+class DedicatedStorageService final : public base::SupportsUserData::Data {
+ public:
+  explicit DedicatedStorageService(base::FilePath root)
+      : root_(std::move(root)),
+        lifetime_(base::MakeRefCounted<StorageServiceProcessLifetime>()) {}
+  ~DedicatedStorageService() override { remote_.reset(); }
+
+  mojo::Remote<storage::mojom::StorageService>& Get() {
+#if !BUILDFLAG(IS_ANDROID)
+    const auto* command = base::CommandLine::ForCurrentProcess();
+    if (!g_force_in_process_storage_service &&
+        !command->HasSwitch(switches::kSingleProcess)) {
+      if (!remote_) {
+        remote_ = ServiceProcessHost::Launch<storage::mojom::StorageService>(
+            ServiceProcessHost::Options()
+                .WithDisplayName("Storage Service")
+                .WithObserver(lifetime_->GetObserver())
+                .WithProcessCallback(base::BindOnce(
+                    [](scoped_refptr<StorageServiceProcessLifetime>,
+                       const base::Process&) {},
+                    lifetime_))
+                .Pass());
+        remote_.reset_on_disconnect();
+        mojo::PendingRemote<storage::mojom::Directory> directory;
+        base::ThreadPool::CreateSequencedTaskRunner(
+            {base::MayBlock(), base::TaskPriority::USER_VISIBLE})
+            ->PostTask(
+                FROM_HERE,
+                base::BindOnce(&BindStorageServiceFilesystemImpl, root_,
+                               directory.InitWithNewPipeAndPassReceiver()));
+        remote_->SetDataDirectory(root_, std::move(directory));
+        if (command->HasSwitch(switches::kEnableAggressiveDOMStorageFlushing)) {
+          remote_->EnableAggressiveDomStorageFlushing();
+        }
+      }
+      return remote_;
+    }
+#endif
+    // These modes already use the embedder's unrestricted in-process service.
+    return GetStorageServiceRemote();
+  }
+
+  base::OnceClosure ShutdownClosure(base::OnceClosure callback) {
+    return base::BindOnce(&StorageServiceProcessLifetime::CompleteAfterExit,
+                          lifetime_, std::move(callback));
+  }
+
+ private:
+  const base::FilePath root_;
+  const scoped_refptr<StorageServiceProcessLifetime> lifetime_;
+  mojo::Remote<storage::mojom::StorageService> remote_;
+};
+#endif
 
 void OnClearedCookies(base::OnceClosure callback, uint32_t num_deleted) {
   // The final callback needs to happen from UI thread.
@@ -1043,6 +1145,40 @@ storage::QuotaClientTypes StoragePartitionImpl::GenerateQuotaClientTypes(
 void StoragePartitionImpl::ForceInProcessStorageServiceForTesting() {
   g_force_in_process_storage_service = true;
 }
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+void EnableDedicatedStorageServiceForBrowserContext(BrowserContext* context) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK(context);
+  CHECK(context->GetPath().IsAbsolute());
+  if (context->GetUserData(kDedicatedStorageService)) {
+    return;
+  }
+  CHECK_EQ(context->GetLoadedStoragePartitionCount(), 0u);
+  context->SetUserData(
+      kDedicatedStorageService,
+      std::make_unique<DedicatedStorageService>(context->GetPath()));
+}
+
+mojo::Remote<storage::mojom::StorageService>&
+GetStorageServiceForBrowserContext(BrowserContext* context) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  auto* service = context ? static_cast<DedicatedStorageService*>(
+                                context->GetUserData(kDedicatedStorageService))
+                          : nullptr;
+  return service ? service->Get() : GetStorageServiceRemote();
+}
+
+base::OnceClosure MakeStorageServiceShutdownClosure(
+    BrowserContext* context,
+    base::OnceClosure callback) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  auto* service = static_cast<DedicatedStorageService*>(
+      context->GetUserData(kDedicatedStorageService));
+  return service ? service->ShutdownClosure(std::move(callback))
+                 : std::move(callback);
+}
+#endif
 
 // Helper for deleting all sorts of data from a partition, keeps track of
 // deletion status.

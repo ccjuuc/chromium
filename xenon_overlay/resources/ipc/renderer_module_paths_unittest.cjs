@@ -145,6 +145,62 @@ test('native aliases use one canonical module path and one export object', () =>
   assert.deepEqual(nativeLoads, [canonical]);
 });
 
+test('module format follows canonical case-sensitive extensions on Windows', () => {
+  const {context, nativeLoads} = createPathRenderer(new Map([
+    ['C:\\test-app\\lower.json', '{"value":42}'],
+    ['C:\\test-app\\UPPER.JSON', '{"value":42}'],
+    ['C:\\test-app\\UPPER.NODE', 'module.exports = 17;'],
+  ]));
+  assert.equal(context.require('./LOWER.JSON').value, 42);
+  assert.throws(() => context.require('./upper.json'), {name: 'SyntaxError'});
+  assert.equal(context.require('./upper.node'), 17);
+  assert.deepEqual(nativeLoads, []);
+});
+
+test('renderer rejects declared ESM before execution and observes package type after retries', () => {
+  const manifest = 'C:\\test-app\\package.json';
+  const filename = 'C:\\test-app\\entry.js';
+  const fixture = createPathRenderer(new Map([
+    [manifest, '{"type":"module"}'],
+    [filename, 'globalThis.executed = true; module.exports = 42;'],
+    ['C:\\test-app\\explicit.mjs', 'globalThis.executed = true; export default 1;'],
+    ['C:\\test-app\\legacy.cjs', 'module.exports = 17;'],
+    ['C:\\test-app\\extensionless', 'module.exports = 23;'],
+    ['C:\\test-app\\unknown.txt', 'module.exports = 29;'],
+    ['C:\\test-app\\nested\\package.json', '{}'],
+    ['C:\\test-app\\nested\\entry.js', 'module.exports = 31;'],
+    ['C:\\test-app\\node_modules\\legacy\\index.js', 'module.exports = 37;'],
+  ]));
+  const {context, operations} = fixture;
+  assert.equal(context.require.resolve('./entry.js'), filename);
+  assert.throws(() => context.require('./entry.js'), {code: 'ERR_REQUIRE_ESM'});
+  assert.throws(() => context.require('./explicit.mjs'), {code: 'ERR_REQUIRE_ESM'});
+  assert.equal(context.executed, undefined);
+  assert.equal(context.require.cache[filename], undefined);
+  for (const [name, value] of [['legacy.cjs', 17], ['extensionless', 23], ['unknown.txt', 29],
+    ['nested/entry.js', 31], ['node_modules/legacy/index.js', 37]]) {
+    assert.equal(context.require('./' + name), value);
+  }
+  fixture.setFile(manifest, '{"type":"commonjs"}');
+  assert.equal(context.require('./entry.js'), 42);
+  const operationCount = operations.length;
+  assert.equal(context.require('./entry.js'), 42);
+  assert.equal(operations.length, operationCount);
+  delete context.require.cache[filename];
+  fixture.setFile(manifest, '{"type":"module"}');
+  assert.throws(() => context.require('./entry.js'), {code: 'ERR_REQUIRE_ESM'});
+});
+
+test('renderer package type lookup does not read an escaping manifest symlink', () => {
+  const manifest = 'C:\\outside\\package.json';
+  const {context, reads} = createPathRenderer(new Map([
+    ['C:\\test-app\\entry.js', 'module.exports = 42;'],
+    [manifest, '{"type":"commonjs"}'],
+  ]), new Map([['C:\\test-app\\package.json', manifest]]));
+  assert.throws(() => context.require('./entry.js'), {code: 'MODULE_NOT_FOUND'});
+  assert.deepEqual(reads, []);
+});
+
 test('a symlink outside the permitted roots fails before reading or fallback', () => {
   const {context, reads} = createPathRenderer(new Map([
     ['C:\\test-app\\inside.js', 'module.exports = true;'],
@@ -249,6 +305,91 @@ test('cold package resolution reads each canonical package config once', () => {
   assert.equal(operations.length, coldOperations);
 });
 
+test('live Module lookup overrides select real packages and receive the parent module', () => {
+  const {context} = createPathRenderer(new Map([
+    ['C:\\test-app\\main.js', `
+      const Module = require('module');
+      const original = Module._resolveLookupPaths;
+      let observed = false;
+      Module._resolveLookupPaths = function(request, parent) {
+        if (request === 'dependency') {
+          observed = this === Module && parent === module && parent.paths.length > 0;
+          return [__dirname + '/vendor', ...original(request, parent)];
+        }
+        return original(request, parent);
+      };
+      module.exports = {value: require('dependency'), resolved: require.resolve('dependency'),
+        paths: require.resolve.paths('dependency'), observed};
+    `],
+    ['C:\\test-app\\vendor\\dependency\\index.js', 'module.exports = 42;'],
+    ['C:\\test-app\\node_modules\\dependency\\index.js', 'module.exports = 1;'],
+  ]));
+  const result = context.require('./main.js');
+  assert.equal(result.value, 42);
+  assert.equal(result.resolved, 'C:\\test-app\\vendor\\dependency\\index.js');
+  assert.equal(result.paths[0], 'C:\\test-app/vendor');
+  assert.equal(result.observed, true);
+});
+
+test('changing lookup functions or their closure cannot reuse a stale resolved path', () => {
+  const {context} = createPathRenderer(new Map([
+    ['C:\\test-app\\node_modules\\dependency\\index.js', 'module.exports = {value: 1};'],
+    ['C:\\test-app\\vendor\\dependency\\index.js', 'module.exports = {value: 2};'],
+  ]));
+  const first = context.require('dependency');
+  const Module = context.require('module');
+  const original = Module._resolveLookupPaths;
+  let directory = 'C:\\test-app\\vendor';
+  Module._resolveLookupPaths = () => [directory];
+  const second = context.require('dependency');
+  assert.equal(second.value, 2);
+  assert.equal(context.require.resolve('dependency'), directory + '\\dependency\\index.js');
+  directory = 'C:\\test-app\\node_modules';
+  assert.equal(context.require('dependency'), first);
+  Module._resolveLookupPaths = original;
+  assert.equal(context.require('dependency'), first);
+});
+
+test('custom lookup paths keep canonical root restrictions and parent paths are mutable', () => {
+  const {context, reads} = createPathRenderer(new Map([
+    ['C:\\test-app\\main.js', `module.paths.unshift(__dirname + '/vendor'); module.exports = require('dependency');`],
+    ['C:\\test-app\\vendor\\dependency\\index.js', 'module.exports = 42;'],
+    ['C:\\outside\\dependency\\index.js', 'module.exports = "must not read";'],
+  ]));
+  assert.equal(context.require('./main.js'), 42);
+  const Module = context.require('module');
+  Module._resolveLookupPaths = () => ['C:\\outside'];
+  assert.throws(() => context.require('dependency'), {code: 'MODULE_NOT_FOUND'});
+  assert.throws(() => context.require.resolve('dependency'), {code: 'MODULE_NOT_FOUND'});
+  assert.ok(!reads.some(filename => filename.startsWith('C:\\outside')));
+  Module._resolveLookupPaths = () => ['vendor'];
+  assert.throws(() => context.require('dependency'), {code: 'ERR_INVALID_ARG_VALUE'});
+  Module._resolveLookupPaths = () => ['C:\\test-app\0'];
+  assert.throws(() => context.require('dependency'), {code: 'ERR_INVALID_ARG_VALUE'});
+});
+
+test('createRequire keeps a stable independent parent for lookup callbacks', () => {
+  const {context} = createPathRenderer(new Map([
+    ['C:\\test-app\\vendor\\dependency\\index.js', 'module.exports = 42;'],
+  ]));
+  const Module = context.require('module');
+  const first = Module.createRequire('C:\\test-app\\virtual.js');
+  const second = Module.createRequire('C:\\test-app\\virtual.js');
+  const parents = [];
+  Module._resolveLookupPaths = function(request, parent) {
+    assert.equal(this, Module);
+    parents.push(parent);
+    return ['C:\\test-app\\vendor'];
+  };
+  assert.equal(first('dependency'), 42);
+  first.resolve('dependency');
+  first.resolve.paths('dependency');
+  second('dependency');
+  assert.equal(parents[0], parents[1]);
+  assert.equal(parents[0], parents[2]);
+  assert.notEqual(parents[0], parents[3]);
+});
+
 test('package config is refreshed after cache deletion and failed resolution', () => {
   const directory = 'C:\\test-app\\node_modules\\fixture';
   const packageFile = directory + '\\package.json';
@@ -267,7 +408,12 @@ test('package config is refreshed after cache deletion and failed resolution', (
   harness.setFile(packageFile, '{');
   assert.throws(() => harness.context.require('fixture'), {code: 'ERR_INVALID_PACKAGE_CONFIG'});
   harness.setFile(packageFile, JSON.stringify({exports: './second.js'}));
-  assert.throws(() => harness.context.require('fixture'), {code: 'ERR_NOT_SUPPORTED'});
+  assert.equal(harness.context.require('fixture'), 2);
+  delete harness.context.require.cache[secondFile];
+  harness.setFile(packageFile, JSON.stringify({exports: {'.': null}}));
+  assert.throws(() => harness.context.require('fixture'), {code: 'ERR_PACKAGE_PATH_NOT_EXPORTED'});
+  harness.setFile(packageFile, JSON.stringify({exports: './missing.js', main: 'first.js'}));
+  assert.throws(() => harness.context.require('fixture'), {code: 'MODULE_NOT_FOUND'});
   harness.setFile(packageFile, JSON.stringify({main: 'missing.js'}));
   assert.throws(() => harness.context.require('fixture'), {code: 'MODULE_NOT_FOUND'});
   harness.setFile(packageFile, JSON.stringify({main: 'first.js'}));
@@ -359,6 +505,23 @@ test('old hosts map only the matching document origin and preserve nested page p
                root + '\\static\\chunk.js');
   assert.equal(stackFilename(context, 'https://player/static/chunk.js'),
                'https://player/static/chunk.js');
+});
+
+test('module.isBuiltin uses registered names without loading files or native addons', () => {
+  const {context, reads, nativeLoads, operations} = createPathRenderer(new Map());
+  const {isBuiltin} = context.require('node:module');
+  for (const name of ['fs', 'fs/promises', 'stream/promises', 'original-fs',
+    'original-fs/promises', 'util', 'module']) {
+    assert.equal(isBuiltin(name), true);
+    assert.equal(isBuiltin('node:' + name), true);
+  }
+  for (const name of [undefined, null, 7, {}, Symbol(), '', 'electron', 'node:electron',
+    'node:node:fs', 'node:missing', 'FS', './fs', 'fs\0']) {
+    assert.equal(isBuiltin(name), false);
+  }
+  assert.deepEqual(reads, []);
+  assert.deepEqual(nativeLoads, []);
+  assert.deepEqual(operations, []);
 });
 
 test('module.createRequire binds a new parent and uses the existing CommonJS cache', () => {

@@ -83,10 +83,20 @@ class StageThunderMacResourcesTest(unittest.TestCase):
         self.assertEqual(inventory(self.destination / staging.BUNDLE), inventory(self.bundle))
         descriptor = json.loads((self.destination / staging.DESCRIPTOR).read_text())
         self.assertEqual(descriptor,
-                         {**self.descriptor, 'application': staging.HOST_APPLICATION})
+                         {**self.descriptor, 'application': staging.HOST_APPLICATION,
+                          'userDataPolicy': 'legacy-host'})
         self.assertNotIn('executable', descriptor)
         self.assertTrue((self.destination / staging.BUNDLE / 'Contents/MacOS').is_dir())
         self.assertEqual(inventory(self.source), before)
+
+    def test_explicit_storage_policy_is_preserved(self):
+        self.descriptor['userDataPolicy'] = 'isolated'
+        self.descriptor['storageId'] = 'org.example.test'
+        (self.source / staging.DESCRIPTOR).write_text(json.dumps(self.descriptor))
+        self.stage()
+        descriptor = json.loads((self.destination / staging.DESCRIPTOR).read_text())
+        self.assertEqual(descriptor['userDataPolicy'], 'isolated')
+        self.assertEqual(descriptor['storageId'], 'org.example.test')
 
     def test_new_stage_removes_stale_files_and_changes_directory_input_timestamp(self):
         old = self.bundle / 'Contents/Resources/app/old/deep/old.bin'

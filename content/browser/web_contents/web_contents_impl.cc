@@ -176,6 +176,7 @@
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_view_delegate.h"
+#include "content/public/browser/web_contents_visibility_policy.h"
 #include "content/public/browser/web_ui_controller.h"
 #include "content/public/browser/webid/federated_embedder_login_request.h"
 #include "content/public/browser/webid/identity_credential_source.h"
@@ -289,6 +290,11 @@
 namespace content {
 
 namespace {
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+const char kWebContentsOcclusionDisabledKey[] =
+    "web-contents-occlusion-disabled";
+#endif
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
@@ -12404,9 +12410,13 @@ void WebContentsImpl::UpdateWebContentsVisibility(Visibility visibility) {
   // Occlusion is disabled when
   // |switches::kDisableBackgroundingOccludedWindowsForTesting| is specified on
   // the command line (to avoid flakiness in browser tests).
-  const bool occlusion_is_disabled =
+  bool occlusion_is_disabled =
       base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kDisableBackgroundingOccludedWindowsForTesting);
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  occlusion_is_disabled |=
+      GetUserData(kWebContentsOcclusionDisabledKey) != nullptr;
+#endif
   if (occlusion_is_disabled && visibility == Visibility::OCCLUDED) {
     visibility = Visibility::VISIBLE;
   }
@@ -12436,6 +12446,22 @@ void WebContentsImpl::UpdateWebContentsVisibility(Visibility visibility) {
 
   UpdateVisibilityAndNotifyPageAndView(visibility);
 }
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+void SetWebContentsOcclusionEnabled(WebContents* contents, bool enabled) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK(contents);
+  if (enabled) {
+    contents->RemoveUserData(kWebContentsOcclusionDisabledKey);
+  } else {
+    contents->SetUserData(kWebContentsOcclusionDisabledKey,
+                          std::make_unique<base::SupportsUserData::Data>());
+    if (contents->GetVisibility() == Visibility::OCCLUDED) {
+      contents->UpdateWebContentsVisibility(Visibility::VISIBLE);
+    }
+  }
+}
+#endif
 
 void WebContentsImpl::UpdateOverridingUserAgent() {
   OPTIONAL_TRACE_EVENT0("content",

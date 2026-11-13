@@ -256,6 +256,12 @@ source_set("misc") {
   if (enable_bound_session_credentials) {
     deps += [ "//components/unexportable_keys/mojom:mojo_service" ]
   }
+  if (enable_xenon_service) {
+    deps += [
+      "//xenon_overlay/buildflags",
+      "//xenon_overlay/chrome/browser:electron_permissions",
+    ]
+  }
 }
 
 if (!is_chromeos) {

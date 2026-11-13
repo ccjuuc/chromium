@@ -4,6 +4,8 @@
 
 #include "xenon_overlay/chrome/browser/ipc/xenon_ipc_main_container.h"
 
+#include <fcntl.h>
+
 #include <memory>
 #include <string>
 #include <string_view>
@@ -21,27 +23,42 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/scoped_environment_variable_override.h"
 #include "base/task/execution_fence.h"
+#include "base/test/scoped_command_line.h"
+#include "base/test/scoped_path_override.h"
 #include "base/test/test_future.h"
+#include "chrome/common/chrome_paths.h"
 #include "components/version_info/version_info.h"
+#include "content/public/common/content_switches.h"
 #include "gin/converter.h"
 #include "gin/test/v8_test.h"
 #include "mojo/core/embedder/embedder.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/messaging/message_port_descriptor.h"
+#include "third_party/skia/include/core/SkBitmap.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "ui/gfx/codec/png_codec.h"
 #include "v8/include/v8-container.h"
 #include "v8/include/v8-context.h"
 #include "v8/include/v8-function.h"
 #include "v8/include/v8-object.h"
 #include "v8/include/v8-script.h"
+#include "v8/include/v8-typed-array.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_app_runtime.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_file_system_bridge.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_native_image_bridge.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_os_bridge.h"
+#include "xenon_overlay/chrome/browser/napi/napi_loader.h"
 #include "xenon_overlay/common/asar/archive.h"
 #include "xenon_overlay/common/asar/test_support.h"
 #include "xenon_overlay/common/ipc/xenon_ipc_value_codec.h"
+#include "xenon_overlay/common/ipc/xenon_runtime_platform.h"
+#include "xenon_overlay/public/xenon_ipc_switches.h"
 #include "xenon_overlay/services/xenon_node_executor.h"
 
 namespace xenon::ipc {
@@ -57,6 +74,32 @@ const os = require('os');
 const fs = require('node:fs');
 const asyncHooks = require('node:async_hooks');
 const ipcContext = new asyncHooks.AsyncLocalStorage();
+let testWebRequestCallback;
+let testKeyboardInput;
+ipcMain.handle('test:before-input-register', () => {
+  const window = new BrowserWindow({show: false});
+  window.webContents.on('before-input-event', (event, input) => {
+    testKeyboardInput = {sender: event.sender === window.webContents, input};
+    if (input.type === 'keyDown' && input.control && input.key === 's')
+      event.preventDefault();
+  });
+  return window.id;
+});
+ipcMain.handle('test:before-input-observed', () => testKeyboardInput);
+ipcMain.handle('test:web-request-register', (_event, partition, event, mode) => {
+  require('electron').session.fromPartition(partition).webRequest[event]((details, callback) => {
+    if (mode === 'defer') testWebRequestCallback = callback;
+    else if (mode === 'cancel') callback({cancel: true});
+    else callback({});
+  });
+  return true;
+});
+ipcMain.handle('test:web-request-complete', (_event, response) => {
+  const callback = testWebRequestCallback;
+  testWebRequestCallback = null;
+  callback(response);
+  return true;
+});
 ipcMain.on('test:native-app-exit', (event, code) => {
   try {
     __xenonExitApp(code);
@@ -65,6 +108,35 @@ ipcMain.on('test:native-app-exit', (event, code) => {
     event.returnValue = error.code || error.name;
   }
 });
+ipcMain.handle('test:app-path-mutations', (_event, root) => {
+  const userData = app.getPath('userData');
+  const sameData = app.setPath('userData', userData) === undefined;
+  const downloads = path.join(root, 'downloads-not-created');
+  const logs = path.join(root, 'logs-not-created');
+  app.setPath('downloads', downloads);
+  const setDoesNotCreate = !fs.existsSync(downloads);
+  app.setAppLogsPath(logs);
+  const logsCreated = fs.statSync(logs).isDirectory();
+  const logFile = path.join(app.getPath('logs'), 'probe.txt');
+  fs.writeFileSync(logFile, 'real log bytes');
+  const errors = [];
+  for (const call of [() => app.getPath('unknown'),
+      () => app.setPath('downloads', 'relative'),
+      () => app.setPath('userData', path.join(root, 'other-profile')),
+      () => app.setPath('sessionData', path.join(root, 'other-sessions')),
+      () => app.setPath('logs', logs + '\0suffix'),
+      () => app.getPath({toString: () => 'home'})]) {
+    try { call(); errors.push('no error'); } catch (error) { errors.push(error.code); }
+  }
+  return {sameData, userDataUnchanged: userData === app.getPath('userData'),
+    downloads: app.getPath('downloads'), setDoesNotCreate, logsCreated,
+    logText: fs.readFileSync(logFile, 'utf8'), errors,
+    sessionData: app.getPath('sessionData'),
+    logsUnchanged: logs === app.getPath('logs')};
+});
+ipcMain.handle('test:host-paths', () => ({
+  userData: app.getPath('userData'), crashDumps: app.getPath('crashDumps'),
+}));
 ipcMain.on('test:unsupported-app-exit', event => {
   const window = new BrowserWindow({show: false});
   let events = 0;
@@ -149,24 +221,14 @@ ipcMain.handle('test:async-context-unsupported', () => {
     try { call(); return false; } catch (error) { return error.code === 'ERR_NOT_SUPPORTED'; }
   });
 });
-ipcMain.handle('test:async-context-unavailable', () => {
-  const storage = new asyncHooks.AsyncLocalStorage();
-  storage.disable();
-  let callbacks = 0;
-  const calls = [() => storage.run('value', () => ++callbacks),
-    () => storage.enterWith('value'), () => asyncHooks.AsyncLocalStorage.snapshot(),
-    () => asyncHooks.AsyncLocalStorage.bind(() => ++callbacks),
-    () => new asyncHooks.AsyncResource('fixture')];
-  const errors = calls.map(call => {
-    try { call(); return 'no error'; } catch (error) { return error.code; }
-  });
-  return {errors, callbacks, empty: storage.getStore() === undefined,
-    alias: asyncHooks === require('async_hooks')};
-});
 ipcMain.handle('test:crypto-native', async () => {
   const crypto = require('node:crypto');
-  const hashes = Object.fromEntries(['md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512']
+  const algorithms = crypto.getHashes();
+  const hashes = Object.fromEntries(algorithms
     .map(name => [name, crypto.createHash(name).update('a').update('bc').digest('hex')]));
+  hashes.algorithms = algorithms.slice();
+  algorithms.splice(0, algorithms.length, 'not-a-real-digest');
+  hashes.independentAlgorithms = crypto.getHashes().join(',') === hashes.algorithms.join(',');
   const bytes = new Uint8Array([77, 255, 0, 128, 97, 77]);
   const binaryHash = crypto.createHash('sha256').update(bytes.subarray(1, 5));
   bytes.fill(0);
@@ -215,9 +277,16 @@ ipcMain.handle('test:builtin-capability-contract', async () => {
       collect(() => http[method]('https://fixture.invalid'));
     }
   }
-  collect(() => new stream.Readable().pipe(new stream.Writable()));
+  const reader = new stream.Readable();
+  await new Promise(resolve => {
+    reader.once('error', error => { errors.push(error.code); resolve(); });
+    reader.resume();
+  });
   collect(() => new stream.Writable().write(Buffer.from([0, 255])));
-  const writer = new stream.Writable();
+  const writer = new stream.Writable({write(_chunk, _encoding, callback) {
+    callback(Object.assign(new Error('unsupported sink'), {code:'ERR_NOT_SUPPORTED'}));
+  }});
+  writer.on('error', () => {});
   let finishes = 0;
   writer.on('finish', () => ++finishes);
   let returned = false;
@@ -550,7 +619,8 @@ ipcMain.handle('test:electron-runtime', () => ({
   joinedPath: path.join('parent', 'child'),
   osRelease: os.release(),
   windowCount: BrowserWindow.getAllWindows().length,
-  aeroGlass: systemPreferences.isAeroGlassEnabled(),
+  systemPreferencesEmitter: typeof systemPreferences.on === 'function' &&
+      typeof systemPreferences.off === 'function',
 }));
 ipcMain.handle('test:network-interfaces', () => os.networkInterfaces());
 ipcMain.handle('test:os-native-contract', (_event, expected) => {
@@ -616,17 +686,20 @@ ipcMain.handle('test:app-paths', () => ({
   exe: app.getPath('exe'),
   processExe: process.execPath,
   chromeVersion: process.versions.chrome,
+  electronVersion: process.versions.electron,
 }));
 let menuClosed = false;
 let menuClicked = '';
-ipcMain.handle('test:menu-popup', () => {
+ipcMain.handle('test:menu-popup', (_event, iconPath) => {
   menuClosed = false;
   menuClicked = '';
+  const icon = nativeImage.createFromPath(iconPath);
+  if (icon.isEmpty()) throw new Error('Menu fixture icon failed to decode');
   const menu = Menu.buildFromTemplate([
     {
       type: 'normal',
       label: 'hide',
-      icon: nativeImage.createFromPath('C:/icon.png'),
+      icon,
       click: () => { menuClicked = 'hide'; },
     },
     {type: 'separator'},
@@ -648,8 +721,8 @@ ipcMain.handle('test:menu-popup', () => {
 ipcMain.handle('test:menu-state', () => ({menuClosed, menuClicked}));
 ipcMain.handle('test:open-dialog-contract', async (_event, mode) => {
   const options = {title: 'Native picker fixture',
-    properties: ['openDirectory', 'multiSelections'],
-    filters: [{name: 'Fixture', extensions: ['.mp4', 'mkv']}]};
+    defaultPath: 'media', properties: ['openFile', 'multiSelections'],
+    filters: [{name: 'Fixture', extensions: ['mp4', 'mkv']}]};
   const dialog = require('electron').dialog;
   try {
     const value = mode === 'sync' ? dialog.showOpenDialogSync(options) :
@@ -682,6 +755,10 @@ base::Value FileSystemArguments(const std::string& operation,
 
 class FakeIpcRenderer : public xenon::ipc::mojom::IpcRenderer {
  public:
+  void DispatchPostMessage(const std::string& channel,
+                           blink::TransferableMessage message) override {
+    ADD_FAILURE() << "Unexpected MessagePort IPC: " << channel;
+  }
   mojo::PendingRemote<xenon::ipc::mojom::IpcRenderer> BindNewRemote() {
     return receiver_.BindNewPipeAndPassRemote();
   }
@@ -714,6 +791,9 @@ class XenonIpcMainContainerTest : public gin::V8Test {
   void SetUp() override {
     gin::V8Test::SetUp();
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+    browser_user_data_ = temp_dir_.GetPath().AppendASCII("browser-user-data");
+    browser_session_data_ =
+        temp_dir_.GetPath().AppendASCII("browser-session-data");
     main_script_ = temp_dir_.GetPath().AppendASCII("main.js");
     ASSERT_TRUE(base::WriteFile(main_script_, kTestMainSource));
     base::CommandLine::ForCurrentProcess()->AppendSwitchPath("xenon-main-js",
@@ -738,6 +818,47 @@ class XenonIpcMainContainerTest : public gin::V8Test {
            base::Value* result, std::string* error) {
           self->last_window_command_ = command;
           self->last_window_arguments_ = arguments.Clone();
+          if (window_id == 0 && command == "electron-app-storage") {
+            const auto* details = arguments.GetIfDict();
+            const auto* method =
+                details ? details->FindString("method") : nullptr;
+            const auto* name = details ? details->FindString("name") : nullptr;
+            if (!method || !name || (*method != "get" && *method != "set") ||
+                (*name != "userData" && *name != "sessionData")) {
+              *error = "ERR_INVALID_ARG_VALUE: invalid test storage request";
+              return false;
+            }
+            const auto& current = *name == "userData"
+                                      ? self->browser_user_data_
+                                      : self->browser_session_data_;
+            if (*method == "set") {
+              const auto* path = details->FindString("path");
+              if (!path || *path != current.AsUTF8Unsafe()) {
+                // CreateContainer already registered a renderer. Its Browser
+                // storage has been initialized, so a different root is frozen.
+                *error =
+                    "ERR_INVALID_STATE: session storage already initialized";
+                return false;
+              }
+            }
+            *result = base::Value(current.AsUTF8Unsafe());
+            return true;
+          }
+          if (window_id == 0 && command == "web-request-handler") {
+            self->last_web_request_registration_ = arguments.Clone();
+            return true;
+          }
+          if (window_id == 0 && command == "electron-api") {
+            const auto* details = arguments.GetIfDict();
+            const auto* operation =
+                details ? details->FindString("operation") : nullptr;
+            if (operation && operation->starts_with("nativeImage.")) {
+              auto image_result = CallNativeImageApi(*operation, *details);
+              *result = std::move(image_result->value);
+              *error = std::move(image_result->error);
+              return image_result->success;
+            }
+          }
           if (window_id == 0 && command == "electron-session") {
             const auto* details = arguments.GetIfDict();
             const auto* method =
@@ -777,6 +898,10 @@ class XenonIpcMainContainerTest : public gin::V8Test {
           }
           if (command == "center") {
             return true;
+          }
+          if (command == "observe-before-input") {
+            return arguments.is_dict() &&
+                   arguments.GetDict().FindBool("enabled").has_value();
           }
           if (command == "popup-menu") {
             return true;
@@ -830,133 +955,155 @@ class XenonIpcMainContainerTest : public gin::V8Test {
 
   base::ScopedTempDir temp_dir_;
   base::FilePath main_script_;
+  base::FilePath browser_user_data_;
+  base::FilePath browser_session_data_;
   base::DictValue window_bounds_;
   base::DictValue window_preferences_;
   std::string user_agent_ = "DefaultAgent/1.0";
   std::string last_window_command_;
   base::Value last_window_arguments_;
+  base::Value last_web_request_registration_;
   std::unique_ptr<FakeIpcRenderer> fixture_renderer_;
   std::unique_ptr<XenonIpcMainContainer> container_;
 };
 
-TEST_F(XenonIpcMainContainerTest, OpenDialogMissingHostReportsUnsupported) {
-  for (const char* mode : {"sync", "async"}) {
-    SCOPED_TRACE(mode);
-    base::test::TestFuture<mojom::IpcResultPtr> future;
-    container_->Invoke("renderer-1", "test:open-dialog-contract",
-                       Arguments({base::Value(mode)}), future.GetCallback());
-    const auto result = future.Take();
-    ASSERT_TRUE(result->success) << result->error;
-    const auto& value = result->value.GetDict();
-    EXPECT_EQ(true, value.FindBool("failed"));
-    ASSERT_TRUE(value.FindString("code"));
-    EXPECT_EQ("ERR_NOT_SUPPORTED", *value.FindString("code"));
-    ASSERT_TRUE(value.FindString("name"));
-    EXPECT_EQ("Error", *value.FindString("name"));
-    EXPECT_FALSE(value.contains("value"));
+TEST_F(XenonIpcMainContainerTest, OpenDialogErrorsNeverLookCancelled) {
+  container_->MarkAppReady();
+  for (const std::string error : {"ERR_FAILED: transport failed",
+                                  "ERR_INVALID_STATE: permission check active",
+                                  "ERR_ACCESS_DENIED: stale window owner"}) {
+    SCOPED_TRACE(error);
+    XenonIpcMainContainer::WindowHooks hooks;
+    hooks.call = base::BindRepeating(
+        [](const std::string& error, int32_t id, const std::string& command,
+           const base::Value&, base::Value* result, std::string* failure) {
+          EXPECT_EQ(0, id);
+          EXPECT_EQ("electron-open-dialog", command);
+          *result = base::Value(base::DictValue().Set("canceled", true));
+          *failure = error;
+          return true;
+        },
+        error);
+    hooks.call_async = base::BindRepeating(
+        [](const std::string& error, int32_t id, const std::string& command,
+           base::Value,
+           base::OnceCallback<void(base::Value, std::string)> reply) {
+          EXPECT_EQ(0, id);
+          EXPECT_EQ("electron-open-dialog", command);
+          std::move(reply).Run(base::Value(), error);
+        },
+        error);
+    container_->SetWindowHooks(std::move(hooks));
+    for (const char* mode : {"sync", "async"}) {
+      SCOPED_TRACE(mode);
+      base::test::TestFuture<mojom::IpcResultPtr> future;
+      container_->Invoke("renderer-1", "test:open-dialog-contract",
+                         Arguments({base::Value(mode)}), future.GetCallback());
+      const auto result = future.Take();
+      ASSERT_TRUE(result->success) << result->error;
+      const auto& value = result->value.GetDict();
+      EXPECT_EQ(true, value.FindBool("failed"));
+      ASSERT_TRUE(value.FindString("code"));
+      EXPECT_EQ(error.substr(0, error.find(':')), *value.FindString("code"));
+      EXPECT_FALSE(value.contains("value"));
+    }
   }
 }
 
-TEST_F(XenonIpcMainContainerTest, OpenDialogBrowserFailureNeverLooksCancelled) {
-  int calls = 0;
-  XenonIpcMainContainer::WindowHooks hooks;
-  hooks.show_open_dialog = base::BindRepeating(
-      [](int* calls, const std::string& title, bool directory, bool allow_multi,
-         const std::vector<std::string>& extensions,
-         std::vector<std::string>* paths) {
-        ++*calls;
-        // A partial reply must not become a successful selection either.
-        paths->push_back("C:\\partial\\fixture.mp4");
-        return false;
-      },
-      &calls);
-  container_->SetWindowHooks(std::move(hooks));
-  for (const char* mode : {"sync", "async"}) {
-    SCOPED_TRACE(mode);
-    base::test::TestFuture<mojom::IpcResultPtr> future;
-    container_->Invoke("renderer-1", "test:open-dialog-contract",
-                       Arguments({base::Value(mode)}), future.GetCallback());
-    const auto result = future.Take();
-    ASSERT_TRUE(result->success) << result->error;
-    const auto& value = result->value.GetDict();
-    EXPECT_EQ(true, value.FindBool("failed"));
-    ASSERT_TRUE(value.FindString("code"));
-    EXPECT_EQ("ERR_FAILED", *value.FindString("code"));
-    EXPECT_FALSE(value.contains("value"));
-  }
-  EXPECT_EQ(2, calls);
-}
-
-TEST_F(XenonIpcMainContainerTest, OpenDialogPreservesRealCancellation) {
-  XenonIpcMainContainer::WindowHooks hooks;
-  hooks.show_open_dialog = base::BindRepeating(
-      [](const std::string& title, bool directory, bool allow_multi,
-         const std::vector<std::string>& extensions,
-         std::vector<std::string>* paths) { return true; });
-  container_->SetWindowHooks(std::move(hooks));
-  for (const char* mode : {"sync", "async"}) {
-    SCOPED_TRACE(mode);
-    base::test::TestFuture<mojom::IpcResultPtr> future;
-    container_->Invoke("renderer-1", "test:open-dialog-contract",
-                       Arguments({base::Value(mode)}), future.GetCallback());
-    const auto result = future.Take();
-    ASSERT_TRUE(result->success) << result->error;
-    const auto& value = result->value.GetDict();
-    EXPECT_EQ(false, value.FindBool("failed"));
-    if (std::string_view(mode) == "sync") {
-      EXPECT_EQ(true, value.FindBool("isUndefined"));
-      ASSERT_TRUE(value.Find("value"));
-      EXPECT_TRUE(value.Find("value")->is_none());
-    } else {
-      EXPECT_EQ(false, value.FindBool("isUndefined"));
-      const auto* reply = value.FindDict("value");
-      ASSERT_TRUE(reply);
-      EXPECT_EQ(true, reply->FindBool("canceled"));
-      const auto* paths = reply->FindList("filePaths");
+TEST_F(XenonIpcMainContainerTest,
+       OpenDialogPreservesOptionsSelectionAndCancellation) {
+  container_->MarkAppReady();
+  for (bool canceled : {false, true}) {
+    const auto respond = base::BindRepeating(
+        [](bool canceled, int32_t id, const std::string& command,
+           const base::Value& arguments) {
+          EXPECT_EQ(0, id);
+          EXPECT_EQ("electron-open-dialog", command);
+          EXPECT_EQ("Native picker fixture",
+                    *arguments.GetDict().FindString("title"));
+          EXPECT_EQ("media", *arguments.GetDict().FindString("defaultPath"));
+          EXPECT_EQ(
+              (base::ListValue().Append("openFile").Append("multiSelections")),
+              *arguments.GetDict().FindList("properties"));
+          base::ListValue paths;
+          if (!canceled) {
+            paths.Append("first.mp4");
+            paths.Append("second.mkv");
+          }
+          return base::Value(base::DictValue()
+                                 .Set("canceled", canceled)
+                                 .Set("filePaths", std::move(paths)));
+        },
+        canceled);
+    XenonIpcMainContainer::WindowHooks hooks;
+    hooks.call = base::BindRepeating(
+        [](decltype(respond) respond, int32_t id, const std::string& command,
+           const base::Value& arguments, base::Value* result, std::string*) {
+          *result = respond.Run(id, command, arguments);
+          return true;
+        },
+        respond);
+    hooks.call_async = base::BindRepeating(
+        [](decltype(respond) respond, int32_t id, const std::string& command,
+           base::Value arguments,
+           base::OnceCallback<void(base::Value, std::string)> reply) {
+          std::move(reply).Run(respond.Run(id, command, arguments), "");
+        },
+        respond);
+    container_->SetWindowHooks(std::move(hooks));
+    for (const char* mode : {"sync", "async"}) {
+      SCOPED_TRACE(mode);
+      base::test::TestFuture<mojom::IpcResultPtr> future;
+      container_->Invoke("renderer-1", "test:open-dialog-contract",
+                         Arguments({base::Value(mode)}), future.GetCallback());
+      const auto result = future.Take();
+      ASSERT_TRUE(result->success) << result->error;
+      const auto& value = result->value.GetDict();
+      EXPECT_EQ(false, value.FindBool("failed"));
+      if (std::string_view(mode) == "sync" && canceled) {
+        EXPECT_EQ(true, value.FindBool("isUndefined"));
+        continue;
+      }
+      const auto* paths = std::string_view(mode) == "sync"
+                              ? value.FindList("value")
+                              : value.FindDict("value")->FindList("filePaths");
       ASSERT_TRUE(paths);
-      EXPECT_TRUE(paths->empty());
+      EXPECT_EQ(canceled ? 0u : 2u, paths->size());
     }
   }
 }
 
-TEST_F(XenonIpcMainContainerTest, OpenDialogPreservesSelectionAndOptions) {
-  XenonIpcMainContainer::WindowHooks hooks;
-  hooks.show_open_dialog = base::BindRepeating(
-      [](const std::string& title, bool directory, bool allow_multi,
-         const std::vector<std::string>& extensions,
-         std::vector<std::string>* paths) {
-        EXPECT_EQ("Native picker fixture", title);
-        EXPECT_TRUE(directory);
-        EXPECT_TRUE(allow_multi);
-        EXPECT_EQ((std::vector<std::string>{"mp4", "mkv"}), extensions);
-        *paths = {"C:\\media\\first.mp4", "C:\\media\\second.mkv"};
-        return true;
-      });
-  container_->SetWindowHooks(std::move(hooks));
-  for (const char* mode : {"sync", "async"}) {
-    SCOPED_TRACE(mode);
-    base::test::TestFuture<mojom::IpcResultPtr> future;
-    container_->Invoke("renderer-1", "test:open-dialog-contract",
-                       Arguments({base::Value(mode)}), future.GetCallback());
-    const auto result = future.Take();
-    ASSERT_TRUE(result->success) << result->error;
-    const auto& value = result->value.GetDict();
-    EXPECT_EQ(false, value.FindBool("failed"));
-    EXPECT_EQ(false, value.FindBool("isUndefined"));
-    const base::ListValue* paths;
-    if (std::string_view(mode) == "sync") {
-      paths = value.FindList("value");
-    } else {
-      const auto* reply = value.FindDict("value");
-      ASSERT_TRUE(reply);
-      EXPECT_EQ(false, reply->FindBool("canceled"));
-      paths = reply->FindList("filePaths");
-    }
-    ASSERT_TRUE(paths);
-    ASSERT_EQ(2u, paths->size());
-    EXPECT_EQ("C:\\media\\first.mp4", (*paths)[0].GetString());
-    EXPECT_EQ("C:\\media\\second.mkv", (*paths)[1].GetString());
-  }
+TEST_F(XenonIpcMainContainerTest,
+       BeforeInputEventReturnsTheRealListenerDecision) {
+  base::test::TestFuture<mojom::IpcResultPtr> registered;
+  container_->Invoke("renderer-1", "test:before-input-register", Arguments({}),
+                     registered.GetCallback());
+  auto result = registered.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  ASSERT_EQ(1, result->value.GetInt());
+  EXPECT_EQ("observe-before-input", last_window_command_);
+  base::DictValue input = base::DictValue()
+                              .Set("type", "keyDown")
+                              .Set("key", "s")
+                              .Set("code", "KeyS")
+                              .Set("control", true)
+                              .Set("shift", false)
+                              .Set("isComposing", false);
+  EXPECT_TRUE(
+      container_->DispatchBeforeInputEvent(1, base::Value(input.Clone())));
+  input.Set("type", "keyUp");
+  EXPECT_FALSE(
+      container_->DispatchBeforeInputEvent(1, base::Value(input.Clone())));
+  base::test::TestFuture<mojom::IpcResultPtr> observed;
+  container_->Invoke("renderer-1", "test:before-input-observed", Arguments({}),
+                     observed.GetCallback());
+  result = observed.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ(true, result->value.GetDict().FindBool("sender"));
+  ASSERT_TRUE(result->value.GetDict().FindDict("input"));
+  EXPECT_EQ(input, *result->value.GetDict().FindDict("input"));
+  EXPECT_TRUE(
+      container_->DispatchBeforeInputEvent(999, base::Value(input.Clone())));
 }
 
 TEST_F(XenonIpcMainContainerTest,
@@ -975,15 +1122,17 @@ TEST_F(XenonIpcMainContainerTest,
   const auto* errors = values.FindList("errors");
   ASSERT_TRUE(errors);
   ASSERT_EQ(7u, errors->size());
-  for (const auto& code : *errors) {
-    EXPECT_EQ("ERR_NOT_SUPPORTED", code.GetString());
+  for (size_t i = 0; i < errors->size(); ++i) {
+    const char* expected = i == 2 || i == 3 ? "ERR_METHOD_NOT_IMPLEMENTED"
+                           : i == 5         ? "ENOENT"
+                                            : "ERR_NOT_SUPPORTED";
+    EXPECT_EQ(expected, (*errors)[i].GetString());
   }
 }
 
-#if defined(V8_ENABLE_JAVASCRIPT_PROMISE_HOOKS)
 TEST_F(XenonIpcMainContainerTest,
        AsyncLocalStoragePreservesNativeAwaitNestedAndConcurrentScopes) {
-  // This uses the actual hosted V8 context and its native SetPromiseHooks,
+  // This uses the actual hosted V8 isolate and its native Promise hook,
   // rather than a Node AsyncLocalStorage stand-in or Promise.then patch.
   base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
   container_->Invoke("renderer-1", "test:async-context-await", Arguments({}),
@@ -1048,26 +1197,78 @@ TEST_F(XenonIpcMainContainerTest,
   EXPECT_TRUE(result->value.GetBool());
 }
 
-#else
 TEST_F(XenonIpcMainContainerTest,
-       AsyncLocalStorageUnavailableBuildFailsExplicitlyWithoutCrashing) {
-  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
-  container_->Invoke("renderer-1", "test:async-context-unavailable",
-                     Arguments({}), future.GetCallback());
+       AsyncLocalStorageSurvivesOtherContainerShutdownAndReplacement) {
+  auto second = std::make_unique<XenonIpcMainContainer>();
+  FakeIpcRenderer second_renderer;
+  second->AddRenderer("renderer-1", second_renderer.BindNewRemote(), 1, 1, 0,
+                      "about:blank", true);
+  ASSERT_TRUE(second->Initialize()) << second->startup_error();
+  const auto exercise = [](XenonIpcMainContainer* container) {
+    base::test::TestFuture<mojom::IpcResultPtr> future;
+    container->Invoke("renderer-1", "test:async-context-await", Arguments({}),
+                      future.GetCallback());
+    auto result = future.Take();
+    ASSERT_TRUE(result->success) << result->error;
+    const auto& values = result->value.GetDict();
+    ASSERT_TRUE(values.FindString("first"));
+    EXPECT_EQ("first,nested,first", *values.FindString("first"));
+    EXPECT_EQ(true, values.FindBool("restored"));
+  };
+  exercise(container_.get());
+  exercise(second.get());
+  container_.reset();
+  exercise(second.get());
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize()) << container_->startup_error();
+  exercise(container_.get());
+  second.reset();
+  exercise(container_.get());
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       NativeAsyncContextHooksSuppressReentryAndIsolateExceptions) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+let depth = 0, maxDepth = 0, threw = false, before = 0, after = 0;
+__xenonInstallAsyncContextHooks(() => {
+  ++depth; maxDepth = Math.max(maxDepth, depth);
+  try {
+    if (!threw) {
+      threw = true;
+      Promise.resolve('nested in hook');
+      throw new Error('expected hook exception');
+    }
+  } finally { --depth; }
+}, () => ++before, () => ++after);
+require('electron').ipcMain.handle('exercise', async () => {
+  const value = await Promise.resolve('original reaction');
+  await Promise.resolve();
+  return {value, maxDepth, threw, before, after};
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "exercise", Arguments({}),
+                     future.GetCallback());
   auto result = future.Take();
   ASSERT_TRUE(result->success) << result->error;
   const auto& values = result->value.GetDict();
-  const auto* errors = values.FindList("errors");
-  ASSERT_TRUE(errors);
-  ASSERT_EQ(5u, errors->size());
-  for (const auto& error : *errors) {
-    EXPECT_EQ("ERR_NOT_SUPPORTED", error.GetString());
+  ASSERT_TRUE(values.FindString("value"));
+  EXPECT_EQ("original reaction", *values.FindString("value"));
+  EXPECT_EQ(1, values.FindInt("maxDepth"));
+  EXPECT_EQ(true, values.FindBool("threw"));
+  for (const char* key : {"before", "after"}) {
+    ASSERT_TRUE(values.FindInt(key));
+    EXPECT_GT(*values.FindInt(key), 0);
   }
-  EXPECT_EQ(0, values.FindInt("callbacks"));
-  EXPECT_EQ(true, values.FindBool("empty"));
-  EXPECT_EQ(true, values.FindBool("alias"));
 }
-#endif  // defined(V8_ENABLE_JAVASCRIPT_PROMISE_HOOKS)
 
 TEST_F(XenonIpcMainContainerTest,
        AsyncHooksUnsupportedLifecycleApisDoNotReturnFakeIds) {
@@ -1087,6 +1288,12 @@ TEST_F(XenonIpcMainContainerTest,
   auto result = future.Take();
   ASSERT_TRUE(result->success) << result->error;
   const auto& values = result->value.GetDict();
+  ASSERT_TRUE(values.FindList("algorithms"));
+  EXPECT_EQ(Arguments({base::Value("md5"), base::Value("sha1"),
+                       base::Value("sha224"), base::Value("sha256"),
+                       base::Value("sha384"), base::Value("sha512")}),
+            *values.Find("algorithms"));
+  EXPECT_EQ(true, values.FindBool("independentAlgorithms"));
   for (const auto& [name, expected] :
        {std::pair{"md5", "900150983cd24fb0d6963f7d28e17f72"},
         std::pair{"sha1", "a9993e364706816aba3e25717850c26c9cd0d89d"},
@@ -1127,6 +1334,114 @@ TEST_F(XenonIpcMainContainerTest,
       *values.Find("errors"));
 }
 
+TEST_F(XenonIpcMainContainerTest,
+       MainUrlCanParseUsesNativeValidationAndOptionalBase) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+require('electron').ipcMain.handle('parse-urls', () => {
+  const {URL} = require('node:url');
+  return [
+    ['https://example.com'], ['http://'], ['http://[bad]'],
+    ['https://example.com:70000'], ['/path'],
+    ['/path', 'https://example.com/root'],
+    ['https://example.com', 'invalid'], ['mailto:me@example.com'],
+    ['opaque:payload'], ['', 'https://example.com'],
+    ['bare-package'], ['node:fs'], ['file:///tmp/file.js']
+  ].map(args => URL.canParse(...args));
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "parse-urls", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  base::ListValue expected;
+  for (bool value : {true, false, false, false, false, true, false, true, true,
+                     true, false, true, true}) {
+    expected.Append(value);
+  }
+  EXPECT_EQ(expected, result->value.GetList());
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       MainUrlCanParseRejectsForbiddenDomainCharactersWithoutChangingOpaqueHosts) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+require('electron').ipcMain.handle('parse-hosts', () => {
+  const failures = [];
+  let total = 0;
+  const check = (expected, ...args) => {
+    ++total;
+    if (URL.canParse(...args) !== expected) failures.push(args);
+  };
+  const invalidHosts = [
+    'bad host', 'bad%20host', 'bad\u3000host', 'bad%E3%80%80host',
+    'bad%host', 'bad%zzhost', 'bad%25host', 'bad%2520host',
+    'bad%23host', 'bad%2Fhost', 'bad%3Ahost', 'bad%3Chost', 'bad%3Ehost',
+    'bad%3Fhost', 'bad%40host', 'bad%5Bhost', 'bad%5Chost', 'bad%5Dhost',
+    'bad%5Ehost', 'bad%7Chost', '[::1%25zone]', '[::invalid]',
+  ];
+  for (const scheme of ['http', 'https', 'ws', 'wss', 'ftp', 'file']) {
+    for (const host of invalidHosts) {
+      const url = scheme + '://' + host + '/';
+      check(false, url);
+      check(false, 'https://valid.test/', url);
+      check(false, 'relative', url);
+      check(false, '//' + host + '/', scheme + '://valid.test/base');
+    }
+    for (let code = 0; code <= 0x20; ++code) {
+      const raw = String.fromCharCode(code);
+      const escaped = '%' + code.toString(16).padStart(2, '0');
+      // The URL parser strips literal TAB/LF/CR before parsing. Encoded
+      // control characters remain part of the host and must be rejected.
+      check([9, 10, 13].includes(code), scheme + '://bad' + raw + 'host/');
+      check(false, scheme + '://bad' + escaped + 'host/');
+    }
+    check(false, scheme + '://bad\x7fhost/');
+    check(false, scheme + '://bad%7fhost/');
+    for (const host of ['valid.test', 'under_score.test', '*', '%2A',
+      '\u4f8b\u5b50.\u6d4b\u8bd5', '[::1]', '127.0.0.1']) {
+      check(true, scheme + '://' + host + '/');
+    }
+  }
+  for (const host of ['bad%20host', 'bad%25host', 'bad%00host', 'bad%7fhost',
+    'bad%zzhost', 'bad\u3000host', 'bad\x01host', 'bad\x7fhost', '[::1]']) {
+    check(true, 'custom://' + host + '/');
+    check(true, 'child', 'custom://' + host + '/parent');
+  }
+  for (const input of ['custom://bad host/', 'custom://bad\0host/',
+    'custom://bad<host/', 'custom://[::invalid]/']) check(false, input);
+  for (const input of ['https://valid.test/a b?q=a b', 'file:///tmp/a b',
+    'custom:bad host', 'data:text/plain,bad host']) check(true, input);
+  return {total, failures};
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "parse-hosts", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  ASSERT_TRUE(result->value.is_dict());
+  const auto& value = result->value.GetDict();
+  EXPECT_GT(value.FindInt("total").value_or(0), 900);
+  ASSERT_TRUE(value.FindList("failures"));
+  EXPECT_TRUE(value.FindList("failures")->empty()) << result->value;
+}
+
 TEST_F(XenonIpcMainContainerTest, MainBufferBase64UsesRealV8AndHonorsSubviews) {
   // No Node atob/btoa stubs: the bootstrap executes inside the actual hosted
   // V8 isolate, including the intrinsic encoder's ArrayBufferView handling.
@@ -1152,6 +1467,55 @@ TEST_F(XenonIpcMainContainerTest, MainBufferBase64UsesRealV8AndHonorsSubviews) {
   EXPECT_EQ(Arguments({base::Value(255)}), *values.Find("tolerant"));
 }
 
+TEST_F(XenonIpcMainContainerTest,
+       TimingSafeEqualUsesNativeBinaryBrandsAndRanges) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+const {timingSafeEqual: equal} = require('node:crypto');
+require('electron').ipcMain.handle('compare', () => {
+  const buffer = new Uint8Array([9, 1, 2, 8]);
+  const view = new DataView(buffer.buffer, 1, 2);
+  const shared = new SharedArrayBuffer(2);
+  new Uint8Array(shared).set([1, 2]);
+  const detached = new ArrayBuffer(2);
+  structuredClone(detached, {transfer: [detached]});
+  const errors = [];
+  for (const pair of [[null, buffer], ['ab', buffer],
+    [new Proxy(buffer, {get() {throw Error('proxy must not be read')}}), buffer],
+    [new Uint8Array(1), new Uint8Array(2)]]) {
+    try { equal(...pair); errors.push('accepted'); } catch (e) { errors.push(e.code); }
+  }
+  return {subview: equal(view, Buffer.from([1, 2])),
+    shared: equal(shared, view), empty: equal(detached, new ArrayBuffer(0)),
+    rawBytes: equal(new Float32Array([1]), new Uint8Array(new Float32Array([1]).buffer)),
+    different: !equal(Buffer.from([1, 2]), Buffer.from([1, 3])), errors};
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "compare", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& values = result->value.GetDict();
+  for (const char* key :
+       {"subview", "shared", "empty", "rawBytes", "different"}) {
+    EXPECT_EQ(true, values.FindBool(key)) << key;
+  }
+  ASSERT_TRUE(values.Find("errors"));
+  EXPECT_EQ(Arguments({base::Value("ERR_INVALID_ARG_TYPE"),
+                       base::Value("ERR_INVALID_ARG_TYPE"),
+                       base::Value("ERR_INVALID_ARG_TYPE"),
+                       base::Value("ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH")}),
+            *values.Find("errors"));
+}
+
 TEST_F(XenonIpcMainContainerTest, MainBufferContractMatchesNodeInRealV8) {
   base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
   container_->Invoke("renderer-1", "test:buffer-contract", Arguments({}),
@@ -1160,6 +1524,41 @@ TEST_F(XenonIpcMainContainerTest, MainBufferContractMatchesNodeInRealV8) {
   ASSERT_TRUE(result->success) << result->error;
   ASSERT_TRUE(result->value.is_bool());
   EXPECT_TRUE(result->value.GetBool());
+}
+
+TEST_F(XenonIpcMainContainerTest, BufferModuleLimitsComeFromHostedV8Build) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+const buffer = require('node:buffer');
+require('electron').ipcMain.handle('limits', () => ({
+  same: buffer === require('buffer') && buffer.Buffer === Buffer,
+  bytes: buffer.constants.MAX_LENGTH,
+  characters: buffer.constants.MAX_STRING_LENGTH,
+  aliases: buffer.kMaxLength === buffer.constants.MAX_LENGTH &&
+    buffer.kStringMaxLength === buffer.constants.MAX_STRING_LENGTH,
+  immutable: !Object.getOwnPropertyDescriptor(buffer.constants, 'MAX_LENGTH').writable &&
+    !Object.getOwnPropertyDescriptor(buffer, 'constants').writable
+}));
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "limits", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& value = result->value.GetDict();
+  EXPECT_EQ(value.FindDouble("bytes"),
+            static_cast<double>(v8::Uint8Array::kMaxLength));
+  EXPECT_EQ(value.FindInt("characters"), v8::String::kMaxLength);
+  for (const char* key : {"same", "aliases", "immutable"}) {
+    EXPECT_EQ(value.FindBool(key), true) << key;
+  }
 }
 
 TEST_F(XenonIpcMainContainerTest, MainFileWriteRunsOnWorkerAndSnapshotsBytes) {
@@ -1220,6 +1619,185 @@ TEST_F(XenonIpcMainContainerTest, MainSyncFileApisPreserveBinaryData) {
                         "A",
                         4),
             contents);
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       MainDescriptorsPersistAtomicConfigurationWrites) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+const fs = require('fs');
+require('electron').ipcMain.handle('atomic-write', (_event, target) => {
+  const temporary = target + '.tmp';
+  fs.writeFileSync(target, 'old configuration');
+  const payload = '{"enabled":true,"title":"new configuration"}\n';
+  const fd = fs.openSync(temporary, 'wx', 0o600);
+  let beforeRename;
+  let written;
+  try {
+    written = fs.writeSync(fd, payload, 0, 'utf8');
+    fs.fsyncSync(fd);
+    beforeRename = fs.readFileSync(target, 'utf8');
+  } finally { fs.closeSync(fd); }
+  fs.renameSync(temporary, target);
+  let closed;
+  try { fs.fstatSync(fd); } catch (error) { closed = error.code; }
+  return {beforeRename, written, closed, text: fs.readFileSync(target, 'utf8'),
+    temporaryExists: fs.existsSync(temporary)};
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  const auto target = temp_dir_.GetPath().AppendASCII("settings.json");
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "atomic-write",
+                     Arguments({base::Value(target.AsUTF8Unsafe())}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& values = result->value.GetDict();
+  EXPECT_EQ("old configuration", *values.FindString("beforeRename"));
+  EXPECT_EQ("EBADF", *values.FindString("closed"));
+  EXPECT_EQ(false, values.FindBool("temporaryExists"));
+  const std::string expected =
+      "{\"enabled\":true,\"title\":\"new configuration\"}\n";
+  EXPECT_EQ(static_cast<int>(expected.size()), values.FindInt("written"));
+  EXPECT_EQ(expected, *values.FindString("text"));
+  std::string persisted;
+  ASSERT_TRUE(base::ReadFileToString(target, &persisted));
+  EXPECT_EQ(expected, persisted);
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       MainFileHandlePreservesSubviewsAndDrainsBeforeClose) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+const fs = require('fs');
+require('electron').ipcMain.handle('file-handle', async (_event, file) => {
+  const handle = await fs.promises.open(file, 'w+');
+  const source = Uint8Array.from([88, 0, 255, 65, 0, 88]);
+  const input = new DataView(source.buffer, 1, 4);
+  const write = await handle.write(input, 0, 4, 0);
+  await handle.sync();
+  const stat = await handle.stat();
+  const target = new Uint8Array(7).fill(77);
+  const output = new DataView(target.buffer, 1, 5);
+  const reading = handle.read({buffer: output, offset: 1, length: 4, position: 0});
+  let closeEvents = 0;
+  handle.on('close', () => ++closeEvents);
+  const closing = handle.close();
+  const read = await reading;
+  await closing;
+  await handle.close();
+  let error;
+  try { await handle.read(); } catch (value) { error = value.code; }
+  return {written: write.bytesWritten, inputIdentity: write.buffer === input,
+    read: read.bytesRead, outputIdentity: read.buffer === output,
+    bytes: Array.from(target), fd: handle.fd, closeEvents, error,
+    size: stat.size, isFile: stat.isFile()};
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  const auto target = temp_dir_.GetPath().AppendASCII("handle.bin");
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "file-handle",
+                     Arguments({base::Value(target.AsUTF8Unsafe())}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& values = result->value.GetDict();
+  EXPECT_EQ(4, values.FindInt("written"));
+  EXPECT_EQ(4, values.FindInt("read"));
+  EXPECT_EQ(4, values.FindInt("size"));
+  EXPECT_EQ(-1, values.FindInt("fd"));
+  EXPECT_EQ(1, values.FindInt("closeEvents"));
+  EXPECT_EQ(true, values.FindBool("inputIdentity"));
+  EXPECT_EQ(true, values.FindBool("outputIdentity"));
+  EXPECT_EQ(true, values.FindBool("isFile"));
+  EXPECT_EQ("EBADF", *values.FindString("error"));
+  ASSERT_TRUE(values.FindList("bytes"));
+  EXPECT_EQ(base::ListValue()
+                .Append(77)
+                .Append(77)
+                .Append(0)
+                .Append(255)
+                .Append(65)
+                .Append(0)
+                .Append(77),
+            *values.FindList("bytes"));
+  std::string persisted;
+  ASSERT_TRUE(base::ReadFileToString(target, &persisted));
+  EXPECT_EQ(std::string("\0\xff"
+                        "A\0",
+                        4),
+            persisted);
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       MainFsAndOriginalFsShareRealDescriptorOperations) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+const fs = require('fs');
+const original = require('original-fs');
+require('electron').ipcMain.handle('shared-fd', (_event, file) => {
+  const constants = original.constants;
+  const fd = original.openSync(file,
+    constants.O_CREAT | constants.O_TRUNC | constants.O_RDWR, 0o600);
+  fs.writeSync(fd, Buffer.from([0, 255, 65, 0]));
+  const stat = original.fstatSync(fd);
+  const bytes = Buffer.alloc(4);
+  const count = original.readSync(fd, bytes, 0, 4, 0);
+  const emptyRead = fs.readSync(fd, Buffer.alloc(0), 0, 0, null);
+  fs.closeSync(fd);
+  let closed;
+  try { original.fstatSync(fd); } catch (error) { closed = error.code; }
+  return {count, emptyRead, closed, size: stat.size, bytes: Array.from(bytes),
+    O_RDONLY: fs.constants.O_RDONLY, O_WRONLY: fs.constants.O_WRONLY,
+    O_RDWR: constants.O_RDWR, O_CREAT: constants.O_CREAT,
+    O_EXCL: constants.O_EXCL, O_TRUNC: constants.O_TRUNC,
+    O_APPEND: constants.O_APPEND, isFile: stat.isFile()};
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  const auto target = temp_dir_.GetPath().AppendASCII("shared.bin");
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "shared-fd",
+                     Arguments({base::Value(target.AsUTF8Unsafe())}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& values = result->value.GetDict();
+  EXPECT_EQ(4, values.FindInt("count"));
+  EXPECT_EQ(4, values.FindInt("size"));
+  EXPECT_EQ(0, values.FindInt("emptyRead"));
+  EXPECT_EQ("EBADF", *values.FindString("closed"));
+  EXPECT_EQ(true, values.FindBool("isFile"));
+  for (const auto& [key, expected] :
+       {std::pair{"O_RDONLY", O_RDONLY}, std::pair{"O_WRONLY", O_WRONLY},
+        std::pair{"O_RDWR", O_RDWR}, std::pair{"O_CREAT", O_CREAT},
+        std::pair{"O_EXCL", O_EXCL}, std::pair{"O_TRUNC", O_TRUNC},
+        std::pair{"O_APPEND", O_APPEND}}) {
+    EXPECT_EQ(expected, values.FindInt(key)) << key;
+  }
+  ASSERT_TRUE(values.FindList("bytes"));
+  EXPECT_EQ(base::ListValue().Append(0).Append(255).Append(65).Append(0),
+            *values.FindList("bytes"));
 }
 
 TEST_F(XenonIpcMainContainerTest,
@@ -1380,9 +1958,12 @@ TEST_F(XenonIpcMainContainerTest, MainUnsupportedFileApisFailExplicitly) {
   ASSERT_TRUE(result->success) << result->error;
   ASSERT_TRUE(result->value.is_list());
   ASSERT_EQ(4u, result->value.GetList().size());
-  for (const auto& code : result->value.GetList()) {
-    EXPECT_EQ("ERR_NOT_SUPPORTED", code.GetString());
-  }
+  EXPECT_EQ(base::ListValue()
+                .Append("ENOENT")
+                .Append("ERR_NOT_SUPPORTED")
+                .Append("ENOENT")
+                .Append("ENOENT"),
+            result->value.GetList());
 }
 
 TEST_F(XenonIpcMainContainerTest, MainStateSurvivesIndependentMessages) {
@@ -1444,10 +2025,135 @@ TEST_F(XenonIpcMainContainerTest, BrowserWindowBoundsUseNativeBridge) {
   EXPECT_EQ(bounds.FindInt("height"), 540);
 }
 
-TEST_F(XenonIpcMainContainerTest, MenuPopupSerializesTemplateAndDispatchesClicks) {
+TEST_F(XenonIpcMainContainerTest,
+       WebRequestAwaitsCallbackAndReturnsRealHeaders) {
+  base::test::TestFuture<mojom::IpcResultPtr> registered;
+  container_->Invoke(
+      "renderer-1", "test:web-request-register",
+      Arguments({base::Value("persist:headers"),
+                 base::Value("onHeadersReceived"), base::Value("defer")}),
+      registered.GetCallback());
+  ASSERT_TRUE(registered.Take()->success);
+  ASSERT_TRUE(last_web_request_registration_.is_dict());
+  auto request = last_web_request_registration_.GetDict().Clone();
+  request.Set("requestId", "headers-1");
+  request.Set("details", base::DictValue().Set("url", "https://example.test/"));
+  base::test::TestFuture<mojom::IpcResultPtr> intercepted;
+  container_->HandleWebRequest(base::Value(std::move(request)),
+                               intercepted.GetCallback());
+  EXPECT_FALSE(intercepted.IsReady());
+
+  base::test::TestFuture<mojom::IpcResultPtr> completed;
+  container_->Invoke("renderer-1", "test:web-request-complete",
+                     Arguments({base::Value(base::DictValue().Set(
+                         "responseHeaders",
+                         base::DictValue().Set(
+                             "Content-Security-Policy",
+                             base::ListValue().Append("script-src 'none'"))))}),
+                     completed.GetCallback());
+  ASSERT_TRUE(completed.Take()->success);
+  auto response = intercepted.Take();
+  ASSERT_TRUE(response->success) << response->error;
+  const auto* headers = response->value.GetDict().FindDict("responseHeaders");
+  ASSERT_TRUE(headers);
+  const auto* csp = headers->FindList("content-security-policy");
+  ASSERT_TRUE(csp);
+  ASSERT_EQ(1u, csp->size());
+  EXPECT_EQ("script-src 'none'", (*csp)[0].GetString());
+}
+
+TEST_F(XenonIpcMainContainerTest, WebRequestReleasePreservesInFlightSnapshot) {
+  base::test::TestFuture<mojom::IpcResultPtr> registered;
+  container_->Invoke("renderer-1", "test:web-request-register",
+                     Arguments({base::Value(""), base::Value("onBeforeRequest"),
+                                base::Value("defer")}),
+                     registered.GetCallback());
+  ASSERT_TRUE(registered.Take()->success);
+  auto request = last_web_request_registration_.GetDict().Clone();
+  const auto* registration = request.FindString("registrationId");
+  ASSERT_TRUE(registration);
+  const std::string registration_id = *registration;
+  request.Set("requestId", "old-listener");
+  request.Set("details", base::DictValue());
+
+  container_->Invoke("renderer-1", "test:web-request-register",
+                     Arguments({base::Value(""), base::Value("onBeforeRequest"),
+                                base::Value("allow")}),
+                     registered.GetCallback());
+  ASSERT_TRUE(registered.Take()->success);
+  base::test::TestFuture<mojom::IpcResultPtr> intercepted;
+  container_->HandleWebRequest(base::Value(request.Clone()),
+                               intercepted.GetCallback());
+  EXPECT_FALSE(intercepted.IsReady());
+  container_->ReleaseWebRequestRegistration(registration_id);
+  base::test::TestFuture<mojom::IpcResultPtr> completed;
+  container_->Invoke(
+      "renderer-1", "test:web-request-complete",
+      Arguments({base::Value(base::DictValue().Set("cancel", true))}),
+      completed.GetCallback());
+  ASSERT_TRUE(completed.Take()->success);
+  auto response = intercepted.Take();
+  ASSERT_TRUE(response->success) << response->error;
+  EXPECT_EQ(true, response->value.GetDict().FindBool("cancel"));
+
+  container_->HandleWebRequest(base::Value(std::move(request)),
+                               intercepted.GetCallback());
+  EXPECT_FALSE(intercepted.Take()->success);
+}
+
+TEST_F(XenonIpcMainContainerTest, WebRequestCancellationCompletesNativeReply) {
+  base::test::TestFuture<mojom::IpcResultPtr> registered;
+  container_->Invoke("renderer-1", "test:web-request-register",
+                     Arguments({base::Value(""), base::Value("onBeforeRequest"),
+                                base::Value("defer")}),
+                     registered.GetCallback());
+  ASSERT_TRUE(registered.Take()->success);
+  auto request = last_web_request_registration_.GetDict().Clone();
+  request.Set("requestId", "cancelled-request");
+  request.Set("details", base::DictValue());
+  base::test::TestFuture<mojom::IpcResultPtr> intercepted;
+  container_->HandleWebRequest(base::Value(std::move(request)),
+                               intercepted.GetCallback());
+  EXPECT_FALSE(intercepted.IsReady());
+  container_->CancelWebRequest("cancelled-request");
+  auto response = intercepted.Take();
+  EXPECT_FALSE(response->success);
+  EXPECT_NE(std::string::npos, response->error.find("cancelled"));
+}
+
+TEST_F(XenonIpcMainContainerTest, WebRequestShutdownCompletesNativeReply) {
+  base::test::TestFuture<mojom::IpcResultPtr> registered;
+  container_->Invoke("renderer-1", "test:web-request-register",
+                     Arguments({base::Value(""), base::Value("onBeforeRequest"),
+                                base::Value("defer")}),
+                     registered.GetCallback());
+  ASSERT_TRUE(registered.Take()->success);
+  auto request = last_web_request_registration_.GetDict().Clone();
+  request.Set("requestId", "shutdown-request");
+  request.Set("details", base::DictValue());
+  base::test::TestFuture<mojom::IpcResultPtr> intercepted;
+  container_->HandleWebRequest(base::Value(std::move(request)),
+                               intercepted.GetCallback());
+  EXPECT_FALSE(intercepted.IsReady());
+  container_->Shutdown();
+  auto response = intercepted.Take();
+  EXPECT_FALSE(response->success);
+  EXPECT_NE(std::string::npos, response->error.find("stopped"));
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       MenuPopupSerializesTemplateAndDispatchesClicks) {
+  const auto icon_path = temp_dir_.GetPath().AppendASCII("menu-icon.png");
+  SkBitmap icon_bitmap;
+  icon_bitmap.allocN32Pixels(2, 2);
+  icon_bitmap.eraseColor(SK_ColorBLUE);
+  const auto icon_png = gfx::PNGCodec::EncodeBGRASkBitmap(icon_bitmap, false);
+  ASSERT_TRUE(icon_png);
+  ASSERT_TRUE(base::WriteFile(icon_path, *icon_png));
   container_->MarkAppReady();
   base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> popup_future;
-  container_->Invoke("renderer-1", "test:menu-popup", Arguments({}),
+  container_->Invoke("renderer-1", "test:menu-popup",
+                     Arguments({base::Value(icon_path.AsUTF8Unsafe())}),
                      popup_future.GetCallback());
   xenon::ipc::mojom::IpcResultPtr popup_result = popup_future.Take();
   ASSERT_TRUE(popup_result->success) << popup_result->error;
@@ -1460,7 +2166,8 @@ TEST_F(XenonIpcMainContainerTest, MenuPopupSerializesTemplateAndDispatchesClicks
   const base::DictValue& hide = (*items)[0].GetDict();
   EXPECT_EQ("normal", *hide.FindString("type"));
   EXPECT_EQ("hide", *hide.FindString("label"));
-  EXPECT_EQ("C:/icon.png", *hide.FindString("icon"));
+  ASSERT_TRUE(hide.FindString("icon"));
+  EXPECT_EQ(icon_path.AsUTF8Unsafe(), *hide.FindString("icon"));
   EXPECT_EQ("separator", *(*items)[1].GetDict().FindString("type"));
   const base::DictValue& settings = (*items)[2].GetDict();
   EXPECT_EQ("submenu", *settings.FindString("type"));
@@ -1492,8 +2199,8 @@ TEST_F(XenonIpcMainContainerTest, MenuPopupSerializesTemplateAndDispatchesClicks
 TEST_F(XenonIpcMainContainerTest, WebContentsUserAgentUsesNativeBridge) {
   container_->MarkAppReady();
   base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
-  container_->Invoke("renderer-1", "test:web-contents-user-agent", Arguments({}),
-                     future.GetCallback());
+  container_->Invoke("renderer-1", "test:web-contents-user-agent",
+                     Arguments({}), future.GetCallback());
   xenon::ipc::mojom::IpcResultPtr result = future.Take();
   ASSERT_TRUE(result->success) << result->error;
   ASSERT_TRUE(result->value.is_dict());
@@ -1551,10 +2258,10 @@ TEST_F(XenonIpcMainContainerTest, FileSystemCallUsesRealFilesystem) {
       FileSystemArguments("write_file", source, std::move(write_options)));
   ASSERT_TRUE(write_result->success) << write_result->error;
 
-  auto read = PerformFileSystemCall(
-      FileSystemArguments("read_file", source));
+  auto read = PerformFileSystemCall(FileSystemArguments("read_file", source));
   ASSERT_TRUE(read->success) << read->error;
-  EXPECT_EQ(read->value.GetString(), base::Base64Encode("real filesystem data"));
+  EXPECT_EQ(read->value.GetString(),
+            base::Base64Encode("real filesystem data"));
 
   auto stat = PerformFileSystemCall(FileSystemArguments("stat", source));
   ASSERT_TRUE(stat->success) << stat->error;
@@ -1568,8 +2275,7 @@ TEST_F(XenonIpcMainContainerTest, FileSystemCallUsesRealFilesystem) {
   EXPECT_FALSE(base::PathExists(source));
   EXPECT_TRUE(base::PathExists(destination));
 
-  auto readdir = PerformFileSystemCall(
-      FileSystemArguments("readdir", nested));
+  auto readdir = PerformFileSystemCall(FileSystemArguments("readdir", nested));
   ASSERT_TRUE(readdir->success) << readdir->error;
   ASSERT_EQ(readdir->value.GetList().size(), 1u);
   EXPECT_EQ(readdir->value.GetList().front().GetString(), "destination.bin");
@@ -1860,22 +2566,25 @@ TEST_F(XenonIpcMainContainerTest, AppExitNotificationDoesNotOutliveContainer) {
 TEST_F(XenonIpcMainContainerTest, AppActivateWaitsForReadyAndDrainsMicrotasks) {
   container_->DispatchAppEvent(
       "activate", Arguments({base::Value(false), base::Value("before-ready")}));
-  const auto before = container_->SendSync(
-      "renderer-1", "test:app-event-state", Arguments({}));
+  const auto before =
+      container_->SendSync("renderer-1", "test:app-event-state", Arguments({}));
   ASSERT_TRUE(before->success) << before->error;
   EXPECT_EQ(0, before->value.GetDict().FindInt("readyCount"));
   ASSERT_TRUE(before->value.GetDict().FindList("activations"));
   EXPECT_TRUE(before->value.GetDict().FindList("activations")->empty());
 
   container_->MarkAppReady();
-  const auto after = container_->SendSync(
-      "renderer-1", "test:app-event-state", Arguments({}));
+  const auto after =
+      container_->SendSync("renderer-1", "test:app-event-state", Arguments({}));
   ASSERT_TRUE(after->success) << after->error;
   const auto& state = after->value.GetDict();
   EXPECT_EQ(1, state.FindInt("readyCount"));
   EXPECT_EQ(1, state.FindInt("microtasks"));
   ASSERT_TRUE(state.FindList("order"));
-  EXPECT_EQ((base::ListValue().Append("ready").Append("when-ready").Append("activate")),
+  EXPECT_EQ((base::ListValue()
+                 .Append("ready")
+                 .Append("when-ready")
+                 .Append("activate")),
             *state.FindList("order"));
   const auto* activations = state.FindList("activations");
   ASSERT_TRUE(activations);
@@ -1895,8 +2604,8 @@ TEST_F(XenonIpcMainContainerTest,
   container_->DispatchAppEvent("activate", Arguments({base::Value(false)}));
   container_->MarkAppReady();
   container_->DispatchAppEvent("activate", Arguments({base::Value(true)}));
-  const auto result = container_->SendSync(
-      "renderer-1", "test:app-event-state", Arguments({}));
+  const auto result =
+      container_->SendSync("renderer-1", "test:app-event-state", Arguments({}));
   ASSERT_TRUE(result->success) << result->error;
   const auto& state = result->value.GetDict();
   EXPECT_EQ(1, state.FindInt("readyCount"));
@@ -1931,7 +2640,7 @@ TEST_F(XenonIpcMainContainerTest, StandardElectronMainBootstrapRunsUnchanged) {
   ASSERT_TRUE(os_release);
   EXPECT_FALSE(os_release->empty());
   EXPECT_EQ(1, runtime.FindInt("windowCount"));
-  EXPECT_EQ(false, runtime.FindBool("aeroGlass"));
+  EXPECT_EQ(true, runtime.FindBool("systemPreferencesEmitter"));
 }
 
 TEST_F(XenonIpcMainContainerTest,
@@ -2132,7 +2841,7 @@ const answer = require('./answer.json').value + require('fixture-dependency');
 const fallback = require('./fallback');
 const cycle = require('./cycle/a');
 const errors = [];
-for (const request of ['./missing', 'exports-package']) {
+for (const request of ['./missing', 'exports-package/private']) {
   try { require(request); } catch (error) { errors.push(error.code); }
 }
 for (let i = 0; i < 2; ++i) {
@@ -2141,6 +2850,7 @@ for (let i = 0; i < 2; ++i) {
 }
 ipcMain.handle('asar:modules', () => ({
   answer, fallback, cycle, errors,
+  exported: require('exports-package'),
   same: first === same && first === require('./counter') &&
       first === alias && first === directoryAlias && first === chainedAlias,
   relativeAnswer: alias.relativeAnswer,
@@ -2196,6 +2906,7 @@ module.exports = {loads: globalThis.counterLoads,
     ASSERT_TRUE(result->value.is_dict());
     const auto& value = result->value.GetDict();
     EXPECT_EQ(42, value.FindInt("answer"));
+    EXPECT_EQ(1, value.FindInt("exported"));
     ASSERT_TRUE(value.FindString("fallback"));
     EXPECT_EQ("index", *value.FindString("fallback"));
     EXPECT_EQ(7, value.FindInt("cycle"));
@@ -2207,7 +2918,7 @@ module.exports = {loads: globalThis.counterLoads,
     ASSERT_TRUE(errors);
     ASSERT_EQ(4u, errors->size());
     EXPECT_EQ("MODULE_NOT_FOUND", (*errors)[0].GetString());
-    EXPECT_EQ("ERR_NOT_SUPPORTED", (*errors)[1].GetString());
+    EXPECT_EQ("ERR_PACKAGE_PATH_NOT_EXPORTED", (*errors)[1].GetString());
     EXPECT_EQ("module failure", (*errors)[2].GetString());
     EXPECT_EQ("module failure", (*errors)[3].GetString());
     base::FilePath normalized_app;
@@ -2459,6 +3170,64 @@ require('electron').ipcMain.handle('v8:serialize', () => {
   EXPECT_EQ(2, value.FindInt("failures"));
 }
 
+TEST_F(XenonIpcMainContainerTest, UtilTypesUseV8BrandsAndBuiltinIdentity) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+const types = require('node:util/types');
+const {ipcMain} = require('electron');
+ipcMain.handle('util-types', () => {
+  let traps = 0;
+  const proxy = new Proxy(new Uint8Array(2), {
+    get() { ++traps; throw new Error('must not inspect'); },
+    getPrototypeOf() { ++traps; throw new Error('must not inspect'); }
+  });
+  const revoked = Proxy.revocable({}, {});
+  revoked.revoke();
+  const fake = {[Symbol.toStringTag]: 'Uint8Array'};
+  const bytes = new Uint8Array(8);
+  const data = new DataView(bytes.buffer, 2, 3);
+  const shared = new SharedArrayBuffer(8);
+  return {
+    aliases: types === require('util').types && types === require('util/types'),
+    builtins: require('module').isBuiltin('node:util/types'),
+    views: types.isArrayBufferView(data) && !types.isTypedArray(data) &&
+      types.isUint8Array(bytes) && types.isTypedArray(bytes) &&
+      types.isDataView(data) && !types.isUint8Array(fake),
+    buffers: types.isAnyArrayBuffer(shared) && !types.isArrayBuffer(shared) &&
+      types.isSharedArrayBuffer(shared) && types.isAnyArrayBuffer(bytes.buffer),
+    brands: types.isMap(new Map()) && types.isMapIterator(new Map().entries()) &&
+      types.isSetIterator(new Set().values()) && types.isArgumentsObject(arguments) &&
+      types.isPromise(Promise.resolve()) && !types.isPromise({then(){}}) &&
+      types.isGeneratorObject((function*(){})()) && types.isAsyncFunction(async()=>{}),
+    boxed: types.isBoxedPrimitive(Object(1n)) && types.isBigIntObject(Object(1n)) &&
+      types.isSymbolObject(Object(Symbol())) && !types.isBoxedPrimitive(1n),
+    proxies: types.isProxy(proxy) && types.isProxy(revoked.proxy) &&
+      !types.isTypedArray(proxy) && !types.isArrayBufferView(proxy),
+    missing: !types.isTypedArray() && !types.isNativeError(undefined),
+    traps,
+  };
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "util-types", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& value = result->value.GetDict();
+  for (const char* key : {"aliases", "builtins", "views", "buffers", "brands",
+                          "boxed", "proxies", "missing"}) {
+    EXPECT_EQ(true, value.FindBool(key)) << key;
+  }
+  EXPECT_EQ(0, value.FindInt("traps"));
+}
+
 TEST_F(XenonIpcMainContainerTest, LoadsPackagedMainModuleWithoutDiskFile) {
   container_.reset();
   base::CommandLine::ForCurrentProcess()->RemoveSwitch("xenon-main-js");
@@ -2495,6 +3264,470 @@ TEST_F(XenonIpcMainContainerTest, LoadsPackagedMainModuleWithoutDiskFile) {
   EXPECT_FALSE(base::PathExists(virtual_main));
 }
 
+TEST_F(XenonIpcMainContainerTest,
+       UsesTrustedLaunchArgumentsWithoutUtilitySwitches) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+const {ipcMain} = require('electron');
+ipcMain.handle('launch-arguments', () => {
+  const initial = process.argv.slice();
+  process.argv.push('application-mutation');
+  return {initial, cwd: process.cwd(), metadataLength: __xenonArgv.length};
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+      .working_directory = temp_dir_.GetPath(),
+      .app_argv = {"trusted-browser-launcher", "--read-only", "文档 名称.md",
+                   ""},
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "launch-arguments", Arguments({}),
+                     future.GetCallback());
+  const auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  ASSERT_TRUE(result->value.is_dict());
+  const auto& value = result->value.GetDict();
+  ASSERT_TRUE(value.FindList("initial"));
+  EXPECT_EQ((base::ListValue()
+                 .Append("trusted-browser-launcher")
+                 .Append("--read-only")
+                 .Append("文档 名称.md")
+                 .Append("")),
+            *value.FindList("initial"));
+  EXPECT_EQ(4, value.FindInt("metadataLength"));
+  EXPECT_EQ(temp_dir_.GetPath().AsUTF8Unsafe(), *value.FindString("cwd"));
+}
+
+TEST_F(XenonIpcMainContainerTest, EmbeddedChdirCannotChangeHostDirectory) {
+  base::FilePath original;
+  ASSERT_TRUE(base::GetCurrentDirectory(&original));
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+require('electron').ipcMain.handle('cwd-check', () => {
+  const before = process.cwd();
+  let code;
+  try { process.chdir(__dirname); } catch (error) { code = error.code; }
+  return code === 'ERR_NOT_SUPPORTED' && process.cwd() === before;
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+      .working_directory = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "cwd-check", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_TRUE(result->value.GetBool());
+  base::FilePath after;
+  ASSERT_TRUE(base::GetCurrentDirectory(&after));
+  EXPECT_EQ(original, after);
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       IsolatedChdirChangesNativeAndFileSystemDirectory) {
+  base::FilePath original;
+  ASSERT_TRUE(base::GetCurrentDirectory(&original));
+  base::ScopedClosureRunner restore(base::BindOnce(
+      [](base::FilePath path) { EXPECT_TRUE(base::SetCurrentDirectory(path)); },
+      original));
+  base::test::ScopedCommandLine command;
+  command.GetProcessCommandLine()->AppendSwitchASCII(
+      ::switches::kProcessType, ::switches::kUtilityProcess);
+  command.GetProcessCommandLine()->AppendSwitch(
+      switches::kIsolatedElectronService);
+  const auto child = temp_dir_.GetPath().AppendASCII("cwd-child");
+  ASSERT_TRUE(base::CreateDirectory(child));
+  ASSERT_TRUE(base::WriteFile(child.AppendASCII("value.txt"), "cwd-value"));
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+require('electron').ipcMain.handle('cwd-check', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const start = process.cwd();
+  const changed = process.chdir('cwd-child');
+  const current = process.cwd();
+  const fd = fs.openSync('value.txt', 'r');
+  const bytes = Buffer.alloc(9);
+  const count = fs.readSync(fd, bytes, 0, 9, 0);
+  fs.closeSync(fd);
+  let missing, file, type, nul;
+  try { process.chdir('missing'); } catch (error) { missing = error.code; }
+  try { process.chdir('value.txt'); } catch (error) { file = error.code; }
+  try { process.chdir({toString() { throw Error('must not convert'); }}); }
+    catch (error) { type = error.code; }
+  try { process.chdir('bad\0path'); } catch (error) { nul = error.code; }
+  return changed === undefined && current === path.join(start, 'cwd-child') &&
+      process.cwd() === current && count === 9 && bytes.toString() === 'cwd-value' &&
+      fs.readFileSync('value.txt', 'utf8') === 'cwd-value' && missing === 'ENOENT' &&
+      file === (process.platform === 'win32' ? 'ENOENT' : 'ENOTDIR') &&
+      type === 'ERR_INVALID_ARG_TYPE' && nul === 'ERR_INVALID_ARG_VALUE';
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+      .working_directory = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "cwd-check", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_TRUE(result->value.GetBool());
+  base::FilePath after, expected;
+  ASSERT_TRUE(base::GetCurrentDirectory(&after));
+  ASSERT_TRUE(base::NormalizeFilePath(after, &after));
+  ASSERT_TRUE(base::NormalizeFilePath(child, &expected));
+  EXPECT_EQ(expected, after);
+  container_.reset();
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       SingleInstanceUsesRealDirectoryAfterChdirOnBothTransports) {
+  base::FilePath original;
+  ASSERT_TRUE(base::GetCurrentDirectory(&original));
+  base::ScopedClosureRunner restore(base::BindOnce(
+      [](base::FilePath path) { EXPECT_TRUE(base::SetCurrentDirectory(path)); },
+      original));
+  base::test::ScopedCommandLine command;
+  command.GetProcessCommandLine()->AppendSwitchASCII(
+      ::switches::kProcessType, ::switches::kUtilityProcess);
+  command.GetProcessCommandLine()->AppendSwitch(
+      switches::kIsolatedElectronService);
+  const auto child =
+      temp_dir_.GetPath().Append(base::FilePath::FromUTF8Unsafe("cwd 子目录"));
+  ASSERT_TRUE(base::CreateDirectory(child));
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+require('electron').ipcMain.handle('native-cwd', async () => {
+  process.chdir('cwd 子目录');
+  process.cwd = () => { throw Error('do not call JS cwd'); };
+  process.argv = ['forged argv'];
+  const request = {method:'request', additionalData:{cwd:'user-data'},
+    __xenonRuntime:{workingDirectory:'forged'}};
+  const direct = __xenonBrowserWindowCall(0, 'app-single-instance', request);
+  const standard = require('electron').app.requestSingleInstanceLock({cwd:'user-data'});
+  const asynchronous = await __xenonBrowserWindowCallAsync(0, 'app-single-instance', request);
+  return direct && standard && asynchronous;
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+      .working_directory = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  std::vector<base::Value> requests;
+  XenonIpcMainContainer::WindowHooks hooks;
+  hooks.call = base::BindRepeating(
+      [](std::vector<base::Value>* requests, int32_t id,
+         const std::string& command, const base::Value& arguments,
+         base::Value* result, std::string*) {
+        EXPECT_EQ(0, id);
+        EXPECT_EQ("app-single-instance", command);
+        requests->push_back(arguments.Clone());
+        *result = base::Value(true);
+        return true;
+      },
+      &requests);
+  hooks.call_async = base::BindRepeating(
+      [](std::vector<base::Value>* requests, int32_t id,
+         const std::string& command, base::Value arguments,
+         base::OnceCallback<void(base::Value, std::string)> reply) {
+        EXPECT_EQ(0, id);
+        EXPECT_EQ("app-single-instance", command);
+        requests->push_back(std::move(arguments));
+        std::move(reply).Run(base::Value(true), "");
+      },
+      &requests);
+  container_->SetWindowHooks(std::move(hooks));
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "native-cwd", Arguments({}),
+                     future.GetCallback());
+  const auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_TRUE(result->value.GetBool());
+  ASSERT_EQ(3u, requests.size());
+  base::FilePath actual;
+  ASSERT_TRUE(base::GetCurrentDirectory(&actual));
+  for (const auto& request : requests) {
+    const auto* runtime = request.GetDict().FindDict("__xenonRuntime");
+    ASSERT_TRUE(runtime);
+    EXPECT_EQ(actual.AsUTF8Unsafe(), *runtime->FindString("workingDirectory"));
+    EXPECT_EQ("user-data",
+              *request.GetDict().FindDict("additionalData")->FindString("cwd"));
+  }
+  container_.reset();
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       MainStructuredClonePreservesGraphsAndBuiltinTypes) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+require('electron').ipcMain.handle('clone-graph', () => {
+  const key = {key: 1};
+  const source = {key, map: new Map([[key, key]]), set: new Set([key]),
+    date: new Date(1700000000123), regexp: /example/gi, bigint: 9007199254740993n,
+    missing: undefined, bytes: Buffer.from([0, 255, 128])};
+  source.self = source;
+  source.alias = key;
+  const copy = structuredClone(source);
+  copy.bytes[0] = 42;
+  return {independent: copy !== source && copy.key !== key,
+    cycles: copy.self === copy && copy.key === copy.alias,
+    collections: copy.map instanceof Map && copy.map.get(copy.key) === copy.key &&
+      copy.set instanceof Set && copy.set.has(copy.key),
+    date: copy.date instanceof Date && copy.date.getTime() === 1700000000123,
+    regexp: copy.regexp instanceof RegExp && copy.regexp.source === 'example' && copy.regexp.flags === 'gi',
+    bigint: copy.bigint === 9007199254740993n,
+    undefinedProperty: Object.hasOwn(copy, 'missing') && copy.missing === undefined,
+    bufferBecomesUint8Array: copy.bytes instanceof Uint8Array && !Buffer.isBuffer(copy.bytes),
+    independentBytes: source.bytes[0] === 0 && copy.bytes[0] === 42 && copy.bytes[1] === 255,
+    undefinedValue: structuredClone(undefined) === undefined};
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "clone-graph", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  for (const auto [name, value] : result->value.GetDict()) {
+    EXPECT_TRUE(value.GetBool()) << name;
+  }
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       MainStructuredCloneTransfersAndSharesBackingStores) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+require('electron').ipcMain.handle('clone-memory', () => {
+  const buffer = new ArrayBuffer(5);
+  const source = new Uint8Array(buffer);
+  source.set([0, 255, 128, 65, 0]);
+  const view = new DataView(buffer, 1, 3);
+  const copy = structuredClone({buffer, view}, {transfer: new Set([buffer])});
+  const shared = new SharedArrayBuffer(4);
+  const original = new Uint8Array(shared);
+  original[0] = 7;
+  const clonedShared = structuredClone({shared, view: new Uint8Array(shared)});
+  clonedShared.view[0] = 42;
+  return {detached: buffer.byteLength === 0 && source.byteLength === 0,
+    viewRange: copy.view instanceof DataView && copy.view.buffer === copy.buffer &&
+      copy.view.byteOffset === 1 && copy.view.byteLength === 3,
+    bytes: Array.from(new Uint8Array(copy.buffer)).join(',') === '0,255,128,65,0',
+    sharedBrand: clonedShared.shared instanceof SharedArrayBuffer && clonedShared.shared !== shared,
+    sharedAliasing: clonedShared.view.buffer === clonedShared.shared && original[0] === 42};
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "clone-memory", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  for (const auto [name, value] : result->value.GetDict()) {
+    EXPECT_TRUE(value.GetBool()) << name;
+  }
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       MainStructuredCloneFailuresPreserveOwnershipAndExceptions) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+require('electron').ipcMain.handle('clone-failures', () => {
+  const errors = [];
+  const buffer = new ArrayBuffer(8);
+  for (const call of [
+    () => structuredClone(() => {}, {transfer: [buffer]}),
+    () => structuredClone(buffer, {transfer: [buffer, buffer]}),
+    () => structuredClone(1, {transfer: [new SharedArrayBuffer(4)]}),
+  ]) {
+    try { call(); errors.push(false); }
+    catch (error) { errors.push(error instanceof DOMException && error instanceof Error &&
+      error.name === 'DataCloneError' && error.code === 25 &&
+      Object.prototype.toString.call(error) === '[object DOMException]'); }
+  }
+  const marker = Object.assign(new Error('application getter'), {name: 'DataCloneError', code: 25});
+  let preserved = false;
+  try { structuredClone({get value() { throw marker; }}, {transfer: [buffer]}); }
+  catch (error) { preserved = error === marker; }
+  const intactAfterFailure = buffer.byteLength === 8;
+  const other = new ArrayBuffer(4);
+  let reentrantFailure = false;
+  try { structuredClone({get value() { structuredClone(buffer, {transfer: [buffer]}); return 1; }},
+      {transfer: [other, buffer]}); }
+  catch (error) { reentrantFailure = error instanceof DOMException; }
+  const invalid = [];
+  for (const options of [1, {transfer: null}, {transfer: {length: 0}}]) {
+    try { structuredClone(1, options); invalid.push(false); }
+    catch (error) { invalid.push(error instanceof TypeError && error.code === 'ERR_INVALID_ARG_TYPE'); }
+  }
+  let missing = false;
+  try { structuredClone(); } catch (error) { missing = error.code === 'ERR_MISSING_ARGS'; }
+  const dom = new DOMException('message', 'NotFoundError');
+  return {errors: errors.every(Boolean), preserved, intactAfterFailure,
+    reentrantFailure, otherIntact: other.byteLength === 4,
+    invalid: invalid.every(Boolean), missing,
+    domContract: dom.name === 'NotFoundError' && dom.message === 'message' && dom.code === 8 &&
+      DOMException.DATA_CLONE_ERR === 25 && DOMException.prototype.DATA_CLONE_ERR === 25};
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "clone-failures", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  for (const auto [name, value] : result->value.GetDict()) {
+    EXPECT_TRUE(value.GetBool()) << name;
+  }
+}
+
+TEST_F(XenonIpcMainContainerTest, MainHasNativeIndependentEventTargetGlobals) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+const {ipcMain} = require('electron');
+// Construct at module evaluation time, as conf/electron-store do.
+const events = new EventTarget();
+ipcMain.handle('event-target-globals', () => {
+  const detail = {answer: 42};
+  const event = new CustomEvent('change', {detail, cancelable: true});
+  const received = [];
+  const controller = new AbortController();
+  events.addEventListener('change', value => {
+    received.push(value === event && value.detail === detail &&
+        value.target === events && value.currentTarget === events);
+    value.preventDefault();
+  }, {once: true});
+  events.addEventListener('change', () => received.push(false),
+      {signal: controller.signal});
+  controller.abort();
+  const result = events.dispatchEvent(event);
+  events.dispatchEvent(new Event('change'));
+  return {received, result, defaultPrevented: event.defaultPrevented,
+    currentTargetCleared: event.currentTarget === null,
+    eventBrand: Object.prototype.toString.call(event),
+    signalIsTarget: controller.signal instanceof EventTarget,
+    hasNoEmitterAlias: typeof events.emit === 'undefined'};
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "event-target-globals", Arguments({}),
+                     future.GetCallback());
+  const auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  ASSERT_TRUE(result->value.is_dict());
+  const auto& value = result->value.GetDict();
+  ASSERT_TRUE(value.FindList("received"));
+  EXPECT_EQ(base::ListValue().Append(true), *value.FindList("received"));
+  EXPECT_EQ(false, value.FindBool("result"));
+  EXPECT_EQ(true, value.FindBool("defaultPrevented"));
+  EXPECT_EQ(true, value.FindBool("currentTargetCleared"));
+  EXPECT_EQ(true, value.FindBool("signalIsTarget"));
+  EXPECT_EQ(true, value.FindBool("hasNoEmitterAlias"));
+  EXPECT_EQ("[object CustomEvent]", *value.FindString("eventBrand"));
+}
+
+TEST_F(XenonIpcMainContainerTest, MainEventTargetReportsListenerFailuresAsync) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+const {ipcMain} = require('electron');
+ipcMain.handle('event-target-errors', async () => {
+  const observed = [];
+  const onError = error => observed.push(error.message);
+  process.on('uncaughtException', onError);
+  try {
+    const target = new EventTarget();
+    target.addEventListener('x', () => { throw new Error('thrown'); });
+    target.addEventListener('x', () => Promise.reject(new Error('rejected')));
+    target.addEventListener('x', () => observed.push('last listener'));
+    observed.push(target.dispatchEvent(new Event('x')));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    return observed;
+  } finally {
+    process.removeListener('uncaughtException', onError);
+  }
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "event-target-errors", Arguments({}),
+                     future.GetCallback());
+  const auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  ASSERT_TRUE(result->value.is_list());
+  EXPECT_EQ(base::ListValue()
+                .Append("last listener")
+                .Append(true)
+                .Append("thrown")
+                .Append("rejected"),
+            result->value.GetList());
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       RejectsNulInLaunchArgumentsBeforeMainExecutes) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = "throw new Error('main must not execute');",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+      .working_directory = temp_dir_.GetPath(),
+      .app_argv = {"host", std::string("bad\0argument", 12)},
+  };
+  container_ = CreateContainer();
+  EXPECT_FALSE(container_->Initialize(std::move(module)));
+  EXPECT_EQ("Application arguments must not contain NUL",
+            container_->startup_error());
+}
+
 TEST_F(XenonIpcMainContainerTest, UsesExplicitExecutableWithoutRenamingIt) {
   container_.reset();
   const auto executable =
@@ -2529,25 +3762,22 @@ TEST_F(XenonIpcMainContainerTest, UsesExplicitExecutableWithoutRenamingIt) {
   EXPECT_EQ("3.2.1", *result->value.GetDict().FindString("version"));
 }
 
-TEST_F(XenonIpcMainContainerTest,
-       LoadsNativeAddonBesideExplicitExecutable) {
+TEST_F(XenonIpcMainContainerTest, LoadsNativeAddonBesideExplicitExecutable) {
   container_.reset();
   base::FilePath build_dir;
   ASSERT_TRUE(base::PathService::Get(base::DIR_EXE, &build_dir));
   const base::FilePath app_dir =
       temp_dir_.GetPath().AppendASCII("resources").AppendASCII("app");
   const base::FilePath main_dir = app_dir.AppendASCII("out");
-  const base::FilePath runtime_dir =
-      temp_dir_.GetPath().AppendASCII("runtime");
+  const base::FilePath runtime_dir = temp_dir_.GetPath().AppendASCII("runtime");
   ASSERT_TRUE(base::CreateDirectory(main_dir));
   ASSERT_TRUE(base::CreateDirectory(runtime_dir));
-  const base::FilePath executable =
-      runtime_dir.AppendASCII("hosted-app.exe");
+  const base::FilePath executable = runtime_dir.AppendASCII("hosted-app.exe");
   ASSERT_TRUE(base::WriteFile(main_dir.AppendASCII("main.js"), "fixture"));
   ASSERT_TRUE(base::WriteFile(executable, "fixture"));
-  ASSERT_TRUE(base::CopyFile(
-      build_dir.Append(FILE_PATH_LITERAL("test_addon.node")),
-      runtime_dir.Append(FILE_PATH_LITERAL("test_addon.node"))));
+  ASSERT_TRUE(
+      base::CopyFile(build_dir.Append(FILE_PATH_LITERAL("test_addon.node")),
+                     runtime_dir.Append(FILE_PATH_LITERAL("test_addon.node"))));
 
   XenonIpcMainContainer::EmbeddedMainModule module{
       .source =
@@ -2634,10 +3864,11 @@ TEST_F(XenonIpcMainContainerTest, NetworkInterfacesComeFromTheOperatingSystem) {
   }
 }
 
-TEST_F(XenonIpcMainContainerTest, OsModuleUsesNativeQueriesAndPreservesIdentity) {
+TEST_F(XenonIpcMainContainerTest,
+       OsModuleUsesNativeQueriesAndPreservesIdentity) {
   base::DictValue expected;
-  for (const auto* method : {"type", "release", "version", "machine",
-                             "totalmem"}) {
+  for (const auto* method :
+       {"type", "release", "version", "machine", "totalmem"}) {
     auto native =
         PerformOsCall(base::Value(base::DictValue().Set("method", method)));
     ASSERT_TRUE(native->success);
@@ -2649,10 +3880,9 @@ TEST_F(XenonIpcMainContainerTest, OsModuleUsesNativeQueriesAndPreservesIdentity)
   ASSERT_TRUE(cpus->value.is_list());
   expected.Set("cpuCount", static_cast<int>(cpus->value.GetList().size()));
   base::test::TestFuture<mojom::IpcResultPtr> future;
-  container_->Invoke(
-      "renderer-1", "test:os-native-contract",
-      base::Value(base::ListValue().Append(std::move(expected))),
-      future.GetCallback());
+  container_->Invoke("renderer-1", "test:os-native-contract",
+                     base::Value(base::ListValue().Append(std::move(expected))),
+                     future.GetCallback());
   auto result = future.Take();
   ASSERT_TRUE(result->success) << result->error;
   ASSERT_TRUE(result->value.is_dict());
@@ -2978,7 +4208,8 @@ TEST_F(XenonIpcMainContainerTest, SenderUsesStableWindowWebContents) {
   FakeIpcRenderer next_renderer;
   const std::string next_endpoint =
       container_->AddRenderer(next_renderer.BindNewRemote(), 18, 24, 1);
-  result = container_->SendSync(next_endpoint, "test:sender-state", Arguments({}));
+  result =
+      container_->SendSync(next_endpoint, "test:sender-state", Arguments({}));
   ASSERT_TRUE(result->success) << result->error;
   EXPECT_EQ(true, result->value.GetDict().FindBool("sameSender"));
   EXPECT_EQ(false, result->value.GetDict().FindBool("destroyed"));
@@ -3015,9 +4246,9 @@ TEST_F(XenonIpcMainContainerTest, WebContentsSendsOnlyToItsRegisteredRenderer) {
   base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(unrelated_renderer.dispatch_future().IsReady());
 
-  auto result = container_->SendSync(
-      endpoint, "test:sender-send-frame",
-      Arguments({base::Value(23), base::Value(43)}));
+  auto result =
+      container_->SendSync(endpoint, "test:sender-send-frame",
+                           Arguments({base::Value(23), base::Value(43)}));
   ASSERT_TRUE(result->success) << result->error;
   EXPECT_TRUE(result->value.GetBool());
   auto [frame_channel, frame_arguments] = renderer.dispatch_future().Take();
@@ -3027,7 +4258,8 @@ TEST_F(XenonIpcMainContainerTest, WebContentsSendsOnlyToItsRegisteredRenderer) {
   // A frame in a different WebContents must not receive this message.
   result = container_->SendSync(
       endpoint, "test:sender-send-frame",
-      Arguments({Arguments({base::Value(18), base::Value(24)}), base::Value(44)}));
+      Arguments(
+          {Arguments({base::Value(18), base::Value(24)}), base::Value(44)}));
   ASSERT_TRUE(result->success) << result->error;
   EXPECT_FALSE(result->value.GetBool());
   base::RunLoop().RunUntilIdle();
@@ -3073,7 +4305,11 @@ TEST_F(XenonIpcMainContainerTest, NetSocketBuffersWritesUntilConnected) {
   ASSERT_TRUE(wire);
   const std::string* encoded = wire->FindString("d");
   ASSERT_TRUE(encoded);
-  EXPECT_EQ("queued-before-connect", *encoded);
+  ASSERT_TRUE(wire->FindString("t"));
+  EXPECT_EQ("b64", *wire->FindString("t"));
+  std::string decoded;
+  ASSERT_TRUE(base::Base64Decode(*encoded, &decoded));
+  EXPECT_EQ("queued-before-connect", decoded);
   base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(renderer.dispatch_future().IsReady());
   container_->SetNetPipeSender({});
@@ -3110,6 +4346,87 @@ TEST_F(XenonIpcMainContainerTest, CommonJsCanRequireNodeApiAddon) {
   ASSERT_TRUE(result->success) << result->error;
   ASSERT_TRUE(result->value.is_int());
   EXPECT_EQ(42, result->value.GetInt());
+}
+
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+TEST_F(XenonIpcMainContainerTest,
+       NativeRetirementDrainsAddonCloseCallbacksAfterStartupFailure) {
+  container_.reset();
+  base::FilePath executable_dir;
+  ASSERT_TRUE(base::PathService::Get(base::DIR_EXE, &executable_dir));
+  base::NativeLibraryLoadError load_error;
+  auto library = xenon::LoadNodeAddonLibrary(
+      executable_dir.AppendASCII("test_addon.node"), &load_error);
+  ASSERT_TRUE(library.is_valid()) << load_error.ToString();
+  auto count_closed = reinterpret_cast<int (*)()>(
+      library.GetFunctionPointer("XenonTestGetUvCleanupCloseCount"));
+  ASSERT_TRUE(count_closed);
+
+  // Both successful and failed application initialization retain the entire
+  // native runtime until an inactive, unreferenced uv handle has closed.
+  for (bool fail_startup : {false, true}) {
+    SCOPED_TRACE(fail_startup);
+    const int before = count_closed();
+    XenonIpcMainContainer::EmbeddedMainModule main;
+    main.virtual_path = executable_dir.AppendASCII("native-retirement.cjs");
+    main.app_path = executable_dir;
+    main.source = "require('./test_addon.node').UvCleanupTimer();";
+    if (fail_startup) {
+      main.source += "throw new Error('expected startup failure');";
+    }
+    container_ = CreateContainer();
+    EXPECT_EQ(!fail_startup, container_->Initialize(std::move(main)))
+        << container_->startup_error();
+    EXPECT_EQ(before, count_closed());
+
+    base::test::TestFuture<void> retired;
+    xenon::NativeRuntimeRetirementOptions options;
+    options.on_stalled = base::BindOnce([](std::string diagnostic) {
+      ADD_FAILURE() << "Native retirement stalled: " << diagnostic;
+    });
+    options.on_complete = retired.GetCallback();
+    xenon::RetireNativeRuntime(std::move(container_), std::move(options));
+    ASSERT_TRUE(retired.Wait());
+    EXPECT_EQ(before + 1, count_closed());
+  }
+}
+#endif
+
+TEST_F(XenonIpcMainContainerTest,
+       NativeRetirementRetainsFailedAddonRegistration) {
+  container_.reset();
+  base::FilePath executable_dir;
+  ASSERT_TRUE(base::PathService::Get(base::DIR_EXE, &executable_dir));
+  base::NativeLibraryLoadError load_error;
+  auto library = xenon::LoadNodeAddonLibrary(
+      executable_dir.AppendASCII("test_addon.node"), &load_error);
+  ASSERT_TRUE(library.is_valid()) << load_error.ToString();
+  auto fail_next = reinterpret_cast<void (*)()>(
+      library.GetFunctionPointer("XenonTestFailNextInitialization"));
+  auto count_completions =
+      reinterpret_cast<int (*)()>(library.GetFunctionPointer(
+          "XenonTestGetFailedInitializationCompletions"));
+  ASSERT_TRUE(fail_next);
+  ASSERT_TRUE(count_completions);
+  const int before = count_completions();
+  fail_next();
+
+  XenonIpcMainContainer::EmbeddedMainModule main;
+  main.virtual_path = executable_dir.AppendASCII("native-failure.cjs");
+  main.app_path = executable_dir;
+  main.source = "require('./test_addon.node');";
+  container_ = CreateContainer();
+  EXPECT_FALSE(container_->Initialize(std::move(main)));
+  EXPECT_EQ(before, count_completions());
+  base::test::TestFuture<void> retired;
+  xenon::NativeRuntimeRetirementOptions options;
+  options.on_stalled = base::BindOnce([](std::string diagnostic) {
+    ADD_FAILURE() << "Native retirement stalled: " << diagnostic;
+  });
+  options.on_complete = retired.GetCallback();
+  xenon::RetireNativeRuntime(std::move(container_), std::move(options));
+  ASSERT_TRUE(retired.Wait());
+  EXPECT_EQ(before + 1, count_completions());
 }
 
 TEST_F(XenonIpcMainContainerTest, NodeAddonCacheIsIsolatedByCanonicalPath) {
@@ -3216,24 +4533,21 @@ TEST_F(XenonIpcMainContainerTest, NodeAddonResolvesCallbacksNestedInObjects) {
   std::vector<xenon::mojom::NodeInvokeArgPtr> arguments;
   arguments.push_back(std::move(argument));
 
-  base::test::TestFuture<
-      bool, base::Value, std::vector<xenon::mojom::NodeCallbackResultPtr>,
-      std::string>
+  base::test::TestFuture<bool, base::Value,
+                         std::vector<xenon::mojom::NodeCallbackResultPtr>,
+                         std::string>
       invoke_future;
-  executor.InvokeFunction(addon_path.AsUTF8Unsafe(), "InvokeNestedCallback",
-                          /*client_id=*/17, std::move(arguments),
-                          base::BindOnce(
-                              [](decltype(invoke_future)* future, bool success,
-                                 base::Value result,
-                                 std::vector<
-                                     xenon::mojom::NodeCallbackResultPtr>
-                                     callback_results,
-                                 const std::string& error) {
-                                future->SetValue(
-                                    success, std::move(result),
-                                    std::move(callback_results), error);
-                              },
-                              &invoke_future));
+  executor.InvokeFunction(
+      addon_path.AsUTF8Unsafe(), "InvokeNestedCallback",
+      /*client_id=*/17, std::move(arguments),
+      base::BindOnce(
+          [](decltype(invoke_future)* future, bool success, base::Value result,
+             std::vector<xenon::mojom::NodeCallbackResultPtr> callback_results,
+             const std::string& error) {
+            future->SetValue(success, std::move(result),
+                             std::move(callback_results), error);
+          },
+          &invoke_future));
   auto [success, result, callback_results, invoke_error] = invoke_future.Take();
   EXPECT_TRUE(success) << invoke_error;
   EXPECT_EQ(41, received_callback_id);
@@ -3250,8 +4564,8 @@ TEST_F(XenonIpcMainContainerTest, NodeAddonReturnsCallableFunctionHandles) {
 
   XenonNodeExecutor executor;
   std::string load_error;
-  ASSERT_TRUE(
-      executor.LoadAddonFromCurrentThread(addon_path.AsUTF8Unsafe(), &load_error))
+  ASSERT_TRUE(executor.LoadAddonFromCurrentThread(addon_path.AsUTF8Unsafe(),
+                                                  &load_error))
       << load_error;
 
   std::vector<base::Value> received_args;
@@ -3272,9 +4586,9 @@ TEST_F(XenonIpcMainContainerTest, NodeAddonReturnsCallableFunctionHandles) {
   std::vector<xenon::mojom::NodeInvokeArgPtr> callback_arguments;
   callback_arguments.push_back(std::move(callback_argument));
 
-  base::test::TestFuture<
-      bool, base::Value, std::vector<xenon::mojom::NodeCallbackResultPtr>,
-      std::string>
+  base::test::TestFuture<bool, base::Value,
+                         std::vector<xenon::mojom::NodeCallbackResultPtr>,
+                         std::string>
       invoke_future;
   executor.InvokeFunction(
       addon_path.AsUTF8Unsafe(), "InvokeCallbackWithFunction",
@@ -3307,24 +4621,21 @@ TEST_F(XenonIpcMainContainerTest, NodeAddonReturnsCallableFunctionHandles) {
   call_arguments.push_back(std::move(this_argument));
   call_arguments.push_back(std::move(value_argument));
 
-  base::test::TestFuture<
-      bool, base::Value, std::vector<xenon::mojom::NodeCallbackResultPtr>,
-      std::string>
+  base::test::TestFuture<bool, base::Value,
+                         std::vector<xenon::mojom::NodeCallbackResultPtr>,
+                         std::string>
       call_future;
-  executor.InvokeInstance(addon_path.AsUTF8Unsafe(), *instance_id, "call",
-                          /*client_id=*/17, std::move(call_arguments),
-                          base::BindOnce(
-                              [](decltype(call_future)* future, bool success,
-                                 base::Value result,
-                                 std::vector<
-                                     xenon::mojom::NodeCallbackResultPtr>
-                                     callback_results,
-                                 const std::string& error) {
-                                future->SetValue(
-                                    success, std::move(result),
-                                    std::move(callback_results), error);
-                              },
-                              &call_future));
+  executor.InvokeInstance(
+      addon_path.AsUTF8Unsafe(), *instance_id, "call",
+      /*client_id=*/17, std::move(call_arguments),
+      base::BindOnce(
+          [](decltype(call_future)* future, bool success, base::Value result,
+             std::vector<xenon::mojom::NodeCallbackResultPtr> callback_results,
+             const std::string& error) {
+            future->SetValue(success, std::move(result),
+                             std::move(callback_results), error);
+          },
+          &call_future));
   auto [call_success, call_result, call_callbacks, call_error] =
       call_future.Take();
   ASSERT_TRUE(call_success) << call_error;
@@ -3363,6 +4674,8 @@ TEST_F(XenonIpcMainContainerTest, StandardPathModuleParsesRootsAndPosixWin32) {
 }
 
 TEST_F(XenonIpcMainContainerTest, AppGetPathAndDynamicVersions) {
+  base::ScopedPathOverride user_data(chrome::DIR_USER_DATA,
+                                     temp_dir_.GetPath());
   base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> future;
   container_->Invoke("renderer-1", "test:app-paths", Arguments({}),
                      future.GetCallback());
@@ -3381,7 +4694,7 @@ TEST_F(XenonIpcMainContainerTest, AppGetPathAndDynamicVersions) {
 
   const std::string* userData = dict.FindString("userData");
   ASSERT_TRUE(userData);
-  EXPECT_FALSE(userData->empty());
+  EXPECT_EQ(browser_user_data_.AsUTF8Unsafe(), *userData);
 
   const std::string* desktop = dict.FindString("desktop");
   ASSERT_TRUE(desktop);
@@ -3396,6 +4709,65 @@ TEST_F(XenonIpcMainContainerTest, AppGetPathAndDynamicVersions) {
   const std::string* chromeVersion = dict.FindString("chromeVersion");
   ASSERT_TRUE(chromeVersion);
   EXPECT_EQ(std::string(version_info::GetVersionNumber()), *chromeVersion);
+  const std::string* electronVersion = dict.FindString("electronVersion");
+  ASSERT_TRUE(electronVersion);
+  EXPECT_EQ(kElectronCompatibilityVersion, *electronVersion);
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       AppPathsUseBrowserStateAndRejectLateMigration) {
+  base::ScopedPathOverride user_data(chrome::DIR_USER_DATA,
+                                     temp_dir_.GetPath());
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke(
+      "renderer-1", "test:app-path-mutations",
+      Arguments({base::Value(temp_dir_.GetPath().AsUTF8Unsafe())}),
+      future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& value = result->value.GetDict();
+  for (const char* key : {"sameData", "userDataUnchanged", "setDoesNotCreate",
+                          "logsCreated", "logsUnchanged"}) {
+    EXPECT_EQ(true, value.FindBool(key)) << key;
+  }
+  EXPECT_EQ(
+      temp_dir_.GetPath().AppendASCII("downloads-not-created").AsUTF8Unsafe(),
+      *value.FindString("downloads"));
+  EXPECT_EQ("real log bytes", *value.FindString("logText"));
+  EXPECT_EQ(browser_session_data_.AsUTF8Unsafe(),
+            *value.FindString("sessionData"));
+  ASSERT_TRUE(value.FindList("errors"));
+  EXPECT_EQ(base::ListValue()
+                .Append("ERR_INVALID_ARG_VALUE")
+                .Append("ERR_INVALID_ARG_VALUE")
+                .Append("ERR_INVALID_STATE")
+                .Append("ERR_INVALID_STATE")
+                .Append("ERR_INVALID_ARG_VALUE")
+                .Append("ERR_INVALID_ARG_TYPE"),
+            *value.FindList("errors"));
+  EXPECT_FALSE(
+      base::PathExists(temp_dir_.GetPath().AppendASCII("other-profile")));
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       AppPathsUseHostSnapshotInsteadOfUtilityDefaults) {
+  container_.reset();
+  const auto host_data = temp_dir_.GetPath().AppendASCII("host-profile");
+  const auto host_crashes = temp_dir_.GetPath().AppendASCII("host-crashes");
+  base::ScopedPathOverride utility_data(
+      chrome::DIR_USER_DATA, temp_dir_.GetPath().AppendASCII("wrong-profile"));
+  container_ = CreateContainer();
+  container_->SetHostPaths(host_data, host_crashes);
+  ASSERT_TRUE(container_->Initialize()) << container_->startup_error();
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "test:host-paths", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ(host_data.AsUTF8Unsafe(),
+            *result->value.GetDict().FindString("userData"));
+  EXPECT_EQ(host_crashes.AsUTF8Unsafe(),
+            *result->value.GetDict().FindString("crashDumps"));
 }
 
 TEST_F(XenonIpcMainContainerTest, InitializationFailsForInvalidMainScript) {
@@ -3412,6 +4784,224 @@ TEST_F(XenonIpcMainContainerTest, InitializationFailsForInvalidMainScript) {
   EXPECT_FALSE(container_->Initialize());
   EXPECT_FALSE(container_->is_initialized());
   EXPECT_FALSE(container_->startup_error().empty());
+}
+
+TEST_F(XenonIpcMainContainerTest, NodeTimersUpdateNativeReferencesAndCancel) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+const {ipcMain} = require('electron');
+let timer;
+ipcMain.handle('timer', async (_event, action) => {
+  if (action === 'start') {
+    await new Promise(resolve => setTimeout(resolve, 5));
+    timer = setInterval(() => { throw Error('canceled interval fired'); }, 60000);
+  } else if (action === 'unref') timer.unref();
+  else if (action === 'refresh') timer.refresh();
+  else if (action === 'ref') timer.ref();
+  else if (action === 'cancel') clearTimeout(String(+timer));
+  return {type: timer.constructor.name, referenced: timer.hasRef(),
+    same: require('node:timers').setTimeout === setTimeout};
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  for (const auto& [action, active] : {std::pair{"start", true},
+                                       {"unref", false},
+                                       {"refresh", false},
+                                       {"ref", true},
+                                       {"cancel", false}}) {
+    base::test::TestFuture<mojom::IpcResultPtr> future;
+    container_->Invoke("renderer-1", "timer", Arguments({base::Value(action)}),
+                       future.GetCallback());
+    auto result = future.Take();
+    ASSERT_TRUE(result->success) << result->error;
+    EXPECT_EQ("Timeout", *result->value.GetDict().FindString("type"));
+    EXPECT_EQ(true, result->value.GetDict().FindBool("same"));
+    EXPECT_EQ(active, container_->WorkerHasActiveWork()) << action;
+  }
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       MarkAsUncloneableAppliesToStructuredCloneWorkersAndMessagePorts) {
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+const {markAsUncloneable, Worker} = require('node:worker_threads');
+const {ipcMain, MessageChannelMain} = require('electron');
+ipcMain.handle('uncloneable', async () => {
+  let getters = 0;
+  const marked = Object.freeze({get secret() {++getters; return 'hidden';}});
+  markAsUncloneable(marked);
+  const buffer = new ArrayBuffer(4);
+  const channel = new MessageChannelMain(), transfer = new MessageChannelMain();
+  const errors = [];
+  for (const call of [
+    () => structuredClone({marked, buffer}, {transfer:[buffer]}),
+    () => new Worker('0', {eval:true,workerData:{marked}}),
+    () => channel.port1.postMessage({marked, port:transfer.port1}, [transfer.port1]),
+  ]) {
+    try { call(); errors.push('accepted'); }
+    catch (error) { errors.push(error.name + ':' + error.code); }
+  }
+  const received = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(Error('MessagePort detached after failed clone')), 200);
+    transfer.port2.on('message', event => {clearTimeout(timer); resolve(event.data);});
+    transfer.port2.start();
+  });
+  transfer.port1.postMessage('port retained');
+  const port = await received;
+  for (const endpoint of [channel.port1, channel.port2, transfer.port1, transfer.port2]) endpoint.close();
+  const bytes = new Uint8Array([1,2]); markAsUncloneable(bytes);
+  const cloned = structuredClone(bytes);
+  return {errors, getters, bufferRetained:buffer.byteLength === 4, port,
+    bytes:cloned[0] === 1 && cloned[1] === 2,
+    primitive:markAsUncloneable(null) === undefined};
+});
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "uncloneable", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  const auto& values = result->value.GetDict();
+  ASSERT_TRUE(values.FindList("errors"));
+  EXPECT_EQ(Arguments({base::Value("DataCloneError:25"),
+                       base::Value("DataCloneError:25"),
+                       base::Value("DataCloneError:25")}),
+            *values.Find("errors"));
+  EXPECT_EQ(0, values.FindInt("getters"));
+  EXPECT_EQ(true, values.FindBool("bufferRetained"));
+  EXPECT_EQ(true, values.FindBool("bytes"));
+  EXPECT_EQ(true, values.FindBool("primitive"));
+  ASSERT_TRUE(values.FindString("port"));
+  EXPECT_EQ("port retained", *values.FindString("port"));
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       ProcessEnvironmentPreservesArbitraryKeysEmptyValuesAndUnicode) {
+  base::ScopedEnvironmentVariableOverride custom("Xenon_Env_Custom", "opaque");
+  base::ScopedEnvironmentVariableOverride empty("XENON_ENV_EMPTY", "");
+  base::ScopedEnvironmentVariableOverride unicode("XENON_ENV_测试", "路径/😀");
+  base::ScopedEnvironmentVariableOverride prototype("__proto__", "own value");
+  base::ScopedEnvironmentVariableOverride absent("XENON_ENV_ABSENT");
+  ASSERT_TRUE(custom.IsOverridden());
+  ASSERT_TRUE(empty.IsOverridden());
+  ASSERT_TRUE(unicode.IsOverridden());
+  ASSERT_TRUE(prototype.IsOverridden());
+  ASSERT_TRUE(absent.IsOverridden());
+  container_.reset();
+  XenonIpcMainContainer::EmbeddedMainModule module{
+      .source = R"JS(
+require('electron').ipcMain.handle('environment', () => ({
+  custom: process.env.Xenon_Env_Custom === 'opaque' &&
+    (process.platform !== 'win32' || process.env.XENON_ENV_CUSTOM === 'opaque'),
+  empty: Object.hasOwn(process.env, 'XENON_ENV_EMPTY') && process.env.XENON_ENV_EMPTY === '',
+  unicode: process.env['XENON_ENV_测试'] === '路径/😀',
+  prototype: Object.hasOwn(process.env, '__proto__') && process.env.__proto__ === 'own value',
+  absent: !Object.hasOwn(process.env, 'XENON_ENV_ABSENT'),
+  hidden: process.platform !== 'win32' || !Object.keys(process.env).some(key => key.startsWith('=')),
+}));
+)JS",
+      .virtual_path = main_script_,
+      .app_path = temp_dir_.GetPath(),
+  };
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize(std::move(module)))
+      << container_->startup_error();
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container_->Invoke("renderer-1", "environment", Arguments({}),
+                     future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  for (const char* key :
+       {"custom", "empty", "unicode", "prototype", "absent", "hidden"}) {
+    EXPECT_EQ(true, result->value.GetDict().FindBool(key)) << key;
+  }
+}
+
+TEST_F(XenonIpcMainContainerTest,
+       UtilityExitAndFatalErrorsRespectProcessSemantics) {
+  struct Case {
+    const char* name;
+    const char* source;
+    int exit_code;
+    const char* expected;
+  };
+  const Case cases[] = {
+      {"immediate exit",
+       "process.exit(23); fs.writeFileSync(marker, 'continued');", 23,
+       "|exit:23"},
+      {"throwing exit listener",
+       "process.on('exit', () => { throw Error('exit listener'); }); "
+       "process.exit(9);",
+       9, "|exit:9"},
+      {"timer fatal", "setTimeout(() => { throw Error('fatal timer'); }, 0);",
+       1, "|exit:1"},
+      {"handled exception",
+       "process.on('uncaughtException', error => {"
+       "fs.writeFileSync(marker, error.message); process.exit(0); });"
+       "setTimeout(() => { throw Error('handled timer'); }, 0);",
+       0, "handled timer|exit:0"},
+      {"unhandled rejection",
+       "Promise.reject(Error('expected warning'));"
+       "setTimeout(() => {fs.writeFileSync(marker, 'code:' + process.exitCode);"
+       "process.exit();}, 10);",
+       1, "code:1|exit:1"},
+      {"handled rejection",
+       "process.on('unhandledRejection', () => { process.exitCode = 4; });"
+       "Promise.reject(Error('handled warning'));"
+       "setTimeout(() => process.exit(), 10);",
+       4, "|exit:4"},
+  };
+  for (const auto& test : cases) {
+    SCOPED_TRACE(test.name);
+    container_.reset();
+    const auto marker = temp_dir_.GetPath().AppendASCII("utility-exit.txt");
+    ASSERT_TRUE(base::WriteFile(marker, ""));
+    container_ = std::make_unique<XenonIpcMainContainer>();
+    blink::MessagePortDescriptorPair ports;
+    XenonIpcMainContainer::UtilityRuntimeOptions options;
+    options.argv = {"fixture", main_script_.AsUTF8Unsafe()};
+    options.environment.Set("UTILITY_TEST_MARKER", marker.AsUTF8Unsafe());
+    options.parent_port = ports.TakePort0();
+    container_->SetUtilityRuntimeOptions(std::move(options));
+    base::test::TestFuture<int> exited;
+    container_->SetAppExitHandler(base::BindRepeating(
+        [](XenonIpcMainContainer* container,
+           base::test::TestFuture<int>* future, int code) {
+          container->UtilityShutdown(code);
+          future->SetValue(code);
+        },
+        base::Unretained(container_.get()), base::Unretained(&exited)));
+    XenonIpcMainContainer::EmbeddedMainModule module{
+        .source = std::string(
+                      "const fs = require('fs');"
+                      "const marker = process.env.UTILITY_TEST_MARKER;"
+                      "process.on('exit', code => fs.writeFileSync(marker, "
+                      "fs.readFileSync(marker, 'utf8') + '|exit:' + code));") +
+                  test.source,
+        .virtual_path = main_script_,
+        .app_path = temp_dir_.GetPath(),
+    };
+    ASSERT_TRUE(container_->Initialize(std::move(module)))
+        << container_->startup_error();
+    EXPECT_FALSE(exited.IsReady());
+    EXPECT_EQ(test.exit_code, exited.Get());
+    std::string contents;
+    ASSERT_TRUE(base::ReadFileToString(marker, &contents));
+    EXPECT_EQ(test.expected, contents);
+  }
 }
 
 TEST_F(XenonIpcMainContainerTest, PackageMainCanPointToItsOwnDirectory) {
@@ -3438,6 +5028,72 @@ TEST_F(XenonIpcMainContainerTest, PackageMainCanPointToItsOwnDirectory) {
   ASSERT_TRUE(result->success) << result->error;
   EXPECT_EQ(42, result->value.GetInt());
 }
+
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+TEST_F(XenonIpcMainContainerTest,
+       DatagramPumpStopsWhenDrainedAndRestartsForUnreferencedSockets) {
+  container_.reset();
+  ASSERT_TRUE(base::WriteFile(main_script_, R"JS(
+    const {ipcMain} = require('electron');
+    const dgram = require('node:dgram');
+    let receiver;
+    let sender;
+    ipcMain.handle('datagram:open', async () => {
+      receiver = dgram.createSocket('udp4');
+      sender = dgram.createSocket('udp4');
+      await new Promise((resolve, reject) => {
+        receiver.once('error', reject);
+        receiver.bind(0, '127.0.0.1', resolve);
+      });
+      receiver.unref();
+      sender.unref();
+      return receiver.address().port;
+    });
+    ipcMain.handle('datagram:roundtrip-and-close', async (_event, text) => {
+      const received = new Promise((resolve, reject) => {
+        receiver.once('message', data => resolve(data.toString()));
+        receiver.once('error', reject);
+      });
+      await new Promise((resolve, reject) => {
+        sender.send(Buffer.from(text), receiver.address().port, '127.0.0.1',
+          error => error ? reject(error) : resolve());
+      });
+      const result = await received;
+      await Promise.all([receiver, sender].map(socket =>
+        new Promise(resolve => socket.close(resolve))));
+      return result;
+    });
+  )JS"));
+  container_ = CreateContainer();
+  ASSERT_TRUE(container_->Initialize()) << container_->startup_error();
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(0u, task_environment_.GetPendingMainThreadTaskCount());
+
+  for (const char* payload : {"first", "reopened"}) {
+    base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> opened;
+    container_->Invoke("renderer-1", "datagram:open", Arguments({}),
+                       opened.GetCallback());
+    auto open_result = opened.Take();
+    ASSERT_TRUE(open_result->success) << open_result->error;
+    EXPECT_GT(open_result->value.GetInt(), 0);
+    task_environment_.RunUntilIdle();
+    // Both sockets are unreferenced, but still need native receive callbacks.
+    // Repeated native calls share one pending pump rather than multiplying it.
+    EXPECT_EQ(1u, task_environment_.GetPendingMainThreadTaskCount());
+
+    base::test::TestFuture<xenon::ipc::mojom::IpcResultPtr> completed;
+    container_->Invoke("renderer-1", "datagram:roundtrip-and-close",
+                       Arguments({base::Value(payload)}),
+                       completed.GetCallback());
+    auto result = completed.Take();
+    ASSERT_TRUE(result->success) << result->error;
+    EXPECT_EQ(payload, result->value.GetString());
+    task_environment_.RunUntilIdle();
+    // Closing the final socket must remove the recurring wakeup completely.
+    EXPECT_EQ(0u, task_environment_.GetPendingMainThreadTaskCount());
+  }
+}
+#endif
 
 }  // namespace
 

@@ -1181,6 +1181,7 @@ component("base") {
     "//build:chromecast_buildflags",
     "//build:robolectric_buildflags",
     "//third_party/abseil-cpp:absl",
+    "//xenon_overlay/buildflags",
   ]
 
   sources += [

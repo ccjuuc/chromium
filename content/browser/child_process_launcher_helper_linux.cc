@@ -66,6 +66,11 @@ bool ChildProcessLauncherHelper::BeforeLaunchOnLauncherThread(
     }
 
     options->environment = delegate_->GetEnvironment();
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    if (!delegate_->ApplyXenonUtilityProcessOptions(options)) {
+      return false;
+    }
+#endif
   } else {
     DCHECK(GetZygoteForLaunch());
     // Environment variables could be supported in the future, but are not

@@ -12,6 +12,7 @@
 #include "gin/test/v8_test.h"
 #include "mojo/core/embedder/embedder.h"
 #include "mojo/public/cpp/bindings/receiver.h"
+#include "net/base/load_flags.h"
 #include "net/http/http_status_code.h"
 #include "net/url_request/redirect_info.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -45,6 +46,10 @@ class XenonMainNetworkTest : public gin::V8Test, public mojom::IpcRenderer {
   }
 
   void Dispatch(const std::string& channel, base::Value arguments) override {}
+  void DispatchPostMessage(const std::string& channel,
+                           blink::TransferableMessage message) override {
+    ADD_FAILURE() << "Unexpected MessagePort IPC: " << channel;
+  }
 
   mojo::Receiver<mojom::IpcRenderer> renderer_receiver_{this};
   network::TestURLLoaderFactory factory_;
@@ -73,6 +78,34 @@ TEST_F(XenonMainNetworkTest, HttpErrorStatusAndBinaryUploadAreNotFabricated) {
   EXPECT_EQ(404, result->value.GetDict().FindInt("statusCode"));
   EXPECT_EQ(base::Base64Encode(body),
             *result->value.GetDict().FindString("bodyBase64"));
+}
+
+TEST_F(XenonMainNetworkTest, NodeRequestsNeverUseBrowserCookiesOrHttpCache) {
+  factory_.AddResponse("https://fixture.test/node", "response");
+  size_t intercepted = 0;
+  factory_.SetInterceptor(
+      base::BindLambdaForTesting([&](const network::ResourceRequest& request) {
+        ++intercepted;
+        EXPECT_EQ(network::mojom::CredentialsMode::kOmit,
+                  request.credentials_mode);
+        EXPECT_TRUE(request.load_flags & net::LOAD_DISABLE_CACHE);
+        EXPECT_TRUE(request.load_flags & net::LOAD_BYPASS_PROXY);
+        EXPECT_EQ("explicit=value", request.headers.GetHeader("Cookie"));
+      }));
+  for (const bool legacy_use_session_cookies : {false, true}) {
+    auto arguments = RequestArguments("https://fixture.test/node");
+    auto& request = arguments.GetList()[0].GetDict();
+    request.Set("useSessionCookies", legacy_use_session_cookies);
+    base::DictValue headers;
+    headers.Set("Cookie", "explicit=value");
+    request.Set("headers", std::move(headers));
+    base::test::TestFuture<mojom::IpcResultPtr> future;
+    PerformNetworkRequest(factory_.GetSafeWeakWrapper(), std::move(arguments),
+                          future.GetCallback());
+    auto result = future.Take();
+    ASSERT_TRUE(result->success) << result->error;
+  }
+  EXPECT_EQ(2u, intercepted);
 }
 
 TEST_F(XenonMainNetworkTest, AbortDisconnectsTheActualLoader) {
@@ -149,6 +182,63 @@ TEST_F(XenonMainNetworkTest, ContainerShutdownCancelsPendingLoader) {
   ASSERT_TRUE(factory_.IsPending("https://fixture.test/shutdown"));
   container.Shutdown();
   EXPECT_FALSE(factory_.IsPending("https://fixture.test/shutdown"));
+}
+
+TEST_F(XenonMainNetworkTest, WorkerFetchBindsItsOwnClonedNetworkFactory) {
+  factory_.AddResponse("https://fixture.test/worker", "worker response");
+  size_t intercepted = 0;
+  factory_.SetInterceptor(
+      base::BindLambdaForTesting([&](const network::ResourceRequest& request) {
+        ++intercepted;
+        EXPECT_EQ(network::mojom::CredentialsMode::kOmit,
+                  request.credentials_mode);
+        EXPECT_TRUE(request.load_flags & net::LOAD_DISABLE_CACHE);
+        EXPECT_EQ("worker=explicit", request.headers.GetHeader("Cookie"));
+      }));
+  base::ScopedTempDir directory;
+  ASSERT_TRUE(directory.CreateUniqueTempDir());
+  base::FilePath canonical;
+  ASSERT_TRUE(base::NormalizeFilePath(directory.GetPath(), &canonical));
+  XenonIpcMainContainer::EmbeddedMainModule module;
+  module.app_path = canonical;
+  module.virtual_path = canonical.AppendASCII("main.js");
+  module.source = R"JS(
+    const {ipcMain} = require('electron');
+    const {Worker} = require('node:worker_threads');
+    ipcMain.handle('test:worker-network', async () => {
+      const worker = new Worker(`
+        const {parentPort} = require('node:worker_threads');
+        fetch('https://fixture.test/worker', {
+          credentials: 'include', headers: {Cookie: 'worker=explicit'},
+        }).then(response => response.text()).then(
+          text => parentPort.postMessage({text}),
+          error => parentPort.postMessage({error: String(error)}));
+      `, {eval: true});
+      const result = await new Promise((resolve, reject) => {
+        worker.once('message', resolve); worker.once('error', reject);
+      });
+      await worker.terminate();
+      return result;
+    });
+  )JS";
+  XenonIpcMainContainer container;
+  container.SetNetworkLoaderFactory(factory_.GetSafeWeakWrapper());
+  ASSERT_TRUE(container.Initialize(std::move(module)))
+      << container.startup_error();
+  container.AddRenderer("renderer",
+                        renderer_receiver_.BindNewPipeAndPassRemote(), 1, 1, 0,
+                        "about:blank", true);
+  base::test::TestFuture<mojom::IpcResultPtr> future;
+  container.Invoke("renderer", "test:worker-network",
+                   base::Value(base::ListValue()), future.GetCallback());
+  auto result = future.Take();
+  ASSERT_TRUE(result->success) << result->error;
+  ASSERT_TRUE(result->value.is_dict());
+  const auto& value = result->value.GetDict();
+  EXPECT_FALSE(value.Find("error"));
+  ASSERT_TRUE(value.FindString("text"));
+  EXPECT_EQ("worker response", *value.FindString("text"));
+  EXPECT_EQ(1u, intercepted);
 }
 
 TEST_F(XenonMainNetworkTest, FetchAndHttpUseRealV8AndNetworkLoader) {

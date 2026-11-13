@@ -3,7 +3,11 @@ module xenon.mojom;
 import "mojo/public/mojom/base/values.mojom";
 import "sandbox/policy/mojom/sandbox.mojom";
 import "services/network/public/mojom/url_loader_factory.mojom";
+import "third_party/blink/public/mojom/messaging/transferable_message.mojom";
+import "third_party/blink/public/mojom/messaging/message_port_descriptor.mojom";
 import "xenon_overlay/public/mojom/xenon_ipc.mojom";
+import "xenon_overlay/public/mojom/xenon_permission_check.mojom";
+import "xenon_overlay/public/mojom/xenon_utility_process.mojom";
 
 // Multiplexed on the same message pipe as XenonMainService (FIFO ordering).
 interface XenonAssociatedSide {
@@ -12,9 +16,27 @@ interface XenonAssociatedSide {
 
 // Implemented in the browser process; utility holds a Remote to push events.
 interface XenonBrowserObserver {
+  // Only the authenticated main-service observer can launch children. Browser
+  // supplies its own application configuration and generation to each fork.
+  ForkUtilityProcess(xenon.ipc.mojom.UtilityProcessOptions options,
+      blink.mojom.MessagePortDescriptor parent_port,
+      pending_receiver<xenon.ipc.mojom.UtilityProcessControl> control,
+      pending_remote<xenon.ipc.mojom.UtilityProcessClient> client)
+      => (bool success, string error);
+
   OnServiceEvent(string message);
 
   OnThreadCallback(string message);
+
+  // Dedicated async main-process networking. Browser authenticates the
+  // observer and resolves the named Session within that container only.
+  CreateElectronNetworkFactory(string partition,
+      pending_remote<xenon.ipc.mojom.ElectronNetworkHeadersObserver> headers)
+      => (pending_remote<network.mojom.URLLoaderFactory>? factory, string error);
+
+  // Reads the Browser's cached network-link state; does not perform a request.
+  [Sync]
+  GetElectronNetworkOnline() => (bool online, string error);
 
   // Electron BrowserWindow backing. Called from the Utility ipcMain isolate;
   // HWND is returned synchronously so getNativeWindowHandle() can run in the
@@ -54,15 +76,6 @@ interface XenonBrowserObserver {
   // only this application's service connection and cleans up its windows.
   OnElectronAppExit(string container_id, int32 exit_code);
 
-  // Electron `dialog.showOpenDialog`. Must run on the Browser UI thread with
-  // a real owner HWND. Calling GetOpenFileName from Utility never shows a
-  // picker (no UI pump / no owner).
-  [Sync]
-  ShowElectronOpenDialog(string title,
-                         bool directory,
-                         bool allow_multi,
-                         array<string> extensions)
-      => (array<string> file_paths);
 };
 
 // Receives callbacks retained and invoked by a loaded Node addon.
@@ -131,6 +144,13 @@ interface XenonMainService {
   // notifications.
   SetBrowserObserver(pending_remote<XenonBrowserObserver> observer);
 
+  // Dedicated check pipe; Browser's watchdog may revoke it without affecting
+  // normal application IPC, and bind a fresh one after the handler recovers.
+  BindElectronPermissionCheck(string container_id,
+      pending_receiver<xenon.ipc.mojom.ElectronPermissionCheck> receiver);
+  DispatchElectronPermissionRequest(string container_id,
+      mojo_base.mojom.Value request);
+
   // One observer per chrome://xenon-node page. Native callback ids are scoped
   // by context_id + client_id so independent Electron containers cannot
   // consume each other's callbacks.
@@ -149,7 +169,9 @@ interface XenonMainService {
 
   // Configures a document's isolated native-addon service without starting an
   // Electron main script or creating a second ipcMain container.
-  InitializeNodeAddonRuntime(string context_id, string runtime_directory);
+  InitializeNodeAddonRuntime(string context_id, string runtime_directory,
+                             string app_path,
+                             array<xenon.ipc.mojom.IpcArchivePublicKey> archive_public_keys);
 
   // Native Widget/window-message events forwarded to the Electron-compatible
   // main isolate. Window ids are process-global and containers without the id
@@ -157,6 +179,11 @@ interface XenonMainService {
   DispatchElectronWindowEvent(int32 window_id,
                              string event_name,
                              mojo_base.mojom.Value arguments);
+
+  // Browser-owned input is held in its original widget's asynchronous queue.
+  // The reply only decides cancellation; it never redirects input to a window.
+  FilterElectronKeyboardEvent(string container_id, int32 window_id,
+                              mojo_base.mojom.Value input) => (bool prevented);
 
   // Application lifecycle events are scoped to the explicitly activated
   // container, including when it currently has no BrowserWindow.
@@ -177,7 +204,7 @@ interface XenonMainService {
       int32 frame_id,
       int32 window_id,
       string document_url,
-      bool is_main_frame);
+      bool is_main_frame) => (bool registered);
 
   // Browser-authored URL refresh for same-document navigations. Never accepts
   // renderer-provided identity metadata.
@@ -198,6 +225,11 @@ interface XenonMainService {
                   string endpoint_id,
                   string channel,
                   mojo_base.mojom.Value arguments);
+
+  ElectronIpcPostMessage(string container_id,
+                        string endpoint_id,
+                        string channel,
+                        blink.mojom.TransferableMessage message);
 
   ElectronIpcInvoke(string container_id,
                     string endpoint_id,
@@ -221,6 +253,15 @@ interface XenonMainService {
                          string request_id, mojo_base.mojom.Value request)
       => (xenon.ipc.mojom.IpcResult result);
   CancelElectronProtocol(string container_id, string request_id);
+
+  // Browser-owned Session interception; never exposed as renderer IPC.
+  HandleElectronWebRequest(string container_id, mojo_base.mojom.Value request)
+      => (xenon.ipc.mojom.IpcResult result);
+  CancelElectronWebRequest(string container_id, string request_id);
+  // Sent after queued requests referencing a retired registration. In-flight
+  // JS callbacks retain their snapshot, while unused listener functions retire.
+  ReleaseElectronWebRequestRegistration(string container_id,
+                                         string registration_id);
 
   // N-API / Node Addon testing methods (runs in the utility process)
   [Sync]

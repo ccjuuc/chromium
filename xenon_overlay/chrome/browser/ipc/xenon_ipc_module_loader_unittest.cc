@@ -40,6 +40,10 @@ class XenonIpcModuleLoaderTest : public gin::V8Test, public mojom::IpcRenderer {
   }
 
   void Dispatch(const std::string& channel, base::Value arguments) override {}
+  void DispatchPostMessage(const std::string& channel,
+                           blink::TransferableMessage message) override {
+    ADD_FAILURE() << "Unexpected MessagePort IPC: " << channel;
+  }
 
   void WriteModule(const std::string& relative_path,
                    const std::string& source) {
@@ -89,8 +93,9 @@ TEST_F(XenonIpcModuleLoaderTest, BuiltinsHaveExactNamesAndSharedIdentity) {
   ExpectScript(R"JS(
     return require('fs') === require('node:fs') &&
         require('events') === require('node:events') &&
-        ['tls', 'readline', 'zlib', 'http2', 'child_process'].every(name =>
+        ['tls', 'readline', 'zlib', 'http2', 'child_process', 'timers/promises', 'console'].every(name =>
             require(name) === require('node:' + name)) &&
+        require('timers').promises === require('timers/promises') &&
         require.resolve('fs') === 'fs' &&
         require.resolve('node:fs') === 'node:fs' &&
         errorCode(() => require('node:electron')) === 'ERR_UNKNOWN_BUILTIN_MODULE' &&
@@ -108,6 +113,50 @@ TEST_F(XenonIpcModuleLoaderTest, BuiltinsHaveExactNamesAndSharedIdentity) {
   )JS");
 }
 
+TEST_F(XenonIpcModuleLoaderTest, IsBuiltinUsesTheActualModuleRegistry) {
+  ExpectScript(R"JS(
+    const {isBuiltin} = require('node:module');
+    return ['fs', 'fs/promises', 'stream/promises', 'original-fs',
+        'original-fs/promises', 'util', 'module'].every(name =>
+          isBuiltin(name) && isBuiltin('node:' + name) &&
+          require(name) === require('node:' + name)) &&
+        [undefined, null, 1, {}, Symbol(), '', 'electron', 'node:electron',
+         'node:node:fs', 'node:missing', 'FS', './fs', 'fs\0'].every(name =>
+          isBuiltin(name) === false);
+  )JS");
+}
+
+TEST_F(XenonIpcModuleLoaderTest, UtilDeepStrictEqualUsesNativeBrands) {
+  ExpectScript(R"JS(
+    const util = require('node:util');
+    const equal = util.isDeepStrictEqual;
+    const promise = Promise.resolve(1);
+    const fakePromise = Object.create(Promise.prototype);
+    const fakeError = Object.create(Error.prototype);
+    const nativeError = Object.setPrototypeOf(new Error('native'), null);
+    const thenable = {get then() { throw new Error('must not inspect then'); }};
+    const first = {items: new Map([[{key: 1}, new Set([1, 2])]])};
+    const second = {items: new Map([[{key: 1}, new Set([2, 1])]])};
+    first.self = first;
+    second.self = second;
+    class First { constructor() { this.value = 1; } }
+    class Second { constructor() { this.value = 1; } }
+    return util === require('util') && typeof equal === 'function' &&
+        util.types.isPromise(promise) &&
+        !util.types.isPromise(fakePromise) &&
+        !util.types.isPromise(thenable) && !util.types.isPromise() &&
+        !util.types.isPromise(new Proxy(promise, {})) &&
+        util.types.isNativeError(nativeError) &&
+        !util.types.isNativeError(fakeError) && !util.types.isNativeError() &&
+        equal(first, second) && equal(NaN, NaN) && !equal(0, -0) &&
+        equal(promise, promise) && !equal(promise, Promise.resolve(1)) &&
+        equal(fakePromise, Object.create(Promise.prototype)) &&
+        !equal(new First(), new Second()) &&
+        equal(new First(), new Second(), true) &&
+        !equal(new Error('first'), new Error('second'));
+  )JS");
+}
+
 TEST_F(XenonIpcModuleLoaderTest, BuiltinObjectsRejectUnavailableOperations) {
   ExpectScript(R"JS(
     const childProcess = require('child_process');
@@ -116,7 +165,14 @@ TEST_F(XenonIpcModuleLoaderTest, BuiltinObjectsRejectUnavailableOperations) {
         childProcess !== require('net') &&
         typeof childProcess.spawn === 'function' &&
         errorCode(() => childProcess.spawn('fixture', [], {shell: true})) === 'ERR_NOT_SUPPORTED' &&
-        ['spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork'].every(method =>
+        typeof childProcess.execFile === 'function' &&
+        typeof childProcess.execFile[require('util').promisify.custom] === 'function' &&
+        errorCode(() => childProcess.execFile('fixture', [], {timeout: -1})) === 'ERR_OUT_OF_RANGE' &&
+        // This module-only fixture has no OS transport. A null killSignal
+        // avoids native signal lookup while checking the unsupported shell.
+        errorCode(() => childProcess.execFile('fixture', [],
+            {shell: true, killSignal: null})) === 'ERR_NOT_SUPPORTED' &&
+        ['spawnSync', 'exec', 'execSync', 'execFileSync', 'fork'].every(method =>
             typeof childProcess[method] === 'function' &&
             errorCode(() => childProcess[method]('fixture')) === 'ERR_NOT_SUPPORTED') &&
         ['connect', 'createServer', 'createSecureServer'].every(method =>
@@ -138,6 +194,32 @@ TEST_F(XenonIpcModuleLoaderTest, MissingAddonDoesNotResolveByBasename) {
         errorCode(() => require('./missing/addon.node')) === 'MODULE_NOT_FOUND' &&
         require.resolve('./addon.node').endsWith('addon.node');
   )JS");
+}
+
+TEST_F(XenonIpcModuleLoaderTest, AddonLoadErrorsDoNotLookLikeMissingFiles) {
+  WriteModule("denied.node", "native loader fixture");
+  WriteModule("invalid.node", "native loader fixture");
+  XenonIpcMainContainer::NativeAddonHooks hooks;
+  hooks.load =
+      base::BindRepeating([](const std::string& path, std::string* error) {
+        *error =
+            base::FilePath::FromUTF8Unsafe(path).BaseName().AsUTF8Unsafe() ==
+                    "denied.node"
+                ? "ERR_ACCESS_DENIED: native library outside application"
+                : "native library initialization failed";
+        return false;
+      });
+  ExpectScript(R"JS(
+    let denied, invalid;
+    try { require('./denied.node'); } catch (error) { denied = error; }
+    try { require('./invalid.node'); } catch (error) { invalid = error; }
+    return denied.code === 'ERR_ACCESS_DENIED' &&
+        denied.message.includes('outside application') &&
+        invalid.code === 'ERR_DLOPEN_FAILED' &&
+        invalid.message.includes('initialization failed') &&
+        errorCode(() => require('./missing.node')) === 'MODULE_NOT_FOUND';
+  )JS",
+               std::move(hooks));
 }
 
 TEST_F(XenonIpcModuleLoaderTest, ResolveDoesNotExecuteAndRequireCachesExports) {
@@ -203,11 +285,59 @@ TEST_F(XenonIpcModuleLoaderTest, PackageExportsAndImportsAreNotBypassed) {
   WriteModule("node_modules/guarded/package.json",
               "{\"exports\":{\".\":\"./public.js\"},\"main\":\"private.js\"}");
   WriteModule("node_modules/guarded/private.js", "module.exports = 'private';");
+  WriteModule("node_modules/guarded/public.js", "module.exports = 'public';");
   ExpectScript(R"JS(
-    return errorCode(() => require('guarded')) === 'ERR_NOT_SUPPORTED' &&
+    return require('guarded') === 'public' &&
         errorCode(() => require.resolve('guarded/private.js')) ===
-            'ERR_NOT_SUPPORTED' &&
-        errorCode(() => require('#private')) === 'ERR_NOT_SUPPORTED';
+            'ERR_PACKAGE_PATH_NOT_EXPORTED' &&
+        errorCode(() => require('#private')) === 'ERR_PACKAGE_IMPORT_NOT_DEFINED';
+  )JS");
+}
+
+TEST_F(XenonIpcModuleLoaderTest,
+       PackageConditionsImportsPatternsAndSelfReference) {
+  WriteModule("package.json", R"JSON({"name":"fixture","exports":{
+    "./public":"./self.cjs"},"imports":{"#self":"./self.cjs",
+    "#external":"ordered","#wild/*":"./lib/*.cjs"}})JSON");
+  WriteModule("self.cjs", "module.exports = {answer:42};");
+  WriteModule("lib/value.cjs", "module.exports = 42;");
+  WriteModule("node_modules/ordered/package.json", R"JSON({"exports":{
+    ".":{"default":"./default.cjs","require":"./wrong.cjs"},
+    "./feature":{"node":{"require":"./feature.cjs"}},
+    "./hidden":null,"./wild/*":"./lib/*.cjs"}})JSON");
+  WriteModule("node_modules/ordered/default.cjs",
+              "module.exports = 'default-first';");
+  WriteModule("node_modules/ordered/wrong.cjs",
+              "throw new Error('wrong condition');");
+  WriteModule("node_modules/ordered/feature.cjs", "module.exports = 7;");
+  WriteModule("node_modules/ordered/lib/value.cjs", "module.exports = 9;");
+  ExpectScript(R"JS(
+    return require('ordered') === 'default-first' &&
+      require('ordered/feature') === 7 && require('ordered/wild/value') === 9 &&
+      require('#external') === require('ordered') && require('#wild/value') === 42 &&
+      require('#self') === require('fixture/public') &&
+      errorCode(() => require('fixture')) === 'ERR_PACKAGE_PATH_NOT_EXPORTED' &&
+      errorCode(() => require('ordered/hidden')) === 'ERR_PACKAGE_PATH_NOT_EXPORTED';
+  )JS");
+}
+
+TEST_F(XenonIpcModuleLoaderTest, ExportTargetsAreExactAndStayInsideThePackage) {
+  WriteModule("node_modules/guarded/package.json", R"JSON({"exports":{
+    ".":["../invalid.cjs","./valid.cjs"],"./missing":["./missing.cjs","./valid.cjs"],
+    "./extension":"./extension","./directory":"./directory",
+    "./bad":"./lib/../../escape.cjs","./space":"./with%20space.cjs"}})JSON");
+  WriteModule("node_modules/guarded/valid.cjs", "module.exports = 42;");
+  WriteModule("node_modules/guarded/extension.js",
+              "throw 'extension guessed';");
+  WriteModule("node_modules/guarded/directory/index.js",
+              "throw 'index guessed';");
+  WriteModule("node_modules/guarded/with space.cjs", "module.exports = 7;");
+  ExpectScript(R"JS(
+    return require('guarded') === 42 && require('guarded/space') === 7 &&
+      errorCode(() => require('guarded/missing')) === 'MODULE_NOT_FOUND' &&
+      errorCode(() => require('guarded/extension')) === 'MODULE_NOT_FOUND' &&
+      errorCode(() => require('guarded/directory')) === 'MODULE_NOT_FOUND' &&
+      errorCode(() => require('guarded/bad')) === 'ERR_INVALID_PACKAGE_TARGET';
   )JS");
 }
 
@@ -221,6 +351,23 @@ TEST_F(XenonIpcModuleLoaderTest, CircularRequiresKeepPartialExports) {
 }
 
 TEST_F(XenonIpcModuleLoaderTest,
+       RequiredEsmSurvivesFileRemovalWithLiveBindings) {
+  WriteModule("counter.mjs", R"JS(
+    export let count = 1;
+    export function increment() { ++count; }
+    export default 'value';
+  )JS");
+  ExpectScript(R"JS(
+    const first = require('./counter.mjs');
+    require('fs').unlinkSync(require.resolve('./counter.mjs'));
+    first.increment();
+    const second = require('./counter.mjs');
+    return first === second && second.count === 2 &&
+      second.default === 'value' && second.__esModule === true;
+  )JS");
+}
+
+TEST_F(XenonIpcModuleLoaderTest,
        CircularRequiresObserveReassignedModuleExports) {
   WriteModule("a.js", R"JS(
     module.exports = {name: 'replacement'};
@@ -230,6 +377,16 @@ TEST_F(XenonIpcModuleLoaderTest,
   ExpectScript(R"JS(
     const a = require('./a');
     return a.name === 'replacement' && a.b.a === a;
+  )JS");
+}
+
+TEST_F(XenonIpcModuleLoaderTest,
+       RequireEsmRejectsCycleBackToExecutingCommonJs) {
+  WriteModule("start.cjs", "exports.partial = 1; require('./bridge.mjs');");
+  WriteModule("bridge.mjs",
+              "import value from './start.cjs'; export default value;");
+  ExpectScript(R"JS(
+    return errorCode(() => require('./start.cjs')) === 'ERR_REQUIRE_CYCLE_MODULE';
   )JS");
 }
 
@@ -522,9 +679,9 @@ TEST_F(XenonIpcModuleLoaderTest, NativeForwarderPreservesNestedBinaryKinds) {
   XenonIpcMainContainer::NativeAddonHooks hooks;
   hooks.load = base::BindRepeating(
       [](const std::string&, std::string*) { return true; });
-  hooks.describe = base::BindRepeating(
-      [](const std::string&, const std::string&, base::Value* description,
-         std::string*) {
+  hooks.describe =
+      base::BindRepeating([](const std::string&, const std::string&,
+                             base::Value* description, std::string*) {
         *description = base::Value(base::DictValue().Set("kind", "function"));
         return true;
       });
@@ -547,8 +704,13 @@ TEST_F(XenonIpcModuleLoaderTest, NativeForwarderPreservesNestedBinaryKinds) {
         }
         EXPECT_EQ(bytes->GetBlob().size(),
                   static_cast<size_t>(*row.FindInt("byteLength")));
-        EXPECT_EQ(row.FindList("nested")->front().GetDict().Find("data")
-                      ->GetDict().Find("value")->GetBlob(),
+        EXPECT_EQ(row.FindList("nested")
+                      ->front()
+                      .GetDict()
+                      .Find("data")
+                      ->GetDict()
+                      .Find("value")
+                      ->GetBlob(),
                   bytes->GetBlob());
         *result = args.GetList()[0].Clone();
         return true;
@@ -601,9 +763,9 @@ TEST_F(XenonIpcModuleLoaderTest,
   XenonIpcMainContainer::NativeAddonHooks hooks;
   hooks.load = base::BindRepeating(
       [](const std::string&, std::string*) { return true; });
-  hooks.describe = base::BindRepeating(
-      [](const std::string&, const std::string&, base::Value* description,
-         std::string*) {
+  hooks.describe =
+      base::BindRepeating([](const std::string&, const std::string&,
+                             base::Value* description, std::string*) {
         *description = base::Value(base::DictValue().Set("kind", "class"));
         return true;
       });
@@ -616,24 +778,27 @@ TEST_F(XenonIpcModuleLoaderTest,
             base::DictValue()
                 .Set("__xenon_node_wire_type__", "native_instance")
                 .Set("instance_id", 23)
-                .Set("fields", base::DictValue().Set("payload", payload.Clone()))
+                .Set("fields",
+                     base::DictValue().Set("payload", payload.Clone()))
                 .Set("prototype",
                      base::ListValue().Append(base::DictValue()
                                                   .Set("name", "echo")
                                                   .Set("kind", "function"))));
         return true;
       });
-  hooks.invoke_instance = base::BindRepeating(
-      [](const std::string&, int32_t id, const std::string& method,
-         const base::Value& args, base::Value* result, std::string*) {
-        EXPECT_EQ(id, 23);
-        EXPECT_EQ(method, "echo");
-        const auto& row = args.GetList()[0].GetDict();
-        EXPECT_TRUE(row.FindDict("__proto__")->FindDict("data")
-                        ->Find("value")->is_blob());
-        *result = args.GetList()[0].Clone();
-        return true;
-      });
+  hooks.invoke_instance = base::BindRepeating([](const std::string&, int32_t id,
+                                                 const std::string& method,
+                                                 const base::Value& args,
+                                                 base::Value* result,
+                                                 std::string*) {
+    EXPECT_EQ(id, 23);
+    EXPECT_EQ(method, "echo");
+    const auto& row = args.GetList()[0].GetDict();
+    EXPECT_TRUE(
+        row.FindDict("__proto__")->FindDict("data")->Find("value")->is_blob());
+    *result = args.GetList()[0].Clone();
+    return true;
+  });
   ExpectScript(R"JS(
     const Binary = require('./binary-class.node');
     const instance = new Binary(Buffer.from([91, 11, 22, 92]).subarray(1, 3));

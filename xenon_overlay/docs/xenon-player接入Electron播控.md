@@ -114,6 +114,7 @@ resources/                           # 构建后对应宿主 exe 所在目录
   "executable": "xenon_player/xmp.exe",
   "name": "xmp",
   "archivePublicKey": "xenon_player.asar-public-key.pem",
+  "nativeAddonExecution": "shared",
   "parentWindowPairing": [
     "out.asar/main-renderer/clipper.html",
     "out.asar/main-renderer/gifClipper.html"

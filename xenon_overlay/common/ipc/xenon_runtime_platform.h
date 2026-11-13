@@ -9,6 +9,10 @@
 
 namespace xenon::ipc {
 
+// Identifies an Electron API adapter, not a bundled vendor Electron release.
+// Keep the main bootstrap's process.versions.electron identity in sync.
+inline constexpr char kElectronCompatibilityVersion[] = "0.0.0-compat";
+
 // Node's platform and architecture describe the running binary, which may
 // differ from the host machine when running under emulation. Unknown targets
 // stay empty so callers can report unsupported capability instead of guessing.

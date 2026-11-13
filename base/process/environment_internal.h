@@ -13,6 +13,7 @@
 #include "base/containers/span.h"
 #include "base/environment.h"
 #include "build/build_config.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 namespace base {
 namespace internal {
@@ -42,6 +43,15 @@ UNSAFE_BUFFER_USAGE BASE_EXPORT base::HeapArray<char*> AlterEnvironment(
     base::span<const char* const> env,
     const EnvironmentMap& changes);
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+// As above, except empty values are retained as KEY= when requested. The same
+// NUL-terminated input and output ownership requirements apply.
+UNSAFE_BUFFER_USAGE BASE_EXPORT base::HeapArray<char*> AlterEnvironment(
+    base::span<const char* const> env,
+    const EnvironmentMap& changes,
+    bool preserve_empty_values);
+#endif
+
 // Returns a span over the current process' environment (excluding the
 // terminating null pointer). Each string in the span is NUL-terminated.
 // On POSIX, this returns a view into the system's 'environ' array.
@@ -64,6 +74,14 @@ BASE_EXPORT void SetEnvironment(base::span<char*> env);
 // L"A=1\0B=2\0\0". The input span `env` can be empty.
 BASE_EXPORT NativeEnvironmentString
 AlterEnvironment(base::span<const wchar_t> env, const EnvironmentMap& changes);
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+// As above, except empty values are retained as KEY= when requested.
+BASE_EXPORT NativeEnvironmentString AlterEnvironment(
+    base::span<const wchar_t> env,
+    const EnvironmentMap& changes,
+    bool preserve_empty_values);
+#endif
 
 // Returns a double-NUL-terminated copy of the current process' environment
 // block. Windows requires returning an owned copy of the environment block.

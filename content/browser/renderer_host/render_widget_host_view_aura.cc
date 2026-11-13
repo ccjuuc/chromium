@@ -111,6 +111,7 @@
 #include "ui/wm/public/activation_client.h"
 #include "ui/wm/public/scoped_tooltip_disabler.h"
 #include "ui/wm/public/tooltip_client.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
@@ -3677,7 +3678,16 @@ RenderWidgetHostViewAura::DidUpdateVisualProperties(
 void RenderWidgetHostViewAura::DidNavigate() {
   CHECK(delegated_frame_host_) << "Cannot be invoked during destruction.";
 
-  if (!IsShowing()) {
+  bool defer_surface_allocation = !IsShowing();
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // Only explicitly opted-in embedded widgets may draw while their native
+  // window is hidden. Preserve Chromium's original policy for ordinary tabs,
+  // even when the renderer and native visibility are briefly out of sync.
+  if (host()->hidden_surface_allocation_allowed()) {
+    defer_surface_allocation &= host()->IsHidden();
+  }
+#endif
+  if (defer_surface_allocation) {
     // Navigating while hidden should not allocate a new LocalSurfaceID. Once
     // sizes are ready, or we begin to Show, we can then allocate the new
     // LocalSurfaceId.

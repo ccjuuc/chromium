@@ -149,6 +149,14 @@ void NotificationDisplayServiceImpl::ProcessNotificationOperation(
     const std::optional<bool>& is_suspicious,
     base::OnceClosure on_completed_cb) {
   NotificationHandler* handler = GetNotificationHandler(notification_type);
+#if BUILDFLAG(ENABLE_XENON_SERVICE) && !BUILDFLAG(IS_ANDROID)
+  // An OS notification can outlive the application and its profile service.
+  // Ignore that stale identity without creating or relaunching an app owner.
+  if (!handler && notification_type == NotificationHandler::Type::XENON_ELECTRON) {
+    std::move(on_completed_cb).Run();
+    return;
+  }
+#endif
   DCHECK(handler);
   if (!handler) {
     LOG(ERROR) << "Unable to find a handler for "
@@ -212,6 +220,14 @@ NotificationHandler* NotificationDisplayServiceImpl::GetNotificationHandler(
 void NotificationDisplayServiceImpl::Shutdown() {
   bridge_delegator_->DisplayServiceShutDown();
 }
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE) && !BUILDFLAG(IS_ANDROID)
+bool NotificationDisplayServiceImpl::IsXenonNotificationSupported() const {
+  return bridge_delegator_initialized_ && bridge_delegator_ &&
+         bridge_delegator_->CanDisplayType(
+             NotificationHandler::Type::XENON_ELECTRON);
+}
+#endif
 
 void NotificationDisplayServiceImpl::Display(
     NotificationHandler::Type notification_type,

@@ -5,6 +5,7 @@
 #ifndef CONTENT_BROWSER_SERVICE_HOST_UTILITY_SANDBOX_DELEGATE_H_
 #define CONTENT_BROWSER_SERVICE_HOST_UTILITY_SANDBOX_DELEGATE_H_
 
+#include <memory>
 #include <optional>
 
 #include "base/command_line.h"
@@ -15,6 +16,11 @@
 #include "content/common/content_export.h"
 #include "content/public/common/zygote/zygote_buildflags.h"
 #include "sandbox/policy/mojom/sandbox.mojom.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/public/utility_process_launch_options.h"
+#endif
 
 #if BUILDFLAG(USE_ZYGOTE)
 #include "content/public/common/zygote/zygote_handle.h"
@@ -40,6 +46,12 @@ class CONTENT_EXPORT UtilitySandboxedProcessLauncherDelegate
   ~UtilitySandboxedProcessLauncherDelegate() override;
 
   sandbox::mojom::Sandbox GetSandboxType() override;
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  bool SetXenonUtilityProcessOptions(
+      std::unique_ptr<xenon::UtilityProcessLaunchOptions> options);
+  bool ApplyXenonUtilityProcessOptions(base::LaunchOptions* options) override;
+#endif
 
 #if BUILDFLAG(IS_WIN)
   std::string GetSandboxTag() override;
@@ -77,6 +89,9 @@ class CONTENT_EXPORT UtilitySandboxedProcessLauncherDelegate
 #endif  // BUILDFLAG(IS_MAC)
 
  private:
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  std::unique_ptr<xenon::UtilityProcessLaunchOptions> xenon_utility_options_;
+#endif
 #if BUILDFLAG(IS_POSIX)
   base::EnvironmentMap env_;
 #endif  // BUILDFLAG(IS_POSIX)

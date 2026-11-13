@@ -294,6 +294,15 @@ UtilityProcessHost::Options& UtilityProcessHost::Options::WithPriority(
   return *this;
 }
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+UtilityProcessHost::Options&
+UtilityProcessHost::Options::WithXenonUtilityProcessOptions(
+    std::unique_ptr<xenon::UtilityProcessLaunchOptions> options) {
+  xenon_utility_options_ = std::move(options);
+  return *this;
+}
+#endif
+
 UtilityProcessHost::Options UtilityProcessHost::Options::Pass() {
   return std::move(*this);
 }
@@ -332,6 +341,13 @@ bool UtilityProcessHost::StartProcess() {
   process_->SetMetricsName(options_.metrics_name_);
 
   if (RenderProcessHost::run_renderer_in_process()) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    if (options_.xenon_utility_options_) {
+      LOG(ERROR)
+          << "Electron utilityProcess requires an independent OS process";
+      return false;
+    }
+#endif
     DCHECK(g_utility_main_thread_factory);
     // See comment in RenderProcessHostImpl::Init() for the background on why we
     // support single process mode this way.
@@ -576,6 +592,14 @@ bool UtilityProcessHost::StartProcess() {
   std::unique_ptr<UtilitySandboxedProcessLauncherDelegate> delegate =
       std::make_unique<UtilitySandboxedProcessLauncherDelegate>(
           options_.sandbox_type_, options_.env_, *cmd_line);
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (options_.xenon_utility_options_ &&
+      !delegate->SetXenonUtilityProcessOptions(
+          std::move(options_.xenon_utility_options_))) {
+    return false;
+  }
+#endif
 
 #if BUILDFLAG(IS_WIN)
   if (!options_.preload_libraries_.empty()) {

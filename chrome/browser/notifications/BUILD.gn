@@ -58,6 +58,7 @@ source_set("notifications") {
     "//ui/gfx",
     "//ui/message_center/public/cpp",
     "//url",
+    "//xenon_overlay/buildflags",
   ]
 
   deps = [ "//components/content_settings/core/browser" ]

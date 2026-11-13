@@ -1,5 +1,6 @@
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_app_config.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_media_permission.h"
 
 #include <algorithm>
 #include <cmath>
@@ -47,6 +48,7 @@
 #include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
 #include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
+#include "xenon_overlay/common/ipc/xenon_app_descriptor_paths.h"
 #include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -1545,6 +1547,42 @@ void XenonWebDialog::ShowThunder2025(Profile* profile) {
   }
 }
 
+void XenonWebDialog::ShowElectronApp(Profile* profile,
+                                     const std::string& descriptor_name,
+                                     const std::string& container_id) {
+  if (!profile || container_id.empty()) {
+    LOG(ERROR) << "ShowElectronApp requires a profile and container identity";
+    return;
+  }
+  const auto descriptor = ipc::FindElectronAppDescriptor(descriptor_name);
+  if (descriptor.empty()) {
+    LOG(ERROR) << "Electron application descriptor not found: "
+               << descriptor_name;
+    return;
+  }
+  ipc::mojom::IpcMainConfigPtr config;
+  std::string error;
+  if (!ipc::LoadElectronAppConfig(descriptor, container_id, &config, &error)) {
+    LOG(ERROR) << "Unable to configure Electron application '" << container_id
+               << "': " << error;
+    return;
+  }
+  XenonManager* manager = XenonManager::GetInstance();
+  manager->SetBrowserContext(profile);
+  // Register updates the saved configuration only. Ensure is idempotent while
+  // the Utility is alive and uses the existing restart path after app exit.
+  // InitializeElectronIpc would reexecute main on an already running Utility.
+  if (!manager->RegisterElectronIpc(std::move(config)) ||
+      !manager->EnsureElectronIpcStarted(container_id)) {
+    LOG(ERROR) << "Unable to start Electron application: " << container_id;
+    return;
+  }
+  if (!XenonElectronWindowHost::GetInstance()->ActivateForContainer(
+          container_id)) {
+    LOG(INFO) << "Waiting for Electron application window: " << container_id;
+  }
+}
+
 void XenonWebDialog::ShowDataMaskTest(Profile* profile) {
   LOG(INFO)
       << "DataMask test enabled from XenonWebDialog (Rule injected natively).";
@@ -1674,6 +1712,26 @@ bool XenonWebDialog::ShouldShowDialogTitle() const {
 
 bool XenonWebDialog::ShouldShowCloseButton() const {
   return show_close_button_;
+}
+
+void XenonWebDialog::RequestMediaAccessPermission(
+    content::WebContents* contents,
+    const content::MediaStreamRequest& request,
+    content::MediaResponseCallback callback) {
+  if (!ipc::HandleElectronMediaAccessRequest(contents, request, callback)) {
+    ui::WebDialogDelegate::RequestMediaAccessPermission(contents, request,
+                                                       std::move(callback));
+  }
+}
+
+bool XenonWebDialog::CheckMediaAccessPermission(
+    content::RenderFrameHost* frame,
+    const url::Origin& origin,
+    blink::mojom::MediaStreamType type) {
+  if (auto allowed = ipc::CheckElectronMediaAccessPermission(frame, origin, type)) {
+    return *allowed;
+  }
+  return ui::WebDialogDelegate::CheckMediaAccessPermission(frame, origin, type);
 }
 
 ui::WebDialogDelegate::FrameKind XenonWebDialog::GetWebDialogFrameKind() const {

@@ -18,6 +18,7 @@
       if (value instanceof URLSearchParams) return Buffer.from(value.toString());
       return unsupported('Streaming, Blob and FormData request bodies');
     }
+    const immutableHeaders = new WeakSet();
     class Headers {
       constructor(init) {
         this._values = new Map();
@@ -42,13 +43,20 @@
         return value;
       }
       append(name, value) {
+        if (immutableHeaders.has(this)) throw new TypeError('Headers are immutable');
         name = this._name(name); value = this._value(value);
         this._values.set(name, this._values.has(name) ? this._values.get(name) + ', ' + value : value);
       }
-      set(name, value) { this._values.set(this._name(name), this._value(value)); }
+      set(name, value) {
+        if (immutableHeaders.has(this)) throw new TypeError('Headers are immutable');
+        this._values.set(this._name(name), this._value(value));
+      }
       get(name) { return this._values.get(this._name(name)) ?? null; }
       has(name) { return this._values.has(this._name(name)); }
-      delete(name) { this._values.delete(this._name(name)); }
+      delete(name) {
+        if (immutableHeaders.has(this)) throw new TypeError('Headers are immutable');
+        this._values.delete(this._name(name));
+      }
       *entries() { yield* [...this._values].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0); }
       *keys() { for (const [key] of this.entries()) yield key; }
       *values() { for (const [, value] of this.entries()) yield value; }
@@ -56,12 +64,23 @@
       [Symbol.iterator]() { return this.entries(); }
       get [Symbol.toStringTag]() { return 'Headers'; }
     }
-    class AbortSignal extends EventEmitter {
-      constructor() { super(); this.aborted = false; this.reason = undefined; this.onabort = null; }
-      addEventListener(name, callback, options) {
-        if (options && options.once) this.once(name, callback); else this.on(name, callback);
+    const abortHandlers = new WeakMap();
+    class AbortSignal extends EventTarget {
+      constructor() {
+        super();
+        this.aborted = false;
+        this.reason = undefined;
+        abortHandlers.set(this, {callback: null, listener: null});
       }
-      removeEventListener(name, callback) { this.removeListener(name, callback); }
+      get onabort() { return abortHandlers.get(this).callback; }
+      set onabort(callback) {
+        const state = abortHandlers.get(this);
+        state.callback = typeof callback === 'function' ? callback : null;
+        if (state.callback && !state.listener) {
+          state.listener = event => state.callback?.call(this, event);
+          this.addEventListener('abort', state.listener);
+        }
+      }
       throwIfAborted() { if (this.aborted) throw this.reason; }
       static abort(reason) { const controller = new AbortController(); controller.abort(reason); return controller.signal; }
       static timeout(delay) {
@@ -78,9 +97,7 @@
         const signal = this.signal;
         if (signal.aborted) return;
         signal.aborted = true; signal.reason = reason;
-        const event = {type: 'abort', target: signal};
-        signal.emit('abort', event);
-        if (typeof signal.onabort === 'function') signal.onabort.call(signal, event);
+        signal.dispatchEvent(new Event('abort'));
       }
       get [Symbol.toStringTag]() { return 'AbortController'; }
     }
@@ -92,6 +109,7 @@
       }
       _consume() {
         if (this.bodyUsed) throw new TypeError('Body has already been consumed');
+        if (this._bytes === null) return Buffer.alloc(0);
         this.bodyUsed = true;
         return this._bytes || Buffer.alloc(0);
       }
@@ -124,7 +142,7 @@
         const value = this._consume();
         return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
       }
-      get body() { return unsupported('Streaming response bodies'); }
+      get body() { return this._bytes === null ? null : unsupported('Streaming response bodies'); }
     }
     class Request extends Body {
       constructor(input, init = {}) {
@@ -167,8 +185,16 @@
         this._setBody(body);
       }
       get ok() { return this.status >= 200 && this.status < 300; }
+      static error() {
+        const response = new Response();
+        response.status = 0;
+        response.type = 'error';
+        immutableHeaders.add(response.headers);
+        return response;
+      }
       clone() {
         if (this.bodyUsed) throw new TypeError('Response body has already been consumed');
+        if (this.type === 'error') return Response.error();
         return new Response(this._bytes, this);
       }
       get [Symbol.toStringTag]() { return 'Response'; }
@@ -195,7 +221,7 @@
           operation = nativeRequest({url: request.url, method: request.method,
             headers: Object.fromEntries(request.headers),
             bodyBase64: request._bytes ? request._bytes.toString('base64') : '',
-            useSessionCookies: request.credentials === 'include', redirect: request.redirect,
+            redirect: request.redirect,
             timeoutMs: 300000});
           Promise.resolve(operation.promise).then(value => {
             if (finished) return;
@@ -293,6 +319,8 @@
           } else if (settings.path) url = new URL(settings.path, url.href);
           if (url.protocol !== protocol) throw error('ERR_INVALID_PROTOCOL', 'Protocol ' + url.protocol + ' is not supported by this module');
           this._url = url.href;
+          this._settings = settings;
+          this.maxHeadersCount = null;
           this.method = String(settings.method || 'GET').toUpperCase();
           this._headers = new Headers(settings.headers);
           if (settings.auth && !this._headers.has('authorization')) this._headers.set('authorization', 'Basic ' + Buffer.from(String(settings.auth)).toString('base64'));
@@ -329,10 +357,33 @@
           if (chunk !== undefined && chunk !== null) this.write(chunk, encoding);
           this.writableEnded = true; this._sent = true;
           if (callback) this.once('finish', callback);
+          const body = Buffer.concat(this._chunks);
           const request = {url: this._url, method: this.method, headers: this.getHeaders(),
-            bodyBase64: Buffer.concat(this._chunks).toString('base64'), timeoutMs: 300000,
-            redirect: 'error'};
+            timeoutMs: 300000, redirect: 'error'};
           this._chunks.length = 0;
+          if (isHttpUpgradeRequest(request.headers)) {
+            try {
+              this._upgradeTransport = startHttpUpgradeRequest(netModule, serverModule, {
+                url: this._url, method: this.method, headers: request.headers,
+                body, settings: this._settings,
+                timeout: this._timeout, globalAgent: result.globalAgent,
+                getMaxHeadersCount: () => this.maxHeadersCount,
+              }, {
+                socket: socket => { this.socket = this.connection = socket; this.emit('socket', socket); },
+                finish: () => { this.writableFinished = true; this.emit('finish'); },
+                information: response => { if (response.statusCode === 100) this.emit('continue'); this.emit('information', response); },
+                response: response => { this.res = response; this.emit('response', response); },
+                upgrade: (response, socket, head) => {
+                  this.res = response;
+                  if (!this.emit('upgrade', response, socket, head)) socket.destroy();
+                },
+                error: reason => this.destroy(reason), close: () => this._close(),
+                timeout: () => this.emit('timeout'),
+              });
+            } catch (reason) { this.destroy(reason); }
+            return this;
+          }
+          request.bodyBase64 = body.toString('base64');
           try {
             this._operation = nativeRequest(request);
             this._armTimeout();
@@ -357,6 +408,10 @@
         setTimeout(delay, callback) {
           if (!Number.isFinite(delay) || delay < 0) throw new RangeError('Invalid timeout');
           this._timeout = delay;
+          if (this._upgradeTransport) {
+            if (callback) this.once('timeout', callback);
+            this._upgradeTransport.setTimeout(delay); return this;
+          }
           if (callback) this.once('timeout', callback);
           this._armTimeout(); return this;
         }
@@ -367,7 +422,8 @@
           this.emit('close');
         }
         destroy(reason) {
-          if (this.destroyed) return this;
+          if (this.destroyed || this._upgradeTransport?.detached) return this;
+          this._upgradeTransport?.destroy();
           this.destroyed = true; this._chunks.length = 0; clearTimeout(this._timer);
           if (this._operation) nativeAbort(this._operation.id);
           if (this.res) this.res.destroy();

@@ -43,6 +43,7 @@
 #include "ui/views/widget/widget.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_electron_dialog.h"
 #include "xenon_overlay/public/mojom/xenon_service.mojom.h"
 #include "xenon_overlay/resources/webui/xenon_node/grit/xenon_node_webui_resources.h"
 #include "xenon_overlay/resources/webui/xenon_node/grit/xenon_node_webui_resources_map.h"
@@ -52,7 +53,6 @@
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>  // Must be in front of other Windows header files.
 
-#include <commdlg.h>
 
 #include "ui/display/win/screen_win.h"
 #include "ui/views/win/hwnd_util.h"
@@ -293,6 +293,7 @@ XenonNodeController::XenonNodeController(content::WebUI* web_ui,
 }
 
 XenonNodeController::~XenonNodeController() {
+  CancelElectronDialogs(dialog_owner_token_);
   weak_ptr_factory_.InvalidateWeakPtrs();
   if (player_widget_) {
     player_widget_->RemoveObserver(this);
@@ -497,91 +498,35 @@ void XenonNodeController::ControlPlayerWindow(
 }
 
 void XenonNodeController::OpenNativeFileDialog(
-    const std::string& title,
-    const std::vector<std::string>& filter_extensions,
-    bool allow_multi,
+    base::Value options,
     OpenNativeFileDialogCallback callback) {
-#if BUILDFLAG(IS_WIN)
-  HWND owner = nullptr;
-  if (web_ui()->GetWebContents()->GetTopLevelNativeWindow()) {
-    owner = views::HWNDForNativeWindow(
-        web_ui()->GetWebContents()->GetTopLevelNativeWindow());
+  if (!options.is_dict()) {
+    std::move(callback).Run(
+        {}, "ERR_INVALID_ARG_TYPE: dialog options must be an object");
+    return;
   }
-
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
+  auto* owner = views::Widget::GetWidgetForNativeWindow(
+      web_ui()->GetWebContents()->GetTopLevelNativeWindow());
+  if (!owner) {
+    std::move(callback).Run({},
+                            "ERR_ABORTED: WebUI dialog owner is unavailable");
+    return;
+  }
+  ShowElectronOpenDialog(
+      dialog_owner_token_, owner, options.GetDict(),
       base::BindOnce(
-          [](HWND owner, std::wstring dialog_title,
-             std::vector<std::string> extensions,
-             bool allow_multi) -> std::vector<std::string> {
-            std::wstring patterns;
-            for (const std::string& extension : extensions) {
-              std::wstring item = base::UTF8ToWide(extension);
-              item.erase(std::remove(item.begin(), item.end(), L'.'),
-                         item.end());
-              if (item.empty() || item.find_first_of(L"\\/:*?\"<>|") !=
-                                      std::wstring::npos) {
-                continue;
-              }
-              if (!patterns.empty()) {
-                patterns.append(L";");
-              }
-              patterns.append(L"*.").append(item);
+          [](base::WeakPtr<XenonNodeController> self, std::string owner_token,
+             OpenNativeFileDialogCallback reply, base::Value result,
+             std::string error) {
+            if (!self || self->dialog_owner_token_ != owner_token) {
+              std::move(reply).Run({},
+                                   "ERR_ABORTED: WebUI dialog owner changed");
+              return;
             }
-            if (patterns.empty()) {
-              patterns = L"*.*";
-            }
-
-            std::wstring filter = L"Media files (" + patterns + L")";
-            filter.push_back(L'\0');
-            filter.append(patterns);
-            filter.push_back(L'\0');
-            filter.append(L"All files (*.*)");
-            filter.push_back(L'\0');
-            filter.append(L"*.*");
-            filter.push_back(L'\0');
-
-            std::vector<wchar_t> buffer(32768, L'\0');
-            OPENFILENAMEW open_file = {};
-            open_file.lStructSize = sizeof(open_file);
-            open_file.hwndOwner = owner;
-            open_file.lpstrFile = buffer.data();
-            open_file.nMaxFile = static_cast<DWORD>(buffer.size());
-            open_file.lpstrTitle = dialog_title.empty()
-                                       ? L"Select media files"
-                                       : dialog_title.c_str();
-            open_file.lpstrFilter = filter.c_str();
-            open_file.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST |
-                              OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST;
-            if (allow_multi) {
-              open_file.Flags |= OFN_ALLOWMULTISELECT;
-            }
-            if (!::GetOpenFileNameW(&open_file)) {
-              return {};
-            }
-
-            std::vector<std::string> paths;
-            UNSAFE_BUFFERS({
-              const wchar_t* item = buffer.data();
-              const base::FilePath first(item);
-              item += first.value().size() + 1;
-              if (*item == L'\0') {
-                paths.push_back(first.AsUTF8Unsafe());
-              } else {
-                while (*item != L'\0') {
-                  const base::FilePath path = first.Append(item);
-                  paths.push_back(path.AsUTF8Unsafe());
-                  item += std::wcslen(item) + 1;
-                }
-              }
-            });
-            return paths;
+            std::move(reply).Run(std::move(result), error);
           },
-          owner, base::UTF8ToWide(title), filter_extensions, allow_multi),
-      std::move(callback));
-#else
-  std::move(callback).Run({});
-#endif
+          weak_ptr_factory_.GetWeakPtr(), dialog_owner_token_,
+          std::move(callback)));
 }
 
 void XenonNodeController::ScanDirectoryVideos(
@@ -876,6 +821,10 @@ void XenonNodeController::OnNodeAddonObserverDisconnected() {
 
 void XenonNodeController::BindInterface(
     mojo::PendingReceiver<xenon_node::mojom::PageHandlerFactory> receiver) {
+  if (!XenonManager::GetInstance()->CanBindLegacyElectronNodeInterface(
+          web_ui()->GetWebContents())) {
+    return;
+  }
   page_factory_receiver_.reset();
   page_factory_receiver_.Bind(std::move(receiver));
 }
@@ -883,6 +832,9 @@ void XenonNodeController::BindInterface(
 void XenonNodeController::CreatePageHandler(
     mojo::PendingRemote<xenon_node::mojom::Page> page,
     mojo::PendingReceiver<xenon_node::mojom::PageHandler> receiver) {
+  CancelElectronDialogs(dialog_owner_token_);
+  dialog_owner_token_ =
+      "webui-dialog:" + base::UnguessableToken::Create().ToString();
   page_.reset();
   page_.Bind(std::move(page));
 

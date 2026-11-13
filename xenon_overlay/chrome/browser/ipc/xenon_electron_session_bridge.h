@@ -7,13 +7,16 @@
 #include <vector>
 
 #include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/values.h"
 #include "content/public/browser/storage_partition_config.h"
 
 namespace content {
 class BrowserContext;
+class SiteInstance;
 class StoragePartition;
 }  // namespace content
+class GURL;
 
 namespace xenon::ipc {
 
@@ -30,11 +33,20 @@ struct ElectronSessionPreloadScript {
 };
 
 // All calls are Browser UI sequence only. Every Electron session, including
-// the default session, has a non-default partition owned by its container.
+// a default session, is isolated by its container partition or dedicated
+// BrowserContext. A dedicated context's default session uses its default
+// StoragePartition.
 content::StoragePartitionConfig GetElectronSessionPartitionConfig(
     content::BrowserContext* context,
     const std::string& container_id,
     const std::string& partition);
+// Selects the matching SiteInstance factory: Chromium's fixed-partition factory
+// only accepts non-default partitions.
+scoped_refptr<content::SiteInstance> CreateElectronSessionSiteInstance(
+    content::BrowserContext* context,
+    const std::string& container_id,
+    const std::string& partition,
+    const GURL& url);
 // Returns null after BrowserContext shutdown has begun; shutdown must not
 // recreate sessions or retain storage partitions that are about to be freed.
 content::StoragePartition* ResolveElectronSessionPartition(
@@ -42,6 +54,11 @@ content::StoragePartition* ResolveElectronSessionPartition(
     const std::string& container_id,
     const std::string& partition);
 std::optional<ElectronSessionIdentity> FindElectronSessionIdentity(
+    content::StoragePartition* partition);
+// Ownership provenance survives an application exit until its actual partition
+// is destroyed. Permission routing uses this to deny retired app documents
+// instead of falling back to the unrelated ordinary-browser permission store.
+std::optional<ElectronSessionIdentity> FindElectronSessionProvenance(
     content::StoragePartition* partition);
 std::vector<ElectronSessionPreloadScript> GetElectronSessionPreloadScripts(
     content::StoragePartition* partition,

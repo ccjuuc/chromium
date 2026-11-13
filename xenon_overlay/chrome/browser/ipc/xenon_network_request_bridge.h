@@ -19,9 +19,10 @@ namespace xenon::ipc {
 using NetworkRequestCallback =
     base::OnceCallback<void(xenon::ipc::mojom::IpcResultPtr)>;
 
-// Performs one HTTP(S) request for a trusted Electron-compatible renderer.
-// Electron/Node requests are not renderer fetches: routing through the
-// browser network service preserves their headers and avoids renderer CORS.
+// Performs one Node HTTP(S)/global fetch request for a trusted hosted runtime.
+// Routing through the browser network service preserves explicit headers and
+// avoids renderer CORS, but never uses its cookie jar or HTTP cache. Electron
+// net/session.fetch instead use their separate Session-aware network bridge.
 // The optional returned closure cancels the actual loader. Discarding the
 // closure leaves the request running until its response, error or timeout.
 base::OnceClosure PerformNetworkRequest(

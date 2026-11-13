@@ -5961,6 +5961,41 @@ TEST_F(RenderWidgetHostViewAuraTest, AllocateLocalSurfaceIdOnEviction) {
   EXPECT_NE(id1, id2);
 }
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+TEST_F(RenderWidgetHostViewAuraTest,
+       OrdinaryHiddenNavigationDefersSurfaceEvenWhenRendererIsVisible) {
+  InitViewForFrame(nullptr);
+  ParentHostView(view_, parent_view_);
+  view_->SetSize(gfx::Size(50, 30));
+  view_->ShowWithVisibility(PageVisibilityState::kVisible);
+  view_->Hide();
+  widget_host_->WasShown(std::nullopt);
+  ASSERT_FALSE(view_->IsShowing());
+  ASSERT_FALSE(widget_host_->IsHidden());
+  view_->DidNavigate();
+  EXPECT_FALSE(view_->GetLocalSurfaceId().is_valid());
+}
+
+TEST_F(RenderWidgetHostViewAuraTest,
+       EmbeddedHiddenNavigationRequiresExplicitSurfacePolicy) {
+  InitViewForFrame(nullptr);
+  ParentHostView(view_, parent_view_);
+  view_->SetSize(gfx::Size(50, 30));
+  view_->ShowWithVisibility(PageVisibilityState::kVisible);
+  view_->Hide();
+  widget_host_->WasShown(std::nullopt);
+  widget_host_->SetHiddenSurfaceAllocationAllowed(true);
+  ASSERT_FALSE(view_->IsShowing());
+  ASSERT_FALSE(widget_host_->IsHidden());
+  view_->DidNavigate();
+  EXPECT_TRUE(view_->GetLocalSurfaceId().is_valid());
+  // Explicitly hidden renderers still defer, even for an opted-in widget.
+  widget_host_->WasHidden();
+  view_->DidNavigate();
+  EXPECT_FALSE(view_->GetLocalSurfaceId().is_valid());
+}
+#endif
+
 // If a tab was resized while it's hidden, drop the fallback so next time it's
 // visible we show blank.
 TEST_F(RenderWidgetHostViewAuraTest, DropFallbackIfResizedWhileHidden) {

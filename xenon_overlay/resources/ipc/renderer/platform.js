@@ -261,11 +261,11 @@
       return osEndianness;
     },
     homedir() {
-      const value = globalThis.process.env[osPlatform === 'win32' ? 'USERPROFILE' : 'HOME'];
+      const value = process.env[osPlatform === 'win32' ? 'USERPROFILE' : 'HOME'];
       return value === undefined ? osQuery('homedir') : String(value);
     },
     tmpdir() {
-      const env = globalThis.process.env;
+      const env = process.env;
       const value = osPlatform === 'win32' ? env.TEMP || env.TMP :
           env.TMPDIR || env.TMP || env.TEMP;
       const directory = value ? String(value) : osQuery('tmpdir');

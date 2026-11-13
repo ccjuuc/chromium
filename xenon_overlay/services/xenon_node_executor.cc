@@ -21,6 +21,7 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/no_destructor.h"
@@ -48,6 +49,7 @@
 #include "xenon_overlay/chrome/browser/napi/js_native_api_v8.h"
 #include "xenon_overlay/chrome/browser/napi/napi_loader.h"
 #include "xenon_overlay/chrome/browser/napi/napi_switches.h"
+#include "xenon_overlay/chrome/browser/napi/native_addon_event_loop.h"
 #include "xenon_overlay/common/asar/archive.h"
 #include "xenon_overlay/public/mojom/xenon_service.mojom.h"
 
@@ -368,9 +370,91 @@ bool IsBundledAddonPath(const base::FilePath& addon_path,
 #endif
 }
 
+bool SameCanonicalPath(const base::FilePath& first,
+                       const base::FilePath& second) {
+#if BUILDFLAG(IS_WIN)
+  return base::FilePath::CompareEqualIgnoreCase(first.value(), second.value());
+#else
+  return first == second;
+#endif
+}
+
+bool IsApplicationAddonPath(const base::FilePath& addon_path,
+                            const base::FilePath& application_directory,
+                            const base::FilePath& application_archive) {
+  if (!application_directory.empty() &&
+      application_directory.IsParent(addon_path)) {
+    return true;
+  }
+  if (application_archive.empty()) {
+    return false;
+  }
+  const auto unpacked_root =
+      application_archive.AddExtension(FILE_PATH_LITERAL("unpacked"));
+  base::FilePath canonical_archive;
+  base::FilePath canonical_unpacked;
+  // The selected archive identity is pinned at configuration time. Neither
+  // its unpacked root nor the archive itself may be redirected afterwards.
+  if (!base::NormalizeFilePath(application_archive, &canonical_archive) ||
+      !SameCanonicalPath(canonical_archive, application_archive) ||
+      !base::NormalizeFilePath(unpacked_root, &canonical_unpacked) ||
+      !SameCanonicalPath(canonical_unpacked, unpacked_root)) {
+    return false;
+  }
+  base::FilePath member;
+  // FilePath component comparison is deliberately case-sensitive, including
+  // on Windows. Derive the member from the actual canonical spelling of the
+  // unpacked directory rather than the synthesized '.unpacked' suffix.
+  if (!canonical_unpacked.AppendRelativePath(addon_path, &member) ||
+      member.empty()) {
+    return false;
+  }
+  const auto archive = asar::GetOrCreateAsarArchive(application_archive);
+  asar::Archive::FileInfo info;
+  return archive && archive->GetFileInfo(member, &info) && info.unpacked;
+}
+
+bool CheckAddonDirectoryPolicy(const base::FilePath& addon_path,
+                               bool allow_external_addons,
+                               const base::FilePath& outer_bundle_path,
+                               const base::FilePath& application_directory,
+                               const base::FilePath& application_archive,
+                               std::string* error) {
+  if (allow_external_addons ||
+      IsApplicationAddonPath(addon_path, application_directory,
+                             application_archive)) {
+    return true;
+  }
+  base::FilePath executable_directory;
+  base::FilePath normalized_executable_directory;
+  if (!base::PathService::Get(base::DIR_EXE, &executable_directory) ||
+      !base::NormalizeFilePath(executable_directory,
+                               &normalized_executable_directory)) {
+    if (error) {
+      *error = "ERR_ACCESS_DENIED: Failed to resolve executable directory";
+    }
+    return false;
+  }
+  if (normalized_executable_directory.IsParent(addon_path) ||
+      IsBundledAddonPath(addon_path, outer_bundle_path)) {
+    return true;
+  }
+  if (error) {
+    *error =
+        "ERR_ACCESS_DENIED: Native addon is outside the executable directory, "
+        "trusted bundled app directory and selected application; start with "
+        "--" +
+        std::string(napi_switches::kAllowExternalNodeAddons) +
+        " to allow external development modules";
+  }
+  return false;
+}
+
 PreparedAddon PrepareAddon(const base::FilePath& requested_path,
                            bool allow_external_addons,
-                           const base::FilePath& outer_bundle_path) {
+                           const base::FilePath& outer_bundle_path,
+                           const base::FilePath& application_directory,
+                           const base::FilePath& application_archive) {
   PreparedAddon prepared;
   if (!base::FilePath::CompareEqualIgnoreCase(requested_path.Extension(),
                                               FILE_PATH_LITERAL(".node"))) {
@@ -400,29 +484,24 @@ PreparedAddon PrepareAddon(const base::FilePath& requested_path,
       return prepared;
     }
   }
+  // base::File rejects parent references before opening on every platform.
+  // Preserve that policy as an access error instead of reporting a missing
+  // module and allowing bindings loaders to suppress the rejection.
+  if (physical_path.ReferencesParent()) {
+    prepared.error =
+        "ERR_ACCESS_DENIED: Native addon path must not reference a parent "
+        "directory";
+    return prepared;
+  }
   if (!base::NormalizeFilePath(physical_path, &prepared.path)) {
     prepared.error = "Native addon does not exist or cannot be resolved";
     return prepared;
   }
 
-  if (!allow_external_addons) {
-    base::FilePath executable_directory;
-    base::FilePath normalized_executable_directory;
-    if (!base::PathService::Get(base::DIR_EXE, &executable_directory) ||
-        !base::NormalizeFilePath(executable_directory,
-                                 &normalized_executable_directory)) {
-      prepared.error = "Failed to resolve executable directory";
-      return prepared;
-    }
-    if (!normalized_executable_directory.IsParent(prepared.path) &&
-        !IsBundledAddonPath(prepared.path, outer_bundle_path)) {
-      prepared.error =
-          "Native addon is outside the executable directory and trusted "
-          "bundled app directory; start with --" +
-          std::string(napi_switches::kAllowExternalNodeAddons) +
-          " to allow external development modules";
-      return prepared;
-    }
+  if (!CheckAddonDirectoryPolicy(prepared.path, allow_external_addons,
+                                 outer_bundle_path, application_directory,
+                                 application_archive, &prepared.error)) {
+    return prepared;
   }
 
 #if BUILDFLAG(IS_WIN)
@@ -2008,8 +2087,8 @@ void NativeAddonResourceRedirect::RestoreImports() {
 XenonNodeExecutor::AddonModule::AddonModule() = default;
 XenonNodeExecutor::AddonModule::~AddonModule() {
   exports.Reset();
-  resource_redirect.reset();
   loaded_addon.reset();
+  resource_redirect.reset();
 }
 XenonNodeExecutor::AddonModule::AddonModule(AddonModule&&) = default;
 XenonNodeExecutor::AddonModule& XenonNodeExecutor::AddonModule::operator=(
@@ -2054,6 +2133,22 @@ bool XenonNodeExecutor::HasNativeCallback(int32_t client_id,
 void XenonNodeExecutor::SetRuntimeDirectory(
     const base::FilePath& runtime_directory) {
   runtime_directory_ = runtime_directory.StripTrailingSeparators();
+}
+
+void XenonNodeExecutor::SetApplicationPath(
+    const base::FilePath& application_path) {
+  application_directory_.clear();
+  application_archive_.clear();
+  base::FilePath canonical;
+  if (!application_path.IsAbsolute() ||
+      !base::NormalizeFilePath(application_path, &canonical)) {
+    return;
+  }
+  if (base::DirectoryExists(canonical)) {
+    application_directory_ = std::move(canonical);
+  } else if (canonical.MatchesExtension(FILE_PATH_LITERAL(".asar"))) {
+    application_archive_ = std::move(canonical);
+  }
 }
 
 void XenonNodeExecutor::ReleaseCallbacksForClient(int32_t client_id) {
@@ -2879,6 +2974,16 @@ void XenonNodeExecutor::OnAsyncPromiseRejected(uint64_t promise_id,
 }
 
 XenonNodeExecutor::~XenonNodeExecutor() {
+  BeginNativeShutdown();
+  CHECK(PollNativeShutdown())
+      << "Native executor must be retired before destruction";
+}
+
+void XenonNodeExecutor::BeginNativeShutdown() {
+  if (shutting_down_) {
+    return;
+  }
+  shutting_down_ = true;
   weak_factory_.InvalidateWeakPtrs();
   deferred_promise_timer_.Stop();
   uv_loop_timer_.Stop();
@@ -2889,6 +2994,81 @@ XenonNodeExecutor::~XenonNodeExecutor() {
     }
   }
   pending_promises_.clear();
+  if (addon_isolate_ && !addon_context_.IsEmpty()) {
+    AutoV8Scope scope(addon_isolate_, addon_context_);
+    for (auto& [path, module] : addon_modules_) {
+      if (module.loaded_addon && module.loaded_addon->env) {
+        module.loaded_addon->env->BeginShutdown();
+      }
+    }
+    for (auto& module : failed_addons_) {
+      if (module.loaded_addon && module.loaded_addon->env) {
+        module.loaded_addon->env->BeginShutdown();
+      }
+    }
+  }
+}
+
+bool XenonNodeExecutor::PollNativeShutdown() {
+  if (shutdown_complete_) {
+    return true;
+  }
+  CHECK(shutting_down_);
+  if (*pending_addon_loads_) {
+    return false;
+  }
+  auto poll_environments = [&] {
+    bool ready = true;
+    for (auto& [path, module] : addon_modules_) {
+      if (module.loaded_addon && module.loaded_addon->env) {
+        ready = module.loaded_addon->env->PollShutdown() && ready;
+      }
+    }
+    for (auto& module : failed_addons_) {
+      if (module.loaded_addon && module.loaded_addon->env) {
+        ready = module.loaded_addon->env->PollShutdown() && ready;
+      }
+    }
+    return ready;
+  };
+  if (addon_isolate_ && !addon_context_.IsEmpty()) {
+    AutoV8Scope scope(addon_isolate_, addon_context_);
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+    if (native_loop_ && !native_loop_draining_) {
+      // BeginShutdown is applied to the loop only once env finalizers finish.
+      auto pumped = native_loop_->Pump();
+      if (!pumped.has_value()) {
+        return false;
+      }
+    }
+#endif
+    if (!poll_environments()) {
+      return false;
+    }
+  }
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+  if (native_loop_ && !native_loop_->is_closed()) {
+    // Close callbacks may use N-API; keep the originating realm entered.
+    AutoV8Scope scope(addon_isolate_, addon_context_);
+    native_loop_draining_ = true;
+    native_loop_->BeginShutdown();
+    const auto closed = native_loop_->PollShutdown(poll_environments);
+    if (!closed.has_value() || !*closed) {
+      return false;
+    }
+  }
+#endif
+  FinalizeNativeShutdown();
+  return true;
+}
+
+std::string XenonNodeExecutor::DescribeNativeShutdown() const {
+  return "shared native executor: " + std::to_string(addon_modules_.size()) +
+         " loaded addons, " + std::to_string(failed_addons_.size()) +
+         " failed registrations";
+}
+
+void XenonNodeExecutor::FinalizeNativeShutdown() {
   if (addon_isolate_) {
     if (!addon_context_.IsEmpty()) {
       AutoV8Scope v8_scope(addon_isolate_, addon_context_);
@@ -2897,6 +3077,7 @@ XenonNodeExecutor::~XenonNodeExecutor() {
       addon_instances_.clear();
       addon_instance_ids_by_hash_.clear();
       addon_modules_.clear();
+      failed_addons_.clear();
       addon_path_aliases_.clear();
       addon_context_.Reset();
     } else {
@@ -2907,16 +3088,22 @@ XenonNodeExecutor::~XenonNodeExecutor() {
       addon_instances_.clear();
       addon_instance_ids_by_hash_.clear();
       addon_modules_.clear();
+      failed_addons_.clear();
       addon_path_aliases_.clear();
     }
     addon_isolate_ = nullptr;
   }
   addon_isolate_holder_.reset();
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+  native_loop_.reset();
+#endif
+  shutdown_complete_ = true;
 }
 
 void XenonNodeExecutor::EnsureUvLoopPolling() {
 #if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
-  if (uv_loop_timer_.IsRunning() || addon_modules_.empty()) {
+  if (shutting_down_ || uv_loop_timer_.IsRunning() ||
+      (addon_modules_.empty() && failed_addons_.empty())) {
     return;
   }
   // Keep pumping for as long as any addon is loaded. Native engines often
@@ -2930,7 +3117,7 @@ void XenonNodeExecutor::EnsureUvLoopPolling() {
 
 void XenonNodeExecutor::PumpUvLoops() {
 #if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
-  if (!addon_isolate_ || addon_modules_.empty()) {
+  if (shutting_down_ || !addon_isolate_ || !native_loop_) {
     uv_loop_timer_.Stop();
     return;
   }
@@ -2938,32 +3125,10 @@ void XenonNodeExecutor::PumpUvLoops() {
     return;
   }
 
-  struct UvLoopEntry {
-    RAW_PTR_EXCLUSION uv_loop_t* loop;
-    XenonUvRunFunction run;
-  };
-  std::vector<UvLoopEntry> loops;
-  std::set<uv_loop_t*> seen;
-  uv_loop_t* default_loop = uv_default_loop();
-  if (default_loop) {
-    seen.insert(default_loop);
-    loops.push_back({default_loop, reinterpret_cast<XenonUvRunFunction>(&uv_run)});
-  }
-  for (const auto& [path, module] : addon_modules_) {
-    if (!module.loaded_addon || !module.loaded_addon->env) {
-      continue;
-    }
-    napi_env env = module.loaded_addon->env.get();
-    if (!env->uv_loop || !env->uv_run_function ||
-        !seen.insert(env->uv_loop).second) {
-      continue;
-    }
-    loops.push_back({env->uv_loop, env->uv_run_function});
-  }
-
   AutoV8Scope v8_scope(addon_isolate_, addon_context_);
-  for (const auto& entry : loops) {
-    entry.run(entry.loop, UV_RUN_NOWAIT);
+  auto pumped = native_loop_->Pump();
+  if (!pumped.has_value()) {
+    return;
   }
   addon_isolate_->PerformMicrotaskCheckpoint();
 #if BUILDFLAG(IS_WIN)
@@ -2971,6 +3136,24 @@ void XenonNodeExecutor::PumpUvLoops() {
   PumpWin32Messages();
 #endif
 #endif
+}
+
+bool XenonNodeExecutor::EnsureNativeLoop(std::string* error) {
+  if (shutting_down_) {
+    *error = "ERR_CLOSED: Native executor is shutting down";
+    return false;
+  }
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+  if (!native_loop_) {
+    auto loop = NativeAddonEventLoop::AcquireDefault();
+    if (!loop.has_value()) {
+      *error = "ERR_RESOURCE_BUSY: " + loop.error();
+      return false;
+    }
+    native_loop_ = std::move(*loop);
+  }
+#endif
+  return true;
 }
 
 bool XenonNodeExecutor::EnsureIsolate() {
@@ -3032,16 +3215,25 @@ bool XenonNodeExecutor::LoadAddonFromCurrentThread(const std::string& path,
     }
     return false;
   }
-  if (HasModule(path)) {
-    return true;
+  std::string loop_error;
+  if (!EnsureNativeLoop(&loop_error)) {
+    if (error) {
+      *error = loop_error;
+    }
+    return false;
   }
-
   const bool allow_external_addons =
       base::CommandLine::ForCurrentProcess()->HasSwitch(
           napi_switches::kAllowExternalNodeAddons);
+  if (HasModule(path)) {
+    return CheckAddonDirectoryPolicy(
+        GetModuleCacheKey(path), allow_external_addons, outer_bundle_path_,
+        application_directory_, application_archive_, error);
+  }
   const base::FilePath requested_path = ResolveAddonPath(path);
   PreparedAddon prepared =
-      PrepareAddon(requested_path, allow_external_addons, outer_bundle_path_);
+      PrepareAddon(requested_path, allow_external_addons, outer_bundle_path_,
+                   application_directory_, application_archive_);
   if (!prepared.error.empty()) {
     if (error) {
       *error = prepared.error;
@@ -3066,6 +3258,13 @@ bool XenonNodeExecutor::LoadAddonFromCurrentThread(const std::string& path,
   if (exports_value.IsEmpty() || !exports_value->IsObject()) {
     if (error) {
       *error = "Failed to initialize addon in utility";
+    }
+    if (loaded_addon->env) {
+      AddonModule failed;
+      failed.loaded_addon = std::move(loaded_addon);
+      failed.resource_redirect = std::move(resource_redirect);
+      failed_addons_.push_back(std::move(failed));
+      EnsureUvLoopPolling();
     }
     return false;
   }
@@ -3315,12 +3514,28 @@ void XenonNodeExecutor::LoadAddon(const std::string& path,
                                   bool include_export_tree) {
   if (!EnsureIsolate()) {
     LOG(ERROR) << "[XenonNodeExecutor] Failed to create V8 isolate";
-    std::move(callback).Run(false, "Failed to create V8 isolate in utility", {});
+    std::move(callback).Run(false, "Failed to create V8 isolate in utility",
+                            {});
+    return;
+  }
+  std::string loop_error;
+  if (!EnsureNativeLoop(&loop_error)) {
+    std::move(callback).Run(false, loop_error, {});
     return;
   }
 
+  const bool allow_external_addons =
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
+          napi_switches::kAllowExternalNodeAddons);
   if (AddonModule* cached_addon = FindModule(path);
       cached_addon && !cached_addon->exports.IsEmpty()) {
+    std::string error;
+    if (!CheckAddonDirectoryPolicy(
+            GetModuleCacheKey(path), allow_external_addons, outer_bundle_path_,
+            application_directory_, application_archive_, &error)) {
+      std::move(callback).Run(false, error, {});
+      return;
+    }
     std::move(callback).Run(true, "",
                             include_export_tree
                                 ? GetCachedExportTree(cached_addon)
@@ -3328,24 +3543,41 @@ void XenonNodeExecutor::LoadAddon(const std::string& path,
     return;
   }
 
-  const bool allow_external_addons =
-      base::CommandLine::ForCurrentProcess()->HasSwitch(
-          napi_switches::kAllowExternalNodeAddons);
   const base::FilePath addon_path = ResolveAddonPath(path);
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+  ++*pending_addon_loads_;
+  const bool posted = base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE,
+      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
+       base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
       base::BindOnce(&PrepareAddon, addon_path, allow_external_addons,
-                     outer_bundle_path_),
+                     outer_bundle_path_, application_directory_,
+                     application_archive_),
       base::BindOnce(
-          [](base::WeakPtr<XenonNodeExecutor> self, base::FilePath addon_path,
+          [](std::shared_ptr<size_t> pending_loads,
+             base::WeakPtr<XenonNodeExecutor> self, base::FilePath addon_path,
              bool include_export_tree, LoadAddonCallback callback,
              PreparedAddon prepared) {
+            base::ScopedClosureRunner completed(base::BindOnce(
+                [](std::shared_ptr<size_t> pending) { --*pending; },
+                pending_loads));
             if (!self) {
               std::move(callback).Run(
                   false, "Node executor was destroyed during load", {});
               return;
             }
             if (!prepared.error.empty()) {
+              std::move(callback).Run(false, prepared.error, {});
+              return;
+            }
+            // Browser-side initialization may replace the selected app while
+            // preparation is queued on the blocking worker. Do not expose a
+            // cached module or initialize exports under the stale scope.
+            if (!CheckAddonDirectoryPolicy(
+                    prepared.path,
+                    base::CommandLine::ForCurrentProcess()->HasSwitch(
+                        napi_switches::kAllowExternalNodeAddons),
+                    self->outer_bundle_path_, self->application_directory_,
+                    self->application_archive_, &prepared.error)) {
               std::move(callback).Run(false, prepared.error, {});
               return;
             }
@@ -3374,6 +3606,13 @@ void XenonNodeExecutor::LoadAddon(const std::string& path,
             if (exports_value.IsEmpty() || !exports_value->IsObject()) {
               LOG(ERROR)
                   << "[XenonNodeExecutor] InitializeLoadedNodeAddon failed";
+              if (loaded_addon->env) {
+                AddonModule failed;
+                failed.loaded_addon = std::move(loaded_addon);
+                failed.resource_redirect = std::move(resource_redirect);
+                self->failed_addons_.push_back(std::move(failed));
+                self->EnsureUvLoopPolling();
+              }
               std::move(callback).Run(
                   false, "Failed to initialize addon in utility", {});
               return;
@@ -3404,8 +3643,11 @@ void XenonNodeExecutor::LoadAddon(const std::string& path,
                     ? self->GetCachedExportTree(&entry.first->second)
                     : std::vector<mojom::NodeExportInfoPtr>());
           },
-          weak_factory_.GetWeakPtr(), addon_path, include_export_tree,
-          std::move(callback)));
+          pending_addon_loads_, weak_factory_.GetWeakPtr(), addon_path,
+          include_export_tree, std::move(callback)));
+  if (!posted) {
+    --*pending_addon_loads_;
+  }
 }
 
 void XenonNodeExecutor::InspectExport(const std::string& module_path,

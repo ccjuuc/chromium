@@ -86,6 +86,11 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/buildflags.h"
 #include "extensions/buildflags/buildflags.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_permission_delegate.h"
+#endif
 #include "media/capabilities/in_memory_video_decode_stats_db_impl.h"
 #include "media/mojo/services/video_decode_perf_history.h"
 #include "net/http/transport_security_state.h"
@@ -475,7 +480,18 @@ OffTheRecordProfileImpl::GetSSLHostStateDelegate() {
 // instead of repeating them inside all Profile implementations.
 content::PermissionControllerDelegate*
 OffTheRecordProfileImpl::GetPermissionControllerDelegate() {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  return xenon::ipc::GetElectronPermissionControllerDelegate(
+      this, base::BindRepeating(
+                [](Profile* profile) -> content::PermissionControllerDelegate* {
+                  return profile->ShutdownStarted()
+                             ? nullptr
+                             : PermissionManagerFactory::GetForProfile(profile);
+                },
+                base::Unretained(this)));
+#else
   return PermissionManagerFactory::GetForProfile(this);
+#endif
 }
 
 content::ClientHintsControllerDelegate*

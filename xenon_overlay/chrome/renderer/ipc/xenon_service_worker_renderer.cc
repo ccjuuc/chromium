@@ -14,11 +14,15 @@
 #include "gin/converter.h"
 #include "gin/function_template.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
+#include "third_party/blink/public/common/messaging/transferable_message.h"
 #include "third_party/blink/public/web/modules/service_worker/web_service_worker_context_proxy.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "v8/include/v8.h"
 #include "xenon_overlay/chrome/renderer/ipc/xenon_context_bridge.h"
+#include "xenon_overlay/chrome/renderer/ipc/xenon_process_sandbox.h"
 #include "xenon_overlay/common/ipc/xenon_ipc_value_codec.h"
+#include "xenon_overlay/common/ipc/xenon_crypto_primitives.h"
+#include "xenon_overlay/common/ipc/xenon_x509_certificate.h"
 #include "xenon_overlay/resources/grit/xenon_resources.h"
 
 namespace xenon::ipc {
@@ -183,6 +187,12 @@ bool XenonServiceWorkerRenderer::Initialize(
   v8::MicrotasksScope microtasks(isolate_, main->GetMicrotaskQueue(),
                                  v8::MicrotasksScope::kDoNotRunMicrotasks);
   auto native = v8::Object::New(isolate_);
+  native
+      ->CreateDataProperty(
+          preload, gin::StringToV8(isolate_, "sandboxed"),
+          v8::Boolean::New(
+              isolate_, HasActiveProcessSandbox()))
+      .Check();
   auto method = [&](const char* name, auto function) {
     native
         ->CreateDataProperty(preload, gin::StringToV8(isolate_, name),
@@ -191,6 +201,10 @@ bool XenonServiceWorkerRenderer::Initialize(
   };
   method("send", &XenonServiceWorkerRenderer::Send);
   method("invoke", &XenonServiceWorkerRenderer::Invoke);
+  method("registerIpcRenderer",
+         &XenonServiceWorkerRenderer::RegisterIpcRenderer);
+  InstallTimingSafeEqual(isolate_, preload, native, "timingSafeEqual");
+  InstallX509CertificateBridge(isolate_, preload, native, "x509CertificateCall");
   method("setDispatchHandler", &XenonServiceWorkerRenderer::SetDispatchHandler);
   bridge_ = XenonContextBridge::Create(preload, main);
   native
@@ -479,6 +493,17 @@ void XenonServiceWorkerRenderer::OnInvoke(uint64_t id,
   resolver->Resolve(context, value).Check();
 }
 
+void XenonServiceWorkerRenderer::RegisterIpcRenderer(gin::Arguments* args) {
+  v8::Local<v8::Object> ipc_renderer;
+  if (!args->GetNext(&ipc_renderer)) {
+    args->ThrowTypeError("registerIpcRenderer expects an object");
+    return;
+  }
+  if (bridge_) {
+    bridge_->SetIpcRenderer(ipc_renderer);
+  }
+}
+
 void XenonServiceWorkerRenderer::SetDispatchHandler(gin::Arguments* args) {
   v8::Local<v8::Function> callback;
   if (!args->GetNext(&callback)) {
@@ -513,6 +538,15 @@ void XenonServiceWorkerRenderer::Dispatch(const std::string& channel,
     LOG(ERROR) << "Service worker IPC handler failed: "
                << ExceptionText(isolate_, caught);
   }
+}
+
+void XenonServiceWorkerRenderer::DispatchPostMessage(
+    const std::string& channel,
+    blink::TransferableMessage message) {
+  // Worker preload contexts do not own Blink DOM wrappers. The Browser must
+  // reject this route before transferring ports; drop any unexpected handles
+  // instead of exposing invalid MessagePort objects to the preload context.
+  LOG(ERROR) << "MessagePort IPC is unavailable in service worker preloads";
 }
 
 }  // namespace xenon::ipc

@@ -1065,17 +1065,14 @@ const appModule = Object.assign(new SimpleEventEmitter(), {
 
 const dialogModule = {
   showOpenDialog: async (optsOrWin?: unknown, maybeOpts?: unknown) => {
-    const options = ((maybeOpts || optsOrWin || {}) as {
-      title?: string;
-      properties?: string[];
-      filters?: Array<{name: string; extensions: string[]}>;
-    });
-    const title = options.title || '选择文件';
-    const multi = (options.properties || []).includes('multiSelections');
-    const paths = await openNativeFileDialog(title, [], multi);
-    return { canceled: !paths || paths.length === 0, filePaths: paths || [] };
+    const options = (maybeOpts ?? optsOrWin ?? {}) as Record<string, unknown>;
+    const paths = await openNativeFileDialog(options);
+    return {canceled: paths.length === 0, filePaths: paths};
   },
-  showOpenDialogSync: (_optsOrWin?: unknown, _maybeOpts?: unknown) => [] as string[],
+  showOpenDialogSync: (_optsOrWin?: unknown, _maybeOpts?: unknown) => {
+    throw Object.assign(new Error('Synchronous renderer dialogs are unavailable'),
+                        {code: 'ERR_NOT_SUPPORTED'});
+  },
   showSaveDialog: async (optsOrWin?: unknown, maybeOpts?: unknown) => {
     const options = ((maybeOpts || optsOrWin || {}) as { title?: string; defaultPath?: string });
     return { canceled: false, filePath: options.defaultPath || 'video.mp4' };

@@ -15,6 +15,7 @@
 #include "base/files/file_path.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
+#include "base/unguessable_token.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/webui_config.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -69,11 +70,8 @@ class XenonNodeController : public ui::MojoWebUIController,
   void ControlPlayerWindow(const std::string& action,
                            bool flag,
                            ControlPlayerWindowCallback callback) override;
-  void OpenNativeFileDialog(
-      const std::string& title,
-      const std::vector<std::string>& filter_extensions,
-      bool allow_multi,
-      OpenNativeFileDialogCallback callback) override;
+  void OpenNativeFileDialog(base::Value options,
+                            OpenNativeFileDialogCallback callback) override;
   void ScanDirectoryVideos(const std::string& dir_path,
                            ScanDirectoryVideosCallback callback) override;
   void RequireNodeModule(const std::string& path) override;
@@ -189,6 +187,8 @@ class XenonNodeController : public ui::MojoWebUIController,
   mojo::Receiver<xenon_node::mojom::PageHandler> page_handler_receiver_{this};
   mojo::Remote<xenon_node::mojom::Page> page_;
   mojo::Receiver<mojom::NodeAddonObserver> node_addon_observer_receiver_{this};
+  std::string dialog_owner_token_ =
+      "webui-dialog:" + base::UnguessableToken::Create().ToString();
   const int32_t client_id_;
   const std::string node_context_id_;
   uint64_t service_generation_ = 0;

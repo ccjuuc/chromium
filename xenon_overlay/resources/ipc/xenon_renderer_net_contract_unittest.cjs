@@ -343,6 +343,7 @@ test('socket inactivity timeout resets on connect/read/write and can be disabled
   deliver('data', {toId: socketId, wire: {t: 's', d: 'read'}});
   advance(90);
   socket.write('write');
+  deliver('written', {toId: socketId, writeId: sent.at(-1).value.writeId});
   advance(99);
   assert.equal(timeouts, 0);
   advance(1);
@@ -352,6 +353,7 @@ test('socket inactivity timeout resets on connect/read/write and can be disabled
   advance(200);
   assert.equal(timeouts, 1);
   socket.write('rearm');
+  deliver('written', {toId: socketId, writeId: sent.at(-1).value.writeId});
   advance(100);
   assert.equal(timeouts, 2);
   assert.equal(callbacks, 1);

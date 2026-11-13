@@ -20,7 +20,8 @@
 
 namespace blink {
 class WebServiceWorkerContextProxy;
-}
+struct TransferableMessage;
+}  // namespace blink
 
 namespace xenon::ipc {
 
@@ -55,8 +56,11 @@ class XenonServiceWorkerRenderer final
                      std::string* channel,
                      base::Value* arguments);
   void OnInvoke(uint64_t id, mojom::IpcResultPtr result);
+  void RegisterIpcRenderer(gin::Arguments* args);
   void SetDispatchHandler(gin::Arguments* args);
   void Dispatch(const std::string& channel, base::Value arguments) override;
+  void DispatchPostMessage(const std::string& channel,
+                           blink::TransferableMessage message) override;
   void ThrowError(const std::string& message);
   v8::Local<v8::Function> BindFunction(auto method, auto... bound_args);
 

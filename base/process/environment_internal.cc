@@ -82,6 +82,17 @@ void SetEnvironment(base::span<char*> env) {
 UNSAFE_BUFFER_USAGE base::HeapArray<char*> AlterEnvironment(
     const base::span<const char* const> env,
     const EnvironmentMap& changes) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // SAFETY: This overload has the same caller-guaranteed NUL termination
+  // precondition as the implementation it forwards to.
+  return UNSAFE_BUFFERS(AlterEnvironment(env, changes, false));
+}
+
+UNSAFE_BUFFER_USAGE base::HeapArray<char*> AlterEnvironment(
+    const base::span<const char* const> env,
+    const EnvironmentMap& changes,
+    bool preserve_empty_values) {
+#endif
   std::string value_storage;  // Holds concatenated null-terminated strings.
   std::vector<size_t> result_indices;  // Line indices into value_storage.
 
@@ -104,7 +115,11 @@ UNSAFE_BUFFER_USAGE base::HeapArray<char*> AlterEnvironment(
 
   // Now append all modified and new values.
   for (const auto& i : changes) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    if (preserve_empty_values || !i.second.empty()) {
+#else
     if (!i.second.empty()) {
+#endif
       result_indices.push_back(value_storage.size());
       value_storage.append(i.first);
       value_storage.push_back('=');
@@ -170,6 +185,14 @@ base::HeapArray<wchar_t> GetEnvironment() {
 
 NativeEnvironmentString AlterEnvironment(base::span<const wchar_t> env,
                                          const EnvironmentMap& changes) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  return AlterEnvironment(env, changes, false);
+}
+
+NativeEnvironmentString AlterEnvironment(base::span<const wchar_t> env,
+                                         const EnvironmentMap& changes,
+                                         bool preserve_empty_values) {
+#endif
   NativeEnvironmentString result;
 
   // First build up all of the unchanged environment strings.
@@ -197,7 +220,11 @@ NativeEnvironmentString AlterEnvironment(base::span<const wchar_t> env,
     // Windows environment blocks cannot handle keys or values with NULs.
     CHECK_EQ(std::wstring::npos, i.first.find(L'\0'));
     CHECK_EQ(std::wstring::npos, i.second.find(L'\0'));
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    if (preserve_empty_values || !i.second.empty()) {
+#else
     if (!i.second.empty()) {
+#endif
       result += i.first;
       result.push_back(L'=');
       result += i.second;

@@ -4,6 +4,8 @@
 
 #include "xenon_overlay/chrome/browser/ipc/xenon_file_system_bridge.h"
 
+#include <sys/stat.h>
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -26,11 +28,39 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_file_stats.h"
 #include "xenon_overlay/common/asar/archive.h"
 #include "xenon_overlay/common/asar/test_support.h"
 
+#if BUILDFLAG(IS_WIN)
+#include <io.h>
+#elif BUILDFLAG(IS_POSIX)
+#include <unistd.h>
+#endif
+
 namespace xenon::ipc {
 namespace {
+
+TEST(XenonFileSystemStatTest, BigIntSerializationPreservesIntegersAndNanoseconds) {
+  uv_stat_t stat = {};
+  stat.st_ino = UINT64_C(9007199254740993);
+  stat.st_size = UINT64_C(18446744073709551615);
+  stat.st_mtim = {1794455573, 756347601};
+  stat.st_atim = {-1, 999499999};
+  stat.st_ctim = {-2, 0};
+  const auto exact = FileSystemStatValue(stat, true);
+  ASSERT_TRUE(exact.FindString("ino"));
+  EXPECT_EQ("9007199254740993", *exact.FindString("ino"));
+  EXPECT_EQ("18446744073709551615", *exact.FindString("size"));
+  EXPECT_EQ("1794455573756347601", *exact.FindString("mtimeNs"));
+  EXPECT_EQ("-500001", *exact.FindString("atimeNs"));
+  EXPECT_EQ("-2000000000", *exact.FindString("ctimeNs"));
+  EXPECT_EQ("0", *exact.FindString("birthtimeNs"));
+  EXPECT_FALSE(exact.Find("mtimeMs"));
+  const auto number = FileSystemStatValue(stat, false);
+  EXPECT_TRUE(number.FindDouble("ino"));
+  EXPECT_FALSE(number.Find("mtimeNs"));
+}
 
 constexpr double kMaxSafeInteger = 9007199254740991.0;
 constexpr size_t kLargeFileSize = 16 * 1024 * 1024;
@@ -58,6 +88,22 @@ class XenonFileSystemRangeTest : public testing::Test {
     options.Set("operation", "read_file");
     options.Set("path", path.AsUTF8Unsafe());
     options.Set("returnBytes", return_bytes);
+    return PerformFileSystemCall(
+        base::Value(base::ListValue().Append(std::move(options))));
+  }
+
+  mojom::IpcResultPtr Access(const base::FilePath& path,
+                             base::DictValue options = {}) {
+    options.Set("operation", "access");
+    options.Set("path", path.AsUTF8Unsafe());
+    return PerformFileSystemCall(
+        base::Value(base::ListValue().Append(std::move(options))));
+  }
+
+  mojom::IpcResultPtr Chmod(const base::FilePath& path,
+                           base::DictValue options = {}) {
+    options.Set("operation", "chmod");
+    options.Set("path", path.AsUTF8Unsafe());
     return PerformFileSystemCall(
         base::Value(base::ListValue().Append(std::move(options))));
   }
@@ -117,6 +163,284 @@ class XenonFileSystemRangeTest : public testing::Test {
   base::ScopedTempDir temp_dir_;
   base::FilePath archive_path_;
 };
+
+TEST_F(XenonFileSystemRangeTest, BigIntPathStatsPreserveNativeMetadata) {
+  const auto path = temp_dir_.GetPath().AppendASCII("precise.txt");
+  ASSERT_TRUE(base::WriteFile(path, "metadata"));
+  uv_fs_t native = {};
+  ASSERT_EQ(0, uv_fs_stat(nullptr, &native, path.AsUTF8Unsafe().c_str(), nullptr));
+  const auto expected = FileSystemStatValue(native.statbuf, true);
+  uv_fs_req_cleanup(&native);
+  for (const char* operation : {"stat", "lstat"}) {
+    auto result = PerformFileSystemCall(base::Value(base::ListValue().Append(
+        base::DictValue().Set("operation", operation)
+            .Set("path", path.AsUTF8Unsafe()).Set("bigint", true))));
+    ASSERT_TRUE(result->success) << result->error;
+    EXPECT_EQ(expected, result->value.GetDict());
+  }
+#if BUILDFLAG(IS_POSIX)
+  const auto link = temp_dir_.GetPath().AppendASCII("link");
+  ASSERT_TRUE(base::CreateSymbolicLink(path, link));
+  auto result = PerformFileSystemCall(base::Value(base::ListValue().Append(
+      base::DictValue().Set("operation", "lstat")
+          .Set("path", link.AsUTF8Unsafe()).Set("bigint", true))));
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_EQ(true, result->value.GetDict().FindBool("isSymbolicLink"));
+#endif
+}
+
+TEST_F(XenonFileSystemRangeTest, BigIntAsarStatsPreserveKnownVirtualMetadata) {
+  CreateArchive("packed-data", "unpacked-data");
+  for (const char* operation : {"stat", "lstat"}) {
+    auto result = PerformFileSystemCall(base::Value(base::ListValue().Append(
+        base::DictValue().Set("operation", operation)
+            .Set("path", archive_path_.AppendASCII("packed.bin").AsUTF8Unsafe())
+            .Set("bigint", true))));
+    ASSERT_TRUE(result->success) << result->error;
+    const auto& stat = result->value.GetDict();
+    ASSERT_TRUE(stat.FindString("size"));
+    EXPECT_EQ("11", *stat.FindString("size"));
+    EXPECT_EQ("0", *stat.FindString("mtimeNs"));
+    EXPECT_EQ("0", *stat.FindString("birthtimeNs"));
+    EXPECT_EQ(true, stat.FindBool("isFile"));
+    EXPECT_FALSE(stat.Find("ino"));
+    EXPECT_FALSE(stat.Find("mode"));
+  }
+  auto raw = PerformFileSystemCall(base::Value(base::ListValue().Append(
+      base::DictValue().Set("operation", "stat")
+          .Set("path", archive_path_.AsUTF8Unsafe())
+          .Set("bigint", true).Set("noAsar", true))));
+  ASSERT_TRUE(raw->success) << raw->error;
+  EXPECT_EQ(true, raw->value.GetDict().FindBool("isFile"));
+  EXPECT_TRUE(raw->value.GetDict().FindString("ino"));
+  EXPECT_TRUE(raw->value.GetDict().FindString("birthtimeNs"));
+}
+
+TEST_F(XenonFileSystemRangeTest,
+       AccessChecksRealFilesAndDoesNotCreateMissingFiles) {
+  const auto file = temp_dir_.GetPath().AppendASCII("access.txt");
+  ASSERT_TRUE(base::WriteFile(file, "unchanged"));
+  for (int mode : {0, 2, 4, 6}) {
+    const auto result = Access(file, base::DictValue().Set("mode", mode));
+    EXPECT_TRUE(result->success) << result->error;
+    EXPECT_TRUE(result->value.is_none());
+  }
+  EXPECT_TRUE(
+      Access(temp_dir_.GetPath(), base::DictValue().Set("mode", 7))->success);
+  const auto missing = temp_dir_.GetPath().AppendASCII("missing");
+  const auto error = Access(missing, base::DictValue().Set("mode", 2));
+  ASSERT_FALSE(error->success);
+  EXPECT_TRUE(error->error.starts_with("ENOENT:"));
+  EXPECT_FALSE(base::PathExists(missing));
+  std::string unchanged;
+  ASSERT_TRUE(base::ReadFileToString(file, &unchanged));
+  EXPECT_EQ("unchanged", unchanged);
+}
+
+TEST_F(XenonFileSystemRangeTest,
+       AccessRejectsMalformedRequestsBeforeFileLookup) {
+  const auto missing = temp_dir_.GetPath().AppendASCII("missing");
+  for (const auto& invalid :
+       {base::Value(-1), base::Value(8), base::Value(1.5), base::Value("2"),
+        base::Value(true), base::Value()}) {
+    const auto result =
+        Access(missing, base::DictValue().Set("mode", invalid.Clone()));
+    ASSERT_FALSE(result->success);
+    EXPECT_TRUE(result->error.starts_with("EINVAL:"));
+  }
+  auto arguments = base::DictValue()
+                       .Set("operation", "access")
+                       .Set("path", std::string("present\0truncated", 17))
+                       .Set("mode", 0);
+  const auto nul = PerformFileSystemCall(
+      base::Value(base::ListValue().Append(std::move(arguments))));
+  EXPECT_FALSE(nul->success);
+  EXPECT_TRUE(nul->error.starts_with("EINVAL:"));
+}
+
+TEST_F(XenonFileSystemRangeTest,
+       AccessPreservesAsarAndPhysicalFilesystemViews) {
+  ASSERT_NO_FATAL_FAILURE(CreateArchive("packed", "unpacked"));
+  const auto packed = archive_path_.AppendASCII("packed.bin");
+  const auto unpacked = archive_path_.AppendASCII("unpacked.bin");
+  for (int mode : {0, 1, 4, 5}) {
+    EXPECT_TRUE(Access(packed, base::DictValue().Set("mode", mode))->success);
+  }
+  for (int mode : {2, 3, 6, 7}) {
+    const auto result = Access(packed, base::DictValue().Set("mode", mode));
+    EXPECT_FALSE(result->success);
+    EXPECT_TRUE(result->error.starts_with("EACCES:"));
+  }
+  EXPECT_TRUE(Access(unpacked, base::DictValue().Set("mode", 6))->success);
+  EXPECT_FALSE(
+      Access(archive_path_, base::DictValue().Set("mode", 2))->success);
+  EXPECT_TRUE(Access(archive_path_,
+                     base::DictValue().Set("mode", 2).Set("noAsar", true))
+                  ->success);
+  const auto physical =
+      archive_path_.AddExtension(FILE_PATH_LITERAL("unpacked"))
+          .AppendASCII("unpacked.bin");
+  ASSERT_TRUE(base::DeleteFile(physical));
+  const auto missing = Access(unpacked);
+  EXPECT_FALSE(missing->success);
+  EXPECT_TRUE(missing->error.starts_with("ENOENT:"));
+}
+
+TEST_F(XenonFileSystemRangeTest,
+       AccessChecksReadOnlyFileAndUnpackedPermissions) {
+#if BUILDFLAG(IS_POSIX)
+  if (geteuid() == 0) {
+    GTEST_SKIP() << "Root bypasses ordinary write permission bits";
+  }
+#endif
+  ASSERT_NO_FATAL_FAILURE(CreateArchive("packed", "unpacked"));
+  const auto physical =
+      archive_path_.AddExtension(FILE_PATH_LITERAL("unpacked"))
+          .AppendASCII("unpacked.bin");
+#if BUILDFLAG(IS_WIN)
+  ASSERT_EQ(0, _wchmod(physical.value().c_str(), _S_IREAD));
+#elif BUILDFLAG(IS_POSIX)
+  ASSERT_TRUE(base::SetPosixFilePermissions(physical, 0400));
+#else
+  GTEST_SKIP() << "No test fixture for read-only permissions on this platform";
+#endif
+  for (const auto& path :
+       {physical, archive_path_.AppendASCII("unpacked.bin")}) {
+    const auto read = Access(path, base::DictValue().Set("mode", 4));
+    EXPECT_TRUE(read->success) << read->error;
+    const auto write = Access(path, base::DictValue().Set("mode", 2));
+    EXPECT_FALSE(write->success);
+    EXPECT_TRUE(write->error.starts_with("EACCES:") ||
+                write->error.starts_with("EPERM:"))
+        << write->error;
+  }
+#if BUILDFLAG(IS_WIN)
+  EXPECT_EQ(0, _wchmod(physical.value().c_str(), _S_IREAD | _S_IWRITE));
+#elif BUILDFLAG(IS_POSIX)
+  EXPECT_TRUE(base::SetPosixFilePermissions(physical, 0600));
+#endif
+}
+
+TEST_F(XenonFileSystemRangeTest, ChmodChangesRealPermissionsAndPreservesBytes) {
+  const auto file = temp_dir_.GetPath().AppendASCII("permissions.txt");
+  ASSERT_TRUE(base::WriteFile(file, "unchanged permissions fixture"));
+  for (const int mode : {0400, 0600}) {
+    const auto result = Chmod(file, base::DictValue().Set("mode", mode));
+    EXPECT_TRUE(result->success) << result->error;
+    EXPECT_TRUE(result->value.is_none());
+#if BUILDFLAG(IS_WIN)
+    // Windows chmod changes read-only, not Unix group/other permission bits.
+    const auto writable = Access(file, base::DictValue().Set("mode", 2));
+    EXPECT_EQ((mode & 0200) != 0, writable->success);
+#elif BUILDFLAG(IS_POSIX)
+    int actual = 0;
+    EXPECT_TRUE(base::GetPosixFilePermissions(file, &actual));
+    EXPECT_EQ(mode, actual);
+#endif
+  }
+  std::string contents;
+  EXPECT_TRUE(base::ReadFileToString(file, &contents));
+  EXPECT_EQ("unchanged permissions fixture", contents);
+  EXPECT_TRUE(Chmod(temp_dir_.GetPath(), base::DictValue().Set("mode", 0700))
+                  ->success);
+  const auto missing = Chmod(temp_dir_.GetPath().AppendASCII("missing"),
+                              base::DictValue().Set("mode", 0600));
+  EXPECT_FALSE(missing->success);
+  EXPECT_TRUE(missing->error.starts_with("ENOENT:"));
+  EXPECT_NE(std::string::npos, missing->error.find(", chmod '"));
+}
+
+TEST_F(XenonFileSystemRangeTest, ChmodRejectsInvalidRequestsWithoutMutation) {
+  const auto file = temp_dir_.GetPath().AppendASCII("permissions.txt");
+  ASSERT_TRUE(base::WriteFile(file, "unchanged"));
+  for (const auto& mode : {base::Value(), base::Value(-1), base::Value(0.5),
+                           base::Value(true), base::Value("644"),
+                           base::Value(4294967296.0)}) {
+    const auto result = Chmod(file, base::DictValue().Set("mode", mode.Clone()));
+    EXPECT_FALSE(result->success);
+    EXPECT_TRUE(result->error.starts_with("EINVAL:"));
+  }
+  EXPECT_FALSE(Chmod(file)->success);
+  const auto nul = PerformFileSystemCall(base::Value(base::ListValue().Append(
+      base::DictValue()
+          .Set("operation", "chmod")
+          .Set("path", file.AsUTF8Unsafe() + std::string("\0suffix", 7))
+          .Set("mode", 0400))));
+  EXPECT_FALSE(nul->success);
+  EXPECT_TRUE(nul->error.starts_with("EINVAL:"));
+  EXPECT_TRUE(Access(file, base::DictValue().Set("mode", 2))->success);
+  // Numeric transport can carry unsigned modes beyond signed-int range.
+  EXPECT_TRUE(Chmod(file, base::DictValue().Set("mode", 4294967295.0))->success);
+  EXPECT_TRUE(Chmod(file, base::DictValue().Set("mode", 0600))->success);
+}
+
+TEST_F(XenonFileSystemRangeTest, ChmodPreservesAsarReadOnlyAndOriginalFsViews) {
+  ASSERT_NO_FATAL_FAILURE(CreateArchive("packed bytes", "unpacked bytes"));
+  for (const auto& file : {archive_path_,
+                            archive_path_.AppendASCII("packed.bin"),
+                            archive_path_.AppendASCII("unpacked.bin")}) {
+    const auto result = Chmod(file, base::DictValue().Set("mode", 0400));
+    EXPECT_FALSE(result->success);
+    EXPECT_TRUE(result->error.starts_with("EACCES:"));
+  }
+  EXPECT_TRUE(Chmod(archive_path_, base::DictValue()
+                                      .Set("mode", 0400)
+                                      .Set("noAsar", true))
+                  ->success);
+  EXPECT_TRUE(Chmod(archive_path_, base::DictValue()
+                                      .Set("mode", 0600)
+                                      .Set("noAsar", true))
+                  ->success);
+  ExpectBytes(archive_path_.AppendASCII("packed.bin"), {}, "packed bytes");
+}
+
+#if BUILDFLAG(IS_POSIX)
+TEST_F(XenonFileSystemRangeTest, ChmodFollowsRealSymbolicLinks) {
+  const auto target = temp_dir_.GetPath().AppendASCII("target");
+  const auto link = temp_dir_.GetPath().AppendASCII("link");
+  ASSERT_TRUE(base::WriteFile(target, "target bytes"));
+  ASSERT_TRUE(base::CreateSymbolicLink(target, link));
+  EXPECT_TRUE(Chmod(link, base::DictValue().Set("mode", 0400))->success);
+  int actual = 0;
+  EXPECT_TRUE(base::GetPosixFilePermissions(target, &actual));
+  EXPECT_EQ(0400, actual);
+  EXPECT_TRUE(Chmod(link, base::DictValue().Set("mode", 0600))->success);
+}
+#endif
+
+TEST_F(XenonFileSystemRangeTest,
+       OriginalFsReadsPhysicalArchiveWithoutChangingFs) {
+  CreateArchive("logical entry", "unpacked content");
+  std::string physical;
+  ASSERT_TRUE(base::ReadFileToString(archive_path_, &physical));
+  ExpectBytes(archive_path_, base::DictValue().Set("noAsar", true), physical);
+  ExpectBytes(
+      archive_path_,
+      base::DictValue().Set("noAsar", true).Set("start", 0).Set("end", 7),
+      physical.substr(0, 8));
+  auto virtual_root = Read(archive_path_);
+  EXPECT_FALSE(virtual_root->success);
+  EXPECT_TRUE(virtual_root->error.starts_with("EISDIR:"));
+  const auto member = archive_path_.AppendASCII("packed.bin");
+  auto raw_member = Read(member, base::DictValue().Set("noAsar", true));
+  EXPECT_FALSE(raw_member->success);
+  ExpectBytes(member, {}, "logical entry");
+  auto malformed = Read(archive_path_, base::DictValue().Set("noAsar", "true"));
+  EXPECT_FALSE(malformed->success);
+  EXPECT_TRUE(malformed->error.starts_with("EINVAL:"));
+}
+
+TEST_F(XenonFileSystemRangeTest, OriginalFsReadsEncryptedBytesWithoutAKey) {
+  asar::TestArchiveBuilder builder;
+  const auto archive = temp_dir_.GetPath().AppendASCII("encrypted.asar");
+  ASSERT_TRUE(
+      builder.Write(archive, {{"private.bin", "encrypted bytes", true}}, true));
+  std::string physical;
+  ASSERT_TRUE(base::ReadFileToString(archive, &physical));
+  ExpectBytes(archive, base::DictValue().Set("noAsar", true), physical);
+  auto member = Read(archive.AppendASCII("private.bin"));
+  EXPECT_FALSE(member->success);
+}
 
 class XenonFileSystemSymlinkTest : public testing::Test {
  protected:

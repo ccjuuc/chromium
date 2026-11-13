@@ -12,16 +12,24 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/bind.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
+#include "base/threading/sequence_bound.h"
+#include "base/threading/thread.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/buildflag.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/browser_task_environment.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "mojo/public/cpp/bindings/sync_call_restrictions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 #include "xenon_overlay/buildflags/buildflags.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_permission_check_remote.h"
 #include "xenon_overlay/common/asar/archive.h"
 #include "xenon_overlay/common/asar/test_support.h"
 #include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
@@ -441,7 +449,8 @@ TEST(XenonManagerTest, DisconnectedContainerRejectsRendererTraffic) {
   mojo::PendingRemote<ipc::mojom::IpcRenderer> renderer;
   auto renderer_receiver = renderer.InitWithNewPipeAndPassReceiver();
   manager.RegisterElectronIpcRenderer(kContainerId, "old-page",
-                                      std::move(renderer), 1, 1, 1);
+                                      std::move(renderer), 1, 1, 1, "", true,
+                                      base::DoNothing());
   mojo::Remote<ipc::mojom::NodeAddonHost> addon_host;
   bool addon_disconnected = false;
   mojo::PendingRemote<ipc::mojom::IpcRenderer> callbacks;
@@ -567,7 +576,8 @@ TEST(XenonManagerTest, RendererAddonDisconnectDoesNotRestartOrCloseApp) {
   mojo::PendingRemote<ipc::mojom::IpcRenderer> renderer;
   auto renderer_receiver = renderer.InitWithNewPipeAndPassReceiver();
   manager.RegisterElectronIpcRenderer(kContainerId, key.second,
-                                      std::move(renderer), 1, 1, 1);
+                                      std::move(renderer), 1, 1, 1, "", true,
+                                      base::DoNothing());
   EXPECT_EQ(manager.EnsureRendererAddonServiceStarted(key), nullptr);
   for (const char* channel : {"__xenon:node-addon:invoke-export",
                               "__xenon:node-addon:construct-export",
@@ -743,6 +753,36 @@ TEST(XenonManagerTest,
 }
 
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
+namespace {
+
+// Exercises the real Browser -> Utility permission call and reverse synchronous
+// open-dialog request without exposing a test-only permission scope setter.
+class OpenDialogPermissionService final
+    : public ipc::mojom::ElectronPermissionCheck {
+ public:
+  OpenDialogPermissionService(
+      mojo::PendingReceiver<ipc::mojom::ElectronPermissionCheck> receiver,
+      mojo::PendingRemote<mojom::XenonBrowserObserver> observer)
+      : receiver_(this, std::move(receiver)), observer_(std::move(observer)) {}
+
+  void Check(base::Value request, CheckCallback callback) override {
+    mojo::ScopedAllowSyncCallForTesting allow;
+    base::Value result;
+    std::string error;
+    const bool received = observer_->ElectronWindowCall(
+        0, "electron-open-dialog", base::Value(base::DictValue()), &result,
+        &error);
+    std::move(callback).Run(
+        false, received ? error : "ERR_ABORTED: open-dialog transport failed");
+  }
+
+ private:
+  mojo::Receiver<ipc::mojom::ElectronPermissionCheck> receiver_;
+  mojo::Remote<mojom::XenonBrowserObserver> observer_;
+};
+
+}  // namespace
+
 TEST(XenonManagerTest, AppExitDisconnectsAllCopiesAndPreservesConfiguration) {
   base::test::TaskEnvironment task_environment;
   XenonManager manager;
@@ -839,6 +879,166 @@ TEST(XenonManagerTest, AppExitRejectsOtherAndStaleObservers) {
   task_environment.RunUntilIdle();
   EXPECT_EQ(manager.FindContainerService(kContainerId), nullptr);
   EXPECT_TRUE(service_pipe->QuerySignalsState().peer_closed());
+}
+
+TEST(XenonManagerTest, WindowCreationRejectsForeignContainer) {
+  content::BrowserTaskEnvironment task_environment;
+  TestingProfile profile;
+  XenonManager manager;
+  auto connection =
+      std::make_unique<XenonManager::ContainerServiceConnection>();
+  connection->generation = 1;
+  connection->browser_context = profile.GetWeakPtr();
+  auto service_pipe =
+      connection->remote.BindNewPipeAndPassReceiver().PassPipe();
+  mojo::Remote<mojom::XenonBrowserObserver> observer;
+  connection->observer_receiver_id = manager.browser_observer_receivers_.Add(
+      &manager, observer.BindNewPipeAndPassReceiver(), "window-owner");
+  manager.container_services_["window-owner"] = std::move(connection);
+  manager.container_service_generations_["window-owner"] = 1;
+  base::test::TestFuture<int32_t, uint64_t, std::string> reply;
+  observer->CreateElectronWindow(
+      200, 200, false, true, false, 0, "foreign", "another-application",
+      reply.GetCallback<int32_t, uint64_t, const std::string&>());
+  EXPECT_EQ(reply.Get<0>(), 0);
+  EXPECT_EQ(reply.Get<1>(), 0u);
+  EXPECT_EQ(reply.Get<2>(), "ERR_ACCESS_DENIED: invalid window container");
+  EXPECT_FALSE(service_pipe->QuerySignalsState().peer_closed());
+}
+
+TEST(XenonManagerTest, WindowOperationsRejectStaleObserverAndGeneration) {
+  content::BrowserTaskEnvironment task_environment;
+  TestingProfile profile;
+  XenonManager manager;
+  auto connection =
+      std::make_unique<XenonManager::ContainerServiceConnection>();
+  connection->generation = 2;
+  connection->browser_context = profile.GetWeakPtr();
+  auto service_pipe =
+      connection->remote.BindNewPipeAndPassReceiver().PassPipe();
+  mojo::Remote<mojom::XenonBrowserObserver> observer;
+  connection->observer_receiver_id = manager.browser_observer_receivers_.Add(
+      &manager, observer.BindNewPipeAndPassReceiver(), "window-owner");
+  manager.container_services_["window-owner"] = std::move(connection);
+  manager.container_service_generations_["window-owner"] = 2;
+  mojo::Remote<mojom::XenonBrowserObserver> stale;
+  manager.browser_observer_receivers_.Add(
+      &manager, stale.BindNewPipeAndPassReceiver(), "window-owner");
+  base::test::TestFuture<base::Value, std::string> stale_reply;
+  stale->ElectronWindowCall(
+      1, "get-bounds", base::Value(),
+      stale_reply.GetCallback<base::Value, const std::string&>());
+  EXPECT_EQ(stale_reply.Get<1>(), "ERR_ACCESS_DENIED: stale window owner");
+  manager.container_service_generations_["window-owner"] = 3;
+  base::test::TestFuture<base::Value, std::string> generation_reply;
+  observer->ElectronWindowCall(
+      1, "get-bounds", base::Value(),
+      generation_reply.GetCallback<base::Value, const std::string&>());
+  EXPECT_EQ(generation_reply.Get<1>(), "ERR_ACCESS_DENIED: stale window owner");
+  EXPECT_FALSE(service_pipe->QuerySignalsState().peer_closed());
+}
+
+TEST(XenonManagerTest, DialogCommandsRejectInvalidOptionsAndOwners) {
+  content::BrowserTaskEnvironment task_environment;
+  TestingProfile profile;
+  XenonManager manager;
+  auto connection =
+      std::make_unique<XenonManager::ContainerServiceConnection>();
+  connection->generation = 1;
+  connection->browser_context = profile.GetWeakPtr();
+  auto service_pipe =
+      connection->remote.BindNewPipeAndPassReceiver().PassPipe();
+  mojo::Remote<mojom::XenonBrowserObserver> observer;
+  connection->observer_receiver_id = manager.browser_observer_receivers_.Add(
+      &manager, observer.BindNewPipeAndPassReceiver(), "dialog-owner");
+  manager.container_services_["dialog-owner"] = std::move(connection);
+  manager.container_service_generations_["dialog-owner"] = 1;
+  mojo::Remote<mojom::XenonBrowserObserver> stale;
+  manager.browser_observer_receivers_.Add(
+      &manager, stale.BindNewPipeAndPassReceiver(), "dialog-owner");
+
+  for (const char* command : {"electron-message-box", "electron-save-dialog",
+                              "electron-open-dialog"}) {
+    base::test::TestFuture<base::Value, std::string> options_reply;
+    observer->ElectronWindowCall(
+        0, command, base::Value(),
+        options_reply.GetCallback<base::Value, const std::string&>());
+    EXPECT_EQ(options_reply.Get<1>(),
+              "ERR_INVALID_ARG_TYPE: dialog options must be an object");
+
+    base::test::TestFuture<base::Value, std::string> foreign_reply;
+    observer->ElectronWindowCall(
+        999999, command, base::Value(base::DictValue()),
+        foreign_reply.GetCallback<base::Value, const std::string&>());
+    EXPECT_TRUE(foreign_reply.Get<1>().starts_with("ERR_ACCESS_DENIED:"));
+
+    base::test::TestFuture<base::Value, std::string> stale_reply;
+    stale->ElectronWindowCall(
+        0, command, base::Value(base::DictValue()),
+        stale_reply.GetCallback<base::Value, const std::string&>());
+    EXPECT_EQ(stale_reply.Get<1>(), "ERR_ACCESS_DENIED: stale window owner");
+  }
+  manager.container_service_generations_["dialog-owner"] = 2;
+  base::test::TestFuture<base::Value, std::string> stale_generation_reply;
+  observer->ElectronWindowCall(
+      0, "electron-open-dialog", base::Value(base::DictValue()),
+      stale_generation_reply.GetCallback<base::Value, const std::string&>());
+  EXPECT_TRUE(stale_generation_reply.Get<0>().is_none());
+  EXPECT_EQ(stale_generation_reply.Get<1>(),
+            "ERR_ACCESS_DENIED: stale window owner");
+  EXPECT_FALSE(service_pipe->QuerySignalsState().peer_closed());
+}
+
+TEST(XenonManagerTest, OpenDialogRejectsPermissionCheckReentry) {
+  content::BrowserTaskEnvironment task_environment;
+  TestingProfile profile;
+  XenonManager manager;
+  auto connection =
+      std::make_unique<XenonManager::ContainerServiceConnection>();
+  connection->generation = 1;
+  connection->browser_context = profile.GetWeakPtr();
+  auto service_pipe =
+      connection->remote.BindNewPipeAndPassReceiver().PassPipe();
+  mojo::PendingRemote<mojom::XenonBrowserObserver> observer;
+  connection->observer_receiver_id = manager.browser_observer_receivers_.Add(
+      &manager, observer.InitWithNewPipeAndPassReceiver(), "permission-dialog");
+  manager.container_services_["permission-dialog"] = std::move(connection);
+  manager.container_service_generations_["permission-dialog"] = 1;
+
+  base::Thread service_thread("PermissionDialogService");
+  base::Thread transport_thread("PermissionDialogTransport");
+  ASSERT_TRUE(service_thread.StartWithOptions(
+      base::Thread::Options(base::MessagePumpType::IO, 0)));
+  ASSERT_TRUE(transport_thread.StartWithOptions(
+      base::Thread::Options(base::MessagePumpType::IO, 0)));
+  mojo::PendingRemote<ipc::mojom::ElectronPermissionCheck> permission;
+  base::SequenceBound<OpenDialogPermissionService> service(
+      service_thread.task_runner(), permission.InitWithNewPipeAndPassReceiver(),
+      std::move(observer));
+  {
+    ipc::ElectronPermissionCheckRemote remote(std::move(permission),
+                                              transport_thread.task_runner(),
+                                              base::Seconds(2));
+    auto ordinary_task_called = std::make_shared<bool>(false);
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindLambdaForTesting([ordinary_task_called] {
+          *ordinary_task_called = true;
+        }));
+    mojo::ScopedAllowSyncCallForTesting allow;
+    const auto result = remote.Check(base::Value());
+    EXPECT_FALSE(result.has_value());
+    EXPECT_EQ(result.error_or(""),
+              "ERR_INVALID_STATE: cannot display a dialog during a "
+              "synchronous permission check");
+    EXPECT_FALSE(*ordinary_task_called);
+    EXPECT_FALSE(ipc::IsElectronPermissionCheckInProgress());
+    task_environment.RunUntilIdle();
+    EXPECT_TRUE(*ordinary_task_called);
+  }
+  service.SynchronouslyResetForTest();
+  transport_thread.Stop();
+  service_thread.Stop();
+  EXPECT_FALSE(service_pipe->QuerySignalsState().peer_closed());
 }
 #endif
 

@@ -6,9 +6,14 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/bind.h"
 #include "base/test/mock_log.h"
 #include "base/test/test_future.h"
+#include "base/threading/sequence_bound.h"
+#include "base/threading/thread.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/site_instance.h"
@@ -17,9 +22,13 @@
 #include "content/public/test/test_browser_context.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_permission_broker.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_permissions.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_session_shutdown_notifier_factory.h"
 #include "xenon_overlay/common/asar/test_support.h"
+#include "xenon_overlay/public/mojom/xenon_permission_check.mojom.h"
 
 namespace xenon::ipc {
 namespace {
@@ -47,6 +56,22 @@ class SessionTestBrowserContext : public content::TestBrowserContext {
  private:
   bool services_shutdown_ = false;
 };
+
+class PermissionCheckService : public mojom::ElectronPermissionCheck {
+ public:
+  explicit PermissionCheckService(
+      mojo::PendingReceiver<mojom::ElectronPermissionCheck> receiver)
+      : receiver_(this, std::move(receiver)) {}
+  void Check(base::Value request, CheckCallback callback) override;
+
+ private:
+  mojo::Receiver<mojom::ElectronPermissionCheck> receiver_;
+};
+
+void PermissionCheckService::Check(base::Value request,
+                                   CheckCallback callback) {
+  std::move(callback).Run(true, "");
+}
 
 class ElectronSessionBridgeTest : public testing::Test {
  public:
@@ -138,6 +163,132 @@ TEST_F(ElectronSessionBridgeTest, PartitionIdentityAndPersistenceAreReal) {
   EXPECT_EQ(FindElectronSessionIdentity(first)->container_id, "app");
   EXPECT_FALSE(
       FindElectronSessionIdentity(context_.GetDefaultStoragePartition()));
+}
+
+TEST_F(ElectronSessionBridgeTest,
+       RetiredSessionRetainsOwnershipButRevokesExecutableState) {
+  auto* partition =
+      ResolveElectronSessionPartition(&context_, "retired-app", "persist:view");
+  ASSERT_TRUE(FindElectronSessionIdentity(partition));
+  RemoveElectronSessionsForContainer("retired-app");
+  EXPECT_FALSE(FindElectronSessionIdentity(partition));
+  const auto provenance = FindElectronSessionProvenance(partition);
+  ASSERT_TRUE(provenance);
+  EXPECT_EQ(provenance->container_id, "retired-app");
+  EXPECT_EQ(provenance->partition, "persist:view");
+  EXPECT_TRUE(GetElectronSessionPreloadScripts(partition, "frame").empty());
+  EXPECT_FALSE(
+      FindElectronSessionProvenance(context_.GetDefaultStoragePartition()));
+  EXPECT_EQ(partition, ResolveElectronSessionPartition(&context_, "retired-app",
+                                                       "persist:view"));
+  EXPECT_TRUE(FindElectronSessionIdentity(partition));
+  context_.ShutdownServices();
+  EXPECT_FALSE(FindElectronSessionProvenance(partition));
+}
+
+TEST_F(ElectronSessionBridgeTest,
+       PermissionPipeBindingCannotWaitForItsOwnUiTaskAndGenerationIsRetained) {
+  content::RenderViewHostTestEnabler renderer_hosts;
+  SessionTestBrowserContext moved_context;
+  ResolveElectronSessionPartition(&context_, "permission-app", "browser");
+  auto contents = content::WebContentsTester::CreateTestWebContents(
+      &context_, content::SiteInstance::CreateForFixedStoragePartition(
+                     &context_, GURL("about:blank"),
+                     GetElectronSessionPartitionConfig(
+                         &context_, "permission-app", "browser")));
+  content::WebContentsTester::For(contents.get())
+      ->NavigateAndCommit(GURL("https://permission.example/"));
+  auto* frame = contents->GetPrimaryMainFrame();
+  base::Thread service_thread("PermissionBindingTest");
+  ASSERT_TRUE(service_thread.StartWithOptions(
+      base::Thread::Options(base::MessagePumpType::IO, 0)));
+  base::SequenceBound<PermissionCheckService> service;
+  size_t pipe_bindings = 0;
+  const auto bind_owner = [&](const std::string& owner) {
+    BindElectronPermissionOwner(
+        &context_, "permission-app", owner, base::BindLambdaForTesting([&] {
+          ++pipe_bindings;
+          mojo::PendingRemote<mojom::ElectronPermissionCheck> remote;
+          // Reproduce the real service SharedRemote's mandatory UI queue hop.
+          base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+              FROM_HERE,
+              base::BindOnce(
+                  [](base::SequenceBound<PermissionCheckService>* service,
+                     scoped_refptr<base::SingleThreadTaskRunner> runner,
+                     mojo::PendingReceiver<mojom::ElectronPermissionCheck>
+                         receiver) {
+                    service->emplace(std::move(runner), std::move(receiver));
+                  },
+                  &service, service_thread.task_runner(),
+                  remote.InitWithNewPipeAndPassReceiver()));
+          return remote;
+        }),
+        base::BindRepeating([](content::WebContents*) { return 1; }),
+        base::BindRepeating([](base::Value) {}));
+  };
+  bind_owner("permission-app:1");
+  base::ScopedClosureRunner cleanup(base::BindLambdaForTesting([&] {
+    CloseElectronPermissionOwner("permission-app:1");
+    CloseElectronPermissionOwner("permission-app:2");
+    tasks_.RunUntilIdle();
+    service.SynchronouslyResetForTest();
+    service_thread.Stop();
+  }));
+  const auto registered =
+      CallElectronPermissions("permission-app", "permission-app:1",
+                              base::Value(base::DictValue()
+                                              .Set("method", "set-handler")
+                                              .Set("partition", "browser")
+                                              .Set("kind", "check")
+                                              .Set("registration", 1)
+                                              .Set("enabled", true)));
+  ASSERT_TRUE(registered.has_value()) << registered.error_or("");
+  const auto started = base::TimeTicks::Now();
+  EXPECT_FALSE(CheckElectronPermission(
+      frame, "notifications", GURL("https://permission.example/"), {}));
+  EXPECT_LT(base::TimeTicks::Now() - started, base::Seconds(1));
+  tasks_.RunUntilIdle();
+  EXPECT_TRUE(CheckElectronPermission(frame, "notifications",
+                                      GURL("https://permission.example/"), {}));
+  const auto before_context_change = GetElectronPermissionFrameValidator(frame);
+  ResolveElectronSessionPartition(&moved_context, "permission-app", "browser");
+  auto moved_contents = content::WebContentsTester::CreateTestWebContents(
+      &moved_context, content::SiteInstance::CreateForFixedStoragePartition(
+                          &moved_context, GURL("about:blank"),
+                          GetElectronSessionPartitionConfig(
+                              &moved_context, "permission-app", "browser")));
+  content::WebContentsTester::For(moved_contents.get())
+      ->NavigateAndCommit(GURL("https://permission.example/"));
+  auto* moved_frame = moved_contents->GetPrimaryMainFrame();
+  ASSERT_TRUE(
+      RebindElectronPermissionOwnerContext("permission-app:1", &moved_context)
+          .has_value());
+  EXPECT_FALSE(before_context_change.Run());
+  EXPECT_FALSE(CheckElectronPermission(
+      frame, "notifications", GURL("https://permission.example/"), {}));
+  EXPECT_TRUE(CheckElectronPermission(moved_frame, "notifications",
+                                      GURL("https://permission.example/"), {}));
+  EXPECT_EQ(pipe_bindings, 1u);
+  ASSERT_TRUE(
+      RebindElectronPermissionOwnerContext("permission-app:1", &context_)
+          .has_value());
+  EXPECT_FALSE(before_context_change.Run());
+  moved_contents.reset();
+  moved_context.ShutdownServices();
+  EXPECT_TRUE(CheckElectronPermission(frame, "notifications",
+                                      GURL("https://permission.example/"), {}));
+  const auto original_generation = GetElectronPermissionFrameValidator(frame);
+  EXPECT_TRUE(original_generation.Run());
+  CloseElectronPermissionOwner("permission-app:1");
+  RemoveElectronSessionsForContainer("permission-app");
+  EXPECT_TRUE(IsElectronPermissionFrame(frame));
+  EXPECT_FALSE(IsActiveElectronPermissionFrame(frame));
+  EXPECT_FALSE(CheckElectronPermission(
+      frame, "notifications", GURL("https://permission.example/"), {}));
+  bind_owner("permission-app:2");
+  EXPECT_FALSE(original_generation.Run());
+  EXPECT_TRUE(IsActiveElectronPermissionFrame(frame));
+  cleanup.RunAndReset();
 }
 
 TEST_F(ElectronSessionBridgeTest, ReadsRealDiskAndAsarPreloadsAndRevokesOwner) {
@@ -264,9 +415,8 @@ TEST_F(ElectronSessionBridgeTest,
   content::RenderViewHostTestEnabler renderer_hosts;
   auto contents = content::WebContentsTester::CreateTestWebContents(
       &context_,
-      content::SiteInstance::CreateForFixedStoragePartition(
-          &context_, GURL("about:blank"),
-          GetElectronSessionPartitionConfig(&context_, "app", "browser")));
+      CreateElectronSessionSiteInstance(&context_, "app", "browser",
+                                          GURL("about:blank")));
   EXPECT_EQ(contents->GetPrimaryMainFrame()->GetStoragePartition(), expected);
   for (const auto& url : {GURL("about:blank"), GURL("https://one.test/"),
                           GURL("https://two.test/")}) {

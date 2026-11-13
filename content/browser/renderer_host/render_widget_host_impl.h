@@ -77,6 +77,13 @@
 #include "ui/gfx/native_ui_types.h"
 #include "ui/latency/latency_info.h"
 #include "url/origin.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+namespace xenon::ipc {
+class AsyncKeyboardEventQueue;
+}
+#endif
 
 #if BUILDFLAG(IS_ANDROID)
 #include "content/public/browser/android/child_process_importance.h"
@@ -266,6 +273,15 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   void ForwardWheelEvent(const blink::WebMouseWheelEvent& wheel_event) override;
   void ForwardKeyboardEvent(
       const input::NativeWebKeyboardEvent& key_event) override;
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  using AsyncKeyboardEventFilter =
+      base::RepeatingCallback<void(const input::NativeWebKeyboardEvent&,
+                                   base::OnceCallback<void(bool)>)>;
+  // Installed only by a trusted embedder. Replacing it cancels queued input;
+  // callbacks from the previous document cannot replay into its replacement.
+  void SetAsyncKeyboardEventFilter(AsyncKeyboardEventFilter filter,
+                                   bool cancel_pending = true);
+#endif
   void ForwardGestureEvent(
       const blink::WebGestureEvent& gesture_event) override;
   RenderProcessHost* GetProcess() const override;
@@ -516,6 +532,14 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   bool background_throttling_allowed() const {
     return background_throttling_allowed_;
   }
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  void SetHiddenSurfaceAllocationAllowed(bool allowed) {
+    hidden_surface_allocation_allowed_ = allowed;
+  }
+  bool hidden_surface_allocation_allowed() const {
+    return hidden_surface_allocation_allowed_;
+  }
+#endif
   void WasShown(std::optional<blink::RecordContentToVisibleTimeRequest>
                     record_tab_switch_time_request);
 
@@ -1374,6 +1398,9 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   // process_->UpdateClientPriority when this value changes.
   bool is_hidden_ = true;
   bool background_throttling_allowed_ = true;
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  bool hidden_surface_allocation_allowed_ = false;
+#endif
 
   // Records the latest time when |this| widget's visibility state changes from
   // hidden to shown.
@@ -1476,6 +1503,21 @@ class CONTENT_EXPORT RenderWidgetHostImpl
 
   // Keyboard event listeners.
   std::vector<KeyPressEventCallback> key_press_event_callbacks_;
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  void ForwardKeyboardEventWithCommandsInternal(
+      const input::NativeWebKeyboardEvent& key_event,
+      const ui::LatencyInfo& latency,
+      std::vector<blink::mojom::EditCommandPtr> commands,
+      bool* update_event,
+      bool already_filtered);
+  void OnAsyncKeyboardEvent(input::NativeWebKeyboardEvent key_event,
+                            ui::LatencyInfo latency,
+                            std::vector<blink::mojom::EditCommandPtr> commands,
+                            bool prevented);
+  AsyncKeyboardEventFilter async_keyboard_event_filter_;
+  std::unique_ptr<xenon::ipc::AsyncKeyboardEventQueue> async_keyboard_events_;
+#endif
 
   // Mouse event callbacks.
   std::vector<MouseEventCallback> mouse_event_callbacks_;

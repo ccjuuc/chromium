@@ -22,6 +22,12 @@ using AutoUpdaterEventCallback =
     base::RepeatingCallback<void(const std::string&, base::ListValue)>;
 void SetAutoUpdaterEventCallback(AutoUpdaterEventCallback callback);
 
+// System theme notifications contain a fresh OS snapshot and change flags.
+// Setting an empty callback removes the OS-settings subscription.
+using ElectronThemeEventCallback =
+    base::RepeatingCallback<void(base::DictValue)>;
+void SetElectronThemeEventCallback(ElectronThemeEventCallback callback);
+
 // Calls clipboard/shell/updater APIs and read-only app settings for an
 // already-authorized Electron endpoint.
 // Accepts a direct main-process request or the renderer's one-argument list.

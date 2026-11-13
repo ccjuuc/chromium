@@ -68,6 +68,7 @@ component("common") {
   public_deps = [
     ":algorithm_mojom",
     "//base",
+    "//xenon_overlay/buildflags",
   ]
 
   defines = [ "IS_OS_CRYPT_ASYNC_IMPL" ]

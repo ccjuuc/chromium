@@ -117,21 +117,46 @@
   }
   globalThis.URLSearchParams = URLSearchParams;
 
+  function encodeUrlUserInfo(value) {
+    // WHATWG's userinfo percent-encode set. Preserve already encoded '%' bytes;
+    // decoding here would change passwords and can turn data into delimiters.
+    return Array.from(String(value).toWellFormed(), character =>
+      /^[A-Za-z0-9!$%&'()*+,\-._~]$/.test(character) ? character :
+        encodeURIComponent(character)).join('');
+  }
+
   class URL {
+    static canParse(input, base = undefined) {
+      if (arguments.length === 0) {
+        throw Object.assign(new TypeError('The "url" argument must be specified'),
+            {code: 'ERR_MISSING_ARGS'});
+      }
+      // Coercion errors (including Symbol) must escape, rather than being
+      // mistaken for an unparseable URL. Convert both arguments before parsing.
+      const url = `${input}`.toWellFormed();
+      const baseUrl = base === undefined ? undefined : `${base}`.toWellFormed();
+      if (typeof globalThis.__xenonCanParseURL !== 'function') {
+        throw Object.assign(new Error('Native URL parsing is unavailable'),
+            {code: 'ERR_NOT_SUPPORTED'});
+      }
+      // The legacy constructor below does not validate every URL component.
+      // Use Chromium's URL parser rather than infer validity from that shim.
+      return globalThis.__xenonCanParseURL(url, baseUrl);
+    }
     constructor(input, base) {
       let href = String(input ?? '');
       if (base && !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(href)) {
         const resolved = new URL(base);
         const dir = resolved.pathname.replace(/\/[^/]*$/, '/') || '/';
-        href = resolved.protocol + '//' + resolved.host +
+        href = resolved.protocol + '//' + resolved._userinfo() + resolved.host +
             (href.startsWith('/') ? href : dir + href);
       }
       href = href.replace(/\\/g, '/');
       if (/^file:\/\/[A-Za-z]:/.test(href)) {
         href = 'file:///' + href.slice('file://'.length);
       }
-      this.username = '';
-      this.password = '';
+      this._username = '';
+      this._password = '';
       this.hostname = '';
       this.port = '';
       this.pathname = '/';
@@ -164,6 +189,8 @@
       let rest = protoIdx >= 0 ? href.slice(protoIdx + 1) : href;
       this.hostname = '';
       this.port = '';
+      this._username = '';
+      this._password = '';
       if (rest.startsWith('//')) {
         rest = rest.slice(2);
         const slash = rest.indexOf('/');
@@ -171,6 +198,12 @@
         this.pathname = slash >= 0 ? rest.slice(slash) : '/';
         const at = authority.lastIndexOf('@');
         const hostport = at >= 0 ? authority.slice(at + 1) : authority;
+        if (at >= 0 && this.protocol !== 'file:') {
+          const userinfo = authority.slice(0, at);
+          const separator = userinfo.indexOf(':');
+          this._username = encodeUrlUserInfo(separator < 0 ? userinfo : userinfo.slice(0, separator));
+          this._password = separator < 0 ? '' : encodeUrlUserInfo(userinfo.slice(separator + 1));
+        }
         const colon = hostport.lastIndexOf(':');
         const bracket = hostport.indexOf(']');
         if (hostport.startsWith('[') && bracket >= 0) {
@@ -202,6 +235,22 @@
       }
       this._recompose();
     }
+    get username() { return this._username; }
+    set username(value) {
+      if (!this.hostname || this.protocol === 'file:') return;
+      this._username = encodeUrlUserInfo(value);
+      this._recompose();
+    }
+    get password() { return this._password; }
+    set password(value) {
+      if (!this.hostname || this.protocol === 'file:') return;
+      this._password = encodeUrlUserInfo(value);
+      this._recompose();
+    }
+    _userinfo() {
+      if (!this._username && !this._password) return '';
+      return this._username + (this._password ? ':' + this._password : '') + '@';
+    }
     get search() { return this._search; }
     set search(value) {
       const text = String(value || '');
@@ -224,7 +273,7 @@
       if (hasAuthority && path && !path.startsWith('/')) {
         path = `/${path}`;
       }
-      this.href = `${this.protocol}${hasAuthority ? '//' + this.host : ''}${path}${this._search}${this._hash}`;
+      this.href = `${this.protocol}${hasAuthority ? '//' + this._userinfo() + this.host : ''}${path}${this._search}${this._hash}`;
     }
     toString() { return this.href; }
     toJSON() { return this.href; }

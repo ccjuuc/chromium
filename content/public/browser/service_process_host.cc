@@ -103,4 +103,13 @@ ServiceProcessHost::Options ServiceProcessHost::Options::Pass() {
   return std::move(*this);
 }
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+ServiceProcessHost::Options&
+ServiceProcessHost::Options::WithXenonUtilityProcessOptions(
+    std::unique_ptr<xenon::UtilityProcessLaunchOptions> options) {
+  xenon_utility_options = std::move(options);
+  return *this;
+}
+#endif
+
 }  // namespace content

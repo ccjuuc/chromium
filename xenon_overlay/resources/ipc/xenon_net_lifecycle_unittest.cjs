@@ -71,7 +71,7 @@ test('local net server connection callback can destroy before client connect del
   server.close();
 });
 
-test('local net connect listener destruction cancels the deferred connect callback', async () => {
+test('local net connect callbacks retain registration order when a later listener destroys', async () => {
   const {net} = fixture();
   const events = [];
   const server = net.createServer(() => events.push('server-connection')).listen(pipePath);
@@ -79,7 +79,7 @@ test('local net connect listener destruction cancels the deferred connect callba
   socket.on('connect', () => { events.push('client-connect'); socket.destroy(); });
   socket.on('close', () => events.push('client-close'));
   await settle();
-  assert.deepEqual(events, ['server-connection', 'client-connect', 'client-close']);
+  assert.deepEqual(events, ['server-connection', 'connect-callback', 'client-connect', 'client-close']);
   server.close();
 });
 
@@ -122,7 +122,7 @@ test('local net successful connection preserves asynchronous ordering and bidire
   socket.on('data', bytes => { reply = Array.from(bytes); });
   assert.deepEqual(events, []);
   await settle();
-  assert.deepEqual(events, ['server-connection', 'client-connect', 'connect-callback']);
+  assert.deepEqual(events, ['server-connection', 'connect-callback', 'client-connect']);
   assert.deepEqual(reply, [0, 255, 128, 65]);
   socket.destroy();
   server.close();

@@ -3,11 +3,17 @@
 // found in the LICENSE file.
 const {readBootstrapPart} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
+const path = require('node:path');
 const test = require('node:test');
+const {fileURLToPath, pathToFileURL} = require('node:url');
 const vm = require('node:vm');
-const page = readBootstrapPart('renderer/page.js');
-const source = page.slice(page.indexOf('    function upgradeWebView(el)'),
-    page.indexOf("    if (typeof Document !== 'undefined'"));
+// Validate the real composed entry, where page.js is inside its IIFE. The
+// fragment intentionally contains return statements for sandbox initialization.
+const page = readBootstrapPart('xenon_ipc_renderer_bootstrap.js');
+const start = page.indexOf('    function upgradeWebView(el)');
+const end = page.indexOf("    if (typeof Document !== 'undefined'", start);
+assert.ok(start >= 0 && end > start, 'production webview source boundaries');
+const source = page.slice(start, end);
 function createWebView() {
   const attributes = new Map(), attachments = [], calls = [];
   const element = {style: {}, isConnected: false,
@@ -18,6 +24,7 @@ function createWebView() {
     appendChild() {}, dispatchEvent() {},
   };
   const context = vm.createContext({element, console, guestElements: new Map(),
+    URL, urlModule: {fileURLToPath},
     MutationObserver: class {observe() {}},
     document: {createElement: () => ({style: {}})},
     transport: {attachGuest: async (_frame, preferences) => {
@@ -37,7 +44,8 @@ test('webview DOM properties reflect into the first guest attachment', async () 
   element.allowpopups = true;
   element.allowpopups = false;
   element.webpreferences = 'contextIsolation=no,sandbox=no';
-  element.preload = 'file:///fixture/preload.js';
+  const preloadPath = path.resolve(__dirname, 'fixture-preload.js');
+  element.preload = pathToFileURL(preloadPath).href;
   element.partition = 'persist:fixture';
   element.src = 'http://127.0.0.1:1234/';
   assert.equal(element.nodeintegration, true);
@@ -54,6 +62,7 @@ test('webview DOM properties reflect into the first guest attachment', async () 
   assert.equal(attachments[0].contextIsolation, false);
   assert.equal(attachments[0].sandbox, false);
   assert.equal(attachments[0].partition, 'persist:fixture');
+  assert.equal(attachments[0].preload, preloadPath);
   assert.equal(calls[0][2], 'loadURL');
   assert.equal(calls[0][3][0], element.src);
 });

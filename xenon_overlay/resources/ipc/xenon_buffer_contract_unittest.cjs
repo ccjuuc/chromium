@@ -10,9 +10,13 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-function createBufferContext(side, nativeDecode = false) {
-  const source = readBootstrapPart(`${side}/buffer.js`);
+function createBufferContext(side, nativeDecode = false, webCodecs = true) {
+  const source = readBootstrapPart('common/buffer_numeric.js') + '\n' +
+      readBootstrapPart('common/buffer.js') + '\n' +
+      readBootstrapPart('common/promisify.js') + '\n' +
+      readBootstrapPart(`${side}/buffer.js`);
   const context = vm.createContext({TextEncoder, TextDecoder, atob, btoa});
+  if (!webCodecs) { delete context.TextEncoder; delete context.TextDecoder; }
   if (nativeDecode) vm.runInContext(`
     Uint8Array.fromBase64 = value => {
       const binary = atob(value);
@@ -26,7 +30,83 @@ function createBufferContext(side, nativeDecode = false) {
   return context;
 }
 
+  test('shared Buffer without Web codecs preserves malformed UTF-8 and foreign storage', () => {
+    const BufferImpl = createBufferContext('main', false, false).Buffer;
+    const strings = ['\ufeffBOM', '中😀', '\ud800', '\udc00', '\ud800x\udc00',
+      'a'.repeat(10000) + '𐀀'];
+    for (const value of strings) {
+      assert.deepEqual(Buffer.from(BufferImpl.from(value)), Buffer.from(value));
+    }
+    // Deterministic byte corpus includes truncated and overlong sequences,
+    // surrogate encodings and invalid continuation bytes at every position.
+    let state = 0x31415926;
+    const randomByte = () => { state ^= state << 13; state ^= state >>> 17;
+      state ^= state << 5; return state & 255; };
+    const corpus = [Buffer.from([0xef, 0xbb, 0xbf]), Buffer.alloc(10000, 0xff)];
+    for (let i = 0; i < 2048; ++i)
+      corpus.push(Buffer.from(Array.from({length: i % 17}, randomByte)));
+    for (const bytes of corpus)
+      assert.equal(BufferImpl.from(bytes).toString(), bytes.toString());
+    for (const Storage of [ArrayBuffer, SharedArrayBuffer]) {
+      const storage = new Storage(4), raw = new Uint8Array(storage);
+      raw.set([1, 2, 3, 4]);
+      const selected = BufferImpl.from(storage, 1, 2);
+      selected[0] = 8;
+      assert.deepEqual(Array.from(selected), [8, 3]);
+      assert.equal(raw[1], 8);
+      assert.equal(selected.buffer, storage);
+    }
+  });
+
+test('main Buffer.write without Web codecs matches Node at every UTF-8 capacity', () => {
+  const context = createBufferContext('main', false, false);
+  assert.equal(vm.runInContext('typeof TextEncoder', context), 'undefined');
+  assert.equal(vm.runInContext('typeof TextDecoder', context), 'undefined');
+  const BufferImpl = context.Buffer;
+  const strings = ['', 'ASCII', 'é中文😀', '\ufeff\0end', '\ud800', '\udc00',
+    '\ud800x\udc00', '\ud800\ud800\udc00\udc00', 'a😀b中c'];
+  for (const value of strings) {
+    for (let length = 0; length <= Buffer.byteLength(value) + 1; ++length) {
+      const actual = BufferImpl.alloc(length + 6, 0xa5);
+      const expected = Buffer.alloc(length + 6, 0xa5);
+      const actualCount = actual.subarray(1, length + 5).write(value, 2, length);
+      const expectedCount = expected.subarray(1, length + 5).write(value, 2, length);
+      assert.equal(actualCount, expectedCount, `capacity ${length}: ${JSON.stringify(value)}`);
+      assert.deepEqual([...actual], [...expected]);
+    }
+  }
+  // ws writes an existing UTF-8 string into an allocated frame Buffer. Keep
+  // this path free of injected native codecs and exercise a large payload too.
+  const value = 'compressed text / 中文😀'.repeat(16384);
+  const actual = BufferImpl.alloc(Buffer.byteLength(value));
+  assert.equal(actual.write(value), actual.length);
+  assert.deepEqual(Buffer.from(actual), Buffer.from(value));
+});
+
 const cases = {
+  'public static methods survive enumerable compatibility wrappers': `
+    const names = ['from', 'alloc', 'allocUnsafe', 'allocUnsafeSlow',
+      'isBuffer', 'isEncoding', 'byteLength', 'concat'];
+    const safe = {};
+    for (const name in Buffer) {
+      if (Object.hasOwn(Buffer, name) &&
+          name !== 'allocUnsafe' && name !== 'allocUnsafeSlow') {
+        safe[name] = Buffer[name];
+      }
+    }
+    const bytes = safe.from('中文 / wrapper', 'utf8');
+    return {
+      methods: names.map(name => {
+        const descriptor = Object.getOwnPropertyDescriptor(Buffer, name);
+        return [name, descriptor.enumerable, descriptor.configurable,
+          descriptor.writable, typeof descriptor.value];
+      }),
+      roundtrip: bytes.toString(), buffer: safe.isBuffer(bytes),
+      encoding: safe.isEncoding('UTF-8'), length: safe.byteLength('中文'),
+      combined: safe.concat([bytes, safe.alloc(1, 33)]).toString(),
+      unsafeExcluded: !Object.hasOwn(safe, 'allocUnsafe'),
+    };
+  `,
   'readInt16LE reads signed words from window messages and shared views': `
     const words = [0, 1, 0x7fff, 0x8000, 0xfffe, 0xffff];
     return words.map(word => {

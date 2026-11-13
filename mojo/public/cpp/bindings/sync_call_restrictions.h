@@ -8,6 +8,13 @@
 #include "base/component_export.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+namespace xenon::ipc {
+class ElectronPermissionCheckRemote;
+}
+#endif
 
 #if (!defined(NDEBUG) || defined(DCHECK_ALWAYS_ON))
 #define ENABLE_SYNC_CALL_RESTRICTIONS 1
@@ -106,6 +113,13 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) SyncCallRestrictions {
   // SynchronousCompositorHost is used for Android webview.
   friend class content::SynchronousCompositorHost;
   friend class mojo::ScopedAllowSyncCallForTesting;
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // Electron permission-check closures live in an isolated Utility. This
+  // dedicated pipe is bounded by a watchdog on a separate transport sequence;
+  // timeout disconnects only the check pipe and returns denial. Reverse sync
+  // getters and reentrant owner retirement are covered by real Mojo tests.
+  friend class xenon::ipc::ElectronPermissionCheckRemote;
+#endif
   friend class viz::GpuHostImpl;
   // For destroying the GL context/surface that draw to a platform window before
   // the platform window is destroyed.
@@ -159,6 +173,23 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) SyncCallRestrictions {
    private:
     base::ScopedAllowBaseSyncPrimitivesOutsideBlockingScope allow_wait_;
   };
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // Only the bounded Electron permission-check call may dispatch incoming
+  // synchronous getters while Browser waits. Ordinary tasks and other
+  // sequences retain Chromium's process-wide interrupt policy.
+  static void IncreaseScopedInterruptCount();
+  static void DecreaseScopedInterruptCount();
+  class ScopedAllowSyncCallInterrupts {
+   public:
+    ScopedAllowSyncCallInterrupts() { IncreaseScopedInterruptCount(); }
+    ScopedAllowSyncCallInterrupts(const ScopedAllowSyncCallInterrupts&) =
+        delete;
+    ScopedAllowSyncCallInterrupts& operator=(
+        const ScopedAllowSyncCallInterrupts&) = delete;
+    ~ScopedAllowSyncCallInterrupts() { DecreaseScopedInterruptCount(); }
+  };
+#endif
 };
 
 class ScopedAllowSyncCallForTesting {

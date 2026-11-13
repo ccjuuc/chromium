@@ -16,6 +16,7 @@ component("policy") {
     "features.h",
     "sandbox.cc",
     "sandbox.h",
+    "sandbox_delegate.cc",
     "sandbox_delegate.h",
     "sandbox_type.cc",
     "sandbox_type.h",
@@ -27,7 +28,10 @@ component("policy") {
     "//base",
     "//sandbox/policy/mojom",
   ]
-  public_deps = [ "//sandbox:common" ]
+  public_deps = [
+    "//sandbox:common",
+    "//xenon_overlay/buildflags",
+  ]
   if (is_android) {
     sources += [
       "linux/bpf_base_policy_linux.cc",

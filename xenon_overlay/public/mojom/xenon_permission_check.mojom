@@ -1,0 +1,15 @@
+// Copyright 2026 The Xenon Overlay Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+module xenon.ipc.mojom;
+
+import "mojo/public/mojom/base/values.mojom";
+
+// A dedicated pipe for the synchronous Electron permission-check callback.
+// The Browser may close this pipe from an independent sequence when a callback
+// exceeds its deadline, without closing the application's main service pipe.
+interface ElectronPermissionCheck {
+  [Sync]
+  Check(mojo_base.mojom.Value request) => (bool granted, string error);
+};

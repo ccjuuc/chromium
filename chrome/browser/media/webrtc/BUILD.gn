@@ -94,6 +94,7 @@ source_set("webrtc") {
   ]
 
   public_deps = [
+    "//xenon_overlay/buildflags",
     "//base",
     "//build:android_buildflags",
     "//build:buildflag_header_h",

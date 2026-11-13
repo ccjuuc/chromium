@@ -6,6 +6,7 @@
 #define CONTENT_PUBLIC_BROWSER_TRACING_CONTROLLER_H_
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include <memory>
 #include <set>
@@ -16,6 +17,7 @@
 #include "base/task/task_traits.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/tracing_delegate.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 namespace base {
 namespace trace_event {
@@ -47,6 +49,11 @@ class TracingController {
    public:
     virtual void ReceiveTraceChunk(std::unique_ptr<std::string> chunk) = 0;
     virtual void ReceivedTraceFinalContents() = 0;
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    // Existing endpoints retain their completion callback. Consumers that
+    // publish a persisted recording can distinguish failed native flushes.
+    virtual void ReceivedTraceFinalContentsWithStatus(bool success);
+#endif
 
    protected:
     friend class base::RefCountedThreadSafe<TraceDataEndpoint>;
@@ -137,6 +144,11 @@ class TracingController {
 
   // Check if the tracing system is tracing
   virtual bool IsTracing() = 0;
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // UI-sequence identity changes on each accepted recording. Zero indicates
+  // a backend without identity support; it must not be treated as an owner.
+  CONTENT_EXPORT virtual uint64_t GetRecordingGeneration() const;
+#endif
 
  protected:
   virtual ~TracingController() {}

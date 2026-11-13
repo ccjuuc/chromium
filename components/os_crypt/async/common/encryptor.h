@@ -16,6 +16,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "mojo/public/cpp/bindings/default_construct_tag.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 namespace mojo {
 template <typename DataViewType, typename T>
@@ -158,6 +159,15 @@ class COMPONENT_EXPORT(OS_CRYPT_ASYNC) Encryptor
   // Returns true if there is at least one key contained within the encryptor
   // that could be used for encryption.
   virtual bool IsEncryptionAvailable() const;
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // Identifies the provider selected by OSCryptAsync without exposing key
+  // material. Desktop embedders use this to distinguish the Linux fixed-key
+  // fallback from an OS-backed user key; availability must still be checked.
+  const std::string& GetEncryptionProviderName() const {
+    return provider_for_encryption_;
+  }
+#endif
 
   // Returns true if there is at least one key contained within the encryptor
   // that might be able to decrypt data. Note that if this function returns true

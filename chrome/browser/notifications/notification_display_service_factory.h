@@ -7,6 +7,7 @@
 
 #include "base/no_destructor.h"
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 class NotificationDisplayService;
 class Profile;
@@ -18,6 +19,10 @@ class NotificationDisplayServiceFactory : public ProfileKeyedServiceFactory {
   NotificationDisplayServiceFactory& operator=(
       const NotificationDisplayServiceFactory&) = delete;
   static NotificationDisplayService* GetForProfile(Profile* profile);
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // Cleanup must not initialize the platform notification bridge.
+  static NotificationDisplayService* GetForProfileIfExists(Profile* profile);
+#endif
   static NotificationDisplayServiceFactory* GetInstance();
 
  private:

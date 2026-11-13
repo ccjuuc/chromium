@@ -459,12 +459,22 @@ base::DictValue XenonChildProcessBridge::Spawn(
   return Success().Set("pid", static_cast<int>(child->process.pid));
 }
 
-base::DictValue XenonChildProcessBridge::Call(
-    const std::string& container_id,
-    const std::string& endpoint_id,
-    const base::DictValue& request) {
+base::DictValue XenonChildProcessBridge::Call(const std::string& container_id,
+                                              const std::string& endpoint_id,
+                                              const base::DictValue& request) {
   const auto* id = request.FindString("id");
   const auto* operation = request.FindString("op");
+  if (operation && *operation == "validate-signal") {
+    // Read-only validation must happen before execFile launches a process. Use
+    // this platform's ABI constants instead of duplicating signal tables in JS.
+    const auto* name = request.FindString("signal");
+    const int signal =
+        name ? SignalNumber(*name) : request.FindInt("signal").value_or(-1);
+    if (signal <= 0 || std::string_view(SignalName(signal)) == "UNKNOWN") {
+      return Failure(UV_EINVAL);
+    }
+    return Success().Set("signal", signal);
+  }
   if (!id || id->empty() || !operation) {
     return Failure(UV_EINVAL);
   }

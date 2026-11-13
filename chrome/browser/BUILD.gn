@@ -1262,7 +1262,10 @@ source_set("core") {
   ]
 
   if (enable_xenon_service) {
-    deps += [ "//xenon_overlay/common/ipc:privileged_schemes" ]
+    deps += [
+      "//xenon_overlay/common/ipc:privileged_schemes",
+      "//xenon_overlay/common/ipc:renderer_command_line",
+    ]
   }
 
   if (!is_android) {
@@ -2842,7 +2845,10 @@ source_set("browser") {
   ]
 
   if (enable_xenon_service) {
-    deps += [ "//xenon_overlay/chrome/browser" ]
+    deps += [
+      "//xenon_overlay/chrome/browser",
+      "//xenon_overlay/chrome/browser:app_runtime",
+    ]
   }
 
   if (enable_webui_ntp) {

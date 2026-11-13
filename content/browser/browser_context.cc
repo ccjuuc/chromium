@@ -55,6 +55,7 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/storage_partition_config.h"
+#include "content/public/browser/storage_partition_path.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_switches.h"
 #include "media/base/media_switches.h"
@@ -160,6 +161,22 @@ StoragePartition* BrowserContext::GetStoragePartitionForUrl(
 
   return GetStoragePartition(storage_partition_config, can_create);
 }
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+base::FilePath GetStoragePartitionPath(
+    const BrowserContext* context,
+    const StoragePartitionConfig& storage_partition_config) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  if (storage_partition_config.in_memory()) {
+    return {};
+  }
+  const auto relative = StoragePartitionImplMap::GetStoragePartitionPath(
+      storage_partition_config.partition_domain(),
+      storage_partition_config.partition_name());
+  return relative.empty() ? context->GetPath()
+                          : context->GetPath().Append(relative);
+}
+#endif
 
 void BrowserContext::ForEachLoadedStoragePartition(
     base::FunctionRef<void(StoragePartition*)> fn) {

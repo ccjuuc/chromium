@@ -3,13 +3,16 @@
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_protocol.h"
 
 #include <algorithm>
+#include <array>
 #include <map>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 #include "base/byte_size.h"
 #include "base/containers/span.h"
+#include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/self_deleting.h"
@@ -26,6 +29,7 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/data_pipe_producer.h"
 #include "mojo/public/cpp/system/string_data_source.h"
+#include "net/base/filename_util.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
@@ -33,11 +37,14 @@
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/resource_request_body.h"
 #include "services/network/public/cpp/self_deleting_url_loader_factory.h"
+#include "services/network/public/mojom/early_hints.mojom.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/origin.h"
+#include "xenon_overlay/chrome/browser/asar/xenon_asar_url_loader_factory.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_guest.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_session_bridge.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_web_request.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
 #include "xenon_overlay/common/ipc/xenon_privileged_schemes.h"
@@ -72,6 +79,25 @@ const PrivilegedScheme* DeclaredScheme(const std::string& scheme) {
     }
   }
   return nullptr;
+}
+bool IsSupportedHandlerScheme(std::string_view scheme) {
+  if (scheme.empty() || scheme.size() > 64 ||
+      !base::IsAsciiAlpha(scheme.front()) ||
+      !std::ranges::all_of(scheme, [](char c) {
+        return base::IsAsciiLower(c) || base::IsAsciiDigit(c) || c == '+' ||
+               c == '-' || c == '.';
+      })) {
+    return false;
+  }
+  // Built-in file interception is supported without altering URL privileges.
+  // Other browser/network-owned schemes need their own interception routes.
+  constexpr auto reserved = std::to_array<std::string_view>(
+      {"about",    "android-app",   "blob",         "content",    "data",
+       "devtools", "dom-distiller", "externalfile", "filesystem", "ftp",
+       "http",     "https",         "isolated-app", "javascript", "mailto",
+       "tel",      "urn",           "view-source",  "ws",         "wss"});
+  return !base::StartsWith(scheme, "chrome") &&
+         !std::ranges::contains(reserved, scheme);
 }
 std::optional<SessionKey> ResolveSession(content::WebContents* contents) {
   if (!contents) {
@@ -116,17 +142,25 @@ bool StillRegistered(const SessionKey& session,
              generation;
 }
 
-class ProtocolLoader final : public network::mojom::URLLoader {
+class ProtocolLoader final : public network::mojom::URLLoader,
+                             public network::mojom::URLLoaderClient {
  public:
-  ProtocolLoader(SessionKey session,
-                 std::string scheme,
-                 uint64_t generation,
-                 const network::ResourceRequest& request,
-                 mojo::PendingReceiver<network::mojom::URLLoader> receiver,
-                 mojo::PendingRemote<network::mojom::URLLoaderClient> client)
+  ProtocolLoader(
+      SessionKey session,
+      std::string scheme,
+      uint64_t generation,
+      int32_t request_id,
+      uint32_t options,
+      const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
+      const network::ResourceRequest& request,
+      mojo::PendingReceiver<network::mojom::URLLoader> receiver,
+      mojo::PendingRemote<network::mojom::URLLoaderClient> client)
       : session_(std::move(session)),
         scheme_(std::move(scheme)),
         generation_(generation),
+        request_id_(request_id),
+        options_(options),
+        traffic_annotation_(traffic_annotation),
         request_(request),
         receiver_(this, std::move(receiver)),
         client_(std::move(client)) {
@@ -164,7 +198,7 @@ class ProtocolLoader final : public network::mojom::URLLoader {
       return !net::HttpUtil::IsSafeHeader(header.key, header.value);
     });
     if (response_type_ == network::mojom::FetchResponseType::kCors &&
-        (!request_.request_initiator ||
+        (!request_.request_initiator || !DeclaredScheme(scheme_) ||
          !DeclaredScheme(scheme_)->cors_enabled ||
          request_.mode ==
              network::mojom::RequestMode::kCorsWithForcedPreflight ||
@@ -202,6 +236,7 @@ class ProtocolLoader final : public network::mojom::URLLoader {
     base::DictValue details;
     details.Set("url", request_.url.spec());
     details.Set("method", request_.method);
+    details.Set("referrer", request_.referrer.spec());
     details.Set("headers", std::move(headers));
     details.Set("body", base::Value(std::move(body)));
     timer_.Start(
@@ -220,7 +255,60 @@ class ProtocolLoader final : public network::mojom::URLLoader {
                       const std::optional<GURL>&) override {
     Finish(net::ERR_NOT_IMPLEMENTED);
   }
-  void SetPriority(net::RequestPriority, int32_t) override {}
+  void SetPriority(net::RequestPriority priority,
+                   int32_t intra_priority) override {
+    if (file_loader_) {
+      file_loader_->SetPriority(priority, intra_priority);
+    }
+  }
+
+  void OnReceiveEarlyHints(network::mojom::EarlyHintsPtr hints) override {
+    client_->OnReceiveEarlyHints(std::move(hints));
+  }
+  void OnReceiveResponse(
+      network::mojom::URLResponseHeadPtr head,
+      mojo::ScopedDataPipeConsumerHandle body,
+      std::optional<mojo_base::BigBuffer> metadata) override {
+    // The disk loader reads a main-process-authorized path. Its internal file
+    // URL must not replace the original custom protocol's response policy.
+    head->response_type = response_type_;
+    if (request_.method == "HEAD" || head->headers->response_code() == 204 ||
+        head->headers->response_code() == 205 ||
+        head->headers->response_code() == 304) {
+      // URLLoader clients still need a body pipe whose peer closes, even
+      // when HTTP semantics suppress every byte. An absent pipe leaves
+      // renderer fetch waiting for its body forever.
+      mojo::ScopedDataPipeProducerHandle producer;
+      mojo::ScopedDataPipeConsumerHandle consumer;
+      if (mojo::CreateDataPipe(nullptr, producer, consumer) != MOJO_RESULT_OK) {
+        Finish(net::ERR_INSUFFICIENT_RESOURCES);
+        return;
+      }
+      producer.reset();
+      client_->OnReceiveResponse(std::move(head), std::move(consumer),
+                                 std::move(metadata));
+      Finish(net::OK);
+      return;
+    }
+    client_->OnReceiveResponse(std::move(head), std::move(body),
+                               std::move(metadata));
+  }
+  void OnReceiveRedirect(const net::RedirectInfo&,
+                         network::mojom::URLResponseHeadPtr) override {
+    Finish(net::ERR_NOT_IMPLEMENTED);
+  }
+  void OnUploadProgress(int64_t current,
+                        int64_t total,
+                        OnUploadProgressCallback callback) override {
+    client_->OnUploadProgress(current, total, std::move(callback));
+  }
+  void OnTransferSizeUpdated(int32_t delta) override {
+    client_->OnTransferSizeUpdated(delta);
+  }
+  void OnComplete(const network::URLLoaderCompletionStatus& status) override {
+    client_->OnComplete(status);
+    delete this;
+  }
 
  private:
   ~ProtocolLoader() override = default;
@@ -262,14 +350,22 @@ class ProtocolLoader final : public network::mojom::URLLoader {
       return;
     }
     const auto& value = result->value.GetDict();
+    if (const auto error = value.FindInt("error")) {
+      Finish(*error < 0 ? *error : net::ERR_INVALID_RESPONSE);
+      return;
+    }
     const auto status = value.FindInt("status");
     const auto* status_text = value.FindString("statusText");
     const auto* headers = value.FindList("headers");
     const auto* body = value.FindBlob("body");
+    const auto* file_path = value.FindString("path");
+    const auto* kind = value.FindString("kind");
+    const bool file_response = kind && *kind == "file";
     if (!status || *status < 200 || *status > 599 || !status_text ||
         status_text->size() > 1024 ||
-        !net::HttpUtil::IsValidHeaderValue(*status_text) || !headers || !body ||
-        body->size() > kMaxBody) {
+        !net::HttpUtil::IsValidHeaderValue(*status_text) || !headers ||
+        (!file_response && (!body || body->size() > kMaxBody)) ||
+        (file_response && (!file_path || body))) {
       Finish(net::ERR_INVALID_RESPONSE);
       return;
     }
@@ -301,18 +397,45 @@ class ProtocolLoader final : public network::mojom::URLLoader {
       Finish(net::ERR_NOT_IMPLEMENTED);
       return;
     }
-    if (response_type_ == network::mojom::FetchResponseType::kCors) {
-      const auto check = network::cors::CheckAccess(
-          request_.url,
-          head->headers->GetNormalizedHeader("Access-Control-Allow-Origin"),
-          head->headers->GetNormalizedHeader(
-              "Access-Control-Allow-Credentials"),
-          request_.credentials_mode, *request_.request_initiator);
-      if (!check.has_value()) {
-        Finish(net::ERR_ACCESS_DENIED);
+    if (file_response) {
+      const auto path = base::FilePath::FromUTF8Unsafe(*file_path);
+      if (file_path->find('\0') != std::string::npos || !path.IsAbsolute()) {
+        Finish(net::ERR_INVALID_ARGUMENT);
         return;
       }
+      network::ResourceRequest file_request = request_;
+      file_request.url = net::FilePathToFileURL(path);
+      if (const auto* method = value.FindString("method")) {
+        if (!net::HttpUtil::IsToken(*method)) {
+          Finish(net::ERR_INVALID_ARGUMENT);
+          return;
+        }
+        file_request.method = *method;
+      }
+      if (const auto* referrer = value.FindString("referrer")) {
+        file_request.referrer = GURL(*referrer);
+        if (!referrer->empty() && !file_request.referrer.is_valid()) {
+          Finish(net::ERR_INVALID_ARGUMENT);
+          return;
+        }
+      }
+      if (!file_request.url.is_valid()) {
+        Finish(net::ERR_INVALID_ARGUMENT);
+        return;
+      }
+      timer_.Stop();
+      auto file_client = file_client_.BindNewPipeAndPassRemote();
+      file_client_.set_disconnect_handler(
+          base::BindOnce(&ProtocolLoader::Finish, weak_factory_.GetWeakPtr(),
+                         net::ERR_FAILED));
+      xenon::CreateAsarProtocolFileURLLoader(
+          file_request, request_id_, options_, traffic_annotation_,
+          file_loader_.BindNewPipeAndPassReceiver(), std::move(file_client),
+          head->headers);
+      return;
     }
+    // The factory is always wrapped below. Its response proxy applies
+    // webRequest's trusted header changes before enforcing this CORS check.
     if ((*status == 204 || *status == 205 || *status == 304) &&
         !body->empty()) {
       Finish(net::ERR_INVALID_RESPONSE);
@@ -348,6 +471,9 @@ class ProtocolLoader final : public network::mojom::URLLoader {
   SessionKey session_;
   std::string scheme_;
   uint64_t generation_;
+  const int32_t request_id_;
+  const uint32_t options_;
+  const net::MutableNetworkTrafficAnnotationTag traffic_annotation_;
   network::ResourceRequest request_;
   std::string id_;
   bool pending_ = false;
@@ -356,6 +482,8 @@ class ProtocolLoader final : public network::mojom::URLLoader {
       network::mojom::FetchResponseType::kDefault;
   mojo::Receiver<network::mojom::URLLoader> receiver_;
   mojo::Remote<network::mojom::URLLoaderClient> client_;
+  mojo::Remote<network::mojom::URLLoader> file_loader_;
+  mojo::Receiver<network::mojom::URLLoaderClient> file_client_{this};
   std::unique_ptr<mojo::DataPipeProducer> producer_;
   base::OneShotTimer timer_;
   base::WeakPtrFactory<ProtocolLoader> weak_factory_{this};
@@ -378,13 +506,15 @@ class ProtocolFactory final : public network::SelfDeletingURLLoaderFactory {
   ~ProtocolFactory() override = default;
   void CreateLoaderAndStart(
       mojo::PendingReceiver<network::mojom::URLLoader> receiver,
-      int32_t,
-      uint32_t,
+      int32_t request_id,
+      uint32_t options,
       const network::ResourceRequest& request,
       mojo::PendingRemote<network::mojom::URLLoaderClient> client,
-      const net::MutableNetworkTrafficAnnotationTag&) override {
-    auto* loader = new ProtocolLoader(session_, scheme_, generation_, request,
-                                      std::move(receiver), std::move(client));
+      const net::MutableNetworkTrafficAnnotationTag& traffic_annotation)
+      override {
+    auto* loader = new ProtocolLoader(
+        session_, scheme_, generation_, request_id, options, traffic_annotation,
+        request, std::move(receiver), std::move(client));
     loader->Start();
   }
   SessionKey session_;
@@ -405,9 +535,9 @@ bool SetElectronProtocolHandler(content::BrowserContext* context,
   const auto handled = dict ? dict->FindBool("handled") : std::nullopt;
   if (!context || !scheme || !partition || !handled ||
       partition->size() > 1024 || partition->find('\0') != std::string::npos ||
-      !DeclaredScheme(*scheme)) {
+      !IsSupportedHandlerScheme(*scheme)) {
     *error =
-        "ERR_INVALID_ARG_VALUE: invalid or undeclared protocol registration";
+        "ERR_INVALID_ARG_VALUE: invalid or unsupported protocol registration";
     return false;
   }
   SessionKey session{reinterpret_cast<uintptr_t>(context),
@@ -445,10 +575,11 @@ std::vector<std::string> GetElectronProtocolSchemes(
   if (!session) {
     return result;
   }
-  for (const auto& scheme : GetStartupPrivilegedSchemes()) {
-    auto it = Registrations().find(Key(*session, scheme.scheme));
-    if (it != Registrations().end()) {
-      result.push_back(scheme.scheme);
+  for (const auto& [key, registration] : Registrations()) {
+    if (key == Key(*session, registration.scheme) &&
+        StillRegistered(*session, registration.scheme,
+                        registration.generation)) {
+      result.push_back(registration.scheme);
     }
   }
   return result;
@@ -470,6 +601,9 @@ CreateElectronProtocolURLLoaderFactory(content::WebContents* contents,
   base::MakeSelfDeleting<ProtocolFactory>(
       remote.InitWithNewPipeAndPassReceiver(), *session, scheme,
       it->second.generation);
-  return remote;
+  return WrapElectronWebRequestFactory(
+      contents->GetBrowserContext(),
+      contents->GetPrimaryMainFrame()->GetStoragePartition(), std::move(remote),
+      ElectronWebRequestFactoryKind::kCustomProtocol);
 }
 }  // namespace xenon::ipc

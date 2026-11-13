@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
+#include "base/functional/callback.h"
 #include "base/no_destructor.h"
 #include "base/values.h"
 #include "ui/gfx/geometry/point.h"
@@ -22,6 +23,7 @@
 
 namespace content {
 class BrowserContext;
+class RenderFrameHost;
 class WebContents;
 }
 
@@ -41,22 +43,32 @@ class XenonElectronWindowHost : public views::WidgetObserver {
   static XenonElectronWindowHost* GetInstance();
 
   bool CreateHostedWindow(content::BrowserContext* context,
-                    int width,
-                    int height,
-                    bool show,
-                    bool frame,
-                    bool transparent,
-                    int32_t parent_id,
-                    const std::string& title,
-                    const std::string& container_id,
-                    int32_t* window_id,
-                    uint64_t* hwnd,
-                    std::string* error,
-                    const std::string& partition = "",
-                    bool has_shadow = true,
-                    const std::string& title_bar_style = "default");
+                          int width,
+                          int height,
+                          bool show,
+                          bool frame,
+                          bool transparent,
+                          int32_t parent_id,
+                          const std::string& title,
+                          const std::string& container_id,
+                          int32_t* window_id,
+                          uint64_t* hwnd,
+                          std::string* error,
+                          const std::string& partition = "",
+                          bool has_shadow = true,
+                          const std::string& title_bar_style = "default",
+                          bool paint_when_initially_hidden = true);
   void LoadURL(int32_t window_id, const std::string& url);
+  void LoadURLAsync(int32_t window_id,
+                    const std::string& url,
+                    base::OnceCallback<void(base::Value, std::string)> reply);
+  void WaitForMainFrameRuntime(
+      int32_t window_id,
+      base::OnceCallback<void(base::Value, std::string)> reply);
   void SetVisible(int32_t window_id, bool visible);
+  void OnFirstNonEmptyLayout(content::RenderFrameHost* frame);
+  void SetAppUserModelIdForContainer(const std::string& container_id,
+                                    const std::string& app_id);
   bool Call(int32_t window_id,
             const std::string& command,
             const base::Value& arguments,
@@ -68,6 +80,11 @@ class XenonElectronWindowHost : public views::WidgetObserver {
       content::WebContents* web_contents) const;
   const base::DictValue* GetWebPreferencesForWebContents(
       content::WebContents* web_contents) const;
+  bool GetOwnedWindowTarget(const std::string& container_id,
+                            int32_t window_id,
+                            views::Widget** widget,
+                            content::WebContents** web_contents,
+                            std::string* error) const;
   // Resolves only a live BrowserWindow owned by the requesting container.
   // Native playback services use these local objects without exposing their
   // native view addresses to the application's Utility process.
@@ -99,14 +116,6 @@ class XenonElectronWindowHost : public views::WidgetObserver {
   std::vector<WindowMenuEntry> GetWindowMenuEntries() const;
   bool CanActivateWindowFromMenu(int32_t window_id) const;
   bool ActivateWindowFromMenu(int32_t window_id);
-
-  // Electron `dialog.showOpenDialog`. Runs on the Browser UI thread with an
-  // owner HWND from a hosted BrowserWindow. Empty result means cancel.
-  std::vector<std::string> ShowOpenDialog(
-      const std::string& title,
-      bool directory,
-      bool allow_multi,
-      const std::vector<std::string>& extensions);
 
   // views::WidgetObserver:
   void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
@@ -153,11 +162,16 @@ class XenonElectronWindowHost : public views::WidgetObserver {
     bool has_loaded_url = false;
     // A show:false helper must not become the application's sidebar entry.
     bool ever_shown = false;
+    // Initial hidden rendering ends on the first show or an explicit
+    // hide/minimize.
+    bool initial_paint_pending = false;
+    bool paint_when_initially_hidden = true;
     // ipcMain already emitted cancellable close and authorized destruction.
     bool close_authorized = false;
     // Rendering has been quiesced after an irreversible close decision.
     bool close_prepared = false;
     bool ready_to_show_emitted = false;
+    bool observes_before_input = false;
     bool frameless = false;
     bool transparent = false;
     // Construction establishes the geometry baseline before JS can subscribe.
@@ -213,6 +227,12 @@ class XenonElectronWindowHost : public views::WidgetObserver {
   void PrepareForClose(int32_t window_id);
   void ObserveWebContents(int32_t window_id, content::WebContents* contents);
   void ApplyBackgroundThrottling(int32_t window_id);
+  void UpdateContentsVisibility(
+      int32_t window_id,
+      std::optional<bool> widget_visible = std::nullopt);
+  void ApplyKeyboardFilter(int32_t window_id,
+                            bool cancel = false,
+                            bool cancel_pending = true);
   void UpdateUserAgent(int32_t window_id,
                        content::WebContents* contents,
                        const std::string& user_agent);
@@ -243,6 +263,7 @@ class XenonElectronWindowHost : public views::WidgetObserver {
   raw_ptr<std::vector<BoundsChange>> bounds_transaction_ = nullptr;
   std::optional<std::string> bounds_transaction_container_;
   std::map<int32_t, Entry> windows_;
+  std::map<std::string, std::string> app_user_model_ids_;
   std::unique_ptr<PopupMenuSession> popup_menu_;
 };
 

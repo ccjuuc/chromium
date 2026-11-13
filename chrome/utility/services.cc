@@ -32,8 +32,18 @@
 #include "printing/buildflags/buildflags.h"
 #include "services/passage_embeddings/passage_embeddings_service.h"
 #include "ui/accessibility/accessibility_features.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/public/mojom/xenon_service.mojom.h"
 #include "xenon_overlay/services/xenon_service_impl.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/process/process.h"
+#include "content/public/common/content_switches.h"
+#include "xenon_overlay/public/xenon_ipc_switches.h"
+#endif
 
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/services/readaloud/read_aloud_playback_controller.h"  // nogncheck
@@ -163,8 +173,58 @@ auto RunFilePatcher(mojo::PendingReceiver<patch::mojom::FilePatcher> receiver) {
 
 auto RunXenonService(
     mojo::PendingReceiver<xenon::mojom::XenonMainService> receiver) {
-  return std::make_unique<xenon::XenonServiceImpl>(std::move(receiver));
+  auto service = std::make_unique<xenon::XenonServiceImpl>(std::move(receiver));
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  service->SetNativeRetirementHooks(
+      base::BindRepeating([]() -> base::OnceClosure {
+        auto* utility = content::UtilityThread::Get();
+        return utility ? utility->AcquireXenonProcessKeepAlive()
+                       : base::OnceClosure();
+      }),
+      base::BindRepeating([](std::string runtime) {
+        LOG(ERROR)
+            << "Native runtime did not drain before the shutdown deadline: "
+            << runtime;
+        const auto* command_line = base::CommandLine::ForCurrentProcess();
+        if (command_line->GetSwitchValueASCII(switches::kProcessType) ==
+                switches::kUtilityProcess &&
+            command_line->HasSwitch(
+                xenon::ipc::switches::kIsolatedElectronService)) {
+          // The application has stopped. A native thread that ignores cleanup
+          // cannot safely be freed or allowed to retain this process forever.
+          // Only its dedicated Utility is terminated; the OS reclaims the
+          // entire runtime without running callbacks on freed V8/DLL state.
+          base::Process::TerminateCurrentProcessImmediately(1);
+        }
+      }));
+#endif
+  return service;
 }
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+auto RunXenonUtilityProcess(
+    mojo::PendingReceiver<xenon::ipc::mojom::UtilityProcessService> receiver) {
+  auto service = std::make_unique<xenon::XenonServiceImpl>(std::move(receiver));
+  service->SetNativeRetirementHooks(
+      base::BindRepeating([]() -> base::OnceClosure {
+        auto* utility = content::UtilityThread::Get();
+        return utility ? utility->AcquireXenonProcessKeepAlive()
+                       : base::OnceClosure();
+      }),
+      base::BindRepeating([](std::string detail) {
+        LOG(ERROR) << "Utility process native runtime failed to drain: "
+                   << detail;
+        // This factory owns an independent OS Utility, so a stalled addon is
+        // reclaimed together with its process without freeing live V8 state.
+        base::Process::TerminateCurrentProcessImmediately(1);
+      }));
+  service->SetUtilityExitHandler(base::BindRepeating([](int exit_code) {
+    // Called only after NativeRuntimeRetirement has destroyed all runtimes.
+    base::Process::TerminateCurrentProcessImmediately(exit_code);
+  }));
+  return service;
+}
+#endif
 
 auto RunUnzipper(mojo::PendingReceiver<unzip::mojom::Unzipper> receiver) {
   return std::make_unique<unzip::UnzipperImpl>(std::move(receiver));
@@ -500,6 +560,9 @@ void RegisterElevatedMainThreadServices(mojo::ServiceFactory& services) {
 void RegisterMainThreadServices(mojo::ServiceFactory& services) {
   services.Add(RunFilePatcher);
   services.Add(RunXenonService);
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  services.Add(RunXenonUtilityProcess);
+#endif
   services.Add(RunUnzipper);
   services.Add(RunCSVPasswordParser);
   services.Add(ContentBookmarkParser);

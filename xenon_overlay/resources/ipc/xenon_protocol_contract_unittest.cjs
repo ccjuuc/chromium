@@ -93,6 +93,62 @@ test('scheme registration rejects invalid arguments without consuming registrati
   assert.equal(calls[0], schemes);
 });
 
+test('unsupported feature privileges accept false and reject true', () => {
+  const calls = [];
+  const {protocol} = createRuntime(value => calls.push(value));
+  for (const name of ['stream', 'allowServiceWorkers']) {
+    const disabled = [{scheme: 'fixture', privileges: {[name]: false}}];
+    protocol.registerSchemesAsPrivileged(disabled);
+    assert.equal(calls.at(-1), disabled);
+    assert.throws(() => protocol.registerSchemesAsPrivileged([
+      {scheme: 'fixture', privileges: {[name]: true}},
+    ]), {name: 'Error', code: 'ERR_NOT_SUPPORTED'});
+    assert.throws(() => protocol.registerSchemesAsPrivileged([
+      {scheme: 'fixture', privileges: {[name]: 1}},
+    ]), {name: 'TypeError'});
+  }
+  assert.equal(calls.length, 2);
+});
+
+test('optional scheme declarations reach native validation and report disabled capabilities once', () => {
+  const calls = [];
+  const messages = [];
+  const {context, protocol} = createRuntime(value => calls.push(value));
+  context.__xenonLog = message => messages.push(message);
+  const schemes = declaration();
+  Object.assign(schemes[0].privileges, {codeCache: true, allowServiceWorkers: false});
+  Object.freeze(schemes[0].privileges);
+  Object.freeze(schemes[0]);
+  Object.freeze(schemes);
+  protocol.registerSchemesAsPrivileged(schemes);
+  protocol.registerSchemesAsPrivileged(schemes);
+  assert.deepEqual(calls, [schemes, schemes]);
+  assert.equal(messages.length, 1);
+  assert.ok(messages.every(message => message.includes('disabled')));
+  for (const name of ['codeCache']) {
+    assert.ok(messages.some(message => message.includes(name)));
+    protocol.registerSchemesAsPrivileged([{scheme: 'other', privileges: {[name]: false}}]);
+    assert.throws(() => protocol.registerSchemesAsPrivileged([
+      {scheme: 'other', privileges: {[name]: 1}},
+    ]), {name: 'TypeError'});
+  }
+  assert.equal(messages.length, 1);
+});
+
+test('optional declarations do not bypass host rejection or consume deferred diagnostics', () => {
+  const failure = new Error('Scheme privileges were not declared at browser startup');
+  let rejected = true;
+  const messages = [];
+  const {context, protocol} = createRuntime(() => { if (rejected) throw failure; });
+  context.__xenonLog = message => messages.push(message);
+  const schemes = [{scheme: 'fixture-view', privileges: {secure: true, codeCache: true}}];
+  assert.throws(() => protocol.registerSchemesAsPrivileged(schemes), error => error === failure);
+  assert.equal(messages.length, 0);
+  rejected = false;
+  protocol.registerSchemesAsPrivileged(schemes);
+  assert.equal(messages.length, 1);
+});
+
 test('scheme registration fails explicitly when the native host is unavailable', () => {
   const {context, protocol} = createRuntime();
   assert.throws(() => protocol.registerSchemesAsPrivileged(declaration()),
@@ -170,7 +226,9 @@ test('the global protocol delegates default-session handlers only after readines
   assert.equal(protocol.unknownCapability, undefined);
   assert.equal(await Promise.resolve(protocol), protocol);
   for (const name of Object.keys(handlers).filter(name =>
-      !['handle', 'unhandle', 'isProtocolHandled'].includes(name))) {
+      !['handle', 'unhandle', 'isProtocolHandled', 'registerFileProtocol',
+        'interceptFileProtocol', 'unregisterProtocol', 'uninterceptProtocol',
+        'isProtocolRegistered', 'isProtocolIntercepted'].includes(name))) {
     for (const target of [protocol, handlers, otherHandlers]) {
       assert.throws(() => target[name]('fixture-view', () => {}),
           {code: 'ERR_NOT_SUPPORTED'});
@@ -224,15 +282,131 @@ test('protocol requests preserve binary responses, status and headers within the
       {url: 'fixture-view://icon/a', method: 'GET', headers: []}), /no handler/);
 });
 
-test('protocol registration is transactional and rejects undeclared schemes and duplicates', () => {
+test('protocol registration is transactional and keeps unsupported builtins explicit', () => {
   const {context, protocol} = handledRuntime();
-  assert.throws(() => protocol.handle('https', () => {}), /not declared/);
+  for (const scheme of [
+    'https', 'http', 'about', 'android-app', 'blob', 'content', 'data',
+    'devtools', 'dom-distiller', 'externalfile', 'filesystem', 'ftp',
+    'isolated-app', 'javascript', 'mailto', 'tel', 'urn', 'view-source',
+    'ws', 'wss', 'chrome', 'chrome-extension', 'chrome-untrusted',
+  ]) {
+    assert.throws(() => protocol.handle(scheme, () => {}), {code: 'ERR_NOT_SUPPORTED'});
+    assert.equal(protocol.isProtocolHandled(scheme), false);
+  }
+  assert.throws(() => protocol.handle('a'.repeat(65), () => {}), {name: 'TypeError'});
   context.__xenonBrowserWindowCall = () => { throw new Error('host rejected'); };
   assert.throws(() => protocol.handle('fixture-view', () => {}), /host rejected/);
   assert.equal(protocol.isProtocolHandled('fixture-view'), false);
   context.__xenonBrowserWindowCall = () => {};
   protocol.handle('fixture-view', () => {});
   assert.throws(() => protocol.handle('fixture-view', () => {}), /already handled/);
+});
+
+test('ordinary custom handlers do not require privileged scheme declarations', async () => {
+  const {context, protocol, calls} = handledRuntime();
+  vm.runInContext(`__xenonElectron.protocol.handle('unprivileged-test', () => new Response('ordinary'))`, context);
+  const response = await context.__xenonDispatchProtocol('', 'ordinary',
+      {url: 'unprivileged-test://item/resource', method: 'GET', headers: []});
+  assert.equal(new TextDecoder().decode(response.body), 'ordinary');
+  assert.equal(protocol.isProtocolRegistered('unprivileged-test'), true);
+  assert.equal(protocol.isProtocolIntercepted('unprivileged-test'), false);
+  assert.equal(protocol.unregisterProtocol('unprivileged-test'), true);
+  assert.equal(protocol.unregisterProtocol('unprivileged-test'), false);
+  assert.deepEqual(calls.map(value => value.scheme), ['unprivileged-test', 'unprivileged-test']);
+});
+
+test('built-in file interception is isolated and supports Response.error', async () => {
+  const {context, protocol, session} = handledRuntime();
+  vm.runInContext(`__xenonElectron.protocol.handle('file', () => Response.error())`, context);
+  assert.equal(protocol.isProtocolHandled('file'), true);
+  assert.equal(protocol.isProtocolIntercepted('file'), true);
+  assert.equal(protocol.isProtocolRegistered('file'), false);
+  assert.equal(session.fromPartition('persist:other').protocol.isProtocolHandled('file'), false);
+  const result = await context.__xenonDispatchProtocol('', 'blocked-file',
+      {url: 'file:///C:/fixture/secret.txt', method: 'GET', headers: []});
+  assert.deepEqual({...result}, {error: -2});
+  assert.equal(protocol.unregisterProtocol('file'), false);
+  protocol.unhandle('file');
+  assert.equal(protocol.isProtocolIntercepted('file'), false);
+  assert.throws(() => protocol.unhandle('file'), /Failed to unhandle/);
+});
+
+test('Response.error has standard empty-body and immutable-header behavior', async () => {
+  const {context} = handledRuntime();
+  const response = vm.runInContext('Response.error()', context);
+  const native = Response.error();
+  for (const key of ['status', 'statusText', 'type', 'ok', 'body', 'bodyUsed', 'url', 'redirected'])
+    assert.equal(response[key], native[key]);
+  for (const method of ['append', 'set', 'delete'])
+    assert.throws(() => response.headers[method]('x-test', 'value'), {name: 'TypeError'});
+  assert.equal(await response.text(), await native.text());
+  assert.equal(response.bodyUsed, native.bodyUsed);
+  assert.equal(await response.text(), '');
+  assert.equal(response.clone().type, 'error');
+  assert.throws(() => response.clone().headers.set('x-test', 'value'), {name: 'TypeError'});
+});
+
+test('file protocol callbacks return native paths and preserve response metadata', async () => {
+  const {context, protocol, session} = handledRuntime();
+  let callbackResult = 'not called';
+  assert.equal(protocol.registerFileProtocol('fixture-file', (request, callback) => {
+    assert.equal(request.url, 'fixture-file://host/assets/data.bin');
+    assert.equal(request.method, 'POST');
+    assert.equal(request.referrer, 'fixture-file://host/');
+    assert.equal(request.headers['x-token'], 'request-value');
+    assert.deepEqual([...request.uploadData[0].bytes], [3, 9]);
+    callback({path: 'C:\\发行目录\\app.asar\\assets\\data.bin',
+      headers: {'X-Fixture': ['one', 'two'], 'Content-Security-Policy': "default-src 'self'"},
+      mimeType: 'application/octet-stream', method: 'GET'});
+    callback({path: 'must-not-replace-first-response'});
+  }, value => callbackResult = value), true);
+  assert.equal(callbackResult, null);
+  assert.equal(session.fromPartition('persist:other').protocol.isProtocolRegistered('fixture-file'), false);
+  const result = await context.__xenonDispatchProtocol('', 'native-path', {
+    url: 'fixture-file://host/assets/data.bin', method: 'POST', referrer: 'fixture-file://host/',
+    headers: [['x-token', 'request-value']], body: new Uint8Array([3, 9]),
+  });
+  assert.equal(result.kind, 'file');
+  assert.equal(result.path, 'C:\\发行目录\\app.asar\\assets\\data.bin');
+  assert.equal(result.body, undefined);
+  assert.equal(result.method, 'GET');
+  assert.deepEqual(JSON.parse(JSON.stringify(result.headers)), [
+    ['x-fixture', 'one'], ['x-fixture', 'two'], ['content-security-policy', "default-src 'self'"],
+    ['content-type', 'application/octet-stream'], ['access-control-allow-origin', '*'],
+  ]);
+  assert.equal(protocol.registerFileProtocol('fixture-file', () => {}, error => {
+    assert.match(error.message, /registered/);
+  }), false);
+  assert.equal(protocol.unregisterProtocol('fixture-file'), true);
+});
+
+test('file protocol responses preserve explicit network failures and reject invalid metadata', async () => {
+  const {context, protocol} = handledRuntime();
+  const request = {url: 'fixture-file://host/entry', method: 'GET', headers: []};
+  protocol.registerFileProtocol('fixture-file', (_request, callback) => callback({error: -6}));
+  assert.deepEqual({...await context.__xenonDispatchProtocol('', 'missing', request)}, {error: -6});
+  protocol.unregisterProtocol('fixture-file');
+  for (const value of [undefined, null, [], {path: ''}, {path: 'C:\\file\0name'},
+    {error: 0}, {error: -1.5}, {path: 'C:\\file', headers: {'x-test': 'bad\r\nheader'}},
+    {path: 'C:\\file', statusCode: 0}, {path: 'C:\\file', headers: {'x-huge': 'x'.repeat(65537)}}]) {
+    protocol.registerFileProtocol('fixture-file', (_request, callback) => callback(value));
+    await assert.rejects(context.__xenonDispatchProtocol('', 'invalid', request));
+    protocol.unregisterProtocol('fixture-file');
+  }
+});
+
+test('cancelling a legacy file callback releases the pending request and ignores late replies', async () => {
+  const {context, protocol} = handledRuntime();
+  let reply;
+  protocol.registerFileProtocol('fixture-file', (_request, callback) => reply = callback);
+  const request = {url: 'fixture-file://host/entry', method: 'GET', headers: []};
+  const pending = context.__xenonDispatchProtocol('', 'legacy-cancel', request);
+  context.__xenonCancelProtocol('legacy-cancel');
+  await assert.rejects(pending, /aborted/);
+  reply('C:\\late-path');
+  protocol.unregisterProtocol('fixture-file');
+  protocol.registerFileProtocol('fixture-file', (_request, callback) => callback('C:\\new-path'));
+  assert.equal((await context.__xenonDispatchProtocol('', 'legacy-cancel', request)).path, 'C:\\new-path');
 });
 
 test('protocol handler errors and non-Response results fail explicitly', async () => {

@@ -1,0 +1,28 @@
+Name: web-streams-polyfill
+Short Name: web_streams_polyfill
+URL: https://github.com/MattiasBuelens/web-streams-polyfill
+Version: 4.5.1
+License: MIT
+License File: LICENSE
+Security Critical: yes
+Shipped: yes
+
+Description:
+Maintained implementation of WHATWG ReadableStream, WritableStream,
+TransformStream, byte/BYOB streams and queuing strategies. Plain V8 main and
+Worker contexts use the ponyfill; renderer contexts keep native Blink streams.
+
+Source:
+https://registry.npmjs.org/web-streams-polyfill/-/web-streams-polyfill-4.5.1.tgz
+Archive SHA-256:
+5d7862804fd5a3e018a84b78631159368ecdd683c71725a02758cfed3f827a03
+Archive npm integrity:
+sha512-pFmV/G8K9uKW3I3xx3vqpKYLBer7K1wZej5uU66zhtjzG1bfE6e+OHNxhmGb9UsXe+geX4/lndxJDgs7wbYO9g==
+
+Local Modifications:
+package.json and LICENSE are byte-for-byte copies of the npm archive. One final
+newline is appended to dist/ponyfill.js for the bootstrap fragment contract;
+JavaScript bytes before that newline are unchanged. The bootstrap provides
+lexical CommonJS module/exports bindings. No runtime package install or
+network access is needed. BYOB buffer ownership relies on V8's ArrayBuffer
+transfer primitive, checked before installing this fallback.

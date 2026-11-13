@@ -51,6 +51,7 @@ void EnsureNodeHostLibraryLoaded() {
 namespace {
 
 using RegisterFunc = napi_value (*)(napi_env, napi_value);
+using GetModuleApiVersionFunc = int32_t (*)();
 
 #if BUILDFLAG(IS_WIN) && BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
 using GetRegisteredModuleCountFunc = size_t (*)();
@@ -249,29 +250,6 @@ base::ScopedNativeLibrary LoadNodeAddonLibrary(
   if (!library.is_valid()) {
     return {};
   }
-#if BUILDFLAG(IS_MAC)
-  // env 的同步清理可能排队 uv_close 回调。保留 image，而非延长 env 寿命，
-  // 确保后续正常 loop 泵执行 native-only close 时仍有有效代码和静态注册记录。
-  void* retained = dlopen(addon_path.value().c_str(),
-                          RTLD_LAZY | RTLD_LOCAL | RTLD_NOLOAD | RTLD_NODELETE);
-  if (!retained) {
-    if (error) {
-      const char* message = dlerror();
-      error->message =
-          message ? message : "Failed to retain native addon image";
-    }
-    return {};
-  }
-  const bool matches = library.get()->type == base::DYNAMIC_LIB &&
-                       retained == library.get()->dylib;
-  dlclose(retained);
-  if (!matches) {
-    if (error) {
-      error->message = "Native addon image changed during loading";
-    }
-    return {};
-  }
-#endif
   return library;
 }
 
@@ -279,7 +257,9 @@ v8::Local<v8::Value> LoadAndInitializeNodeAddon(
     v8::Isolate* isolate,
     v8::Local<v8::Context> context,
     const base::FilePath& addon_path,
-    LoadedNodeAddon* loaded_addon) {
+    LoadedNodeAddon* loaded_addon,
+    bool allow_default_uv_loop,
+    uv_loop_s* runtime_loop) {
   VLOG(1) << "[NapiLoader] Loading native library from: " << addon_path.value();
 #if BUILDFLAG(IS_WIN)
   EnsureNodeHostLibraryLoaded();
@@ -292,14 +272,17 @@ v8::Local<v8::Value> LoadAndInitializeNodeAddon(
     return {};
   }
   return InitializeLoadedNodeAddon(isolate, context, std::move(library),
-                                   loaded_addon);
+                                   loaded_addon, allow_default_uv_loop,
+                                   runtime_loop);
 }
 
 v8::Local<v8::Value> InitializeLoadedNodeAddon(
     v8::Isolate* isolate,
     v8::Local<v8::Context> context,
     base::ScopedNativeLibrary library,
-    LoadedNodeAddon* loaded_addon) {
+    LoadedNodeAddon* loaded_addon,
+    bool allow_default_uv_loop,
+    uv_loop_s* runtime_loop) {
   if (!loaded_addon || !library.is_valid()) {
     return {};
   }
@@ -360,30 +343,42 @@ v8::Local<v8::Value> InitializeLoadedNodeAddon(
   }
   VLOG(1) << "[NapiLoader] Entry point resolved. Creating N-API env...";
 
-  auto env = std::make_unique<napi_env__>(isolate, context);
+  auto get_api_version = reinterpret_cast<GetModuleApiVersionFunc>(
+      base::GetFunctionPointerFromNativeLibrary(
+          library_handle, "node_api_module_get_api_version_v1"));
+  const int32_t module_api_version =
+      get_api_version ? get_api_version()
+                      : napi_env__::kDefaultModuleApiVersion;
+  auto env =
+      std::make_unique<napi_env__>(isolate, context, module_api_version);
+  env->allow_default_uv_loop = allow_default_uv_loop;
+  env->uv_loop = runtime_loop;
+  // Registration can start native work and then fail. Transfer ownership
+  // before invoking any addon code so the caller can retire that work safely.
+  loaded_addon->library = std::move(library);
+  loaded_addon->env = std::move(env);
+  napi_env native_env = loaded_addon->env.get();
   napi_handle_scope initialization_scope = nullptr;
-  if (napi_open_handle_scope(env.get(), &initialization_scope) != napi_ok) {
+  if (napi_open_handle_scope(native_env, &initialization_scope) != napi_ok) {
     return {};
   }
 
   v8::Local<v8::Object> exports_obj = v8::Object::New(isolate);
-  napi_value exports = env->CreateValue(exports_obj);
+  napi_value exports = native_env->CreateValue(exports_obj);
 
   VLOG(1) << "[NapiLoader] Invoking addon entry point (register_func)...";
-  napi_value result = register_func(env.get(), exports);
+  napi_value result = register_func(native_env, exports);
 
   if (!result) {
     LOG(ERROR) << "[NapiLoader] Failed to initialize Node-API addon: register_func returned null";
-    napi_close_handle_scope(env.get(), initialization_scope);
+    napi_close_handle_scope(native_env, initialization_scope);
     return {};
   }
 
   v8::Global<v8::Value> persistent_result(isolate, result->Get());
-  napi_close_handle_scope(env.get(), initialization_scope);
+  napi_close_handle_scope(native_env, initialization_scope);
   v8::Local<v8::Value> exports_result = persistent_result.Get(isolate);
   persistent_result.Reset();
-  loaded_addon->library = std::move(library);
-  loaded_addon->env = std::move(env);
   VLOG(1) << "[NapiLoader] Addon initialization complete.";
   return exports_result;
 }

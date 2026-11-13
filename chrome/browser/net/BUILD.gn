@@ -11,6 +11,7 @@ import("//extensions/buildflags/buildflags.gni")
 import("//net/features.gni")
 import("//net/gm/gm.gni")
 import("//third_party/protobuf/proto_library.gni")
+import("//xenon_overlay/buildflags/features.gni")
 
 if (is_android) {
   import("//build/config/android/rules.gni")
@@ -219,8 +220,13 @@ source_set("impl") {
     "//sandbox/policy",
     "//services/network:network_service",
     "//services/strings",
+    "//xenon_overlay/buildflags",
     "//xenon_overlay/chrome/browser:managed_certificates",
   ]
+
+  if (enable_xenon_service) {
+    deps += [ "//xenon_overlay/chrome/browser:electron_cookie_encryption" ]
+  }
 
   if (enable_extensions_core) {
     deps += [ "//chrome/browser/ui/webui/extensions:headers" ]

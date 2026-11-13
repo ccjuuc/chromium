@@ -185,6 +185,11 @@
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "pdf/buildflags.h"
 #include "printing/buildflags/buildflags.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_permission_delegate.h"
+#endif
 #include "profile_load_tracker_win.h"
 #include "services/data_decoder/public/cpp/data_decoder.h"
 #include "services/preferences/public/mojom/preferences.mojom.h"
@@ -1440,7 +1445,18 @@ ProfileImpl::GetBrowsingDataRemoverDelegate() {
 // instead of repeating them inside all Profile implementations.
 content::PermissionControllerDelegate*
 ProfileImpl::GetPermissionControllerDelegate() {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  return xenon::ipc::GetElectronPermissionControllerDelegate(
+      this, base::BindRepeating(
+                [](Profile* profile) -> content::PermissionControllerDelegate* {
+                  return profile->ShutdownStarted()
+                             ? nullptr
+                             : PermissionManagerFactory::GetForProfile(profile);
+                },
+                base::Unretained(this)));
+#else
   return PermissionManagerFactory::GetForProfile(this);
+#endif
 }
 
 content::ClientHintsControllerDelegate*

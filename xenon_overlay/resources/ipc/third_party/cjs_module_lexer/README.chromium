@@ -1,0 +1,26 @@
+Name: cjs-module-lexer
+Short Name: cjs_module_lexer
+URL: https://github.com/nodejs/cjs-module-lexer
+Version: 2.3.0
+License: MIT
+License File: LICENSE
+Security Critical: yes
+Shipped: yes
+
+Description:
+Node.js CommonJS named-export and re-export detection. Xenon's ESM loader uses
+the synchronous JavaScript implementation to discover namespace exports before
+evaluation, preserving CommonJS side-effect ordering during graph linking.
+
+Source:
+https://registry.npmjs.org/cjs-module-lexer/-/cjs-module-lexer-2.3.0.tgz
+Archive SHA-256:
+b647d01fc1cc2a14ca575f5158042359ed4b8b61bb9284792e5afa7aaa6678f9
+Archive npm integrity:
+sha512-lmNyBzi6iYiqyrExTctfmjd8tInx+dHu9PBomTfH5RXS53c27JMFJgzNv5TyAnm3PgGf+MLy0+Ws41/HlVxdKQ==
+
+Local Modifications:
+None. lexer.js, package.json and LICENSE are byte-for-byte copies of the npm archive.
+The host bootstrap supplies a lexical CommonJS module object around lexer.js;
+no WebAssembly, external Node runtime, network access, or package installation
+is required at runtime.

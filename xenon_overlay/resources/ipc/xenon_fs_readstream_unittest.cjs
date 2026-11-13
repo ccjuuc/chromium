@@ -300,15 +300,17 @@ for (const kind of ['main', 'renderer']) {
     assert.equal(reads.length, 1);
     const closed = new Promise(resolve => stream.on('close', () => { events.push('close'); resolve(); }));
     stream.destroy();
-    await closed;
     release();
+    // Like Node's pending open, stream construction settles before destruction.
+    // Its result must still be discarded, without ready/data/end events.
+    await closed;
     await new Promise(setImmediate);
     assert.deepEqual(events, ['close']);
     assert.equal(stream.bytesRead, 0);
     assert.equal(stream.pending, false);
   });
 
-  test(`${kind}: destroying in the decoder tail suppresses end and duplicate close`, async () => {
+  test(`${kind}: destroying in the decoder tail preserves Node EOF ordering and closes once`, async () => {
     const {fs, file} = runtime(kind, Buffer.from([0x41, 0xf0, 0x9f]));
     const stream = fs.createReadStream(file, {encoding: 'utf8', highWaterMark: 1});
     const events = [];
@@ -317,7 +319,7 @@ for (const kind of ['main', 'renderer']) {
       events.push(value);
       if (value === '\ufffd') stream.destroy();
     }).on('error', reject).on('close', () => { events.push('close'); resolve(); }));
-    assert.deepEqual(events, ['A', '\ufffd', 'close']);
+    assert.deepEqual(events, ['A', '\ufffd', 'end', 'close']);
   });
 
   test(`${kind}: unsupported descriptor options fail without submitting I/O`, async () => {

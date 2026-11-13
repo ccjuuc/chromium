@@ -3,14 +3,27 @@
     window.process = globalThis.process;
     window.require = globalThis.require;
     window.__xenonElectronRequire = globalThis.require;
-    const evaluate = globalThis.eval;
+    const executeScript = typeof transport.executeJavaScript === 'function'
+        ? transport.executeJavaScript.bind(transport) : undefined;
     ipcRenderer.on('__xenon:execute-javascript', async (_event, id, code) => {
       try {
-        const value = await evaluate(code);
+        if (!executeScript) {
+          throw Object.assign(new Error('Native main-world script execution is unavailable'),
+                              {code: 'ERR_NOT_SUPPORTED'});
+        }
+        const value = await executeScript(id, code);
         transport.send('__xenon:execute-javascript-result', id, true, value);
       } catch (error) {
-        transport.send('__xenon:execute-javascript-result', id, false, String(error.message || error));
+        try {
+          transport.send('__xenon:execute-javascript-result', id, false, error);
+        } catch (_) {
+          // Navigation/disconnect may revoke the endpoint while awaiting. The
+          // main process rejects its matching request when that endpoint dies.
+        }
       }
+    });
+    ipcRenderer.on('__xenon:cancel-execute-javascript', (_event, id) => {
+      transport.cancelExecuteJavaScript?.(id);
     });
 
     // A webview owns a Browser-managed inner WebContents. The blank iframe is
@@ -57,7 +70,7 @@
       const preferences = () => {
         // Explicit webpreferences override the attribute's default, matching
         // Electron's guest-view preference merge order.
-        const prefs = {contextIsolation: true, sandbox: true,
+        const prefs = {contextIsolation: true,
           webSecurity: !el.hasAttribute('disablewebsecurity')};
         for (const item of (el.getAttribute('webpreferences') || '').split(',')) {
           const [key, raw] = item.trim().split('=');
@@ -65,7 +78,9 @@
           prefs[key] = raw === undefined || /^(yes|true|1)$/i.test(raw) ? true :
               /^(no|false|0)$/i.test(raw) ? false : raw;
         }
-        prefs.preload = el.getAttribute('preload') || '';
+        const preload = el.getAttribute('preload') || '';
+        prefs.preload = preload.startsWith('file:')
+          ? urlModule.fileURLToPath(new URL(preload)) : preload;
         prefs.userAgent = el.getAttribute('useragent') || '';
         prefs.nodeIntegration = el.hasAttribute('nodeintegration');
         prefs.nodeIntegrationInSubFrames = el.hasAttribute('nodeintegrationinsubframes');
@@ -187,28 +202,54 @@
     // a process-global window ID or an application-specific preload alias.
     const preferences = injectedPaths.webPreferences ||
         transport.sendSync('__xenon:renderer-web-preferences');
+    const sandbox = preferences?.sandbox === true;
+    let sandboxRuntime;
+    if (sandbox) {
+      try {
+        sandboxRuntime = createSandboxedPreloadRuntime({
+          electron, process, Buffer, EventEmitter, loadBuiltin: loadBuiltinModule,
+        });
+      } catch (error) {
+        console.error('[xenon-ipc] Unable to initialize sandboxed preload:', error);
+        ipcRenderer.send('__xenon:preload-error', preferences.preload || '',
+            String(error.message || error));
+        return;
+      }
+    }
     const preloads = [...(injectedPaths.sessionPreloads || [])];
-    if (preferences?.preload) preloads.push({filePath: preferences.preload});
+    if (preferences?.preload) preloads.push({filePath: preferences.preload,
+      source: sandbox ? injectedPaths.windowPreloadSource : undefined,
+      error: sandbox ? injectedPaths.windowPreloadError : undefined});
     for (const preload of preloads) {
       try {
         if (preferences.contextIsolation !== false && !injectedPaths.contextIsolated)
           throw new Error('Preload requires an isolated execution world');
-        if (preload.source === undefined) electronRequire(preload.filePath);
-        else loadHostedCjsModule(preload.filePath, preload.source);
+        if (preload.error) throw new Error(preload.error);
+        if (sandboxRuntime) sandboxRuntime.run(preload.filePath, preload.source);
+        else loadHostedPreload(preload.filePath, preload.source);
       } catch (error) {
         console.error('[xenon-ipc] Unable to load preload script:', preload.filePath, error);
         ipcRenderer.send('__xenon:preload-error', preload.filePath, String(error.message || error));
       }
     }
-    // A guest preload can keep Node APIs in its CommonJS closure without
-    // giving the remote page require(), process, or the privileged transport.
-    if (injectedPaths.isGuest && !injectedPaths.contextIsolated &&
+    if (sandboxRuntime) return;
+    // BrowserWindow preferences include the explicit nodeIntegration default;
+    // origin-authorized WebUI documents have no such window preferences.
+    // Both ordinary windows and guests keep Node APIs in preload closures,
+    // without granting them to page scripts when integration is disabled.
+    const windowControlsNode = injectedPaths.isGuest ||
+        Object.prototype.hasOwnProperty.call(preferences || {}, 'nodeIntegration');
+    if (windowControlsNode && !injectedPaths.contextIsolated &&
         preferences?.nodeIntegration !== true) {
       for (const key of ['require', 'process', 'Buffer', 'global', '__filename',
                         '__dirname', 'xenonIpcRenderer', '__xenonElectronRequire',
-                        '__xenonElectronIpc', '__xenonPaths']) {
+                        '__xenonElectronIpc', '__xenonPaths',
+                        '__xenonPageHandler__', '__xenonPageCallbackRouter__',
+                        '__xenonPageHandlerBound__']) {
         delete globalThis[key];
       }
+      // Preserve an API deliberately exposed by preload under this name.
+      if (globalThis.electron === electron) delete globalThis.electron;
     } else if (globalThis.electron === undefined) {
       globalThis.electron = electron;
     }

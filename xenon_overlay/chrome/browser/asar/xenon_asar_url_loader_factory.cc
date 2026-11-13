@@ -125,11 +125,12 @@ class AsarURLLoader : public network::mojom::URLLoader {
       const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
       mojo::SharedRemote<network::mojom::URLLoaderFactory> file_factory,
       mojo::PendingReceiver<network::mojom::URLLoader> loader,
-      mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
+      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+      scoped_refptr<net::HttpResponseHeaders> protocol_headers) {
     auto* asar_url_loader = new AsarURLLoader;
     asar_url_loader->Start(request, request_id, options, traffic_annotation,
                            std::move(file_factory), std::move(loader),
-                           std::move(client));
+                           std::move(client), std::move(protocol_headers));
     ANALYZER_SKIP_THIS_PATH();
   }
 
@@ -152,7 +153,8 @@ class AsarURLLoader : public network::mojom::URLLoader {
              const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
              mojo::SharedRemote<network::mojom::URLLoaderFactory> file_factory,
              mojo::PendingReceiver<network::mojom::URLLoader> loader,
-             mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
+             mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+             scoped_refptr<net::HttpResponseHeaders> protocol_headers) {
     base::FilePath path;
     if (!net::FileURLToFilePath(request.url, &path)) {
       mojo::Remote<network::mojom::URLLoaderClient>(std::move(client))
@@ -174,7 +176,8 @@ class AsarURLLoader : public network::mojom::URLLoader {
     // ASAR entries have the same origin and CORS rules as ordinary file URLs.
     // A grant to display local subresources must not also make their bytes
     // readable through XHR or an untainted canvas.
-    if (network::cors::IsCorsEnabledRequestMode(request.mode) &&
+    if (!protocol_headers &&
+        network::cors::IsCorsEnabledRequestMode(request.mode) &&
         !request.request_initiator) {
       mojo::Remote<network::mojom::URLLoaderClient>(std::move(client))
           ->OnComplete(
@@ -187,8 +190,10 @@ class AsarURLLoader : public network::mojom::URLLoader {
             switches::kDisableWebSecurity) ||
         (request.request_initiator &&
          request.request_initiator->IsSameOriginWith(request.url));
-    const auto response_type =
-        network::cors::CalculateResponseType(request.mode, is_same_origin);
+    const auto response_type = protocol_headers
+                                   ? network::mojom::FetchResponseType::kBasic
+                                   : network::cors::CalculateResponseType(
+                                         request.mode, is_same_origin);
     if (response_type == network::mojom::FetchResponseType::kCors) {
       mojo::Remote<network::mojom::URLLoaderClient>(std::move(client))
           ->OnComplete(
@@ -252,16 +257,20 @@ class AsarURLLoader : public network::mojom::URLLoader {
       return;
     }
 
-    total_bytes_written_ = total_bytes_to_send;
+    const bool head_only = request.method == "HEAD";
+    total_bytes_written_ = head_only ? 0 : total_bytes_to_send;
     auto head = network::mojom::URLResponseHead::New();
     head->response_type = response_type;
     head->request_start = base::TimeTicks::Now();
     head->response_start = base::TimeTicks::Now();
     head->content_length = base::saturated_cast<int64_t>(total_bytes_to_send);
     head->headers =
-        base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 200 OK");
+        protocol_headers
+            ? std::move(protocol_headers)
+            : base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 200 OK");
+    head->headers->GetMimeTypeAndCharset(&head->mime_type, &head->charset);
 
-    if (first_byte_to_send < read_result.bytes_read) {
+    if (!head_only && first_byte_to_send < read_result.bytes_read) {
       const size_t write_size = std::min<uint64_t>(
           read_result.bytes_read - first_byte_to_send, total_bytes_to_send);
       const base::span<const uint8_t> bytes =
@@ -279,7 +288,8 @@ class AsarURLLoader : public network::mojom::URLLoader {
       total_bytes_to_send -= write_size;
     }
 
-    if (!net::GetMimeTypeFromFile(path, &head->mime_type)) {
+    if (head->mime_type.empty() &&
+        !net::GetMimeTypeFromFile(path, &head->mime_type)) {
       std::string sniffed_type;
       net::SniffMimeType(
           std::string_view(initial_read_buffer.data(), read_result.bytes_read),
@@ -288,14 +298,14 @@ class AsarURLLoader : public network::mojom::URLLoader {
       head->mime_type = std::move(sniffed_type);
       head->did_mime_sniff = true;
     }
-    if (!head->mime_type.empty()) {
+    if (!head->mime_type.empty() && !head->headers->HasHeader("Content-Type")) {
       head->headers->AddHeader(net::HttpRequestHeaders::kContentType,
                                head->mime_type);
     }
     client_->OnReceiveResponse(std::move(head), std::move(consumer_handle),
                                std::nullopt);
 
-    if (total_bytes_to_send == 0) {
+    if (head_only || total_bytes_to_send == 0) {
       OnFileWritten(MOJO_RESULT_OK);
       return;
     }
@@ -356,7 +366,8 @@ void CreateAsarURLLoader(
     const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
     mojo::SharedRemote<network::mojom::URLLoaderFactory> file_factory,
     mojo::PendingReceiver<network::mojom::URLLoader> loader,
-    mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
+    mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+    scoped_refptr<net::HttpResponseHeaders> protocol_headers = nullptr) {
   base::ThreadPool::CreateSequencedTaskRunner(
       {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
        base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN})
@@ -364,8 +375,36 @@ void CreateAsarURLLoader(
           FROM_HERE,
           base::BindOnce(&AsarURLLoader::CreateAndStart, request, request_id,
                          options, traffic_annotation, std::move(file_factory),
-                         std::move(loader), std::move(client)));
+                         std::move(loader), std::move(client),
+                         std::move(protocol_headers)));
 }
+
+// The ordinary-file half of a main-process-authorized protocol response. This
+// factory stays private to one response and cannot be obtained by a renderer.
+class ProtocolFileFactory final : public network::SelfDeletingURLLoaderFactory {
+ public:
+  ProtocolFileFactory(
+      mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver,
+      scoped_refptr<net::HttpResponseHeaders> headers,
+      base::SelfDeletingPassKey key)
+      : SelfDeletingURLLoaderFactory(std::move(receiver), key),
+        headers_(std::move(headers)) {}
+
+ private:
+  ~ProtocolFileFactory() override = default;
+  void CreateLoaderAndStart(
+      mojo::PendingReceiver<network::mojom::URLLoader> loader,
+      int32_t,
+      uint32_t,
+      const network::ResourceRequest& request,
+      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+      const net::MutableNetworkTrafficAnnotationTag&) override {
+    content::CreateFileURLLoaderBypassingSecurityChecks(
+        request, std::move(loader), std::move(client), nullptr,
+        /*allow_directory_listing=*/false, headers_);
+  }
+  scoped_refptr<net::HttpResponseHeaders> headers_;
+};
 
 class AsarURLLoaderFactory : public network::SelfDeletingURLLoaderFactory {
  public:
@@ -417,6 +456,26 @@ CreateAsarURLLoaderFactory() {
                                 remote.InitWithNewPipeAndPassReceiver(),
                                 std::move(file_factory)));
   return remote;
+}
+
+void CreateAsarProtocolFileURLLoader(
+    const network::ResourceRequest& request,
+    int32_t request_id,
+    uint32_t options,
+    const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
+    mojo::PendingReceiver<network::mojom::URLLoader> loader,
+    mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+    scoped_refptr<net::HttpResponseHeaders> response_headers) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK(response_headers);
+  mojo::PendingRemote<network::mojom::URLLoaderFactory> file_factory;
+  base::MakeSelfDeleting<ProtocolFileFactory>(
+      file_factory.InitWithNewPipeAndPassReceiver(), response_headers);
+  CreateAsarURLLoader(request, request_id, options, traffic_annotation,
+                      mojo::SharedRemote<network::mojom::URLLoaderFactory>(
+                          std::move(file_factory)),
+                      std::move(loader), std::move(client),
+                      std::move(response_headers));
 }
 
 }  // namespace xenon

@@ -3,18 +3,50 @@
   function createHttpServerModule(net) {
     const requestHighWaterMark = 64 * 1024;
     const token = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-    const reasons = {100: 'Continue', 200: 'OK', 201: 'Created', 204: 'No Content',
-      301: 'Moved Permanently', 302: 'Found', 304: 'Not Modified', 400: 'Bad Request',
-      401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 405: 'Method Not Allowed',
-      408: 'Request Timeout', 413: 'Payload Too Large', 417: 'Expectation Failed',
-      431: 'Request Header Fields Too Large', 500: 'Internal Server Error',
-      501: 'Not Implemented', 503: 'Service Unavailable'};
+    // Node's public HTTP reason phrases (node:http.STATUS_CODES). Keep the
+    // exported mutable object and ServerResponse's defaults identical.
+    const reasons = {
+      100: 'Continue', 101: 'Switching Protocols', 102: 'Processing', 103: 'Early Hints',
+      200: 'OK', 201: 'Created', 202: 'Accepted', 203: 'Non-Authoritative Information',
+      204: 'No Content', 205: 'Reset Content', 206: 'Partial Content', 207: 'Multi-Status',
+      208: 'Already Reported', 226: 'IM Used', 300: 'Multiple Choices',
+      301: 'Moved Permanently', 302: 'Found', 303: 'See Other', 304: 'Not Modified',
+      305: 'Use Proxy', 307: 'Temporary Redirect', 308: 'Permanent Redirect',
+      400: 'Bad Request', 401: 'Unauthorized', 402: 'Payment Required', 403: 'Forbidden',
+      404: 'Not Found', 405: 'Method Not Allowed', 406: 'Not Acceptable',
+      407: 'Proxy Authentication Required', 408: 'Request Timeout', 409: 'Conflict',
+      410: 'Gone', 411: 'Length Required', 412: 'Precondition Failed',
+      413: 'Payload Too Large', 414: 'URI Too Long', 415: 'Unsupported Media Type',
+      416: 'Range Not Satisfiable', 417: 'Expectation Failed', 418: "I'm a Teapot",
+      421: 'Misdirected Request', 422: 'Unprocessable Entity', 423: 'Locked',
+      424: 'Failed Dependency', 425: 'Too Early', 426: 'Upgrade Required',
+      428: 'Precondition Required', 429: 'Too Many Requests',
+      431: 'Request Header Fields Too Large', 451: 'Unavailable For Legal Reasons',
+      500: 'Internal Server Error', 501: 'Not Implemented', 502: 'Bad Gateway',
+      503: 'Service Unavailable', 504: 'Gateway Timeout', 505: 'HTTP Version Not Supported',
+      506: 'Variant Also Negotiates', 507: 'Insufficient Storage', 508: 'Loop Detected',
+      509: 'Bandwidth Limit Exceeded', 510: 'Not Extended', 511: 'Network Authentication Required',
+    };
     function fail(code, message) { const error = new Error(message); error.code = code; return error; }
+    function validateHeaderName(name, label = 'Header name') {
+      if (typeof name !== 'string' || !token.test(name))
+        throw Object.assign(new TypeError(`${label} must be a valid HTTP token`),
+          {code: 'ERR_INVALID_HTTP_TOKEN'});
+    }
+    function validateHeaderValue(name, value) {
+      if (value === undefined)
+        throw Object.assign(new TypeError('Invalid undefined HTTP header value'),
+          {code: 'ERR_HTTP_INVALID_HEADER_VALUE'});
+      // RegExp performs ToString itself: Symbols must reject instead of using
+      // String(symbol)'s special conversion. Horizontal tab and latin1 are valid.
+      if (/[^\t\x20-\x7e\x80-\xff]/.test(value))
+        throw Object.assign(new TypeError('Invalid character in HTTP header value' +
+          (name === undefined ? '' : ' ["' + name + '"]')),
+          {code: 'ERR_INVALID_CHAR'});
+    }
     function header(name, value) {
-      if (!token.test(name)) throw fail('ERR_INVALID_HTTP_TOKEN', 'Invalid HTTP header name');
-      if (/[\x00-\x08\x0a-\x1f\x7f-\uffff]/.test(String(value))) {
-        throw fail('ERR_INVALID_CHAR', 'Invalid HTTP header value');
-      }
+      validateHeaderName(name);
+      validateHeaderValue(name, value);
     }
     function bytes(value, encoding) {
       if (typeof value === 'string') return Buffer.from(value, encoding);
@@ -407,5 +439,7 @@
         this.emit('connection', socket);
       }
     }
-    return {Server, IncomingMessage, ServerResponse, createServer: (options, listener) => new Server(options, listener)};
+    return {STATUS_CODES: reasons, validateHeaderName, validateHeaderValue,
+      Server, IncomingMessage, ServerResponse,
+      createServer: (options, listener) => new Server(options, listener)};
   }

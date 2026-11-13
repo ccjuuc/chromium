@@ -12,7 +12,9 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/unguessable_token.h"
+#include "crypto/hash.h"
 #include "net/base/filename_util.h"
 #include "url/gurl.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_app_runtime.h"
@@ -73,6 +75,19 @@ bool LoadElectronAppConfig(const base::FilePath& path,
         }
       } else if (key == "versionFromExecutable" && value.is_bool()) {
         continue;
+      } else if (key == "nativeAddonExecution" && value.is_string() &&
+                 (value.GetString() == "standard" ||
+                  value.GetString() == "shared")) {
+        continue;
+      } else if (key == "userDataPolicy" && value.is_string() &&
+                 (value.GetString() == "isolated" ||
+                  value.GetString() == "legacy-host")) {
+        continue;
+      } else if (key == "storageId" && value.is_string() &&
+                 !value.GetString().empty() &&
+                 value.GetString().size() <= 256 &&
+                 value.GetString().find('\0') == std::string::npos) {
+        continue;
       } else if (key == "parentWindowPairing" && value.is_list()) {
         continue;
       } else if (key == "privilegedSchemes") {
@@ -106,6 +121,25 @@ bool LoadElectronAppConfig(const base::FilePath& path,
   application = std::move(normalized_application);
   auto result = mojom::IpcMainConfig::New();
   result->container_id = container_id;
+  if (const auto* storage_id = descriptor.FindString("storageId")) {
+    result->storage_id = *storage_id;
+  }
+  if (const auto* policy = descriptor.FindString("userDataPolicy");
+      policy && *policy == "legacy-host") {
+    result->user_data_policy = mojom::UserDataPolicy::kLegacyHost;
+  }
+  // Descriptor-relative paths are resolved against the path the caller
+  // selected. Preserve it for relaunch: resolving a descriptor symlink here
+  // would change that base directory on the next launch.
+  result->launch_path =
+      (path.MatchesExtension(FILE_PATH_LITERAL(".json"))
+           ? path.NormalizePathSeparators().StripTrailingSeparators()
+           : application)
+          .AsUTF8Unsafe();
+  if (descriptor.FindString("nativeAddonExecution") &&
+      *descriptor.FindString("nativeAddonExecution") == "shared") {
+    result->native_addon_execution = mojom::NativeAddonExecution::kShared;
+  }
   base::ScopedClosureRunner remove_keys;
   if (const auto* key_path = descriptor.FindString("archivePublicKey")) {
     auto public_key_path = base::FilePath::FromUTF8Unsafe(*key_path);
@@ -194,6 +228,58 @@ bool LoadElectronAppConfig(const base::FilePath& path,
   }
   *config = std::move(result);
   return true;
+}
+
+base::expected<base::FilePath, std::string>
+ResolveElectronAppStorageUserDataPath(const mojom::IpcMainConfig& config) {
+  if (config.host_user_data_directory.find('\0') != std::string::npos ||
+      config.storage_id.size() > 256 ||
+      config.storage_id.find('\0') != std::string::npos) {
+    return base::unexpected(
+        "ERR_INVALID_ARG_VALUE: invalid application storage configuration");
+  }
+  const auto host =
+      base::FilePath::FromUTF8Unsafe(config.host_user_data_directory)
+          .NormalizePathSeparators()
+          .StripTrailingSeparators();
+  if (!host.IsAbsolute()) {
+    return base::unexpected(
+        "ERR_INVALID_ARG_VALUE: host userData must be absolute");
+  }
+  switch (config.user_data_policy) {
+    case mojom::UserDataPolicy::kLegacyHost:
+      return host;
+    case mojom::UserDataPolicy::kIsolated:
+      break;
+    default:
+      return base::unexpected("ERR_INVALID_ARG_VALUE: unknown userData policy");
+  }
+  std::string identity;
+  if (!config.storage_id.empty()) {
+    identity = "storage:" + config.storage_id;
+  } else if (!config.container_id.empty() && config.container_id != "default") {
+    identity = "container:" + config.container_id;
+  } else if (!config.app_path.empty()) {
+    if (config.app_path.find('\0') != std::string::npos) {
+      return base::unexpected(
+          "ERR_INVALID_ARG_VALUE: application path must not contain NUL");
+    }
+    const auto app = base::FilePath::FromUTF8Unsafe(config.app_path);
+    if (!app.IsAbsolute()) {
+      return base::unexpected(
+          "ERR_INVALID_ARG_VALUE: application storage requires an absolute "
+          "installation path");
+    }
+    identity =
+        "installation:" +
+        app.NormalizePathSeparators().StripTrailingSeparators().AsUTF8Unsafe();
+  } else {
+    // The command-line/embedded diagnostic container has no installation.
+    identity = "container:default";
+  }
+  return host.AppendASCII("ElectronApps")
+      .AppendASCII(base::HexEncodeLower(crypto::hash::Sha256(identity)))
+      .AppendASCII("UserData");
 }
 
 }  // namespace xenon::ipc

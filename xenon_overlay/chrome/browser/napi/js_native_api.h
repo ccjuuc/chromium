@@ -190,6 +190,14 @@ NAPI_EXTERN napi_status napi_fatal_error(const char* location, size_t location_l
 NAPI_EXTERN napi_status napi_define_class(napi_env env, const char* utf8name, size_t length, napi_callback constructor, void* data, size_t property_count, const napi_property_descriptor* properties, napi_value* result);
 
 // Wrap / Unwrap
+NAPI_EXTERN napi_status napi_type_tag_object(napi_env env,
+                                             napi_value object,
+                                             const napi_type_tag* type_tag);
+NAPI_EXTERN napi_status
+napi_check_object_type_tag(napi_env env,
+                           napi_value object,
+                           const napi_type_tag* type_tag,
+                           bool* result);
 NAPI_EXTERN napi_status napi_wrap(napi_env env, napi_value js_object, void* native_object, napi_finalize finalize_cb, void* finalize_hint, napi_ref* result);
 NAPI_EXTERN napi_status napi_unwrap(napi_env env, napi_value js_object, void** result);
 NAPI_EXTERN napi_status napi_remove_wrap(napi_env env, napi_value js_object, void** result);

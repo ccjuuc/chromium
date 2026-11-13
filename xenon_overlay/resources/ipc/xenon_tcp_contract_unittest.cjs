@@ -2,17 +2,19 @@
 const {readBootstrapPart} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
 const {EventEmitter} = require('node:events');
+const {Duplex} = require('node:stream');
+const settle = () => new Promise(resolve => setImmediate(resolve));
 const test = require('node:test');
 const vm = require('node:vm');
 
 function fixture(kind) {
   const sent = [];
   const send = (channel, payload) => sent.push({channel, payload});
-  const context = vm.createContext({EventEmitter, Buffer, Uint8Array, queueMicrotask,
+  const context = vm.createContext({EventEmitter, Duplex, Buffer, Uint8Array, queueMicrotask,
     setTimeout, clearTimeout, process: {platform: 'win32'}, __xenonPlatform: 'win32',
     transport: {send}, __xenonNetSend: send, console: {info() {}}});
   vm.runInContext('let dispatchXenonNet;\n' + readBootstrapPart('main/async_context.js') +
-    readBootstrapPart(`${kind}/net.js`) + '\nglobalThis.net = netModule; ' +
+    readBootstrapPart('common/net.js') + readBootstrapPart(`${kind}/net.js`) + '\nglobalThis.net = netModule; ' +
     'globalThis.deliver = dispatchXenonNet;', context);
   return {net: context.net, sent, deliver: (event, payload) =>
     context.deliver('__xenon:net:' + event, payload)};
@@ -38,7 +40,7 @@ for (const kind of ['main', 'renderer']) {
     server.close();
   });
 
-  test(`${kind} TCP write and end callbacks wait for OS completion, and reads survive end`, () => {
+  test(`${kind} TCP write and end callbacks wait for OS completion, and reads survive end`, async () => {
     const {net, sent, deliver} = fixture(kind);
     const socket = net.connect(1234, '127.0.0.1');
     const id = sent[0].payload.fromId;
@@ -51,11 +53,15 @@ for (const kind of ['main', 'renderer']) {
     const write = sent.at(-1).payload;
     socket.end('tail', () => events.push('finish'));
     assert.deepEqual(events, []);
-    assert.equal(sent.at(-1).channel, '__xenon:net:end');
+    assert.equal(sent.at(-1).channel, '__xenon:net:data');
     deliver('written', {toId: id, writeId: write.writeId});
     assert.deepEqual(events, ['write']);
+    deliver('written', {toId: id, writeId: sent.at(-1).payload.writeId});
+    assert.equal(sent.at(-1).channel, '__xenon:net:end');
     deliver('finish', {toId: id});
+    await settle();
     deliver('data', {toId: id, wire: {t: 's', d: 'reply'}});
+    await settle();
     assert.deepEqual(events, ['write', 'finish', 'reply']);
     assert.equal(socket.remotePort, 1234);
     assert.equal(socket.address().port, 40000);
@@ -73,6 +79,8 @@ for (const kind of ['main', 'renderer']) {
     deliver('connected', {toId: id, peerId: 'native-peer'});
     assert.equal(sent[1].channel, '__xenon:net:data');
     assert.deepEqual([...Buffer.from(sent[1].payload.wire.d, 'base64')], [1, 2, 3]);
+    assert.equal(sent.length, 2);
+    deliver('written', {toId: id, writeId: sent[1].payload.writeId});
     assert.equal(sent[2].channel, '__xenon:net:end');
     socket.destroy();
   });
@@ -101,15 +109,15 @@ for (const kind of ['main', 'renderer']) {
     deliver('error', {toId: id, code: 'ECONNREFUSED'});
     deliver('close', {toId: id});
     socket.destroy();
-    await Promise.resolve();
+    await settle();
     assert.deepEqual(events, ['ECONNREFUSED', true]);
     assert.deepEqual(failures, [
-      ['first', 'ERR_STREAM_DESTROYED'], ['binary', 'ERR_STREAM_DESTROYED'],
+      ['first', 'ERR_SOCKET_CLOSED_BEFORE_CONNECTION'], ['binary', 'ECONNREFUSED'],
     ]);
     assert.equal(socket.destroyed, true);
   });
 
-  test(`${kind} asynchronous write failure reports error and close even without a write callback`, () => {
+  test(`${kind} asynchronous write failure reports error and close even without a write callback`, async () => {
     for (const withCallback of [false, true]) {
       const {net, sent, deliver} = fixture(kind);
       const socket = net.connect(1234);
@@ -126,6 +134,7 @@ for (const kind of ['main', 'renderer']) {
       // The native bridge sends the socket error independently of write ACKs.
       deliver('error', {toId: id, code: 'EPIPE'});
       deliver('close', {toId: id});
+      await settle();
       assert.deepEqual(events, [
         ...(withCallback ? [['write', 'EPIPE']] : []),
         ['error', 'EPIPE'], ['close', true],
@@ -133,15 +142,18 @@ for (const kind of ['main', 'renderer']) {
     }
   });
 
-  test(`${kind} a Socket reconnects after EOF without carrying ended or paused state`, async () => {
+  test(`${kind} a Socket reconnects after EOF while retaining explicitly requested pause state`, async () => {
     const {net, sent, deliver} = fixture(kind);
     const socket = net.connect(1234);
     const firstId = sent[0].payload.fromId;
     deliver('connected', {toId: firstId, peerId: 'first-peer'});
+    socket.resume();
     socket.end();
     deliver('finish', {toId: firstId});
     deliver('end', {toId: firstId});
+    await settle();
     deliver('close', {toId: firstId});
+    await settle();
     assert.equal(socket.writableEnded, true);
     assert.equal(socket.readableEnded, true);
     socket.connect(2345);
@@ -152,7 +164,7 @@ for (const kind of ['main', 'renderer']) {
     assert.equal(socket.readableEnded, false);
     assert.equal(socket.isPaused(), false);
     // The previous connection's queued auto-end must not end the new one.
-    await Promise.resolve();
+    await settle();
     assert.equal(socket.writableEnded, false);
     const events = [];
     socket.on('data', bytes => events.push(bytes.toString()));
@@ -160,17 +172,20 @@ for (const kind of ['main', 'renderer']) {
     assert.equal(socket.write('new request'), true);
     socket.end();
     deliver('connected', {toId: nextId, peerId: 'second-peer'});
-    assert.equal(sent.at(-2).channel, '__xenon:net:data');
-    assert.equal(sent.at(-2).payload.toId, 'second-peer');
+    assert.equal(sent.at(-1).channel, '__xenon:net:data');
+    assert.equal(sent.at(-1).payload.toId, 'second-peer');
+    deliver('written', {toId: nextId, writeId: sent.at(-1).payload.writeId});
     assert.equal(sent.at(-1).channel, '__xenon:net:end');
     assert.equal(sent.at(-1).payload.toId, 'second-peer');
     deliver('data', {toId: firstId, wire: {t: 's', d: 'stale'}});
     deliver('data', {toId: nextId, wire: {t: 's', d: 'new reply'}});
     deliver('finish', {toId: nextId});
+    await settle();
     assert.deepEqual(events, ['new reply', 'finish']);
     socket.pause().destroy();
+    await settle();
     socket.connect(3456);
-    assert.equal(socket.isPaused(), false);
+    assert.equal(socket.isPaused(), true);
     socket.destroy();
   });
 
@@ -191,14 +206,13 @@ for (const kind of ['main', 'renderer']) {
     for (const options of [
       {localAddress: '127.0.0.1'}, {localPort: 32000}, {family: 6}, {hints: 32},
       {lookup() {}}, {autoSelectFamily: true}, {autoSelectFamilyAttemptTimeout: 100},
-      {noDelay: true}, {keepAlive: true}, {keepAliveInitialDelay: 1000},
+      {keepAlive: true}, {keepAliveInitialDelay: 1000},
       {timeout: 500}, {signal: new AbortController().signal},
     ]) {
       assert.throws(() => net.connect({port: 1234, ...options}),
         {code: 'ERR_NOT_SUPPORTED'}, JSON.stringify(Object.keys(options)));
     }
-    for (const options of [{highWaterMark: 1024},
-      {noDelay: true}, {keepAlive: true}]) {
+    for (const options of [{keepAlive: true}]) {
       assert.throws(() => net.createServer(options), {code: 'ERR_NOT_SUPPORTED'});
     }
     assert.deepEqual(sent, []);
@@ -220,7 +234,7 @@ for (const kind of ['main', 'renderer']) {
     deliver('data', {toId: 'paused-tcp', wire: {t: 's', d: 'first frame'}});
     assert.deepEqual(received, []);
     incoming.resume();
-    await Promise.resolve();
+    await settle();
     assert.deepEqual(received, ['first frame']);
     incoming.destroy();
     server.close();
@@ -290,7 +304,7 @@ for (const kind of ['main', 'renderer']) {
     assert.equal(socket.destroyed, false);
     assert.equal(socket.resume(), socket);
     assert.deepEqual(events, []);
-    await Promise.resolve();
+    await settle();
     assert.deepEqual(events, ['first', 'second', 'end', 'close']);
     assert.equal(socket.readableLength, 0);
     assert.equal(socket.readableEnded, true);
@@ -311,13 +325,13 @@ for (const kind of ['main', 'renderer']) {
     socket.pause();
     for (const data of ['a', 'b', 'c']) deliver('data', {toId: id, wire: {t: 's', d: data}});
     socket.resume();
-    await Promise.resolve();
+    await settle();
     assert.deepEqual(events, ['a']);
     assert.equal(socket.isPaused(), true);
     assert.equal(socket.readableLength, 2);
-    assert.equal(sent.some(entry => entry.channel === '__xenon:net:resume'), false);
+    assert.equal(sent.at(-1).channel, '__xenon:net:pause');
     socket.resume();
-    await Promise.resolve();
+    await settle();
     assert.deepEqual(events, ['a', 'b', 'c']);
     assert.equal(socket.isPaused(), false);
     assert.equal(socket.readableFlowing, true);
@@ -327,7 +341,7 @@ for (const kind of ['main', 'renderer']) {
     socket.destroy();
   });
 
-  test(`${kind} pause before connect reaches native before callbacks and destroy discards reads`, async () => {
+  test(`${kind} pause before connect reaches native before callbacks and destruction follows standard Duplex`, async () => {
     const {net, sent, deliver} = fixture(kind);
     const socket = net.connect(1234, () => {
       assert.equal(sent.at(-1).channel, '__xenon:net:pause');
@@ -343,9 +357,16 @@ for (const kind of ['main', 'renderer']) {
     assert.equal(socket.readableLength, 7);
     socket.resume();
     socket.destroy();
-    await Promise.resolve();
-    assert.deepEqual(events, ['close']);
-    assert.equal(socket.readableLength, 0);
+    await settle();
+    const reference = new Duplex({read() {}, write(_chunk, _encoding, callback) { callback(); }});
+    const referenceEvents = [];
+    reference.on('data', () => referenceEvents.push('data'));
+    reference.on('close', () => referenceEvents.push('close'));
+    reference.pause(); reference.push(Buffer.from('discard'));
+    reference.resume(); reference.destroy();
+    await settle();
+    assert.deepEqual(events, referenceEvents);
+    assert.equal(socket.readableLength, reference.readableLength);
     assert.equal(sent.some(entry => entry.channel === '__xenon:net:resume'), false);
   });
 
@@ -356,7 +377,7 @@ for (const kind of ['main', 'renderer']) {
       .listen('\\\\.\\pipe\\paused-contract');
     deliver('listening', {serverId: sent[0].payload.serverId});
     const client = net.connect('\\\\.\\pipe\\paused-contract');
-    await Promise.resolve();
+    await settle();
     const events = [];
     incoming.pause();
     incoming.on('data', bytes => events.push([...bytes]));
@@ -368,7 +389,7 @@ for (const kind of ['main', 'renderer']) {
     client.end();
     assert.deepEqual(events, []);
     incoming.resume();
-    await Promise.resolve();
+    await settle();
     assert.deepEqual(events, [[0, 255], 'end', 'close']);
     assert.equal(sent.some(entry => /:(pause|resume)$/.test(entry.channel)), false);
     server.close();

@@ -6,14 +6,15 @@ const assert = require('node:assert/strict');
 const {EventEmitter} = require('node:events');
 const test = require('node:test');
 const vm = require('node:vm');
-const factory = readBootstrapPart('main/net.js');
+const factory = readBootstrapPart('common/net.js') + readBootstrapPart('main/net.js');
+const {Duplex} = require('node:stream');
 const asyncScope = readBootstrapPart('main/async_context.js');
 const pipe = '\\\\.\\pipe\\xenon-main-routing-test';
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 function fixture(onSend = () => {}, platform = 'win32') {
   const sent = [];
-  const context = vm.createContext({EventEmitter, Buffer, Uint8Array, queueMicrotask,
+  const context = vm.createContext({EventEmitter, Duplex, Buffer, Uint8Array, queueMicrotask,
     __xenonPlatform: platform, console: {info() {}},
     __xenonSendToRenderer() { assert.fail('net operations must never broadcast to renderers'); },
     __xenonNetSend(channel, payload) {
@@ -93,11 +94,11 @@ test('main connect uses one native route with unrelated renderer listeners prese
   client.on('error', error => assert.fail(error.message));
   assert.equal(client.write('queued registration'), true);
   await settle();
-  assert.deepEqual(events, ['connect', 'callback']);
+  assert.deepEqual(events, ['callback', 'connect']);
   assert.deepEqual(pages.map(page => page.calls), [0, 1, 0]);
   assert.equal(sent[1].channel, '__xenon:net:data');
   assert.equal(sent[1].payload.toId, 'native-1');
-  assert.equal(sent[1].payload.wire.d, 'queued registration');
+  assert.equal(Buffer.from(sent[1].payload.wire.d, 'base64').toString(), 'queued registration');
   client.destroy();
 });
 
@@ -146,7 +147,7 @@ test('main named-pipe listen waits for native readiness and close cancels queued
   assert.equal(sent.at(-1).payload.toId, 'native-late');
 });
 
-test('main named-pipe accepted sockets preserve binary bytes and native errors close them', () => {
+test('main named-pipe accepted sockets preserve binary bytes and native errors close them', async () => {
   const {net, context, sent} = fixture();
   let incoming;
   const server = net.createServer(socket => {
@@ -157,12 +158,14 @@ test('main named-pipe accepted sockets preserve binary bytes and native errors c
   context.deliver('__xenon:net:listening', {serverId: id});
   context.deliver('__xenon:net:connection', {serverId: id, socketId: 'native-peer'});
   context.deliver('__xenon:net:data', {toId: 'native-peer', wire: {t: 'b64', d: 'AP+A'}});
+  await settle();
   assert.equal(sent.at(-1).payload.wire.t, 'b64');
   assert.equal(sent.at(-1).payload.wire.d, 'AP+A');
   const events = [];
   incoming.on('error', error => events.push(error.code));
   incoming.on('close', () => events.push('close'));
   context.deliver('__xenon:net:error', {toId: 'native-peer', code: 'EPIPE'});
+  await settle();
   assert.deepEqual(events, ['EPIPE', 'close']);
   assert.equal(incoming.write('after close'), false);
   server.close();

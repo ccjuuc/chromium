@@ -1,5 +1,6 @@
-  // Promise hooks are scoped to this V8 context. Blink owns the isolate's
-  // continuation-preserved embedder data, so never overwrite that slot.
+  // The main/Worker/Utility host owns its isolate and provides native Promise
+  // hooks. Renderer hosts use per-context hooks when V8 supports them. Neither
+  // path overwrites Blink's continuation-preserved embedder data.
   let currentAsyncContext;
   let asyncContextHooksInstalled = false;
   const promiseAsyncContexts = new WeakMap();

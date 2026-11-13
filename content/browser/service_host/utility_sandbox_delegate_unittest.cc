@@ -26,6 +26,12 @@
 #include "sandbox/win/src/sandbox_policy_base.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "base/files/scoped_temp_dir.h"
+#include "base/process/launch.h"
+#include "xenon_overlay/public/xenon_ipc_switches.h"
+#endif
+
 namespace content {
 
 class UtilitySandboxDelegateWinTest
@@ -129,5 +135,126 @@ INSTANTIATE_TEST_SUITE_P(
           {std::get<0>(info.param) ? "ACDisabled" : "ACEnabled",
            std::get<1>(info.param) ? "FeatureEnabled" : "FeatureDisabled"});
     });
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+class XenonUtilityLaunchOptionsTest : public testing::Test {
+ public:
+  void SetUp() override {
+    ASSERT_TRUE(directory_.CreateUniqueTempDir());
+    previous_client_ = SetBrowserClientForTesting(&client_);
+  }
+  void TearDown() override { SetBrowserClientForTesting(previous_client_); }
+
+  std::unique_ptr<xenon::UtilityProcessLaunchOptions> Options() {
+    auto options = std::make_unique<xenon::UtilityProcessLaunchOptions>();
+    options->working_directory = directory_.GetPath();
+    options->environment.emplace(L"XENON_TEST_VALUE", L"isolated");
+    for (auto& file : options->stdio) {
+      file = base::File(directory_.GetPath().AppendASCII("stdio"),
+                        base::File::FLAG_OPEN_ALWAYS | base::File::FLAG_READ |
+                            base::File::FLAG_WRITE);
+      EXPECT_TRUE(file.IsValid());
+    }
+    return options;
+  }
+
+  base::CommandLine Command() {
+    base::CommandLine command(base::CommandLine::NO_PROGRAM);
+    command.AppendSwitchASCII(switches::kProcessType,
+                              switches::kUtilityProcess);
+    command.AppendSwitchASCII(switches::kUtilitySubType,
+                              "xenon.ipc.mojom.UtilityProcessService");
+    command.AppendSwitch(xenon::ipc::switches::kUtilityProcess);
+    return command;
+  }
+
+ private:
+  base::ScopedTempDir directory_;
+  ContentBrowserClient client_;
+  raw_ptr<ContentBrowserClient> previous_client_ = nullptr;
+};
+
+TEST_F(XenonUtilityLaunchOptionsTest, DefaultDelegateLeavesLaunchUntouched) {
+  UtilitySandboxedProcessLauncherDelegate delegate(
+      sandbox::mojom::Sandbox::kNoSandbox, {}, Command());
+  base::LaunchOptions options;
+  options.environment.emplace(L"UNCHANGED", L"original");
+  EXPECT_TRUE(delegate.ApplyXenonUtilityProcessOptions(&options));
+  EXPECT_FALSE(options.clear_environment);
+  EXPECT_FALSE(options.preserve_empty_environment_values);
+  EXPECT_TRUE(options.current_directory.empty());
+  EXPECT_EQ(options.environment.at(L"UNCHANGED"), L"original");
+  EXPECT_EQ(options.stdout_handle, nullptr);
+}
+
+TEST_F(XenonUtilityLaunchOptionsTest, RequiresDedicatedUnsandboxedUtility) {
+  UtilitySandboxedProcessLauncherDelegate sandboxed(
+      sandbox::mojom::Sandbox::kUtility, {}, Command());
+  EXPECT_FALSE(sandboxed.SetXenonUtilityProcessOptions(Options()));
+  auto command = Command();
+  command.RemoveSwitch(xenon::ipc::switches::kUtilityProcess);
+  UtilitySandboxedProcessLauncherDelegate unmarked(
+      sandbox::mojom::Sandbox::kNoSandbox, {}, command);
+  EXPECT_FALSE(unmarked.SetXenonUtilityProcessOptions(Options()));
+  command = Command();
+  command.RemoveSwitch(switches::kUtilitySubType);
+  command.AppendSwitchASCII(switches::kUtilitySubType, "other.service");
+  UtilitySandboxedProcessLauncherDelegate unrelated(
+      sandbox::mojom::Sandbox::kNoSandbox, {}, command);
+  EXPECT_FALSE(unrelated.SetXenonUtilityProcessOptions(Options()));
+}
+
+TEST_F(XenonUtilityLaunchOptionsTest,
+       AppliesOwnedHandlesWithoutLosingIpcHandles) {
+  UtilitySandboxedProcessLauncherDelegate delegate(
+      sandbox::mojom::Sandbox::kNoSandbox, {}, Command());
+  auto owned = Options();
+  owned->environment.emplace(L"EMPTY", L"");
+  const auto cwd = owned->working_directory;
+  const HANDLE in = owned->stdio[0].GetPlatformFile();
+  const HANDLE out = owned->stdio[1].GetPlatformFile();
+  const HANDLE err = owned->stdio[2].GetPlatformFile();
+  ASSERT_TRUE(delegate.SetXenonUtilityProcessOptions(std::move(owned)));
+  auto ipc_file = Options()->stdio[0].Duplicate();
+  base::LaunchOptions options;
+  options.handles_to_inherit.push_back(ipc_file.GetPlatformFile());
+  options.environment.emplace(L"MUST_NOT_LEAK", L"parent");
+  ASSERT_TRUE(delegate.ApplyXenonUtilityProcessOptions(&options));
+  EXPECT_TRUE(options.clear_environment);
+  EXPECT_TRUE(options.preserve_empty_environment_values);
+  EXPECT_TRUE(options.start_hidden);
+  EXPECT_EQ(options.current_directory, cwd);
+  EXPECT_EQ(options.environment.size(), 2u);
+  EXPECT_EQ(options.environment.at(L"XENON_TEST_VALUE"), L"isolated");
+  EXPECT_TRUE(options.environment.contains(L"EMPTY"));
+  EXPECT_TRUE(options.environment.at(L"EMPTY").empty());
+  EXPECT_EQ(options.stdin_handle, in);
+  EXPECT_EQ(options.stdout_handle, out);
+  EXPECT_EQ(options.stderr_handle, err);
+  ASSERT_EQ(options.handles_to_inherit.size(), 4u);
+  EXPECT_EQ(options.handles_to_inherit.front(), ipc_file.GetPlatformFile());
+  for (HANDLE handle : {in, out, err}) {
+    DWORD flags = 0;
+    ASSERT_TRUE(::GetHandleInformation(handle, &flags));
+    EXPECT_TRUE(flags & HANDLE_FLAG_INHERIT);
+  }
+}
+
+TEST_F(XenonUtilityLaunchOptionsTest,
+       InvalidEnvironmentAndStdioFailExplicitly) {
+  std::string error;
+  auto options = Options();
+  ASSERT_TRUE(options->Validate(&error));
+  options->environment.emplace(L"EMPTY", L"");
+  EXPECT_TRUE(options->Validate(&error));
+  options->environment.erase(L"EMPTY");
+  options->environment.emplace(L"INVALID=KEY", L"value");
+  EXPECT_FALSE(options->Validate(&error));
+  EXPECT_TRUE(error.starts_with("ERR_INVALID_ARG_VALUE:"));
+  options->environment.erase(L"INVALID=KEY");
+  options->stdio[2].Close();
+  EXPECT_FALSE(options->Validate(&error));
+}
+#endif
 
 }  // namespace content

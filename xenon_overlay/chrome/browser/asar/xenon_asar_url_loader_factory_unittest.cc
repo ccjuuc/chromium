@@ -18,6 +18,7 @@
 #include "mojo/public/cpp/system/data_pipe_utils.h"
 #include "net/base/filename_util.h"
 #include "net/base/net_errors.h"
+#include "net/http/http_response_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
@@ -119,7 +120,8 @@ class XenonAsarURLLoaderFactoryTest : public testing::TestWithParam<FileKind> {
       request.headers.SetHeader("Range", range);
     }
     factory_->CreateLoaderAndStart(
-        loader_.BindNewPipeAndPassReceiver(), 1, 0, request, client.CreateRemote(),
+        loader_.BindNewPipeAndPassReceiver(), 1, 0, request,
+        client.CreateRemote(),
         net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
     client.RunUntilComplete();
   }
@@ -183,6 +185,59 @@ TEST_P(XenonAsarURLLoaderFactoryTest, ByteRangeReturnsOnlyRequestedPlaintext) {
   ASSERT_EQ(net::OK, client.completion_status().error_code);
   ASSERT_TRUE(client.has_received_response());
   EXPECT_EQ(16, client.response_head()->content_length);
+  std::string body;
+  ASSERT_TRUE(
+      mojo::BlockingCopyToString(client.response_body_release(), &body));
+  EXPECT_EQ(std::string_view(kBody).substr(3, 16), body);
+}
+
+TEST_P(XenonAsarURLLoaderFactoryTest,
+       AuthorizedProtocolFileStreamsWithApplicationHeaders) {
+  network::ResourceRequest request;
+  request.url = url_;
+  request.mode = network::mojom::RequestMode::kCors;
+  request.request_initiator =
+      url::Origin::Create(GURL("https://protocol.test"));
+  auto headers =
+      base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 201 Created");
+  headers->AddHeader("Content-Security-Policy", "default-src 'none'");
+  headers->AddHeader("Content-Type", "application/x-fixture; charset=utf-8");
+  network::TestURLLoaderClient client;
+  CreateAsarProtocolFileURLLoader(
+      request, 1, 0,
+      net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS),
+      loader_.BindNewPipeAndPassReceiver(), client.CreateRemote(), headers);
+  client.RunUntilComplete();
+  ASSERT_EQ(net::OK, client.completion_status().error_code);
+  ASSERT_TRUE(client.has_received_response());
+  EXPECT_EQ(201, client.response_head()->headers->response_code());
+  EXPECT_EQ("default-src 'none'",
+            client.response_head()->headers->GetNormalizedHeader(
+                "Content-Security-Policy"));
+  EXPECT_EQ("application/x-fixture", client.response_head()->mime_type);
+  EXPECT_EQ("utf-8", client.response_head()->charset);
+  ExpectBody(client);
+}
+
+TEST_P(XenonAsarURLLoaderFactoryTest,
+       AuthorizedProtocolFilePreservesPlaintextByteRanges) {
+  network::ResourceRequest request;
+  request.url = url_;
+  request.headers.SetHeader("Range", "bytes=3-18");
+  auto headers =
+      base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 200 OK");
+  headers->AddHeader("X-File-Protocol", "streamed");
+  network::TestURLLoaderClient client;
+  CreateAsarProtocolFileURLLoader(
+      request, 1, 0,
+      net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS),
+      loader_.BindNewPipeAndPassReceiver(), client.CreateRemote(), headers);
+  client.RunUntilComplete();
+  ASSERT_EQ(net::OK, client.completion_status().error_code);
+  ASSERT_TRUE(client.has_received_response());
+  EXPECT_EQ(16, client.response_head()->content_length);
+  EXPECT_EQ("streamed", client.response_head()->headers->GetNormalizedHeader(
+                            "X-File-Protocol"));
   std::string body;
   ASSERT_TRUE(
       mojo::BlockingCopyToString(client.response_body_release(), &body));

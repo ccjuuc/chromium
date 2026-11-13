@@ -1,12 +1,8 @@
   const utilModule = {
     TextEncoder: typeof TextEncoder !== 'undefined' ? TextEncoder : class TextEncoder {
-      encode(str) {
-        str = String(str || '');
-        const utf8 = unescape(encodeURIComponent(str));
-        const arr = new Uint8Array(utf8.length);
-        for (let i = 0; i < utf8.length; i++) arr[i] = utf8.charCodeAt(i);
-        return arr;
-      }
+      get encoding() { return 'utf-8'; }
+      encode(source = '') { return encodeUtf8(source); }
+      encodeInto(source, destination) { return encodeUtf8Into(source, destination); }
     },
     TextDecoder: typeof TextDecoder !== 'undefined' ? TextDecoder : class TextDecoder {
       constructor(encoding = 'utf-8') { this.encoding = encoding; }
@@ -18,14 +14,7 @@
         try { return decodeURIComponent(escape(str)); } catch { return str; }
       }
     },
-    promisify(fn) {
-      return (...args) => new Promise((resolve, reject) => {
-        fn(...args, (err, res) => {
-          if (err) return reject(err);
-          resolve(res);
-        });
-      });
-    },
+    promisify: createNodePromisify(),
     callbackify(fn) {
       return (...args) => {
         const cb = args.pop();
@@ -141,10 +130,15 @@
     if (value instanceof ArrayBuffer) return Buffer.from(new Uint8Array(value));
     throw cryptoArgumentError('Crypto data must be a string or binary buffer');
   }
+  // This registry is also used for validation: advertise only the canonical
+  // algorithms implemented by NativeCryptoDigest, not Node/OpenSSL's wider set.
+  const supportedDigestAlgorithms = Object.freeze([
+    'md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512',
+  ]);
   function createDigestObject(algorithm, key) {
     if (typeof algorithm !== 'string') throw cryptoArgumentError('Algorithm must be a string');
     const normalized = algorithm.toLowerCase().replace(/-/g, '');
-    if (!['md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512'].includes(normalized)) {
+    if (!supportedDigestAlgorithms.includes(normalized)) {
       throw Object.assign(new Error('Unsupported digest algorithm: ' + algorithm),
                           {code: 'ERR_NOT_SUPPORTED'});
     }
@@ -171,7 +165,24 @@
       },
     };
   }
+  function fillMainSecureRandom(bytes) {
+    if (typeof globalThis.__xenonCryptoRandom !== 'function') {
+      throw Object.assign(new Error('A secure random source is not available'),
+                          {code: 'ERR_NOT_SUPPORTED'});
+    }
+    if (bytes.byteLength) bytes.set(__xenonCryptoRandom(bytes.byteLength));
+  }
   const cryptoModule = {
+    getHashes() {
+      return supportedDigestAlgorithms.slice();
+    },
+    timingSafeEqual(a, b) {
+      if (typeof globalThis.__xenonCryptoTimingSafeEqual !== 'function') {
+        throw Object.assign(new Error('Native constant-time comparison is unavailable'),
+                            {code: 'ERR_NOT_SUPPORTED'});
+      }
+      return globalThis.__xenonCryptoTimingSafeEqual(a, b);
+    },
     createCipheriv(algorithm, key, iv) {
       return createCipherObject(algorithm, key, iv, true);
     },
@@ -207,6 +218,24 @@
       bytes[8] = (bytes[8] & 63) | 128;
       const hex = bytes.toString('hex');
       return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    },
+    randomFillSync(buf, offset = 0, size) {
+      fillMainSecureRandom(randomTargetBytes(buf, offset, size));
+      return buf;
+    },
+    randomFill(buf, offset, size, callback) {
+      if (typeof offset === 'function') {
+        callback = offset; offset = 0; size = undefined;
+      } else if (typeof size === 'function') {
+        callback = size; size = undefined;
+      }
+      if (typeof callback !== 'function') throw cryptoArgumentError('Callback must be a function');
+      const bytes = randomTargetBytes(buf, offset, size);
+      queueMicrotask(() => {
+        try { fillMainSecureRandom(bytes); }
+        catch (error) { callback(error); return; }
+        callback(null, buf);
+      });
     },
   };
 
@@ -333,131 +362,56 @@
         return { href: urlStr };
       }
     },
-    format(obj) {
-      return obj.href || (obj.protocol ? `${obj.protocol}//${obj.host || ''}${obj.pathname || ''}${obj.search || ''}` : '');
+    format(obj, options) {
+      if (typeof obj === 'string') return urlModule.parse(obj).href;
+      if (!obj || typeof obj !== 'object') {
+        throw Object.assign(new TypeError('urlObject must be an object or string'), {code: 'ERR_INVALID_ARG_TYPE'});
+      }
+      if (obj instanceof URL) {
+        if (options != null && (typeof options !== 'object' || Array.isArray(options)))
+          throw Object.assign(new TypeError('options must be an object'), {code: 'ERR_INVALID_ARG_TYPE'});
+        if (options?.unicode)
+          throw Object.assign(new Error('Unicode URL formatting is not supported'), {code: 'ERR_NOT_SUPPORTED'});
+        const url = new URL(obj.href);
+        if (options?.auth != null && !options.auth) { url.username = ''; url.password = ''; }
+        if (options?.fragment != null && !options.fragment) url.hash = '';
+        if (options?.search != null && !options.search) url.search = '';
+        return url.href;
+      }
+      // Legacy url.format uses fields rather than href, and query objects use
+      // querystring encoding (including repeated array keys and %20 spaces).
+      const primitive = value => {
+        if (typeof value === 'string' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
+        return typeof value === 'number' && Number.isFinite(value) ? String(value) : '';
+      };
+      const query = obj.query && typeof obj.query === 'object' ? Object.keys(obj.query).flatMap(key => {
+        const value = obj.query[key];
+        return (Array.isArray(value) ? value : [value]).map(item =>
+          encodeURIComponent(key) + '=' + encodeURIComponent(primitive(item)));
+      }).join('&') : '';
+      let protocol = obj.protocol || '';
+      if (protocol && !protocol.endsWith(':')) protocol += ':';
+      let pathname = obj.pathname || '';
+      let search = obj.search || (query ? '?' + query : '');
+      let hash = obj.hash || '';
+      const auth = obj.auth ? encodeURIComponent(obj.auth).replace(/%3A/gi, ':') + '@' : '';
+      let host = '';
+      if (obj.host) host = auth + obj.host;
+      else if (obj.hostname) {
+        const hostname = obj.hostname;
+        host = auth + (hostname.includes(':') && !(hostname.startsWith('[') && hostname.endsWith(']')) ? '[' + hostname + ']' : hostname);
+        if (obj.port) host += ':' + obj.port;
+      }
+      pathname = pathname.replace(/[?#]/g, character => character === '?' ? '%3F' : '%23');
+      if (obj.slashes || ['http:', 'https:', 'ftp:', 'gopher:', 'file:', 'ws:', 'wss:'].includes(protocol)) {
+        if (obj.slashes || host) {
+          if (pathname && !pathname.startsWith('/')) pathname = '/' + pathname;
+          host = '//' + host;
+        } else if (protocol.startsWith('file')) host = '//';
+      }
+      search = search.replace(/#/g, '%23');
+      if (search && !search.startsWith('?')) search = '?' + search;
+      if (hash && !hash.startsWith('#')) hash = '#' + hash;
+      return protocol + host + pathname + search + hash;
     },
   };
-
-  function streamUnsupportedError(method) {
-    const error = new Error(`stream.${method} is not supported by this runtime`);
-    error.code = 'ERR_NOT_SUPPORTED';
-    return error;
-  }
-  function streamValidateCallback(callback) {
-    if (typeof callback !== 'function') {
-      const error = new TypeError('The callback argument must be a function');
-      error.code = 'ERR_INVALID_ARG_TYPE';
-      throw error;
-    }
-  }
-  function streamFailOperation(method, callback) {
-    const error = streamUnsupportedError(method);
-    if (callback === undefined) throw error;
-    streamValidateCallback(callback);
-    queueMicrotask(() => callback(error));
-  }
-
-  // Keep the callable constructors and EventEmitter inheritance used by
-  // userland stream implementations. These base classes do not implement an
-  // I/O queue: operations must fail explicitly until a subclass supplies one.
-  function Stream() {
-    if (!(this instanceof Stream)) return new Stream();
-    EventEmitter.call(this);
-  }
-  Object.setPrototypeOf(Stream.prototype, EventEmitter.prototype);
-  Object.setPrototypeOf(Stream, EventEmitter);
-  Stream.prototype.pipe = function() { throw streamUnsupportedError('pipe'); };
-
-  function Readable(options) {
-    if (!(this instanceof Readable)) return new Readable(options);
-    Stream.call(this);
-    if (options) {
-      if (typeof options.read === 'function') this._read = options.read;
-      if (typeof options.destroy === 'function') this._destroy = options.destroy;
-    }
-  }
-  Object.setPrototypeOf(Readable.prototype, Stream.prototype);
-  Object.setPrototypeOf(Readable, Stream);
-  Readable.prototype.read = function() { throw streamUnsupportedError('Readable.read'); };
-  Readable.prototype.push = function() { throw streamUnsupportedError('Readable.push'); };
-
-  function Writable(options) {
-    if (!(this instanceof Writable)) return new Writable(options);
-    Stream.call(this);
-    if (options && typeof options.write === 'function') this._write = options.write;
-  }
-  Object.setPrototypeOf(Writable.prototype, Stream.prototype);
-  Object.setPrototypeOf(Writable, Stream);
-  Writable.prototype.write = function(chunk, encoding, callback) {
-    if (typeof encoding === 'function') callback = encoding;
-    streamFailOperation('Writable.write', callback);
-    return false;
-  };
-  Writable.prototype.end = function(chunk, encoding, callback) {
-    if (typeof chunk === 'function') callback = chunk;
-    else if (typeof encoding === 'function') callback = encoding;
-    streamFailOperation('Writable.end', callback);
-    return this;
-  };
-
-  function Duplex(options) {
-    if (!(this instanceof Duplex)) return new Duplex(options);
-    Readable.call(this, options);
-    if (options && typeof options.write === 'function') this._write = options.write;
-  }
-  Object.setPrototypeOf(Duplex.prototype, Readable.prototype);
-  Object.setPrototypeOf(Duplex, Readable);
-  Duplex.prototype.write = Writable.prototype.write;
-  Duplex.prototype.end = Writable.prototype.end;
-
-  function Transform(options) {
-    if (!(this instanceof Transform)) return new Transform(options);
-    Duplex.call(this, options);
-    if (options && typeof options.transform === 'function') {
-      this._transform = options.transform;
-    }
-  }
-  Object.setPrototypeOf(Transform.prototype, Duplex.prototype);
-  Object.setPrototypeOf(Transform, Duplex);
-  Transform.prototype._transform = function(chunk, encoding, callback) {
-    streamFailOperation('Transform._transform', callback);
-  };
-
-  function PassThrough(options) {
-    if (!(this instanceof PassThrough)) return new PassThrough(options);
-    Transform.call(this, options);
-  }
-  Object.setPrototypeOf(PassThrough.prototype, Transform.prototype);
-  Object.setPrototypeOf(PassThrough, Transform);
-
-  Stream.Stream = Stream;
-  Stream.Readable = Readable;
-  Stream.Writable = Writable;
-  Stream.Duplex = Duplex;
-  Stream.Transform = Transform;
-  Stream.PassThrough = PassThrough;
-  Stream.EventEmitter = EventEmitter;
-  Stream.pipeline = (...args) => {
-    const callback = args.pop();
-    streamValidateCallback(callback);
-    streamFailOperation('pipeline', callback);
-    const streams = Array.isArray(args[0]) ? args[0] : args;
-    return streams[streams.length - 1];
-  };
-  Stream.finished = (stream, options, callback) => {
-    if (typeof options === 'function') callback = options;
-    streamValidateCallback(callback);
-    let active = true;
-    queueMicrotask(() => {
-      if (active) callback(streamUnsupportedError('finished'));
-    });
-    return () => { active = false; };
-  };
-  const streamModule = Stream;
-
-  class StringDecoder {
-    constructor(encoding = 'utf8') { this.encoding = encoding; }
-    write(buf) { return Buffer.from(buf).toString(this.encoding); }
-    end(buf) { return buf ? this.write(buf) : ''; }
-  }
-  const stringDecoderModule = { StringDecoder };

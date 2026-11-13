@@ -4,6 +4,7 @@
 
 #include "xenon_overlay/services/xenon_child_process_bridge.h"
 
+#include <csignal>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -151,6 +152,33 @@ class XenonChildProcessBridgeTest : public testing::Test {
   double exit_code_ = -99;
   bool closed_ = false;
 };
+
+TEST_F(XenonChildProcessBridgeTest, ValidatesSignalsWithoutLaunchingAChild) {
+  for (const char* endpoint : {"@main", "renderer"}) {
+    const auto named = bridge_.Call("container", endpoint,
+                                    base::DictValue()
+                                        .Set("op", "validate-signal")
+                                        .Set("signal", "SIGTERM"));
+    EXPECT_TRUE(named.FindBool("ok").value_or(false));
+    EXPECT_EQ(named.FindInt("signal"), SIGTERM);
+    const auto numeric = bridge_.Call(
+        "container", endpoint,
+        base::DictValue().Set("op", "validate-signal").Set("signal", SIGTERM));
+    EXPECT_TRUE(numeric.FindBool("ok").value_or(false));
+    EXPECT_EQ(numeric.FindInt("signal"), SIGTERM);
+    for (const auto& invalid :
+         {base::Value(0), base::Value(-1), base::Value(0.5),
+          base::Value("SIG_NOT_REAL"), base::Value()}) {
+      const auto result = bridge_.Call("container", endpoint,
+                                       base::DictValue()
+                                           .Set("op", "validate-signal")
+                                           .Set("signal", invalid.Clone()));
+      EXPECT_FALSE(result.FindBool("ok").value_or(true));
+      EXPECT_EQ(*result.FindString("code"), "EINVAL");
+    }
+  }
+  EXPECT_TRUE(events_.empty());
+}
 
 #if BUILDFLAG(IS_WIN)
 TEST_F(XenonChildProcessBridgeTest, ConsoleIsHiddenWhenWindowsHideIsOmitted) {

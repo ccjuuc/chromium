@@ -181,11 +181,27 @@ export async function controlPlayerWindow(
 }
 
 export async function openNativeFileDialog(
-    title: string, filterExtensions: string[] = [],
-    allowMulti = false): Promise<string[]> {
-  const {filePaths} = await boundPageHandler().openNativeFileDialog(
-      title, filterExtensions, allowMulti);
-  return filePaths;
+    options: Record<string, unknown> = {}): Promise<string[]> {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw Object.assign(new TypeError('dialog options must be an object'),
+                        {code: 'ERR_INVALID_ARG_TYPE'});
+  }
+  // Snapshot standard options before awaiting the native response. Keep filter
+  // groups, defaultPath and properties intact across the Mojo boundary.
+  const {result, error} =
+      await boundPageHandler().openNativeFileDialog(valueToWire(options));
+  if (error) {
+    const code = /^(ERR_[A-Z_]+):/.exec(error)?.[1] || 'ERR_FAILED';
+    throw Object.assign(new Error(error), {code});
+  }
+  const selection = valueFromWire(result);
+  if (!selection || typeof selection.canceled !== 'boolean' ||
+      !Array.isArray(selection.filePaths) ||
+      selection.filePaths.some((path: unknown) => typeof path !== 'string')) {
+    throw Object.assign(new Error('Native open dialog returned an invalid result'),
+                        {code: 'ERR_FAILED'});
+  }
+  return selection.filePaths;
 }
 
 export async function scanDirectoryVideos(dirPath: string): Promise<string[]> {

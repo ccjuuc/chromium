@@ -8,11 +8,13 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include "base/auto_reset.h"
 #include "base/base64.h"
 #include "base/base_paths.h"
 #include "base/check.h"
@@ -20,17 +22,19 @@
 #include "base/compiler_specific.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/span.h"
-#include "base/environment.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
+#include "base/memory/ref_counted.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/path_service.h"
 #include "base/process/process_handle.h"
+#include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
@@ -50,6 +54,7 @@
 #include "base/task/bind_post_task.h"
 #include "chrome/common/chrome_paths.h"
 #include "components/version_info/version_info.h"
+#include "content/public/common/content_switches.h"
 #include "gin/arguments.h"
 #include "gin/converter.h"
 #include "gin/dictionary.h"
@@ -57,8 +62,11 @@
 #include "gin/public/isolate_holder.h"
 #include "gin/try_catch.h"
 #include "gin/v8_initializer.h"
+#include "net/base/filename_util.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "url/gurl.h"
+#include "url/url_canon.h"
 #include "v8/include/v8-array-buffer.h"
 #include "v8/include/v8-context.h"
 #include "v8/include/v8-exception.h"
@@ -68,24 +76,37 @@
 #include "v8/include/v8-json.h"
 #include "v8/include/v8-locker.h"
 #include "v8/include/v8-message.h"
+#include "v8/include/v8-microtask-queue.h"
 #include "v8/include/v8-object.h"
 #include "v8/include/v8-primitive.h"
 #include "v8/include/v8-promise.h"
 #include "v8/include/v8-script.h"
 #include "v8/include/v8-typed-array.h"
 #include "v8/include/v8-value-serializer.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_app_paths.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_app_runtime.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_file_descriptors.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_file_system_bridge.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_message_port.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_network_request_bridge.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_os_bridge.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_udp_socket_bridge.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_worker_message.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_zlib_bridge.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_zlib_stream.h"
+#include "xenon_overlay/chrome/browser/napi/js_native_api_v8.h"
 #include "xenon_overlay/chrome/browser/napi/napi_loader.h"
+#include "xenon_overlay/chrome/browser/napi/native_addon_event_loop.h"
 #include "xenon_overlay/common/asar/archive.h"
+#include "xenon_overlay/common/ipc/xenon_crypto_primitives.h"
 #include "xenon_overlay/common/ipc/xenon_ipc_value_codec.h"
 #include "xenon_overlay/common/ipc/xenon_privileged_schemes.h"
 #include "xenon_overlay/common/ipc/xenon_runtime_platform.h"
+#include "xenon_overlay/common/ipc/xenon_v8_statistics.h"
+#include "xenon_overlay/common/ipc/xenon_x509_certificate.h"
 #include "xenon_overlay/public/xenon_ipc_switches.h"
 #include "xenon_overlay/resources/grit/xenon_resources.h"
+#include "xenon_overlay/third_party/libuv/include/uv.h"
 
 namespace xenon::ipc {
 
@@ -94,6 +115,19 @@ namespace {
 constexpr int kMaxPackageMainDepth = 32;
 constexpr int kMaxIpcValueDepth = 32;
 constexpr uint64_t kMaxSafeInteger = 9007199254740991ULL;
+
+void ThrowAppPathError(v8::Isolate* isolate,
+                       const std::string& code,
+                       const std::string& message) {
+  auto error = v8::Exception::Error(gin::StringToV8(isolate, message));
+  if (error.As<v8::Object>()
+          ->Set(isolate->GetCurrentContext(), gin::StringToV8(isolate, "code"),
+                gin::StringToV8(isolate, code))
+          .IsNothing()) {
+    return;
+  }
+  isolate->ThrowException(error);
+}
 
 // Node's v8.serialize writes views as host objects so pooled Buffers neither
 // expose unrelated backing-store bytes nor inflate the serialized size.
@@ -205,10 +239,65 @@ class NodeValueSerializer : public v8::ValueSerializer::Delegate {
 // disk, then resolve the member and ASAR links so equivalent CommonJS requests
 // share one module record without changing __filename to an extracted file
 // path.
-bool NormalizeCommonJsPath(const base::FilePath& path,
+bool NormalizeCommonJsPath(const base::FilePath& requested_path,
                            base::FilePath* normalized,
                            bool* is_directory = nullptr,
                            bool allow_missing_member = false) {
+  // Node resolves dot segments lexically before realpath, including paths
+  // through a missing directory or an ASAR. base::File deliberately rejects
+  // ReferencesParent(), so passing a CJS "../file" directly to realpath would
+  // reject an existing module. Work on filesystem components, not URL paths:
+  // a Windows UNC share is part of the root and cannot be removed by "..".
+  // The caller still checks the canonical result against the application root.
+  if (!requested_path.IsAbsolute()) {
+    return false;
+  }
+  const auto components =
+      requested_path.NormalizePathSeparators().GetComponents();
+  size_t root_components = 1;
+  base::FilePath root(FILE_PATH_LITERAL("/"));
+#if BUILDFLAG(IS_WIN)
+  if (requested_path.IsNetwork()) {
+    root_components = 3;
+    if (components.size() >= 3 && components[1] == FILE_PATH_LITERAL("?") &&
+        base::FilePath::CompareEqualIgnoreCase(components[2],
+                                               FILE_PATH_LITERAL("UNC"))) {
+      root_components = 5;
+    }
+    if (components.size() < root_components) {
+      return false;
+    }
+    root = base::FilePath(components[0]);
+    for (size_t i = 1; i < root_components; ++i) {
+      root = root.Append(components[i]);
+    }
+    if (root_components == 3 &&
+        (components[1] == FILE_PATH_LITERAL("?") ||
+         components[1] == FILE_PATH_LITERAL(".")) &&
+        components[2].size() == 2 && components[2].back() == L':') {
+      root = root.AsEndingWithSeparator();
+    }
+  } else {
+    root_components = 2;
+    if (components.size() < root_components) {
+      return false;
+    }
+    root = base::FilePath(components[0] + components[1]);
+  }
+#endif
+  base::FilePath path = root;
+  for (size_t i = root_components; i < components.size(); ++i) {
+    if (components[i] == FILE_PATH_LITERAL(".")) {
+      continue;
+    }
+    if (components[i] == FILE_PATH_LITERAL("..")) {
+      if (path != root) {
+        path = path.DirName();
+      }
+    } else {
+      path = path.Append(components[i]);
+    }
+  }
   base::FilePath archive_path;
   base::FilePath relative_path;
   if (!asar::GetAsarArchivePath(path, &archive_path, &relative_path,
@@ -227,9 +316,9 @@ bool NormalizeCommonJsPath(const base::FilePath& path,
     return false;
   }
   base::FilePath member;
-  const auto components = relative_path.GetComponents();
-  for (size_t i = 0; i < components.size(); ++i) {
-    const auto& component = components[i];
+  const auto member_components = relative_path.GetComponents();
+  for (size_t i = 0; i < member_components.size(); ++i) {
+    const auto& component = member_components[i];
     if (component == FILE_PATH_LITERAL(".")) {
       continue;
     }
@@ -238,8 +327,8 @@ bool NormalizeCommonJsPath(const base::FilePath& path,
         // require() resolves '..' lexically, including leaving an archive.
         // The caller still enforces the configured application module root.
         base::FilePath outside = normalized_archive.DirName();
-        for (++i; i < components.size(); ++i) {
-          outside = outside.Append(components[i]);
+        for (++i; i < member_components.size(); ++i) {
+          outside = outside.Append(member_components[i]);
         }
         return NormalizeCommonJsPath(outside, normalized, is_directory,
                                      allow_missing_member);
@@ -376,8 +465,7 @@ bool ConvertV8ToValue(v8::Isolate* isolate,
     base::span<const uint8_t> bytes = UNSAFE_BUFFERS(base::span(
         static_cast<const uint8_t*>(store->Data()), store->ByteLength()));
     auto slice = bytes.subspan(byte_offset, byte_length);
-    *output = base::Value(
-        base::Value::BlobStorage(slice.begin(), slice.end()));
+    *output = base::Value(base::Value::BlobStorage(slice.begin(), slice.end()));
     return true;
   }
   if (value->IsArray()) {
@@ -406,8 +494,9 @@ bool ConvertV8ToValue(v8::Isolate* isolate,
   if (preserve_nested_binary && value->IsObject()) {
     const auto object = value.As<v8::Object>();
     v8::Local<v8::Array> keys;
-    if (!object->GetOwnPropertyNames(context, v8::ONLY_ENUMERABLE,
-                                     v8::KeyConversionMode::kConvertToString)
+    if (!object
+             ->GetOwnPropertyNames(context, v8::ONLY_ENUMERABLE,
+                                   v8::KeyConversionMode::kConvertToString)
              .ToLocal(&keys)) {
       *error = "Failed to enumerate native argument properties";
       return false;
@@ -543,7 +632,7 @@ class ScopedV8Context {
 // webpack bundles can be hundreds of KB. Keep the exception text and a short
 // location hint; drop oversized source-line dumps.
 std::string FormatCaughtError(v8::Isolate* /*isolate*/,
-                               gin::TryCatch& try_catch) {
+                              gin::TryCatch& try_catch) {
   if (!try_catch.HasCaught()) {
     return {};
   }
@@ -583,7 +672,8 @@ std::string FormatCaughtError(v8::Isolate* /*isolate*/,
     }
     start = end + 1;
   }
-  return out.empty() ? full.substr(0, std::min<size_t>(full.size(), 1024)) : out;
+  return out.empty() ? full.substr(0, std::min<size_t>(full.size(), 1024))
+                     : out;
 }
 
 std::optional<base::FilePath> NormalizedExecutableDirectory(
@@ -609,11 +699,218 @@ bool IsNativeAddonBesideExecutable(const base::FilePath& normalized,
   std::optional<base::FilePath> executable_directory =
       NormalizedExecutableDirectory(app_executable);
   return executable_directory &&
-         base::FilePath::CompareEqualIgnoreCase(
-             normalized.DirName().value(), executable_directory->value());
+         base::FilePath::CompareEqualIgnoreCase(normalized.DirName().value(),
+                                                executable_directory->value());
+}
+
+const char* BuiltinModuleGlobal(const std::string& request) {
+  static constexpr auto kBuiltinModules =
+      base::MakeFixedFlatMap<std::string_view, const char*>({
+          {"assert", "__xenonAssert"},
+          {"async_hooks", "__xenonAsyncHooks"},
+          {"diagnostics_channel", "__xenonDiagnosticsChannel"},
+          {"buffer", "__xenonBuffer"},
+          {"child_process", "__xenonChildProcess"},
+          {"console", "__xenonConsole"},
+          {"constants", "__xenonConstants"},
+          {"crypto", "__xenonCrypto"},
+          {"dns", "__xenonDns"},
+          {"dgram", "__xenonDgram"},
+          {"electron", "__xenonElectron"},
+          {"events", "__xenonEvents"},
+          {"fs", "__xenonFs"},
+          {"fs/promises", "__xenonFsPromises"},
+          {"http", "__xenonHttp"},
+          {"http2", "__xenonHttp2"},
+          {"https", "__xenonHttps"},
+          {"module", "__xenonModule"},
+          {"net", "__xenonNet"},
+          {"node:process", "process"},
+          {"process", "process"},
+          {"node:assert", "__xenonAssert"},
+          {"node:async_hooks", "__xenonAsyncHooks"},
+          {"node:diagnostics_channel", "__xenonDiagnosticsChannel"},
+          {"node:buffer", "__xenonBuffer"},
+          {"node:child_process", "__xenonChildProcess"},
+          {"node:console", "__xenonConsole"},
+          {"node:constants", "__xenonConstants"},
+          {"node:crypto", "__xenonCrypto"},
+          {"node:dns", "__xenonDns"},
+          {"node:dgram", "__xenonDgram"},
+          {"node:events", "__xenonEvents"},
+          {"node:fs", "__xenonFs"},
+          {"node:fs/promises", "__xenonFsPromises"},
+          {"node:http", "__xenonHttp"},
+          {"node:http2", "__xenonHttp2"},
+          {"node:https", "__xenonHttps"},
+          {"node:module", "__xenonModule"},
+          {"node:net", "__xenonNet"},
+          {"node:original-fs", "__xenonOriginalFs"},
+          {"node:original-fs/promises", "__xenonOriginalFsPromises"},
+          {"node:os", "__xenonOs"},
+          {"node:path", "__xenonPath"},
+          {"node:path/posix", "__xenonPathPosix"},
+          {"node:path/win32", "__xenonPathWin32"},
+          {"node:perf_hooks", "__xenonPerfHooks"},
+          {"node:querystring", "__xenonQuerystring"},
+          {"node:readline", "__xenonReadline"},
+          {"node:stream", "__xenonStream"},
+          {"node:stream/promises", "__xenonStreamPromises"},
+          {"node:stream/web", "__xenonStreamWeb"},
+          {"node:string_decoder", "__xenonStringDecoder"},
+          {"node:timers", "__xenonTimers"},
+          {"node:timers/promises", "__xenonTimersPromises"},
+          {"node:tls", "__xenonTls"},
+          {"node:tty", "__xenonTty"},
+          {"node:url", "__xenonUrl"},
+          {"node:util", "__xenonUtil"},
+          {"node:util/types", "__xenonUtilTypes"},
+          {"node:v8", "__xenonV8"},
+          {"node:worker_threads", "__xenonWorkerThreads"},
+          {"node:zlib", "__xenonZlib"},
+          {"os", "__xenonOs"},
+          {"original-fs", "__xenonOriginalFs"},
+          {"original-fs/promises", "__xenonOriginalFsPromises"},
+          {"path", "__xenonPath"},
+          {"path/posix", "__xenonPathPosix"},
+          {"path/win32", "__xenonPathWin32"},
+          {"perf_hooks", "__xenonPerfHooks"},
+          {"querystring", "__xenonQuerystring"},
+          {"readline", "__xenonReadline"},
+          {"stream", "__xenonStream"},
+          {"stream/promises", "__xenonStreamPromises"},
+          {"stream/web", "__xenonStreamWeb"},
+          {"string_decoder", "__xenonStringDecoder"},
+          {"timers", "__xenonTimers"},
+          {"timers/promises", "__xenonTimersPromises"},
+          {"tls", "__xenonTls"},
+          {"tty", "__xenonTty"},
+          {"url", "__xenonUrl"},
+          {"util", "__xenonUtil"},
+          {"util/types", "__xenonUtilTypes"},
+          {"v8", "__xenonV8"},
+          {"worker_threads", "__xenonWorkerThreads"},
+          {"zlib", "__xenonZlib"},
+      });
+
+  auto found = kBuiltinModules.find(request);
+  return found == kBuiltinModules.end() ? nullptr : found->second;
 }
 
 }  // namespace
+
+// Each main/Worker/Utility container owns its isolate. Native Promise hooks
+// therefore cannot replace Blink's hooks, and work without V8's optional
+// JavaScript Promise-hook build feature. Keep the lookup on the owning thread;
+// no embedder-data slot or continuation-preserved data is appropriated.
+struct XenonIpcMainContainer::AsyncContextHooks
+    : public base::RefCounted<AsyncContextHooks> {
+  AsyncContextHooks(v8::Isolate* isolate,
+                    v8::Local<v8::Context> context,
+                    v8::Local<v8::Function> init,
+                    v8::Local<v8::Function> before,
+                    v8::Local<v8::Function> after)
+      : isolate(isolate),
+        context(isolate, context),
+        init(isolate, init),
+        before(isolate, before),
+        after(isolate, after),
+        next(head) {
+    head = this;
+    isolate->SetPromiseHook(&Dispatch);
+  }
+
+  void Detach() {
+    if (!isolate) {
+      return;
+    }
+    // Stop new callbacks before releasing any of their persistent handles.
+    isolate->SetPromiseHook(nullptr);
+    if (head == this) {
+      head = next;
+    } else {
+      AsyncContextHooks* previous = head;
+      while (previous && previous->next != this) {
+        previous = previous->next;
+      }
+      CHECK(previous);
+      previous->next = next;
+    }
+    next = nullptr;
+    init.Reset();
+    before.Reset();
+    after.Reset();
+    context.Reset();
+    isolate = nullptr;
+  }
+
+  static void Dispatch(v8::PromiseHookType type,
+                       v8::Local<v8::Promise> promise,
+                       v8::Local<v8::Value> parent) {
+    if (type == v8::PromiseHookType::kResolve) {
+      return;
+    }
+    v8::Isolate* isolate = v8::Isolate::GetCurrent();
+    AsyncContextHooks* current = head;
+    while (current && current->isolate != isolate) {
+      current = current->next;
+    }
+    if (!current || current->dispatching || isolate->IsExecutionTerminating()) {
+      return;
+    }
+    // Shutdown may detach while JS is on the stack. Keep the guard alive and
+    // take local handles before calling JS; never re-read detached handles.
+    scoped_refptr<AsyncContextHooks> state(current);
+    base::AutoReset<bool> guard(&state->dispatching, true);
+    v8::HandleScope handle_scope(isolate);
+    v8::Local<v8::Context> context = state->context.Get(isolate);
+    v8::Local<v8::Function> callback;
+    switch (type) {
+      case v8::PromiseHookType::kInit:
+        callback = state->init.Get(isolate);
+        break;
+      case v8::PromiseHookType::kBefore:
+        callback = state->before.Get(isolate);
+        break;
+      case v8::PromiseHookType::kAfter:
+        callback = state->after.Get(isolate);
+        break;
+      case v8::PromiseHookType::kResolve:
+        return;
+    }
+    v8::Context::Scope context_scope(context);
+    v8::MicrotasksScope microtasks(context,
+                                   v8::MicrotasksScope::kDoNotRunMicrotasks);
+    v8::TryCatch try_catch(isolate);
+    // Match V8's context hooks: report hook exceptions without replacing the
+    // Promise reaction's exception or propagating into the running job.
+    try_catch.SetVerbose(true);
+    v8::Local<v8::Value> argv[] = {promise, parent};
+    if (callback
+            ->Call(context, v8::Undefined(isolate),
+                   type == v8::PromiseHookType::kInit ? 2 : 1, argv)
+            .IsEmpty() &&
+        !try_catch.HasTerminated()) {
+      LOG(ERROR) << "ipcMain async context hook threw";
+    }
+  }
+
+ private:
+  friend class base::RefCounted<AsyncContextHooks>;
+  ~AsyncContextHooks() { DCHECK(!isolate); }
+
+  static thread_local AsyncContextHooks* head;
+  raw_ptr<v8::Isolate> isolate;
+  v8::Global<v8::Context> context;
+  v8::Global<v8::Function> init;
+  v8::Global<v8::Function> before;
+  v8::Global<v8::Function> after;
+  raw_ptr<AsyncContextHooks> next;
+  bool dispatching = false;
+};
+
+thread_local XenonIpcMainContainer::AsyncContextHooks*
+    XenonIpcMainContainer::AsyncContextHooks::head = nullptr;
 
 struct XenonIpcMainContainer::PromiseReplyContext {
   base::WeakPtr<XenonIpcMainContainer> owner;
@@ -638,6 +935,8 @@ XenonIpcMainContainer::XenonIpcMainContainer() = default;
 XenonIpcMainContainer::~XenonIpcMainContainer() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   Shutdown();
+  CHECK(native_shutdown_complete_)
+      << "Destroying a busy main runtime: " << DescribeNativeShutdown();
 }
 
 bool XenonIpcMainContainer::Initialize() {
@@ -654,12 +953,23 @@ bool XenonIpcMainContainer::Initialize(AppMainModule main_module) {
 
 void XenonIpcMainContainer::SetNativeAddonHooks(NativeAddonHooks hooks) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(!initialized_);
   native_addon_hooks_ = std::move(hooks);
 }
 
 void XenonIpcMainContainer::SetNetworkLoaderFactory(
     scoped_refptr<network::SharedURLLoaderFactory> factory) {
   network_loader_factory_ = std::move(factory);
+}
+
+void XenonIpcMainContainer::SetElectronNetworkHooks(
+    ElectronNetEngine::FactoryProvider factory,
+    ElectronNetEngine::OnlineProvider online) {
+  electron_net_online_ = std::move(online);
+  electron_net_ = std::make_unique<ElectronNetEngine>(
+      std::move(factory),
+      base::BindRepeating(&XenonIpcMainContainer::DispatchElectronNetEvent,
+                          weak_factory_.GetWeakPtr()));
 }
 
 void XenonIpcMainContainer::SetWindowHooks(WindowHooks hooks) {
@@ -671,6 +981,19 @@ void XenonIpcMainContainer::SetAppExitHandler(
     base::RepeatingCallback<void(int)> handler) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   app_exit_handler_ = std::move(handler);
+}
+
+void XenonIpcMainContainer::SetMainEvaluationCompleteHandler(
+    base::RepeatingClosure handler) {
+  main_evaluation_complete_handler_ = std::move(handler);
+}
+
+void XenonIpcMainContainer::SetHostPaths(base::FilePath user_data,
+                                         base::FilePath crash_dumps) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(!initialized_);
+  host_user_data_path_ = std::move(user_data);
+  host_crash_dumps_path_ = std::move(crash_dumps);
 }
 
 void XenonIpcMainContainer::SetChildProcessCaller(
@@ -689,11 +1012,16 @@ bool XenonIpcMainContainer::InitializeInternal(
     std::optional<EmbeddedMainModule> main_module,
     std::optional<AppMainModule> app_module) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (shutting_down_) {
+    startup_error_ = "Main JavaScript container is shutting down";
+    return false;
+  }
   if (initialized_) {
     return true;
   }
 
   startup_error_.clear();
+  app_paths_.reset();
   embedded_main_source_.reset();
   main_script_path_.clear();
   module_root_.clear();
@@ -701,13 +1029,41 @@ bool XenonIpcMainContainer::InitializeInternal(
   executable_path_.clear();
   resources_directory_.clear();
   working_directory_.clear();
+  app_argv_.clear();
   is_packaged_ = false;
   app_name_ = "Application";
   app_version_ = "0.0.0";
   default_user_agent_.clear();
   renderer_url_mappings_.clear();
   renderer_base_url_.clear();
-  if (main_module) {
+  if (worker_options_) {
+    main_script_path_ = worker_options_->filename;
+    app_path_ = worker_options_->app_path;
+    module_root_ = app_path_;
+    executable_path_ = worker_options_->executable_path;
+    resources_directory_ = worker_options_->resources_directory;
+    working_directory_ = worker_options_->working_directory;
+    app_argv_ = worker_options_->argv;
+    base::FilePath normalized;
+    if (worker_options_->eval) {
+      // Eval has a virtual CommonJS filename; ordinary OS realpath requires
+      // the file to exist, while the inherited application root is canonical.
+      normalized = app_path_.AppendASCII("[worker eval].cjs");
+    } else if (!NormalizeCommonJsPath(main_script_path_, &normalized)) {
+      startup_error_ = "ERR_MODULE_NOT_FOUND: Worker entry does not exist: " +
+                       main_script_path_.AsUTF8Unsafe();
+      return false;
+    }
+    main_script_path_ = std::move(normalized);
+    if (!module_root_.IsParent(main_script_path_)) {
+      startup_error_ =
+          "ERR_ACCESS_DENIED: Worker entry is outside its application";
+      return false;
+    }
+    if (worker_options_->eval) {
+      embedded_main_source_ = worker_options_->source;
+    }
+  } else if (main_module) {
     if (main_module->source.empty()) {
       startup_error_ = "Embedded main JavaScript source is empty";
       return false;
@@ -720,7 +1076,7 @@ bool XenonIpcMainContainer::InitializeInternal(
     }
     main_script_path_ = std::move(main_module->virtual_path);
     app_path_ = main_module->app_path.empty() ? main_script_path_.DirName()
-                                               : main_module->app_path;
+                                              : main_module->app_path;
     // Paths derived from the executable command line may preserve the caller's
     // spelling (for example, "release_64"), while resolving a required chunk
     // returns the filesystem spelling ("Release_64"). FilePath ancestry checks
@@ -730,13 +1086,24 @@ bool XenonIpcMainContainer::InitializeInternal(
     if (NormalizeCommonJsPath(main_script_path_, &normalized_main_script,
                               nullptr, /*allow_missing_member=*/true)) {
       main_script_path_ = std::move(normalized_main_script);
+    } else if (!base::PathExists(main_script_path_) &&
+               !base::IsLink(main_script_path_)) {
+      // Embedded source need not have a physical file. Canonicalize its
+      // existing parent too, so Windows short names/casing do not produce a
+      // false root escape. A dangling symlink is not a virtual source path.
+      base::FilePath normalized_parent;
+      if (base::NormalizeFilePath(main_script_path_.DirName(),
+                                  &normalized_parent) &&
+          base::DirectoryExists(normalized_parent)) {
+        main_script_path_ =
+            normalized_parent.Append(main_script_path_.BaseName());
+      }
     }
     if (NormalizeCommonJsPath(app_path_, &normalized_app_path)) {
       app_path_ = std::move(normalized_app_path);
     }
-    if (!app_path_.IsAbsolute() ||
-        (main_script_path_ != app_path_ &&
-         !app_path_.IsParent(main_script_path_))) {
+    if (!app_path_.IsAbsolute() || (main_script_path_ != app_path_ &&
+                                    !app_path_.IsParent(main_script_path_))) {
       startup_error_ =
           "Embedded main JavaScript is outside its application directory";
       return false;
@@ -750,6 +1117,7 @@ bool XenonIpcMainContainer::InitializeInternal(
     renderer_base_url_ = std::move(main_module->renderer_base_url);
     resources_directory_ = std::move(main_module->resources_directory);
     working_directory_ = std::move(main_module->working_directory);
+    app_argv_ = std::move(main_module->app_argv);
     is_packaged_ = main_module->is_packaged.value_or(
         !renderer_base_url_.empty() || !renderer_url_mappings_.empty());
     embedded_main_source_ = std::move(main_module->source);
@@ -764,6 +1132,15 @@ bool XenonIpcMainContainer::InitializeInternal(
   if (!ResolveAppExecutable(executable_path_, &executable_path_,
                             &startup_error_)) {
     return false;
+  }
+  if (app_argv_.empty()) {
+    app_argv_.push_back(executable_path_.AsUTF8Unsafe());
+  }
+  for (const auto& argument : app_argv_) {
+    if (argument.find('\0') != std::string::npos) {
+      startup_error_ = "Application arguments must not contain NUL";
+      return false;
+    }
   }
   if (resources_directory_.empty()) {
     const auto executable_directory = executable_path_.DirName();
@@ -784,6 +1161,64 @@ bool XenonIpcMainContainer::InitializeInternal(
     return false;
   }
 
+  XenonAppPaths::StoragePathCallback storage_path;
+  if (!worker_options_ && !utility_options_ && window_hooks_.call) {
+    storage_path = base::BindRepeating(
+        [](XenonIpcMainContainer* self, std::string name,
+           std::optional<base::FilePath> path)
+            -> base::expected<base::FilePath, XenonAppPaths::Error> {
+          auto request = base::DictValue()
+                             .Set("method", path ? "set" : "get")
+                             .Set("name", std::move(name));
+          if (path) {
+            request.Set("path", path->AsUTF8Unsafe());
+          }
+          base::Value result;
+          std::string error;
+          bool success;
+          {
+            v8::Unlocker unlocker(self->isolate_);
+            success = self->window_hooks_.call.Run(
+                0, "electron-app-storage", base::Value(std::move(request)),
+                &result, &error);
+          }
+          if (!success || !error.empty() || !result.is_string()) {
+            const auto separator = error.find(':');
+            return base::unexpected(XenonAppPaths::Error{
+                separator == std::string::npos ? "ERR_FAILED"
+                                               : error.substr(0, separator),
+                error.empty() ? "Application storage path request failed"
+                              : error});
+          }
+          auto resolved = base::FilePath::FromUTF8Unsafe(result.GetString());
+          if (!resolved.IsAbsolute()) {
+            return base::unexpected(XenonAppPaths::Error{
+                "ERR_INVALID_STATE",
+                "Host returned an invalid application storage path"});
+          }
+          return resolved;
+        },
+        base::Unretained(this));
+  }
+  app_paths_ = std::make_unique<XenonAppPaths>(
+      app_path_, executable_path_, app_name_, host_user_data_path_,
+      host_crash_dumps_path_, std::move(storage_path));
+  if (!worker_options_) {
+    const auto* command_line = base::CommandLine::ForCurrentProcess();
+    const bool owns_process_directory =
+        command_line->GetSwitchValueASCII(::switches::kProcessType) ==
+            ::switches::kUtilityProcess &&
+        (command_line->HasSwitch(switches::kIsolatedElectronService) ||
+         command_line->HasSwitch(switches::kUtilityProcess));
+    file_descriptors_ = base::MakeRefCounted<XenonFileDescriptors>(
+        working_directory_, owns_process_directory);
+    if (owns_process_directory && file_descriptors_->ChangeWorkingDirectory(
+                                      working_directory_.AsUTF8Unsafe()) != 0) {
+      startup_error_ = "Unable to set application process working directory";
+      return false;
+    }
+  }
+
   if (!gin::IsolateHolder::Initialized()) {
 #if defined(V8_USE_EXTERNAL_STARTUP_DATA)
     gin::V8Initializer::LoadV8Snapshot();
@@ -792,12 +1227,28 @@ bool XenonIpcMainContainer::InitializeInternal(
                                    gin::ArrayBufferAllocator::SharedInstance());
   }
 
-  isolate_holder_ = std::make_unique<gin::IsolateHolder>(
-      base::SingleThreadTaskRunner::GetCurrentDefault(),
-      gin::IsolateHolder::kUseLocker,
-      gin::IsolateHolder::IsolateType::kUtility);
+  if (worker_params_) {
+    // Supported host architectures have downward-growing native stacks. Keep
+    // a reserve for unwinding and native calls after V8 raises stack overflow.
+    uintptr_t stack_anchor = 0;
+    const auto limit =
+        reinterpret_cast<uintptr_t>(&stack_anchor) -
+        static_cast<size_t>(worker_options_->stack_mb * 1024 * 1024) +
+        128 * 1024;
+    worker_params_->constraints.set_stack_limit(
+        reinterpret_cast<uint32_t*>(limit));
+    isolate_holder_ = std::make_unique<gin::IsolateHolder>(
+        base::SingleThreadTaskRunner::GetCurrentDefault(),
+        gin::IsolateHolder::kUseLocker,
+        gin::IsolateHolder::IsolateType::kUtility, std::move(worker_params_));
+  } else {
+    isolate_holder_ = std::make_unique<gin::IsolateHolder>(
+        base::SingleThreadTaskRunner::GetCurrentDefault(),
+        gin::IsolateHolder::kUseLocker,
+        gin::IsolateHolder::IsolateType::kUtility);
+  }
   isolate_ = isolate_holder_->isolate();
-  async_context_hooks_installed_ = false;
+  CHECK(!async_context_hooks_);
   if (!isolate_) {
     startup_error_ = "Failed to create the main JavaScript isolate";
     return false;
@@ -808,6 +1259,12 @@ bool XenonIpcMainContainer::InitializeInternal(
     v8::Locker locker(isolate_);
     v8::Isolate::Scope isolate_scope(isolate_);
     v8::HandleScope handle_scope(isolate_);
+    if (worker_control_) {
+      worker_control_->PublishIsolate(isolate_);
+    }
+    if (isolate_->IsExecutionTerminating()) {
+      return false;
+    }
     v8::Local<v8::Context> context = v8::Context::New(isolate_);
     context_.Reset(isolate_, context);
     v8::Context::Scope context_scope(context);
@@ -845,6 +1302,15 @@ bool XenonIpcMainContainer::InitializeInternal(
             gin::StringToV8(isolate_, working_directory_.AsUTF8Unsafe()))
         .Check();
     global
+        ->Set(context, gin::StringToV8(isolate_, "__xenonFsConstants"),
+              ValueToV8(base::Value(XenonFileDescriptors::Constants()))
+                  .ToLocalChecked())
+        .Check();
+    global
+        ->Set(context, v8::String::NewFromUtf8Literal(isolate_, "__xenonArgv"),
+              gin::ConvertToV8(isolate_, app_argv_))
+        .Check();
+    global
         ->Set(context,
               v8::String::NewFromUtf8Literal(isolate_, "__xenonIsPackaged"),
               v8::Boolean::New(isolate_, is_packaged_))
@@ -854,10 +1320,10 @@ bool XenonIpcMainContainer::InitializeInternal(
               v8::Integer::NewFromUnsigned(isolate_, base::GetCurrentProcId()))
         .Check();
     global
-        ->Set(context,
-              v8::String::NewFromUtf8Literal(isolate_, "__xenonPlatform"),
-              v8::String::NewFromUtf8(isolate_, PlatformName())
-                  .ToLocalChecked())
+        ->Set(
+            context,
+            v8::String::NewFromUtf8Literal(isolate_, "__xenonPlatform"),
+            v8::String::NewFromUtf8(isolate_, PlatformName()).ToLocalChecked())
         .Check();
     global
         ->Set(context, v8::String::NewFromUtf8Literal(isolate_, "__xenonArch"),
@@ -902,8 +1368,8 @@ bool XenonIpcMainContainer::InitializeInternal(
       mapping
           ->Set(context,
                 v8::String::NewFromUtf8Literal(isolate_, "sourcePathPrefix"),
-                v8::String::NewFromUtf8(
-                    isolate_, renderer_url_mappings_[i].first.c_str())
+                v8::String::NewFromUtf8(isolate_,
+                                        renderer_url_mappings_[i].first.c_str())
                     .ToLocalChecked())
           .Check();
       mapping
@@ -913,21 +1379,21 @@ bool XenonIpcMainContainer::InitializeInternal(
                     isolate_, renderer_url_mappings_[i].second.c_str())
                     .ToLocalChecked())
           .Check();
-      renderer_url_mappings
-          ->Set(context, static_cast<uint32_t>(i), mapping)
+      renderer_url_mappings->Set(context, static_cast<uint32_t>(i), mapping)
           .Check();
     }
     global
         ->Set(context,
-              v8::String::NewFromUtf8Literal(
-                  isolate_, "__xenonRendererUrlMappings"),
+              v8::String::NewFromUtf8Literal(isolate_,
+                                             "__xenonRendererUrlMappings"),
               renderer_url_mappings)
         .Check();
     global
-        ->Set(context,
-              v8::String::NewFromUtf8Literal(isolate_, "__xenonRendererBaseUrl"),
-              v8::String::NewFromUtf8(isolate_, renderer_base_url_.c_str())
-                  .ToLocalChecked())
+        ->Set(
+            context,
+            v8::String::NewFromUtf8Literal(isolate_, "__xenonRendererBaseUrl"),
+            v8::String::NewFromUtf8(isolate_, renderer_base_url_.c_str())
+                .ToLocalChecked())
         .Check();
     global
         ->Set(
@@ -943,46 +1409,37 @@ bool XenonIpcMainContainer::InitializeInternal(
               v8::String::NewFromUtf8(isolate_, v8::V8::GetVersion())
                   .ToLocalChecked())
         .Check();
-    v8::Local<v8::Object> environment_object = v8::Object::New(isolate_);
-    std::unique_ptr<base::Environment> environment =
-        base::Environment::Create();
-    for (const char* name : {"APPDATA",
-                             "LOCALAPPDATA",
-                             "USERPROFILE",
-                             "HOME",
-                             "TMPDIR",
-                             "TEMP",
-                             "TMP",
-                             "COMPUTERNAME",
-                             "PATH",
-                             "NODE_ENV",
-                             "SystemRoot",
-                             "windir",
-                             "ProgramFiles",
-                             "ProgramFiles(x86)",
-                             "CommonProgramFiles",
-                             "CommonProgramFiles(x86)",
-                             "ProgramData",
-                             "ALLUSERSPROFILE",
-                             "PUBLIC",
-                             "USER",
-                             "LOGNAME",
-                             "LANG",
-                             "SHELL"}) {
-      const std::string variable_name(name);
-      if (std::optional<std::string> value =
-              environment->GetVar(variable_name)) {
-        environment_object
-            ->Set(context,
-                  v8::String::NewFromUtf8(isolate_, name).ToLocalChecked(),
-                  v8::String::NewFromUtf8(isolate_, value->c_str())
-                      .ToLocalChecked())
-            .Check();
+    v8::Local<v8::Object> buffer_limits = v8::Object::New(isolate_);
+    buffer_limits
+        ->Set(context, gin::StringToV8(isolate_, "MAX_LENGTH"),
+              v8::Number::New(isolate_,
+                              static_cast<double>(v8::Uint8Array::kMaxLength)))
+        .Check();
+    buffer_limits
+        ->Set(context, gin::StringToV8(isolate_, "MAX_STRING_LENGTH"),
+              v8::Integer::New(isolate_, v8::String::kMaxLength))
+        .Check();
+    global
+        ->Set(context, gin::StringToV8(isolate_, "__xenonBufferLimits"),
+              buffer_limits)
+        .Check();
+    base::Value environment_values;
+    if (worker_options_) {
+      environment_values = base::Value(worker_options_->environment.Clone());
+    } else if (utility_options_) {
+      environment_values = base::Value(utility_options_->environment.Clone());
+    } else {
+      auto snapshot = GetProcessEnvironment();
+      if (!snapshot->success) {
+        startup_error_ =
+            "Failed to read process environment: " + snapshot->error;
+        return false;
       }
+      environment_values = std::move(snapshot->value);
     }
     global
         ->Set(context, v8::String::NewFromUtf8Literal(isolate_, "__xenonEnv"),
-              environment_object)
+              ValueToV8(environment_values).ToLocalChecked())
         .Check();
     auto bind_func = [&](const char* name, auto method) {
       global
@@ -997,18 +1454,43 @@ bool XenonIpcMainContainer::InitializeInternal(
     bind_func("__xenonLog", &XenonIpcMainContainer::NativeLog);
     bind_func("__xenonCreateRequire",
               &XenonIpcMainContainer::NativeCreateRequire);
+    bind_func("__xenonProcessDirectory",
+              &XenonIpcMainContainer::NativeProcessDirectory);
+    bind_func("__xenonIsBuiltinModule",
+              &XenonIpcMainContainer::NativeIsBuiltinModule);
+    bind_func("__xenonIsPromise", &XenonIpcMainContainer::NativeIsPromise);
+    bind_func("__xenonCanParseURL", &XenonIpcMainContainer::NativeCanParseURL);
+    bind_func("__xenonIsNativeError",
+              &XenonIpcMainContainer::NativeIsNativeError);
+    bind_func("__xenonUtilType", &XenonIpcMainContainer::NativeUtilType);
     bind_func("__xenonV8Serialize", &XenonIpcMainContainer::NativeV8Serialize);
+    bind_func("__xenonModuleHooksChanged",
+              &XenonIpcMainContainer::NativeModuleHooksChanged);
+    bind_func("__xenonDefaultModuleResolve",
+              &XenonIpcMainContainer::NativeDefaultModuleResolve);
+    bind_func("__xenonDefaultModuleLoad",
+              &XenonIpcMainContainer::NativeDefaultModuleLoad);
+    bind_func("__xenonStructuredClone",
+              &XenonIpcMainContainer::NativeStructuredClone);
+    bind_func("__xenonIsDataCloneError",
+              &XenonIpcMainContainer::NativeIsDataCloneError);
     bind_func("__xenonInstallAsyncContextHooks",
               &XenonIpcMainContainer::NativeInstallAsyncContextHooks);
     bind_func("__xenonGetPath", &XenonIpcMainContainer::NativeGetPath);
+    bind_func("__xenonSetPath", &XenonIpcMainContainer::NativeSetPath);
+    bind_func("__xenonSetAppLogsPath",
+              &XenonIpcMainContainer::NativeSetAppLogsPath);
     bind_func("__xenonNetworkInterfaces",
               &XenonIpcMainContainer::NativeNetworkInterfaces);
     bind_func("__xenonOsCall", &XenonIpcMainContainer::NativeOsCall);
+    bind_func("__xenonCrashReporterCall",
+              &XenonIpcMainContainer::NativeCrashReporterCall);
     bind_func("__xenonRegisterSchemesAsPrivileged",
               &XenonIpcMainContainer::NativeRegisterSchemesAsPrivileged);
     bind_func("__xenonSendToRenderer",
               &XenonIpcMainContainer::NativeSendToRenderer);
     bind_func("__xenonNetSend", &XenonIpcMainContainer::NativeNetSend);
+    bind_func("__xenonDgramCall", &XenonIpcMainContainer::NativeDgramCall);
     bind_func("__xenonChildProcessCall",
               &XenonIpcMainContainer::NativeChildProcessCall);
     bind_func("__xenonFsCall", &XenonIpcMainContainer::NativeFsCall);
@@ -1019,23 +1501,41 @@ bool XenonIpcMainContainer::InitializeInternal(
               &XenonIpcMainContainer::NativeCryptoDigest);
     bind_func("__xenonCryptoRandom",
               &XenonIpcMainContainer::NativeCryptoRandom);
+    InstallTimingSafeEqual(isolate_, context, global,
+                           "__xenonCryptoTimingSafeEqual");
+    InstallHeapCodeStatistics(isolate_, context, global,
+                              "__xenonGetHeapCodeStatistics");
+    InstallX509CertificateBridge(isolate_, context, global,
+                                 "__xenonX509CertificateCall");
     bind_func("__xenonZlibCall", &XenonIpcMainContainer::NativeZlibCall);
+    bind_func("__xenonZlibStreamCall",
+              &XenonIpcMainContainer::NativeZlibStreamCall);
     bind_func("__xenonHttpRequest", &XenonIpcMainContainer::NativeHttpRequest);
     bind_func("__xenonHttpAbort", &XenonIpcMainContainer::NativeHttpAbort);
-    bind_func("__xenonShowOpenDialog",
-              &XenonIpcMainContainer::NativeShowOpenDialog);
-    bind_func("__xenonCreateBrowserWindow",
-              &XenonIpcMainContainer::NativeCreateBrowserWindow);
-    bind_func("__xenonLoadBrowserWindowURL",
-              &XenonIpcMainContainer::NativeLoadBrowserWindowURL);
-    bind_func("__xenonSetBrowserWindowVisible",
-              &XenonIpcMainContainer::NativeSetBrowserWindowVisible);
-    bind_func("__xenonBrowserWindowCall",
-              &XenonIpcMainContainer::NativeBrowserWindowCall);
-    bind_func("__xenonCloseBrowserWindow",
-              &XenonIpcMainContainer::NativeCloseBrowserWindow);
-    bind_func("__xenonExitApp", &XenonIpcMainContainer::NativeExitApp);
-    bind_func("__xenonCanExitApp", &XenonIpcMainContainer::NativeCanExitApp);
+    bind_func("__xenonElectronNetStart",
+              &XenonIpcMainContainer::NativeElectronNetStart);
+    bind_func("__xenonElectronNetControl",
+              &XenonIpcMainContainer::NativeElectronNetControl);
+    bind_func("__xenonElectronNetAuth",
+              &XenonIpcMainContainer::NativeElectronNetAuth);
+    bind_func("__xenonElectronNetOnline",
+              &XenonIpcMainContainer::NativeElectronNetOnline);
+    if (!worker_control_) {
+      bind_func("__xenonCreateBrowserWindow",
+                &XenonIpcMainContainer::NativeCreateBrowserWindow);
+      bind_func("__xenonLoadBrowserWindowURL",
+                &XenonIpcMainContainer::NativeLoadBrowserWindowURL);
+      bind_func("__xenonSetBrowserWindowVisible",
+                &XenonIpcMainContainer::NativeSetBrowserWindowVisible);
+      bind_func("__xenonBrowserWindowCall",
+                &XenonIpcMainContainer::NativeBrowserWindowCall);
+      bind_func("__xenonBrowserWindowCallAsync",
+                &XenonIpcMainContainer::NativeBrowserWindowCallAsync);
+      bind_func("__xenonCloseBrowserWindow",
+                &XenonIpcMainContainer::NativeCloseBrowserWindow);
+      bind_func("__xenonExitApp", &XenonIpcMainContainer::NativeExitApp);
+      bind_func("__xenonCanExitApp", &XenonIpcMainContainer::NativeCanExitApp);
+    }
     bind_func("__xenonNativeInvokeExport",
               &XenonIpcMainContainer::NativeInvokeExport);
     bind_func("__xenonNativeDescribeExport",
@@ -1044,6 +1544,16 @@ bool XenonIpcMainContainer::InitializeInternal(
               &XenonIpcMainContainer::NativeConstructExport);
     bind_func("__xenonNativeInvokeInstance",
               &XenonIpcMainContainer::NativeInvokeInstance);
+    bind_func("__xenonSetTimerReferenced",
+              &XenonIpcMainContainer::NativeSetTimerReferenced);
+    if (!InitializeWorkerBindings(context)) {
+      startup_error_ = "Failed to initialize Worker bindings";
+      return false;
+    }
+    if (!InitializeUtilityBindings(context)) {
+      startup_error_ = "Failed to initialize utilityProcess bindings";
+      return false;
+    }
     global
         ->Set(context, v8::String::NewFromUtf8Literal(isolate_, "setTimeout"),
               v8::Function::New(
@@ -1079,9 +1589,48 @@ bool XenonIpcMainContainer::InitializeInternal(
         .Check();
   }
 
+  if (!worker_control_) {
+    ScopedV8Context scope(isolate_, context_);
+    message_ports_ = std::make_unique<MessagePortRuntime>(
+        isolate_, context_.Get(isolate_),
+        base::BindRepeating(
+            [](XenonIpcMainContainer* self, const std::string& endpoint) {
+              auto it = self->renderers_.find(endpoint);
+              return !self->shutting_down_ && it != self->renderers_.end() &&
+                     it->second.remote.is_bound() && !it->second.worker_info;
+            },
+            base::Unretained(this)),
+        base::BindRepeating(
+            [](XenonIpcMainContainer* self, const std::string& endpoint,
+               const std::string& channel, blink::TransferableMessage message) {
+              auto it = self->renderers_.find(endpoint);
+              if (!self->shutting_down_ && it != self->renderers_.end() &&
+                  !it->second.worker_info) {
+                it->second.remote->DispatchPostMessage(channel,
+                                                       std::move(message));
+              }
+            },
+            base::Unretained(this)));
+    if (!message_ports_->Install()) {
+      startup_error_ = "Failed to install MessagePortMain transport";
+      return false;
+    }
+    if (utility_options_) {
+      message_ports_->SetExceptionHandler(base::BindRepeating(
+          [](XenonIpcMainContainer* self, v8::Local<v8::Value> exception) {
+            self->ReportNodeException(exception);
+          },
+          base::Unretained(this)));
+    }
+  }
   if (!RunBootstrap()) {
     return false;
   }
+  if (!InstallUtilityParentPort()) {
+    return false;
+  }
+
+  InitializeModuleLoaders();
 
   if (!MaybeLoadConfiguredMainScript()) {
     return false;
@@ -1092,13 +1641,28 @@ bool XenonIpcMainContainer::InitializeInternal(
 }
 
 void XenonIpcMainContainer::Shutdown() {
+  BeginNativeShutdown();
+  PollNativeShutdown();
+}
+
+void XenonIpcMainContainer::BeginNativeShutdown() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (shutting_down_) {
     return;
   }
   shutting_down_ = true;
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+  native_event_loop_timer_.Stop();
+#endif
+  if (!utility_processes_.empty()) {
+    ScopedV8Context scope(isolate_, context_);
+    utility_processes_.clear();
+  }
+  if (worker_engine_) {
+    worker_engine_->Shutdown();
+  }
 
-  if (initialized_ && !shutdown_app_.IsEmpty()) {
+  if (!worker_control_ && initialized_ && !shutdown_app_.IsEmpty()) {
     ScopedV8Context scope(isolate_, context_);
     gin::TryCatch try_catch(isolate_);
     if (shutdown_app_.Get(isolate_)
@@ -1107,48 +1671,286 @@ void XenonIpcMainContainer::Shutdown() {
       LOG(ERROR) << "Electron app shutdown listener failed: "
                  << try_catch.GetStackTrace();
     }
+    if (!shutdown_web_requests_.IsEmpty() &&
+        shutdown_web_requests_.Get(isolate_)
+            ->Call(scope.context(), scope.context()->Global(), 0, nullptr)
+            .IsEmpty()) {
+      LOG(ERROR) << "WebRequest shutdown failed: " << try_catch.GetStackTrace();
+    }
+    if (!shutdown_electron_net_.IsEmpty() &&
+        shutdown_electron_net_.Get(isolate_)
+            ->Call(scope.context(), scope.context()->Global(), 0, nullptr)
+            .IsEmpty()) {
+      LOG(ERROR) << "Electron network shutdown failed: "
+                 << try_catch.GetStackTrace();
+    }
     isolate_->PerformMicrotaskCheckpoint();
   }
 
+  initialized_ = false;
+  if (udp_sockets_) {
+    udp_sockets_->Shutdown();
+  }
   weak_factory_.InvalidateWeakPtrs();
+  if (message_ports_) {
+    message_ports_->Shutdown();
+  }
+  for (auto& [id, entry] : zlib_streams_) {
+    entry.stream->Cancel();
+  }
+  zlib_streams_.clear();
+  if (!context_.IsEmpty()) {
+    ScopedV8Context scope(isolate_, context_);
+    for (auto& [path, addon] : loaded_node_addons_) {
+      if (addon->env) {
+        addon->env->BeginShutdown();
+      }
+    }
+    for (auto& addon : failed_node_addons_) {
+      if (addon->env) {
+        addon->env->BeginShutdown();
+      }
+    }
+  }
   for (auto& [id, request] : pending_http_requests_) {
     if (request.cancel) {
       std::move(request.cancel).Run();
     }
   }
-  FailAllPendingPromises("The Utility main JavaScript container stopped");
+  // V8 promise reactions can still run from an addon completion while the
+  // runtime drains. Reject their callers now but keep the External tokens
+  // alive until no JavaScript can run; their weak owners are already invalid.
+  for (auto* reply : pending_promise_replies_) {
+    if (reply->callback) {
+      std::move(reply->callback)
+          .Run(ErrorResult("The Utility main JavaScript container stopped"));
+    }
+  }
   renderers_.clear();
-  module_resolution_cache_.clear();
+}
+
+bool XenonIpcMainContainer::PollNativeShutdown() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(shutting_down_);
+  if (native_shutdown_complete_) {
+    return true;
+  }
+  // Worker threads own independent native loops and V8 isolates. Their exit
+  // events arrive only after retirement; keep this parent and its shared file
+  // descriptors alive until then instead of stopping threads with pending UV
+  // requests or scheduled close callbacks.
+  if (worker_engine_ && !worker_engine_->IsDrained()) {
+    return false;
+  }
   if (!context_.IsEmpty()) {
     ScopedV8Context scope(isolate_, context_);
-    pending_fs_calls_.clear();
-    pending_zlib_calls_.clear();
-    pending_http_requests_.clear();
-    timers_.clear();
-    module_cache_.clear();
-    loaded_node_addons_.clear();
-  } else {
-    pending_fs_calls_.clear();
-    pending_zlib_calls_.clear();
-    pending_http_requests_.clear();
-    timers_.clear();
-    module_cache_.clear();
-    loaded_node_addons_.clear();
+    // Environments may finish work or run finalizers which still use libuv.
+    // Close the shared runtime loop only after every environment is ready.
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+    if (native_event_loop_ && !native_loop_draining_) {
+      auto pumped = native_event_loop_->Pump();
+      if (!pumped.has_value()) {
+        native_shutdown_error_ = pumped.error();
+        return false;
+      }
+    }
+#endif
+    auto poll_environments = [&] {
+      bool environments_ready = true;
+      for (auto& [path, addon] : loaded_node_addons_) {
+        if (addon->env && !addon->env->PollShutdown()) {
+          environments_ready = false;
+        }
+      }
+      for (auto& addon : failed_node_addons_) {
+        if (addon->env && !addon->env->PollShutdown()) {
+          environments_ready = false;
+        }
+      }
+      return environments_ready;
+    };
+    if (!poll_environments()) {
+      return false;
+    }
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+    if (native_event_loop_) {
+      native_loop_draining_ = true;
+      native_event_loop_->BeginShutdown();
+      auto drained = native_event_loop_->PollShutdown(poll_environments);
+      if (!drained.has_value()) {
+        native_shutdown_error_ = drained.error();
+        return false;
+      }
+      if (!drained.value()) {
+        return false;
+      }
+    }
+#endif
   }
+  // All callback stacks and V8 scopes have unwound before isolate disposal.
+  FinalizeNativeShutdown();
+  return true;
+}
+
+std::string XenonIpcMainContainer::DescribeNativeShutdown() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  size_t pending_environments = 0;
+  for (const auto& [path, addon] : loaded_node_addons_) {
+    if (addon->env && addon->env->HasPendingWork()) {
+      ++pending_environments;
+    }
+  }
+  for (const auto& addon : failed_node_addons_) {
+    if (addon->env && addon->env->HasPendingWork()) {
+      ++pending_environments;
+    }
+  }
+  std::string result =
+      "ipcMain: " + base::NumberToString(pending_environments) +
+      " pending native environments";
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+  if (native_event_loop_) {
+    for (const auto& handle : native_event_loop_->InspectHandles()) {
+      result += "; " + handle.type + (handle.active ? " active" : " inactive") +
+                (handle.closing ? " closing" : " open") +
+                (handle.referenced ? " referenced" : " unreferenced");
+    }
+  }
+#endif
+  if (!native_shutdown_error_.empty()) {
+    result += "; " + native_shutdown_error_;
+  }
+  return result;
+}
+
+void XenonIpcMainContainer::ScheduleNativeEventLoopPump() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+  if (!shutting_down_ && native_event_loop_ && !native_event_loop_pumping_ &&
+      !native_event_loop_timer_.IsRunning()) {
+    native_event_loop_timer_.Start(
+        FROM_HERE, base::Milliseconds(10), this,
+        &XenonIpcMainContainer::PumpNativeEventLoop);
+  }
+#endif
+}
+
+void XenonIpcMainContainer::PumpNativeEventLoop() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+  if (shutting_down_ || !native_event_loop_ || context_.IsEmpty()) {
+    return;
+  }
+  {
+    // Native callbacks may issue another UDP call and enter a nested RunLoop.
+    // Only schedule their next pump after this uv_run has unwound.
+    base::AutoReset<bool> pumping(&native_event_loop_pumping_, true);
+    ScopedV8Context scope(isolate_, context_);
+    auto result = native_event_loop_->Pump();
+    if (!result.has_value()) {
+      LOG(ERROR) << "ipcMain native event loop: " << result.error();
+    }
+    isolate_->PerformMicrotaskCheckpoint();
+  }
+  if (shutting_down_ || !native_event_loop_) {
+    return;
+  }
+  // Built-in UDP activity can be restarted by its next native call. Once its
+  // handles and requests have drained, do not retain an empty 100 Hz pump.
+  // Loaded addons may enqueue work later without another JS call, so keep
+  // their conservative polling. uv_loop_alive alone also misses unreferenced
+  // and inactive handles; neither is evidence that an addon has gone idle.
+  if (loaded_node_addons_.empty() && failed_node_addons_.empty() &&
+      !native_event_loop_->HasReferencedWork() &&
+      native_event_loop_->InspectHandles().empty()) {
+    native_event_loop_timer_.Stop();
+    return;
+  }
+  ScheduleNativeEventLoopPump();
+#endif
+}
+
+void XenonIpcMainContainer::FinalizeNativeShutdown() {
+  if (async_context_hooks_) {
+    v8::Locker locker(isolate_);
+    v8::Isolate::Scope isolate_scope(isolate_);
+    async_context_hooks_->Detach();
+    async_context_hooks_.reset();
+  }
+  if (file_descriptors_) {
+    if (!worker_options_) {
+      file_descriptors_->CloseAll();
+    } else if (worker_options_->track_unmanaged_fds) {
+      file_descriptors_->CloseOwned(worker_options_->id);
+    }
+    file_descriptors_.reset();
+  }
+  electron_net_.reset();
+  electron_net_online_.Reset();
+  commonjs_parent_stack_.clear();
+  module_resolution_cache_.clear();
+  hooked_module_sources_.clear();
+  has_resolve_hooks_ = false;
+  has_load_hooks_ = false;
+  if (!context_.IsEmpty()) {
+    ScopedV8Context scope(isolate_, context_);
+    esm_loader_.reset();
+    module_resolver_.reset();
+    pending_fs_calls_.clear();
+    pending_window_calls_.clear();
+    pending_zlib_calls_.clear();
+    pending_http_requests_.clear();
+    timers_.clear();
+    worker_rejections_.clear();
+    module_cache_.clear();
+    loaded_node_addons_.clear();
+    failed_node_addons_.clear();
+  } else {
+    esm_loader_.reset();
+    module_resolver_.reset();
+    pending_fs_calls_.clear();
+    pending_window_calls_.clear();
+    pending_zlib_calls_.clear();
+    pending_http_requests_.clear();
+    timers_.clear();
+    worker_rejections_.clear();
+    module_cache_.clear();
+    loaded_node_addons_.clear();
+    failed_node_addons_.clear();
+  }
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+  udp_sockets_.reset();
+  native_event_loop_.reset();
+#endif
   dispatch_send_.Reset();
   dispatch_invoke_.Reset();
   dispatch_protocol_.Reset();
   cancel_protocol_.Reset();
+  dispatch_web_request_.Reset();
+  cancel_web_request_.Reset();
+  release_web_request_registration_.Reset();
+  shutdown_web_requests_.Reset();
+  dispatch_electron_net_event_.Reset();
+  shutdown_electron_net_.Reset();
   dispatch_sync_.Reset();
   dispatch_window_event_.Reset();
   dispatch_app_event_.Reset();
   dispatch_renderer_event_.Reset();
   mark_app_ready_.Reset();
   shutdown_app_.Reset();
+  dispatch_worker_event_.Reset();
+  shutdown_workers_.Reset();
+  message_ports_.reset();
   context_.Reset();
+  if (worker_control_) {
+    worker_control_->PublishIsolate(nullptr);
+  }
   isolate_ = nullptr;
   isolate_holder_.reset();
+  FailAllPendingPromises("The Utility main JavaScript container stopped");
+  crash_reporter_annotations_.Clear();
   initialized_ = false;
+  native_shutdown_complete_ = true;
 }
 
 bool XenonIpcMainContainer::RunBootstrap() {
@@ -1192,9 +1994,23 @@ bool XenonIpcMainContainer::RunBootstrap() {
     return true;
   };
   return capture_function("__xenonDispatchSend", &dispatch_send_) &&
+         capture_function("__xenonDispatchWorkerEvent",
+                          &dispatch_worker_event_) &&
+         capture_function("__xenonShutdownWorkers", &shutdown_workers_) &&
          capture_function("__xenonDispatchInvoke", &dispatch_invoke_) &&
          capture_function("__xenonDispatchProtocol", &dispatch_protocol_) &&
          capture_function("__xenonCancelProtocol", &cancel_protocol_) &&
+         capture_function("__xenonDispatchWebRequest",
+                          &dispatch_web_request_) &&
+         capture_function("__xenonCancelWebRequest", &cancel_web_request_) &&
+         capture_function("__xenonReleaseWebRequestRegistration",
+                          &release_web_request_registration_) &&
+         capture_function("__xenonShutdownWebRequests",
+                          &shutdown_web_requests_) &&
+         capture_function("__xenonDispatchElectronNetEvent",
+                          &dispatch_electron_net_event_) &&
+         capture_function("__xenonShutdownElectronNet",
+                          &shutdown_electron_net_) &&
          capture_function("__xenonDispatchSync", &dispatch_sync_) &&
          capture_function("__xenonDispatchBrowserWindowEvent",
                           &dispatch_window_event_) &&
@@ -1244,6 +2060,7 @@ bool XenonIpcMainContainer::ResolveApplicationMain(AppMainModule main_module) {
                              ? application.resources_directory
                              : std::move(main_module.resources_directory);
   working_directory_ = std::move(main_module.working_directory);
+  app_argv_ = std::move(main_module.app_argv);
   is_packaged_ = main_module.is_packaged.value_or(application.is_packaged);
   default_user_agent_ = std::move(main_module.default_user_agent);
   renderer_url_mappings_ = std::move(main_module.renderer_url_mappings);
@@ -1257,8 +2074,7 @@ bool XenonIpcMainContainer::ResolveConfiguredMainScript() {
   base::PathService::Get(base::DIR_EXE, &app_path_);
 
   if (command_line->HasSwitch(switches::kMainScript)) {
-    main_script_path_ =
-        command_line->GetSwitchValuePath(switches::kMainScript);
+    main_script_path_ = command_line->GetSwitchValuePath(switches::kMainScript);
     if (main_script_path_.empty() || !main_script_path_.IsAbsolute()) {
       startup_error_ = "--xenon-main-js requires an absolute JavaScript path";
       return false;
@@ -1301,6 +2117,349 @@ bool XenonIpcMainContainer::ResolveConfiguredMainScript() {
   return true;
 }
 
+void XenonIpcMainContainer::InitializeModuleLoaders() {
+  ScopedV8Context scope(isolate_, context_);
+  module_resolver_ = std::make_unique<XenonModuleResolver>(
+      module_root_.empty() ? app_path_ : module_root_, executable_path_,
+      base::BindRepeating([](const base::FilePath& path, base::FilePath* output,
+                             bool* directory) {
+        return NormalizeCommonJsPath(path, output, directory);
+      }),
+      base::BindRepeating(&ReadCommonJsFile),
+      base::BindRepeating([](const std::string& request) {
+        return BuiltinModuleGlobal(request) != nullptr;
+      }),
+      base::BindRepeating(&XenonIpcMainContainer::ResolvePackageMap,
+                          base::Unretained(this)),
+      base::BindRepeating(&XenonIpcMainContainer::ResolveCommonJsLookupPaths,
+                          base::Unretained(this)));
+  esm_loader_ = std::make_unique<XenonEsmModuleLoader>(
+      isolate_, scope.context(),
+      base::BindRepeating(&XenonIpcMainContainer::ResolveEsmModule,
+                          base::Unretained(this)),
+      base::BindRepeating(&XenonIpcMainContainer::ReadEsmModuleSource,
+                          base::Unretained(this)),
+      base::BindRepeating(&XenonIpcMainContainer::LoadEsmValue,
+                          base::Unretained(this)),
+      base::BindRepeating(&XenonIpcMainContainer::GetCommonJsExportNames,
+                          base::Unretained(this)));
+  esm_loader_->SetPrepareModuleCallback(base::BindRepeating(
+      &XenonIpcMainContainer::PrepareHookedModule, base::Unretained(this)));
+}
+
+bool XenonIpcMainContainer::ReadModuleSourceFile(const base::FilePath& path,
+                                                 std::string* source) {
+  return ReadCommonJsFile(path, source);
+}
+
+bool XenonIpcMainContainer::IsBuiltinModuleRequest(
+    const std::string& name) const {
+  return BuiltinModuleGlobal(name) != nullptr;
+}
+
+v8::MaybeLocal<v8::Value> XenonIpcMainContainer::BuiltinModuleValue(
+    const std::string& name,
+    std::string* error) {
+  const char* builtin = BuiltinModuleGlobal(name);
+  if (!builtin) {
+    *error = "ERR_UNKNOWN_BUILTIN_MODULE: No such built-in module: " + name;
+    return {};
+  }
+  if (worker_control_ && name == "electron") {
+    *error =
+        "ERR_NOT_SUPPORTED: Electron modules are unavailable in a Node worker";
+    return {};
+  }
+  return context_.Get(isolate_)->Global()->Get(
+      context_.Get(isolate_), gin::StringToV8(isolate_, builtin));
+}
+
+bool XenonIpcMainContainer::ResolvePackageMap(const std::string& package_json,
+                                              const std::string& key,
+                                              bool importing,
+                                              bool imports,
+                                              std::string* target,
+                                              std::string* error) {
+  auto context = context_.Get(isolate_);
+  v8::Local<v8::Value> package;
+  v8::Local<v8::Value> resolver;
+  if (!v8::JSON::Parse(context,
+                       gin::StringToV8(isolate_, package_json).As<v8::String>())
+           .ToLocal(&package) ||
+      !context->Global()
+           ->Get(context, gin::StringToV8(isolate_, "__xenonResolvePackageMap"))
+           .ToLocal(&resolver) ||
+      !resolver->IsFunction()) {
+    *error = "ERR_INVALID_PACKAGE_CONFIG: Cannot read package map";
+    return false;
+  }
+  const std::vector<std::string> defaults{
+      "node", importing ? "import" : "require", "node-addons", "module-sync"};
+  const auto* selected = module_resolver_->active_conditions();
+  if (!selected) {
+    selected = &defaults;
+  }
+  auto conditions = v8::Array::New(isolate_, selected->size());
+  for (uint32_t index = 0; index < selected->size(); ++index) {
+    conditions
+        ->Set(context, index, gin::StringToV8(isolate_, (*selected)[index]))
+        .Check();
+  }
+  v8::Local<v8::Value> argv[] = {package, gin::StringToV8(isolate_, key),
+                                 conditions,
+                                 v8::Boolean::New(isolate_, imports)};
+  v8::Local<v8::Value> result;
+  if (!resolver.As<v8::Function>()
+           ->Call(context, context->Global(), std::size(argv), argv)
+           .ToLocal(&result) ||
+      !gin::ConvertFromV8(isolate_, result, target)) {
+    *error = "ERR_INVALID_PACKAGE_TARGET: Cannot resolve " + key;
+    return false;
+  }
+  return true;
+}
+
+bool XenonIpcMainContainer::ResolveEsmModule(
+    const std::string& specifier,
+    const std::string& parent_url,
+    XenonEsmModuleLoader::ResolutionMode mode,
+    XenonEsmModuleLoader::ModuleInfo* result,
+    std::string* error) {
+  if (has_resolve_hooks_ || has_load_hooks_) {
+    return ResolveWithModuleHooks(
+        specifier, parent_url,
+        mode == XenonEsmModuleLoader::ResolutionMode::kMetaResolve
+            ? XenonModuleResolver::Mode::kMetaResolve
+            : XenonModuleResolver::Mode::kImport,
+        esm_loader_->current_import_attributes(), result, error);
+  }
+  base::FilePath parent;
+  if (!net::FileURLToFilePath(GURL(parent_url), &parent)) {
+    parent = base::FilePath::FromUTF8Unsafe(parent_url);
+  }
+  if (!parent.IsAbsolute()) {
+    *error =
+        "ERR_INVALID_MODULE_SPECIFIER: Invalid module referrer " + parent_url;
+    return false;
+  }
+  XenonModuleResolver::Resolution resolved;
+  if (!module_resolver_->Resolve(
+          specifier, parent,
+          mode == XenonEsmModuleLoader::ResolutionMode::kMetaResolve
+              ? XenonModuleResolver::Mode::kMetaResolve
+              : XenonModuleResolver::Mode::kImport,
+          &resolved, error)) {
+    return false;
+  }
+  result->filename = resolved.filename;
+  result->url = resolved.url;
+  switch (resolved.format) {
+    case XenonModuleResolver::Format::kModule:
+      result->format = XenonEsmModuleLoader::Format::kModule;
+      break;
+    case XenonModuleResolver::Format::kCommonJs:
+      result->format = XenonEsmModuleLoader::Format::kCommonJs;
+      break;
+    case XenonModuleResolver::Format::kJson:
+      result->format = XenonEsmModuleLoader::Format::kJson;
+      break;
+    case XenonModuleResolver::Format::kBuiltin:
+      result->format = XenonEsmModuleLoader::Format::kBuiltin;
+      break;
+  }
+  if (mode == XenonEsmModuleLoader::ResolutionMode::kImport &&
+      resolved.format != XenonModuleResolver::Format::kBuiltin) {
+    const auto extension = resolved.filename.FinalExtension();
+    if (!extension.empty() && extension != FILE_PATH_LITERAL(".js") &&
+        extension != FILE_PATH_LITERAL(".mjs") &&
+        extension != FILE_PATH_LITERAL(".cjs") &&
+        extension != FILE_PATH_LITERAL(".json")) {
+      *error = "ERR_UNKNOWN_FILE_EXTENSION: Unsupported module extension: " +
+               resolved.url;
+      return false;
+    }
+  }
+  return true;
+}
+
+v8::MaybeLocal<v8::Value> XenonIpcMainContainer::LoadEsmValue(
+    const XenonEsmModuleLoader::ModuleInfo& module,
+    std::string* error) {
+  if (module.format == XenonEsmModuleLoader::Format::kBuiltin) {
+    return BuiltinModuleValue(module.url, error);
+  }
+  if (requiring_esm_ &&
+      module.format == XenonEsmModuleLoader::Format::kCommonJs) {
+    const auto cached = module_cache_.find(
+        module.filename.empty() ? module.url : module.filename.AsUTF8Unsafe());
+    if (cached != module_cache_.end()) {
+      v8::Local<v8::Value> loaded;
+      if (!cached->second.Get(isolate_)
+               .As<v8::Object>()
+               ->Get(context_.Get(isolate_),
+                     gin::StringToV8(isolate_, "loaded"))
+               .ToLocal(&loaded)) {
+        return {};
+      }
+      if (loaded->IsFalse()) {
+        *error =
+            "ERR_REQUIRE_CYCLE_MODULE: Cannot import an executing CommonJS "
+            "module while requiring ESM: " +
+            module.url;
+        return {};
+      }
+    }
+  }
+  if (module.use_module_hooks) {
+    return LoadHookedModule(module, error);
+  }
+  return LoadResolvedCommonJsModule(module.filename, error);
+}
+
+bool XenonIpcMainContainer::GetCommonJsExportNames(
+    const XenonEsmModuleLoader::ModuleInfo& module,
+    std::vector<std::string>* names,
+    std::string* error) {
+  auto context = context_.Get(isolate_);
+  v8::Local<v8::Value> lexer;
+  if (!context->Global()
+           ->Get(context,
+                 gin::StringToV8(isolate_, "__xenonParseCommonJsExports"))
+           .ToLocal(&lexer) ||
+      !lexer->IsFunction()) {
+    *error = "ERR_NOT_SUPPORTED: CommonJS export lexer is unavailable";
+    return false;
+  }
+  std::set<std::string> visited;
+  std::set<std::string> exports;
+  auto visit = [&](auto&& self, XenonEsmModuleLoader::ModuleInfo info) -> bool {
+    if (!visited.insert(info.url).second) {
+      return true;
+    }
+    if (!PrepareHookedModule(&info, error)) {
+      return false;
+    }
+    if (info.hook_format == "addon" ||
+        info.filename.MatchesExtension(FILE_PATH_LITERAL(".node"))) {
+      return true;
+    }
+    std::string source;
+    if (!ReadEsmModuleSource(info, &source, error)) {
+      return false;
+    }
+    v8::Local<v8::Value> argv[] = {gin::StringToV8(isolate_, source),
+                                   gin::StringToV8(isolate_, info.url)};
+    v8::Local<v8::Value> parsed;
+    if (!lexer.As<v8::Function>()
+             ->Call(context, context->Global(), std::size(argv), argv)
+             .ToLocal(&parsed) ||
+        !parsed->IsObject()) {
+      *error = "ERR_MODULE_NOT_FOUND: Cannot inspect CommonJS exports";
+      return false;
+    }
+    for (const char* property : {"exports", "reexports"}) {
+      v8::Local<v8::Value> entries;
+      if (!parsed.As<v8::Object>()
+               ->Get(context, gin::StringToV8(isolate_, property))
+               .ToLocal(&entries) ||
+          !entries->IsArray()) {
+        return false;
+      }
+      auto array = entries.As<v8::Array>();
+      for (uint32_t index = 0; index < array->Length(); ++index) {
+        v8::Local<v8::Value> value;
+        std::string name;
+        if (!array->Get(context, index).ToLocal(&value) ||
+            !gin::ConvertFromV8(isolate_, value, &name)) {
+          return false;
+        }
+        if (std::string_view(property) == "exports") {
+          exports.insert(std::move(name));
+          continue;
+        }
+        // A statically seen re-export may be in an unexecuted branch. Node's
+        // pre-parser ignores unresolved re-exports; actual require still fails
+        // normally if that branch executes during module evaluation.
+        v8::TryCatch reexport_error(isolate_);
+        XenonEsmModuleLoader::ModuleInfo dependency;
+        std::string ignored_error;
+        bool resolved = false;
+        if (has_resolve_hooks_ || has_load_hooks_) {
+          resolved = ResolveWithModuleHooks(name, info.url,
+                                            XenonModuleResolver::Mode::kRequire,
+                                            {}, &dependency, &ignored_error) &&
+                     PrepareHookedModule(&dependency, &ignored_error);
+        } else {
+          XenonModuleResolver::Resolution raw;
+          if (module_resolver_->Resolve(name, info.filename,
+                                        XenonModuleResolver::Mode::kRequire,
+                                        &raw, &ignored_error) &&
+              raw.format == XenonModuleResolver::Format::kCommonJs) {
+            dependency.filename = raw.filename;
+            dependency.url = raw.url;
+            dependency.format = XenonEsmModuleLoader::Format::kCommonJs;
+            resolved = true;
+          }
+        }
+        if (resolved &&
+            dependency.format == XenonEsmModuleLoader::Format::kCommonJs &&
+            !dependency.filename.MatchesExtension(FILE_PATH_LITERAL(".node"))) {
+          if (!self(self, dependency)) {
+            error->clear();
+          }
+        }
+      }
+    }
+    return true;
+  };
+  if (!visit(visit, module)) {
+    return false;
+  }
+  names->assign(exports.begin(), exports.end());
+  return true;
+}
+
+void XenonIpcMainContainer::OnMainModuleEvaluated(
+    const v8::FunctionCallbackInfo<v8::Value>& info) {
+  auto* self =
+      static_cast<XenonIpcMainContainer*>(info.Data().As<v8::External>()->Value(
+          v8::kExternalPointerTypeTagDefault));
+  self->main_evaluation_pending_ = false;
+  if (self->app_exit_requested_ || self->shutting_down_) {
+    return;
+  }
+  if (self->main_evaluation_complete_handler_) {
+    self->main_evaluation_complete_handler_.Run();
+  } else if (self->app_ready_requested_) {
+    self->MarkAppReady();
+  }
+}
+
+void XenonIpcMainContainer::OnMainModuleRejected(
+    const v8::FunctionCallbackInfo<v8::Value>& info) {
+  auto* self =
+      static_cast<XenonIpcMainContainer*>(info.Data().As<v8::External>()->Value(
+          v8::kExternalPointerTypeTagDefault));
+  self->main_evaluation_pending_ = false;
+  v8::String::Utf8Value message(info.GetIsolate(), info[0]);
+  if (self->worker_control_ || self->utility_options_) {
+    self->ReportNodeException(info[0]);
+    return;
+  }
+  self->startup_error_ = "Failed to evaluate main ES module: " +
+                         (*message ? std::string(*message, message.length())
+                                   : "unknown rejection");
+  LOG(ERROR) << self->startup_error_;
+  if (!self->app_exit_requested_ && !self->shutting_down_) {
+    self->app_exit_requested_ = true;
+    // As with app.exit(), the owner may destroy the isolate in its callback.
+    // Finish the current V8/IPC stack before notifying it.
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&XenonIpcMainContainer::NotifyAppExit,
+                                  self->weak_factory_.GetWeakPtr(), 1));
+  }
+}
+
 bool XenonIpcMainContainer::MaybeLoadConfiguredMainScript() {
   if (main_script_path_.empty()) {
     return true;
@@ -1310,12 +2469,64 @@ bool XenonIpcMainContainer::MaybeLoadConfiguredMainScript() {
   v8::TryCatch try_catch(isolate_);
   std::string error;
   v8::Local<v8::Value> ignored;
-  v8::MaybeLocal<v8::Value> loaded =
-      embedded_main_source_
-          ? LoadCommonJsSource(main_script_path_, *embedded_main_source_,
-                               &error)
-          : LoadCommonJsModule(main_script_path_, &error);
+  v8::MaybeLocal<v8::Value> loaded;
+  XenonModuleResolver::Resolution entry;
+  if (embedded_main_source_) {
+    loaded =
+        LoadCommonJsSource(main_script_path_, *embedded_main_source_, &error);
+  } else if (module_resolver_->Describe(main_script_path_, &entry, &error,
+                                        XenonModuleResolver::Mode::kImport) &&
+             entry.format == XenonModuleResolver::Format::kModule) {
+    XenonEsmModuleLoader::ModuleInfo module;
+    module.url = entry.url;
+    module.filename = entry.filename;
+    module.format = XenonEsmModuleLoader::Format::kModule;
+    v8::Local<v8::Promise> evaluation;
+    if (esm_loader_->Evaluate(module, &error).ToLocal(&evaluation)) {
+      // Resolve already queued await continuations before deciding whether
+      // initialization must wait for native asynchronous work.
+      isolate_->PerformMicrotaskCheckpoint();
+      if (utility_options_ && app_exit_requested_ &&
+          isolate_->IsExecutionTerminating()) {
+        return true;
+      }
+      if (evaluation->State() == v8::Promise::kRejected) {
+        evaluation->MarkAsHandled();
+        isolate_->ThrowException(evaluation->Result());
+      } else {
+        loaded = evaluation;
+        if (evaluation->State() == v8::Promise::kPending) {
+          main_evaluation_pending_ = true;
+          auto data = v8::External::New(isolate_, this,
+                                        v8::kExternalPointerTypeTagDefault);
+          auto fulfilled =
+              v8::Function::New(scope.context(), &OnMainModuleEvaluated, data)
+                  .ToLocalChecked();
+          auto rejected =
+              v8::Function::New(scope.context(), &OnMainModuleRejected, data)
+                  .ToLocalChecked();
+          if (evaluation->Then(scope.context(), fulfilled, rejected)
+                  .IsEmpty()) {
+            loaded = {};
+          }
+        }
+      }
+    }
+  } else if (error.empty()) {
+    loaded = LoadCommonJsModule(main_script_path_, &error);
+  }
   if (!loaded.ToLocal(&ignored)) {
+    if (utility_options_ && app_exit_requested_ &&
+        isolate_->IsExecutionTerminating()) {
+      return true;
+    }
+    if ((worker_control_ || utility_options_) && try_catch.HasCaught() &&
+        ReportNodeException(try_catch.Exception())) {
+      return true;
+    }
+    if (utility_options_ && app_exit_requested_) {
+      return true;
+    }
     if (try_catch.HasCaught()) {
       v8::Local<v8::Value> details = try_catch.Exception();
       v8::Local<v8::Value> stack;
@@ -1335,10 +2546,13 @@ bool XenonIpcMainContainer::MaybeLoadConfiguredMainScript() {
   return true;
 }
 
-void XenonIpcMainContainer::MarkAppReady() {
+bool XenonIpcMainContainer::MarkAppReady() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!initialized_ || mark_app_ready_.IsEmpty()) {
-    return;
+  app_ready_requested_ = true;
+  if (!initialized_ || shutting_down_ || app_exit_requested_ ||
+      mark_app_ready_.IsEmpty() || main_evaluation_pending_ ||
+      !startup_error_.empty()) {
+    return false;
   }
   ScopedV8Context scope(isolate_, context_);
   gin::TryCatch try_catch(isolate_);
@@ -1353,6 +2567,7 @@ void XenonIpcMainContainer::MarkAppReady() {
     LOG(ERROR) << "Electron app ready microtask failed: "
                << try_catch.GetStackTrace();
   }
+  return true;
 }
 
 v8::MaybeLocal<v8::Value> XenonIpcMainContainer::LoadCommonJsModule(
@@ -1393,7 +2608,37 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::LoadResolvedCommonJsModule(
     module_cache_.emplace(cache_key, v8::Global<v8::Value>(isolate_, module));
   };
 
-  if (normalized.MatchesExtension(FILE_PATH_LITERAL(".node"))) {
+  XenonModuleResolver::Resolution description;
+  if (!module_resolver_->Describe(normalized, &description, error)) {
+    return {};
+  }
+  if (description.format == XenonModuleResolver::Format::kModule) {
+    XenonEsmModuleLoader::ModuleInfo module;
+    module.url = description.url;
+    module.filename = normalized;
+    module.format = XenonEsmModuleLoader::Format::kModule;
+    v8::Local<v8::Value> exports;
+    base::AutoReset<bool> requiring_esm(&requiring_esm_, true);
+    if (!esm_loader_->Require(module, error).ToLocal(&exports)) {
+      return {};
+    }
+    // Cache only successful synchronous evaluation, using the same require
+    // record as CJS. Repeated require must not re-read package metadata or fail
+    // after a loaded file is removed; the ESM namespace retains live bindings.
+    cache_exports(exports);
+    return exports;
+  }
+
+  if (normalized.FinalExtension() == FILE_PATH_LITERAL(".node")) {
+    if (shutting_down_) {
+      *error = "ERR_DLOPEN_FAILED: native runtime is shutting down";
+      return {};
+    }
+    if (worker_control_) {
+      *error =
+          "ERR_NOT_SUPPORTED: native addons are unavailable in a Node worker";
+      return {};
+    }
     const auto native_path = GetNativeCommonJsPath(normalized, error);
     if (!native_path) {
       return {};
@@ -1408,24 +2653,49 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::LoadResolvedCommonJsModule(
       }
       if (!loaded) {
         *error = load_error.empty()
-                     ? "Failed to load Node-API addon: " + cache_key
+                     ? "ERR_DLOPEN_FAILED: Failed to load Node-API addon: " +
+                           cache_key
                      : load_error;
+        // The filename was resolved successfully. A loader/policy failure must
+        // not be mislabeled MODULE_NOT_FOUND: bindings treats that as a reason
+        // to ignore the real failure and continue searching other filenames.
+        if (!error->starts_with("ERR_")) {
+          error->insert(0, "ERR_DLOPEN_FAILED: ");
+        }
         return {};
       }
       v8::Local<v8::Value> forwarder;
       if (!CreateNativeAddonForwarder(native_path->AsUTF8Unsafe())
                .ToLocal(&forwarder)) {
-        *error = "Failed to create native addon forwarder: " + cache_key;
+        *error =
+            "ERR_DLOPEN_FAILED: Failed to create native addon forwarder: " +
+            cache_key;
         return {};
       }
       cache_exports(forwarder);
       return forwarder;
     }
+    uv_loop_s* runtime_loop = nullptr;
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+    runtime_loop = EnsureNativeEventLoop(error);
+    if (!runtime_loop) {
+      *error = "ERR_DLOPEN_FAILED: " + *error;
+      return {};
+    }
+#endif
     auto loaded_addon = std::make_unique<xenon::LoadedNodeAddon>();
     v8::Local<v8::Value> exports = xenon::LoadAndInitializeNodeAddon(
-        isolate_, context_.Get(isolate_), *native_path, loaded_addon.get());
+        isolate_, context_.Get(isolate_), *native_path, loaded_addon.get(),
+        /*allow_default_uv_loop=*/false, runtime_loop);
+    // Initialization may run a nested loop before the addon is retained in
+    // either map below. Re-arm after it returns, including failed initializers
+    // whose environments still own callbacks.
+    ScheduleNativeEventLoopPump();
     if (exports.IsEmpty()) {
-      *error = "Failed to load Node-API addon: " + cache_key;
+      if (loaded_addon->env) {
+        failed_node_addons_.push_back(std::move(loaded_addon));
+      }
+      *error = "ERR_DLOPEN_FAILED: Failed to load Node-API addon: " + cache_key;
       return {};
     }
     cache_exports(exports);
@@ -1439,7 +2709,7 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::LoadResolvedCommonJsModule(
     return {};
   }
 
-  if (normalized.MatchesExtension(FILE_PATH_LITERAL(".json"))) {
+  if (description.format == XenonModuleResolver::Format::kJson) {
     v8::Local<v8::Value> exports;
     if (!v8::JSON::Parse(
              context, gin::StringToV8(isolate_, source_text).As<v8::String>())
@@ -1454,21 +2724,138 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::LoadResolvedCommonJsModule(
   return LoadCommonJsSource(normalized, source_text, error);
 }
 
-v8::Local<v8::Function> XenonIpcMainContainer::CreateRequireFunction(
-    const base::FilePath& parent_path) {
+v8::MaybeLocal<v8::Value> XenonIpcMainContainer::CallModuleMethod(
+    const char* name,
+    int argc,
+    v8::Local<v8::Value> argv[]) {
+  const auto context = context_.Get(isolate_);
+  v8::Local<v8::Value> module, method;
+  if (!context->Global()
+           ->Get(context, gin::StringToV8(isolate_, "__xenonModule"))
+           .ToLocal(&module)) {
+    return {};
+  }
+  if (!module->IsObject()) {
+    isolate_->ThrowException(v8::Exception::TypeError(
+        gin::StringToV8(isolate_, "Module API is unavailable")));
+    return {};
+  }
+  if (!module.As<v8::Object>()
+           ->Get(context, gin::StringToV8(isolate_, name))
+           .ToLocal(&method)) {
+    return {};
+  }
+  if (!method->IsFunction()) {
+    isolate_->ThrowException(v8::Exception::TypeError(gin::StringToV8(
+        isolate_, std::string("Module.") + name + " must be a function")));
+    return {};
+  }
+  return method.As<v8::Function>()->Call(context, module, argc, argv);
+}
+
+v8::MaybeLocal<v8::Object> XenonIpcMainContainer::CreateCommonJsParent(
+    const base::FilePath& filename) {
+  const auto context = context_.Get(isolate_);
+  const auto directory =
+      gin::StringToV8(isolate_, filename.DirName().AsUTF8Unsafe());
+  v8::Local<v8::Value> argv[] = {directory};
+  v8::Local<v8::Value> paths;
+  if (!CallModuleMethod("_nodeModulePaths", std::size(argv), argv)
+           .ToLocal(&paths)) {
+    return {};
+  }
+  auto parent = v8::Object::New(isolate_);
+  const auto name = gin::StringToV8(isolate_, filename.AsUTF8Unsafe());
+  for (const char* property : {"id", "filename"}) {
+    parent
+        ->CreateDataProperty(context, gin::StringToV8(isolate_, property), name)
+        .Check();
+  }
+  parent
+      ->CreateDataProperty(context, gin::StringToV8(isolate_, "path"),
+                           directory)
+      .Check();
+  parent->CreateDataProperty(context, gin::StringToV8(isolate_, "paths"), paths)
+      .Check();
+  return parent;
+}
+
+v8::MaybeLocal<v8::Value> XenonIpcMainContainer::CallCommonJsLookupPaths(
+    const std::string& request,
+    v8::Local<v8::Object> parent) {
+  v8::Local<v8::Value> argv[] = {gin::StringToV8(isolate_, request), parent};
+  return CallModuleMethod("_resolveLookupPaths", std::size(argv), argv);
+}
+
+bool XenonIpcMainContainer::ResolveCommonJsLookupPaths(
+    const std::string& request,
+    const base::FilePath& parent_file,
+    std::vector<base::FilePath>* paths,
+    std::string* error) {
+  v8::Local<v8::Object> parent;
+  for (auto active = commonjs_parent_stack_.rbegin();
+       active != commonjs_parent_stack_.rend(); ++active) {
+    if (active->first == parent_file) {
+      parent = active->second.Get(isolate_);
+      break;
+    }
+  }
+  if (parent.IsEmpty()) {
+    const auto cached = module_cache_.find(parent_file.AsUTF8Unsafe());
+    if (cached != module_cache_.end()) {
+      parent = cached->second.Get(isolate_).As<v8::Object>();
+    } else if (!CreateCommonJsParent(parent_file).ToLocal(&parent)) {
+      return false;
+    }
+  }
+  v8::Local<v8::Value> result;
+  if (!CallCommonJsLookupPaths(request, parent).ToLocal(&result)) {
+    return false;
+  }
+  if (result->IsNull()) {
+    return true;
+  }
+  std::vector<std::string> entries;
+  if (!gin::ConvertFromV8(isolate_, result, &entries)) {
+    *error =
+        "ERR_INVALID_ARG_VALUE: Module lookup paths must be an array of "
+        "strings or null";
+    return false;
+  }
+  for (const auto& entry : entries) {
+    const auto path = base::FilePath::FromUTF8Unsafe(entry);
+    if (entry.find('\0') != std::string::npos || !path.IsAbsolute()) {
+      *error =
+          "ERR_INVALID_ARG_VALUE: Module lookup paths must be absolute paths";
+      return false;
+    }
+    paths->push_back(path);
+  }
+  return true;
+}
+
+v8::MaybeLocal<v8::Function> XenonIpcMainContainer::CreateRequireFunction(
+    const base::FilePath& parent_path,
+    v8::Local<v8::Object> parent_module) {
   v8::Local<v8::Context> context = context_.Get(isolate_);
   const std::string parent_file = parent_path.AsUTF8Unsafe();
+  if (parent_module.IsEmpty() &&
+      !CreateCommonJsParent(parent_path).ToLocal(&parent_module)) {
+    return {};
+  }
   auto require_callback = [](const v8::FunctionCallbackInfo<v8::Value>& info) {
     v8::Local<v8::Array> data = info.Data().As<v8::Array>();
     v8::Isolate* isolate = info.GetIsolate();
     v8::Local<v8::Context> context = isolate->GetCurrentContext();
     v8::Local<v8::Value> host_value;
     v8::Local<v8::Value> parent_value;
-    v8::Local<v8::Value> resolve_only;
+    v8::Local<v8::Value> operation;
+    v8::Local<v8::Value> parent_record;
     if (!data->Get(context, 0).ToLocal(&host_value) ||
         !data->Get(context, 1).ToLocal(&parent_value) ||
-        !data->Get(context, 2).ToLocal(&resolve_only) ||
-        !host_value->IsExternal()) {
+        !data->Get(context, 2).ToLocal(&operation) ||
+        !data->Get(context, 3).ToLocal(&parent_record) ||
+        !host_value->IsExternal() || !parent_record->IsObject()) {
       return;
     }
     if (info.Length() < 1 || !info[0]->IsString()) {
@@ -1481,7 +2868,8 @@ v8::Local<v8::Function> XenonIpcMainContainer::CreateRequireFunction(
       isolate->ThrowException(exception);
       return;
     }
-    if (info[0].As<v8::String>()->Length() == 0) {
+    if (info[0].As<v8::String>()->Length() == 0 &&
+        operation.As<v8::Int32>()->Value() != 2) {
       auto exception = v8::Exception::TypeError(v8::String::NewFromUtf8Literal(
           isolate, "The module id must not be empty"));
       exception.As<v8::Object>()
@@ -1501,11 +2889,23 @@ v8::Local<v8::Function> XenonIpcMainContainer::CreateRequireFunction(
     v8::Local<v8::Value> result;
     if (*request && *parent) {
       v8::TryCatch require_try_catch(isolate);
-      if (!host->RequireModule(std::string(*request, request.length()),
-                               base::FilePath::FromUTF8Unsafe(*parent),
-                               &require_error, resolve_only->IsTrue())
-               .ToLocal(&result) &&
-          require_try_catch.HasCaught()) {
+      const auto filename = base::FilePath::FromUTF8Unsafe(*parent);
+      host->commonjs_parent_stack_.emplace_back(
+          filename,
+          v8::Global<v8::Object>(isolate, parent_record.As<v8::Object>()));
+      base::ScopedClosureRunner pop_parent(base::BindOnce(
+          [](XenonIpcMainContainer* owner) {
+            owner->commonjs_parent_stack_.pop_back();
+          },
+          base::Unretained(host)));
+      const auto request_text = std::string(*request, request.length());
+      const auto loaded =
+          operation.As<v8::Int32>()->Value() == 2
+              ? host->CallCommonJsLookupPaths(request_text,
+                                              parent_record.As<v8::Object>())
+              : host->RequireModule(request_text, filename, &require_error,
+                                    operation.As<v8::Int32>()->Value() == 1);
+      if (!loaded.ToLocal(&result) && require_try_catch.HasCaught()) {
         require_try_catch.ReThrow();
         return;
       }
@@ -1534,20 +2934,24 @@ v8::Local<v8::Function> XenonIpcMainContainer::CreateRequireFunction(
     }
     info.GetReturnValue().Set(result);
   };
-  auto create_require = [&](bool resolve_only) {
-    v8::Local<v8::Array> data = v8::Array::New(isolate_, 3);
+  auto create_require = [&](int operation) {
+    v8::Local<v8::Array> data = v8::Array::New(isolate_, 4);
     data->Set(context, 0,
               v8::External::New(isolate_, this,
                                 v8::kExternalPointerTypeTagDefault))
         .Check();
     data->Set(context, 1, gin::StringToV8(isolate_, parent_file)).Check();
-    data->Set(context, 2, v8::Boolean::New(isolate_, resolve_only)).Check();
+    data->Set(context, 2, v8::Integer::New(isolate_, operation)).Check();
+    data->Set(context, 3, parent_module).Check();
     return v8::Function::New(context, require_callback, data).ToLocalChecked();
   };
-  v8::Local<v8::Function> require_function = create_require(false);
+  v8::Local<v8::Function> require_function = create_require(0);
+  const auto resolve = create_require(1);
+  resolve->Set(context, gin::StringToV8(isolate_, "paths"), create_require(2))
+      .Check();
   require_function
       ->Set(context, v8::String::NewFromUtf8Literal(isolate_, "resolve"),
-            create_require(true))
+            resolve)
       .Check();
 
   return require_function;
@@ -1565,9 +2969,17 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::LoadCommonJsSource(
         context, v8::String::NewFromUtf8Literal(isolate_, "exports"));
   }
 
+  std::string body = source_text;
+  if (body.starts_with("\xEF\xBB\xBF")) {
+    body.erase(0, 3);
+  }
+  if (body.starts_with("#!")) {
+    const auto end = body.find_first_of("\r\n");
+    body.replace(0, end == std::string::npos ? body.size() : end, "");
+  }
   std::string wrapped =
-      "(function(exports, require, module, __filename, __dirname) {\n" +
-      source_text + "\n})";
+      "(function(exports, require, module, __filename, __dirname) {\n" + body +
+      "\n})";
   v8::TryCatch try_catch(isolate_);
   v8::Local<v8::String> source =
       v8::String::NewFromUtf8(isolate_, wrapped.c_str()).ToLocalChecked();
@@ -1591,17 +3003,42 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::LoadCommonJsSource(
   }
 
   v8::Local<v8::Object> exports = v8::Object::New(isolate_);
-  v8::Local<v8::Object> module = v8::Object::New(isolate_);
+  v8::Local<v8::Object> module;
+  if (!CreateCommonJsParent(virtual_path).ToLocal(&module)) {
+    if (try_catch.HasCaught()) {
+      try_catch.ReThrow();
+    }
+    return {};
+  }
   module
       ->Set(context, v8::String::NewFromUtf8Literal(isolate_, "exports"),
             exports)
+      .Check();
+  module
+      ->Set(context, gin::StringToV8(isolate_, "filename"),
+            gin::StringToV8(isolate_, cache_key))
+      .Check();
+  module
+      ->Set(context, gin::StringToV8(isolate_, "id"),
+            gin::StringToV8(isolate_, cache_key))
+      .Check();
+  module->Set(context, gin::StringToV8(isolate_, "loaded"), v8::False(isolate_))
       .Check();
   // Keep the module record: a circular dependency can observe a replacement
   // module.exports before this wrapper returns, or an exported function can
   // replace it after evaluation. An exports snapshot is stale in both cases.
   module_cache_.emplace(cache_key, v8::Global<v8::Value>(isolate_, module));
 
-  auto require_function = CreateRequireFunction(virtual_path);
+  v8::Local<v8::Function> require_function;
+  if (!CreateRequireFunction(virtual_path, module).ToLocal(&require_function)) {
+    module_cache_.erase(cache_key);
+    if (try_catch.HasCaught()) {
+      try_catch.ReThrow();
+    }
+    return {};
+  }
+  module->Set(context, gin::StringToV8(isolate_, "require"), require_function)
+      .Check();
 
   v8::Local<v8::Value> argv[] = {
       exports,
@@ -1625,6 +3062,8 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::LoadCommonJsSource(
   }
 
   v8::Local<v8::Value> final_exports;
+  module->Set(context, gin::StringToV8(isolate_, "loaded"), v8::True(isolate_))
+      .Check();
   if (!module->Get(context, v8::String::NewFromUtf8Literal(isolate_, "exports"))
            .ToLocal(&final_exports)) {
     module_cache_.erase(cache_key);
@@ -1723,98 +3162,84 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::RequireModule(
     return {};
   }
 
-  static constexpr auto kBuiltinModules =
-      base::MakeFixedFlatMap<std::string_view, const char*>({
-          {"assert", "__xenonAssert"},
-          {"async_hooks", "__xenonAsyncHooks"},
-          {"buffer", "__xenonBuffer"},
-          {"child_process", "__xenonChildProcess"},
-          {"constants", "__xenonConstants"},
-          {"crypto", "__xenonCrypto"},
-          {"dns", "__xenonDns"},
-          {"electron", "__xenonElectron"},
-          {"events", "__xenonEvents"},
-          {"fs", "__xenonFs"},
-          {"fs/promises", "__xenonFsPromises"},
-          {"http", "__xenonHttp"},
-          {"http2", "__xenonHttp2"},
-          {"https", "__xenonHttps"},
-          {"module", "__xenonModule"},
-          {"net", "__xenonNet"},
-          {"node:assert", "__xenonAssert"},
-          {"node:async_hooks", "__xenonAsyncHooks"},
-          {"node:buffer", "__xenonBuffer"},
-          {"node:child_process", "__xenonChildProcess"},
-          {"node:constants", "__xenonConstants"},
-          {"node:crypto", "__xenonCrypto"},
-          {"node:dns", "__xenonDns"},
-          {"node:events", "__xenonEvents"},
-          {"node:fs", "__xenonFs"},
-          {"node:fs/promises", "__xenonFsPromises"},
-          {"node:http", "__xenonHttp"},
-          {"node:http2", "__xenonHttp2"},
-          {"node:https", "__xenonHttps"},
-          {"node:module", "__xenonModule"},
-          {"node:net", "__xenonNet"},
-          {"node:os", "__xenonOs"},
-          {"node:path", "__xenonPath"},
-          {"node:path/posix", "__xenonPathPosix"},
-          {"node:path/win32", "__xenonPathWin32"},
-          {"node:perf_hooks", "__xenonPerfHooks"},
-          {"node:querystring", "__xenonQuerystring"},
-          {"node:readline", "__xenonReadline"},
-          {"node:stream", "__xenonStream"},
-          {"node:string_decoder", "__xenonStringDecoder"},
-          {"node:timers", "__xenonTimers"},
-          {"node:tls", "__xenonTls"},
-          {"node:tty", "__xenonTty"},
-          {"node:url", "__xenonUrl"},
-          {"node:util", "__xenonUtil"},
-          {"node:v8", "__xenonV8"},
-          {"node:zlib", "__xenonZlib"},
-          {"os", "__xenonOs"},
-          {"path", "__xenonPath"},
-          {"path/posix", "__xenonPathPosix"},
-          {"path/win32", "__xenonPathWin32"},
-          {"perf_hooks", "__xenonPerfHooks"},
-          {"querystring", "__xenonQuerystring"},
-          {"readline", "__xenonReadline"},
-          {"stream", "__xenonStream"},
-          {"string_decoder", "__xenonStringDecoder"},
-          {"timers", "__xenonTimers"},
-          {"tls", "__xenonTls"},
-          {"tty", "__xenonTty"},
-          {"url", "__xenonUrl"},
-          {"util", "__xenonUtil"},
-          {"v8", "__xenonV8"},
-          {"zlib", "__xenonZlib"},
-      });
+  if (worker_control_ && request == "electron") {
+    *error =
+        "ERR_NOT_SUPPORTED: Electron modules are unavailable in a Node worker";
+    return {};
+  }
+  if (has_resolve_hooks_ || has_load_hooks_) {
+    const auto parent_url = parent_file.IsAbsolute()
+                                ? net::FilePathToFileURL(parent_file).spec()
+                                : parent_file.AsUTF8Unsafe();
+    XenonEsmModuleLoader::ModuleInfo module;
+    if (!ResolveWithModuleHooks(request, parent_url,
+                                XenonModuleResolver::Mode::kRequire, {},
+                                &module, error)) {
+      return {};
+    }
+    if (resolve_only) {
+      std::string resolved =
+          module.filename.empty() ? module.url : module.filename.AsUTF8Unsafe();
+      if (resolved.starts_with("node:") && !request.starts_with("node:")) {
+        resolved.erase(0, 5);
+      }
+      return gin::StringToV8(isolate_, resolved);
+    }
+    return LoadHookedModule(std::move(module), error);
+  }
 
-  auto it = kBuiltinModules.find(request);
-  if (it != kBuiltinModules.end()) {
+  if (const char* builtin = BuiltinModuleGlobal(request)) {
     if (resolve_only) {
       return gin::StringToV8(isolate_, request);
     }
-    return context->Global()->Get(
-        context,
-        v8::String::NewFromUtf8(isolate_, it->second).ToLocalChecked());
+    return context->Global()->Get(context, gin::StringToV8(isolate_, builtin));
   }
 
-  if (request.starts_with("node:")) {
-    *error = "ERR_UNKNOWN_BUILTIN_MODULE: No such built-in module: " + request;
-    return {};
+  const auto requested_path = base::FilePath::FromUTF8Unsafe(request);
+  bool use_lookup = !requested_path.IsAbsolute() && request != "." &&
+                    request != ".." && !request.starts_with("./") &&
+                    !request.starts_with("../") && !request.starts_with('#');
+#if BUILDFLAG(IS_WIN)
+  use_lookup =
+      use_lookup && !request.starts_with(".\\") && !request.starts_with("..\\");
+#endif
+  std::vector<base::FilePath> lookup_paths;
+  std::string lookup_key = request;
+  bool cache_resolution = true;
+  if (use_lookup) {
+    v8::Local<v8::Value> module, current_lookup, default_lookup;
+    if (!context->Global()
+             ->Get(context, gin::StringToV8(isolate_, "__xenonModule"))
+             .ToLocal(&module) ||
+        !module->IsObject() ||
+        !module.As<v8::Object>()
+             ->Get(context, gin::StringToV8(isolate_, "_resolveLookupPaths"))
+             .ToLocal(&current_lookup) ||
+        !context->Global()
+             ->Get(context,
+                   gin::StringToV8(isolate_, "__xenonDefaultModuleLookupPaths"))
+             .ToLocal(&default_lookup)) {
+      return {};
+    }
+    cache_resolution = current_lookup->IsFunction() &&
+                       current_lookup->StrictEquals(default_lookup);
+    if (cache_resolution) {
+      // Compute the default path list once. This retains the hot module cache
+      // without ignoring application changes to parent.paths.
+      if (!ResolveCommonJsLookupPaths(request, parent_file, &lookup_paths,
+                                      error)) {
+        return {};
+      }
+      for (const auto& path : lookup_paths) {
+        lookup_key += '\0';
+        lookup_key += path.AsUTF8Unsafe();
+      }
+    }
   }
-  if (request.starts_with('#')) {
-    *error =
-        "ERR_NOT_SUPPORTED: package imports resolution is not implemented: " +
-        request;
-    return {};
-  }
-
   const auto resolution_key =
-      std::make_pair(parent_file.AsUTF8Unsafe(), request);
+      std::make_pair(parent_file.AsUTF8Unsafe(), lookup_key);
   auto resolution = module_resolution_cache_.find(resolution_key);
-  if (resolution != module_resolution_cache_.end()) {
+  if (cache_resolution && resolution != module_resolution_cache_.end()) {
     auto cached = module_cache_.find(resolution->second);
     if (cached != module_cache_.end()) {
       if (resolve_only) {
@@ -1841,83 +3266,24 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::RequireModule(
     if (!LoadResolvedCommonJsModule(path, error).ToLocal(&exports)) {
       return {};
     }
-    module_resolution_cache_.insert_or_assign(resolution_key,
-                                              path.AsUTF8Unsafe());
+    if (cache_resolution) {
+      module_resolution_cache_.insert_or_assign(resolution_key,
+                                                path.AsUTF8Unsafe());
+    }
     return exports;
   };
 
-  if (request == "." || request == ".." || request.starts_with("./") ||
-      request.starts_with("../") || request.starts_with(".\\") ||
-      request.starts_with("..\\") ||
-      base::FilePath::FromUTF8Unsafe(request).IsAbsolute()) {
-    base::FilePath path = base::FilePath::FromUTF8Unsafe(request);
-    if (!path.IsAbsolute()) {
-      path = parent_file.DirName().Append(path);
-    }
-    std::optional<base::FilePath> resolved = ResolveCommonJsPath(path, error);
-    return resolved ? load_resolved(*resolved) : v8::MaybeLocal<v8::Value>();
+  XenonModuleResolver::Resolution resolved;
+  if (!module_resolver_->Resolve(
+          request, parent_file, XenonModuleResolver::Mode::kRequire, &resolved,
+          error, nullptr,
+          use_lookup && cache_resolution ? &lookup_paths : nullptr)) {
+    return {};
   }
-
-  const base::FilePath request_path = base::FilePath::FromUTF8Unsafe(request);
-  if (!request_path.empty() && !request_path.ReferencesParent()) {
-    base::FilePath start_dir = parent_file.DirName();
-    for (base::FilePath directory = start_dir;;) {
-      if (directory != module_root_ && !module_root_.IsParent(directory)) {
-        break;
-      }
-      if (directory.BaseName().value() != FILE_PATH_LITERAL("node_modules")) {
-        const base::FilePath modules = directory.AppendASCII("node_modules");
-        const base::FilePath candidate = modules.Append(request_path);
-        // Package exports must not be silently bypassed by package.main or a
-        // filesystem subpath. This loader currently implements CommonJS only.
-        size_t package_end = request.find_first_of("/\\");
-        if (request.starts_with('@') && package_end != std::string::npos) {
-          package_end = request.find_first_of("/\\", package_end + 1);
-        }
-        const base::FilePath package_path =
-            modules
-                .Append(base::FilePath::FromUTF8Unsafe(
-                    request.substr(0, package_end)))
-                .AppendASCII("package.json");
-        std::string package_text;
-        if (ReadCommonJsFile(package_path, &package_text)) {
-          std::optional<base::Value> package =
-              base::JSONReader::Read(package_text, base::JSON_PARSE_RFC);
-          if (!package || !package->is_dict()) {
-            *error = "ERR_INVALID_PACKAGE_CONFIG: Invalid package.json: " +
-                     package_path.AsUTF8Unsafe();
-            return {};
-          }
-          if (package->GetDict().contains("exports")) {
-            *error =
-                "ERR_NOT_SUPPORTED: package exports resolution is not "
-                "implemented: " +
-                request;
-            return {};
-          }
-        }
-        std::string resolve_error;
-        if (std::optional<base::FilePath> resolved =
-                ResolveCommonJsPath(candidate, &resolve_error)) {
-          return load_resolved(*resolved);
-        }
-        if (!resolve_error.starts_with("Cannot find module '")) {
-          *error = std::move(resolve_error);
-          return {};
-        }
-      }
-      if (directory == module_root_) {
-        break;
-      }
-      const base::FilePath parent = directory.DirName();
-      if (parent == directory) {
-        break;
-      }
-      directory = parent;
-    }
+  if (resolved.format == XenonModuleResolver::Format::kBuiltin) {
+    return RequireModule(resolved.url, parent_file, error, resolve_only);
   }
-  *error = "Cannot find module '" + request + "'";
-  return {};
+  return load_resolved(resolved.filename);
 }
 
 void XenonIpcMainContainer::NativeInstallAsyncContextHooks(
@@ -1925,32 +3291,145 @@ void XenonIpcMainContainer::NativeInstallAsyncContextHooks(
   v8::Local<v8::Function> init;
   v8::Local<v8::Function> before;
   v8::Local<v8::Function> after;
-  if (async_context_hooks_installed_ || !args->GetNext(&init) ||
+  if (async_context_hooks_ || !args->GetNext(&init) ||
       !args->GetNext(&before) || !args->GetNext(&after)) {
     args->ThrowTypeError(
         "Async context hooks require three functions and one installation");
     return;
   }
-#if defined(V8_ENABLE_JAVASCRIPT_PROMISE_HOOKS)
-  // Context hooks also observe native await. Do not use isolate-wide hooks or
-  // the continuation-preserved embedder slot, which belong to Blink elsewhere.
-  context_.Get(isolate_)->SetPromiseHooks(init, before, after, {});
-  async_context_hooks_installed_ = true;
-#else
-  // SetPromiseHooks terminates the process when V8 lacks this build feature.
-  // Requiring async_hooks must stay possible, but activating ALS cannot claim
-  // propagation that this runtime cannot provide.
-  v8::Local<v8::Value> error = v8::Exception::Error(
-      gin::StringToV8(isolate_, "Async context requires V8 JavaScript Promise hooks")
-          .As<v8::String>());
-  if (error.As<v8::Object>()
-          ->Set(context_.Get(isolate_), gin::StringToV8(isolate_, "code"),
-                gin::StringToV8(isolate_, "ERR_NOT_SUPPORTED"))
-          .IsNothing()) {
+  async_context_hooks_ = base::MakeRefCounted<AsyncContextHooks>(
+      isolate_, context_.Get(isolate_), init, before, after);
+}
+
+void XenonIpcMainContainer::NativeIsPromise(gin::Arguments* args) {
+  v8::Local<v8::Value> value;
+  args->Return(args->GetNext(&value) && value->IsPromise());
+}
+
+void XenonIpcMainContainer::NativeCanParseURL(gin::Arguments* args) {
+  const auto is_valid = [](const GURL& url) {
+    if (!url.is_valid()) {
+      return false;
+    }
+    if (!url.has_host() ||
+        !(url.SchemeIsHTTPOrHTTPS() || url.SchemeIsWSOrWSS() ||
+          url.SchemeIsFile() || url.SchemeIs("ftp"))) {
+      return true;
+    }
+    // GURL has already parsed the authority and canonicalized IDNA/IP hosts.
+    // Its special-host parser can still accept spaces (a feature flag, with a
+    // separate file: exception). Validate the decoded, canonical host with
+    // Chromium's existing forbidden-host-code-point checker, independently of
+    // those browser compatibility settings. Opaque hosts must not be decoded.
+    const std::string host = base::UnescapeBinaryURLComponent(url.host());
+    url::RawCanonOutput<256> output;
+    url::Component component;
+    return url::CanonicalizeNonSpecialHost(
+        host, url::Component(0, base::checked_cast<int>(host.size())), output,
+        component);
+  };
+  std::string input;
+  if (!args->GetNext(&input)) {
+    args->ThrowTypeError("URL validation requires a string");
     return;
   }
-  isolate_->ThrowException(error);
-#endif
+  v8::Local<v8::Value> base;
+  if (args->Length() < 2 || (args->GetNext(&base) && base->IsUndefined())) {
+    args->Return(is_valid(GURL(input)));
+    return;
+  }
+  std::string base_string;
+  if (base.IsEmpty() || !gin::ConvertFromV8(isolate_, base, &base_string)) {
+    args->ThrowTypeError("URL validation base must be a string");
+    return;
+  }
+  const GURL base_url(base_string);
+  // WHATWG URL parsing rejects an invalid supplied base even if the input is
+  // absolute. Use Chromium's parser; the compatibility URL constructor alone
+  // does not establish validity.
+  args->Return(is_valid(base_url) && is_valid(base_url.Resolve(input)));
+}
+
+void XenonIpcMainContainer::NativeIsNativeError(gin::Arguments* args) {
+  v8::Local<v8::Value> value;
+  args->Return(args->GetNext(&value) && value->IsNativeError());
+}
+
+void XenonIpcMainContainer::NativeUtilType(gin::Arguments* args) {
+  std::string name;
+  v8::Local<v8::Value> value;
+  if (!args->GetNext(&name)) {
+    args->ThrowTypeError("A native type predicate name is required");
+    return;
+  }
+  if (!args->GetNext(&value)) {
+    value = v8::Undefined(args->isolate());
+  }
+  // V8 brands work across realms and do not invoke Proxy traps or user-defined
+  // Symbol.toStringTag getters. Node's util/types uses these same predicates.
+  using Predicate = bool (v8::Value::*)() const;
+  static constexpr auto predicates =
+      base::MakeFixedFlatMap<std::string_view, Predicate>({
+          {"isArgumentsObject", &v8::Value::IsArgumentsObject},
+          {"isArrayBuffer", &v8::Value::IsArrayBuffer},
+          {"isArrayBufferView", &v8::Value::IsArrayBufferView},
+          {"isAsyncFunction", &v8::Value::IsAsyncFunction},
+          {"isBigInt64Array", &v8::Value::IsBigInt64Array},
+          {"isBigIntObject", &v8::Value::IsBigIntObject},
+          {"isBigUint64Array", &v8::Value::IsBigUint64Array},
+          {"isBooleanObject", &v8::Value::IsBooleanObject},
+          {"isDataView", &v8::Value::IsDataView},
+          {"isDate", &v8::Value::IsDate},
+          {"isExternal", &v8::Value::IsExternal},
+          {"isFloat16Array", &v8::Value::IsFloat16Array},
+          {"isFloat32Array", &v8::Value::IsFloat32Array},
+          {"isFloat64Array", &v8::Value::IsFloat64Array},
+          {"isGeneratorFunction", &v8::Value::IsGeneratorFunction},
+          {"isGeneratorObject", &v8::Value::IsGeneratorObject},
+          {"isInt16Array", &v8::Value::IsInt16Array},
+          {"isInt32Array", &v8::Value::IsInt32Array},
+          {"isInt8Array", &v8::Value::IsInt8Array},
+          {"isMap", &v8::Value::IsMap},
+          {"isMapIterator", &v8::Value::IsMapIterator},
+          {"isModuleNamespaceObject", &v8::Value::IsModuleNamespaceObject},
+          {"isNativeError", &v8::Value::IsNativeError},
+          {"isNumberObject", &v8::Value::IsNumberObject},
+          {"isPromise", &v8::Value::IsPromise},
+          {"isProxy", &v8::Value::IsProxy},
+          {"isRegExp", &v8::Value::IsRegExp},
+          {"isSet", &v8::Value::IsSet},
+          {"isSetIterator", &v8::Value::IsSetIterator},
+          {"isSharedArrayBuffer", &v8::Value::IsSharedArrayBuffer},
+          {"isStringObject", &v8::Value::IsStringObject},
+          {"isSymbolObject", &v8::Value::IsSymbolObject},
+          {"isTypedArray", &v8::Value::IsTypedArray},
+          {"isUint16Array", &v8::Value::IsUint16Array},
+          {"isUint32Array", &v8::Value::IsUint32Array},
+          {"isUint8Array", &v8::Value::IsUint8Array},
+          {"isUint8ClampedArray", &v8::Value::IsUint8ClampedArray},
+          {"isWeakMap", &v8::Value::IsWeakMap},
+          {"isWeakSet", &v8::Value::IsWeakSet},
+      });
+  if (name == "isAnyArrayBuffer") {
+    args->Return(value->IsArrayBuffer() || value->IsSharedArrayBuffer());
+  } else if (name == "isBoxedPrimitive") {
+    args->Return(value->IsNumberObject() || value->IsStringObject() ||
+                 value->IsBooleanObject() || value->IsBigIntObject() ||
+                 value->IsSymbolObject());
+  } else if (const auto predicate = predicates.find(name);
+             predicate != predicates.end()) {
+    args->Return((value.operator->()->*(predicate->second))());
+  } else {
+    args->ThrowTypeError("Unknown native type predicate");
+  }
+}
+
+void XenonIpcMainContainer::NativeIsBuiltinModule(gin::Arguments* args) {
+  std::string name;
+  // Electron is a separate loader entry, not a Node builtin. Query the same
+  // registry used by require(), including the original-fs aliases.
+  args->Return(args->GetNext(&name) && name != "electron" &&
+               BuiltinModuleGlobal(name) != nullptr);
 }
 
 void XenonIpcMainContainer::NativeCreateRequire(gin::Arguments* args) {
@@ -1966,7 +3445,13 @@ void XenonIpcMainContainer::NativeCreateRequire(gin::Arguments* args) {
     // Node accepts drive-relative rooted paths such as /app/entry.js. Resolve
     // their device using this container's cwd, without consulting the host cwd
     // or requiring the synthetic parent file to exist.
-    const auto cwd = working_directory_.NormalizePathSeparators();
+    base::FilePath current_directory;
+    if (file_descriptors_->GetWorkingDirectory(&current_directory) != 0) {
+      isolate_->ThrowException(v8::Exception::Error(gin::StringToV8(
+          isolate_, "Process working directory is unavailable")));
+      return;
+    }
+    const auto cwd = current_directory.NormalizePathSeparators();
     const auto components = cwd.GetComponents();
     if (cwd.IsNetwork() && components.size() >= 3) {
       parent = base::FilePath(components[0] + components[1] +
@@ -1981,7 +3466,39 @@ void XenonIpcMainContainer::NativeCreateRequire(gin::Arguments* args) {
     args->ThrowTypeError("createRequire requires an absolute filename");
     return;
   }
-  args->Return(CreateRequireFunction(parent));
+  v8::Local<v8::Function> require;
+  if (CreateRequireFunction(parent).ToLocal(&require)) {
+    args->Return(require);
+  }
+}
+
+void XenonIpcMainContainer::NativeProcessDirectory(gin::Arguments* args) {
+  std::string directory;
+  const bool changing = args->GetNext(&directory);
+  int status = 0;
+  base::FilePath current;
+  if (changing && worker_options_) {
+    status = UV_ENOTSUP;
+  } else if (changing) {
+    status = file_descriptors_->ChangeWorkingDirectory(directory);
+  } else {
+    status = file_descriptors_->GetWorkingDirectory(&current);
+  }
+  base::DictValue result;
+  result.Set("ok", status == 0);
+  if (status == 0) {
+    if (!changing) {
+      result.Set("directory", current.AsUTF8Unsafe());
+    }
+  } else {
+    result.Set("code", uv_err_name(status));
+    result.Set("errno", status);
+    result.Set("message", uv_strerror(status));
+  }
+  v8::Local<v8::Value> value;
+  if (ValueToV8(base::Value(std::move(result))).ToLocal(&value)) {
+    args->Return(value);
+  }
 }
 
 void XenonIpcMainContainer::NativeV8Serialize(gin::Arguments* args) {
@@ -2020,6 +3537,37 @@ void XenonIpcMainContainer::NativeV8Serialize(gin::Arguments* args) {
   args->Return(v8::Uint8Array::New(buffer, 0, size).As<v8::Value>());
 }
 
+void XenonIpcMainContainer::NativeIsDataCloneError(gin::Arguments* args) {
+  v8::Local<v8::Value> value;
+  args->Return(args->GetNext(&value) &&
+               IsWorkerDataCloneError(context_.Get(isolate_), value));
+}
+
+void XenonIpcMainContainer::NativeStructuredClone(gin::Arguments* args) {
+  v8::Local<v8::Value> value;
+  v8::Local<v8::Value> transfers;
+  if (!args->GetNext(&value)) {
+    args->ThrowTypeError("structuredClone requires a value");
+    return;
+  }
+  if (!args->GetNext(&transfers)) {
+    transfers = v8::Undefined(isolate_);
+  }
+  auto context = context_.Get(isolate_);
+  auto prepared = PreparedWorkerMessage::Serialize(context, value, transfers);
+  if (!prepared) {
+    return;
+  }
+  auto message = prepared->Commit(isolate_);
+  if (!message) {
+    return;
+  }
+  v8::Local<v8::Value> cloned;
+  if (message->Deserialize(context).ToLocal(&cloned)) {
+    args->Return(cloned);
+  }
+}
+
 void XenonIpcMainContainer::NativeLog(gin::Arguments* args) {
   std::string message;
   if (!args->GetNext(&message)) {
@@ -2034,51 +3582,52 @@ void XenonIpcMainContainer::NativeGetPath(gin::Arguments* args) {
     args->ThrowTypeError("getPath expects a name string");
     return;
   }
-  base::FilePath path;
-  if (name == "exe") {
-    path = executable_path_;
-  } else if (name == "module") {
-    base::PathService::Get(base::DIR_MODULE, &path);
-  } else if (name == "home") {
-    base::PathService::Get(base::DIR_HOME, &path);
-  } else if (name == "appData") {
-    std::unique_ptr<base::Environment> env = base::Environment::Create();
-    if (std::optional<std::string> app_data = env->GetVar("APPDATA")) {
-      path = base::FilePath::FromUTF8Unsafe(*app_data);
-    } else {
-      base::PathService::Get(base::DIR_HOME, &path);
-    }
-  } else if (name == "userData") {
-    if (!base::PathService::Get(chrome::DIR_USER_DATA, &path) || path.empty()) {
-      std::unique_ptr<base::Environment> env = base::Environment::Create();
-      if (std::optional<std::string> app_data = env->GetVar("APPDATA")) {
-        path = base::FilePath::FromUTF8Unsafe(*app_data).Append(
-            base::FilePath::FromUTF8Unsafe(app_name_));
-      } else {
-        path = app_path_;
-      }
-    }
-  } else if (name == "temp") {
-    base::PathService::Get(base::DIR_TEMP, &path);
-  } else if (name == "desktop") {
-    base::PathService::Get(base::DIR_USER_DESKTOP, &path);
-  } else if (name == "documents") {
-    base::PathService::Get(chrome::DIR_USER_DOCUMENTS, &path);
-  } else if (name == "downloads") {
-    base::PathService::Get(chrome::DIR_DEFAULT_DOWNLOADS, &path);
-  } else if (name == "music") {
-    base::PathService::Get(chrome::DIR_USER_MUSIC, &path);
-  } else if (name == "pictures") {
-    base::PathService::Get(chrome::DIR_USER_PICTURES, &path);
-  } else if (name == "videos") {
-    base::PathService::Get(chrome::DIR_USER_VIDEOS, &path);
-  } else if (name == "app" || name == "appPath") {
-    path = app_path_;
-  } else {
-    path = app_path_;
+  auto path = app_paths_->Get(name);
+  if (!path.has_value()) {
+    ThrowAppPathError(isolate_, path.error().code, path.error().message);
+    return;
   }
-  args->GetFunctionCallbackInfo()->GetReturnValue().Set(
-      gin::StringToV8(args->isolate(), path.AsUTF8Unsafe()));
+  args->Return(path->AsUTF8Unsafe());
+}
+
+void XenonIpcMainContainer::NativeSetPath(gin::Arguments* args) {
+  std::string name;
+  std::string path;
+  if (!args->GetNext(&name) || !args->GetNext(&path)) {
+    args->ThrowTypeError("setPath expects name and path strings");
+    return;
+  }
+  // FilePath truncates at NUL; reject before constructing it.
+  if (path.find('\0') != std::string::npos) {
+    ThrowAppPathError(isolate_, "ERR_INVALID_ARG_VALUE",
+                      "Path must not contain NUL");
+    return;
+  }
+  auto result = app_paths_->Set(name, base::FilePath::FromUTF8Unsafe(path));
+  if (!result.has_value()) {
+    ThrowAppPathError(isolate_, result.error().code, result.error().message);
+  }
+}
+
+void XenonIpcMainContainer::NativeSetAppLogsPath(gin::Arguments* args) {
+  std::optional<base::FilePath> path;
+  if (args->Length() > 0) {
+    std::string text;
+    if (!args->GetNext(&text)) {
+      args->ThrowTypeError("setAppLogsPath expects an optional path string");
+      return;
+    }
+    if (text.find('\0') != std::string::npos) {
+      ThrowAppPathError(isolate_, "ERR_INVALID_ARG_VALUE",
+                        "Path must not contain NUL");
+      return;
+    }
+    path = base::FilePath::FromUTF8Unsafe(text);
+  }
+  auto result = app_paths_->SetLogsPath(std::move(path));
+  if (!result.has_value()) {
+    ThrowAppPathError(isolate_, result.error().code, result.error().message);
+  }
 }
 
 void XenonIpcMainContainer::NativeNetworkInterfaces(gin::Arguments* args) {
@@ -2118,10 +3667,33 @@ void XenonIpcMainContainer::NativeOsCall(gin::Arguments* args) {
   std::string error;
   if (args->Length() != 1 || !args->GetNext(&request_value) ||
       !V8ToValue(request_value, &request, &error) || !request.is_dict()) {
-    args->ThrowTypeError("ERR_INVALID_ARG_TYPE: os call expects a request object");
+    args->ThrowTypeError(
+        "ERR_INVALID_ARG_TYPE: os call expects a request object");
     return;
   }
   auto result = PerformOsCall(std::move(request));
+  if (!result->success) {
+    isolate_->ThrowException(
+        v8::Exception::Error(gin::StringToV8(isolate_, result->error)));
+    return;
+  }
+  v8::Local<v8::Value> value;
+  if (ValueToV8(result->value).ToLocal(&value)) {
+    args->Return(value);
+  }
+}
+
+void XenonIpcMainContainer::NativeCrashReporterCall(gin::Arguments* args) {
+  v8::Local<v8::Value> request_value;
+  base::Value request;
+  std::string error;
+  if (args->Length() != 1 || !args->GetNext(&request_value) ||
+      !V8ToValue(request_value, &request, &error)) {
+    args->ThrowTypeError(
+        "ERR_INVALID_ARG_TYPE: crashReporter expects a request object");
+    return;
+  }
+  auto result = crash_reporter_annotations_.Call(std::move(request));
   if (!result->success) {
     isolate_->ThrowException(
         v8::Exception::Error(gin::StringToV8(isolate_, result->error)));
@@ -2164,7 +3736,11 @@ void XenonIpcMainContainer::NativeFsCall(gin::Arguments* args) {
   if (!ReadFileSystemArguments(args, &arguments)) {
     return;
   }
-  auto result = PerformFileSystemCall(std::move(arguments));
+  auto result = file_descriptors_->CallOwned(
+      std::move(arguments),
+      worker_options_ && worker_options_->track_unmanaged_fds
+          ? worker_options_->id
+          : 0);
   if (!result->success) {
     isolate_->ThrowException(
         v8::Exception::Error(gin::StringToV8(isolate_, result->error)));
@@ -2198,7 +3774,11 @@ void XenonIpcMainContainer::NativeFsCallAsync(gin::Arguments* args) {
   // and all V8 handles stay on the originating sequence.
   if (!base::ThreadPool::PostTaskAndReplyWithResult(
           FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-          base::BindOnce(&PerformFileSystemCall, std::move(arguments)),
+          base::BindOnce(&XenonFileDescriptors::CallOwned, file_descriptors_,
+                         std::move(arguments),
+                         worker_options_ && worker_options_->track_unmanaged_fds
+                             ? worker_options_->id
+                             : 0),
           base::BindOnce(&XenonIpcMainContainer::OnFileSystemCallComplete,
                          weak_factory_.GetWeakPtr(), request_id))) {
     pending_fs_calls_.erase(request_id);
@@ -2335,7 +3915,9 @@ void XenonIpcMainContainer::NativeZlibCall(gin::Arguments* args) {
   if (!args->GetNext(&operation) || !args->GetNext(&input) ||
       !args->GetNext(&options) || !args->GetNext(&asynchronous) ||
       !V8ToValue(input, &bytes, &error) || !bytes.is_blob() ||
-      !V8ToValue(options, &settings, &error) || !settings.is_dict()) {
+      !ConvertV8ToValue(isolate_, context_.Get(isolate_), options, &settings,
+                        &error, 0, true) ||
+      !settings.is_dict()) {
     args->ThrowTypeError("zlib expects an operation, binary input and options");
     return;
   }
@@ -2379,6 +3961,130 @@ void XenonIpcMainContainer::NativeZlibCall(gin::Arguments* args) {
         ->Reject(context_.Get(isolate_),
                  v8::Exception::Error(gin::StringToV8(
                      isolate_, "ERR_RESOURCE_BUSY: cannot schedule zlib task")))
+        .Check();
+  }
+}
+
+void XenonIpcMainContainer::NativeZlibStreamCall(gin::Arguments* args) {
+  v8::Local<v8::Value> input;
+  bool asynchronous = false;
+  std::string owner, error;
+  base::Value value;
+  if (!args->GetNext(&input) || !args->GetNext(&asynchronous) ||
+      !args->GetNext(&owner) ||
+      !ConvertV8ToValue(isolate_, context_.Get(isolate_), input, &value, &error,
+                        0, true) ||
+      !value.is_dict()) {
+    args->ThrowTypeError(
+        "Compression stream expects a request, mode and owner");
+    return;
+  }
+  auto fail = [&](const std::string& message) {
+    isolate_->ThrowException(
+        v8::Exception::Error(gin::StringToV8(isolate_, message)));
+  };
+  if (shutting_down_ || (!owner.empty() && !renderers_.contains(owner))) {
+    fail("ERR_STREAM_DESTROYED: Compression owner is unavailable");
+    return;
+  }
+  const auto& request = value.GetDict();
+  const auto* action = request.FindString("action");
+  if (!action) {
+    fail("ERR_INVALID_ARG_TYPE: Missing compression action");
+    return;
+  }
+  if (*action == "create") {
+    const auto* operation = request.FindString("operation");
+    const auto* options = request.FindDict("options");
+    if (!operation || !options) {
+      fail("ERR_INVALID_ARG_TYPE: Missing compression format or options");
+      return;
+    }
+    if (zlib_streams_.size() >= 128 ||
+        next_zlib_stream_id_ == std::numeric_limits<int>::max()) {
+      fail("ERR_RESOURCE_BUSY: Too many compression streams");
+      return;
+    }
+    auto stream = ZlibStream::Create(*operation, *options, &error);
+    if (!stream) {
+      fail(error);
+      return;
+    }
+    const int id = next_zlib_stream_id_++;
+    zlib_streams_.emplace(id, ZlibStreamEntry{owner, std::move(stream)});
+    args->Return(id);
+    return;
+  }
+  const auto id = request.FindInt("id");
+  auto entry = id ? zlib_streams_.find(*id) : zlib_streams_.end();
+  if (entry == zlib_streams_.end() || entry->second.owner != owner) {
+    if (*action == "close") {
+      args->Return(false);
+      return;
+    }
+    fail("ERR_STREAM_DESTROYED: Compression stream is unavailable");
+    return;
+  }
+  auto stream = entry->second.stream;
+  if (*action == "close") {
+    stream->Cancel();
+    zlib_streams_.erase(entry);
+    args->Return(true);
+    return;
+  }
+  const auto* bytes = request.FindBlob("data");
+  const auto flush = request.FindInt("flush");
+  const auto capacity = request.FindInt("outputSize");
+  if (*action != "process" || !bytes || !flush || !capacity ||
+      bytes->size() > ZlibStream::kMaximumChunk || *capacity < 64 ||
+      *capacity > static_cast<int>(ZlibStream::kMaximumChunk)) {
+    fail("ERR_INVALID_ARG_TYPE: Invalid compression chunk request");
+    return;
+  }
+  if (asynchronous && pending_zlib_calls_.size() >= 128) {
+    fail("ERR_RESOURCE_BUSY: Compression worker queue is full");
+    return;
+  }
+  if (!stream->TryBegin()) {
+    fail("ERR_RESOURCE_BUSY: Compression stream has an active operation");
+    return;
+  }
+  if (!asynchronous) {
+    auto result = stream->Process(*bytes, *flush, *capacity);
+    if (!result->success) {
+      fail(result->error);
+      return;
+    }
+    v8::Local<v8::Value> converted;
+    if (ValueToV8(result->value).ToLocal(&converted)) {
+      args->Return(converted);
+    }
+    return;
+  }
+  v8::Local<v8::Promise::Resolver> resolver;
+  if (!v8::Promise::Resolver::New(context_.Get(isolate_)).ToLocal(&resolver)) {
+    stream->Cancel();
+    zlib_streams_.erase(entry);
+    return;
+  }
+  const uint64_t request_id = next_zlib_request_id_++;
+  pending_zlib_calls_.emplace(
+      request_id, v8::Global<v8::Promise::Resolver>(isolate_, resolver));
+  args->Return(resolver->GetPromise());
+  if (!base::ThreadPool::PostTaskAndReplyWithResult(
+          FROM_HERE, {base::TaskPriority::USER_VISIBLE},
+          base::BindOnce(&ZlibStream::Process, stream, *bytes, *flush,
+                         *capacity),
+          base::BindOnce(&XenonIpcMainContainer::OnZlibCallComplete,
+                         weak_factory_.GetWeakPtr(), request_id))) {
+    stream->Cancel();
+    zlib_streams_.erase(entry);
+    pending_zlib_calls_.erase(request_id);
+    resolver
+        ->Reject(context_.Get(isolate_),
+                 v8::Exception::Error(gin::StringToV8(
+                     isolate_,
+                     "ERR_RESOURCE_BUSY: Cannot schedule compression task")))
         .Check();
   }
 }
@@ -2536,19 +4242,18 @@ void XenonIpcMainContainer::NativeCryptoCipher(gin::Arguments* args) {
     args->ThrowTypeError("Invalid key length for " + algorithm);
     return;
   }
-  if (uses_iv && iv.size() != static_cast<size_t>(EVP_CIPHER_iv_length(cipher))) {
+  if (uses_iv &&
+      iv.size() != static_cast<size_t>(EVP_CIPHER_iv_length(cipher))) {
     args->ThrowTypeError("Invalid initialization vector for " + algorithm);
     return;
   }
 
   crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
   bssl::ScopedEVP_CIPHER_CTX context;
-  const uint8_t* iv_data = uses_iv
-                               ? reinterpret_cast<const uint8_t*>(iv.data())
-                               : nullptr;
+  const uint8_t* iv_data =
+      uses_iv ? reinterpret_cast<const uint8_t*>(iv.data()) : nullptr;
   const uint8_t* key_data = reinterpret_cast<const uint8_t*>(key.data());
-  const uint8_t* input_data =
-      reinterpret_cast<const uint8_t*>(input.data());
+  const uint8_t* input_data = reinterpret_cast<const uint8_t*>(input.data());
   if (!EVP_CipherInit_ex(context.get(), cipher, nullptr, key_data, iv_data,
                          encrypt ? 1 : 0) ||
       !EVP_CIPHER_CTX_set_padding(context.get(), auto_padding ? 1 : 0)) {
@@ -2574,8 +4279,8 @@ void XenonIpcMainContainer::NativeCryptoCipher(gin::Arguments* args) {
   output.resize(update_size + final_size);
   const std::string_view output_view(
       reinterpret_cast<const char*>(output.data()), output.size());
-  args->GetFunctionCallbackInfo()->GetReturnValue().Set(gin::StringToV8(
-      args->isolate(), base::Base64Encode(output_view)));
+  args->GetFunctionCallbackInfo()->GetReturnValue().Set(
+      gin::StringToV8(args->isolate(), base::Base64Encode(output_view)));
 }
 
 xenon::ipc::mojom::IpcResultPtr XenonIpcMainContainer::FileSystemCall(
@@ -2634,6 +4339,14 @@ void XenonIpcMainContainer::UpdateRendererFrameUrl(
 
 void XenonIpcMainContainer::RemoveRenderer(const std::string& endpoint_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  for (auto entry = zlib_streams_.begin(); entry != zlib_streams_.end();) {
+    if (entry->second.owner != endpoint_id) {
+      ++entry;
+      continue;
+    }
+    entry->second.stream->Cancel();
+    entry = zlib_streams_.erase(entry);
+  }
   if (renderers_.contains(endpoint_id)) {
     DispatchRendererEvent(endpoint_id, false);
     renderers_.erase(endpoint_id);
@@ -2649,8 +4362,8 @@ void XenonIpcMainContainer::DispatchRendererEvent(
     return;
   }
   ScopedV8Context scope(isolate_, context_);
-  v8::Local<v8::Value> argv[] = {
-      CreateSenderMetadata(endpoint_id), v8::Boolean::New(isolate_, attached)};
+  v8::Local<v8::Value> argv[] = {CreateSenderMetadata(endpoint_id),
+                                 v8::Boolean::New(isolate_, attached)};
   gin::TryCatch try_catch(isolate_);
   if (dispatch_renderer_event_.Get(isolate_)
           ->Call(scope.context(), scope.context()->Global(), std::size(argv),
@@ -2662,10 +4375,9 @@ void XenonIpcMainContainer::DispatchRendererEvent(
   isolate_->PerformMicrotaskCheckpoint();
 }
 
-void XenonIpcMainContainer::DispatchToRenderer(
-    const std::string& endpoint_id,
-    const std::string& channel,
-    base::Value arguments) {
+void XenonIpcMainContainer::DispatchToRenderer(const std::string& endpoint_id,
+                                               const std::string& channel,
+                                               base::Value arguments) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   auto renderer = renderers_.find(endpoint_id);
   if (renderer != renderers_.end()) {
@@ -2673,10 +4385,9 @@ void XenonIpcMainContainer::DispatchToRenderer(
   }
 }
 
-void XenonIpcMainContainer::DispatchWindowEvent(
-    int32_t window_id,
-    const std::string& event_name,
-    base::Value arguments) {
+void XenonIpcMainContainer::DispatchWindowEvent(int32_t window_id,
+                                                const std::string& event_name,
+                                                base::Value arguments) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!initialized_ || dispatch_window_event_.IsEmpty()) {
     return;
@@ -2698,9 +4409,69 @@ void XenonIpcMainContainer::DispatchWindowEvent(
   isolate_->PerformMicrotaskCheckpoint();
 }
 
-void XenonIpcMainContainer::DispatchAppEvent(
-    const std::string& event_name,
-    base::Value arguments) {
+bool XenonIpcMainContainer::DispatchBeforeInputEvent(int32_t window_id,
+                                                     base::Value input) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!initialized_ || shutting_down_ || dispatch_window_event_.IsEmpty()) {
+    return true;
+  }
+  ScopedV8Context scope(isolate_, context_);
+  gin::TryCatch try_catch(isolate_);
+  v8::Local<v8::Value> converted;
+  if (!ValueToV8(input).ToLocal(&converted)) {
+    return true;
+  }
+  v8::Local<v8::Value> argv[] = {
+      v8::Integer::New(isolate_, window_id),
+      gin::StringToV8(isolate_, "web-contents-before-input-event"), converted};
+  v8::Local<v8::Value> result;
+  if (!dispatch_window_event_.Get(isolate_)
+           ->Call(scope.context(), scope.context()->Global(), std::size(argv),
+                  argv)
+           .ToLocal(&result)) {
+    LOG(ERROR) << "Electron before-input-event failed: "
+               << try_catch.GetStackTrace();
+    return true;
+  }
+  const bool prevented = result->IsTrue();
+  isolate_->PerformMicrotaskCheckpoint();
+  return prevented;
+}
+
+base::expected<bool, std::string> XenonIpcMainContainer::CheckPermission(
+    base::Value request) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!initialized_ || shutting_down_) {
+    return base::unexpected("ERR_ABORTED: permission container is unavailable");
+  }
+  ScopedV8Context scope(isolate_, context_);
+  gin::TryCatch try_catch(isolate_);
+  v8::Local<v8::Value> function;
+  v8::Local<v8::Value> argument;
+  if (!scope.context()
+           ->Global()
+           ->Get(scope.context(),
+                 gin::StringToV8(isolate_, "__xenonCheckPermission"))
+           .ToLocal(&function) ||
+      !function->IsFunction() || !ValueToV8(request).ToLocal(&argument)) {
+    return base::unexpected(
+        "ERR_ABORTED: permission dispatcher is unavailable");
+  }
+  v8::Local<v8::Value> result;
+  if (!function.As<v8::Function>()
+           ->Call(scope.context(), scope.context()->Global(), 1, &argument)
+           .ToLocal(&result)) {
+    return base::unexpected("ERR_FAILED: " + try_catch.GetStackTrace());
+  }
+  if (!result->IsBoolean()) {
+    return base::unexpected(
+        "ERR_INVALID_ARG_TYPE: permission check must return boolean");
+  }
+  return result->IsTrue();
+}
+
+void XenonIpcMainContainer::DispatchAppEvent(const std::string& event_name,
+                                             base::Value arguments) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!initialized_ || shutting_down_ || dispatch_app_event_.IsEmpty()) {
     return;
@@ -2713,8 +4484,8 @@ void XenonIpcMainContainer::DispatchAppEvent(
                << try_catch.GetStackTrace();
     return;
   }
-  v8::Local<v8::Value> argv[] = {
-      gin::StringToV8(isolate_, event_name), converted_arguments};
+  v8::Local<v8::Value> argv[] = {gin::StringToV8(isolate_, event_name),
+                                 converted_arguments};
   if (dispatch_app_event_.Get(isolate_)
           ->Call(scope.context(), scope.context()->Global(), std::size(argv),
                  argv)
@@ -2771,8 +4542,9 @@ v8::MaybeLocal<v8::Value> XenonIpcMainContainer::ValueToV8(
       for (const auto [key, item] : value.GetDict()) {
         v8::Local<v8::Value> converted;
         if (!ValueToV8(item).ToLocal(&converted) ||
-            !object->CreateDataProperty(context, gin::StringToV8(isolate_, key),
-                                        converted)
+            !object
+                 ->CreateDataProperty(context, gin::StringToV8(isolate_, key),
+                                      converted)
                  .FromMaybe(false)) {
           return {};
         }
@@ -2876,6 +4648,21 @@ v8::Local<v8::Object> XenonIpcMainContainer::CreateSenderMetadata(
     set("partition", gin::StringToV8(isolate_, worker.partition));
   }
   return sender;
+}
+
+void XenonIpcMainContainer::ReceivePortMessage(
+    const std::string& endpoint_id,
+    const std::string& channel,
+    blink::TransferableMessage message) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  auto it = renderers_.find(endpoint_id);
+  if (!initialized_ || shutting_down_ || !message_ports_ ||
+      it == renderers_.end() || it->second.worker_info) {
+    return;
+  }
+  ScopedV8Context scope(isolate_, context_);
+  message_ports_->Receive(CreateSenderMetadata(endpoint_id), channel,
+                          std::move(message));
 }
 
 void XenonIpcMainContainer::Send(const std::string& endpoint_id,
@@ -3063,6 +4850,95 @@ void XenonIpcMainContainer::CancelProtocol(const std::string& request_id) {
   isolate_->PerformMicrotaskCheckpoint();
 }
 
+void XenonIpcMainContainer::HandleWebRequest(base::Value request,
+                                             InvokeCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!initialized_ || shutting_down_) {
+    std::move(callback).Run(ErrorResult("WebRequest container is unavailable"));
+    return;
+  }
+  const auto* details = request.GetIfDict();
+  const auto* request_id = details ? details->FindString("requestId") : nullptr;
+  if (!request_id || request_id->empty()) {
+    std::move(callback).Run(ErrorResult("Invalid WebRequest identity"));
+    return;
+  }
+  ScopedV8Context scope(isolate_, context_);
+  v8::Local<v8::Value> payload;
+  if (!ValueToV8(request).ToLocal(&payload)) {
+    std::move(callback).Run(ErrorResult("Invalid WebRequest payload"));
+    return;
+  }
+  v8::Local<v8::Value> argv[] = {payload};
+  gin::TryCatch try_catch(isolate_);
+  v8::Local<v8::Value> result;
+  if (!dispatch_web_request_.Get(isolate_)
+           ->Call(scope.context(), scope.context()->Global(), std::size(argv),
+                  argv)
+           .ToLocal(&result) ||
+      !result->IsPromise()) {
+    std::move(callback).Run(ErrorResult("WebRequest dispatch failed: " +
+                                        try_catch.GetStackTrace()));
+    return;
+  }
+  auto* reply =
+      new PromiseReplyContext{weak_factory_.GetWeakPtr(), std::move(callback),
+                              "web-request:" + *request_id, false, true};
+  pending_promise_replies_.insert(reply);
+  auto data =
+      v8::External::New(isolate_, reply, v8::kExternalPointerTypeTagDefault);
+  auto resolved = v8::Function::New(scope.context(), OnPromiseResolved, data)
+                      .ToLocalChecked();
+  auto rejected = v8::Function::New(scope.context(), OnPromiseRejected, data)
+                      .ToLocalChecked();
+  if (result.As<v8::Promise>()
+          ->Then(scope.context(), resolved, rejected)
+          .IsEmpty()) {
+    pending_promise_replies_.erase(reply);
+    std::move(reply->callback)
+        .Run(ErrorResult("Cannot await WebRequest callback"));
+    delete reply;
+  }
+  isolate_->PerformMicrotaskCheckpoint();
+}
+
+void XenonIpcMainContainer::CancelWebRequest(const std::string& request_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!initialized_ || shutting_down_) {
+    return;
+  }
+  ScopedV8Context scope(isolate_, context_);
+  v8::Local<v8::Value> argv[] = {gin::StringToV8(isolate_, request_id)};
+  gin::TryCatch try_catch(isolate_);
+  if (cancel_web_request_.Get(isolate_)
+          ->Call(scope.context(), scope.context()->Global(), std::size(argv),
+                 argv)
+          .IsEmpty()) {
+    LOG(ERROR) << "WebRequest cancellation failed: "
+               << try_catch.GetStackTrace();
+  }
+  isolate_->PerformMicrotaskCheckpoint();
+}
+
+void XenonIpcMainContainer::ReleaseWebRequestRegistration(
+    const std::string& registration_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!initialized_ || shutting_down_) {
+    return;
+  }
+  ScopedV8Context scope(isolate_, context_);
+  v8::Local<v8::Value> argv[] = {gin::StringToV8(isolate_, registration_id)};
+  gin::TryCatch try_catch(isolate_);
+  if (release_web_request_registration_.Get(isolate_)
+          ->Call(scope.context(), scope.context()->Global(), std::size(argv),
+                 argv)
+          .IsEmpty()) {
+    LOG(ERROR) << "WebRequest registration release failed: "
+               << try_catch.GetStackTrace();
+  }
+  isolate_->PerformMicrotaskCheckpoint();
+}
+
 xenon::ipc::mojom::IpcResultPtr XenonIpcMainContainer::SendSync(
     const std::string& endpoint_id,
     const std::string& channel,
@@ -3147,7 +5023,8 @@ void XenonIpcMainContainer::NativeChildProcessCall(gin::Arguments* args) {
     return;
   }
   v8::Local<v8::Value> result;
-  if (ValueToV8(child_process_caller_.Run(request.GetDict())).ToLocal(&result)) {
+  if (ValueToV8(child_process_caller_.Run(request.GetDict()))
+          .ToLocal(&result)) {
     args->Return(result);
   }
 }
@@ -3186,112 +5063,6 @@ void XenonIpcMainContainer::NativeSendToRenderer(gin::Arguments* args) {
   if (renderer != renderers_.end()) {
     renderer->second.remote->Dispatch(channel, std::move(arguments));
   }
-}
-
-void XenonIpcMainContainer::NativeShowOpenDialog(gin::Arguments* args) {
-  std::string title = "打开文件";
-  bool directory = false;
-  bool allow_multi = false;
-  std::vector<std::string> extensions;
-
-  v8::Isolate* isolate = isolate_;
-  v8::Local<v8::Context> context = context_.Get(isolate);
-  v8::Local<v8::Value> options_val;
-  if (args->GetNext(&options_val) && options_val->IsObject()) {
-    v8::Local<v8::Object> options_obj = options_val.As<v8::Object>();
-    v8::Local<v8::Value> title_v;
-    if (options_obj->Get(context, gin::StringToV8(isolate, "title"))
-            .ToLocal(&title_v) &&
-        title_v->IsString()) {
-      gin::ConvertFromV8(isolate, title_v, &title);
-    }
-    v8::Local<v8::Value> props_v;
-    if (options_obj->Get(context, gin::StringToV8(isolate, "properties"))
-            .ToLocal(&props_v) &&
-        props_v->IsArray()) {
-      v8::Local<v8::Array> props = props_v.As<v8::Array>();
-      for (uint32_t i = 0; i < props->Length(); ++i) {
-        v8::Local<v8::Value> item;
-        std::string name;
-        if (!props->Get(context, i).ToLocal(&item) ||
-            !gin::ConvertFromV8(isolate, item, &name)) {
-          continue;
-        }
-        if (name == "openDirectory") {
-          directory = true;
-        } else if (name == "multiSelections") {
-          allow_multi = true;
-        }
-      }
-    }
-    v8::Local<v8::Value> filters_v;
-    if (options_obj->Get(context, gin::StringToV8(isolate, "filters"))
-            .ToLocal(&filters_v) &&
-        filters_v->IsArray()) {
-      v8::Local<v8::Array> filters = filters_v.As<v8::Array>();
-      for (uint32_t i = 0; i < filters->Length(); ++i) {
-        v8::Local<v8::Value> filter_v;
-        if (!filters->Get(context, i).ToLocal(&filter_v) ||
-            !filter_v->IsObject()) {
-          continue;
-        }
-        v8::Local<v8::Value> exts_v;
-        if (!filter_v.As<v8::Object>()
-                 ->Get(context, gin::StringToV8(isolate, "extensions"))
-                 .ToLocal(&exts_v) ||
-            !exts_v->IsArray()) {
-          continue;
-        }
-        v8::Local<v8::Array> exts = exts_v.As<v8::Array>();
-        for (uint32_t j = 0; j < exts->Length(); ++j) {
-          v8::Local<v8::Value> ext_v;
-          std::string ext;
-          if (!exts->Get(context, j).ToLocal(&ext_v) ||
-              !gin::ConvertFromV8(isolate, ext_v, &ext) || ext.empty()) {
-            continue;
-          }
-          if (ext[0] == '.') {
-            ext.erase(0, 1);
-          }
-          extensions.push_back(std::move(ext));
-        }
-      }
-    }
-  }
-
-  std::vector<std::string> results;
-  auto throw_dialog_error = [&](const char* code, const char* message) {
-    v8::Local<v8::Value> error = v8::Exception::Error(
-        gin::StringToV8(isolate, message).As<v8::String>());
-    if (error.As<v8::Object>()
-            ->Set(context, gin::StringToV8(isolate, "code"),
-                  gin::StringToV8(isolate, code))
-            .IsNothing()) {
-      return;
-    }
-    isolate->ThrowException(error);
-  };
-  if (!window_hooks_.show_open_dialog) {
-    throw_dialog_error("ERR_NOT_SUPPORTED", "Native open dialog is unavailable");
-    return;
-  }
-  LOG(INFO) << "showOpenDialog hop title=" << title
-            << " directory=" << directory << " multi=" << allow_multi
-            << " filters=" << extensions.size();
-  bool succeeded;
-  {
-    v8::Unlocker unlocker(isolate_);
-    succeeded = window_hooks_.show_open_dialog.Run(
-        title, directory, allow_multi, extensions, &results);
-  }
-  // V8 must be locked again before constructing or throwing the JS error.
-  // Only a successful Browser reply with no paths means user cancellation.
-  if (!succeeded) {
-    throw_dialog_error("ERR_FAILED", "Native open dialog request failed");
-    return;
-  }
-  LOG(INFO) << "showOpenDialog hop returned " << results.size() << " path(s)";
-  args->Return(results);
 }
 
 void XenonIpcMainContainer::NativeCreateBrowserWindow(gin::Arguments* args) {
@@ -3357,7 +5128,8 @@ void XenonIpcMainContainer::NativeLoadBrowserWindowURL(gin::Arguments* args) {
   }
 }
 
-void XenonIpcMainContainer::NativeSetBrowserWindowVisible(gin::Arguments* args) {
+void XenonIpcMainContainer::NativeSetBrowserWindowVisible(
+    gin::Arguments* args) {
   int32_t window_id = 0;
   bool visible = true;
   if (!args->GetNext(&window_id) || !args->GetNext(&visible)) {
@@ -3368,6 +5140,33 @@ void XenonIpcMainContainer::NativeSetBrowserWindowVisible(gin::Arguments* args) 
     v8::Unlocker unlocker(isolate_);
     window_hooks_.set_visible.Run(window_id, visible);
   }
+}
+
+bool XenonIpcMainContainer::AddNativeRuntimeArguments(
+    int32_t window_id,
+    const std::string& command,
+    base::Value* arguments,
+    std::string* error) {
+  auto* request = arguments->GetIfDict();
+  const auto* method = request ? request->FindString("method") : nullptr;
+  if (window_id != 0 || command != "app-single-instance" || !method ||
+      *method != "request") {
+    return true;
+  }
+  base::FilePath directory;
+  if (!file_descriptors_ ||
+      file_descriptors_->GetWorkingDirectory(&directory) != 0 ||
+      !directory.IsAbsolute()) {
+    *error = "ERR_CWD_UNAVAILABLE: native working directory is unavailable";
+    return false;
+  }
+  // This is a native snapshot after argument conversion. Application code can
+  // replace process.cwd or submit the reserved key, but cannot replace the
+  // actual process state with either of those JavaScript values.
+  request->Set(
+      "__xenonRuntime",
+      base::DictValue().Set("workingDirectory", directory.AsUTF8Unsafe()));
+  return true;
 }
 
 void XenonIpcMainContainer::NativeBrowserWindowCall(gin::Arguments* args) {
@@ -3387,6 +5186,10 @@ void XenonIpcMainContainer::NativeBrowserWindowCall(gin::Arguments* args) {
             : V8ToValue(value, &arguments, &error))) {
     args->ThrowTypeError(error.empty() ? "Invalid BrowserWindow arguments"
                                        : error);
+    return;
+  }
+  if (!AddNativeRuntimeArguments(window_id, command, &arguments, &error)) {
+    args->ThrowTypeError(error);
     return;
   }
   if (!window_hooks_.call) {
@@ -3461,6 +5264,11 @@ void XenonIpcMainContainer::NativeExitApp(gin::Arguments* args) {
 }
 
 void XenonIpcMainContainer::NotifyAppExit(int exit_code) {
+  if (utility_options_ && isolate_ && isolate_->IsExecutionTerminating()) {
+    // The terminating JS stack has unwound. Allow exit listeners and addon
+    // cleanup to run only now, immediately before the owner begins retirement.
+    isolate_->CancelTerminateExecution();
+  }
   if (!shutting_down_ && app_exit_handler_) {
     app_exit_handler_.Run(exit_code);
   }
@@ -3514,7 +5322,7 @@ void XenonIpcMainContainer::NativeInvokeExport(gin::Arguments* args) {
   if (args_val.IsEmpty() || args_val->IsUndefined() || args_val->IsNull()) {
     converted = base::Value(base::Value::Type::LIST);
   } else if (!ConvertV8ToValue(isolate_, context_.Get(isolate_), args_val,
-                                &converted, &error, 0, true)) {
+                               &converted, &error, 0, true)) {
     args->ThrowTypeError(error.empty() ? "Invalid native arguments" : error);
     return;
   }
@@ -3560,7 +5368,7 @@ void XenonIpcMainContainer::NativeConstructExport(gin::Arguments* args) {
   if (args_val.IsEmpty() || args_val->IsUndefined() || args_val->IsNull()) {
     converted = base::Value(base::Value::Type::LIST);
   } else if (!ConvertV8ToValue(isolate_, context_.Get(isolate_), args_val,
-                                &converted, &error, 0, true)) {
+                               &converted, &error, 0, true)) {
     args->ThrowTypeError(error.empty() ? "Invalid native arguments" : error);
     return;
   }
@@ -3604,7 +5412,7 @@ void XenonIpcMainContainer::NativeInvokeInstance(gin::Arguments* args) {
   if (args_val.IsEmpty() || args_val->IsUndefined() || args_val->IsNull()) {
     converted = base::Value(base::Value::Type::LIST);
   } else if (!ConvertV8ToValue(isolate_, context_.Get(isolate_), args_val,
-                                &converted, &error, 0, true)) {
+                               &converted, &error, 0, true)) {
     args->ThrowTypeError(error.empty() ? "Invalid native arguments" : error);
     return;
   }
@@ -4022,9 +5830,18 @@ void XenonIpcMainContainer::HandleClearTimer(
   timers_.erase(id);
 }
 
+void XenonIpcMainContainer::NativeSetTimerReferenced(int id, bool referenced) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  auto it = timers_.find(id);
+  if (it != timers_.end()) {
+    it->second->referenced = referenced;
+  }
+}
+
 void XenonIpcMainContainer::OnTimerTriggered(int id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (shutting_down_ || !initialized_) {
+  if (shutting_down_ || !initialized_ ||
+      (utility_options_ && app_exit_requested_)) {
     return;
   }
   auto it = timers_.find(id);
@@ -4051,6 +5868,12 @@ void XenonIpcMainContainer::OnTimerTriggered(int id) {
       v8::String::Utf8Value error(isolate_, try_catch.Exception());
       LOG(ERROR) << "Uncaught exception in timer callback: "
                  << (error.length() ? *error : "unknown error");
+      if (worker_control_ || utility_options_) {
+        ReportNodeException(try_catch.Exception());
+      }
+    }
+    if (worker_control_ || utility_options_) {
+      isolate_->PerformMicrotaskCheckpoint();
     }
   }
 

@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// One behavior table for both production bootstraps. The shims provide stream
-// constructor/inheritance infrastructure; they do not implement a stream queue.
+// One behavior table for both production bootstraps, including the bundled
+// Node stream engine and its host dependencies.
 const {readBootstrap} = require('./bootstrap_test_support.cjs');
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -43,77 +43,109 @@ function createRuntime(kind, invoke) {
   return {context, ...modules};
 }
 
-const unsupportedCalls = stream => [
-  () => new stream().pipe({}),
-  () => new stream.Readable().read(),
-  () => new stream.Readable().push('must not disappear'),
-  () => new stream.Readable().pipe({}),
-  () => new stream.Writable().write('must not disappear'),
-  () => new stream.Writable().end('must not disappear'),
-  () => new stream.Duplex().write('must not disappear'),
-  () => new stream.Transform().write('must not disappear'),
-  () => new stream.PassThrough().end('must not disappear'),
-];
-
 for (const kind of ['main', 'renderer']) {
-  test(`${kind}: default stream operations never report dropped data as success`, () => {
+  test(`${kind}: real stream queues bound producer demand and serialize async transforms`, async () => {
     const {stream} = createRuntime(kind);
-    for (const operation of unsupportedCalls(stream)) {
-      assert.throws(operation, {code: 'ERR_NOT_SUPPORTED'});
-    }
+    let produced = 0, consumed = 0, maxAhead = 0, transforming = 0, maximum = 0;
+    const received = [], count = 32;
+    const source = new stream.Readable({objectMode: true, highWaterMark: 2, read() {
+      if (produced === count) return this.push(null);
+      this.push(produced++);
+      maxAhead = Math.max(maxAhead, produced - consumed);
+    }});
+    const transform = new stream.Transform({objectMode: true, highWaterMark: 2,
+      transform(value, _encoding, callback) {
+        maximum = Math.max(maximum, ++transforming);
+        setTimeout(() => { --transforming; callback(null, value * 3); }, 1);
+      }});
+    const sink = new stream.Writable({objectMode: true, highWaterMark: 2,
+      write(value, _encoding, callback) {
+        received.push(value);
+        setTimeout(() => { ++consumed; callback(); }, 2);
+      }});
+    await stream.promises.pipeline(source, transform, new stream.PassThrough({objectMode: true,
+      highWaterMark: 2}), sink);
+    assert.deepEqual(received, Array.from({length: count}, (_, i) => i * 3));
+    assert.equal(maximum, 1);
+    assert.ok(maxAhead < count / 2, 'slow writes must limit upstream production');
+    assert.equal(sink.writableFinished, true);
   });
 
-  test(`${kind}: stream callback operations fail once and asynchronously`, async () => {
+  test(`${kind}: unimplemented stream hooks report real errors without dropping writes`, async () => {
     const {stream} = createRuntime(kind);
-    const writable = new stream.Writable();
-    let finishes = 0;
+    const abstract = new stream.Writable();
+    assert.throws(() => abstract.write('bytes'), {code: 'ERR_METHOD_NOT_IMPLEMENTED'});
+    abstract.destroy();
+    const writable = new stream.Writable({write(chunk, encoding, done) {
+      done(Object.assign(new Error('write failed'), {code: 'EIO'}));
+    }});
+    let finishes = 0, callbacks = 0, emitted = 0, returned = false;
     writable.on('finish', () => ++finishes);
-    const operations = [
-      callback => writable.write('bytes', callback),
-      callback => writable.end('bytes', callback),
-      callback => new stream.Transform()._transform('bytes', 'utf8', callback),
-      callback => stream.pipeline(new stream.Readable(), writable, callback),
-      callback => stream.finished(writable, callback),
-    ];
-    for (const operation of operations) {
-      let returned = false;
-      let count = 0;
-      await new Promise((resolve, reject) => {
-        operation(error => {
-          ++count;
-          try {
-            assert.equal(returned, true);
-            assert.equal(error.code, 'ERR_NOT_SUPPORTED');
-            resolve();
-          } catch (failure) {
-            reject(failure);
-          }
-        });
-        returned = true;
-      });
-      assert.equal(count, 1);
-    }
+    const closed = new Promise(resolve => writable.on('close', resolve));
+    writable.on('error', error => {
+      ++emitted;
+      assert.equal(error.code, 'EIO');
+    });
+    writable.write('bytes', error => {
+      ++callbacks;
+      assert.equal(returned, true);
+      assert.equal(error.code, 'EIO');
+    });
+    returned = true;
+    await closed;
+    assert.equal(callbacks, 1);
+    assert.equal(emitted, 1);
     assert.equal(finishes, 0);
+    const source = new stream.Readable();
+    await new Promise(resolve => {
+      source.on('error', error => {
+        assert.equal(error.code, 'ERR_METHOD_NOT_IMPLEMENTED');
+        resolve();
+      });
+      source.resume();
+    });
   });
 
   test(`${kind}: completion callback validation and cleanup are real`, async () => {
     const {stream} = createRuntime(kind);
-    const writable = new stream.Writable();
-    for (const callback of [null, 1, 'callback', {}]) {
-      assert.throws(() => writable.write('bytes', 'utf8', callback),
-          {name: 'TypeError', code: 'ERR_INVALID_ARG_TYPE'});
-    }
+    const writable = new stream.Writable({write(_chunk, _encoding, done) { done(); }});
     for (const callback of [undefined, null, 1, 'callback', {}]) {
       assert.throws(() => stream.pipeline(new stream.Readable(), writable, callback),
           {name: 'TypeError', code: 'ERR_INVALID_ARG_TYPE'});
       assert.throws(() => stream.finished(writable, {}, callback),
           {name: 'TypeError', code: 'ERR_INVALID_ARG_TYPE'});
     }
-    let called = false;
-    const cleanup = stream.finished(writable, () => { called = true; });
-    cleanup();
-    await Promise.resolve();
-    assert.equal(called, false);
+    const finished = new Promise((resolve, reject) => {
+      const cleanup = stream.finished(writable, error => {
+        cleanup();
+        error ? reject(error) : resolve();
+      });
+    });
+    writable.end('kept');
+    await finished;
+    assert.equal(writable.listenerCount('error'), 0);
+    assert.equal(writable.writableFinished, true);
+  });
+
+  test(`${kind}: cross-realm bytes, corking and final hooks preserve output order`, async () => {
+    const {stream} = createRuntime(kind), output = [], order = [];
+    let writing = 0;
+    const sink = new stream.Writable({write(chunk, encoding, done) {
+      assert.equal(++writing, 1);
+      output.push(Buffer.from(chunk));
+      setTimeout(() => { --writing; order.push('write'); done(); }, 1);
+    }, final(done) { order.push('final'); done(); }});
+    const complete = stream.promises.finished(sink, {cleanup: true});
+    sink.cork();
+    sink.write(Buffer.from([0, 255]));
+    sink.write(new Uint8Array([128, 65]));
+    assert.equal(output.length, 0);
+    sink.uncork();
+    sink.end('中');
+    await complete;
+    assert.deepEqual(Buffer.concat(output), Buffer.concat([
+      Buffer.from([0, 255, 128, 65]), Buffer.from('中')]));
+    assert.deepEqual(order, ['write', 'write', 'write', 'final']);
   });
 
   test(`${kind}: stream constructors preserve implemented userland behavior`, () => {
@@ -126,7 +158,7 @@ for (const kind of ['main', 'renderer']) {
     assert.equal(new stream.Readable({read})._read, read);
     assert.equal(new stream.Writable({write})._write, write);
     assert.equal(new stream.Transform({transform})._transform, transform);
-    for (const Constructor of [stream, stream.Readable, stream.Writable,
+    for (const Constructor of [stream.Readable, stream.Writable,
       stream.Duplex, stream.Transform, stream.PassThrough]) {
       assert.equal(Constructor() instanceof Constructor, true);
     }
@@ -217,7 +249,7 @@ for (const kind of ['main', 'renderer']) {
 
   test(`${kind}: unsupported fs Promise permissions and descriptors reject consistently`, async () => {
     const {fs} = createRuntime(kind);
-    for (const method of ['open', 'chmod', 'chown']) {
+    for (const method of (kind === 'main' ? ['chown'] : ['open', 'chown'])) {
       await assert.rejects(fs.promises[method]('unused', 0o644),
           {code: 'ERR_NOT_SUPPORTED'});
     }
@@ -235,7 +267,8 @@ test('renderer HTTP uses its working native boundary independently of stream bas
   const bytes = vm.runInContext('Buffer.from([9, 0, 255, 128, 65, 9]).subarray(1, 5)', context);
   const response = await new Promise((resolve, reject) => {
     const req = context.require('http').request({hostname: 'fixture.invalid',
-      method: 'POST', path: '/bytes'}, incoming => {
+      method: 'POST', path: '/bytes', useSessionCookies: true,
+      headers: {Cookie: 'explicit=renderer'}}, incoming => {
       const chunks = [];
       incoming.on('data', chunk => chunks.push(Buffer.from(chunk)));
       incoming.on('end', () => resolve({status: incoming.statusCode,
@@ -247,6 +280,9 @@ test('renderer HTTP uses its working native boundary independently of stream bas
   assert.equal(response.status, 201);
   assert.deepEqual(Array.from(response.data), [0, 255, 128, 65]);
   assert.equal(requests.length, 1);
+  assert.equal(Object.entries(requests[0].headers).find(([name]) =>
+    name.toLowerCase() === 'cookie')?.[1], 'explicit=renderer');
+  assert.equal(Object.hasOwn(requests[0], 'useSessionCookies'), false);
   assert.deepEqual(Array.from(Buffer.from(requests[0].bodyBase64, 'base64')),
       [0, 255, 128, 65]);
 });

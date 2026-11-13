@@ -1,7 +1,57 @@
-  // Both loaders own their resolution and cache. This module only converts the
-  // Node createRequire input into the filename to which that loader is bound.
-  function createModuleModule(pathModule, urlModule, createRequireForFilename) {
+  // Both loaders own their resolution and cache. This module binds createRequire
+  // to a loader filename and exposes the runtime's compile-cache capabilities.
+  function createModuleModule(pathModule, urlModule, createRequireForFilename, isBuiltinModule) {
+    const compileCacheStatus = Object.freeze({
+      FAILED: 0,
+      ENABLED: 1,
+      ALREADY_ENABLED: 2,
+      DISABLED: 3,
+    });
     return {
+      // This application-scoped runtime has no implicit global module roots.
+      // Like Node, mutating this published snapshot does not change lookups.
+      globalPaths: [],
+      _nodeModulePaths(from) {
+        if (typeof from !== 'string') {
+          throw Object.assign(new TypeError('The module path must be a string'),
+                              {code: 'ERR_INVALID_ARG_TYPE'});
+        }
+        const paths = [];
+        let directory = pathModule.resolve(from);
+        for (;;) {
+          if (pathModule.basename(directory) !== 'node_modules') {
+            paths.push(pathModule.join(directory, 'node_modules'));
+          }
+          const parent = pathModule.dirname(directory);
+          if (parent === directory) return paths;
+          directory = parent;
+        }
+      },
+      _resolveLookupPaths(request, parent) {
+        if (isBuiltinModule?.(request)) return null;
+        const relative = pathModule.sep === '\\' ?
+            /^\.\.?([\\/]|$)/.test(request) : /^\.\.?(\/|$)/.test(request);
+        if (relative) return [parent?.id && parent.filename ? pathModule.dirname(parent.filename) : '.'];
+        return parent?.paths?.length ? [...parent.paths] : [];
+      },
+      isBuiltin(name) {
+        return typeof name === 'string' && isBuiltinModule(name);
+      },
+      constants: Object.freeze({compileCacheStatus}),
+      getCompileCacheDir() {
+        return undefined;
+      },
+      flushCompileCache() {
+        // Like Node with caching disabled, there is no pending cache to flush.
+      },
+      enableCompileCache() {
+        // A CommonJS module cache is not Node's persistent V8 compile cache.
+        // Report the unsupported optimization without affecting module loads.
+        return {
+          status: compileCacheStatus.DISABLED,
+          message: 'Persistent module compile caching is not supported by this runtime',
+        };
+      },
       createRequire(filename) {
         const invalidFilename = () => Object.assign(new TypeError(
             'The argument \'filename\' must be a file URL object, file URL string, or absolute path string'),

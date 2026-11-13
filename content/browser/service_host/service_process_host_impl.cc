@@ -22,6 +22,10 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "sandbox/policy/mojom/sandbox.mojom.h"
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "base/check_op.h"
+#endif
+
 namespace content {
 
 namespace {
@@ -79,6 +83,16 @@ void LaunchServiceProcess(mojo::GenericPendingReceiver receiver,
   if (service_options.priority) {
     utility_options.WithPriority(*service_options.priority);
   }
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (service_options.xenon_utility_options) {
+    // This launch-only extension must never widen an unrelated service's
+    // sandbox or allow renderer-provided launch state to escape its broker.
+    CHECK_EQ(sandbox, sandbox::mojom::Sandbox::kNoSandbox);
+    CHECK_EQ(service_interface_name, "xenon.ipc.mojom.UtilityProcessService");
+    utility_options.WithXenonUtilityProcessOptions(
+        std::move(service_options.xenon_utility_options));
+  }
+#endif
 
   utility_options.WithBoundServiceInterfaceOnChildProcess(std::move(receiver));
 

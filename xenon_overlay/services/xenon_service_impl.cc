@@ -4,6 +4,7 @@
 
 #include "xenon_overlay/services/xenon_service_impl.h"
 
+#include <array>
 #include <optional>
 #include <string>
 #include <utility>
@@ -18,6 +19,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/unguessable_token.h"
 #include "base/values.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -26,10 +28,19 @@
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_ipc_main_container.h"
+#include "xenon_overlay/chrome/browser/napi/native_runtime_retirement.h"
 #include "xenon_overlay/common/asar/archive.h"
+#include "xenon_overlay/common/ipc/xenon_message_port_codec.h"
 #include "xenon_overlay/services/xenon_child_process_bridge.h"
 #include "xenon_overlay/services/xenon_net_pipe_bridge.h"
 #include "xenon_overlay/services/xenon_node_executor.h"
+
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 namespace xenon {
 
@@ -53,10 +64,58 @@ constexpr char kNodeAddonConstructExportChannel[] =
     "__xenon:node-addon:construct-export";
 constexpr char kNodeAddonInvokeInstanceChannel[] =
     "__xenon:node-addon:invoke-instance";
-constexpr char kNodeAddonCallbackChannel[] =
-    "__xenon:node-addon:callback";
+constexpr char kNodeAddonCallbackChannel[] = "__xenon:node-addon:callback";
 constexpr char kNodeAddonCallbackReleasedChannel[] =
     "__xenon:node-addon:callback-released";
+
+bool InstallUtilityStandardStreams(
+    const ipc::mojom::UtilityProcessBootstrap& config,
+    std::string* error) {
+#if BUILDFLAG(IS_WIN)
+  const std::array<const base::File*, 3> files = {
+      &config.stdin_file, &config.stdout_file, &config.stderr_file};
+  const std::array<DWORD, 3> identifiers = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+                                            STD_ERROR_HANDLE};
+  for (int fd = 0; fd != 3; ++fd) {
+    if (!files[fd]->IsValid()) {
+      *error = "ERR_INVALID_ARG_VALUE: Missing utility process standard handle";
+      return false;
+    }
+    HANDLE duplicate = nullptr;
+    if (!::DuplicateHandle(::GetCurrentProcess(), files[fd]->GetPlatformFile(),
+                           ::GetCurrentProcess(), &duplicate, 0, FALSE,
+                           DUPLICATE_SAME_ACCESS)) {
+      *error = "ERR_SYSTEM_ERROR: Cannot duplicate utility standard handle";
+      return false;
+    }
+    const int temporary =
+        _open_osfhandle(reinterpret_cast<intptr_t>(duplicate),
+                        _O_BINARY | (fd == 0 ? _O_RDONLY : _O_WRONLY));
+    if (temporary < 0) {
+      ::CloseHandle(duplicate);
+      *error = "ERR_SYSTEM_ERROR: Cannot initialize utility CRT descriptor";
+      return false;
+    }
+    if (temporary != fd) {
+      const int result = _dup2(temporary, fd);
+      _close(temporary);
+      if (result != 0) {
+        *error = "ERR_SYSTEM_ERROR: Cannot map utility CRT standard descriptor";
+        return false;
+      }
+    }
+    if (_setmode(fd, _O_BINARY) == -1 ||
+        !::SetStdHandle(identifiers[fd],
+                        reinterpret_cast<HANDLE>(_get_osfhandle(fd)))) {
+      *error = "ERR_SYSTEM_ERROR: Cannot configure utility standard descriptor";
+      return false;
+    }
+  }
+#endif
+  // POSIX receives descriptors 0/1/2 through launch remapping; neither path
+  // changes environment or cwd after Chromium's threads have started.
+  return true;
+}
 
 bool IsRendererNodeAddonInvokeChannel(const std::string& channel) {
   return channel == kNodeAddonInvokeExportChannel ||
@@ -124,6 +183,52 @@ base::Value NodeExportInfoToValue(const mojom::NodeExportInfoPtr& info) {
   return base::Value(std::move(value));
 }
 
+// Shared native hooks in main capture the executor. Retire main first, while
+// retaining both complete objects; only then begin the executor's own drain.
+class RetiringContext final : public NativeRuntimeShutdown {
+ public:
+  RetiringContext(std::unique_ptr<ipc::XenonIpcMainContainer> main,
+                  std::unique_ptr<XenonNodeExecutor> executor)
+      : main_(std::move(main)), executor_(std::move(executor)) {}
+  void BeginNativeShutdown() override {
+    if (main_) {
+      main_->BeginNativeShutdown();
+    } else {
+      BeginExecutor();
+    }
+  }
+  bool PollNativeShutdown() override {
+    if (main_) {
+      if (!main_->PollNativeShutdown()) {
+        return false;
+      }
+      main_.reset();
+      BeginExecutor();
+    }
+    if (executor_) {
+      if (!executor_->PollNativeShutdown()) {
+        return false;
+      }
+      executor_.reset();
+    }
+    return true;
+  }
+  std::string DescribeNativeShutdown() const override {
+    return main_       ? main_->DescribeNativeShutdown()
+           : executor_ ? executor_->DescribeNativeShutdown()
+                       : "complete";
+  }
+
+ private:
+  void BeginExecutor() {
+    if (executor_) {
+      executor_->BeginNativeShutdown();
+    }
+  }
+  std::unique_ptr<ipc::XenonIpcMainContainer> main_;
+  std::unique_ptr<XenonNodeExecutor> executor_;
+};
+
 ipc::mojom::IpcResultPtr MakeNativeInvokeSuccess(base::Value value) {
   auto result = ipc::mojom::IpcResult::New();
   result->success = true;
@@ -152,15 +257,252 @@ std::vector<mojom::NodeInvokeArgPtr> XenonServiceImpl::TakeNodeInvokeArgs(
 
 XenonServiceImpl::XenonServiceImpl(
     mojo::PendingReceiver<mojom::XenonMainService> receiver)
-    : receiver_(this, std::move(receiver)) {
+    : receiver_(this, std::move(receiver)),
+      archive_key_namespace_(base::UnguessableToken::Create().ToString()) {
   node_addon_host_receivers_.set_disconnect_handler(base::BindRepeating(
       &XenonServiceImpl::OnNodeAddonHostDisconnected, base::Unretained(this)));
 }
 
-XenonServiceImpl::~XenonServiceImpl() {
-  for (const auto& [container_id, container] : ipc_main_containers_) {
-    asar::RemoveArchivePublicKeys("electron:" + container_id);
+XenonServiceImpl::XenonServiceImpl(
+    mojo::PendingReceiver<ipc::mojom::UtilityProcessService> receiver)
+    : receiver_(this),
+      utility_receiver_(this, std::move(receiver)),
+      archive_key_namespace_(base::UnguessableToken::Create().ToString()) {
+  utility_receiver_.set_disconnect_handler(base::BindOnce(
+      &XenonServiceImpl::Shutdown, weak_factory_.GetWeakPtr(), 0));
+}
+
+void XenonServiceImpl::SetUtilityExitHandler(
+    base::RepeatingCallback<void(int)> handler) {
+  utility_exit_handler_ = std::move(handler);
+}
+
+void XenonServiceImpl::Start(
+    ipc::mojom::UtilityProcessBootstrapPtr config,
+    mojo::PendingRemote<ipc::mojom::UtilityProcessServiceObserver> observer,
+    ipc::mojom::UtilityProcessService::StartCallback callback) {
+  if (!utility_receiver_.is_bound() || receiver_.is_bound() ||
+      utility_bootstrap_ || utility_exit_code_.has_value()) {
+    std::move(callback).Run(
+        false, "ERR_INVALID_STATE: Utility already initialized or stopping");
+    return;
   }
+  if (!config || !config->main || !config->parent_port.IsValid() ||
+      !observer.is_valid() ||
+      config->main->native_addon_execution !=
+          ipc::mojom::NativeAddonExecution::kStandard) {
+    std::move(callback).Run(false,
+                            "ERR_INVALID_ARG_VALUE: Invalid utility bootstrap");
+    return;
+  }
+  if (!config->exec_argv.empty()) {
+    std::move(callback).Run(false,
+                            "ERR_NOT_SUPPORTED: Utility execArgv requires "
+                            "launch-time engine configuration");
+    return;
+  }
+  std::string error;
+  if (!InstallUtilityStandardStreams(*config, &error)) {
+    std::move(callback).Run(false, error);
+    return;
+  }
+  utility_observer_.Bind(std::move(observer));
+  if (config->network_factory.is_valid()) {
+    Initialize(std::move(config->network_factory));
+  }
+  config->main->working_directory = config->working_directory;
+  config->main->app_argv = config->argv;
+  auto main = std::move(config->main);
+  utility_bootstrap_ = std::move(config);
+  InitializeElectronIpc(
+      std::move(main),
+      base::BindOnce(
+          [](base::WeakPtr<XenonServiceImpl> self,
+             ipc::mojom::UtilityProcessService::StartCallback done,
+             bool success, const std::string& error) {
+            std::move(done).Run(success, error);
+            if (self && !success) {
+              self->Shutdown(1);
+            }
+          },
+          weak_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void XenonServiceImpl::Shutdown(int32_t exit_code) {
+  if (!utility_receiver_.is_bound() || utility_exit_code_.has_value()) {
+    return;
+  }
+  utility_exit_code_ = exit_code;
+  if (utility_observer_.is_bound()) {
+    utility_observer_->OnExitRequested(exit_code);
+  }
+  std::vector<std::string> contexts;
+  for (const auto& [id, container] : ipc_main_containers_) {
+    contexts.push_back(id);
+  }
+  for (const auto& id : contexts) {
+    ipc_main_containers_.at(id)->UtilityShutdown(exit_code);
+    if (child_process_bridge_) {
+      child_process_bridge_->RemoveEndpoint(id, kMainChildProcessEndpointId);
+    }
+    if (net_pipe_bridge_) {
+      net_pipe_bridge_->RemoveEndpoint(id, kMainNetEndpointId);
+    }
+    RetireContext(id);
+  }
+  MaybeCompleteUtilityExit();
+}
+
+void XenonServiceImpl::CreateUtilityNetworkFactory(
+    const std::string& partition,
+    mojo::PendingRemote<ipc::mojom::ElectronNetworkHeadersObserver> headers,
+    ipc::ElectronNetEngine::FactoryCallback callback) {
+  if (!utility_receiver_.is_bound() || utility_exit_code_.has_value() ||
+      !utility_observer_.is_bound()) {
+    std::move(callback).Run({},
+                            "ERR_ABORTED: Utility network owner disconnected");
+    return;
+  }
+  utility_observer_->CreateNetworkFactory(
+      partition, std::move(headers),
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+          base::BindOnce(
+              [](ipc::ElectronNetEngine::FactoryCallback done,
+                 mojo::PendingRemote<network::mojom::URLLoaderFactory> factory,
+                 const std::string& error) {
+                std::move(done).Run(std::move(factory), error);
+              },
+              std::move(callback)),
+          mojo::PendingRemote<network::mojom::URLLoaderFactory>(),
+          std::string("ERR_ABORTED: Utility network owner disconnected")));
+}
+
+bool XenonServiceImpl::GetUtilityNetworkOnline(bool* online,
+                                               std::string* error) {
+  if (!utility_receiver_.is_bound() || utility_exit_code_.has_value() ||
+      !utility_observer_.is_bound()) {
+    *error = "ERR_ABORTED: Utility network owner disconnected";
+    return false;
+  }
+  if (!utility_observer_->GetNetworkOnline(online, error)) {
+    *error = "ERR_ABORTED: Utility network owner disconnected";
+    return false;
+  }
+  return true;
+}
+
+void XenonServiceImpl::MaybeCompleteUtilityExit() {
+  if (!utility_exit_code_.has_value() || utility_exit_completed_ ||
+      !ipc_main_containers_.empty() || !node_executors_.empty() ||
+      !retiring_contexts_.empty()) {
+    return;
+  }
+  utility_exit_completed_ = true;
+  // Both bridges drain their OS handles before destruction. Do this after JS
+  // retirement, when no callback can create more work, and before the process
+  // exits so descendants are reaped and pending pipe writes are cancelled.
+  child_process_bridge_.reset();
+  net_pipe_bridge_.reset();
+  if (utility_exit_handler_) {
+    utility_exit_handler_.Run(*utility_exit_code_);
+  }
+}
+
+XenonServiceImpl::~XenonServiceImpl() {
+  weak_factory_.InvalidateWeakPtrs();
+  std::set<std::string> contexts;
+  for (const auto& [id, container] : ipc_main_containers_) {
+    contexts.insert(id);
+  }
+  for (const auto& [id, executor] : node_executors_) {
+    contexts.insert(id);
+  }
+  for (const auto& id : contexts) {
+    RetireContext(id);
+  }
+}
+
+void XenonServiceImpl::SetNativeRetirementHooks(
+    base::RepeatingCallback<base::OnceClosure()> acquire_keepalive,
+    base::RepeatingCallback<void(std::string)> stalled) {
+  acquire_native_keepalive_ = std::move(acquire_keepalive);
+  native_retirement_stalled_ = std::move(stalled);
+}
+
+void XenonServiceImpl::RetireContext(const std::string& context_id) {
+  RetireContext(context_id, {});
+}
+
+void XenonServiceImpl::RetireContext(
+    const std::string& context_id,
+    std::unique_ptr<ipc::XenonIpcMainContainer> failed) {
+  auto main = std::move(failed);
+  auto container = ipc_main_containers_.find(context_id);
+  if (container != ipc_main_containers_.end()) {
+    CHECK(!main);
+    main = std::move(container->second);
+    ipc_main_containers_.erase(container);
+  }
+  std::unique_ptr<XenonNodeExecutor> executor;
+  if (auto found = node_executors_.find(context_id);
+      found != node_executors_.end()) {
+    executor = std::move(found->second);
+    node_executors_.erase(found);
+  }
+  if (!main && !executor) {
+    return;
+  }
+  retiring_contexts_.insert(context_id);
+  ipc_main_ready_containers_.erase(context_id);
+  // Startup may still own queued invokes and transferred Mojo ports. Revoke
+  // those requests with this generation rather than retaining them for a
+  // later container using the same id.
+  auto pending = pending_ipc_calls_.extract(context_id);
+  if (!pending.empty()) {
+    for (auto& call : pending.mapped()) {
+      if (auto* invoke = std::get_if<PendingIpcInvoke>(&call)) {
+        std::move(invoke->callback)
+            .Run(MakeIpcFailure(
+                "The Utility main JavaScript container stopped"));
+      }
+    }
+  }
+  NativeRuntimeRetirementOptions options;
+  auto release_keepalive = acquire_native_keepalive_
+                               ? acquire_native_keepalive_.Run()
+                               : base::OnceClosure();
+  options.on_stalled = base::BindOnce(
+      [](base::RepeatingCallback<void(std::string)> report, std::string id,
+         std::string detail) {
+        const auto message =
+            "Native runtime " + id + " failed to drain: " + detail;
+        if (report) {
+          report.Run(message);
+        } else {
+          LOG(FATAL) << message;
+        }
+      },
+      native_retirement_stalled_, context_id);
+  options.on_complete = base::BindOnce(
+      [](base::WeakPtr<XenonServiceImpl> self, std::string key_namespace,
+         std::string id, base::OnceClosure release) {
+        asar::RemoveArchivePublicKeys(key_namespace + ":electron:" + id);
+        asar::RemoveArchivePublicKeys(key_namespace + ":node-addon:" + id);
+        if (self) {
+          self->retiring_contexts_.erase(id);
+        }
+        if (release) {
+          std::move(release).Run();
+        }
+        if (self) {
+          self->MaybeCompleteUtilityExit();
+        }
+      },
+      weak_factory_.GetWeakPtr(), archive_key_namespace_, context_id,
+      std::move(release_keepalive));
+  RetireNativeRuntime(
+      std::make_unique<RetiringContext>(std::move(main), std::move(executor)),
+      std::move(options));
 }
 
 void XenonServiceImpl::Initialize(
@@ -186,14 +528,12 @@ void XenonServiceImpl::SetNodeAddonObserver(
     const std::string& context_id,
     int32_t client_id,
     mojo::PendingRemote<mojom::NodeAddonObserver> observer) {
-  const NodeClientKey key =
-      {NormalizeIpcContainerId(context_id), client_id};
+  const NodeClientKey key = {NormalizeIpcContainerId(context_id), client_id};
   node_addon_observers_.erase(key);
   if (!observer) {
     return;
   }
-  mojo::Remote<mojom::NodeAddonObserver>& remote =
-      node_addon_observers_[key];
+  mojo::Remote<mojom::NodeAddonObserver>& remote = node_addon_observers_[key];
   remote.Bind(std::move(observer));
   remote.set_disconnect_handler(
       base::BindOnce(&XenonServiceImpl::OnNodeAddonObserverDisconnected,
@@ -210,6 +550,9 @@ void XenonServiceImpl::BindNodeAddonHost(
     return;
   }
   const std::string normalized_id = NormalizeIpcContainerId(context_id);
+  if (retiring_contexts_.contains(normalized_id)) {
+    return;
+  }
   const int32_t client_id =
       GetOrCreateRendererNodeClient(normalized_id, endpoint_id);
   const NodeClientKey client_key{normalized_id, client_id};
@@ -233,11 +576,31 @@ void XenonServiceImpl::BindNodeAddonHost(
 
 void XenonServiceImpl::InitializeNodeAddonRuntime(
     const std::string& context_id,
-    const std::string& runtime_directory) {
+    const std::string& runtime_directory,
+    const std::string& app_path,
+    std::vector<ipc::mojom::IpcArchivePublicKeyPtr> archive_public_keys) {
+  if (retiring_contexts_.contains(NormalizeIpcContainerId(context_id))) {
+    return;
+  }
+  auto* executor = EnsureNodeExecutor(context_id);
+  executor->SetApplicationPath({});
+  const std::string key_owner = archive_key_namespace_ + ":node-addon:" +
+                                NormalizeIpcContainerId(context_id);
+  std::vector<asar::ArchiveKeyConfig> archive_keys;
+  for (const auto& key : archive_public_keys) {
+    archive_keys.push_back(
+        {base::FilePath::FromUTF8Unsafe(key->root_path), key->public_key_pem});
+  }
+  if (!asar::SetArchivePublicKeys(key_owner, archive_keys)) {
+    asar::RemoveArchivePublicKeys(key_owner);
+    LOG(ERROR) << "Invalid or conflicting addon ASAR public key configuration";
+    return;
+  }
   const base::FilePath hosted_directory =
       base::FilePath::FromUTF8Unsafe(runtime_directory);
   SetHostedAppDirectory(hosted_directory);
-  EnsureNodeExecutor(context_id)->SetRuntimeDirectory(hosted_directory);
+  executor->SetRuntimeDirectory(hosted_directory);
+  executor->SetApplicationPath(base::FilePath::FromUTF8Unsafe(app_path));
 }
 
 void XenonServiceImpl::DispatchElectronWindowEvent(
@@ -245,15 +608,56 @@ void XenonServiceImpl::DispatchElectronWindowEvent(
     const std::string& event_name,
     base::Value arguments) {
   for (auto& item : ipc_main_containers_) {
-    item.second->DispatchWindowEvent(window_id, event_name,
-                                     arguments.Clone());
+    item.second->DispatchWindowEvent(window_id, event_name, arguments.Clone());
   }
 }
 
-void XenonServiceImpl::DispatchElectronAppEvent(
+void XenonServiceImpl::FilterElectronKeyboardEvent(
     const std::string& container_id,
-    const std::string& event_name,
-    base::Value arguments) {
+    int32_t window_id,
+    base::Value input,
+    FilterElectronKeyboardEventCallback callback) {
+  auto container =
+      ipc_main_containers_.find(NormalizeIpcContainerId(container_id));
+  std::move(callback).Run(
+      container == ipc_main_containers_.end() ||
+      container->second->DispatchBeforeInputEvent(window_id, std::move(input)));
+}
+
+void XenonServiceImpl::BindElectronPermissionCheck(
+    const std::string& container_id,
+    mojo::PendingReceiver<ipc::mojom::ElectronPermissionCheck> receiver) {
+  permission_check_receivers_.Add(this, std::move(receiver),
+                                  NormalizeIpcContainerId(container_id));
+}
+
+void XenonServiceImpl::Check(
+    base::Value request,
+    ipc::mojom::ElectronPermissionCheck::CheckCallback callback) {
+  const auto container =
+      ipc_main_containers_.find(permission_check_receivers_.current_context());
+  if (container == ipc_main_containers_.end()) {
+    std::move(callback).Run(false, "ERR_ABORTED: permission container exited");
+    return;
+  }
+  auto result = container->second->CheckPermission(std::move(request));
+  std::move(callback).Run(result.value_or(false), result.error_or(""));
+}
+
+void XenonServiceImpl::DispatchElectronPermissionRequest(
+    const std::string& container_id,
+    base::Value request) {
+  const auto container =
+      ipc_main_containers_.find(NormalizeIpcContainerId(container_id));
+  if (container != ipc_main_containers_.end()) {
+    container->second->DispatchWindowEvent(0, "__xenon-permission-request",
+                                           std::move(request));
+  }
+}
+
+void XenonServiceImpl::DispatchElectronAppEvent(const std::string& container_id,
+                                                const std::string& event_name,
+                                                base::Value arguments) {
   // Activation belongs to one already running application. In particular,
   // never initialize a missing container or broadcast to unrelated apps.
   const auto container =
@@ -268,14 +672,35 @@ void XenonServiceImpl::InitializeElectronIpc(
     InitializeElectronIpcCallback callback) {
   const std::string container_id =
       NormalizeIpcContainerId(config ? config->container_id : std::string());
+  if (retiring_contexts_.contains(container_id)) {
+    std::move(callback).Run(
+        false,
+        "ERR_RESOURCE_BUSY: Previous native runtime is still shutting down");
+    return;
+  }
   auto existing = ipc_main_containers_.find(container_id);
   if (existing != ipc_main_containers_.end() &&
       existing->second->is_initialized()) {
+    const bool shared = config && config->native_addon_execution ==
+                                      ipc::mojom::NativeAddonExecution::kShared;
+    if (existing->second->uses_shared_native_addons() != shared) {
+      std::move(callback).Run(false,
+                              "Cannot change native addon execution while the "
+                              "container is running");
+      return;
+    }
     std::move(callback).Run(true, std::string());
     return;
   }
 
   ipc_main_ready_containers_.erase(container_id);
+  if (existing != ipc_main_containers_.end()) {
+    RetireContext(container_id);
+    std::move(callback).Run(false,
+                            "ERR_RESOURCE_BUSY: Previous runtime is retiring; "
+                            "retry after shutdown");
+    return;
+  }
 
   std::vector<asar::ArchiveKeyConfig> archive_keys;
   if (config) {
@@ -284,7 +709,8 @@ void XenonServiceImpl::InitializeElectronIpc(
                               key->public_key_pem});
     }
   }
-  if (!asar::SetArchivePublicKeys("electron:" + container_id, archive_keys)) {
+  if (!asar::SetArchivePublicKeys(
+          archive_key_namespace_ + ":electron:" + container_id, archive_keys)) {
     std::move(callback).Run(
         false, "Invalid or conflicting ASAR public key configuration");
     return;
@@ -308,26 +734,121 @@ void XenonServiceImpl::InitializeElectronIpc(
   } else if (config && !config->app_path.empty()) {
     hosted_directory = base::FilePath::FromUTF8Unsafe(config->app_path);
   }
-  SetHostedAppDirectory(hosted_directory);
+  if (!utility_bootstrap_) {
+    SetHostedAppDirectory(hosted_directory);
+  }
 
   auto container = std::make_unique<ipc::XenonIpcMainContainer>();
+  if (utility_bootstrap_) {
+    ipc::XenonIpcMainContainer::UtilityRuntimeOptions options;
+    options.argv = utility_bootstrap_->argv;
+    options.exec_argv = utility_bootstrap_->exec_argv;
+    for (const auto& [key, value] : utility_bootstrap_->environment) {
+      options.environment.Set(key, value);
+    }
+    options.parent_port = std::move(utility_bootstrap_->parent_port);
+    container->SetUtilityRuntimeOptions(std::move(options));
+    container->SetAppExitHandler(base::BindRepeating(
+        &XenonServiceImpl::Shutdown, weak_factory_.GetWeakPtr()));
+    // This narrow observer is tied to the authenticated parent generation.
+    // A utility can request networking without acquiring main/window APIs.
+    container->SetElectronNetworkHooks(
+        base::BindRepeating(&XenonServiceImpl::CreateUtilityNetworkFactory,
+                            weak_factory_.GetWeakPtr()),
+        base::BindRepeating(
+            [](base::WeakPtr<XenonServiceImpl> self, bool* online,
+               std::string* error) {
+              if (!self) {
+                *error = "ERR_ABORTED: Utility network owner disconnected";
+                return false;
+              }
+              return self->GetUtilityNetworkOnline(online, error);
+            },
+            weak_factory_.GetWeakPtr()));
+  }
+  container->SetMainEvaluationCompleteHandler(base::BindRepeating(
+      [](base::WeakPtr<XenonServiceImpl> self, const std::string& id) {
+        base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE,
+            base::BindOnce(&XenonServiceImpl::MarkElectronIpcReady, self, id));
+      },
+      weak_factory_.GetWeakPtr(), container_id));
   container->SetNetworkLoaderFactory(url_loader_factory_);
-  container->SetChildProcessCaller(
-      base::BindRepeating(
-          [](base::WeakPtr<XenonServiceImpl> self, const std::string& id,
-             const base::DictValue& request) {
-            return self ? self->CallChildProcess(id, kMainChildProcessEndpointId,
-                                                 request)
-                        : base::Value(base::DictValue()
-                                          .Set("ok", false)
-                                          .Set("code", "ERR_NOT_SUPPORTED")
-                                          .Set("message", "Child process service is unavailable"));
-          }, weak_factory_.GetWeakPtr(), container_id));
+  container->SetChildProcessCaller(base::BindRepeating(
+      [](base::WeakPtr<XenonServiceImpl> self, const std::string& id,
+         const base::DictValue& request) {
+        return self ? self->CallChildProcess(id, kMainChildProcessEndpointId,
+                                             request)
+                    : base::Value(
+                          base::DictValue()
+                              .Set("ok", false)
+                              .Set("code", "ERR_NOT_SUPPORTED")
+                              .Set("message",
+                                   "Child process service is unavailable"));
+      },
+      weak_factory_.GetWeakPtr(), container_id));
   container->SetNetPipeSender(
       base::BindRepeating(&XenonServiceImpl::HandleMainNetPipeMessage,
                           weak_factory_.GetWeakPtr(), container_id));
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
   if (browser_observer_.is_bound()) {
+    ipc::XenonIpcMainContainer::UtilityProcessHooks utility_hooks;
+    utility_hooks.create = base::BindRepeating(
+        [](base::WeakPtr<XenonServiceImpl> self,
+           ipc::mojom::UtilityProcessOptionsPtr options,
+           blink::MessagePortDescriptor parent_port,
+           mojo::PendingReceiver<ipc::mojom::UtilityProcessControl> control,
+           mojo::PendingRemote<ipc::mojom::UtilityProcessClient> client,
+           base::OnceCallback<void(bool, const std::string&)> callback) {
+          if (!self || !self->browser_observer_.is_bound()) {
+            std::move(callback).Run(false,
+                                    "ERR_ABORTED: Utility owner disconnected");
+            return;
+          }
+          self->browser_observer_->ForkUtilityProcess(
+              std::move(options), std::move(parent_port), std::move(control),
+              std::move(client),
+              mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+                  std::move(callback), false,
+                  std::string("ERR_ABORTED: Utility owner disconnected")));
+        },
+        weak_factory_.GetWeakPtr());
+    container->SetUtilityProcessHooks(std::move(utility_hooks));
+    container->SetElectronNetworkHooks(
+        base::BindRepeating(
+            [](base::WeakPtr<XenonServiceImpl> self,
+               const std::string& partition,
+               mojo::PendingRemote<ipc::mojom::ElectronNetworkHeadersObserver>
+                   headers,
+               ipc::ElectronNetEngine::FactoryCallback callback) {
+              if (!self || !self->browser_observer_.is_bound()) {
+                std::move(callback).Run(
+                    {}, "ERR_ABORTED: network owner disconnected");
+                return;
+              }
+              self->browser_observer_->CreateElectronNetworkFactory(
+                  partition, std::move(headers),
+                  base::BindOnce(
+                      [](ipc::ElectronNetEngine::FactoryCallback done,
+                         mojo::PendingRemote<network::mojom::URLLoaderFactory>
+                             factory,
+                         const std::string& error) {
+                        std::move(done).Run(std::move(factory), error);
+                      },
+                      std::move(callback)));
+            },
+            weak_factory_.GetWeakPtr()),
+        base::BindRepeating(
+            [](base::WeakPtr<XenonServiceImpl> self, bool* online,
+               std::string* error) {
+              if (!self || !self->browser_observer_.is_bound()) {
+                *error = "ERR_ABORTED: network owner disconnected";
+                return false;
+              }
+              return self->browser_observer_->GetElectronNetworkOnline(online,
+                                                                       error);
+            },
+            weak_factory_.GetWeakPtr()));
     container->SetAppExitHandler(base::BindRepeating(
         [](base::WeakPtr<XenonServiceImpl> self, const std::string& id,
            int exit_code) {
@@ -338,109 +859,150 @@ void XenonServiceImpl::InitializeElectronIpc(
         weak_factory_.GetWeakPtr(), container_id));
   }
 #endif
-  XenonNodeExecutor* executor = EnsureNodeExecutor(container_id);
-  executor->SetRuntimeDirectory(hosted_directory);
-  ipc::XenonIpcMainContainer::NativeAddonHooks hooks;
-  hooks.load =
-      base::BindRepeating(&XenonNodeExecutor::LoadAddonFromCurrentThread,
-                          base::Unretained(executor));
-  hooks.describe = base::BindRepeating(
-      [](XenonNodeExecutor* executor, const std::string& path,
-         const std::string& export_path, base::Value* description,
-         std::string* error) {
-        mojom::NodeExportInfoPtr info;
-        if (!executor->InspectExportFromCurrentThread(path, export_path, &info,
-                                                      error)) {
-          return false;
-        }
-        *description = NodeExportInfoToValue(info);
-        return true;
-      },
-      base::Unretained(executor));
-  hooks.invoke = base::BindRepeating(
-      [](XenonNodeExecutor* executor, const std::string& path,
-         const std::string& name, const base::Value& args, base::Value* result,
-         std::string* error) {
-        return executor->InvokeExportFromCurrentThread(path, name, args, result, error);
-      }, base::Unretained(executor));
-  hooks.construct = base::BindRepeating(
-      [](XenonNodeExecutor* executor, const std::string& path,
-         const std::string& name, const base::Value& args, base::Value* result,
-         std::string* error) {
-        return executor->ConstructExportFromCurrentThread(path, name, args, result, error);
-      }, base::Unretained(executor));
-  hooks.invoke_instance = base::BindRepeating(
-      [](XenonNodeExecutor* executor, const std::string& path, int32_t id,
-         const std::string& name, const base::Value& args, base::Value* result,
-         std::string* error) {
-        return executor->InvokeInstanceFromCurrentThread(path, id, name, args, result, error);
-      }, base::Unretained(executor));
-  container->SetNativeAddonHooks(std::move(hooks));
-#if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
-  ipc::XenonIpcMainContainer::WindowHooks window_hooks;
-  window_hooks.create = base::BindRepeating(
-      [](XenonServiceImpl* self, std::string container_id, int width,
-         int height, bool show, bool frame, bool transparent,
-         int32_t parent_id, const std::string& title, int32_t* window_id,
-         uint64_t* hwnd, std::string* error) {
-        if (!self->browser_observer_.is_bound()) {
-          *error = "Browser observer is not bound";
-          return false;
-        }
-        return self->browser_observer_->CreateElectronWindow(
-            width, height, show, frame, transparent, parent_id, title,
-            container_id, window_id, hwnd, error);
-      },
-      base::Unretained(this), container_id);
-  window_hooks.load_url = base::BindRepeating(
-      [](XenonServiceImpl* self, int32_t window_id, const std::string& url) {
-        if (self->browser_observer_.is_bound()) {
-          self->browser_observer_->LoadElectronWindowURL(window_id, url);
-        }
-      },
-      base::Unretained(this));
-  window_hooks.set_visible = base::BindRepeating(
-      [](XenonServiceImpl* self, int32_t window_id, bool visible) {
-        if (self->browser_observer_.is_bound()) {
-          self->browser_observer_->SetElectronWindowVisible(window_id, visible);
-        }
-      },
-      base::Unretained(this));
-  window_hooks.call = base::BindRepeating(
-      [](XenonServiceImpl* self, int32_t window_id,
-         const std::string& command, const base::Value& arguments,
-         base::Value* result, std::string* error) {
-        if (!self->browser_observer_.is_bound() || !result || !error) {
-          if (error) {
-            *error = "Browser observer is not bound";
+  if (!utility_bootstrap_) {
+    XenonNodeExecutor* executor = EnsureNodeExecutor(container_id);
+    executor->SetRuntimeDirectory(hosted_directory);
+    executor->SetApplicationPath(
+        config ? base::FilePath::FromUTF8Unsafe(config->app_path)
+               : base::FilePath());
+    ipc::XenonIpcMainContainer::NativeAddonHooks hooks;
+    hooks.load =
+        base::BindRepeating(&XenonNodeExecutor::LoadAddonFromCurrentThread,
+                            base::Unretained(executor));
+    hooks.describe = base::BindRepeating(
+        [](XenonNodeExecutor* executor, const std::string& path,
+           const std::string& export_path, base::Value* description,
+           std::string* error) {
+          mojom::NodeExportInfoPtr info;
+          if (!executor->InspectExportFromCurrentThread(path, export_path,
+                                                        &info, error)) {
+            return false;
           }
-          return false;
-        }
-        return self->browser_observer_->ElectronWindowCall(
-            window_id, command, arguments.Clone(), result, error);
-      },
-      base::Unretained(this));
-  window_hooks.close = base::BindRepeating(
-      [](XenonServiceImpl* self, int32_t window_id) {
-        if (self->browser_observer_.is_bound()) {
-          self->browser_observer_->CloseElectronWindow(window_id);
-        }
-      },
-      base::Unretained(this));
-  window_hooks.show_open_dialog = base::BindRepeating(
-      [](XenonServiceImpl* self, const std::string& title, bool directory,
-         bool allow_multi, const std::vector<std::string>& extensions,
-         std::vector<std::string>* paths) {
-        if (!self->browser_observer_.is_bound() || !paths) {
-          return false;
-        }
-        return self->browser_observer_->ShowElectronOpenDialog(
-            title, directory, allow_multi, extensions, paths);
-      },
-      base::Unretained(this));
-  container->SetWindowHooks(std::move(window_hooks));
+          *description = NodeExportInfoToValue(info);
+          return true;
+        },
+        base::Unretained(executor));
+    hooks.invoke = base::BindRepeating(
+        [](XenonNodeExecutor* executor, const std::string& path,
+           const std::string& name, const base::Value& args,
+           base::Value* result, std::string* error) {
+          return executor->InvokeExportFromCurrentThread(path, name, args,
+                                                         result, error);
+        },
+        base::Unretained(executor));
+    hooks.construct = base::BindRepeating(
+        [](XenonNodeExecutor* executor, const std::string& path,
+           const std::string& name, const base::Value& args,
+           base::Value* result, std::string* error) {
+          return executor->ConstructExportFromCurrentThread(path, name, args,
+                                                            result, error);
+        },
+        base::Unretained(executor));
+    hooks.invoke_instance = base::BindRepeating(
+        [](XenonNodeExecutor* executor, const std::string& path, int32_t id,
+           const std::string& name, const base::Value& args,
+           base::Value* result, std::string* error) {
+          return executor->InvokeInstanceFromCurrentThread(path, id, name, args,
+                                                           result, error);
+        },
+        base::Unretained(executor));
+    if (config && config->native_addon_execution ==
+                      ipc::mojom::NativeAddonExecution::kShared) {
+      container->SetNativeAddonHooks(std::move(hooks));
+    }
+  }
+#if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
+  if (!utility_bootstrap_) {
+    ipc::XenonIpcMainContainer::WindowHooks window_hooks;
+    window_hooks.create = base::BindRepeating(
+        [](base::WeakPtr<XenonServiceImpl> self, std::string container_id,
+           int width, int height, bool show, bool frame, bool transparent,
+           int32_t parent_id, const std::string& title, int32_t* window_id,
+           uint64_t* hwnd, std::string* error) {
+          if (!self || !self->browser_observer_.is_bound()) {
+            *error = "Browser observer is not bound";
+            return false;
+          }
+          return self->browser_observer_->CreateElectronWindow(
+              width, height, show, frame, transparent, parent_id, title,
+              container_id, window_id, hwnd, error);
+        },
+        weak_factory_.GetWeakPtr(), container_id);
+    window_hooks.load_url = base::BindRepeating(
+        [](base::WeakPtr<XenonServiceImpl> self, int32_t window_id,
+           const std::string& url) {
+          if (self && self->browser_observer_.is_bound()) {
+            self->browser_observer_->LoadElectronWindowURL(window_id, url);
+          }
+        },
+        weak_factory_.GetWeakPtr());
+    window_hooks.set_visible = base::BindRepeating(
+        [](base::WeakPtr<XenonServiceImpl> self, int32_t window_id,
+           bool visible) {
+          if (self && self->browser_observer_.is_bound()) {
+            self->browser_observer_->SetElectronWindowVisible(window_id,
+                                                              visible);
+          }
+        },
+        weak_factory_.GetWeakPtr());
+    window_hooks.call = base::BindRepeating(
+        [](base::WeakPtr<XenonServiceImpl> self, int32_t window_id,
+           const std::string& command, const base::Value& arguments,
+           base::Value* result, std::string* error) {
+          if (!self || !self->browser_observer_.is_bound() || !result ||
+              !error) {
+            if (error) {
+              *error = "Browser observer is not bound";
+            }
+            return false;
+          }
+          return self->browser_observer_->ElectronWindowCall(
+              window_id, command, arguments.Clone(), result, error);
+        },
+        weak_factory_.GetWeakPtr());
+    window_hooks.call_async = base::BindRepeating(
+        [](base::WeakPtr<XenonServiceImpl> self, int32_t window_id,
+           const std::string& command, base::Value arguments,
+           base::OnceCallback<void(base::Value, std::string)> reply) {
+          if (!self || !self->browser_observer_.is_bound()) {
+            std::move(reply).Run(
+                {}, "ERR_ABORTED: browser observer is disconnected");
+            return;
+          }
+          self->browser_observer_->ElectronWindowCall(
+              window_id, command, std::move(arguments),
+              mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+                  base::BindOnce(
+                      [](base::OnceCallback<void(base::Value, std::string)>
+                             reply,
+                         base::Value result, const std::string& error) {
+                        std::move(reply).Run(std::move(result), error);
+                      },
+                      std::move(reply)),
+                  base::Value(),
+                  std::string("ERR_ABORTED: browser observer disconnected "
+                              "before reply")));
+        },
+        weak_factory_.GetWeakPtr());
+    window_hooks.close = base::BindRepeating(
+        [](base::WeakPtr<XenonServiceImpl> self, int32_t window_id) {
+          if (self && self->browser_observer_.is_bound()) {
+            self->browser_observer_->CloseElectronWindow(window_id);
+          }
+        },
+        weak_factory_.GetWeakPtr());
+    container->SetWindowHooks(std::move(window_hooks));
+  }
 #endif
   bool initialized = false;
+  if (config) {
+    container->SetHostPaths(
+        base::FilePath::FromUTF8Unsafe(
+            config->app_user_data_directory.empty()
+                ? config->host_user_data_directory
+                : config->app_user_data_directory),
+        base::FilePath::FromUTF8Unsafe(config->host_crash_dumps_directory));
+  }
   if (config &&
       (!config->embedded_main_source.empty() || !config->app_path.empty())) {
     std::vector<std::pair<std::string, std::string>> renderer_url_mappings;
@@ -468,6 +1030,7 @@ void XenonServiceImpl::InitializeElectronIpc(
               base::FilePath::FromUTF8Unsafe(config->resources_directory),
           .working_directory =
               base::FilePath::FromUTF8Unsafe(config->working_directory),
+          .app_argv = std::move(config->app_argv),
           .is_packaged = config->is_packaged,
       };
       initialized = container->Initialize(std::move(main_module));
@@ -482,6 +1045,7 @@ void XenonServiceImpl::InitializeElectronIpc(
               base::FilePath::FromUTF8Unsafe(config->resources_directory),
           .working_directory =
               base::FilePath::FromUTF8Unsafe(config->working_directory),
+          .app_argv = std::move(config->app_argv),
           .app_name = std::move(config->app_name),
           .app_version = std::move(config->app_version),
           .default_user_agent = std::move(config->default_user_agent),
@@ -496,12 +1060,15 @@ void XenonServiceImpl::InitializeElectronIpc(
   }
   if (!initialized) {
     std::string error = container->startup_error();
-    asar::RemoveArchivePublicKeys("electron:" + container_id);
+    RetireContext(container_id, std::move(container));
     std::move(callback).Run(false, std::move(error));
     return;
   }
   ipc_main_containers_[container_id] = std::move(container);
   std::move(callback).Run(true, std::string());
+  if (utility_bootstrap_) {
+    return;
+  }
   // whenReady() must run after this Mojo reply, otherwise a sync
   // BrowserWindow constructor would deadlock the browser UI thread.
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
@@ -516,6 +1083,9 @@ bool XenonServiceImpl::IsElectronIpcReady(
 }
 
 void XenonServiceImpl::MarkElectronIpcReady(const std::string& container_id) {
+  if (utility_bootstrap_) {
+    return;
+  }
   const std::string normalized_id = NormalizeIpcContainerId(container_id);
   auto container = ipc_main_containers_.find(normalized_id);
   if (container == ipc_main_containers_.end()) {
@@ -525,7 +1095,9 @@ void XenonServiceImpl::MarkElectronIpcReady(const std::string& container_id) {
   // MarkAppReady runs app ready/whenReady listeners and drains their V8
   // microtasks. Only after that checkpoint can renderer IPC be dispatched
   // without racing listener registration in the main module.
-  container->second->MarkAppReady();
+  if (!container->second->MarkAppReady()) {
+    return;
+  }
   ipc_main_ready_containers_.insert(normalized_id);
   const auto pending = pending_ipc_calls_.find(normalized_id);
   const size_t pending_count =
@@ -552,6 +1124,11 @@ void XenonServiceImpl::FlushPendingElectronIpc(
                               std::move(send->arguments));
       continue;
     }
+    if (auto* post = std::get_if<PendingIpcPostMessage>(&call)) {
+      container->second->ReceivePortMessage(post->endpoint_id, post->channel,
+                                            std::move(post->message));
+      continue;
+    }
     auto& invoke = std::get<PendingIpcInvoke>(call);
     container->second->Invoke(invoke.endpoint_id, invoke.channel,
                               std::move(invoke.arguments),
@@ -567,12 +1144,16 @@ void XenonServiceImpl::RegisterElectronIpcRenderer(
     int32_t frame_id,
     int32_t window_id,
     const std::string& document_url,
-    bool is_main_frame) {
+    bool is_main_frame,
+    RegisterElectronIpcRendererCallback callback) {
   auto it = ipc_main_containers_.find(NormalizeIpcContainerId(container_id));
   if (it != ipc_main_containers_.end()) {
     it->second->AddRenderer(endpoint_id, std::move(renderer), process_id,
                             frame_id, window_id, document_url, is_main_frame);
+    std::move(callback).Run(true);
+    return;
   }
+  std::move(callback).Run(false);
 }
 
 void XenonServiceImpl::UpdateElectronIpcRendererFrame(
@@ -594,8 +1175,8 @@ void XenonServiceImpl::RegisterElectronIpcServiceWorker(
   auto it = ipc_main_containers_.find(NormalizeIpcContainerId(container_id));
   if (it != ipc_main_containers_.end() && identity) {
     const std::string script_url = identity->script_url;
-    it->second->AddRenderer(endpoint_id, std::move(renderer), process_id, 0,
-                            0, script_url, false, std::move(identity));
+    it->second->AddRenderer(endpoint_id, std::move(renderer), process_id, 0, 0,
+                            script_url, false, std::move(identity));
   }
 }
 
@@ -620,10 +1201,11 @@ void XenonServiceImpl::RemoveElectronIpcRenderer(
     return;
   }
   for (auto call = pending->second.begin(); call != pending->second.end();) {
-    const std::string& pending_endpoint =
-        std::holds_alternative<PendingIpcSend>(*call)
-            ? std::get<PendingIpcSend>(*call).endpoint_id
-            : std::get<PendingIpcInvoke>(*call).endpoint_id;
+    const std::string& pending_endpoint = std::visit(
+        [](const auto& request) -> const std::string& {
+          return request.endpoint_id;
+        },
+        *call);
     if (pending_endpoint != endpoint_id) {
       ++call;
       continue;
@@ -662,8 +1244,8 @@ void XenonServiceImpl::ElectronIpcSend(const std::string& container_id,
                    << normalized_id << "' starts: pending queue is full";
         return;
       }
-      pending.emplace_back(PendingIpcSend{
-          endpoint_id, channel, std::move(arguments)});
+      pending.emplace_back(
+          PendingIpcSend{endpoint_id, channel, std::move(arguments)});
       LOG(INFO) << "Queued renderer IPC send '" << channel
                 << "' until ipcMain container '" << normalized_id
                 << "' becomes ready";
@@ -673,11 +1255,50 @@ void XenonServiceImpl::ElectronIpcSend(const std::string& container_id,
   }
 }
 
+void XenonServiceImpl::ElectronIpcPostMessage(
+    const std::string& container_id,
+    const std::string& endpoint_id,
+    const std::string& channel,
+    blink::TransferableMessage message) {
+  const std::string normalized_id = NormalizeIpcContainerId(container_id);
+  auto container = ipc_main_containers_.find(normalized_id);
+  if (container == ipc_main_containers_.end() ||
+      !ipc::ValidateMessagePortMessage(message)) {
+    return;
+  }
+  if (IsElectronIpcReady(normalized_id)) {
+    container->second->ReceivePortMessage(endpoint_id, channel,
+                                          std::move(message));
+    return;
+  }
+  // Preserve ordering with send/invoke while the app's main module awaits.
+  // Bound both count and retained backing storage; never acknowledge a dropped
+  // transfer as delivered. Its real pipes close when the message is destroyed.
+  constexpr size_t kMaximumPendingPortBytes = 64 * 1024 * 1024;
+  auto& pending = pending_ipc_calls_[normalized_id];
+  size_t bytes = ipc::MessagePortMessageSize(message);
+  for (const auto& call : pending) {
+    if (const auto* post = std::get_if<PendingIpcPostMessage>(&call)) {
+      const size_t queued = ipc::MessagePortMessageSize(post->message);
+      if (queued > kMaximumPendingPortBytes - bytes) {
+        LOG(ERROR) << "Dropping MessagePort IPC: startup byte queue is full";
+        return;
+      }
+      bytes += queued;
+    }
+  }
+  if (pending.size() >= kMaxPendingIpcCallsPerContainer) {
+    LOG(ERROR) << "Dropping MessagePort IPC: startup request queue is full";
+    return;
+  }
+  pending.emplace_back(
+      PendingIpcPostMessage{endpoint_id, channel, std::move(message)});
+}
+
 XenonNetPipeBridge* XenonServiceImpl::EnsureNetPipeBridge() {
   if (!net_pipe_bridge_) {
-    net_pipe_bridge_ = std::make_unique<XenonNetPipeBridge>(
-        base::BindRepeating(&XenonServiceImpl::DispatchNetPipeEvent,
-                            weak_factory_.GetWeakPtr()));
+    net_pipe_bridge_ = std::make_unique<XenonNetPipeBridge>(base::BindRepeating(
+        &XenonServiceImpl::DispatchNetPipeEvent, weak_factory_.GetWeakPtr()));
   }
   return net_pipe_bridge_.get();
 }
@@ -691,11 +1312,10 @@ void XenonServiceImpl::HandleMainNetPipeMessage(const std::string& container_id,
                        base::Value(std::move(arguments)));
 }
 
-bool XenonServiceImpl::HandleNetPipeMessage(
-    const std::string& container_id,
-    const std::string& endpoint_id,
-    const std::string& channel,
-    const base::Value& arguments) {
+bool XenonServiceImpl::HandleNetPipeMessage(const std::string& container_id,
+                                            const std::string& endpoint_id,
+                                            const std::string& channel,
+                                            const base::Value& arguments) {
   if (!channel.starts_with("__xenon:net:")) {
     return false;
   }
@@ -710,7 +1330,9 @@ bool XenonServiceImpl::HandleNetPipeMessage(
     const std::string* path = message.FindString("path");
     const auto port = message.FindInt("port");
     const std::string* host = message.FindString("host");
-    if (!server_id || (!path && !port)) return true;
+    if (!server_id || (!path && !port)) {
+      return true;
+    }
     std::string error;
     auto* bridge = EnsureNetPipeBridge();
     int pipe_permission_flags = 0;
@@ -720,10 +1342,11 @@ bool XenonServiceImpl::HandleNetPipeMessage(
     if (message.FindBool("writableAll").value_or(false)) {
       pipe_permission_flags |= UV_WRITABLE;
     }
-    const bool listening = path ? bridge->Listen(container_id, endpoint_id, *server_id, *path, &error,
-                                                pipe_permission_flags)
-        : bridge->ListenTcp(container_id, endpoint_id, *server_id,
-                            host ? *host : "", *port, &error);
+    const bool listening =
+        path ? bridge->Listen(container_id, endpoint_id, *server_id, *path,
+                              &error, pipe_permission_flags)
+             : bridge->ListenTcp(container_id, endpoint_id, *server_id,
+                                 host ? *host : "", *port, &error);
     if (!listening) {
       base::DictValue payload;
       payload.Set("serverId", *server_id);
@@ -734,9 +1357,9 @@ bool XenonServiceImpl::HandleNetPipeMessage(
     }
     base::DictValue payload;
     payload.Set("serverId", *server_id);
-    payload.Set("address", bridge->ServerAddress(*server_id, container_id, endpoint_id));
-    DispatchNetPipeEvent(container_id, endpoint_id,
-                         "__xenon:net:listening",
+    payload.Set("address",
+                bridge->ServerAddress(*server_id, container_id, endpoint_id));
+    DispatchNetPipeEvent(container_id, endpoint_id, "__xenon:net:listening",
                          base::Value(std::move(payload)));
     return true;
   }
@@ -748,7 +1371,8 @@ bool XenonServiceImpl::HandleNetPipeMessage(
   }
   if (channel == "__xenon:net:unlisten") {
     const std::string* server_id = message.FindString("serverId");
-    const bool closed = server_id && net_pipe_bridge_->CloseServer(*server_id, container_id, endpoint_id);
+    const bool closed = server_id && net_pipe_bridge_->CloseServer(
+                                         *server_id, container_id, endpoint_id);
     return closed || from_main;
   }
   if (channel == "__xenon:net:connect") {
@@ -756,21 +1380,33 @@ bool XenonServiceImpl::HandleNetPipeMessage(
     const std::string* path = message.FindString("path");
     const auto port = message.FindInt("port");
     const std::string* host = message.FindString("host");
-    if (!from_id || (!path && !port)) return true;
+    if (!from_id || (!path && !port)) {
+      return true;
+    }
     if (path && !from_main && !net_pipe_bridge_->HasListenerForPath(*path)) {
       return false;
     }
     std::string error;
-    const bool connected = path ? net_pipe_bridge_->Connect(container_id, endpoint_id, *from_id, *path, &error)
-        : net_pipe_bridge_->ConnectTcp(container_id, endpoint_id, *from_id,
-                                       host ? *host : "", *port, &error);
+    const bool connected =
+        path ? net_pipe_bridge_->Connect(container_id, endpoint_id, *from_id,
+                                         *path, &error)
+             : net_pipe_bridge_->ConnectTcp(container_id, endpoint_id, *from_id,
+                                            host ? *host : "", *port, &error);
     if (!connected) {
       base::DictValue payload;
       payload.Set("toId", *from_id);
       payload.Set("code", error.empty() ? "ECONNREFUSED" : error);
-      if (path) payload.Set("path", *path);
+      if (path) {
+        payload.Set("path", *path);
+      }
       DispatchNetPipeEvent(container_id, endpoint_id, "__xenon:net:error",
                            base::Value(std::move(payload)));
+    }
+    return true;
+  }
+  if (channel == "__xenon:net:cancel") {
+    if (const std::string* client_id = message.FindString("fromId")) {
+      net_pipe_bridge_->CancelConnect(*client_id, container_id, endpoint_id);
     }
     return true;
   }
@@ -798,7 +1434,9 @@ bool XenonServiceImpl::HandleNetPipeMessage(
   if (channel == "__xenon:net:data") {
     const base::DictValue* wire = message.FindDict("wire");
     std::string error;
-    if (!wire || !net_pipe_bridge_->Write(*socket_id, *wire, &error, message.FindInt("writeId").value_or(0))) {
+    if (!wire ||
+        !net_pipe_bridge_->Write(*socket_id, *wire, &error,
+                                 message.FindInt("writeId").value_or(0))) {
       return false;
     }
     if (!error.empty()) {
@@ -818,17 +1456,34 @@ bool XenonServiceImpl::HandleNetPipeMessage(
     return net_pipe_bridge_->SetSocketReadPaused(
         *socket_id, channel == "__xenon:net:pause");
   }
+  if (channel == "__xenon:net:no-delay") {
+    const auto no_delay = message.FindBool("noDelay");
+    std::string error;
+    if (!no_delay) {
+      error = "EINVAL";
+    } else {
+      net_pipe_bridge_->SetSocketNoDelay(*socket_id, *no_delay, &error);
+    }
+    if (!error.empty()) {
+      base::DictValue payload;
+      const std::string* from_id = message.FindString("fromId");
+      payload.Set("toId", from_id ? *from_id : *socket_id);
+      payload.Set("code", error);
+      DispatchNetPipeEvent(container_id, endpoint_id, "__xenon:net:error",
+                           base::Value(std::move(payload)));
+    }
+    return true;
+  }
   if (channel == "__xenon:net:close") {
     return net_pipe_bridge_->CloseSocket(*socket_id);
   }
   return false;
 }
 
-void XenonServiceImpl::DispatchNetPipeEvent(
-    const std::string& container_id,
-    const std::string& endpoint_id,
-    const std::string& channel,
-    base::Value payload) {
+void XenonServiceImpl::DispatchNetPipeEvent(const std::string& container_id,
+                                            const std::string& endpoint_id,
+                                            const std::string& channel,
+                                            base::Value payload) {
   base::ListValue arguments;
   arguments.Append(std::move(payload));
   if (endpoint_id == kMainNetEndpointId) {
@@ -877,17 +1532,50 @@ void XenonServiceImpl::HandleElectronProtocol(
 }
 
 void XenonServiceImpl::CancelElectronProtocol(const std::string& container_id,
-                                             const std::string& request_id) {
+                                              const std::string& request_id) {
   auto it = ipc_main_containers_.find(NormalizeIpcContainerId(container_id));
-  if (it != ipc_main_containers_.end()) it->second->CancelProtocol(request_id);
+  if (it != ipc_main_containers_.end()) {
+    it->second->CancelProtocol(request_id);
+  }
 }
 
-void XenonServiceImpl::ElectronIpcInvoke(
+void XenonServiceImpl::HandleElectronWebRequest(
     const std::string& container_id,
-    const std::string& endpoint_id,
-    const std::string& channel,
-    base::Value arguments,
-    ElectronIpcInvokeCallback callback) {
+    base::Value request,
+    HandleElectronWebRequestCallback callback) {
+  auto it = ipc_main_containers_.find(NormalizeIpcContainerId(container_id));
+  if (it == ipc_main_containers_.end() || !it->second->is_initialized()) {
+    auto result = ipc::mojom::IpcResult::New();
+    result->success = false;
+    result->error = "WebRequest container is unavailable";
+    std::move(callback).Run(std::move(result));
+    return;
+  }
+  it->second->HandleWebRequest(std::move(request), std::move(callback));
+}
+
+void XenonServiceImpl::CancelElectronWebRequest(const std::string& container_id,
+                                                const std::string& request_id) {
+  auto it = ipc_main_containers_.find(NormalizeIpcContainerId(container_id));
+  if (it != ipc_main_containers_.end()) {
+    it->second->CancelWebRequest(request_id);
+  }
+}
+
+void XenonServiceImpl::ReleaseElectronWebRequestRegistration(
+    const std::string& container_id,
+    const std::string& registration_id) {
+  auto it = ipc_main_containers_.find(NormalizeIpcContainerId(container_id));
+  if (it != ipc_main_containers_.end()) {
+    it->second->ReleaseWebRequestRegistration(registration_id);
+  }
+}
+
+void XenonServiceImpl::ElectronIpcInvoke(const std::string& container_id,
+                                         const std::string& endpoint_id,
+                                         const std::string& channel,
+                                         base::Value arguments,
+                                         ElectronIpcInvokeCallback callback) {
   const std::string normalized_id = NormalizeIpcContainerId(container_id);
   if (IsRendererNodeAddonInvokeChannel(channel)) {
     HandleRendererNodeAddonInvoke(normalized_id, endpoint_id, channel,
@@ -903,8 +1591,7 @@ void XenonServiceImpl::ElectronIpcInvoke(
   if (!IsElectronIpcReady(normalized_id)) {
     auto& pending = pending_ipc_calls_[normalized_id];
     if (pending.size() >= kMaxPendingIpcCallsPerContainer) {
-      std::move(callback).Run(
-          MakeIpcFailure("ipcMain startup queue is full"));
+      std::move(callback).Run(MakeIpcFailure("ipcMain startup queue is full"));
       return;
     }
     pending.emplace_back(PendingIpcInvoke{
@@ -921,8 +1608,11 @@ void XenonServiceImpl::ElectronIpcInvoke(
 int32_t XenonServiceImpl::GetOrCreateRendererNodeClient(
     const std::string& context_id,
     const std::string& endpoint_id) {
-  const RendererEndpointKey endpoint_key =
-      {NormalizeIpcContainerId(context_id), endpoint_id};
+  const RendererEndpointKey endpoint_key = {NormalizeIpcContainerId(context_id),
+                                            endpoint_id};
+  if (retiring_contexts_.contains(endpoint_key.first)) {
+    return 0;
+  }
   const auto existing = renderer_node_clients_.find(endpoint_key);
   int32_t client_id;
   if (existing != renderer_node_clients_.end()) {
@@ -974,8 +1664,8 @@ void XenonServiceImpl::ReleaseRendererNodeOwner(
 void XenonServiceImpl::RemoveRendererNodeClient(
     const std::string& context_id,
     const std::string& endpoint_id) {
-  const RendererEndpointKey endpoint_key =
-      {NormalizeIpcContainerId(context_id), endpoint_id};
+  const RendererEndpointKey endpoint_key = {NormalizeIpcContainerId(context_id),
+                                            endpoint_id};
   const auto client = renderer_node_clients_.find(endpoint_key);
   if (client == renderer_node_clients_.end()) {
     return;
@@ -1005,8 +1695,8 @@ void XenonServiceImpl::HandleRendererNodeAddonInvoke(
       request ? request->FindString("modulePath") : nullptr;
   base::Value* invoke_arguments =
       request ? request->Find("arguments") : nullptr;
-  if (!request || !module_path || module_path->empty() ||
-      !invoke_arguments || !invoke_arguments->is_list()) {
+  if (!request || !module_path || module_path->empty() || !invoke_arguments ||
+      !invoke_arguments->is_list()) {
     std::move(callback).Run(
         MakeIpcFailure("Invalid renderer Node addon invocation"));
     return;
@@ -1015,6 +1705,11 @@ void XenonServiceImpl::HandleRendererNodeAddonInvoke(
   const int32_t client_id =
       GetOrCreateRendererNodeClient(context_id, endpoint_id);
   XenonNodeExecutor* executor = GetNodeExecutor(context_id);
+  if (!client_id || !executor) {
+    std::move(callback).Run(
+        MakeIpcFailure("ERR_CLOSED: Native runtime is retiring"));
+    return;
+  }
   const uint64_t owner = GetNodeInstanceOwner(context_id, client_id);
   const std::string owner_token = executor->GetInstanceOwnerToken(owner);
   // Move only the arguments value. Do not remove a dictionary entry or move
@@ -1037,9 +1732,9 @@ void XenonServiceImpl::HandleRendererNodeAddonInvoke(
                const std::string& error) {
               std::move(callback).Run(
                   success ? MakeNativeInvokeSuccess(std::move(value))
-                          : MakeIpcFailure(error.empty()
-                                               ? "Native addon invocation failed"
-                                               : error));
+                          : MakeIpcFailure(
+                                error.empty() ? "Native addon invocation failed"
+                                              : error));
             },
             std::move(callback)));
     return;
@@ -1127,7 +1822,8 @@ void XenonServiceImpl::ElectronIpcSendSync(
       return;
     }
     if (!ipc_main_containers_.contains(normalized_id)) {
-      std::move(callback).Run(MakeIpcFailure("Child process container is unavailable"));
+      std::move(callback).Run(
+          MakeIpcFailure("Child process container is unavailable"));
       return;
     }
     std::move(callback).Run(MakeNativeInvokeSuccess(CallChildProcess(
@@ -1145,20 +1841,20 @@ void XenonServiceImpl::ElectronIpcSendSync(
         MakeIpcFailure("Utility ipcMain container is still starting"));
     return;
   }
-  std::move(callback).Run(it->second->SendSync(
-      endpoint_id, channel, std::move(arguments)));
+  std::move(callback).Run(
+      it->second->SendSync(endpoint_id, channel, std::move(arguments)));
 }
 
-base::Value XenonServiceImpl::CallChildProcess(
-    const std::string& container_id,
-    const std::string& endpoint_id,
-    const base::DictValue& request) {
+base::Value XenonServiceImpl::CallChildProcess(const std::string& container_id,
+                                               const std::string& endpoint_id,
+                                               const base::DictValue& request) {
   if (!child_process_bridge_) {
     child_process_bridge_ = std::make_unique<XenonChildProcessBridge>(
         base::BindRepeating(&XenonServiceImpl::DispatchChildProcessEvent,
                             weak_factory_.GetWeakPtr()));
   }
-  return base::Value(child_process_bridge_->Call(container_id, endpoint_id, request));
+  return base::Value(
+      child_process_bridge_->Call(container_id, endpoint_id, request));
 }
 
 void XenonServiceImpl::DispatchChildProcessEvent(
@@ -1173,10 +1869,9 @@ void XenonServiceImpl::DispatchChildProcessEvent(
                                 endpoint_id, std::move(event)));
 }
 
-void XenonServiceImpl::DeliverChildProcessEvent(
-    const std::string& container_id,
-    const std::string& endpoint_id,
-    base::Value event) {
+void XenonServiceImpl::DeliverChildProcessEvent(const std::string& container_id,
+                                                const std::string& endpoint_id,
+                                                base::Value event) {
   const auto container = ipc_main_containers_.find(container_id);
   if (container == ipc_main_containers_.end()) {
     return;
@@ -1187,7 +1882,8 @@ void XenonServiceImpl::DeliverChildProcessEvent(
     container->second->Send(endpoint_id, kChildProcessEventChannel,
                             base::Value(std::move(arguments)));
   } else {
-    container->second->DispatchToRenderer(endpoint_id, kChildProcessEventChannel,
+    container->second->DispatchToRenderer(endpoint_id,
+                                          kChildProcessEventChannel,
                                           base::Value(std::move(arguments)));
   }
 }
@@ -1197,6 +1893,11 @@ void XenonServiceImpl::RequireNodeModuleSync(
     RequireNodeModuleSyncCallback callback) {
   const std::string context_id =
       node_addon_host_receivers_.current_context().context_id;
+  if (retiring_contexts_.contains(context_id)) {
+    std::move(callback).Run(
+        MakeIpcFailure("ERR_CLOSED: Native runtime is retiring"));
+    return;
+  }
   EnsureNodeExecutor(context_id)
       ->LoadAddon(
           module_path,
@@ -1265,6 +1966,12 @@ void XenonServiceImpl::InvokeNodeExportSync(
         MakeIpcFailure("Native addon arguments must be a list"), 0);
     return;
   }
+  if (retiring_contexts_.contains(
+          node_addon_host_receivers_.current_context().context_id)) {
+    std::move(callback).Run(
+        MakeIpcFailure("ERR_CLOSED: Native runtime is retiring"), 0);
+    return;
+  }
   auto callbacks = base::SplitOnceCallback(std::move(callback));
   EnsureNodeExecutor(node_addon_host_receivers_.current_context().context_id)
       ->InvokeFunction(
@@ -1315,6 +2022,11 @@ void XenonServiceImpl::ConstructNodeExportSync(
     return;
   }
   const auto& connection = node_addon_host_receivers_.current_context();
+  if (retiring_contexts_.contains(connection.context_id)) {
+    std::move(callback).Run(
+        MakeIpcFailure("ERR_CLOSED: Native runtime is retiring"));
+    return;
+  }
   XenonNodeExecutor* executor = EnsureNodeExecutor(connection.context_id);
   executor->ConstructExport(
       module_path, export_path, connection.client_id,
@@ -1453,12 +2165,10 @@ void XenonServiceImpl::InspectNodeInstanceMemberSync(
              base::Value value, const std::string& error) {
             if (!success) {
               std::move(callback).Run(MakeIpcFailure(
-                  error.empty() ? "Native instance inspection failed"
-                                : error));
+                  error.empty() ? "Native instance inspection failed" : error));
               return;
             }
-            std::move(callback).Run(
-                MakeNativeInvokeSuccess(std::move(value)));
+            std::move(callback).Run(MakeNativeInvokeSuccess(std::move(value)));
           },
           std::move(callback)),
       connection.owner);
@@ -1521,12 +2231,14 @@ void XenonServiceImpl::Ping(PingCallback callback) {
              std::optional<std::string> response_body) {
             (void)keep_alive_loader;
             if (!self) {
-              std::move(user_callback).Run("Error: XenonServiceImpl destroyed.");
+              std::move(user_callback)
+                  .Run("Error: XenonServiceImpl destroyed.");
               return;
             }
             if (response_body) {
-              const std::string message = "Probe download success. Size: " +
-                                           base::NumberToString(response_body->size());
+              const std::string message =
+                  "Probe download success. Size: " +
+                  base::NumberToString(response_body->size());
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
               if (self->browser_observer_.is_connected()) {
                 self->browser_observer_->OnServiceEvent(
@@ -1550,14 +2262,14 @@ void XenonServiceImpl::Ping(PingCallback callback) {
 
 XenonNodeExecutor* XenonServiceImpl::GetNodeExecutor(
     const std::string& context_id) {
-  const auto it =
-      node_executors_.find(NormalizeIpcContainerId(context_id));
+  const auto it = node_executors_.find(NormalizeIpcContainerId(context_id));
   return it == node_executors_.end() ? nullptr : it->second.get();
 }
 
 XenonNodeExecutor* XenonServiceImpl::EnsureNodeExecutor(
     const std::string& context_id) {
   const std::string normalized_id = NormalizeIpcContainerId(context_id);
+  CHECK(!retiring_contexts_.contains(normalized_id));
   if (XenonNodeExecutor* executor = GetNodeExecutor(normalized_id)) {
     return executor;
   }
@@ -1578,6 +2290,10 @@ void XenonServiceImpl::EnsureAddonLoaded(
     const std::string& context_id,
     const std::string& path,
     base::OnceCallback<void(bool success, const std::string& error)> done) {
+  if (retiring_contexts_.contains(NormalizeIpcContainerId(context_id))) {
+    std::move(done).Run(false, "ERR_CLOSED: Native runtime is retiring");
+    return;
+  }
   XenonNodeExecutor* executor = EnsureNodeExecutor(context_id);
   if (executor->HasModule(path)) {
     std::move(done).Run(true, std::string());
@@ -1600,8 +2316,7 @@ void XenonServiceImpl::OnNodeCallback(const std::string& context_id,
                                       int32_t callback_id,
                                       std::vector<base::Value> args,
                                       base::Value receiver) {
-  const NodeClientKey key =
-      {NormalizeIpcContainerId(context_id), client_id};
+  const NodeClientKey key = {NormalizeIpcContainerId(context_id), client_id};
   const auto renderer_endpoint = renderer_node_endpoints_.find(key);
   if (renderer_endpoint != renderer_node_endpoints_.end()) {
     base::ListValue callback_args;
@@ -1623,17 +2338,16 @@ void XenonServiceImpl::OnNodeCallback(const std::string& context_id,
     if (container == ipc_main_containers_.end()) {
       return;
     }
-    container->second->DispatchToRenderer(
-        renderer_endpoint->second, kNodeAddonCallbackChannel,
-        base::Value(std::move(event_args)));
+    container->second->DispatchToRenderer(renderer_endpoint->second,
+                                          kNodeAddonCallbackChannel,
+                                          base::Value(std::move(event_args)));
     return;
   }
   auto observer = node_addon_observers_.find(key);
   if (observer == node_addon_observers_.end() ||
       !observer->second.is_connected()) {
     LOG(WARNING) << "Queue native callback context=" << key.first
-                 << " client=" << client_id
-                 << " cb=" << callback_id
+                 << " client=" << client_id << " cb=" << callback_id
                  << " (NodeAddonObserver not connected yet)";
     pending_node_callbacks_[key].push_back(
         {callback_id, std::move(args), std::move(receiver)});
@@ -1643,11 +2357,9 @@ void XenonServiceImpl::OnNodeCallback(const std::string& context_id,
                                std::move(receiver));
 }
 
-void XenonServiceImpl::FlushPendingNodeCallbacks(
-    const std::string& context_id,
-    int32_t client_id) {
-  const NodeClientKey key =
-      {NormalizeIpcContainerId(context_id), client_id};
+void XenonServiceImpl::FlushPendingNodeCallbacks(const std::string& context_id,
+                                                 int32_t client_id) {
+  const NodeClientKey key = {NormalizeIpcContainerId(context_id), client_id};
   auto pending = pending_node_callbacks_.find(key);
   if (pending == pending_node_callbacks_.end() || pending->second.empty()) {
     return;
@@ -1671,8 +2383,7 @@ void XenonServiceImpl::FlushPendingNodeCallbacks(
 void XenonServiceImpl::OnNodeCallbackReleased(const std::string& context_id,
                                               int32_t client_id,
                                               int32_t callback_id) {
-  const NodeClientKey key =
-      {NormalizeIpcContainerId(context_id), client_id};
+  const NodeClientKey key = {NormalizeIpcContainerId(context_id), client_id};
   const auto renderer_endpoint = renderer_node_endpoints_.find(key);
   if (renderer_endpoint != renderer_node_endpoints_.end()) {
     base::ListValue event_args;
@@ -1688,9 +2399,9 @@ void XenonServiceImpl::OnNodeCallbackReleased(const std::string& context_id,
     if (container == ipc_main_containers_.end()) {
       return;
     }
-    container->second->DispatchToRenderer(
-        renderer_endpoint->second, kNodeAddonCallbackReleasedChannel,
-        base::Value(std::move(event_args)));
+    container->second->DispatchToRenderer(renderer_endpoint->second,
+                                          kNodeAddonCallbackReleasedChannel,
+                                          base::Value(std::move(event_args)));
     return;
   }
   auto observer = node_addon_observers_.find(key);
@@ -1704,8 +2415,7 @@ void XenonServiceImpl::OnNodeCallbackReleased(const std::string& context_id,
 void XenonServiceImpl::OnNodeAddonObserverDisconnected(
     const std::string& context_id,
     int32_t client_id) {
-  const NodeClientKey key =
-      {NormalizeIpcContainerId(context_id), client_id};
+  const NodeClientKey key = {NormalizeIpcContainerId(context_id), client_id};
   node_addon_observers_.erase(key);
   pending_node_callbacks_.erase(key);
   if (XenonNodeExecutor* executor = GetNodeExecutor(key.first)) {
@@ -1716,11 +2426,16 @@ void XenonServiceImpl::OnNodeAddonObserverDisconnected(
 void XenonServiceImpl::LoadAddon(const std::string& context_id,
                                  const std::string& path,
                                  LoadAddonCallback callback) {
-  EnsureNodeExecutor(context_id)->LoadAddon(
-      path, mojo::WrapCallbackWithDefaultInvokeIfNotRun(
-                std::move(callback), false,
-                "LoadAddon callback dropped before completion",
-                std::vector<mojom::NodeExportInfoPtr>()));
+  if (retiring_contexts_.contains(NormalizeIpcContainerId(context_id))) {
+    std::move(callback).Run(false, "ERR_CLOSED: Native runtime is retiring",
+                            {});
+    return;
+  }
+  EnsureNodeExecutor(context_id)
+      ->LoadAddon(path, mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+                            std::move(callback), false,
+                            "LoadAddon callback dropped before completion",
+                            std::vector<mojom::NodeExportInfoPtr>()));
 }
 
 void XenonServiceImpl::InspectExport(const std::string& context_id,
@@ -1776,7 +2491,8 @@ void XenonServiceImpl::ConstructExportWithPrototype(
             XenonNodeExecutor* executor =
                 self ? self->GetNodeExecutor(context_id) : nullptr;
             if (!executor) {
-              std::move(callback).Run(false, 0, "No Node addon has been loaded");
+              std::move(callback).Run(false, 0,
+                                      "No Node addon has been loaded");
               return;
             }
             if (!success) {

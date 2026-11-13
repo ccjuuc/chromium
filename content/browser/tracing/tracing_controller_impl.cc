@@ -141,6 +141,17 @@ TracingController* TracingController::GetInstance() {
   return TracingControllerImpl::GetInstance();
 }
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+void TracingController::TraceDataEndpoint::ReceivedTraceFinalContentsWithStatus(
+    bool success) {
+  ReceivedTraceFinalContents();
+}
+
+uint64_t TracingController::GetRecordingGeneration() const {
+  return 0;
+}
+#endif
+
 TracingControllerImpl::TracingControllerImpl()
     : delegate_(GetContentClient()->browser()->CreateTracingDelegate()) {
   DCHECK(!g_tracing_controller);
@@ -278,6 +289,10 @@ bool TracingControllerImpl::StartTracingImpl(
   }
   trace_config_ =
       std::make_unique<base::trace_event::TraceConfig>(trace_config);
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  ++recording_generation_;
+  tracing_failed_ = false;
+#endif
 
   DCHECK(!tracing_session_host_);
   ConnectToServiceIfNeeded();
@@ -323,7 +338,11 @@ bool TracingControllerImpl::StopTracing(
   MojoResult result =
       mojo::CreateDataPipe(nullptr, producer_handle, consumer_handle);
   if (result != MOJO_RESULT_OK) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    CompleteFlush(false);
+#else
     CompleteFlush();
+#endif
     return true;
   }
 
@@ -361,15 +380,29 @@ bool TracingControllerImpl::IsTracing() {
   return trace_config_ != nullptr;
 }
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+uint64_t TracingControllerImpl::GetRecordingGeneration() const {
+  return recording_generation_;
+}
+#endif
+
 void TracingControllerImpl::OnTracingEnabled() {
   if (start_tracing_callback_)
     std::move(start_tracing_callback_).Run();
 }
 
-void TracingControllerImpl::OnTracingDisabled(bool) {}
+void TracingControllerImpl::OnTracingDisabled(bool tracing_succeeded) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  tracing_failed_ = !tracing_succeeded;
+#endif
+}
 
 void TracingControllerImpl::OnTracingFailed() {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  CompleteFlush(false);
+#else
   CompleteFlush();
+#endif
 }
 
 void TracingControllerImpl::OnDataAvailable(base::span<const uint8_t> data) {
@@ -380,9 +413,19 @@ void TracingControllerImpl::OnDataAvailable(base::span<const uint8_t> data) {
   }
 }
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+void TracingControllerImpl::CompleteFlush(bool success) {
+#else
 void TracingControllerImpl::CompleteFlush() {
-  if (trace_data_endpoint_)
+#endif
+  if (trace_data_endpoint_) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    trace_data_endpoint_->ReceivedTraceFinalContentsWithStatus(
+        success && !tracing_failed_);
+#else
     trace_data_endpoint_->ReceivedTraceFinalContents();
+#endif
+  }
 
   trace_data_endpoint_ = nullptr;
   trace_config_ = nullptr;

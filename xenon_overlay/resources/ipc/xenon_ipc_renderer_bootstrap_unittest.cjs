@@ -58,6 +58,7 @@ function createRenderer(exportsList = [], overrides = {}, withWindow = false, in
     xenonIpcRenderer: transport,
     TextEncoder,
     TextDecoder,
+    MessageChannel,
     URL,
     URLSearchParams,
     queueMicrotask,
@@ -83,10 +84,19 @@ function createRenderer(exportsList = [], overrides = {}, withWindow = false, in
   return {
     calls,
     context,
-    dispatch: (channel, args) => dispatchHandler(channel, args),
+    dispatch: (...args) => dispatchHandler(...args),
     load: () => context.require(addonPath),
   };
 }
+
+test('context bridge receives the actual ipcRenderer identity once', () => {
+  const registered = [];
+  const {context} = createRenderer([], {
+    registerIpcRenderer(value) { registered.push(value); },
+  });
+  assert.equal(registered.length, 1);
+  assert.equal(registered[0], context.require('electron').ipcRenderer);
+});
 
 test('renderer process and app identity use native document metadata', () => {
   const config = {
@@ -186,6 +196,104 @@ function createPreloadRenderer(preload, files, extraPreferences = {}, runtimeCon
   return {...renderer, sent};
 }
 
+function createSandboxRenderer(source, configOverrides = {}) {
+  const sent = [];
+  const exposed = {};
+  const renderer = createRenderer([], {
+    getRuntimeConfig: () => ({
+      appPath: 'C:\\test-app', execPath: 'C:\\test-app\\host.exe', cwd: 'C:\\test-app',
+      contextIsolated: true, sandboxed: true, isPackaged: true,
+      webPreferences: {sandbox: true, contextIsolation: true, nodeIntegration: false,
+        preload: 'C:\\test-app\\preload.js'},
+      windowPreloadSource: source,
+      ...configOverrides,
+    }),
+    sendSync(channel) { assert.fail(`Sandbox preload reached synchronous broker ${channel}`); },
+    send(...args) { sent.push(args); },
+    invoke(channel, ...args) { return Promise.resolve({channel, args}); },
+    contextBridge: {exposeInMainWorld(name, value) { exposed[name] = value; }},
+  }, true);
+  return {...renderer, sent, exposed};
+}
+
+test('sandboxed production preload uses browser source and preserves explicit application IPC', async () => {
+  const {context, sent, exposed} = createSandboxRenderer(`
+    const {ipcRenderer, contextBridge} = require('electron');
+    contextBridge.exposeInMainWorld('fixture', {
+      send: value => ipcRenderer.send('application:send', value),
+      invoke: value => ipcRenderer.invoke('application:invoke', value),
+      modules: [require('events') === require('node:events'),
+        require('timers') === require('node:timers'), require('url') === require('node:url')],
+      bytes: Array.from(Buffer.from('你好')),
+      sandboxed: process.sandboxed,
+      hidden: [global.require, global.process, global.Buffer, global.electron,
+        global.xenonIpcRenderer, global.__xenonElectronRequire,
+        global.__xenonElectronIpc, global.__xenonPaths, module.require],
+      blocked: ['fs','node:fs','path','module','process','buffer','./dependency.js','addon.node'].map(name => {
+        try { require(name); return false; } catch (error) { return error.code; }
+      }),
+      exports: Object.keys(require('electron')).sort(),
+    });
+  `);
+  assert.deepEqual(sent, []);
+  assert.equal(exposed.fixture.sandboxed, true);
+  assert.deepEqual(Array.from(exposed.fixture.bytes), [...Buffer.from('你好')]);
+  assert.deepEqual(Array.from(exposed.fixture.modules), [true, true, true]);
+  assert.ok(exposed.fixture.hidden.every(value => value === undefined));
+  assert.ok(exposed.fixture.blocked.every(value => value === 'MODULE_NOT_FOUND'));
+  assert.deepEqual(Array.from(exposed.fixture.exports),
+      ['contextBridge', 'crashReporter', 'ipcRenderer', 'nativeImage', 'webFrame', 'webUtils']);
+  exposed.fixture.send({value: 42});
+  assert.deepEqual(sent, [['application:send', {value: 42}]]);
+  assert.deepEqual(await exposed.fixture.invoke('ok'),
+      {channel: 'application:invoke', args: ['ok']});
+  for (const name of ['require','process','Buffer','electron','xenonIpcRenderer'])
+    assert.equal(context[name], undefined, name);
+});
+
+test('sandboxed session preloads retain ordering and report source errors without filesystem fallback', () => {
+  const {context, sent} = createSandboxRenderer("globalThis.order.push('window');", {
+    sessionPreloads: [
+      {filePath: 'C:\\test-app\\first.js', source: "globalThis.order = ['first'];"},
+      {filePath: 'C:\\test-app\\broken.js', source: "require('fs');"},
+      {filePath: 'C:\\test-app\\last.js', source: "globalThis.order.push('last');"},
+    ],
+  });
+  assert.deepEqual(Array.from(context.order), ['first', 'last', 'window']);
+  assert.deepEqual(sent, [['__xenon:preload-error', 'C:\\test-app\\broken.js', 'module not found: fs']]);
+  for (const config of [{windowPreloadSource: undefined},
+    {windowPreloadError: 'ENOENT: registered preload missing'}]) {
+    const failed = createSandboxRenderer('globalThis.unexpected = true;', config);
+    assert.equal(failed.context.unexpected, undefined);
+    assert.equal(failed.sent.length, 1);
+    assert.equal(failed.sent[0][0], '__xenon:preload-error');
+    assert.equal(failed.context.require, undefined);
+  }
+});
+
+test('sandbox initialization failure revokes full Node globals and does not run a preload', () => {
+  for (const sandboxed of [false, undefined]) {
+    const {context, sent} = createSandboxRenderer('globalThis.unexpected = true;', {sandboxed});
+    assert.equal(context.unexpected, undefined);
+    assert.equal(context.require, undefined);
+    assert.equal(context.xenonIpcRenderer, undefined);
+    assert.equal(context.process, undefined);
+    assert.equal(sent.length, 1);
+    assert.match(sent[0][2], /OS sandbox is not active/);
+  }
+});
+
+test('explicit sandbox false preserves full preload modules without exposing Node to the page', () => {
+  const preload = 'C:\\test-app\\preload.js';
+  const {context, sent} = createPreloadRenderer(preload, new Map([
+    [preload, "globalThis.readValue = () => require('./value.json').value;"],
+    ['C:\\test-app\\value.json', '{"value":42}'],
+  ]), {sandbox: false, nodeIntegration: false});
+  assert.deepEqual(sent, []);
+  assert.equal(context.readValue(), 42);
+  assert.equal(context.require, undefined);
+});
+
 test('document preload runs before application code and once per document', () => {
   const preload = 'C:\\test-app\\preload\\entry.js';
   const files = new Map([[preload, `
@@ -203,6 +311,32 @@ test('document preload runs before application code and once per document', () =
     vm.runInContext(bootstrapSource, context);
     assert.equal(context.preloadRuns, 1);
   }
+});
+
+test('Electron preload js ignores package type while its required js dependencies honor it', () => {
+  const preload = 'C:\\test-app\\preload.js';
+  const files = new Map([
+    ['C:\\test-app\\package.json', '{"type":"module"}'],
+    [preload, `globalThis.preloadRuns = (globalThis.preloadRuns || 0) + 1;
+      globalThis.loadDependency = () => require('./dependency.js');`],
+    ['C:\\test-app\\dependency.js', 'globalThis.dependencyRan = true; module.exports = 42;'],
+  ]);
+  const {context, sent} = createPreloadRenderer(preload, files);
+  assert.equal(context.preloadRuns, 1);
+  assert.deepEqual(sent, []);
+  assert.throws(() => context.loadDependency(), {code: 'ERR_REQUIRE_ESM'});
+  assert.equal(context.dependencyRan, undefined);
+});
+
+test('renderer ESM preloads report unsupported format without running as CommonJS', () => {
+  const preload = 'C:\\test-app\\preload.mjs';
+  const {context, sent} = createPreloadRenderer(preload, new Map([
+    [preload, 'globalThis.preloadRan = true; export default 42;'],
+  ]));
+  assert.equal(context.preloadRan, undefined);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0][0], '__xenon:preload-error');
+  assert.match(sent[0][2], /renderer CommonJS loader does not support ES module/);
 });
 
 test('browser Session preload snapshots run in registration order before window preload', () => {
@@ -455,10 +589,12 @@ test('renderer unavailable dialogs and window APIs fail explicitly', async () =>
 
 test('renderer open dialog preserves real cancellation, selection and native failures', async () => {
   const failure = new Error('picker disconnected');
-  let result = {filePaths: []};
+  let result = {result: {canceled: true, filePaths: []}, error: ""};
+  let request;
   const {context} = createRenderer([], {}, false, context => {
     context.__xenonPageHandler__ = {
-      async openNativeFileDialog() {
+      async openNativeFileDialog(options) {
+        request = options;
         if (result instanceof Error) throw result;
         return result;
       },
@@ -466,13 +602,24 @@ test('renderer open dialog preserves real cancellation, selection and native fai
     context.__xenonPageCallbackRouter__ = {__xenonBootstrapListenersAttached: true};
   });
   const dialog = context.require('electron').dialog;
-  assert.equal((await dialog.showOpenDialog({})).canceled, true);
-  result = {filePaths: ['C:\\fixture.mp4']};
+  const options = {defaultPath: '/media', properties: ['openFile', 'multiSelections'],
+    filters: [{name: 'Videos', extensions: ['mp4', 'mkv']}]};
+  const pending = dialog.showOpenDialog(options);
+  options.defaultPath = 'changed';
+  options.filters[0].extensions.push('changed');
+  assert.equal((await pending).canceled, true);
+  assert.equal(request.dictionaryValue.storage.defaultPath.stringValue, '/media');
+  const filter = request.dictionaryValue.storage.filters.listValue.storage[0].dictionaryValue.storage;
+  assert.equal(filter.name.stringValue, 'Videos');
+  assert.deepEqual(Array.from(filter.extensions.listValue.storage, item => item.stringValue), ['mp4', 'mkv']);
+  result = {result: {canceled: false, filePaths: ['C:\\fixture.mp4']}, error: ''};
   const selection = await dialog.showOpenDialog({});
   assert.equal(selection.canceled, false);
   assert.deepEqual(selection.filePaths, ['C:\\fixture.mp4']);
   result = failure;
   await assert.rejects(dialog.showOpenDialog({}), error => error === failure);
+  result = {result: null, error: 'ERR_ABORTED: dialog owner changed'};
+  await assert.rejects(dialog.showOpenDialog({}), {code: 'ERR_ABORTED'});
   result = {};
   await assert.rejects(dialog.showOpenDialog({}), /invalid result/);
 });
@@ -582,11 +729,39 @@ test('ipcRenderer forwards async, sync, invoke and postMessage values unchanged'
       ['send', 'sendSync', 'invoke', 'invoke', 'postMessage']);
   assert.equal(calls[0][2], payload);
   assert.equal(calls[4][2], payload);
-  assert.throws(
-      () => ipcRenderer.postMessage('post', payload, [{}]),
-      /MessagePort transfer is not supported/);
+  assert.deepEqual(calls[4][3], []);
   assert.throws(() => ipcRenderer.postMessage('post', payload, {}),
       /"transfer" argument must be an array/);
+});
+
+test('ipcRenderer delegates port ownership validation and preserves transferred event identities', () => {
+  const port = {marker: 'native wrapper supplied by the fixture'};
+  const cloneError = Object.assign(new Error('native rejected transfer'), {name: 'DataCloneError'});
+  const calls = [];
+  const {context, dispatch} = createRenderer([], {
+    postMessage(channel, value, transfer) {
+      calls.push({channel, value, transfer});
+      if (transfer?.some(entry => entry !== port)) throw cloneError;
+    },
+  });
+  const ipcRenderer = context.require('electron').ipcRenderer;
+  const transfer = [port];
+  const value = {nested: {port}};
+  assert.equal(ipcRenderer.postMessage('port-event', value, transfer), undefined);
+  assert.equal(calls[0].value, value);
+  assert.equal(calls[0].transfer, transfer);
+  assert.throws(() => ipcRenderer.postMessage('port-event', value, [{}]), error => error === cloneError);
+  assert.throws(() => ipcRenderer.postMessage('port-event', value, null),
+      /"transfer" argument must be an array/);
+  assert.equal(calls.length, 2);
+  let event, received;
+  ipcRenderer.on('port-event', (incoming, payload) => { event = incoming; received = payload; });
+  dispatch('port-event', [value], transfer);
+  assert.equal(event.sender, ipcRenderer);
+  assert.equal(event.ports, transfer);
+  assert.equal(event.ports[0], received.nested.port);
+  dispatch('port-event', [value]);
+  assert.deepEqual(Array.from(event.ports), []);
 });
 
 test('ipcRenderer events expose Electron event shape and EventEmitter semantics', () => {
@@ -1336,6 +1511,32 @@ test('builtins use exact names and stable identities without substituting unsupp
                 {code: 'ERR_NOT_SUPPORTED'});
 });
 
+test('renderer promise timers share the timers module queue and promise object', async () => {
+  const {context} = createRenderer();
+  const promises = context.require('timers/promises');
+  assert.equal(promises, context.require('node:timers/promises'));
+  assert.equal(promises, context.require('timers').promises);
+  const value = {fixture: true};
+  assert.equal(await promises.setTimeout(1, value), value);
+  assert.equal(await promises.setImmediate(value), value);
+  const controller = new AbortController();
+  const pending = promises.setTimeout(1000, value, {signal: controller.signal});
+  controller.abort('cancelled');
+  await assert.rejects(pending, {name: 'AbortError', code: 'ABORT_ERR', cause: 'cancelled'});
+});
+
+test('renderer Immediate message tasks preserve AsyncLocalStorage and restore the outer context', async () => {
+  const {context} = createRenderer([], {installAsyncContextHooks() {}});
+  const storage = new (context.require('async_hooks').AsyncLocalStorage)();
+  const timers = context.require('timers');
+  const result = storage.run('scheduled-context', () => new Promise(resolve => {
+    timers.setImmediate(() => resolve(storage.getStore()));
+  }));
+  assert.equal(storage.getStore(), undefined);
+  assert.equal(await result, 'scheduled-context');
+  assert.equal(storage.getStore(), undefined);
+});
+
 test('CommonJS resolves parent packages, scoped packages and package main without executing resolve', () => {
   const root = 'C:\\test-app';
   const files = new Map([
@@ -1397,7 +1598,7 @@ test('require loads real sqlite3 packages and addons and never substitutes missi
   assert.equal(calls.length, 1);
 });
 
-test('module exceptions preserve identity and unsupported package maps never bypass exports', () => {
+test('module exceptions preserve identity and package maps never bypass exports', () => {
   const root = 'C:\\test-app';
   const files = new Map([
     [root + '\\throw.js', 'throw globalThis.sentinel;'],
@@ -1408,7 +1609,151 @@ test('module exceptions preserve identity and unsupported package maps never byp
   context.sentinel = {originalError: true};
   assert.throws(() => context.require(root + '\\throw.js'), error => error === context.sentinel);
   assert.equal(context.require.cache[root + '\\throw.js'], undefined);
-  assert.throws(() => context.require('mapped'), {code: 'ERR_NOT_SUPPORTED'});
-  assert.throws(() => context.require('mapped/entry.js'), {code: 'ERR_NOT_SUPPORTED'});
-  assert.throws(() => context.require('#alias'), {code: 'ERR_NOT_SUPPORTED'});
+  assert.equal(context.require('mapped'), 42);
+  assert.throws(() => context.require('mapped/entry.js'), {code: 'ERR_PACKAGE_PATH_NOT_EXPORTED'});
+  assert.throws(() => context.require('#alias'), {code: 'ERR_PACKAGE_IMPORT_NOT_DEFINED'});
+});
+
+test('renderer package maps resolve conditions, patterns, self references and private imports', () => {
+  const root = 'C:\\test-app';
+  const files = new Map([
+    [root + '\\package.json', JSON.stringify({name: 'application',
+      exports: {'.': './entry.cjs', './feature/*': './feature/*.cjs', './private': null},
+      imports: {'#value': './value.json', '#dependency': 'dependency', '#path': 'path'}})],
+    [root + '\\entry.cjs', `module.exports = () => [require('#value'), require('#dependency'), require('application/feature/a'), require('#path') === require('path')];`],
+    [root + '\\value.json', '17'],
+    [root + '\\feature\\a.cjs', 'module.exports = 23;'],
+    [root + '\\node_modules\\dependency\\package.json', JSON.stringify({exports: {
+      node: {import: './other.js'}, require: './index.cjs', default: './other.js'}})],
+    [root + '\\node_modules\\dependency\\index.cjs', 'module.exports = 42;'],
+    [root + '\\node_modules\\dependency\\other.js', 'throw new Error("Wrong condition");'],
+  ]);
+  const {context} = createPreloadRenderer('', files);
+  assert.deepEqual(Array.from(context.require('application')()), [17, 42, 23, true]);
+  assert.equal(context.require.resolve('#value'), root + '\\value.json');
+  assert.equal(context.require.resolve('#path'), 'path');
+  assert.throws(() => context.require('application/private'), {code: 'ERR_PACKAGE_PATH_NOT_EXPORTED'});
+  assert.throws(() => context.require('dependency/other.js'), {code: 'ERR_PACKAGE_PATH_NOT_EXPORTED'});
+});
+
+test('renderer maps never guess extensions or fall back after a missing exported target', () => {
+  const root = 'C:\\test-app';
+  const files = new Map([
+    [root + '\\node_modules\\mapped\\package.json', JSON.stringify({main: 'index.js', exports: ['./missing', './index.js']})],
+    [root + '\\node_modules\\mapped\\missing.js', 'module.exports = "extension guess";'],
+    [root + '\\node_modules\\mapped\\index.js', 'module.exports = "fallback";'],
+    [root + '\\node_modules\\legacy\\package.json', JSON.stringify({exports: null, main: 'index.js'})],
+    [root + '\\node_modules\\legacy\\index.js', 'module.exports = 9;'],
+  ]);
+  const {context} = createPreloadRenderer('', files);
+  assert.throws(() => context.require('mapped'), {code: 'MODULE_NOT_FOUND'});
+  assert.equal(context.require('legacy'), 9);
+});
+
+test('renderer private imports stop at package scopes and preserve package-local resolution', () => {
+  const root = 'C:\\test-app';
+  const files = new Map([
+    [root + '\\package.json', JSON.stringify({imports: {'#local': './value.json'}})],
+    [root + '\\value.json', '17'],
+    [root + '\\nested\\package.json', '{}'],
+    [root + '\\nested\\index.cjs', `module.exports = () => require('#local');`],
+    [root + '\\node_modules\\dependency\\package.json', JSON.stringify({imports: {'#local': './value.json'}})],
+    [root + '\\node_modules\\dependency\\index.js', `module.exports = require('#local');`],
+    [root + '\\node_modules\\dependency\\value.json', '23'],
+  ]);
+  const {context} = createPreloadRenderer('', files);
+  assert.equal(context.require('#local'), 17);
+  assert.equal(context.require('dependency'), 23);
+  assert.throws(() => context.require(root + '\\nested\\index.cjs')(), {code: 'ERR_PACKAGE_IMPORT_NOT_DEFINED'});
+});
+
+test('renderer package map retries observe changed manifests after cache invalidation', () => {
+  const root = 'C:\\test-app';
+  const manifest = root + '\\node_modules\\mapped\\package.json';
+  const first = root + '\\node_modules\\mapped\\first.cjs';
+  const second = root + '\\node_modules\\mapped\\second.cjs';
+  const files = new Map([
+    [manifest, JSON.stringify({exports: './first.cjs'})],
+    [first, 'module.exports = 17;'],
+    [second, 'module.exports = 23;'],
+  ]);
+  const {context} = createPreloadRenderer('', files);
+  assert.equal(context.require('mapped'), 17);
+  files.set(manifest, JSON.stringify({exports: './second.cjs'}));
+  assert.equal(context.require('mapped'), 17);
+  delete context.require.cache[first];
+  assert.equal(context.require('mapped'), 23);
+  delete context.require.cache[second];
+  files.set(manifest, JSON.stringify({exports: {'.': null}}));
+  assert.throws(() => context.require('mapped'), {code: 'ERR_PACKAGE_PATH_NOT_EXPORTED'});
+});
+
+test('renderer mapped targets cannot escape their roots through realpath or traversal', () => {
+  const root = 'C:\\test-app';
+  const manifest = root + '\\node_modules\\mapped\\package.json';
+  const target = root + '\\node_modules\\mapped\\linked.cjs';
+  const files = new Map([
+    [manifest, JSON.stringify({exports: './linked.cjs'})],
+    [target, 'globalThis.escaped = true;'],
+  ]);
+  const {context} = createRenderer([], {
+    sendSync(channel, request) {
+      assert.equal(channel, '__xenon:fs');
+      if (request.operation === 'realpath') return request.path === target ?
+          'C:\\outside\\linked.cjs' : request.path;
+      if (request.operation === 'stat') {
+        if (files.has(request.path)) return {isFile: true, isDirectory: false};
+        throw Object.assign(new Error('ENOENT: missing'), {code: 'ENOENT'});
+      }
+      if (request.operation === 'read_file') {
+        assert.equal(request.path, manifest);
+        return Buffer.from(files.get(manifest)).toString('base64');
+      }
+      throw new Error('Unexpected filesystem operation');
+    },
+  });
+  assert.throws(() => context.require('mapped'), {code: 'MODULE_NOT_FOUND'});
+  assert.equal(context.escaped, undefined);
+  files.set(manifest, JSON.stringify({exports: './%2e%2e/escape.cjs'}));
+  assert.throws(() => context.require('mapped'), {code: 'ERR_INVALID_PACKAGE_TARGET'});
+});
+
+test('renderer imports of external packages use exact subpaths and validate package names', () => {
+  const root = 'C:\\test-app';
+  const files = new Map([
+    [root + '\\package.json', JSON.stringify({imports: {
+      '#extensionless': 'dependency/value', '#exact': 'dependency/value.json',
+      '#root': 'dependency', '#bad': 'dependency\\value.json', '#encoded': 'dependency/a%2fb',
+      '#alias': '#exact'}})],
+    [root + '\\node_modules\\dependency\\package.json', JSON.stringify({main: 'index.cjs'})],
+    [root + '\\node_modules\\dependency\\index.cjs', 'module.exports = 17;'],
+    [root + '\\node_modules\\dependency\\value.json', '23'],
+  ]);
+  const {context} = createPreloadRenderer('', files);
+  assert.throws(() => context.require('#extensionless'), {code: 'MODULE_NOT_FOUND'});
+  assert.equal(context.require('#exact'), 23);
+  assert.equal(context.require('#root'), 17);
+  assert.throws(() => context.require('#bad'), {code: 'ERR_INVALID_MODULE_SPECIFIER'});
+  assert.throws(() => context.require('#encoded'), {code: 'ERR_INVALID_MODULE_SPECIFIER'});
+  assert.throws(() => context.require('#alias'), {code: 'MODULE_NOT_FOUND'});
+});
+
+test('renderer imports external subpaths use file URL query and encoding semantics', () => {
+  const root = 'C:\\test-app';
+  const files = new Map([
+    [root + '\\package.json', JSON.stringify({imports: {
+      '#query': 'dependency/value.json?revision=1#tag',
+      '#space': 'dependency/sp%61ce%20file.cjs',
+      '#parent': 'dependency/%2e%2e/value.cjs',
+      '#backslash': 'dependency/a%5cb', '#badEncoding': 'dependency/%GG.cjs'}})],
+    [root + '\\node_modules\\dependency\\value.json', '23'],
+    [root + '\\node_modules\\dependency\\space file.cjs', 'module.exports = 29;'],
+    [root + '\\node_modules\\value.cjs', 'module.exports = 31;'],
+  ]);
+  const {context} = createPreloadRenderer('', files);
+  assert.equal(context.require('#query'), 23);
+  assert.equal(context.require('#space'), 29);
+  assert.equal(context.require('#parent'), 31);
+  assert.throws(() => context.require('#backslash'), {code: 'ERR_INVALID_MODULE_SPECIFIER'});
+  assert.throws(() => context.require('#badEncoding'), {name: 'URIError'});
 });

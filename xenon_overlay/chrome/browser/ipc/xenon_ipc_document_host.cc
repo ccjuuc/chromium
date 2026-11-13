@@ -17,6 +17,7 @@
 #include "base/uuid.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/global_routing_id.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/storage_partition.h"
@@ -26,7 +27,9 @@
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "url/origin.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_api_bridge.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_document_registration.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_guest.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_sandbox_policy.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_session_bridge.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_file_system_bridge.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_network_request_bridge.h"
@@ -97,17 +100,20 @@ void XenonIpcDocumentHost::Create(
 XenonIpcDocumentHost::XenonIpcDocumentHost(
     content::RenderFrameHost& render_frame_host,
     mojo::PendingReceiver<xenon::ipc::mojom::IpcHost> receiver)
-    : DocumentService(render_frame_host, std::move(receiver)) {}
+    : DocumentService(render_frame_host, std::move(receiver)),
+      content::WebContentsObserver(
+          content::WebContents::FromRenderFrameHost(&render_frame_host)) {}
 
 XenonIpcDocumentHost::~XenonIpcDocumentHost() {
   if (!endpoint_id_.empty()) {
+    RevokeElectronDocumentRegistration(&render_frame_host(), endpoint_id_);
     XenonManager::GetInstance()->RemoveElectronIpcRenderer(container_id_,
                                                            endpoint_id_);
   }
 }
 
 void XenonIpcDocumentHost::GetRuntimeConfig(GetRuntimeConfigCallback callback) {
-  if (!IsAllowedDocument()) {
+  if (!IsAllowedDocument() || !InitializeSandboxPolicy()) {
     std::move(callback).Run(nullptr);
     return;
   }
@@ -121,15 +127,7 @@ void XenonIpcDocumentHost::GetRuntimeConfig(GetRuntimeConfigCallback callback) {
     config->is_guest =
         XenonElectronGuest::FromWebContents(web_contents) != nullptr;
     config->is_main_frame = render_frame_host().IsInPrimaryMainFrame();
-    const base::DictValue* preferences = nullptr;
-    if (auto* guest = XenonElectronGuest::FromWebContents(web_contents)) {
-      preferences = &guest->preferences();
-    } else {
-      preferences = XenonElectronWindowHost::GetInstance()
-                        ->GetWebPreferencesForWebContents(web_contents);
-    }
-    config->web_preferences =
-        base::Value(preferences ? preferences->Clone() : base::DictValue());
+    config->web_preferences = base::Value(effective_preferences_->Clone());
     auto* partition = render_frame_host().GetStoragePartition();
     auto identity = FindElectronSessionIdentity(partition);
     if (identity && identity->container_id == ResolveContainerId()) {
@@ -147,6 +145,49 @@ void XenonIpcDocumentHost::GetRuntimeConfig(GetRuntimeConfigCallback callback) {
         hosted &&
         XenonManager::GetInstance()->IsDeclaredFileRendererURL(
             ResolveContainerId(), render_frame_host().GetLastCommittedURL());
+    const auto* preload = effective_preferences_->FindString("preload");
+    if (effective_preferences_->FindBool("sandbox").value_or(false) && preload &&
+        !preload->empty()) {
+      const std::string container = ResolveContainerId();
+      const uint64_t generation =
+          XenonManager::GetInstance()->service_generation(container);
+      base::ListValue request;
+      request.Append(base::DictValue()
+                         .Set("operation", "read_file")
+                         .Set("path", *preload)
+                         .Set("returnBytes", true));
+      // Only the Browser-approved preload is read. The renderer's generic
+      // filesystem/addon IPC remains unavailable throughout initialization.
+      base::ThreadPool::PostTaskAndReplyWithResult(
+          FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+          base::BindOnce(&PerformFileSystemCall, base::Value(std::move(request))),
+          base::BindOnce(
+              [](base::WeakPtr<XenonIpcDocumentHost> self,
+                 std::string container, uint64_t generation,
+                 mojom::IpcRendererConfigPtr config,
+                 GetRuntimeConfigCallback callback, mojom::IpcResultPtr result) {
+                if (!self || !self->IsAllowedDocument() ||
+                    XenonManager::GetInstance()->service_generation(container) !=
+                        generation) {
+                  std::move(callback).Run(nullptr);
+                  return;
+                }
+                if (result && result->success && result->value.is_blob()) {
+                  const auto& bytes = result->value.GetBlob();
+                  config->window_preload_source =
+                      std::string(bytes.begin(), bytes.end());
+                } else {
+                  config->window_preload_error =
+                      result && !result->error.empty()
+                          ? result->error
+                          : "Unable to read sandboxed preload script";
+                }
+                std::move(callback).Run(std::move(config));
+              },
+              weak_factory_.GetWeakPtr(), container, generation,
+              std::move(config), std::move(callback)));
+      return;
+    }
   }
   std::move(callback).Run(std::move(config));
 }
@@ -163,7 +204,10 @@ void XenonIpcDocumentHost::AttachGuest(
     result->error = error;
     std::move(callback).Run(std::move(result));
   };
-  if (!IsAllowedDocument() || !IsCurrentRenderer() || !preferences.is_dict()) {
+  if (!IsAllowedDocument() || !IsCurrentRenderer() || !preferences.is_dict() ||
+      !InitializeSandboxPolicy() ||
+      (effective_preferences_->FindBool("sandbox").value_or(false) &&
+       !effective_preferences_->FindBool("webviewTag").value_or(false))) {
     fail("Invalid guest owner or preferences");
     return;
   }
@@ -182,9 +226,16 @@ void XenonIpcDocumentHost::AttachGuest(
     fail("Guest partition must be a string");
     return;
   }
+  auto normalized =
+      XenonManager::GetInstance()->NormalizeElectronWebPreferences(
+          ResolveContainerId(), prefs);
+  if (!normalized.has_value()) {
+    fail(normalized.error());
+    return;
+  }
   frame->PrepareForInnerWebContentsAttach(base::BindOnce(
       &XenonIpcDocumentHost::OnGuestFramePrepared, weak_factory_.GetWeakPtr(),
-      std::move(preferences).TakeDict(), std::move(callback)));
+      std::move(*normalized), std::move(callback)));
 }
 
 void XenonIpcDocumentHost::OnGuestFramePrepared(
@@ -198,6 +249,13 @@ void XenonIpcDocumentHost::OnGuestFramePrepared(
   }
   int guest_id = XenonElectronGuest::Attach(frame, ResolveContainerId(),
                                             preferences.Clone());
+  if (guest_id == 0) {
+    auto result = mojom::IpcResult::New();
+    result->success = false;
+    result->error = "Unable to create the guest WebContents";
+    std::move(callback).Run(std::move(result));
+    return;
+  }
   base::ListValue args;
   args.Append(guest_id);
   args.Append(std::move(preferences));
@@ -226,6 +284,13 @@ bool XenonIpcDocumentHost::IsAllowedDocument() const {
     return render_frame_host().IsInPrimaryMainFrame() ||
            guest->preferences()
                .FindBool("nodeIntegrationInSubFrames")
+               .value_or(false);
+  }
+  auto* window_preferences = XenonElectronWindowHost::GetInstance()
+                                 ->GetWebPreferencesForWebContents(contents);
+  if (window_preferences) {
+    return render_frame_host().IsInPrimaryMainFrame() ||
+           window_preferences->FindBool("nodeIntegrationInSubFrames")
                .value_or(false);
   }
   if (!render_frame_host().IsInPrimaryMainFrame()) {
@@ -280,10 +345,12 @@ std::string XenonIpcDocumentHost::ResolveContainerId() const {
 }
 
 void XenonIpcDocumentHost::BindRenderer(
-    mojo::PendingRemote<xenon::ipc::mojom::IpcRenderer> renderer) {
-  if (!IsAllowedDocument()) {
+    mojo::PendingRemote<xenon::ipc::mojom::IpcRenderer> renderer,
+    BindRendererCallback callback) {
+  if (!IsAllowedDocument() || !InitializeSandboxPolicy()) {
     // Treat an origin-policy rejection as unavailable transport rather than a
     // compromised renderer. This closes only the document-scoped Mojo pipe.
+    std::move(callback).Run(false);
     ResetAndDeleteThis();
     return;
   }
@@ -291,6 +358,7 @@ void XenonIpcDocumentHost::BindRenderer(
     // A retained document must not rebind itself into a restarted main process.
     // A new document receives a new DocumentService and can register normally.
     if (!IsCurrentRenderer()) {
+      std::move(callback).Run(false);
       ResetAndDeleteThis();
       return;
     }
@@ -316,12 +384,25 @@ void XenonIpcDocumentHost::BindRenderer(
     LOG(WARNING) << "RegisterElectronIpcRenderer: window_id=0; "
                     "BrowserWindow.fromWebContents will not resolve";
   }
-  XenonManager::GetInstance()->RegisterElectronIpcRenderer(
+  const bool accepted = XenonManager::GetInstance()->RegisterElectronIpcRenderer(
       container_id_, endpoint_id_, std::move(renderer),
       frame_id.child_id.GetUnsafeValue(), frame_id.frame_routing_id, window_id,
-      renderer_frame_url_, render_frame_host().IsInPrimaryMainFrame());
+      renderer_frame_url_, render_frame_host().IsInPrimaryMainFrame(),
+      BeginElectronDocumentRegistration(
+          &render_frame_host(), endpoint_id_,
+          base::BindRepeating(
+              [](base::WeakPtr<XenonIpcDocumentHost> self,
+                 const std::string& endpoint) {
+                return self && self->endpoint_id_ == endpoint &&
+                       self->IsCurrentRenderer() && self->IsAllowedDocument();
+              },
+              weak_factory_.GetWeakPtr(), endpoint_id_)));
   service_generation_ =
       XenonManager::GetInstance()->service_generation(container_id_);
+  // This ack covers Browser authorization and the document's pending identity.
+  // Utility acknowledges its actual registration separately; waiting for that
+  // here could deadlock a main process synchronously creating this window.
+  std::move(callback).Run(accepted);
 }
 
 void XenonIpcDocumentHost::UpdateRendererFrameUrl() {
@@ -336,6 +417,18 @@ void XenonIpcDocumentHost::UpdateRendererFrameUrl() {
       container_id_, endpoint_id_, url);
 }
 
+void XenonIpcDocumentHost::DidFinishNavigation(
+    content::NavigationHandle* navigation) {
+  if (!navigation->HasCommitted() || !navigation->IsSameDocument() ||
+      navigation->GetRenderFrameHost() != &render_frame_host() ||
+      !IsCurrentRenderer() || !IsAllowedDocument()) {
+    return;
+  }
+  // Hash/history navigation keeps this document and its endpoint alive. Keep
+  // the trusted URL current even when the page sends no application IPC.
+  UpdateRendererFrameUrl();
+}
+
 void XenonIpcDocumentHost::BindNodeAddonHost(
     mojo::PendingReceiver<xenon::ipc::mojom::NodeAddonHost> receiver,
     mojo::PendingRemote<xenon::ipc::mojom::IpcRenderer> callback_renderer) {
@@ -343,20 +436,46 @@ void XenonIpcDocumentHost::BindNodeAddonHost(
     ResetAndDeleteThis();
     return;
   }
+  if (!InitializeSandboxPolicy() ||
+      effective_preferences_->FindBool("sandbox").value_or(false)) {
+    return;
+  }
   XenonManager::GetInstance()->BindNodeAddonHost(container_id_, endpoint_id_,
                                                  std::move(receiver),
                                                  std::move(callback_renderer));
 }
 
+void XenonIpcDocumentHost::DidFirstNonEmptyLayout() {
+  if (!IsAllowedDocument() || !IsCurrentRenderer() ||
+      !render_frame_host().IsActive()) {
+    return;
+  }
+  XenonElectronWindowHost::GetInstance()->OnFirstNonEmptyLayout(
+      &render_frame_host());
+}
+
 void XenonIpcDocumentHost::Send(const std::string& channel,
                                 base::Value arguments) {
-  if (!IsAllowedDocument() || !IsCurrentRenderer()) {
+  if (!IsAllowedDocument() || !IsCurrentRenderer() ||
+      !AllowsSandboxChannel(channel, arguments)) {
     return;
   }
   UpdateRendererFrameUrl();
   XenonManager::GetInstance()->ElectronIpcSend(container_id_, endpoint_id_,
                                                channel, std::move(arguments),
                                                service_generation_);
+}
+
+void XenonIpcDocumentHost::PostMessage(const std::string& channel,
+                                     blink::TransferableMessage message) {
+  if (!IsAllowedDocument() || !IsCurrentRenderer() ||
+      !AllowsSandboxChannel(channel, base::Value())) {
+    return;
+  }
+  UpdateRendererFrameUrl();
+  XenonManager::GetInstance()->ElectronIpcPostMessage(
+      container_id_, endpoint_id_, channel, std::move(message),
+      service_generation_);
 }
 
 void XenonIpcDocumentHost::Invoke(const std::string& channel,
@@ -367,6 +486,10 @@ void XenonIpcDocumentHost::Invoke(const std::string& channel,
   if (!IsAllowedDocument() || !IsCurrentRenderer() ||
       channel == "__xenon:register-guest") {
     std::move(callback).Run(UnavailableResult());
+    return;
+  }
+  if (!AllowsSandboxChannel(channel, arguments)) {
+    std::move(callback).Run(SandboxDeniedResult());
     return;
   }
   UpdateRendererFrameUrl();
@@ -412,6 +535,10 @@ void XenonIpcDocumentHost::SendSync(const std::string& channel,
                                     SendSyncCallback callback) {
   if (!IsAllowedDocument() || !IsCurrentRenderer()) {
     std::move(callback).Run(UnavailableResult());
+    return;
+  }
+  if (!AllowsSandboxChannel(channel, arguments)) {
+    std::move(callback).Run(SandboxDeniedResult());
     return;
   }
   UpdateRendererFrameUrl();
@@ -466,6 +593,55 @@ void XenonIpcDocumentHost::SendSync(const std::string& channel,
   XenonManager::GetInstance()->ElectronIpcSendSync(
       container_id_, endpoint_id_, channel, std::move(arguments),
       std::move(callback), service_generation_);
+}
+
+bool XenonIpcDocumentHost::InitializeSandboxPolicy() {
+  if (effective_preferences_) {
+    return true;
+  }
+  auto* contents = content::WebContents::FromRenderFrameHost(&render_frame_host());
+  const base::DictValue* preferences = nullptr;
+  if (auto* guest = XenonElectronGuest::FromWebContents(contents)) {
+    preferences = &guest->preferences();
+  } else {
+    preferences = XenonElectronWindowHost::GetInstance()
+                      ->GetWebPreferencesForWebContents(contents);
+  }
+  const base::DictValue empty;
+  const std::string container = ResolveContainerId();
+  auto* manager = XenonManager::GetInstance();
+  auto normalized = manager->NormalizeElectronWebPreferences(
+      container, preferences ? *preferences : empty, preferences != nullptr);
+  if (!normalized.has_value()) {
+    LOG(ERROR) << "Electron document sandbox policy rejected: "
+               << normalized.error();
+    return false;
+  }
+  effective_preferences_ = std::move(*normalized);
+  // Ordinary authorized WebUI documents can expose the same full runtime.
+  // They also prevent a later opt-in from claiming to revoke escaped handles.
+  manager->NoteElectronSandboxDocument(container);
+  return true;
+}
+
+bool XenonIpcDocumentHost::AllowsSandboxChannel(
+    const std::string& channel,
+    const base::Value& arguments) {
+  if (!InitializeSandboxPolicy()) {
+    return false;
+  }
+  return !effective_preferences_->FindBool("sandbox").value_or(false) ||
+         ElectronSandboxPolicy::AllowsChannel(
+             channel, arguments,
+             effective_preferences_->FindBool("webviewTag").value_or(false));
+}
+
+xenon::ipc::mojom::IpcResultPtr XenonIpcDocumentHost::SandboxDeniedResult() const {
+  auto result = mojom::IpcResult::New();
+  result->success = false;
+  result->error = "ERR_ACCESS_DENIED: sandboxed renderer cannot access the "
+                  "privileged Node or application broker";
+  return result;
 }
 
 xenon::ipc::mojom::IpcResultPtr XenonIpcDocumentHost::UnavailableResult()

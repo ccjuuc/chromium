@@ -74,6 +74,17 @@ class XenonContextBridgeTest : public gin::V8Test {
     instance_->isolate()->LowMemoryNotification();
     task_environment_.RunUntilIdle();
   }
+  void RegisterIpcRenderer() {
+    auto* isolate = instance_->isolate();
+    v8::HandleScope handles(isolate);
+    auto preload = preload_.Get(isolate);
+    v8::Context::Scope scope(preload);
+    auto value = preload->Global()
+                     ->Get(preload, gin::StringToV8(isolate, "ipcRenderer"))
+                     .ToLocalChecked();
+    ASSERT_TRUE(value->IsObject());
+    bridge_->SetIpcRenderer(value.As<v8::Object>());
+  }
   scoped_refptr<XenonContextBridge> bridge_;
   v8::Global<v8::Context> preload_;
 };
@@ -128,6 +139,87 @@ TEST_F(XenonContextBridgeTest, CopiesArgumentsAndPreservesCallbackIdentity) {
           true));
   EXPECT_EQ("true",
             Evaluate("var cycle = api.cyclic(); cycle.self === cycle", true));
+}
+
+TEST_F(XenonContextBridgeTest, IpcEventsKeepDataWithoutExposingSender) {
+  Evaluate(R"JS(
+    let listener;
+    globalThis.ipcRenderer = {
+      _events: new Map([['message', [() => {}]]]),
+      send: () => { throw Error('Privileged IPC leaked'); },
+      invoke: () => { throw Error('Privileged IPC leaked'); },
+      get inaccessible() { throw Error('IPC properties must not be read'); },
+    };
+    contextBridge.exposeInMainWorld('api', {
+      on: callback => { listener = callback; },
+      emit: () => listener({sender: ipcRenderer, ports: []}, {language: 'en'}),
+      renderer: () => ipcRenderer,
+    });
+  )JS");
+  RegisterIpcRenderer();
+  EXPECT_EQ("en", Evaluate(R"JS(
+    var event, payload;
+    api.on((received, data) => { event = received; payload = data; });
+    api.emit();
+    payload.language;
+  )JS",
+                           true));
+  EXPECT_EQ("true", Evaluate(R"JS(
+    Object.getPrototypeOf(event) === Object.prototype &&
+    Object.getPrototypeOf(event.sender) === Object.prototype &&
+    Reflect.ownKeys(event.sender).length === 0 &&
+    typeof event.sender.send === 'undefined' &&
+    typeof event.sender.invoke === 'undefined' &&
+    Array.isArray(event.ports) && event.ports.length === 0 &&
+    Reflect.ownKeys(api.renderer()).length === 0;
+  )JS",
+                             true));
+  Evaluate("contextBridge.exposeInMainWorld('directIpc', ipcRenderer)");
+  EXPECT_EQ("true", Evaluate("Object.isFrozen(directIpc) && "
+                             "Reflect.ownKeys(directIpc).length === 0",
+                             true));
+}
+
+TEST_F(XenonContextBridgeTest, IpcRestrictionUsesIdentityInsteadOfObjectShape) {
+  Evaluate("globalThis.ipcRenderer = {send: () => 'private'};");
+  RegisterIpcRenderer();
+  Evaluate(R"JS(
+    contextBridge.exposeInMainWorld('api', {
+      allowed: {send: () => 'application method', invoke: () => 42},
+      nested: {sender: ipcRenderer, alias: ipcRenderer},
+    });
+  )JS");
+  EXPECT_EQ("application method", Evaluate("api.allowed.send()", true));
+  EXPECT_EQ("42", Evaluate("api.allowed.invoke()", true));
+  EXPECT_EQ("true", Evaluate("api.nested.sender === api.nested.alias && "
+                             "Reflect.ownKeys(api.nested.sender).length === 0",
+                             true));
+}
+
+TEST_F(XenonContextBridgeTest,
+       RejectsNativeHostObjectsInsteadOfCopyingMethods) {
+  auto* isolate = instance_->isolate();
+  v8::HandleScope handles(isolate);
+  auto preload = preload_.Get(isolate);
+  {
+    v8::Context::Scope scope(preload);
+    auto type = v8::ObjectTemplate::New(isolate);
+    type->SetInternalFieldCount(1);
+    auto host = type->NewInstance(preload).ToLocalChecked();
+    preload->Global()
+        ->CreateDataProperty(preload, gin::StringToV8(isolate, "host"), host)
+        .Check();
+  }
+  Evaluate("host.send = () => 'private';");
+  EXPECT_EQ("true", Evaluate(R"JS(
+    try {
+      contextBridge.exposeInMainWorld('nativeHost', host);
+      false;
+    } catch (error) {
+      error.message === 'Host objects cannot cross contextBridge';
+    }
+  )JS"));
+  EXPECT_EQ("undefined", Evaluate("typeof nativeHost", true));
 }
 
 TEST_F(XenonContextBridgeTest, ErrorsAndPromisesBelongToDestinationRealm) {

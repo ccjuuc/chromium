@@ -27,6 +27,7 @@
 #include "base/time/time.h"
 #include "build/blink_buildflags.h"
 #include "build/build_config.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "base/win/windows_types.h"
@@ -234,6 +235,13 @@ struct BASE_EXPORT LaunchOptions {
   // process environment.  Empty (the default) means to inherit the same
   // environment. See internal::AlterEnvironment().
   EnvironmentMap environment;
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // Preserve entries with empty values as KEY= instead of treating them as
+  // removals. Used with clear_environment for an explicit environment snapshot.
+  // Existing callers retain AlterEnvironment's default removal semantics.
+  bool preserve_empty_environment_values = false;
+#endif
 
   // Clear the environment for the new process before processing changes from
   // |environment|.

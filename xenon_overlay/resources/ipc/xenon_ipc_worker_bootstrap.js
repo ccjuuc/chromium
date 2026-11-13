@@ -47,6 +47,7 @@
   };
   ipcRenderer.addListener = ipcRenderer.on;
   ipcRenderer.off = ipcRenderer.removeListener;
+  transport.registerIpcRenderer?.(ipcRenderer);
   transport.setDispatchHandler((channel, args) => {
     const event = {sender: ipcRenderer};
     for (const listener of [...(listeners.get(channel) || [])]) {
@@ -56,7 +57,8 @@
   const contextBridge = transport.contextBridge;
   const electron = Object.freeze({ipcRenderer, contextBridge});
   Object.defineProperty(globalThis, 'process', {
-    value: Object.freeze({type: 'service-worker', contextIsolated: true, sandboxed: true}),
+    value: Object.freeze({type: 'service-worker', contextIsolated: true,
+      sandboxed: transport.sandboxed === true}),
   });
   Object.defineProperty(globalThis, 'require', {
     value(id) {

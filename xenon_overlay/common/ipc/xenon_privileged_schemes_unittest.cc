@@ -4,6 +4,7 @@
 
 #include "xenon_overlay/common/ipc/xenon_privileged_schemes.h"
 
+#include "base/base64.h"
 #include "base/base_paths.h"
 #include "base/check.h"
 #include "base/command_line.h"
@@ -41,7 +42,8 @@ constexpr char kCspDeclaration[] =
 constexpr char kSnapshotDescriptor[] =
     R"({"application":"unopened-app", "privilegedSchemes":[
   {"scheme":"sample-app", "privileges":{
-    "standard":true,"secure":true,"supportFetchAPI":true,"corsEnabled":true}},
+    "standard":true,"secure":true,"supportFetchAPI":true,"corsEnabled":true,
+    "codeCache":true,"allowServiceWorkers":false}},
   {"scheme":"crx", "privileges":{"bypassCSP":true}}
 ]})";
 
@@ -100,7 +102,8 @@ TEST(PrivilegedSchemesTest,
        R"([{"scheme":"sample","privileges":{"secure":1}}])",
        R"([{"scheme":"sample","privileges":{"unknown":false}}])",
        R"([{"scheme":"sample","privileges":{"bypassCSP":"true"}}])",
-       R"([{"scheme":"sample","privileges":{"allowServiceWorkers":true}}])",
+       R"([{"scheme":"sample","privileges":{"allowServiceWorkers":"true"}}])",
+       R"([{"scheme":"sample","privileges":{"codeCache":1}}])",
        R"([{"scheme":"sample","privileges":{"stream":true}}])",
        R"([{"scheme":"sample"},{"scheme":"SAMPLE","privileges":{"secure":true}}])",
        R"([{"scheme":"crx"},{"scheme":"CRX","privileges":{"bypassCSP":true}}])"}) {
@@ -113,6 +116,50 @@ TEST(PrivilegedSchemesTest,
   }
 }
 
+TEST(PrivilegedSchemesTest, RejectsEnabledUnsupportedPrivileges) {
+  for (const auto* name : {"stream", "allowServiceWorkers"}) {
+    for (const bool enabled : {false, true}) {
+      PrivilegedSchemes parsed;
+      std::string error;
+      const auto value = base::Value(base::ListValue().Append(
+          base::DictValue()
+              .Set("scheme", "fixture")
+              .Set("privileges", base::DictValue().Set(name, enabled))));
+      EXPECT_EQ(!enabled, ParsePrivilegedSchemes(value, &parsed, &error));
+      if (enabled) {
+        EXPECT_TRUE(error.starts_with("ERR_NOT_SUPPORTED:")) << error;
+      } else {
+        ASSERT_EQ(1u, parsed.size());
+        EXPECT_EQ("fixture", parsed[0].scheme);
+        EXPECT_TRUE(error.empty());
+      }
+    }
+  }
+}
+
+TEST(PrivilegedSchemesTest,
+     OptionalDeclarationsDoNotChangeEffectivePrivilegesOrDuplicateIdentity) {
+  PrivilegedSchemes expected;
+  std::string error;
+  ASSERT_TRUE(ParsePrivilegedSchemes(Json(kDeclaration), &expected, &error));
+  for (const bool enabled : {false, true}) {
+    auto value = Json(kDeclaration);
+    auto& privileges = *value.GetList()[0].GetDict().FindDict("privileges");
+    privileges.Set("codeCache", enabled);
+    privileges.Set("allowServiceWorkers", false);
+    value.GetList().Append(Json(kDeclaration).GetList()[0].Clone());
+    PrivilegedSchemes parsed;
+    ASSERT_TRUE(ParsePrivilegedSchemes(value, &parsed, &error)) << error;
+    EXPECT_EQ(expected, parsed);
+  }
+  PrivilegedSchemes parsed;
+  ASSERT_TRUE(
+      ParsePrivilegedSchemes(Json(R"([{"scheme":"optional-only","privileges":{
+        "codeCache":true,"allowServiceWorkers":false}}])"),
+                             &parsed, &error));
+  EXPECT_EQ((PrivilegedSchemes{{.scheme = "optional-only"}}), parsed);
+}
+
 TEST(PrivilegedSchemesTest, RejectsReservedSchemesCaseInsensitively) {
   for (const auto* scheme :
        {"HTTP", "https", "file", "blob", "data", "about", "javascript", "ws",
@@ -120,10 +167,10 @@ TEST(PrivilegedSchemesTest, RejectsReservedSchemesCaseInsensitively) {
     PrivilegedSchemes parsed;
     std::string error;
     base::ListValue list;
-    list.Append(base::DictValue()
-                    .Set("scheme", scheme)
-                    .Set("privileges",
-                         base::DictValue().Set("bypassCSP", true)));
+    list.Append(
+        base::DictValue()
+            .Set("scheme", scheme)
+            .Set("privileges", base::DictValue().Set("bypassCSP", true)));
     EXPECT_FALSE(
         ParsePrivilegedSchemes(base::Value(std::move(list)), &parsed, &error))
         << scheme;
@@ -342,6 +389,22 @@ MULTIPROCESS_TEST_MAIN(PrivilegedSchemeSnapshotChild) {
   EXPECT_TRUE(ValidatePrivilegedSchemesAgainstStartup(
       Json(kCspDeclaration).GetList(), &error))
       << error;
+  auto optional_declaration = Json(kDeclaration);
+  auto& privileges =
+      *optional_declaration.GetList()[0].GetDict().FindDict("privileges");
+  privileges.Set("codeCache", true);
+  privileges.Set("allowServiceWorkers", false);
+  EXPECT_TRUE(ValidatePrivilegedSchemesAgainstStartup(
+      optional_declaration.GetList(), &error))
+      << error;
+  privileges.Set("allowServiceWorkers", true);
+  EXPECT_FALSE(ValidatePrivilegedSchemesAgainstStartup(
+      optional_declaration.GetList(), &error));
+  EXPECT_TRUE(error.starts_with("ERR_NOT_SUPPORTED:")) << error;
+  privileges.Set("allowServiceWorkers", false);
+  privileges.Set("secure", false);
+  EXPECT_FALSE(ValidatePrivilegedSchemesAgainstStartup(
+      optional_declaration.GetList(), &error));
   EXPECT_FALSE(ValidatePrivilegedSchemesAgainstStartup(
       Json(R"([{"scheme":"crx","privileges":{"bypassCSP":false}}])").GetList(),
       &error));
@@ -394,6 +457,19 @@ MULTIPROCESS_TEST_MAIN(PrivilegedSchemeSnapshotBrowser) {
   child.RemoveSwitch("test-child-process");
   child.AppendSwitchASCII("type", "utility");
   AppendStartupPrivilegedSchemes(&child);
+  std::string decoded_snapshot;
+  CHECK(base::Base64Decode(
+      child.GetSwitchValueASCII("xenon-privileged-schemes-snapshot"),
+      &decoded_snapshot));
+  const auto snapshot = Json(decoded_snapshot);
+  const auto* serialized_schemes = snapshot.GetDict().FindList("schemes");
+  CHECK(serialized_schemes);
+  for (const auto& scheme : *serialized_schemes) {
+    const auto* privileges = scheme.GetDict().FindDict("privileges");
+    CHECK(privileges);
+    EXPECT_FALSE(privileges->contains("codeCache"));
+    EXPECT_FALSE(privileges->contains("allowServiceWorkers"));
+  }
   EXPECT_EQ(RunChild("PrivilegedSchemeSnapshotChild", child), 0);
   return testing::Test::HasFailure() ? 1 : 0;
 }

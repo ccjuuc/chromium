@@ -3,6 +3,9 @@
 // found in the LICENSE file.
 
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_guest.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_navigation.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_media_permission.h"
+#include "net/base/net_errors.h"
 
 #include <map>
 #include <memory>
@@ -18,10 +21,14 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_visibility_policy.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "ui/base/page_transition_types.h"
-#include "xenon_overlay/chrome/browser/xenon_manager.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_session_bridge.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_zoom.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_electron_keyboard.h"
+#include "xenon_overlay/chrome/browser/xenon_manager.h"
 
 namespace xenon::ipc {
 namespace {
@@ -42,25 +49,50 @@ int XenonElectronGuest::Attach(content::RenderFrameHost* frame,
                                const std::string& container_id,
                                base::DictValue preferences) {
   auto* owner = content::WebContents::FromRenderFrameHost(frame);
-  auto* context = owner->GetBrowserContext();
+  auto contents = CreateStandalone(owner->GetBrowserContext(), container_id,
+                                   std::move(preferences));
+  if (!contents) {
+    return 0;
+  }
+  const int id = FromWebContents(contents.get())->id();
+  owner->AttachInnerWebContents(std::move(contents), frame, false);
+  return id;
+}
+
+std::unique_ptr<content::WebContents> XenonElectronGuest::CreateStandalone(
+    content::BrowserContext* context,
+    const std::string& container_id,
+    base::DictValue preferences) {
+  if (!context) {
+    return nullptr;
+  }
+  auto normalized = XenonManager::GetInstance()->NormalizeElectronWebPreferences(
+      container_id, preferences);
+  if (!normalized.has_value()) {
+    return nullptr;
+  }
+  preferences = std::move(*normalized);
   const std::string* requested_partition = preferences.FindString("partition");
   const std::string partition = requested_partition ? *requested_partition : "";
   ResolveElectronSessionPartition(context, container_id, partition);
   content::WebContents::CreateParams params(context);
-  params.site_instance = content::SiteInstance::CreateForFixedStoragePartition(
-      context, GURL("about:blank"),
-      GetElectronSessionPartitionConfig(context, container_id, partition));
+  params.site_instance = CreateElectronSessionSiteInstance(
+      context, container_id, partition, GURL("about:blank"));
   auto contents = content::WebContents::Create(params);
+  if (!contents) {
+    return nullptr;
+  }
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+  content::SetWebContentsOcclusionEnabled(contents.get(), false);
+#endif
   auto guest = std::unique_ptr<XenonElectronGuest>(new XenonElectronGuest(
       contents.get(), container_id, std::move(preferences)));
-  const int id = guest->id();
   contents->SetDelegate(guest.get());
   contents->SetUserData(kGuestKey, std::move(guest));
   // Recompute after attaching the identity, before creating the first document
   // and its network factory.
   contents->OnWebPreferencesChanged();
-  owner->AttachInnerWebContents(std::move(contents), frame, false);
-  return id;
+  return contents;
 }
 
 XenonElectronGuest* XenonElectronGuest::FromWebContents(
@@ -91,14 +123,73 @@ XenonElectronGuest::XenonElectronGuest(content::WebContents* contents,
 }
 
 XenonElectronGuest::~XenonElectronGuest() {
+  ConfigureElectronKeyboardInput(web_contents(), container_id_, id_, false);
   Guests().erase(id_);
 }
 
-void XenonElectronGuest::LoadURL(const std::string& url) {
+void XenonElectronGuest::SetCloseCallback(base::RepeatingClosure callback) {
+  close_callback_ = std::move(callback);
+}
+
+void XenonElectronGuest::CloseContents(content::WebContents* source) {
+  Notify("close");
+  auto callback = close_callback_;
+  if (callback) {
+    callback.Run();
+  }
+}
+
+void XenonElectronGuest::BeforeUnloadFired(content::WebContents* source,
+                                           bool proceed,
+                                           bool* proceed_to_fire_unload) {
+  *proceed_to_fire_unload = proceed;
+  if (!proceed) {
+    Notify("will-prevent-unload");
+  }
+}
+
+void XenonElectronGuest::ReadyToCommitNavigation(
+    content::NavigationHandle* navigation) {
+  if (!navigation->IsSameDocument()) {
+    ConfigureElectronKeyboardInput(web_contents(), container_id_, id_, false);
+  }
+}
+
+void XenonElectronGuest::RenderFrameCreated(content::RenderFrameHost* frame) {
+  if (frame->IsActive()) {
+    ConfigureElectronKeyboardInput(web_contents(), container_id_, id_,
+                                   observes_before_input_, false);
+  }
+}
+
+void XenonElectronGuest::RequestMediaAccessPermission(
+    content::WebContents* contents,
+    const content::MediaStreamRequest& request,
+    content::MediaResponseCallback callback) {
+  if (!HandleElectronMediaAccessRequest(contents, request, callback)) {
+    content::WebContentsDelegate::RequestMediaAccessPermission(
+        contents, request, std::move(callback));
+  }
+}
+
+bool XenonElectronGuest::CheckMediaAccessPermission(
+    content::RenderFrameHost* frame,
+    const url::Origin& origin,
+    blink::mojom::MediaStreamType type) {
+  if (auto allowed = CheckElectronMediaAccessPermission(frame, origin, type)) {
+    return *allowed;
+  }
+  return content::WebContentsDelegate::CheckMediaAccessPermission(frame, origin,
+                                                               type);
+}
+
+void XenonElectronGuest::LoadURL(
+    const std::string& url,
+    base::OnceCallback<void(base::Value, std::string)> reply) {
   content::NavigationController::LoadURLParams params{GURL(url)};
   params.transition_type = ui::PAGE_TRANSITION_AUTO_TOPLEVEL;
   params.override_user_agent = content::NavigationController::UA_OVERRIDE_TRUE;
-  web_contents()->GetController().LoadURLWithParams(params);
+  LoadElectronURL(web_contents(), params, std::move(reply));
 }
 
 bool XenonElectronGuest::Call(const std::string& command,
@@ -112,9 +203,29 @@ bool XenonElectronGuest::Call(const std::string& command,
   }
   const auto* options = arguments.GetIfDict();
   *result = base::Value();
-  if (command == "get-os-process-id") {
-    const auto& process = contents->GetPrimaryMainFrame()->GetProcess()->GetProcess();
-    *result = base::Value(process.IsValid() ? static_cast<int>(process.Pid()) : 0);
+  if (command == "observe-before-input") {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    const auto enabled = options ? options->FindBool("enabled") : std::nullopt;
+    if (!enabled) {
+      *error = "observe-before-input expects a boolean enabled";
+      return false;
+    }
+    observes_before_input_ = *enabled;
+    ConfigureElectronKeyboardInput(contents, container_id_, id_,
+                                   observes_before_input_, false);
+#else
+    *error = "before-input-event requires ENABLE_XENON_SERVICE";
+    return false;
+#endif
+  } else if (command == "set-visual-zoom-limits") {
+    return SetElectronVisualZoomLimits(contents, arguments, error);
+  } else if (command == "get-zoom-level" || command == "set-zoom-level") {
+    return CallElectronPageZoom(contents, command, arguments, result, error);
+  } else if (command == "get-os-process-id") {
+    const auto& process =
+        contents->GetPrimaryMainFrame()->GetProcess()->GetProcess();
+    *result =
+        base::Value(process.IsValid() ? static_cast<int>(process.Pid()) : 0);
   } else if (command == "get-user-agent") {
     auto ua = contents->GetUserAgentOverride().ua_string_override;
     *result = base::Value(ua.empty() ? embedder_support::GetUserAgent() : ua);
@@ -155,8 +266,20 @@ void XenonElectronGuest::DOMContentLoaded(content::RenderFrameHost* frame) {
 }
 void XenonElectronGuest::DidFinishLoad(content::RenderFrameHost* frame,
                                        const GURL& url) {
-  if (frame == web_contents()->GetPrimaryMainFrame()) {
+  if (frame == web_contents()->GetPrimaryMainFrame() && !frame->IsErrorDocument()) {
     Notify("did-finish-load");
+  }
+}
+void XenonElectronGuest::DidFailLoad(content::RenderFrameHost* frame,
+                                    const GURL& url,
+                                    int error) {
+  if (frame == web_contents()->GetPrimaryMainFrame() && !frame->IsErrorDocument()) {
+    Notify("did-fail-load",
+           base::Value(base::DictValue()
+                           .Set("errorCode", error)
+                           .Set("errorDescription", net::ErrorToShortString(error))
+                           .Set("validatedURL", url.spec())
+                           .Set("isMainFrame", true)));
   }
 }
 void XenonElectronGuest::DidStartLoading() {
@@ -166,6 +289,8 @@ void XenonElectronGuest::DidStopLoading() {
   Notify("did-stop-loading");
 }
 void XenonElectronGuest::DidFinishNavigation(content::NavigationHandle* nav) {
+  ConfigureElectronKeyboardInput(web_contents(), container_id_, id_,
+                                 observes_before_input_, false);
   if (!nav->IsInPrimaryMainFrame()) {
     return;
   }
@@ -176,6 +301,7 @@ void XenonElectronGuest::DidFinishNavigation(content::NavigationHandle* nav) {
   details.Set("canGoForward", web_contents()->GetController().CanGoForward());
   if (nav->GetNetErrorCode() != 0) {
     details.Set("errorCode", nav->GetNetErrorCode());
+    details.Set("errorDescription", net::ErrorToShortString(nav->GetNetErrorCode()));
     details.Set("validatedURL", nav->GetURL().spec());
     Notify("did-fail-load", base::Value(std::move(details)));
   } else if (nav->HasCommitted()) {

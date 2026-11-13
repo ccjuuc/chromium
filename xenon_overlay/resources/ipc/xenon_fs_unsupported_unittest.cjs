@@ -52,7 +52,7 @@ function createRenderer() {
 test('unsupported renderer fs descriptor and watcher APIs fail explicitly', () => {
   const {fs, calls} = createRenderer();
   for (const method of [
-    'openSync', 'closeSync', 'readSync', 'writeSync', 'chmodSync', 'chownSync',
+    'openSync', 'closeSync', 'readSync', 'writeSync', 'chownSync',
     'watch', 'watchFile', 'unwatchFile',
   ]) {
     assert.throws(() => fs[method]('C:\\test-app\\unused'),
@@ -67,7 +67,7 @@ test('unsupported renderer fs callbacks receive one asynchronous error', async (
   const {fs, calls} = createRenderer();
   const methods = {
     open: ['unused', 'r'], close: [3], read: [3, new Uint8Array(4), 0, 4, 0],
-    write: [3, 'data'], chmod: ['unused', 0o644], chown: ['unused', 1, 1],
+    write: [3, 'data'], chown: ['unused', 1, 1],
   };
   for (const [method, args] of Object.entries(methods)) {
     let returned = false;
@@ -94,7 +94,7 @@ test('unsupported renderer fs callbacks receive one asynchronous error', async (
 
 test('unsupported renderer fs callbacks validate callback arguments synchronously', () => {
   const {fs, calls} = createRenderer();
-  for (const method of ['open', 'close', 'read', 'write', 'chmod', 'chown']) {
+  for (const method of ['open', 'close', 'read', 'write', 'chown']) {
     for (const callback of [undefined, null, 1, 'callback', {}]) {
       assert.throws(() => fs[method]('unused', callback),
           {name: 'TypeError', code: 'ERR_INVALID_ARG_TYPE'}, method);
@@ -105,7 +105,7 @@ test('unsupported renderer fs callbacks validate callback arguments synchronousl
 
 test('unsupported renderer fs Promise APIs reject instead of returning handles', async () => {
   const {fs, calls} = createRenderer();
-  for (const method of ['open', 'chmod', 'chown']) {
+  for (const method of ['open', 'chown']) {
     let result;
     assert.doesNotThrow(() => { result = fs.promises[method]('unused', 'r'); });
     assert.equal(typeof result.then, 'function');

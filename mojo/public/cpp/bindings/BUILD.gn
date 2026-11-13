@@ -275,6 +275,7 @@ component("bindings") {
     "//ipc:param_traits",
     "//mojo/public/cpp/system",
     "//mojo/public/interfaces/bindings",
+    "//xenon_overlay/buildflags",
   ]
 
   deps = [ "//mojo/core/embedder" ]

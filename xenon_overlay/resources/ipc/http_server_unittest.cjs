@@ -34,8 +34,9 @@ function load(kind) {
     SharedArrayBuffer, TextEncoder, TextDecoder, atob, btoa, console,
     queueMicrotask, setTimeout, clearTimeout});
   if (kind !== 'node') {
-    for (const name of ['events', 'buffer']) {
-      vm.runInContext(fs.readFileSync(path.join(__dirname, kind, `${name}.js`), 'utf8'), context);
+    for (const name of [`${kind}/events.js`, 'common/buffer_numeric.js',
+      'common/buffer.js', 'common/promisify.js', `${kind}/buffer.js`]) {
+      vm.runInContext(fs.readFileSync(path.join(__dirname, name), 'utf8'), context);
     }
   }
   vm.runInContext(fs.readFileSync(path.join(__dirname, 'common/http_server.js'), 'utf8'), context);
@@ -48,14 +49,25 @@ function loadWired(kind) {
   const context = vm.createContext({Buffer, EventEmitter, Uint8Array, ArrayBuffer,
     SharedArrayBuffer, TextEncoder, TextDecoder, atob, btoa, console, URL, URLSearchParams,
     queueMicrotask, setTimeout, clearTimeout, netModule: net,
+    pathModule: path, urlModule: require('node:url'),
     __xenonHttpRequest: () => ({id: 1, promise: Promise.resolve(response)}),
     __xenonHttpAbort() {}, transport: {invoke: async () => response},
     builtinModuleNames: new Set(['http', 'https']), builtinModuleCache: new Map(),
     hostedCjsCache: Object.create(null)});
-  for (const name of ['events', 'buffer']) {
-    vm.runInContext(fs.readFileSync(path.join(__dirname, kind, `${name}.js`), 'utf8'), context);
+  for (const name of [`${kind}/events.js`, 'common/buffer_numeric.js',
+    'common/buffer.js', 'common/promisify.js', `${kind}/buffer.js`]) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, name), 'utf8'), context);
+  }
+  if (kind === 'main') {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, 'main/event_target.js'), 'utf8') + `
+      Object.assign(globalThis, createMainEventClasses(error => {
+        queueMicrotask(() => { throw error; });
+      }, () => Date.now()));
+    `, context);
   }
   vm.runInContext(fs.readFileSync(path.join(__dirname, 'common/http_server.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, 'common/module.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, 'common/http_upgrade.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, kind,
     kind === 'main' ? 'http.js' : 'modules.js'), 'utf8'), context);
   return kind === 'main' ? vm.runInContext('({http: httpModule, https: httpsModule})', context) :
@@ -113,6 +125,28 @@ function responseBody(raw) {
   assert.notEqual(end, -1, 'response contains headers');
   assert.match(raw.subarray(0, end).toString(), /^HTTP\/1\.1 200 /);
   return raw.subarray(end + 4);
+}
+
+for (const kind of ['main', 'renderer']) {
+  test(`${kind}: STATUS_CODES matches Node and supplies real response reason phrases`, async t => {
+    const {http, https} = loadWired(kind);
+    assert.deepEqual({...http.STATUS_CODES}, {...nodeHttp.STATUS_CODES});
+    assert.equal(Object.keys(http).includes('STATUS_CODES'), true);
+    assert.equal(Object.hasOwn(https, 'STATUS_CODES'), false);
+    const {connect} = await fixture(t, http, (req, res) => {
+      res.statusCode = 429;
+      res.end('limited');
+    });
+    const first = await connect();
+    await first.frame('GET / HTTP/1.1\r\nHost: fixture\r\nConnection: close\r\n\r\n');
+    await bounded(first.closed);
+    assert.match(first.raw().toString(), /^HTTP\/1\.1 429 Too Many Requests\r\n/);
+    http.STATUS_CODES[429] = 'Application Reason';
+    const second = await connect();
+    await second.frame('GET / HTTP/1.1\r\nHost: fixture\r\nConnection: close\r\n\r\n');
+    await bounded(second.closed);
+    assert.match(second.raw().toString(), /^HTTP\/1\.1 429 Application Reason\r\n/);
+  });
 }
 
 for (const kind of ['node', 'main', 'renderer']) {

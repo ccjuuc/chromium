@@ -5,6 +5,7 @@
 #ifndef XENON_OVERLAY_CHROME_BROWSER_NAPI_JS_NATIVE_API_V8_H_
 #define XENON_OVERLAY_CHROME_BROWSER_NAPI_JS_NATIVE_API_V8_H_
 
+#include <cstdint>
 #include <memory>
 #include <unordered_set>
 #include <vector>
@@ -43,7 +44,7 @@ struct napi_escapable_handle_scope__ {
 };
 
 struct napi_ref__ {
-  explicit napi_ref__(napi_env env);
+  napi_ref__(napi_env env, v8::Local<v8::Value> value);
   ~napi_ref__();
 
   void SetWeak();
@@ -52,6 +53,7 @@ struct napi_ref__ {
   NAPI_RAW_PTR_EXCLUSION v8::Isolate* isolate;
   NAPI_RAW_PTR_EXCLUSION napi_env env;
   v8::Global<v8::Value> global_value;
+  const bool can_be_weak;
   uint32_t ref_count = 0;
   bool is_weak = false;
 };
@@ -76,6 +78,10 @@ using XenonUvRunFunction = int (*)(uv_loop_t* loop, int mode);
 using XenonUvLoopAliveFunction = int (*)(const uv_loop_t* loop);
 
 struct napi_env__ {
+  // Node uses version 8 semantics for addons without an API-version export.
+  // This is the addon's requested contract, not the host's supported API set.
+  static constexpr int32_t kDefaultModuleApiVersion = 8;
+
   struct CleanupHook {
     napi_cleanup_hook callback;
     NAPI_RAW_PTR_EXCLUSION void* arg;
@@ -83,13 +89,19 @@ struct napi_env__ {
     bool operator==(const CleanupHook&) const = default;
   };
 
-  napi_env__(v8::Isolate* iso, v8::Local<v8::Context> ctx);
+  napi_env__(v8::Isolate* iso,
+             v8::Local<v8::Context> ctx,
+             int32_t api_version = kDefaultModuleApiVersion);
   ~napi_env__();
 
   NAPI_RAW_PTR_EXCLUSION v8::Isolate* isolate;
+  const int32_t module_api_version;
   v8::Global<v8::Context> context;
   v8::Global<v8::Value> last_exception;
   NAPI_RAW_PTR_EXCLUSION uv_loop_t* uv_loop = nullptr;
+  // Only the shared executor pumps the process-global libuv loop. Contexts
+  // without their own host loop must not accidentally schedule work on it.
+  bool allow_default_uv_loop = true;
   NAPI_RAW_PTR_EXCLUSION XenonUvRunFunction uv_run_function = nullptr;
   NAPI_RAW_PTR_EXCLUSION XenonUvLoopAliveFunction uv_loop_alive_function =
       nullptr;
@@ -108,6 +120,12 @@ struct napi_env__ {
   std::unordered_set<napi_async_context> async_contexts;
   napi_async_context active_async_context = nullptr;
   size_t async_callback_depth = 0;
+  size_t native_callback_depth = 0;
+  // Owner-sequence registries. Worker/producer threads never mutate these;
+  // their queued completion/finalizer keeps its entry until it returns.
+  std::unordered_set<napi_async_work> async_work;
+  std::unordered_set<napi_threadsafe_function> threadsafe_functions;
+  size_t pending_async_work = 0;
   // A host may explicitly handle an uncaught native callback exception in
   // this environment's realm. Returning false (or no handler) is fatal; no
   // exception is forwarded to an unrelated Electron/renderer context.
@@ -125,7 +143,19 @@ struct napi_env__ {
   void TrimAllocatedValues(size_t new_size);
   bool IsLiveValue(napi_value v) const;
 
+  // Enter this env's V8 realm before calling. Beginning shutdown closes new
+  // work admission; polling never blocks or disposes the env/realm itself.
+  void BeginShutdown();
+  bool PollShutdown();
+  bool HasPendingWork() const;
+  bool IsClosing() const { return closing_; }
+
   v8::Local<v8::Context> GetContext() const { return context.Get(isolate); }
+
+ private:
+  void RunCleanupHooks();
+  bool closing_ = false;
+  bool finalizing_ = false;
 };
 
 namespace v8impl {

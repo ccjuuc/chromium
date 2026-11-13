@@ -338,8 +338,14 @@ Process LaunchProcess(const std::vector<std::string>& argv,
     // contract (see environment_internal.h) that each string it returns is
     // null-terminated, satisfying this requirement. See:
     // https://leopard-adc.pepas.com/documentation/Darwin/Reference/ManPages/man7/environ.7.html
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    owned_environ = UNSAFE_BUFFERS(internal::AlterEnvironment(
+        new_environ, new_environment_map,
+        options.preserve_empty_environment_values));
+#else
     owned_environ = UNSAFE_BUFFERS(
         internal::AlterEnvironment(new_environ, new_environment_map));
+#endif
   }
 
   const char* executable_path = !options.real_path.empty()

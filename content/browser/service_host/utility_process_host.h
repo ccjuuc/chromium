@@ -25,6 +25,11 @@
 #include "media/media_buildflags.h"
 #include "mojo/public/cpp/bindings/generic_pending_receiver.h"
 #include "sandbox/policy/mojom/sandbox.mojom.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/public/utility_process_launch_options.h"
+#endif
 
 #if BUILDFLAG(USE_ZYGOTE)
 #include "content/public/common/zygote/zygote_handle.h"
@@ -163,6 +168,11 @@ class CONTENT_EXPORT UtilityProcessHost final
     // Specifies the process priority of the launched utility process.
     Options& WithPriority(base::Process::Priority priority);
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    Options& WithXenonUtilityProcessOptions(
+        std::unique_ptr<xenon::UtilityProcessLaunchOptions> options);
+#endif
+
     // Passes the contents of this Options object to a newly returned Options
     // value. This can be called when moving an in-line built Options object
     // directly into a call to `Start`.
@@ -216,6 +226,9 @@ class CONTENT_EXPORT UtilityProcessHost final
 
     // The process priority to apply to the process after launch.
     std::optional<base::Process::Priority> priority_;
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    std::unique_ptr<xenon::UtilityProcessLaunchOptions> xenon_utility_options_;
+#endif
   };
 
   // Creates and starts a new UtilityProcessHost with the specified `Options`.

@@ -10,6 +10,10 @@
 
 namespace xenon::ipc {
 
+// Returns the current OS process environment as a UTF-8 dictionary, including
+// empty values. Like Node's enumeration, omits Windows hidden drive entries.
+mojom::IpcResultPtr GetProcessEnvironment();
+
 // Returns a fresh node:os networkInterfaces() snapshot. May block; callers on
 // the browser UI sequence must dispatch this to a blocking task runner.
 mojom::IpcResultPtr GetNetworkInterfaces();

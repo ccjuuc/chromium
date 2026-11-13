@@ -636,6 +636,11 @@ ResultCode LaunchWithoutSandbox(
     base::Process* process) {
   base::LaunchOptions options;
   options.handles_to_inherit = handles_to_inherit;
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (!delegate->ApplyXenonUtilityProcessOptions(&options)) {
+    return SBOX_ERROR_CANNOT_LAUNCH_UNSANDBOXED_PROCESS;
+  }
+#endif
   options.feedback_cursor_off = true;
   // Network process runs in a job even when unsandboxed. This is to ensure it
   // does not outlive the browser, which could happen if there is a lot of I/O

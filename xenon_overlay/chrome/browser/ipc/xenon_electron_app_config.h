@@ -8,6 +8,7 @@
 #include <string>
 
 #include "base/files/file_path.h"
+#include "base/types/expected.h"
 #include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
 
 namespace xenon::ipc {
@@ -18,6 +19,13 @@ bool LoadElectronAppConfig(const base::FilePath& path,
                            const std::string& container_id,
                            mojom::IpcMainConfigPtr* config,
                            std::string* error);
+
+// Pure path resolution: no filesystem access or directory migration. Explicit
+// storage_id wins, then a stable named container; direct default-container
+// launches fall back to the selected installation path. Names/versions do not
+// participate. The host path remains unchanged in the configuration.
+base::expected<base::FilePath, std::string>
+ResolveElectronAppStorageUserDataPath(const mojom::IpcMainConfig& config);
 
 }  // namespace xenon::ipc
 

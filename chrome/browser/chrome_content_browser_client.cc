@@ -459,12 +459,18 @@
 
 #if BUILDFLAG(ENABLE_XENON_SERVICE)
 #include "xenon_overlay/chrome/browser/asar/xenon_asar_url_loader_factory.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_app_command_line.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_guest.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_protocol.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_session_bridge.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_web_request.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_zoom.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
 #include "xenon_overlay/common/ipc/xenon_privileged_schemes.h"
+#include "xenon_overlay/common/ipc/xenon_renderer_command_line.h"
 #include "xenon_overlay/public/mojom/xenon_service.mojom.h"
+#include "xenon_overlay/public/mojom/xenon_utility_process.mojom.h"
 #endif
 
 #if BUILDFLAG(XENON_GM) && BUILDFLAG(IS_WIN) && defined(ARCH_CPU_X86_64)
@@ -1546,6 +1552,7 @@ bool ApplyHostedElectronWebPreferences(WebContents* web_contents,
       preferences->FindBool("backgroundThrottling").value_or(true);
   changed |= web_prefs->background_throttling != background_throttling;
   web_prefs->background_throttling = background_throttling;
+  changed |= xenon::ipc::ApplyElectronVisualZoomLimits(web_contents, web_prefs);
   // Electron defaults mixed-content permission to !webSecurity, while still
   // honoring an explicit allowRunningInsecureContent preference.
   if (preferences->contains("webSecurity") ||
@@ -2982,6 +2989,25 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
     int child_process_id) {
 #if BUILDFLAG(ENABLE_XENON_SERVICE)
   xenon::ipc::AppendStartupPrivilegedSchemes(command_line);
+  if (command_line->GetSwitchValueASCII(switches::kProcessType) ==
+      switches::kRendererProcess) {
+    bool application_partition = false;
+    if (auto* process = content::RenderProcessHost::FromID(child_process_id)) {
+      if (const auto identity = xenon::ipc::FindElectronSessionIdentity(
+              process->GetStoragePartition())) {
+        application_partition = true;
+        const auto generation =
+            xenon::XenonManager::GetInstance()->service_generation(
+                identity->container_id);
+        xenon::ipc::AppendElectronAppRendererCommandLine(
+            identity->container_id + ":" + base::NumberToString(generation),
+            command_line);
+      }
+    }
+    xenon::ipc::AppendElectronIpcRendererHints(
+        *base::CommandLine::ForCurrentProcess(), application_partition,
+        command_line);
+  }
 #endif
   crash_keys::AppendStringAnnotationsCommandLineSwitch(command_line);
 #if BUILDFLAG(IS_MAC)
@@ -3041,10 +3067,6 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
 #endif
 
   if (process_type == switches::kRendererProcess) {
-    if (browser_command_line.HasSwitch(xenon::ipc::switches::kEnable)) {
-      command_line->AppendSwitch(xenon::ipc::switches::kEnable);
-    }
-
     content::RenderProcessHost* process =
         content::RenderProcessHost::FromID(child_process_id);
     if (process) {
@@ -5619,7 +5641,8 @@ bool ChromeContentBrowserClient::IsUtilityCetCompatible(
   // and kServiceWithJit processes, V8 deoptimization requires a CET opt-out
   // until this build supports CET shadow stacks. This applies to the service,
   // regardless of which application it hosts.
-  if (utility_sub_type == xenon::mojom::XenonMainService::Name_) {
+  if (utility_sub_type == xenon::mojom::XenonMainService::Name_ ||
+      utility_sub_type == xenon::ipc::mojom::UtilityProcessService::Name_) {
     return false;
   }
 #endif
@@ -6286,13 +6309,14 @@ ChromeContentBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
   content::BrowserContext* browser_context = web_contents->GetBrowserContext();
 
 #if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (auto factory = xenon::ipc::CreateElectronProtocolURLLoaderFactory(web_contents, scheme)) {
+    return factory;
+  }
   if (scheme == url::kFileScheme &&
       xenon::XenonElectronWindowHost::GetInstance()
               ->FindWindowIdForWebContents(web_contents) != 0) {
+    // Navigation factories pass through WillCreateURLLoaderFactory below.
     return xenon::CreateAsarURLLoaderFactory();
-  }
-  if (auto factory = xenon::ipc::CreateElectronProtocolURLLoaderFactory(web_contents, scheme)) {
-    return factory;
   }
 #endif
 
@@ -6708,10 +6732,6 @@ void ChromeContentBrowserClient::
         // !BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(ENABLE_XENON_SERVICE)
-  for (const auto& scheme : xenon::ipc::GetElectronProtocolSchemes(web_contents)) {
-    factories->insert_or_assign(scheme,
-        xenon::ipc::CreateElectronProtocolURLLoaderFactory(web_contents, scheme));
-  }
   if (web_contents && request_initiator_origin) {
     auto* window_host = xenon::XenonElectronWindowHost::GetInstance();
     auto* guest = xenon::ipc::XenonElectronGuest::FromWebContents(web_contents);
@@ -6727,9 +6747,16 @@ void ChromeContentBrowserClient::
         (request_initiator_origin->scheme() == url::kFileScheme ||
          xenon::XenonManager::GetInstance()->IsDeclaredFileRendererOrigin(
              container_id, *request_initiator_origin))) {
+      // Non-network subresource factories also pass through
+      // WillCreateURLLoaderFactory, which installs webRequest interception.
       factories->insert_or_assign(url::kFileScheme,
                                   xenon::CreateAsarURLLoaderFactory());
     }
+  }
+  // A session's explicit handler takes precedence over the normal file loader.
+  for (const auto& scheme : xenon::ipc::GetElectronProtocolSchemes(web_contents)) {
+    factories->insert_or_assign(scheme,
+        xenon::ipc::CreateElectronProtocolURLLoaderFactory(web_contents, scheme));
   }
 #endif
 
@@ -6853,6 +6880,19 @@ void ChromeContentBrowserClient::WillCreateURLLoaderFactory(
       *bypass_redirect_checks = use_proxy_for_web_request;
     }
   }
+#endif
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // Match the actual Session partition, including worker factories without a
+  // RenderFrameHost. Unknown partitions must not inherit an app's listeners.
+  auto* xenon_process = content::RenderProcessHost::FromID(render_process_id);
+  auto* xenon_partition = frame ? frame->GetStoragePartition()
+                               : (xenon_process
+                                      ? xenon_process->GetStoragePartition()
+                                      : nullptr);
+  xenon::ipc::AppendElectronWebRequestProxy(
+      browser_context, xenon_partition, factory_builder, is_for_network_service,
+      header_client);
 #endif
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
@@ -7427,6 +7467,20 @@ bool ChromeContentBrowserClient::HandleExternalProtocol(
     const net::IsolationInfo& isolation_info,
     mojo::PendingRemote<network::mojom::URLLoaderFactory>* out_factory) {
   CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (auto* contents = web_contents_getter.Run();
+      contents && contents->GetPrimaryMainFrame() &&
+      xenon::ipc::FindElectronSessionProvenance(
+          contents->GetPrimaryMainFrame()->GetStoragePartition())) {
+    // Registered Session protocols have already selected their own factory.
+    // A remaining unknown scheme is a failed application navigation. Returning
+    // false makes NavigationURLLoader report ERR_UNKNOWN_URL_SCHEME, without
+    // entering Chrome's external-app dialog flow for an unowned browser tab.
+    // Explicit shell.openExternal calls use their separate Electron API.
+    return false;
+  }
+#endif
 
 #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
     BUILDFLAG(IS_WIN)

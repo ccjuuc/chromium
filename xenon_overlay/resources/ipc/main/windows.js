@@ -105,11 +105,7 @@
       });
       this._userAgent = '';
       this._downloadPath = '';
-      this.webRequest = Object.fromEntries([
-        'onBeforeRequest', 'onBeforeSendHeaders', 'onSendHeaders',
-        'onHeadersReceived', 'onResponseStarted', 'onBeforeRedirect',
-        'onCompleted', 'onErrorOccurred',
-      ].map(method => [method, () => electronUnsupported(`webRequest.${method}`)]));
+      this.webRequest = createSessionWebRequest(this.partition);
       this.cookies = Object.fromEntries(['get', 'set', 'remove', 'flushStore']
           .map(method => [method, async () => electronUnsupported(`cookies.${method}`)]));
       this.protocol = createSessionProtocol(this.partition);
@@ -136,6 +132,7 @@
     }
     async setProxy(config) { return electronUnsupported('session.setProxy'); }
     async resolveProxy(url) { return electronUnsupported('session.resolveProxy'); }
+    fetch(input, init) { return electronNet.fetchSession(this, input, init); }
     async clearCache() { return electronUnsupported('session.clearCache'); }
     async clearStorageData(options) { return electronUnsupported('session.clearStorageData'); }
     async clearAuthCache() { return electronUnsupported('session.clearAuthCache'); }
@@ -144,8 +141,15 @@
     enableNetworkEmulation(options) { return electronUnsupported('session.enableNetworkEmulation'); }
     disableNetworkEmulation() { return electronUnsupported('session.disableNetworkEmulation'); }
     setCertificateVerifyProc(proc) { return electronUnsupported('session.setCertificateVerifyProc'); }
-    setPermissionRequestHandler(handler) { return electronUnsupported('session.setPermissionRequestHandler'); }
-    setPermissionCheckHandler(handler) { return electronUnsupported('session.setPermissionCheckHandler'); }
+    setPermissionRequestHandler(handler) {
+      setSessionPermissionHandler(this.partition, 'request', handler);
+    }
+    setPermissionCheckHandler(handler) {
+      setSessionPermissionHandler(this.partition, 'check', handler);
+    }
+    setDisplayMediaRequestHandler(handler, options) {
+      setSessionPermissionHandler(this.partition, 'display', handler, options);
+    }
     async getBlobData(identifier) { return electronUnsupported('session.getBlobData'); }
     createInterruptedDownload(options) { return electronUnsupported('session.createInterruptedDownload'); }
   }
@@ -166,6 +170,7 @@
     fromPartition: (partition) => getSession(partition),
   };
 
+  const reportedDeferredSchemePrivileges = new Set();
   const protocol = {
     registerSchemesAsPrivileged(customSchemes) {
       if (appReady) {
@@ -177,9 +182,10 @@
       }
       const privilegeNames = new Set([
         'standard', 'secure', 'bypassCSP', 'allowServiceWorkers',
-        'supportFetchAPI', 'corsEnabled', 'stream',
+        'supportFetchAPI', 'corsEnabled', 'stream', 'codeCache',
       ]);
       const schemes = new Set();
+      const deferredPrivileges = new Set();
       for (const entry of customSchemes) {
         if (!entry || typeof entry !== 'object' || Array.isArray(entry) ||
             typeof entry.scheme !== 'string' ||
@@ -198,6 +204,12 @@
             if (!privilegeNames.has(name) || typeof value !== 'boolean') {
               throw new TypeError('Invalid custom scheme privilege: ' + name);
             }
+            if (value && (name === 'stream' || name === 'allowServiceWorkers')) {
+              return electronUnsupported('Custom scheme privilege ' + name);
+            }
+            if (value && name === 'codeCache') {
+              deferredPrivileges.add(scheme + ': ' + name);
+            }
           }
         }
       }
@@ -207,7 +219,16 @@
       // 各模块可在 ready 前分次声明；每次都由宿主核对启动时冻结的权限，
       // 不在运行期增加或覆盖 Chromium 的协议权限。
       globalThis.__xenonRegisterSchemesAsPrivileged(customSchemes);
-      declareProtocolSchemes(customSchemes);
+      // Code caching is an optional optimization. Its declaration does not
+      // change the startup privileges or imply that a cache was enabled.
+      for (const privilege of deferredPrivileges) {
+        if (reportedDeferredSchemePrivileges.has(privilege)) continue;
+        reportedDeferredSchemePrivileges.add(privilege);
+        if (typeof __xenonLog === 'function') {
+          __xenonLog('Custom scheme ' + privilege +
+              ' requested but disabled in the compatibility runtime');
+        }
+      }
     },
   };
   // Electron keeps global registration separate from session request handlers.
@@ -246,8 +267,9 @@
   const rendererWebContents = new Map();
   const webFrameState = new WeakMap();
   const guestWebContents = new Map();
-  const pendingGuestScripts = new Map();
-  let nextGuestScriptId = 1;
+  let electronViews;
+  const pendingScriptExecutions = new Map();
+  let nextScriptExecutionId = 1;
   let nextWebContentsId = 1;
 
   class WebFrameMain {
@@ -273,9 +295,15 @@
           (owner ? owner.webContents : new WebContents(null));
       rendererWebContents.set(sender.endpointId, contents);
     }
-    const endpoints = webContentsState.get(contents).endpoints;
+    const state = webContentsState.get(contents);
+    const endpoints = state.endpoints;
     let endpoint = endpoints.get(sender.endpointId);
     if (!endpoint) {
+      if (sender.isMainFrame === true) {
+        cancelScriptExecutions(pending => pending.contents === contents &&
+            pending.endpointId !== sender.endpointId,
+            'Script execution document was replaced');
+      }
       endpoint = {...sender, frame: new WebFrameMain(sender)};
       endpoints.set(sender.endpointId, endpoint);
     } else {
@@ -283,6 +311,11 @@
       // same-document navigations. Preserve the identity of this document.
       webFrameState.get(endpoint.frame).url =
           typeof sender.url === 'string' ? sender.url : '';
+    }
+    // Only the browser's current main document defines the committed URL.
+    // Subframes and late updates from a replaced document cannot overwrite it.
+    if (sender.isMainFrame === true && getMainEndpoint(contents) === endpoint) {
+      state.committedUrl = endpoint.frame.url;
     }
     return contents;
   }
@@ -294,16 +327,30 @@
         .filter(endpoint => endpoint.isMainFrame !== false).at(-1);
   }
 
+  function cancelScriptExecution(id, pending, reason) {
+    clearTimeout(pending.timer);
+    pendingScriptExecutions.delete(id);
+    try {
+      __xenonSendToRenderer(pending.endpointId,
+          '__xenon:cancel-execute-javascript', [id]);
+    } catch (_) {
+      // A revoked endpoint already destroys its native pending evaluations.
+    }
+    pending.reject(new Error(reason));
+  }
+
+  function cancelScriptExecutions(matches, reason) {
+    for (const [id, pending] of pendingScriptExecutions) {
+      if (matches(pending)) cancelScriptExecution(id, pending, reason);
+    }
+  }
+
   function destroyWebContents(contents) {
     const state = webContentsState.get(contents);
     if (state.destroyed) return;
     state.destroyed = true;
-    for (const [id, pending] of pendingGuestScripts) {
-      if (pending.contents !== contents) continue;
-      clearTimeout(pending.timer);
-      pendingGuestScripts.delete(id);
-      pending.reject(new Error('WebContents was destroyed'));
-    }
+    cancelScriptExecutions(pending => pending.contents === contents,
+        'WebContents was destroyed');
     const processIds = new Set();
     for (const endpoint of state.endpoints.values()) {
       webFrameState.get(endpoint.frame).detached = true;
@@ -329,6 +376,8 @@
     }
     const contents = rendererWebContents.get(sender.endpointId);
     if (!contents) return;
+    cancelScriptExecutions(pending => pending.endpointId === sender.endpointId,
+        'Script execution document was detached');
     rendererWebContents.delete(sender.endpointId);
     const state = webContentsState.get(contents);
     const endpoint = state.endpoints.get(sender.endpointId);
@@ -353,6 +402,25 @@
       allWebContents.set(this.id, this);
       this.session = getSession(owner?._webPreferences?.partition || '');
     }
+    _updateInputObservation() {
+      const state = webContentsState.get(this);
+      const enabled = this.listenerCount('before-input-event') > 0;
+      if (state.destroyed || enabled === !!state.observesBeforeInput) return;
+      const nativeId = this._guest?.nativeId ?? this._owner?.id;
+      if (nativeId === undefined) return electronUnsupported('before-input-event on unowned WebContents');
+      callBrowserWindow({id: nativeId}, 'observe-before-input', {enabled});
+      state.observesBeforeInput = enabled;
+    }
+    // Wrappers survive removeAllListeners(), including removal of the meta
+    // events; only subscription transitions cross the native boundary.
+    on(name, listener) { super.on(name, listener); this._updateInputObservation(); return this; }
+    addListener(name, listener) { return this.on(name, listener); }
+    once(name, listener) { super.once(name, listener); this._updateInputObservation(); return this; }
+    prependListener(name, listener) { super.prependListener(name, listener); this._updateInputObservation(); return this; }
+    prependOnceListener(name, listener) { super.prependOnceListener(name, listener); this._updateInputObservation(); return this; }
+    removeListener(name, listener) { super.removeListener(name, listener); this._updateInputObservation(); return this; }
+    off(name, listener) { return this.removeListener(name, listener); }
+    removeAllListeners(name) { super.removeAllListeners(name); this._updateInputObservation(); return this; }
     send(channel, ...args) {
       if (this.isDestroyed()) throw new Error('Object has been destroyed');
       const endpoint = getMainEndpoint(this);
@@ -378,7 +446,12 @@
       if (id === undefined) throw new Error('WebContents has no native owner');
       return callBrowserWindow({id}, 'get-os-process-id');
     }
-    getOwnerBrowserWindow() { return this._owner; }
+    getOwnerBrowserWindow() {
+      if (!this._guest?.standalone) return this._owner;
+      const id = callBrowserWindow({id: 0}, 'electron-view',
+          {action: 'contents-owner', webContentsId: this._guest.nativeId});
+      return id ? BrowserWindow.fromId(id) || null : null;
+    }
     setBackgroundThrottling(allowed) {
       if (typeof allowed !== 'boolean') throw new TypeError('Expected a boolean');
       if (this.isDestroyed()) throw new Error('Object has been destroyed');
@@ -402,48 +475,149 @@
           this._owner ? {...this._owner._webPreferences} : null;
     }
     isDestroyed() { return webContentsState.get(this).destroyed; }
+    isOffscreen() {
+      if (this.isDestroyed()) throw new Error('Object has been destroyed');
+      // All current hosts render into real windows; offscreen rendering is
+      // not implemented by this runtime.
+      return false;
+    }
     getType() {
       if (this.isDestroyed()) throw new Error('Object has been destroyed');
       // Unowned wrappers represent an existing browser-managed document,
       // rather than a BrowserWindow created by this Electron container.
-      return this._guest ? 'webview' : this._owner ? 'window' : 'remote';
+      return this._guest?.standalone ? 'window' : this._guest ? 'webview' : this._owner ? 'window' : 'remote';
     }
     get hostWebContents() { return this._guest?.host; }
-    getURL() { return this._url || ''; }
+    close(options = {}) {
+      if (this.isDestroyed()) return;
+      if (!this._guest?.standalone) return electronUnsupported('webContents.close on this owner');
+      if (!options || typeof options !== 'object') throw new TypeError('options must be an object');
+      if (options.waitForBeforeUnload !== undefined && typeof options.waitForBeforeUnload !== 'boolean')
+        throw new TypeError('waitForBeforeUnload must be a boolean');
+      callBrowserWindow({id: 0}, 'electron-view', {action: 'close-contents',
+        webContentsId: this._guest.nativeId, waitForBeforeUnload: options.waitForBeforeUnload ?? false});
+    }
+    getURL() { return webContentsState.get(this).committedUrl ?? this._url ?? ''; }
     getTitle() { return this._pageTitle || ''; }
-    loadURL(url, options) {
+    loadFile(file, options = {}) {
+      if (typeof file !== 'string') throw new TypeError('File path must be a string');
+      if (!options || typeof options !== 'object' || Array.isArray(options))
+        throw new TypeError('loadFile options must be an object');
+      const target = urlModule.pathToFileURL(pathModule.resolve(__xenonAppPath, file));
+      target.search = urlModule.format({query: options.query, search: options.search});
+      target.hash = options.hash || '';
+      return this.loadURL(target.href);
+    }
+    async loadURL(url, options) {
+      if (this.isDestroyed()) throw new Error('Object has been destroyed');
+      if (typeof url !== 'string') throw new TypeError('URL must be a string');
       if (options && typeof options === 'object' && options.userAgent) {
         this.setUserAgent(options.userAgent);
       }
-      this._url = mapRendererUrl(String(url || ''));
+      this._url = mapRendererUrl(url);
       const nativeId = this._guest?.nativeId || this._owner?.id;
-      if (nativeId && typeof __xenonLoadBrowserWindowURL === 'function') {
-        __xenonLoadBrowserWindowURL(nativeId, this._url);
-      }
-      return Promise.resolve();
-    }
-    executeJavaScript(code) {
-      if (this._guest) {
-        return new Promise((resolve, reject) => {
-          if (this.isDestroyed() || !getMainEndpoint(this)) {
-            reject(new Error('Guest renderer is unavailable'));
-            return;
-          }
-          const id = nextGuestScriptId++;
-          const timer = setTimeout(() => {
-            pendingGuestScripts.delete(id);
-            reject(new Error('Guest script evaluation timed out'));
-          }, 30000);
-          pendingGuestScripts.set(id, {contents: this, resolve, reject, timer});
-          this.send('__xenon:execute-javascript', id, String(code));
+      if (!nativeId || typeof __xenonBrowserWindowCallAsync !== 'function')
+        throw new Error('WebContents has no native navigation endpoint');
+      const result = await __xenonBrowserWindowCallAsync(
+          nativeId, 'load-url', {url: this._url});
+      if (!result || typeof result.ok !== 'boolean')
+        throw Object.assign(new Error('Invalid native navigation response'),
+                            {code: 'ERR_IPC_INVALID_RESPONSE'});
+      if (!result.ok) {
+        const error = new Error(`${result.errorDescription} loading '${result.url}'`);
+        Object.defineProperties(error, {
+          code: {value: result.errorDescription, enumerable: true, configurable: true, writable: true},
+          errno: {value: result.errorCode, enumerable: true, configurable: true, writable: true},
+          url: {value: result.url, enumerable: true, configurable: true, writable: true},
         });
+        throw error;
       }
-      if (this._owner) {
-        callBrowserWindow(
-            this._owner, 'execute-javascript', {code: String(code || '')});
-      }
-      return Promise.resolve();
     }
+    async executeJavaScript(code, userGesture = false) {
+      if (typeof code !== 'string' || typeof userGesture !== 'boolean') {
+        throw Object.assign(new TypeError('Expected a script string and boolean userGesture'),
+                            {code: 'ERR_INVALID_ARG_TYPE'});
+      }
+      if (userGesture) {
+        throw Object.assign(new Error('executeJavaScript userGesture is not supported'),
+                            {code: 'ERR_NOT_SUPPORTED'});
+      }
+      if (this.isDestroyed()) throw new Error('WebContents was destroyed');
+      const nativeId = this._guest?.nativeId ?? this._owner?.id;
+      let confirmedEndpoint;
+      if (nativeId !== undefined) {
+        if (typeof __xenonBrowserWindowCallAsync !== 'function')
+          throw new Error('WebContents runtime host is unavailable');
+        confirmedEndpoint = await __xenonBrowserWindowCallAsync(
+            nativeId, 'wait-for-main-frame-runtime', {});
+        if (typeof confirmedEndpoint !== 'string' || !confirmedEndpoint)
+          throw new Error('WebContents main-frame document is unavailable');
+      }
+      const endpoint = getMainEndpoint(this);
+      if (this.isDestroyed() || !endpoint || endpoint.isMainFrame !== true ||
+          (confirmedEndpoint !== undefined && endpoint.endpointId !== confirmedEndpoint) ||
+          endpoint.frame.detached) {
+        throw new Error('WebContents main-frame document is unavailable');
+      }
+      if (!Number.isSafeInteger(nextScriptExecutionId)) {
+        throw Object.assign(new Error('Script execution request IDs exhausted'),
+                            {code: 'ERR_OUT_OF_RANGE'});
+      }
+      return new Promise((resolve, reject) => {
+        const id = nextScriptExecutionId++;
+        const pending = {contents: this, endpointId: endpoint.endpointId,
+          frame: endpoint.frame, resolve, reject, timer: undefined};
+        pending.timer = setTimeout(() => {
+          cancelScriptExecution(id, pending, 'Script evaluation timed out');
+        }, 30000);
+        pendingScriptExecutions.set(id, pending);
+        try {
+          __xenonSendToRenderer(endpoint.endpointId,
+              '__xenon:execute-javascript', [id, code]);
+        } catch (error) {
+          clearTimeout(pending.timer);
+          pendingScriptExecutions.delete(id);
+          reject(error);
+        }
+      });
+    }
+    async setVisualZoomLevelLimits(minimum, maximum) {
+      if (typeof minimum !== 'number' || typeof maximum !== 'number')
+        throw Object.assign(new TypeError('Zoom limits must be numbers'), {code: 'ERR_INVALID_ARG_TYPE'});
+      if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || minimum <= 0 || maximum < minimum)
+        throw Object.assign(new RangeError('Invalid visual zoom limits'), {code: 'ERR_INVALID_ARG_VALUE'});
+      if (this.isDestroyed()) throw new Error('Object has been destroyed');
+      const id = this._guest?.nativeId ?? this._owner?.id;
+      if (id === undefined) throw new Error('WebContents has no native owner');
+      callBrowserWindow({id}, 'set-visual-zoom-limits', {minimum, maximum});
+    }
+    getZoomLevel() {
+      if (this.isDestroyed()) throw new Error('Object has been destroyed');
+      const id = this._guest?.nativeId ?? this._owner?.id;
+      if (id === undefined) throw new Error('WebContents has no native owner');
+      const level = callBrowserWindow({id}, 'get-zoom-level');
+      if (typeof level !== 'number' || !Number.isFinite(level))
+        throw Object.assign(new Error('Invalid native zoom level'), {code: 'ERR_IPC_INVALID_RESPONSE'});
+      return level;
+    }
+    setZoomLevel(level) {
+      if (typeof level !== 'number' || !Number.isFinite(level))
+        throw Object.assign(new TypeError('Zoom level must be a finite number'), {code: 'ERR_INVALID_ARG_VALUE'});
+      if (this.isDestroyed()) throw new Error('Object has been destroyed');
+      const id = this._guest?.nativeId ?? this._owner?.id;
+      if (id === undefined) throw new Error('WebContents has no native owner');
+      callBrowserWindow({id}, 'set-zoom-level', {level});
+    }
+    getZoomFactor() { return Math.pow(1.2, this.getZoomLevel()); }
+    setZoomFactor(factor) {
+      if (typeof factor !== 'number' || !Number.isFinite(factor) || factor <= 0)
+        throw Object.assign(new TypeError('Zoom factor must be positive and finite'), {code: 'ERR_INVALID_ARG_VALUE'});
+      this.setZoomLevel(Math.log(factor) / Math.log(1.2));
+    }
+    get zoomLevel() { return this.getZoomLevel(); }
+    set zoomLevel(value) { this.setZoomLevel(value); }
+    get zoomFactor() { return this.getZoomFactor(); }
+    set zoomFactor(value) { this.setZoomFactor(value); }
     openDevTools() {}
     closeDevTools() {}
     isDevToolsOpened() { return false; }
@@ -474,6 +648,11 @@
       return this._userAgent || '';
     }
     toggleDevTools() {}
+    setIgnoreMenuShortcuts(ignore) {
+      if (this.isDestroyed()) throw new Error('Object has been destroyed');
+      if (typeof ignore !== 'boolean') throw new TypeError('ignore must be a boolean');
+      webContentsState.get(this).ignoreMenuShortcuts = ignore;
+    }
   }
   ipcMain.handle('__xenon:register-guest', (event, nativeId, preferences) => {
     if (!Number.isInteger(nativeId) || nativeId >= 0 || guestWebContents.has(nativeId)) {
@@ -505,12 +684,14 @@
         {channel, args, frameId: event.frameId});
   });
   ipcMain.on('__xenon:execute-javascript-result', (event, id, success, value) => {
-    const pending = pendingGuestScripts.get(id);
-    if (!pending || pending.contents !== event.sender) return;
+    const pending = pendingScriptExecutions.get(id);
+    if (!pending || pending.contents !== event.sender ||
+        pending.frame !== event.senderFrame || pending.frame.detached ||
+        getMainEndpoint(pending.contents)?.endpointId !== pending.endpointId) return;
     clearTimeout(pending.timer);
-    pendingGuestScripts.delete(id);
-    if (success) pending.resolve(value);
-    else pending.reject(new Error(String(value)));
+    pendingScriptExecutions.delete(id);
+    if (success === true) pending.resolve(value);
+    else pending.reject(value);
   });
   function mapRendererUrl(url) {
     const mappings = Array.isArray(__xenonRendererUrlMappings) ?
@@ -658,6 +839,17 @@
     if (resized && !window._destroyed)
       window.emit('resize', createBrowserWindowEvent(window));
   }
+  function emitWebContentsEvent(contents, name, details) {
+    const event = createBrowserWindowEvent(contents);
+    if (name === 'did-fail-load' || name === 'did-fail-provisional-load') {
+      contents.emit(name, event, details.errorCode, details.errorDescription,
+          details.validatedURL, details.isMainFrame,
+          details.frameProcessId ?? -1, details.frameRoutingId ?? -1);
+    } else {
+      contents.emit(name, event, details);
+    }
+  }
+
   function createBrowserWindowEvent(window, cancellable = false) {
     return {
       sender: window,
@@ -692,7 +884,7 @@
       if (webPreferences.partition !== undefined &&
           typeof webPreferences.partition !== 'string')
         throw new TypeError('webPreferences.partition must be a string');
-      this._webPreferences = Object.freeze(webPreferences);
+      this._webPreferences = Object.freeze(electronSandbox.normalizePreferences(webPreferences));
       if (this._webPreferences.preload &&
           (typeof this._webPreferences.preload !== 'string' ||
            !pathModule.isAbsolute(this._webPreferences.preload))) {
@@ -700,6 +892,10 @@
       }
       const title = options.title === undefined ? 'Electron' : String(options.title);
       const titleBarStyle = options.titleBarStyle ?? 'default';
+      const paintWhenInitiallyHidden = options.paintWhenInitiallyHidden === undefined
+          ? true : options.paintWhenInitiallyHidden;
+      if (typeof paintWhenInitiallyHidden !== 'boolean')
+        throw new TypeError('paintWhenInitiallyHidden must be a boolean');
       if (__xenonPlatform === 'darwin' &&
           !['default', 'hidden', 'hiddenInset'].includes(titleBarStyle)) {
         return electronUnsupported('BrowserWindow titleBarStyle ' + titleBarStyle);
@@ -712,6 +908,7 @@
                   width: options.width || 800,
                   height: options.height || 600,
                   show: options.show !== false,
+                  paintWhenInitiallyHidden,
                   frame: options.frame !== false,
                   transparent: Boolean(options.transparent),
                   hasShadow: options.hasShadow !== false,
@@ -806,6 +1003,8 @@
     static fromId(id) { return browserWindows.find(item => item.id === id) || null; }
     static fromWebContents(contents) {
       if (!contents) return null;
+      if (contents instanceof WebContents && contents._guest?.standalone)
+        return contents.getOwnerBrowserWindow();
       if (contents._owner instanceof BrowserWindow) return contents._owner;
       if (contents instanceof WebContents && contents._owner) {
         return contents._owner;
@@ -865,7 +1064,7 @@
     get focusable() { return this._focusable; }
     set focusable(value) { this.setFocusable(value); }
     loadURL(url, options) { return this.webContents.loadURL(url, options); }
-    loadFile(file) { return this.webContents.loadURL(file); }
+    loadFile(file, options) { return this.webContents.loadFile(file, options); }
     show() {
       if (typeof __xenonBrowserWindowCall === 'function') {
         callBrowserWindow(this, 'show');
@@ -923,6 +1122,20 @@
     }
     isAlwaysOnTop() { return callBrowserWindow(this, 'is-always-on-top'); }
     setSkipTaskbar() {}
+    setTitleBarOverlay(options) {
+      if (this.isDestroyed()) throw new Error('Object has been destroyed');
+      if (!options || typeof options !== 'object' || Array.isArray(options))
+        throw new TypeError('Title bar overlay options must be an object');
+      for (const name of ['color', 'symbolColor']) {
+        if (options[name] !== undefined && typeof options[name] !== 'string')
+          throw new TypeError('Title bar overlay ' + name + ' must be a string');
+      }
+      if (options.height !== undefined &&
+          (!Number.isInteger(options.height) || options.height < 0))
+        throw new TypeError('Title bar overlay height must be a non-negative integer');
+      // Optional native caption styling is deferred. Keep the host's caption
+      // and geometry instead of claiming custom overlay controls were created.
+    }
     setTitle(title) {
       const value = String(title ?? '');
       callBrowserWindow(this, 'set-title', {title: value});
@@ -1047,6 +1260,14 @@
       if (typeof visible !== 'boolean') throw new TypeError('visible must be a boolean');
       callBrowserWindow(this, 'set-window-button-visibility', {visible});
     }
+    setSheetOffset(offsetY, offsetX = 0) {
+      if (this._destroyed) throw new Error('Object has been destroyed');
+      if (!Number.isFinite(offsetY) || !Number.isFinite(offsetX))
+        throw new TypeError('Sheet offsets must be finite numbers');
+      // Electron's sheet positioning only applies on macOS. The host does not
+      // yet provide Cocoa sheet dialogs, so do not claim that support there.
+      if (__xenonPlatform === 'darwin') return electronUnsupported('BrowserWindow.setSheetOffset');
+    }
     setDocumentEdited() {}
     isDocumentEdited() { return false; }
     setRepresentedFilename() {}
@@ -1114,8 +1335,32 @@
   let activeNativeMenu = null;
   globalThis.__xenonDispatchBrowserWindowEvent =
       (windowId, eventName, details = null) => {
+    if (windowId === 0 && eventName === 'notification') {
+      globalThis.__xenonDispatchNotificationEvent?.(details);
+      return;
+    }
+    if (windowId === 0 && eventName === '__xenon-system-theme') {
+      if (!details || !details.state) return;
+      if (details.accentChanged && typeof details.state.accentColor === 'string') {
+        systemPreferences.emit('accent-color-changed', {}, details.state.accentColor);
+      }
+      if (details.nativeThemeChanged) nativeTheme.emit('updated');
+      return;
+    }
+    if (windowId === 0 && eventName === '__xenon-second-instance') {
+      if (!details || !Array.isArray(details.argv) ||
+          !details.argv.every(arg => typeof arg === 'string') ||
+          typeof details.workingDirectory !== 'string') return;
+      globalThis.__xenonDispatchAppEvent('second-instance',
+          [details.argv, details.workingDirectory, details.additionalData]);
+      return;
+    }
     if (windowId === 0 && eventName === '__xenon-session-event') {
       handleElectronSessionEvent(details);
+      return;
+    }
+    if (windowId === 0 && eventName === '__xenon-permission-request') {
+      dispatchElectronPermissionRequest(details);
       return;
     }
     if (windowId === 0 && eventName === '__xenon-mac-player-event') {
@@ -1141,6 +1386,15 @@
       return;
     }
     const guest = guestWebContents.get(Number(windowId));
+    if (eventName === 'electron-view') {
+      electronViews?.dispatch(details);
+      return;
+    }
+    if (guest && eventName === 'web-contents-before-input-event') {
+      const event = createBrowserWindowEvent(guest, true);
+      guest.emit('before-input-event', event, details);
+      return event.defaultPrevented;
+    }
     if (guest && eventName.startsWith('guest-')) {
       const name = eventName.slice('guest-'.length);
       if (details?.url) guest._url = details.url;
@@ -1153,29 +1407,43 @@
           popup.loadURL(details.url);
         }
       }
-      if (!guest._guest.host.isDestroyed())
+      if (guest._guest.host && !guest._guest.host.isDestroyed())
         guest._guest.host.send('__xenon:guest-event', guest.id, name, details || {});
       if (name === 'destroyed') {
         guestWebContents.delete(Number(windowId));
         destroyWebContents(guest);
+      } else if (name === 'will-prevent-unload' && guest._guest.standalone) {
+        const event = createBrowserWindowEvent(guest, true);
+        guest.emit(name, event);
+        if (event.defaultPrevented && !guest.isDestroyed()) guest.close();
       } else {
-        guest.emit(name, {sender: guest}, details);
+        emitWebContentsEvent(guest, name, details);
       }
       return;
     }
     const win = BrowserWindow.fromId(Number(windowId));
     // Native notifications already queued before destroy can arrive after the
     // backing Widget is gone. No application listener may reuse that window.
-    if (!win || win.isDestroyed()) return;
+    if (!win || win.isDestroyed())
+      return eventName === 'web-contents-before-input-event' ? true : undefined;
+    if (eventName === 'web-contents-before-input-event') {
+      const event = createBrowserWindowEvent(win.webContents, true);
+      win.webContents.emit('before-input-event', event, details);
+      return event.defaultPrevented;
+    }
     if (eventName === 'close-requested') {
       win.close();
       return;
     }
     if (eventName === 'native-menu-command') {
+      // This flag controls application menu accelerators only. Normal popup
+      // selection and shortcuts implemented by the page continue to work.
+      if (details?.triggeredByAccelerator === true &&
+          webContentsState.get(win.webContents).ignoreMenuShortcuts) return;
       const click = nativeMenuClicks.get(Number(details && details.commandId));
       if (typeof click === 'function') {
         try {
-          click();
+          click(details || {}, win, win.webContents);
         } catch (error) {
           console.error(error);
         }
@@ -1209,9 +1477,8 @@
     }
     const webContentsEventPrefix = 'web-contents-';
     if (eventName.startsWith(webContentsEventPrefix)) {
-      win.webContents.emit(
-          eventName.slice(webContentsEventPrefix.length),
-          createBrowserWindowEvent(win.webContents), details);
+      emitWebContentsEvent(win.webContents,
+          eventName.slice(webContentsEventPrefix.length), details);
       return;
     }
     if (eventName === 'bounds-changed' && details) {
@@ -1296,9 +1563,11 @@
   }
   function serializeMenuTemplate(items, state) {
     const serialized = [];
+    let radioGroup = 0;
     for (const item of items || []) {
       if (!item) continue;
       const type = item.type || (item.submenu ? 'submenu' : 'normal');
+      if (type === 'separator') radioGroup = 0;
       if (type === 'separator') {
         serialized.push({type: 'separator'});
         continue;
@@ -1317,8 +1586,9 @@
       };
       const icon = serializeNativeImage(item.icon);
       if (icon) entry.icon = icon;
-      if (entry.type === 'radio' && item.groupId != null) {
-        entry.groupId = Number(item.groupId) || 0;
+      if (entry.type === 'radio') {
+        if (!radioGroup) radioGroup = id;
+        entry.groupId = radioGroup;
       }
       if (entry.type === 'submenu') {
         const submenu = Array.isArray(item.submenu)
@@ -1338,17 +1608,67 @@
     destroy() {}
   }
   class Menu extends EventEmitter {
-    static buildFromTemplate(template) { return new Menu(template); }
+    static buildFromTemplate(template) {
+      if (!Array.isArray(template)) throw new TypeError('Menu template must be an array');
+      const menu = new Menu();
+      for (const item of template) menu.append(item instanceof MenuItem ? item : new MenuItem(item));
+      return menu;
+    }
     static setApplicationMenu() {}
     static getApplicationMenu() { return null; }
-    constructor(template = []) {
+    constructor() {
       super();
-      this.items = template;
+      this.items = [];
+    }
+    append(item) { this.insert(this.items.length, item); }
+    insert(position, item) {
+      if (!Number.isInteger(position) || position < 0 || position > this.items.length)
+        throw new RangeError('Menu insertion position is out of range');
+      if (!(item instanceof MenuItem)) throw new TypeError('Expected a MenuItem');
+      if (item.menu) throw new Error('MenuItem already belongs to a menu');
+      Object.defineProperty(item, 'menu', {value: this, enumerable: true});
+      this.items.splice(position, 0, item);
+      if (item.type === 'radio' && item.checked) item.checked = true;
+    }
+    getMenuItemById(id) {
+      if (typeof id !== 'string') throw new TypeError('Menu item id must be a string');
+      const visited = new Set();
+      function find(items) {
+        if (!Array.isArray(items) || visited.has(items)) return null;
+        visited.add(items);
+        for (const item of items) {
+          if (!item || typeof item !== 'object') continue;
+          if (item.id === id) return item;
+          const submenu = Array.isArray(item.submenu) ? item.submenu : item.submenu?.items;
+          const found = find(submenu);
+          if (found) return found;
+        }
+        return null;
+      }
+      return find(this.items);
+    }
+    _preparePopup(seen = new Set()) {
+      if (seen.has(this)) throw new TypeError('Menu contains a submenu cycle');
+      seen.add(this);
+      let radios = [];
+      const finish = () => {
+        if (radios.length && !radios.some(item => item.checked)) radios[0].checked = true;
+        radios = [];
+      };
+      for (const item of this.items) {
+        if (item.type === 'separator') finish();
+        else if (item.type === 'radio') radios.push(item);
+        if (item.submenu instanceof Menu) item.submenu._preparePopup(seen);
+      }
+      finish();
+      seen.delete(this);
     }
     popup(options = {}) {
       const window = (options && options.window) ||
           BrowserWindow.getFocusedWindow();
       if (!window || window._destroyed) return;
+      this.emit('menu-will-show');
+      this._preparePopup();
       nativeMenuClicks.clear();
       activeNativeMenu = this;
       const payload = {
@@ -1365,9 +1685,59 @@
     }
     closePopup() {}
   }
+  const MenuItem = createMenuItemClass({Menu, unsupported: electronUnsupported, platform: __xenonPlatform,
+    runRole(role, window, contents) {
+      if (role === 'quit') { app.quit(); return true; }
+      if (['filemenu', 'editmenu', 'viewmenu', 'windowmenu'].includes(role)) return true;
+      if (!window) return false;
+      if (role === 'close') { window.close(); return true; }
+      if (role === 'minimize') { window.minimize(); return true; }
+      if (role === 'zoom') { window.isMaximized() ? window.unmaximize() : window.maximize(); return true; }
+      if (role === 'togglefullscreen') { window.setFullScreen(!window.isFullScreen()); return true; }
+      if (!contents) return false;
+      if (role === 'reload' || role === 'forcereload') {
+        callBrowserWindow(window, 'reload', {ignoreCache: role === 'forcereload'});
+        return true;
+      }
+      if (['resetzoom', 'zoomin', 'zoomout'].includes(role)) {
+        contents.setZoomLevel(role === 'resetzoom' ? 0 : contents.getZoomLevel() + (role === 'zoomin' ? 0.5 : -0.5));
+        return true;
+      }
+      if (['undo', 'redo', 'cut', 'copy', 'paste', 'pasteandmatchstyle', 'delete', 'selectall'].includes(role)) {
+        callBrowserWindow(window, 'edit-command', {action: role});
+        return true;
+      }
+      if (role === 'toggledevtools') return electronUnsupported('MenuItem.role.' + role);
+      return false;
+    },
+  });
   const nativeTheme = new EventEmitter();
-  nativeTheme.themeSource = 'system';
-  Object.defineProperty(nativeTheme, 'shouldUseDarkColors', {get: () => false});
+  Object.defineProperty(nativeTheme, 'themeSource', {
+    enumerable: true,
+    get: () => 'system',
+    set: value => {
+      if (!['system', 'light', 'dark'].includes(value)) {
+        throw Object.assign(new TypeError('themeSource must be system, light, or dark'),
+            {code: 'ERR_INVALID_ARG_VALUE'});
+      }
+      // A container must not change the global browser theme for other apps.
+      if (value !== 'system') electronUnsupported('nativeTheme.themeSource override');
+    },
+  });
+  for (const property of ['shouldUseDarkColors', 'shouldUseHighContrastColors',
+    'shouldUseInvertedColorScheme', 'prefersReducedTransparency']) {
+    Object.defineProperty(nativeTheme, property, {
+      enumerable: true,
+      get: () => callElectronApi('nativeTheme.getState')[property],
+    });
+  }
+  const systemPreferences = new EventEmitter();
+  systemPreferences.getAccentColor = () => callElectronApi('systemPreferences.getAccentColor');
+  systemPreferences.isAeroGlassEnabled = () => callElectronApi('systemPreferences.isAeroGlassEnabled');
+  systemPreferences.subscribeLocalNotification = () =>
+    electronUnsupported('systemPreferences.subscribeLocalNotification');
+  systemPreferences.unsubscribeLocalNotification = () =>
+    electronUnsupported('systemPreferences.unsubscribeLocalNotification');
   const powerMonitor = new EventEmitter();
   const autoUpdater = new EventEmitter();
   for (const property of ['autoDownload', 'autoInstallOnAppQuit']) {
@@ -1399,8 +1769,19 @@
   autoUpdater.quitAndInstall = () => {
     callElectronApi('autoUpdater.quitAndInstall', {});
   };
+  const clipboardApi = createClipboardApi({
+    callSync: callElectronApi,
+    callAsync: async (operation, details) => callElectronApi(operation, details),
+    Blob: globalThis.Blob,
+  });
   const electronModule = {
     app,
+    crashReporter: createCrashReporter({
+      main: true, app, callHost: callElectronApi,
+      callLocal: typeof globalThis.__xenonCrashReporterCall === 'function'
+        ? (operation, details) => globalThis.__xenonCrashReporterCall({operation, ...details})
+        : undefined,
+    }),
     ipcMain,
     BrowserWindow,
     webContents: {
@@ -1415,27 +1796,32 @@
       showItemInFolder: path => { callElectronApi('shell.showItemInFolder', {path}); },
     },
     dialog: {
-      showOpenDialog: async (winOrOpts, maybeOpts) => {
-        const opts = (maybeOpts && typeof maybeOpts === 'object') ? maybeOpts : (winOrOpts && typeof winOrOpts === 'object' ? winOrOpts : {});
-        if (typeof __xenonShowOpenDialog !== 'function') return electronUnsupported('dialog.showOpenDialog');
-        const filePaths = __xenonShowOpenDialog(opts);
-        return { canceled: filePaths.length === 0, filePaths };
+      showErrorBox: (title, content) => {
+        if (typeof title !== 'string' || typeof content !== 'string') {
+          throw Object.assign(new TypeError('Error dialog title and content must be strings'),
+                              {code: 'ERR_INVALID_ARG_TYPE'});
+        }
+        if (typeof __xenonBrowserWindowCall !== 'function')
+          return electronUnsupported('dialog.showErrorBox');
+        try { __xenonBrowserWindowCall(0, 'electron-error-box', {title, content}); }
+        catch (error) {
+          const code = /^([A-Z][A-Z_]+):/.exec(String(error.message));
+          if (code && !error.code) error.code = code[1];
+          throw error;
+        }
       },
-      showOpenDialogSync: (winOrOpts, maybeOpts) => {
-        const opts = (maybeOpts && typeof maybeOpts === 'object') ? maybeOpts : (winOrOpts && typeof winOrOpts === 'object' ? winOrOpts : {});
-        if (typeof __xenonShowOpenDialog !== 'function') return electronUnsupported('dialog.showOpenDialogSync');
-        const filePaths = __xenonShowOpenDialog(opts);
-        return filePaths.length > 0 ? filePaths : undefined;
-      },
-      showSaveDialog: async () => electronUnsupported('dialog.showSaveDialog'),
-      showSaveDialogSync: () => electronUnsupported('dialog.showSaveDialogSync'),
-      showMessageBox: async () => electronUnsupported('dialog.showMessageBox'),
-      showMessageBoxSync: () => electronUnsupported('dialog.showMessageBoxSync'),
+      ...createElectronDialogs({BrowserWindow, isReady: () => appReady, platform: __xenonPlatform,
+        callSync: typeof __xenonBrowserWindowCall === 'function'
+          ? (...args) => __xenonBrowserWindowCall(...args) : undefined,
+        callAsync: typeof __xenonBrowserWindowCallAsync === 'function'
+          ? (...args) => __xenonBrowserWindowCallAsync(...args) : undefined,
+      }),
     },
     Tray,
     Menu,
+    MenuItem,
     nativeTheme,
-    systemPreferences: {isAeroGlassEnabled: () => false},
+    systemPreferences,
     powerMonitor,
     session,
     protocol,
@@ -1445,14 +1831,12 @@
       // No registration can succeed in this runtime, so cleanup is a valid no-op.
       unregister() {}, unregisterAll() {}, isRegistered: () => false,
     },
-    nativeImage: {createEmpty: () => ({}), createFromPath: path => ({path})},
-    clipboard: {
-      readText: type => callElectronApi('clipboard.readText', {type}),
-      writeText: (text, type) => { callElectronApi('clipboard.writeText', {text, type}); },
-      readHTML: type => callElectronApi('clipboard.readHTML', {type}),
-      writeHTML: (markup, type) => { callElectronApi('clipboard.writeHTML', {markup, type}); },
-      clear: type => { callElectronApi('clipboard.clear', {type}); },
-    },
+    nativeImage: createNativeImageApi({
+      callSync: callElectronApi,
+      readFileSync: path => fsModule.readFileSync(path),
+    }),
+    clipboard: clipboardApi.clipboard,
+    ClipboardItem: clipboardApi.ClipboardItem,
     screen: (() => {
       const call = (method, options = {}) => {
         if (typeof __xenonBrowserWindowCall !== 'function') {

@@ -71,6 +71,7 @@ class XenonMacPlayerHost {
   void CancelPendingCompletions();
   void QuarantineSession(const std::string& error);
   void DetachSubscriptions(int32_t instance_id = 0);
+  void PollNativeShutdown();
   struct Subscription {
     int32_t instance_id;
     std::string method;

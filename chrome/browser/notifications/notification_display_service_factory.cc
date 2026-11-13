@@ -24,6 +24,15 @@ NotificationDisplayService* NotificationDisplayServiceFactory::GetForProfile(
       GetInstance()->GetServiceForBrowserContext(profile, true /* create */));
 }
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+// static
+NotificationDisplayService*
+NotificationDisplayServiceFactory::GetForProfileIfExists(Profile* profile) {
+  return static_cast<NotificationDisplayService*>(
+      GetInstance()->GetServiceForBrowserContext(profile, false /* create */));
+}
+#endif
+
 // static
 NotificationDisplayServiceFactory*
 NotificationDisplayServiceFactory::GetInstance() {

@@ -103,6 +103,7 @@ def deploy(host: Path, thunder: Path, backup_dir: Path = None) -> Path:
         # The browser supplies the executable/runtime. The application resolver
         # independently preserves TH's Resources and MacOS working directory.
         'name': 'Thunder',
+        'userDataPolicy': 'legacy-host',
         'version': info.get('CFBundleShortVersionString', '25.1.13'),
         'main': 'out.asar/main.js',
         'privilegedSchemes': [

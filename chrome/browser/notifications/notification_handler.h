@@ -10,6 +10,9 @@
 #include <string>
 
 #include "base/functional/callback_forward.h"
+#include "build/build_config.h"
+#include "build/buildflag.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 class GURL;
 class Profile;
@@ -40,7 +43,18 @@ class NotificationHandler {
     NOTIFICATIONS_MUTED = 9,
     TAILORED_SECURITY = 10,
     DEFAULT_BROWSER_CHANGED = 11,
+#if !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    // Preserve existing serialized platform notification type values.
+    XENON_ELECTRON = 12,
+    MAX = XENON_ELECTRON,
+#else
     MAX = DEFAULT_BROWSER_CHANGED,
+#endif
+#else
+    // The Java enum generator evaluates OS guards, not Xenon feature flags.
+    MAX = DEFAULT_BROWSER_CHANGED,
+#endif
   };
 
   virtual ~NotificationHandler();

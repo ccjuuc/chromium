@@ -4,8 +4,9 @@
 
 #include "chrome/app/chrome_main_delegate.h"
 
-#if BUILDFLAG(IS_MAC)
 #include "xenon_overlay/buildflags/buildflags.h"
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/common/ipc/xenon_renderer_command_line.h"
 #endif
 
 #include <stddef.h>
@@ -1138,6 +1139,10 @@ void ChromeMainDelegate::SetupTracing() {
 }
 
 std::optional<int> ChromeMainDelegate::BasicStartupComplete() {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  xenon::ipc::ApplyElectronRendererOverrides(
+      base::CommandLine::ForCurrentProcess());
+#endif
 #if BUILDFLAG(IS_CHROMEOS)
   ash::BootTimesRecorder::Get()->SaveChromeMainStats();
 #endif

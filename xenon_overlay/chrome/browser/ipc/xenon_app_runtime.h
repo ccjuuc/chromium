@@ -32,7 +32,10 @@ struct ElectronApplicationInfo {
 
 // Accepts a release directory, macOS .app bundle, resources directory, source
 // application directory or ASAR. Encrypted archive keys must already be
-// registered by the caller. Does not change process state or extract files.
+// registered by the caller. If no direct layout or package.json exists, one
+// standard resources/app(.asar) layout in a direct subdirectory is accepted;
+// ambiguous releases require an explicit application path. Discovery does not
+// follow linked paths. Does not change process state or extract files.
 bool ResolveElectronApplication(const base::FilePath& requested,
                                 ElectronApplicationInfo* application,
                                 std::string* error);

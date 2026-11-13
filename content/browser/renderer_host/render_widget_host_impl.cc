@@ -4,6 +4,10 @@
 
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/common/ipc/xenon_async_keyboard_event_queue.h"
+#endif
+
 #include <math.h>
 
 #include <algorithm>
@@ -107,6 +111,7 @@
 #include "content/public/browser/render_widget_host_observer.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/tracked_element_observer.h"
+#include "content/public/browser/web_contents_visibility_policy.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_constants.h"
 #include "content/public/common/content_features.h"
@@ -885,6 +890,16 @@ void RenderWidgetHostImpl::WasHidden() {
     observer.RenderWidgetHostVisibilityChanged(this, false);
   }
 }
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+void SetRenderWidgetHiddenSurfaceAllocationAllowed(RenderWidgetHost* widget,
+                                                   bool allowed) {
+  if (widget) {
+    RenderWidgetHostImpl::From(widget)->SetHiddenSurfaceAllocationAllowed(
+        allowed);
+  }
+}
+#endif
 
 void RenderWidgetHostImpl::SetBackgroundThrottling(bool allowed) {
   // A prerendered page must remain hidden until activation. The embedder
@@ -1769,6 +1784,46 @@ void RenderWidgetHostImpl::ForwardKeyboardEventWithCommands(
     const ui::LatencyInfo& latency,
     std::vector<blink::mojom::EditCommandPtr> commands,
     bool* update_event) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  ForwardKeyboardEventWithCommandsInternal(
+      key_event, latency, std::move(commands), update_event, false);
+}
+
+void RenderWidgetHostImpl::SetAsyncKeyboardEventFilter(
+    AsyncKeyboardEventFilter filter,
+    bool cancel_pending) {
+  if (cancel_pending) {
+    async_keyboard_events_.reset();
+  }
+  async_keyboard_event_filter_ = std::move(filter);
+  if (async_keyboard_event_filter_ && !async_keyboard_events_) {
+    async_keyboard_events_ =
+        std::make_unique<xenon::ipc::AsyncKeyboardEventQueue>();
+  }
+}
+
+void RenderWidgetHostImpl::OnAsyncKeyboardEvent(
+    input::NativeWebKeyboardEvent key_event,
+    ui::LatencyInfo latency,
+    std::vector<blink::mojom::EditCommandPtr> commands,
+    bool prevented) {
+  if (prevented) {
+    if (key_event.GetType() == WebKeyboardEvent::Type::kRawKeyDown) {
+      suppress_events_until_keydown_ = true;
+    }
+    return;
+  }
+  ForwardKeyboardEventWithCommandsInternal(key_event, latency,
+                                           std::move(commands), nullptr, true);
+}
+
+void RenderWidgetHostImpl::ForwardKeyboardEventWithCommandsInternal(
+    const input::NativeWebKeyboardEvent& key_event,
+    const ui::LatencyInfo& latency,
+    std::vector<blink::mojom::EditCommandPtr> commands,
+    bool* update_event,
+    bool already_filtered) {
+#endif
   // Input comes from the OS (trusted) and is critical for user interaction, we
   // exclude free-d memory from additional safety checks.
   // TODO(crbug.com/478562227): Optimize and remove if possible.
@@ -1801,6 +1856,32 @@ void RenderWidgetHostImpl::ForwardKeyboardEventWithCommands(
       }
     }
   }
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // Queue before shortcut suppression: Char/KeyUp must remain ordered behind
+  // the asynchronous decision for their RawKeyDown. No browser thread waits
+  // for application JavaScript, and ordinary widgets take the existing path.
+  if (!already_filtered &&
+      (async_keyboard_event_filter_ ||
+       (async_keyboard_events_ && async_keyboard_events_->HasPending()))) {
+    if (!async_keyboard_events_ || async_keyboard_events_->is_canceled()) {
+      async_keyboard_events_ =
+          std::make_unique<xenon::ipc::AsyncKeyboardEventQueue>();
+    }
+    auto filter =
+        async_keyboard_event_filter_
+            ? base::BindOnce(async_keyboard_event_filter_, key_event)
+            : base::BindOnce([](base::OnceCallback<void(bool)> reply) {
+                std::move(reply).Run(false);
+              });
+    async_keyboard_events_->Enqueue(
+        std::move(filter),
+        base::BindOnce(&RenderWidgetHostImpl::OnAsyncKeyboardEvent,
+                       weak_factory_.GetWeakPtr(), key_event, latency,
+                       std::move(commands)));
+    return;
+  }
+#endif
 
   // First, let keypress listeners take a shot at handling the event.  If a
   // listener handles the event, it should not be propagated to the renderer.

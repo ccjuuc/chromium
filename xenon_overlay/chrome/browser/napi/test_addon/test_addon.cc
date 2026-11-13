@@ -22,6 +22,33 @@
 #include "uv.h"
 #endif
 
+namespace {
+std::atomic<bool> g_fail_next_initialization{false};
+std::atomic<int> g_failed_initialization_completions{0};
+std::atomic<int> g_uv_cleanup_closed{0};
+std::atomic<int32_t> g_module_api_version{8};
+}  // namespace
+
+NAPI_EXTERN int32_t node_api_module_get_api_version_v1() {
+  return g_module_api_version.load();
+}
+
+NAPI_EXTERN void XenonTestSetModuleApiVersion(int32_t version) {
+  g_module_api_version.store(version);
+}
+
+NAPI_EXTERN void XenonTestFailNextInitialization() {
+  g_fail_next_initialization.store(true);
+}
+
+NAPI_EXTERN int XenonTestGetFailedInitializationCompletions() {
+  return g_failed_initialization_completions.load();
+}
+
+NAPI_EXTERN int XenonTestGetUvCleanupCloseCount() {
+  return g_uv_cleanup_closed.load();
+}
+
 // Deliberately process-wide, not napi_env instance data: independent renderer
 // owners in the same native process must observe one monotonic counter.
 napi_value NextProcessCounter(napi_env env, napi_callback_info) {
@@ -555,11 +582,53 @@ napi_value UvTimer(napi_env env, napi_callback_info info) {
   napi_get_undefined(env, &undefined);
   return undefined;
 }
+
+struct UvCleanupTimerData {
+  napi_env env;
+  uv_timer_t timer = {};
+};
+
+void CloseCleanupTimer(void* opaque) {
+  auto* state = static_cast<UvCleanupTimerData*>(opaque);
+  uv_close(reinterpret_cast<uv_handle_t*>(&state->timer),
+           [](uv_handle_t* handle) {
+             auto* state = static_cast<UvCleanupTimerData*>(handle->data);
+             napi_value value;
+             // Access the original env in the real libuv close callback:
+             // keeping only the DLL mapped would not make this operation safe.
+             if (napi_get_undefined(state->env, &value) == napi_ok) {
+               ++g_uv_cleanup_closed;
+             }
+             delete state;
+           });
+}
+
+napi_value UvCleanupTimer(napi_env env, napi_callback_info) {
+  uv_loop_t* loop = nullptr;
+  if (napi_get_uv_event_loop(env, &loop) != napi_ok || !loop) {
+    return nullptr;
+  }
+  auto* state = new UvCleanupTimerData{env};
+  if (uv_timer_init(loop, &state->timer) != 0) {
+    delete state;
+    return nullptr;
+  }
+  state->timer.data = state;
+  uv_unref(reinterpret_cast<uv_handle_t*>(&state->timer));
+  if (napi_add_env_cleanup_hook(env, CloseCleanupTimer, state) != napi_ok) {
+    CloseCleanupTimer(state);
+    return nullptr;
+  }
+  napi_value value;
+  napi_get_boolean(env, true, &value);
+  return value;
+}
 #endif
 
 // Controllable real N-API Promises let the executor tests settle operations
 // before or after subscribing, without timers or a second native invocation.
 struct ControlledPromiseState {
+  uint32_t environment_counter = 0;
   uint32_t calls = 0;
   std::map<uint32_t, napi_deferred> pending;
   std::map<uint32_t, napi_ref> retained_callbacks;
@@ -857,6 +926,13 @@ napi_value ControlledPromiseCallCount(napi_env env, napi_callback_info info) {
   return result;
 }
 
+napi_value NextEnvironmentCounter(napi_env env, napi_callback_info) {
+  napi_value result;
+  napi_create_uint32(env, ++GetControlledPromiseState(env)->environment_counter,
+                     &result);
+  return result;
+}
+
 napi_value SettleControlledPromise(napi_env env, napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2];
@@ -977,11 +1053,36 @@ void FinalizeControlledPromises(napi_env env, void* data, void* hint) {
 
 // Init Addon
 extern "C" napi_value Init(napi_env env, napi_value exports) {
+  if (g_fail_next_initialization.exchange(false)) {
+    struct FailureWork {
+      napi_async_work work = nullptr;
+    };
+    auto* state = new FailureWork;
+    if (napi_create_async_work(
+            env, nullptr, nullptr, [](napi_env, void*) {},
+            [](napi_env env, napi_status, void* data) {
+              auto* state = static_cast<FailureWork*>(data);
+              ++g_failed_initialization_completions;
+              napi_delete_async_work(env, state->work);
+              delete state;
+            },
+            state, &state->work) == napi_ok) {
+      if (napi_queue_async_work(env, state->work) != napi_ok) {
+        napi_delete_async_work(env, state->work);
+        delete state;
+      }
+    } else {
+      delete state;
+    }
+    return nullptr;
+  }
   napi_set_instance_data(env, new ControlledPromiseState(),
                          FinalizeControlledPromises, nullptr);
   napi_property_descriptor desc[] = {
       {"nextProcessCounter", nullptr, NextProcessCounter, nullptr, nullptr,
        nullptr, napi_default, nullptr},
+      {"nextEnvironmentCounter", nullptr, NextEnvironmentCounter, nullptr,
+       nullptr, nullptr, napi_default, nullptr},
       {"Add", nullptr, Add, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"AsyncAdd", nullptr, AsyncAdd, nullptr, nullptr, nullptr, napi_default,
        nullptr},
@@ -1034,6 +1135,8 @@ extern "C" napi_value Init(napi_env env, napi_value exports) {
 #if defined(XENON_TEST_UV_COMPAT)
       {"UvTimer", nullptr, UvTimer, nullptr, nullptr, nullptr, napi_default,
        nullptr},
+      {"UvCleanupTimer", nullptr, UvCleanupTimer, nullptr, nullptr, nullptr,
+       napi_default, nullptr},
 #endif
   };
   napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);

@@ -1,5 +1,11 @@
+  const arrayBufferByteLength = Object.getOwnPropertyDescriptor(
+    ArrayBuffer.prototype, 'byteLength').get;
+  const sharedArrayBufferByteLength = typeof SharedArrayBuffer === 'function' ?
+    Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, 'byteLength').get : null;
+
   // --- 7. Process Object ---
   const processEmitter = new EventEmitter();
+  const additionalArguments = injectedPaths.webPreferences?.additionalArguments;
   const process = globalThis.process = {
     isMainFrame: injectedPaths.isMainFrame !== false,
     platform: runtimePlatform,
@@ -14,11 +20,15 @@
       TEMP: tempDir,
       APP_BASE_DIR: exeDir,
       ...(homeDir ? {USERPROFILE: homeDir, HOME: homeDir} : {}),
+      ...(typeof injectedPaths.nodeDebug === 'string' ? {NODE_DEBUG: injectedPaths.nodeDebug} : {}),
     },
     pid: injectedPaths.pid,
     execPath,
     resourcesPath: injectedPaths.resourcesPath || '',
-    argv: [execPath],
+    // Arguments belong to this Document's BrowserWindow, even when renderers
+    // share a process. Keep a private copy before any preload executes.
+    argv: [execPath, ...(Array.isArray(additionalArguments)
+      ? additionalArguments.filter(value => typeof value === 'string') : [])],
     cwd() {
       if (typeof injectedPaths.cwd === 'string' && injectedPaths.cwd) return injectedPaths.cwd;
       throw Object.assign(new Error('Host working directory is unavailable'), {code: 'ERR_NOT_SUPPORTED'});
@@ -598,7 +608,11 @@
         PageHandlerFactory.getRemote().createPageHandler(
             mojoRouter.$.bindNewPipeAndPassRemote(),
             mojoHandler.$.bindNewPipeAndPassReceiver());
-        if (!injectedPaths.isGuest) {
+        const preferences = injectedPaths.webPreferences;
+        const windowControlsNode = injectedPaths.isGuest ||
+            Object.prototype.hasOwnProperty.call(preferences || {}, 'nodeIntegration');
+        if (injectedPaths.contextIsolated || !windowControlsNode ||
+            preferences?.nodeIntegration === true) {
           globalThis.__xenonPageHandler__ = mojoHandler;
           globalThis.__xenonPageCallbackRouter__ = mojoRouter;
           globalThis.__xenonPageHandlerBound__ = true;
@@ -639,33 +653,26 @@
   // The standard renderer dialog API delegates to the Browser's picker.
   // Application RPC methods continue through their original IPC handlers.
   async function showNativeOpenDialog(options) {
-    const opts = options && typeof options === 'object' ? options : {};
-    const title = String(opts.title || '选择文件');
-    const properties = Array.isArray(opts.properties) ? opts.properties : [];
-    const multi = properties.includes('multiSelections');
-    const directory = properties.includes('openDirectory');
-    const exts = [];
-    if (directory) {
-      exts.push('__pick_directory__');
+    if (options == null) options = {};
+    if (typeof options !== 'object' || Array.isArray(options)) {
+      throw Object.assign(new TypeError('dialog options must be an object'),
+          {code: 'ERR_INVALID_ARG_TYPE'});
     }
-    for (const filter of (opts.filters || [])) {
-      for (const ext of (filter && filter.extensions) || []) {
-        const trimmed = String(ext || '').replace(/^\./, '');
-        if (trimmed) {
-          exts.push(trimmed);
-        }
-      }
-    }
+    // Encode before awaiting the bridge, preserving grouped filters, the
+    // default path and explicit properties even if the caller mutates them.
+    const request = valueToMojo(options);
     const handler = await ensureMojoBridge();
     if (!handler || typeof handler.openNativeFileDialog !== 'function') {
       return unsupportedElectronApi('dialog.showOpenDialog');
     }
-    const result = await handler.openNativeFileDialog(title, exts, multi);
-    const paths = Array.isArray(result) ? result : result && result.filePaths;
-    if (!Array.isArray(paths)) {
+    const reply = await handler.openNativeFileDialog(request);
+    if (reply?.error) return throwHostApiError(new Error(reply.error));
+    const result = valueFromMojo(reply?.result);
+    if (!result || typeof result.canceled !== 'boolean' || !Array.isArray(result.filePaths) ||
+        result.filePaths.some(path => typeof path !== 'string')) {
       throw new Error('Native open dialog returned an invalid result');
     }
-    return paths;
+    return result.filePaths;
   }
 
 

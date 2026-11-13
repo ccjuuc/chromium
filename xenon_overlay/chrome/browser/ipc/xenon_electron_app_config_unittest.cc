@@ -83,6 +83,12 @@ TEST_F(ElectronAppConfigTest,
       << error;
   ASSERT_TRUE(config);
   EXPECT_EQ("source-container", config->container_id);
+  EXPECT_EQ(app.AsUTF8Unsafe(), config->launch_path);
+  EXPECT_EQ(mojom::NativeAddonExecution::kStandard,
+            config->native_addon_execution);
+  EXPECT_EQ(mojom::UserDataPolicy::kIsolated, config->user_data_policy);
+  EXPECT_TRUE(config->storage_id.empty());
+  EXPECT_TRUE(config->app_user_data_directory.empty());
   EXPECT_EQ(app.AsUTF8Unsafe(), config->app_path);
   EXPECT_EQ("original", config->app_name);
   EXPECT_EQ("2.5", config->app_version);
@@ -116,6 +122,9 @@ TEST_F(ElectronAppConfigTest,
                           .Set("name", "Hosted name")
                           .Set("version", "3.2")
                           .Set("versionFromExecutable", false)
+                          .Set("nativeAddonExecution", "shared")
+                          .Set("userDataPolicy", "legacy-host")
+                          .Set("storageId", "org.example.application")
                           .Set("parentWindowPairing", std::move(pages))));
   mojom::IpcMainConfigPtr config;
   std::string error;
@@ -123,12 +132,18 @@ TEST_F(ElectronAppConfigTest,
       << error;
   EXPECT_EQ(app.AsUTF8Unsafe(), config->app_path);
   EXPECT_EQ(resources.AsUTF8Unsafe(), config->resources_directory);
+  EXPECT_EQ(descriptor_.AsUTF8Unsafe(), config->launch_path);
   EXPECT_EQ(release.AsUTF8Unsafe(), config->runtime_directory);
   EXPECT_EQ(release.AsUTF8Unsafe(), config->working_directory);
   EXPECT_EQ(executable.AsUTF8Unsafe(), config->executable_path);
   EXPECT_EQ(app.AppendASCII("dist").AppendASCII("entry.js").AsUTF8Unsafe(),
             config->main_script_path);
   EXPECT_EQ("Hosted name", config->app_name);
+  EXPECT_EQ(mojom::UserDataPolicy::kLegacyHost, config->user_data_policy);
+  EXPECT_EQ("org.example.application", config->storage_id);
+  EXPECT_TRUE(config->app_user_data_directory.empty());
+  EXPECT_EQ(mojom::NativeAddonExecution::kShared,
+            config->native_addon_execution);
   EXPECT_EQ("3.2", config->app_version);
   EXPECT_EQ(true, config->is_packaged);
   EXPECT_TRUE(config->embedded_main_source.empty());
@@ -148,15 +163,29 @@ TEST_F(ElectronAppConfigTest, InvalidDescriptorsKeepPreviousConfiguration) {
   ASSERT_TRUE(WriteApplication(root_.AppendASCII("source")));
   for (
       std::string_view json :
-      {"[]", "{invalid}", "{}", R"({"application":42})",
-       R"({"application":""})", R"({"application":"../source","unknown":true})",
+      {"[]",
+       "{invalid}",
+       "{}",
+       R"({"application":42})",
+       R"({"application":""})",
+       R"({"application":"../source","unknown":true})",
        R"({"application":"../source","main":false})",
        R"({"application":"../source","main":"../escape.js"})",
        R"({"application":"../source","archivePublicKey":[]})",
        R"({"application":"../source","versionFromExecutable":"true"})",
+       R"({"application":"../source","nativeAddonExecution":true})",
+       R"({"application":"../source","nativeAddonExecution":"unknown"})",
+       R"({"application":"../source","userDataPolicy":true})",
+       R"({"application":"../source","userDataPolicy":"unknown"})",
+       R"({"application":"../source","storageId":42})",
+       R"({"application":"../source","storageId":""})",
+       R"({"application":"../source","storageId":"invalid\u0000id"})",
+       R"({"application":"../source","app_user_data_directory":"/override"})",
        R"({"application":"../source","privilegedSchemes":{}})",
        R"({"application":"../source","privilegedSchemes":[{"scheme":"https","privileges":{"secure":true}}]})",
        R"({"application":"../source","privilegedSchemes":[{"scheme":"fixture","privileges":{"secure":1}}]})",
+       R"({"application":"../source","privilegedSchemes":[{"scheme":"fixture","privileges":{"stream":true}}]})",
+       R"({"application":"../source","privilegedSchemes":[{"scheme":"fixture","privileges":{"allowServiceWorkers":"true"}}]})",
        R"({"application":"../source","privilegedSchemes":[{"scheme":"fixture","privileges":{"allowServiceWorkers":true}}]})",
        R"({"application":"../source","parentWindowPairing":"dist/page.html"})",
        R"({"application":"../source","parentWindowPairing":[42]})",
@@ -181,7 +210,8 @@ TEST_F(ElectronAppConfigTest, InvalidDescriptorsKeepPreviousConfiguration) {
   EXPECT_FALSE(config);
 }
 
-TEST_F(ElectronAppConfigTest, AcceptsPrivilegedSchemeDeclarationWithoutMutatingApp) {
+TEST_F(ElectronAppConfigTest,
+       AcceptsPrivilegedSchemeDeclarationWithoutMutatingApp) {
   const auto app = root_.AppendASCII("source");
   ASSERT_TRUE(WriteApplication(app));
   const auto before = Snapshot(app);
@@ -192,11 +222,14 @@ TEST_F(ElectronAppConfigTest, AcceptsPrivilegedSchemeDeclarationWithoutMutatingA
                base::ListValue().Append(
                    base::DictValue()
                        .Set("scheme", "fixture")
-                       .Set("privileges", base::DictValue()
-                                              .Set("standard", true)
-                                              .Set("secure", true)
-                                              .Set("supportFetchAPI", true)
-                                              .Set("corsEnabled", true))))));
+                       .Set("privileges",
+                            base::DictValue()
+                                .Set("standard", true)
+                                .Set("secure", true)
+                                .Set("supportFetchAPI", true)
+                                .Set("corsEnabled", true)
+                                .Set("codeCache", true)
+                                .Set("allowServiceWorkers", false))))));
   mojom::IpcMainConfigPtr config;
   std::string error;
   ASSERT_TRUE(LoadElectronAppConfig(descriptor_, "hosted", &config, &error))

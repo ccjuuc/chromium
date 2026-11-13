@@ -95,16 +95,20 @@ base::OnceClosure PerformNetworkRequest(
     std::move(callback).Run(Failure("EINVAL: invalid HTTP method"));
     return {};
   }
-  const bool use_session_cookies =
-      request.FindBool("useSessionCookies").value_or(false);
+  // Node HTTP(S) and global fetch have no browser cookie jar, including when
+  // fetch's credentials option is "include". Explicit Cookie headers below
+  // remain application supplied; responses cannot mutate the profile's jar.
+  // Electron net/session.fetch use their separate, Session-aware bridge.
   resource_request->credentials_mode =
-      use_session_cookies ? network::mojom::CredentialsMode::kInclude
-                          : network::mojom::CredentialsMode::kOmit;
+      network::mojom::CredentialsMode::kOmit;
 
   // Node.js http/https modules do not route through system proxy. Bypass
   // browser proxy settings to match real Node networking semantics and avoid
   // ERR_PROXY_CONNECTION_FAILED in hosted Electron applications.
-  resource_request->load_flags |= net::LOAD_BYPASS_PROXY;
+  // Node also has no implicit HTTP response cache. DISABLE_CACHE prevents
+  // both reading and populating the browser cache, unlike BYPASS_CACHE.
+  resource_request->load_flags |=
+      net::LOAD_BYPASS_PROXY | net::LOAD_DISABLE_CACHE;
 
   if (const base::DictValue* headers = request.FindDict("headers")) {
     for (const auto [name, value] : *headers) {
@@ -140,9 +144,9 @@ base::OnceClosure PerformNetworkRequest(
   static const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
       net::DefineNetworkTrafficAnnotation("xenon_electron_network_request", R"(
         semantics {
-          sender: "Xenon Electron-compatible network bridge"
+          sender: "Xenon Node-compatible network bridge"
           description:
-            "Sends an HTTP(S) request initiated through a hosted Electron or Node networking API."
+            "Sends an HTTP(S) request initiated through a hosted Node networking API."
           trigger:
             "A trusted hosted application calls a Node HTTP(S) networking API."
           data:
@@ -152,8 +156,7 @@ base::OnceClosure PerformNetworkRequest(
             "The destination selected by the hosted application."
         }
         policy {
-          cookies_allowed: YES
-          cookies_store: "The active browser profile, only when the request explicitly enables session cookies."
+          cookies_allowed: NO
           setting:
             "This feature is available only to explicitly allowed hosted Electron application origins."
           policy_exception_justification:

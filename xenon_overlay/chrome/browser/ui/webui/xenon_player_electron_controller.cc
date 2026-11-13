@@ -53,6 +53,7 @@
 #include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_electron_dialog.h"
 #include "xenon_overlay/common/asar/archive.h"
 #include "xenon_overlay/resources/webui/xenon_node/grit/xenon_node_webui_resources.h"
 #include "xenon_overlay/resources/webui/xenon_node/grit/xenon_node_webui_resources_map.h"
@@ -379,6 +380,7 @@ XenonPlayerElectronController::XenonPlayerElectronController(
 }
 
 XenonPlayerElectronController::~XenonPlayerElectronController() {
+  CancelElectronDialogs(dialog_owner_token_);
   weak_ptr_factory_.InvalidateWeakPtrs();
   if (player_widget_) {
     player_widget_->RemoveObserver(this);
@@ -395,6 +397,10 @@ WEB_UI_CONTROLLER_TYPE_IMPL(XenonPlayerElectronController)
 
 void XenonPlayerElectronController::BindInterface(
     mojo::PendingReceiver<xenon_node::mojom::PageHandlerFactory> receiver) {
+  if (!XenonManager::GetInstance()->CanBindLegacyElectronNodeInterface(
+          web_ui()->GetWebContents())) {
+    return;
+  }
   page_factory_receiver_.reset();
   page_factory_receiver_.Bind(std::move(receiver));
 }
@@ -402,6 +408,9 @@ void XenonPlayerElectronController::BindInterface(
 void XenonPlayerElectronController::CreatePageHandler(
     mojo::PendingRemote<xenon_node::mojom::Page> page,
     mojo::PendingReceiver<xenon_node::mojom::PageHandler> receiver) {
+  CancelElectronDialogs(dialog_owner_token_);
+  dialog_owner_token_ =
+      "webui-dialog:" + base::UnguessableToken::Create().ToString();
   LOG(INFO) << "XenonPlayerElectron CreatePageHandler client_id=" << client_id_;
   page_.reset();
   page_.Bind(std::move(page));
@@ -657,30 +666,35 @@ void XenonPlayerElectronController::ControlPlayerWindow(
 }
 
 void XenonPlayerElectronController::OpenNativeFileDialog(
-    const std::string& title,
-    const std::vector<std::string>& filter_extensions,
-    bool allow_multi,
+    base::Value options,
     OpenNativeFileDialogCallback callback) {
-  // Packaged player "打开文件" used to hop through Utility ipcMain
-  // (`openElectronSelectFileDialog` → `dialog.showOpenDialogSync`). After a
-  // Utility crash that pipe is dead, so the picker never appears. This Page
-  // Handler runs on the Browser UI thread; IFileOpenDialog belongs here, not
-  // on a worker (GetOpenFileNameW off-thread is why the dialog was flaky).
-  bool directory = false;
-  std::vector<std::string> extensions;
-  extensions.reserve(filter_extensions.size());
-  for (const auto& ext : filter_extensions) {
-    if (ext == "__pick_directory__") {
-      directory = true;
-      continue;
-    }
-    extensions.push_back(ext);
+  if (!options.is_dict()) {
+    std::move(callback).Run(
+        {}, "ERR_INVALID_ARG_TYPE: dialog options must be an object");
+    return;
   }
-  LOG(INFO) << "PlayerElectron OpenNativeFileDialog title=" << title
-            << " directory=" << directory << " multi=" << allow_multi;
-  std::move(callback).Run(
-      XenonElectronWindowHost::GetInstance()->ShowOpenDialog(
-          title, directory, allow_multi, extensions));
+  auto* owner = views::Widget::GetWidgetForNativeWindow(
+      web_ui()->GetWebContents()->GetTopLevelNativeWindow());
+  if (!owner) {
+    std::move(callback).Run({},
+                            "ERR_ABORTED: WebUI dialog owner is unavailable");
+    return;
+  }
+  ShowElectronOpenDialog(
+      dialog_owner_token_, owner, options.GetDict(),
+      base::BindOnce(
+          [](base::WeakPtr<XenonPlayerElectronController> self,
+             std::string owner_token, OpenNativeFileDialogCallback reply,
+             base::Value result, std::string error) {
+            if (!self || self->dialog_owner_token_ != owner_token) {
+              std::move(reply).Run({},
+                                   "ERR_ABORTED: WebUI dialog owner changed");
+              return;
+            }
+            std::move(reply).Run(std::move(result), error);
+          },
+          weak_ptr_factory_.GetWeakPtr(), dialog_owner_token_,
+          std::move(callback)));
 }
 
 void XenonPlayerElectronController::ScanDirectoryVideos(

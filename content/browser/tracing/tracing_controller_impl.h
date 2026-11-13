@@ -70,6 +70,9 @@ class TracingControllerImpl : public TracingController,
                    const std::string& agent_label) override;
   bool GetTraceBufferUsage(GetTraceBufferUsageCallback callback) override;
   bool IsTracing() override;
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  uint64_t GetRecordingGeneration() const override;
+#endif
 
   // tracing::mojom::TracingSessionClient implementation:
   void OnTracingEnabled() override;
@@ -95,7 +98,11 @@ class TracingControllerImpl : public TracingController,
 
   void OnReadBuffersComplete();
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  void CompleteFlush(bool success = true);
+#else
   void CompleteFlush();
+#endif
 
   void InitStartupTracingForDuration();
   void EndStartupTracing();
@@ -113,6 +120,10 @@ class TracingControllerImpl : public TracingController,
   scoped_refptr<TraceDataEndpoint> trace_data_endpoint_;
   bool is_data_complete_ = false;
   bool read_buffers_complete_ = false;
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  uint64_t recording_generation_ = 0;
+  bool tracing_failed_ = false;
+#endif
 
   std::unique_ptr<TracingDelegate> delegate_;
 

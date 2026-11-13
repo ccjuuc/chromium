@@ -18,6 +18,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_view_util.h"
+#include "build/build_config.h"
 #include "uv.h"
 #include "xenon_overlay/common/ipc/xenon_runtime_platform.h"
 
@@ -229,6 +230,32 @@ mojom::IpcResultPtr PerformOsCall(base::Value request) {
                      " requires a trusted caller process identity");
   }
   return OsFailure("ERR_NOT_SUPPORTED: unsupported os method");
+}
+
+mojom::IpcResultPtr GetProcessEnvironment() {
+  uv_env_item_t* raw_environment = nullptr;
+  int count = 0;
+  const int status = uv_os_environ(&raw_environment, &count);
+  if (status != 0) {
+    return OsFailure(status, "uv_os_environ");
+  }
+  base::ScopedClosureRunner cleanup(
+      base::BindOnce(&uv_os_free_environ, raw_environment, count));
+  // libuv owns exactly |count| entries until uv_os_free_environ.
+  const auto environment = UNSAFE_BUFFERS(
+      base::span(raw_environment, static_cast<size_t>(count)));
+  base::DictValue values;
+  for (const auto& entry : environment) {
+#if BUILDFLAG(IS_WIN)
+    // Node's RealEnvStore::Enumerate does not expose hidden drive-directory
+    // entries such as "=C:". They are not valid fork() env dictionary keys.
+    if (entry.name[0] == '=') {
+      continue;
+    }
+#endif
+    values.Set(entry.name, entry.value);
+  }
+  return OsValue(base::Value(std::move(values)));
 }
 
 mojom::IpcResultPtr GetNetworkInterfaces() {

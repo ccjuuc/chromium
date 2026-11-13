@@ -22,9 +22,12 @@
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_file_stats.h"
 #include "xenon_overlay/common/asar/archive.h"
+#include "xenon_overlay/third_party/libuv/include/uv.h"
 
 #if BUILDFLAG(IS_POSIX)
 #include <unistd.h>
@@ -227,7 +230,8 @@ bool ResolveAsarEntry(const base::FilePath& path,
                       bool* is_directory,
                       bool* is_asar_path) {
   base::FilePath archive_path;
-  if (!xenon::asar::GetAsarArchivePath(path, &archive_path, relative_path)) {
+  if (!xenon::asar::GetAsarArchivePath(path, &archive_path, relative_path,
+                                       /*allow_root=*/true)) {
     *is_asar_path = false;
     return false;
   }
@@ -239,21 +243,89 @@ bool ResolveAsarEntry(const base::FilePath& path,
   return (*archive)->StatPath(*relative_path, info, is_directory);
 }
 
-base::DictValue MakeStatDict(bool is_file,
-                             bool is_directory,
-                             double size,
-                             double mtime_ms) {
+std::string StatNanoseconds(const uv_timespec_t& time) {
+  // Decimal concatenation keeps the full seconds range without overflowing
+  // int64 or requiring a platform-specific 128-bit integer type.
+  uint64_t seconds = time.tv_sec >= 0
+                         ? static_cast<uint64_t>(time.tv_sec)
+                         : static_cast<uint64_t>(-(time.tv_sec + 1));
+  uint64_t nanos = time.tv_nsec;
+  if (time.tv_sec < 0) {
+    nanos = 1000000000 - nanos;
+    if (nanos == 1000000000) {
+      ++seconds;
+      nanos = 0;
+    }
+  }
+  std::string value = base::NumberToString(nanos);
+  if (seconds != 0) {
+    value = base::NumberToString(seconds) +
+            std::string(9 - value.size(), '0') + value;
+  }
+  return time.tv_sec < 0 ? "-" + value : value;
+}
+
+base::DictValue MakeArchiveStat(bool is_file,
+                               bool is_directory,
+                               uint64_t size,
+                               bool bigint) {
   base::DictValue stat;
   stat.Set("isFile", is_file);
   stat.Set("isDirectory", is_directory);
   stat.Set("isSymbolicLink", false);
-  stat.Set("size", size);
-  stat.Set("mtimeMs", mtime_ms);
-  stat.Set("birthtimeMs", mtime_ms);
+  if (bigint) {
+    stat.Set("size", base::NumberToString(size));
+    stat.Set("mtimeNs", "0");
+    stat.Set("birthtimeNs", "0");
+  } else {
+    stat.Set("size", static_cast<double>(size));
+    stat.Set("mtimeMs", 0.0);
+    stat.Set("birthtimeMs", 0.0);
+  }
   return stat;
 }
 
 }  // namespace
+
+base::DictValue FileSystemStatValue(const uv_stat_t& stat, bool bigint) {
+  base::DictValue result;
+  auto integer = [&](const char* name, uint64_t value) {
+    if (bigint) {
+      result.Set(name, base::NumberToString(value));
+    } else {
+      result.Set(name, static_cast<double>(value));
+    }
+  };
+  integer("dev", stat.st_dev);
+  integer("mode", stat.st_mode);
+  integer("nlink", stat.st_nlink);
+  integer("uid", stat.st_uid);
+  integer("gid", stat.st_gid);
+  integer("rdev", stat.st_rdev);
+  integer("blksize", stat.st_blksize);
+  integer("ino", stat.st_ino);
+  integer("size", stat.st_size);
+  integer("blocks", stat.st_blocks);
+  auto time = [&](const char* name, const uv_timespec_t& value) {
+    if (bigint) {
+      result.Set(std::string(name) + "Ns", StatNanoseconds(value));
+    } else {
+      result.Set(std::string(name) + "Ms",
+                 static_cast<double>(value.tv_sec) * 1000 +
+                     value.tv_nsec / 1000000.0);
+    }
+  };
+  time("atime", stat.st_atim);
+  time("mtime", stat.st_mtim);
+  time("ctime", stat.st_ctim);
+  time("birthtime", stat.st_birthtim);
+  // libuv normalizes these Node/POSIX type bits on every supported platform.
+  const uint64_t type = stat.st_mode & 0170000;
+  result.Set("isFile", type == 0100000);
+  result.Set("isDirectory", type == 0040000);
+  result.Set("isSymbolicLink", type == 0120000);
+  return result;
+}
 
 xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
   if (!arguments.is_list() || arguments.GetList().empty() ||
@@ -266,6 +338,12 @@ xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
   if (!operation || !path_string) {
     return Failure("EINVAL: fs request requires operation and path");
   }
+  const auto* no_asar_value = request.Find("noAsar");
+  if (no_asar_value && !no_asar_value->is_bool()) {
+    return Failure("EINVAL: noAsar must be a boolean");
+  }
+  const bool no_asar = request.FindBool("noAsar").value_or(false);
+  const bool bigint = request.FindBool("bigint").value_or(false);
 
   const base::FilePath path = base::FilePath::FromUTF8Unsafe(*path_string);
   auto error = [&](const char* code, const char* description,
@@ -281,10 +359,44 @@ xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
   };
 #endif
 
-  if ((*operation == "symlink" || *operation == "readlink") &&
+  if ((*operation == "symlink" || *operation == "readlink" ||
+       *operation == "access" || *operation == "mkdtemp" ||
+       *operation == "chmod" || *operation == "stat" ||
+       *operation == "lstat") &&
       path_string->find('\0') != std::string::npos) {
     return error("EINVAL", "path must not contain null bytes",
                  operation->c_str());
+  }
+
+  int access_mode = 0;
+  if (*operation == "access") {
+    const base::Value* mode = request.Find("mode");
+    if (mode && (!mode->is_int() || mode->GetInt() < 0 || mode->GetInt() > 7)) {
+      return error("EINVAL", "invalid access mode", "access");
+    }
+    access_mode = mode ? mode->GetInt() : 0;
+  }
+  auto access_file = [&](const base::FilePath& target) {
+    uv_fs_t access_request = {};
+    const int status =
+        uv_fs_access(nullptr, &access_request, target.AsUTF8Unsafe().c_str(),
+                     access_mode, nullptr);
+    uv_fs_req_cleanup(&access_request);
+    return status == 0
+               ? Success()
+               : error(uv_err_name(status), uv_strerror(status), "access");
+  };
+
+  int chmod_mode = 0;
+  if (*operation == "chmod") {
+    const base::Value* mode = request.Find("mode");
+    if (!mode || (!mode->is_int() && !mode->is_double()) ||
+        !std::isfinite(mode->GetDouble()) || mode->GetDouble() < 0 ||
+        mode->GetDouble() > std::numeric_limits<uint32_t>::max() ||
+        std::floor(mode->GetDouble()) != mode->GetDouble()) {
+      return error("EINVAL", "invalid permission mode", "chmod");
+    }
+    chmod_mode = static_cast<uint32_t>(mode->GetDouble()) & 07777;
   }
 
   std::optional<FileReadRange> read_range;
@@ -298,6 +410,7 @@ xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
   bool asar_is_directory = false;
   bool is_asar_path = false;
   const bool asar_found =
+      !no_asar &&
       ResolveAsarEntry(path, &asar_archive, &asar_relative_path, &asar_info,
                        &asar_is_directory, &is_asar_path);
   if (is_asar_path) {
@@ -305,17 +418,29 @@ xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
       return Success(base::Value(asar_found));
     }
     if (*operation == "access") {
-      return asar_found ? Success()
-                        : error("ENOENT", "no such file or directory",
-                                "access");
+      if (!asar_found) {
+        return error("ENOENT", "no such file or directory", "access");
+      }
+      if (asar_info.unpacked) {
+        base::FilePath unpacked_path;
+        if (!asar_archive->GetUnpackedPath(asar_relative_path,
+                                           &unpacked_path)) {
+          return error("ENOENT", "no such file or directory", "access");
+        }
+        return access_file(unpacked_path);
+      }
+      // Packed members are immutable even when the physical archive is
+      // writable. Unpacked members above use the real host permissions.
+      return (access_mode & 2) ? error("EACCES", "permission denied", "access")
+                               : Success();
     }
     if (!asar_found) {
       return error("ENOENT", "no such file or directory", operation->c_str());
     }
     if (*operation == "stat" || *operation == "lstat") {
-      return Success(base::Value(MakeStatDict(
+      return Success(base::Value(MakeArchiveStat(
           !asar_is_directory, asar_is_directory,
-          asar_is_directory ? 0.0 : static_cast<double>(asar_info.size), 0.0)));
+          asar_is_directory ? 0 : asar_info.size, bigint)));
     }
     if (*operation == "read_file") {
       if (asar_is_directory) {
@@ -343,6 +468,22 @@ xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
 
   if (*operation == "exists") {
     return Success(base::Value(base::PathExists(path)));
+  }
+  if (*operation == "mkdtemp") {
+    // libuv uses the platform's atomic exclusive directory creation. Append
+    // exactly six template characters without normalizing the supplied prefix.
+    const std::string pattern = *path_string + "XXXXXX";
+    uv_fs_t temporary_request = {};
+    const int status = uv_fs_mkdtemp(nullptr, &temporary_request,
+                                    pattern.c_str(), nullptr);
+    const std::string created =
+        status == 0 ? temporary_request.path : std::string();
+    uv_fs_req_cleanup(&temporary_request);
+    if (status != 0) {
+      return Failure(std::string(uv_err_name(status)) + ": " +
+                     uv_strerror(status) + ", mkdtemp '" + pattern + "'");
+    }
+    return FileContentsResult(request, created);
   }
   if (*operation == "symlink" || *operation == "readlink") {
 #if BUILDFLAG(IS_POSIX)
@@ -385,18 +526,19 @@ xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
 #endif
   }
   if (*operation == "stat" || *operation == "lstat") {
-    base::File::Info info;
-    if (!base::GetFileInfo(path, &info)) {
-      return error("ENOENT", "no such file or directory", "stat");
-    }
-    base::DictValue stat;
-    stat.Set("isFile", !info.is_directory);
-    stat.Set("isDirectory", info.is_directory);
-    stat.Set("isSymbolicLink", false);
-    stat.Set("size", static_cast<double>(info.size));
-    stat.Set("mtimeMs", info.last_modified.InMillisecondsFSinceUnixEpoch());
-    stat.Set("birthtimeMs", info.creation_time.InMillisecondsFSinceUnixEpoch());
-    return Success(base::Value(std::move(stat)));
+    uv_fs_t stat_request = {};
+    const int status = *operation == "lstat"
+                           ? uv_fs_lstat(nullptr, &stat_request,
+                                         path.AsUTF8Unsafe().c_str(), nullptr)
+                           : uv_fs_stat(nullptr, &stat_request,
+                                        path.AsUTF8Unsafe().c_str(), nullptr);
+    auto result = status == 0
+                      ? Success(base::Value(
+                            FileSystemStatValue(stat_request.statbuf, bigint)))
+                      : error(uv_err_name(status), uv_strerror(status),
+                              operation->c_str());
+    uv_fs_req_cleanup(&stat_request);
+    return result;
   }
   if (*operation == "read_file") {
     if (base::DirectoryExists(path)) {
@@ -507,16 +649,13 @@ xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
     if (*operation == "rmdir" && !base::DirectoryExists(path)) {
       return error("ENOTDIR", "not a directory", "rmdir");
     }
-    const bool ok = recursive ? base::DeletePathRecursively(path)
-                              : base::DeleteFile(path);
+    const bool ok =
+        recursive ? base::DeletePathRecursively(path) : base::DeleteFile(path);
     return ok ? Success()
-              : error("ENOTEMPTY", "directory not empty",
-                      operation->c_str());
+              : error("ENOTEMPTY", "directory not empty", operation->c_str());
   }
   if (*operation == "access") {
-    return base::PathExists(path)
-               ? Success()
-               : error("ENOENT", "no such file or directory", "access");
+    return access_file(path);
   }
   if (*operation == "rename" || *operation == "copy_file") {
     const std::string* destination_string = request.FindString("destination");
@@ -527,12 +666,10 @@ xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
         base::FilePath::FromUTF8Unsafe(*destination_string);
     if (!base::PathExists(path) ||
         !base::DirectoryExists(destination.DirName())) {
-      return error("ENOENT", "no such file or directory",
-                   operation->c_str());
+      return error("ENOENT", "no such file or directory", operation->c_str());
     }
-    const bool ok = *operation == "rename"
-                        ? base::Move(path, destination)
-                        : base::CopyFile(path, destination);
+    const bool ok = *operation == "rename" ? base::Move(path, destination)
+                                           : base::CopyFile(path, destination);
     return ok ? Success()
               : error("EACCES", "permission denied", operation->c_str());
   }
@@ -547,9 +684,16 @@ xenon::ipc::mojom::IpcResultPtr PerformFileSystemCall(base::Value arguments) {
     return Success(base::Value(normalized.AsUTF8Unsafe()));
   }
   if (*operation == "chmod") {
-    return base::PathExists(path)
+    // Use the same platform implementation as Node. Windows applies its real
+    // read-only attribute; POSIX applies permission bits and follows symlinks.
+    uv_fs_t chmod_request = {};
+    const int status = uv_fs_chmod(nullptr, &chmod_request,
+                                   path.AsUTF8Unsafe().c_str(), chmod_mode,
+                                   nullptr);
+    uv_fs_req_cleanup(&chmod_request);
+    return status == 0
                ? Success()
-               : error("ENOENT", "no such file or directory", "chmod");
+               : error(uv_err_name(status), uv_strerror(status), "chmod");
   }
   return error("ENOSYS", "operation not supported", operation->c_str());
 }

@@ -448,6 +448,7 @@ def build(options):
             info = plistlib.loads((bundle / 'Contents/Info.plist').read_bytes())
             write_json(artifacts / 'thunder_2025.xenon.json', {
                 'application': './Thunder.app', 'name': 'Thunder',
+                'userDataPolicy': 'legacy-host',
                 'version': info.get('CFBundleShortVersionString', '25.1.13'),
                 'main': 'out.asar/main.js',
                 'privilegedSchemes': [

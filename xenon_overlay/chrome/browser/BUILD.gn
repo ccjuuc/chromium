@@ -1,8 +1,10 @@
+import("//build/config/features.gni")
 import("//build/config/ui.gni")
 import("//chrome/updater/xenon_updater.gni")
 import("//chrome/version.gni")
 import("//testing/test.gni")
 import("//third_party/skia/modules/svg/svg.gni")
+import("//v8/gni/v8.gni")
 import("//xenon_overlay/buildflags/features.gni")
 
 source_set("webrtc_transfer_channel") {
@@ -199,6 +201,39 @@ source_set("xenon_common_dialog") {
   ]
 }
 
+source_set("xenon_electron_dialog") {
+  sources = [
+    "ui/xenon_electron_dialog.cc",
+    "ui/xenon_electron_dialog.h",
+  ]
+  public_deps = [ "//base" ]
+  deps = [
+    "//ui/base",
+    "//ui/base/mojom:ui_base_types",
+    "//ui/events",
+    "//ui/gfx",
+    "//ui/shell_dialogs",
+    "//ui/views",
+  ]
+}
+
+test("xenon_electron_dialog_unittests") {
+  sources = [
+    "//ui/views/run_all_unittests_main.cc",
+    "ui/xenon_electron_dialog_unittest.cc",
+  ]
+  deps = [
+    ":xenon_electron_dialog",
+    "//base/test:test_support",
+    "//mojo/core/embedder",
+    "//testing/gtest",
+    "//ui/resources:ui_test_pak",
+    "//ui/shell_dialogs:test_support",
+    "//ui/views:test_support",
+  ]
+  data_deps = [ "//ui/resources:ui_test_pak_data" ]
+}
+
 source_set("napi") {
   sources = [
     "napi/js_native_api.h",
@@ -208,6 +243,9 @@ source_set("napi") {
     "napi/napi_loader.cc",
     "napi/napi_loader.h",
     "napi/napi_switches.h",
+    "napi/native_addon_event_loop.h",
+    "napi/native_runtime_retirement.cc",
+    "napi/native_runtime_retirement.h",
     "napi/node_api.h",
   ]
   configs += [ "//xenon_overlay/buildflags:custom_names" ]
@@ -218,6 +256,7 @@ source_set("napi") {
     "//xenon_overlay/buildflags",
   ]
   if (enable_xenon_node_uv_compat) {
+    sources += [ "napi/native_addon_event_loop.cc" ]
     deps += [ "//xenon_overlay/third_party:libuv" ]
   }
   if (is_win && enable_xenon_node_uv_compat) {
@@ -227,12 +266,21 @@ source_set("napi") {
 
 source_set("app_runtime") {
   sources = [
+    "ipc/xenon_app_command_line.cc",
+    "ipc/xenon_app_command_line.h",
+    "ipc/xenon_app_launch_arguments.cc",
+    "ipc/xenon_app_launch_arguments.h",
     "ipc/xenon_app_runtime.cc",
     "ipc/xenon_app_runtime.h",
+    "ipc/xenon_electron_user_agent.cc",
+    "ipc/xenon_electron_user_agent.h",
   ]
   deps = [
     "//base",
+    "//net",
     "//xenon_overlay/common/asar",
+    "//xenon_overlay/common/ipc:renderer_command_line",
+    "//xenon_overlay/common/ipc:runtime_platform",
   ]
 }
 
@@ -244,12 +292,28 @@ source_set("electron_app_config") {
   deps = [
     ":app_runtime",
     "//base",
+    "//crypto",
     "//net",
     "//url",
     "//xenon_overlay/common/asar",
     "//xenon_overlay/common/ipc:privileged_schemes",
     "//xenon_overlay/public/mojom",
   ]
+}
+
+source_set("electron_system_languages") {
+  sources = [
+    "ipc/xenon_electron_system_languages.cc",
+    "ipc/xenon_electron_system_languages.h",
+  ]
+  deps = [ "//base" ]
+  if (is_linux && use_glib) {
+    deps += [ "//base:i18n" ]
+    configs += [ "//build/config/linux:glib" ]
+  }
+  if (is_mac) {
+    frameworks = [ "CoreFoundation.framework" ]
+  }
 }
 
 source_set("os_bridge") {
@@ -279,6 +343,9 @@ source_set("sqlite_bridge") {
 
 source_set("filesystem_bridge") {
   sources = [
+    "ipc/xenon_file_descriptors.cc",
+    "ipc/xenon_file_descriptors.h",
+    "ipc/xenon_file_stats.h",
     "ipc/xenon_file_system_bridge.cc",
     "ipc/xenon_file_system_bridge.h",
   ]
@@ -286,6 +353,7 @@ source_set("filesystem_bridge") {
     "//base",
     "//xenon_overlay/common/asar",
     "//xenon_overlay/public/mojom",
+    "//xenon_overlay/third_party:libuv",
   ]
 }
 
@@ -428,22 +496,66 @@ source_set("xenon_updater") {
   }
 }
 
+source_set("electron_sandbox_policy") {
+  sources = [
+    "ipc/xenon_electron_sandbox_policy.cc",
+    "ipc/xenon_electron_sandbox_policy.h",
+  ]
+  public_deps = [ "//base" ]
+}
+
+source_set("electron_power_and_storage") {
+  sources = [
+    "ipc/xenon_electron_power_save_blocker.cc",
+    "ipc/xenon_electron_power_save_blocker.h",
+    "ipc/xenon_electron_safe_storage.cc",
+    "ipc/xenon_electron_safe_storage.h",
+  ]
+  public_deps = [
+    "//base",
+    "//components/os_crypt/async/common",
+    "//mojo/public/cpp/bindings",
+    "//services/device/public/mojom",
+  ]
+  deps = [
+    "//build/config/linux/dbus:buildflags",
+    "//xenon_overlay/buildflags",
+  ]
+}
+
 source_set("electron_api_bridge") {
   sources = [
+    "ipc/xenon_crash_reporter_bridge.cc",
+    "ipc/xenon_crash_reporter_bridge.h",
     "ipc/xenon_electron_api_bridge.cc",
     "ipc/xenon_electron_api_bridge.h",
+    "ipc/xenon_electron_jump_list.cc",
+    "ipc/xenon_electron_jump_list.h",
+    "ipc/xenon_electron_login_items.cc",
+    "ipc/xenon_electron_login_items.h",
     "ipc/xenon_electron_shell.h",
+    "ipc/xenon_native_image_bridge.cc",
+    "ipc/xenon_native_image_bridge.h",
   ]
   deps = [
     ":xenon_updater",
     "//base",
+    "//components/crash/core/app",
+    "//crypto",
+    "//net",
+    "//skia",
     "//ui/base/clipboard",
+    "//ui/gfx/codec",
+    "//ui/native_theme",
     "//url",
     "//xenon_overlay/public/mojom",
   ]
   if (is_win) {
     sources += [ "ipc/xenon_electron_shell_win.cc" ]
-    libs = [ "shell32.lib" ]
+    libs = [
+      "dwmapi.lib",
+      "shell32.lib",
+    ]
   } else {
     sources += [ "ipc/xenon_electron_shell_stub.cc" ]
   }
@@ -460,16 +572,45 @@ source_set("zlib_bridge") {
   sources = [
     "ipc/xenon_zlib_bridge.cc",
     "ipc/xenon_zlib_bridge.h",
+    "ipc/xenon_zlib_stream.cc",
+    "ipc/xenon_zlib_stream.h",
   ]
   deps = [
     "//base",
+    "//third_party/brotli:dec",
+    "//third_party/brotli:enc",
     "//third_party/zlib",
+    "//third_party/zstd:compress",
+    "//third_party/zstd:decompress",
     "//xenon_overlay/public/mojom",
+  ]
+}
+
+source_set("utility_process_pipe") {
+  sources = [
+    "ipc/xenon_utility_process_pipe.cc",
+    "ipc/xenon_utility_process_pipe.h",
+  ]
+  public_deps = [ "//base" ]
+}
+
+source_set("udp_socket_bridge") {
+  sources = [
+    "ipc/xenon_udp_socket_bridge.cc",
+    "ipc/xenon_udp_socket_bridge.h",
+  ]
+  public_deps = [
+    "//base",
+    "//xenon_overlay/third_party:libuv",
   ]
 }
 
 source_set("network_request_bridge") {
   sources = [
+    "ipc/xenon_electron_net.cc",
+    "ipc/xenon_electron_net.h",
+    "ipc/xenon_electron_net_observer.cc",
+    "ipc/xenon_electron_net_observer.h",
     "ipc/xenon_network_request_bridge.cc",
     "ipc/xenon_network_request_bridge.h",
   ]
@@ -492,6 +633,105 @@ source_set("electron_session_shutdown_notifier") {
   public_deps = [
     "//base",
     "//components/keyed_service/content",
+  ]
+}
+
+source_set("electron_permission_core") {
+  sources = [
+    "ipc/xenon_electron_permission_check_remote.cc",
+    "ipc/xenon_electron_permission_check_remote.h",
+    "ipc/xenon_electron_permission_policy.cc",
+    "ipc/xenon_electron_permission_policy.h",
+  ]
+  public_deps = [
+    "//base",
+    "//mojo/public/cpp/bindings",
+    "//xenon_overlay/public/mojom:permission_check",
+  ]
+}
+
+# Profile permission routing must not depend on the Browser UI target.
+source_set("electron_permissions") {
+  sources = [
+    "ipc/xenon_electron_app_storage.cc",
+    "ipc/xenon_electron_app_storage.h",
+    "ipc/xenon_electron_permission_broker.cc",
+    "ipc/xenon_electron_permission_broker.h",
+    "ipc/xenon_electron_permission_delegate.cc",
+    "ipc/xenon_electron_permission_delegate.h",
+    "ipc/xenon_electron_permissions.h",
+    "ipc/xenon_electron_session_bridge.cc",
+    "ipc/xenon_electron_session_bridge.h",
+  ]
+  public_deps = [
+    ":electron_permission_core",
+    "//base",
+    "//content/public/browser",
+  ]
+  deps = [
+    ":electron_session_shutdown_notifier",
+    ":filesystem_bridge",
+    "//components/keyed_service/content",
+    "//components/keyed_service/core",
+    "//components/permissions",
+    "//crypto",
+    "//services/device/public/mojom",
+    "//third_party/blink/public/common",
+    "//url",
+  ]
+}
+
+source_set("electron_cookie_encryption") {
+  sources = [
+    "ipc/xenon_electron_cookie_encryption.cc",
+    "ipc/xenon_electron_cookie_encryption.h",
+  ]
+  public_deps = [
+    "//base",
+    "//mojo/public/cpp/bindings",
+    "//services/network/public/mojom",
+  ]
+  deps = [
+    "//build/config/linux/dbus:buildflags",
+    "//components/os_crypt/async/browser",
+    "//components/os_crypt/async/common",
+    "//components/prefs",
+    "//content/public/browser",
+    "//services/network/public/cpp",
+    "//sql",
+  ]
+  if (is_win) {
+    deps += [ "//components/os_crypt/async/browser:dpapi_key_provider" ]
+  }
+  if (is_mac) {
+    deps += [
+      "//chrome/common:chrome_features",
+      "//components/os_crypt/async/browser:keychain_key_provider",
+    ]
+  }
+  if (is_linux && use_dbus) {
+    deps += [
+      "//chrome/app:generated_resources",
+      "//chrome/browser:browser_features",
+      "//components/os_crypt/async/browser:freedesktop_secret_key_provider",
+      "//components/os_crypt/async/browser:secret_portal_key_provider",
+      "//components/password_manager/core/browser:password_switches",
+      "//ui/base",
+    ]
+  }
+  if (is_posix && !is_mac) {
+    deps += [ "//components/os_crypt/async/browser:posix_key_provider" ]
+  }
+}
+
+source_set("electron_document_registration") {
+  sources = [
+    "ipc/xenon_electron_document_registration.cc",
+    "ipc/xenon_electron_document_registration.h",
+  ]
+  public_deps = [
+    "//base",
+    "//content/public/browser",
   ]
 }
 
@@ -543,16 +783,40 @@ source_set("browser") {
     "account/xenon_transfer_service.h",
     "asar/xenon_asar_url_loader_factory.cc",
     "asar/xenon_asar_url_loader_factory.h",
+    "ipc/xenon_app_single_instance.cc",
+    "ipc/xenon_app_single_instance.h",
+    "ipc/xenon_app_single_instance_transport.cc",
+    "ipc/xenon_app_single_instance_transport.h",
+    "ipc/xenon_electron_app_storage_profile.cc",
+    "ipc/xenon_electron_app_storage_profile.h",
+    "ipc/xenon_electron_desktop_capturer.cc",
+    "ipc/xenon_electron_desktop_capturer.h",
     "ipc/xenon_electron_guest.cc",
     "ipc/xenon_electron_guest.h",
+    "ipc/xenon_electron_media_permission.cc",
+    "ipc/xenon_electron_media_permission.h",
+    "ipc/xenon_electron_navigation.cc",
+    "ipc/xenon_electron_navigation.h",
+    "ipc/xenon_electron_net_factory.cc",
+    "ipc/xenon_electron_net_factory.h",
+    "ipc/xenon_electron_notification.cc",
+    "ipc/xenon_electron_notification.h",
     "ipc/xenon_electron_protocol.cc",
     "ipc/xenon_electron_protocol.h",
-    "ipc/xenon_electron_session_bridge.cc",
-    "ipc/xenon_electron_session_bridge.h",
+    "ipc/xenon_electron_tracing.cc",
+    "ipc/xenon_electron_tracing.h",
+    "ipc/xenon_electron_web_request.cc",
+    "ipc/xenon_electron_web_request.h",
+    "ipc/xenon_electron_web_request_filter.cc",
+    "ipc/xenon_electron_web_request_filter.h",
+    "ipc/xenon_electron_zoom.cc",
+    "ipc/xenon_electron_zoom.h",
     "ipc/xenon_ipc_document_host.cc",
     "ipc/xenon_ipc_document_host.h",
     "ipc/xenon_service_worker_ipc_host.cc",
     "ipc/xenon_service_worker_ipc_host.h",
+    "ipc/xenon_utility_process_host.cc",
+    "ipc/xenon_utility_process_host.h",
     "reminder/xenon_reminder_notification_manager.cc",
     "reminder/xenon_reminder_notification_manager.h",
     "reminder/xenon_reminder_notification_observer.h",
@@ -594,6 +858,10 @@ source_set("browser") {
     "ui/webui/xenon_webui_controller.h",
     "ui/webui/xenon_webui_dev_proxy.cc",
     "ui/webui/xenon_webui_dev_proxy.h",
+    "ui/xenon_electron_keyboard.cc",
+    "ui/xenon_electron_keyboard.h",
+    "ui/xenon_electron_view_host.cc",
+    "ui/xenon_electron_view_host.h",
     "ui/xenon_electron_window_host.cc",
     "ui/xenon_electron_window_host.h",
     "ui/xenon_frameless_shadow_view.cc",
@@ -649,7 +917,13 @@ source_set("browser") {
     ":app_runtime",
     ":electron_api_bridge",
     ":electron_app_config",
+    ":electron_cookie_encryption",
+    ":electron_document_registration",
+    ":electron_permissions",
+    ":electron_power_and_storage",
+    ":electron_sandbox_policy",
     ":electron_session_shutdown_notifier",
+    ":electron_system_languages",
     ":filesystem_bridge",
     ":managed_certificates",
     ":napi",
@@ -657,9 +931,11 @@ source_set("browser") {
     ":os_bridge",
     ":remote_input",
     ":sqlite_bridge",
+    ":utility_process_pipe",
     ":webrtc_transfer_channel",
     ":xenon_common_bubble",
     ":xenon_common_dialog",
+    ":xenon_electron_dialog",
     ":xenon_prefs",
     ":xenon_updater",
     "//base",
@@ -670,12 +946,15 @@ source_set("browser") {
     "//chrome/browser/lifetime:termination_notification",
     "//chrome/browser/media/webrtc",
     "//chrome/browser/net",
+    "//chrome/browser/notifications",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/profiles:profile_manager",
     "//chrome/browser/ui",
     "//chrome/browser/ui/select_file_policy",
     "//chrome/browser/ui/startup",
     "//chrome/browser/ui/startup:xenon_login_startup_hooks",
     "//chrome/common/beijing:render_dll_names",
+    "//components/crash/core/app",
     "//components/crx_file",
     "//components/download/public/common:public",
     "//components/embedder_support",
@@ -707,6 +986,7 @@ source_set("browser") {
     "//ui/gfx",
     "//ui/gfx/codec",
     "//ui/menus",
+    "//ui/message_center/public/cpp",
     "//ui/shell_dialogs",
     "//ui/views",
     "//ui/web_dialogs",
@@ -715,6 +995,7 @@ source_set("browser") {
     "//xenon_overlay/chrome/browser/ui/webui:mojo_bindings",
     "//xenon_overlay/common/asar",
     "//xenon_overlay/common/ipc:privileged_schemes",
+    "//xenon_overlay/public:utility_process_launch_options",
     "//xenon_overlay/public/mojom",
     "//xenon_overlay/resources",
     "//xenon_overlay/resources/webui:resources",
@@ -1010,6 +1291,9 @@ if (is_mac && enable_xenon_node_uv_compat) {
 }
 
 test("napi_host_unittests") {
+  if (is_win && !v8_enable_cet_shadow_stack) {
+    configs -= [ "//build/config/compiler:cet_shadow_stack" ]
+  }
   testonly = true
   sources = [
     "napi/js_native_api_v8.cc",
@@ -1017,6 +1301,9 @@ test("napi_host_unittests") {
     "napi/napi_loader.cc",
     "napi/napi_loader.h",
     "napi/napi_loader_unittest.cc",
+    "napi/native_runtime_retirement.cc",
+    "napi/native_runtime_retirement.h",
+    "napi/native_runtime_retirement_unittest.cc",
   ]
   configs += [ "//xenon_overlay/buildflags:custom_names" ]
   deps = [
@@ -1031,6 +1318,13 @@ test("napi_host_unittests") {
     deps += [ "//xenon_overlay/third_party:libuv" ]
   }
   data_deps = [ ":test_addon" ]
+  if (enable_xenon_node_uv_compat) {
+    sources += [
+      "napi/native_addon_event_loop.cc",
+      "napi/native_addon_event_loop.h",
+      "napi/native_addon_event_loop_unittest.cc",
+    ]
+  }
   if (is_mac && enable_xenon_node_uv_compat) {
     data_deps += [ ":test_static_addon" ]
 
@@ -1064,10 +1358,39 @@ test("xenon_extension_package_unittests") {
   data = [ "//xenon_overlay/resources/xenon_extension.zip" ]
 }
 
+test("electron_permission_check_unittests") {
+  testonly = true
+  sources = [
+    "ipc/xenon_electron_permission_check_remote_unittest.cc",
+    "ipc/xenon_electron_permission_policy_unittest.cc",
+  ]
+  deps = [
+    ":electron_permission_core",
+    "//base",
+    "//base/test:run_all_unittests",
+    "//base/test:test_support",
+    "//mojo/core/embedder",
+    "//mojo/public/cpp/bindings",
+    "//testing/gtest",
+    "//xenon_overlay/public/mojom:permission_check",
+  ]
+}
+
 test("ipc_main_container_unittests") {
   testonly = true
+
+  # Match v8_executable: deoptimization changes return addresses and requires
+  # a V8 build with shadow-stack support before this process can opt into CET.
+  if (is_win && !v8_enable_cet_shadow_stack) {
+    configs -= [ "//build/config/compiler:cet_shadow_stack" ]
+  }
   configs += [ "//v8:external_startup_data" ]
   sources = [
+    "../../common/ipc/xenon_async_keyboard_event_queue_unittest.cc",
+    "../../common/ipc/xenon_crash_reporter_annotations_unittest.cc",
+    "../../common/ipc/xenon_message_port_codec_unittest.cc",
+    "../../common/ipc/xenon_v8_statistics_unittest.cc",
+    "../../common/ipc/xenon_x509_certificate_unittest.cc",
     "../../services/xenon_child_process_bridge.cc",
     "../../services/xenon_child_process_bridge.h",
     "../../services/xenon_child_process_bridge_unittest.cc",
@@ -1081,20 +1404,78 @@ test("ipc_main_container_unittests") {
     "../../services/xenon_service_impl.cc",
     "../../services/xenon_service_impl.h",
     "../../services/xenon_service_impl_unittest.cc",
+    "ipc/xenon_app_command_line_unittest.cc",
+    "ipc/xenon_app_launch_arguments_unittest.cc",
+    "ipc/xenon_app_paths.cc",
+    "ipc/xenon_app_paths.h",
+    "ipc/xenon_app_paths_unittest.cc",
     "ipc/xenon_app_runtime_unittest.cc",
+    "ipc/xenon_app_single_instance.cc",
+    "ipc/xenon_app_single_instance.h",
+    "ipc/xenon_app_single_instance_transport.cc",
+    "ipc/xenon_app_single_instance_transport.h",
+    "ipc/xenon_app_single_instance_unittest.cc",
+    "ipc/xenon_crash_reporter_bridge.cc",
+    "ipc/xenon_crash_reporter_bridge.h",
+    "ipc/xenon_crash_reporter_bridge_unittest.cc",
     "ipc/xenon_electron_api_bridge.cc",
     "ipc/xenon_electron_api_bridge.h",
     "ipc/xenon_electron_api_bridge_unittest.cc",
     "ipc/xenon_electron_app_config_unittest.cc",
+    "ipc/xenon_electron_jump_list.cc",
+    "ipc/xenon_electron_jump_list.h",
+    "ipc/xenon_electron_jump_list_unittest.cc",
+    "ipc/xenon_electron_login_items.cc",
+    "ipc/xenon_electron_login_items.h",
+    "ipc/xenon_electron_login_items_unittest.cc",
+    "ipc/xenon_electron_net_unittest.cc",
+    "ipc/xenon_electron_power_save_blocker_unittest.cc",
+    "ipc/xenon_electron_safe_storage_unittest.cc",
+    "ipc/xenon_electron_sandbox_policy_unittest.cc",
     "ipc/xenon_electron_shell.h",
+    "ipc/xenon_electron_system_languages_unittest.cc",
+    "ipc/xenon_electron_user_agent_unittest.cc",
+    "ipc/xenon_electron_web_request_filter.cc",
+    "ipc/xenon_electron_web_request_filter.h",
+    "ipc/xenon_electron_web_request_filter_unittest.cc",
+    "ipc/xenon_esm_module_loader.cc",
+    "ipc/xenon_esm_module_loader.h",
+    "ipc/xenon_esm_module_loader_unittest.cc",
+    "ipc/xenon_file_descriptors_unittest.cc",
     "ipc/xenon_file_system_bridge_unittest.cc",
+    "ipc/xenon_file_system_mkdtemp_unittest.cc",
+    "ipc/xenon_ipc_esm_integration_unittest.cc",
     "ipc/xenon_ipc_main_container.cc",
     "ipc/xenon_ipc_main_container.h",
+    "ipc/xenon_ipc_main_container_modules.cc",
+    "ipc/xenon_ipc_main_container_net.cc",
+    "ipc/xenon_ipc_main_container_udp.cc",
     "ipc/xenon_ipc_main_container_unittest.cc",
+    "ipc/xenon_ipc_main_container_utility.cc",
+    "ipc/xenon_ipc_main_container_window_async.cc",
+    "ipc/xenon_ipc_main_container_worker.cc",
     "ipc/xenon_ipc_module_loader_unittest.cc",
+    "ipc/xenon_ipc_window_async_unittest.cc",
     "ipc/xenon_main_network_unittest.cc",
+    "ipc/xenon_message_port.cc",
+    "ipc/xenon_message_port.h",
+    "ipc/xenon_message_port_unittest.cc",
+    "ipc/xenon_module_resolver.cc",
+    "ipc/xenon_module_resolver.h",
+    "ipc/xenon_module_resolver_unittest.cc",
+    "ipc/xenon_native_image_bridge.cc",
+    "ipc/xenon_native_image_bridge.h",
+    "ipc/xenon_native_image_bridge_unittest.cc",
     "ipc/xenon_os_bridge_unittest.cc",
     "ipc/xenon_sqlite_bridge_unittest.cc",
+    "ipc/xenon_udp_socket_bridge_unittest.cc",
+    "ipc/xenon_utility_process_pipe_unittest.cc",
+    "ipc/xenon_worker_engine.cc",
+    "ipc/xenon_worker_engine.h",
+    "ipc/xenon_worker_engine_unittest.cc",
+    "ipc/xenon_worker_message.cc",
+    "ipc/xenon_worker_message.h",
+    "ipc/xenon_worker_message_unittest.cc",
     "ipc/xenon_zlib_bridge_unittest.cc",
     "updater/xenon_updater_unittest_stubs.cc",
   ]
@@ -1105,21 +1486,32 @@ test("ipc_main_container_unittests") {
   deps = [
     ":app_runtime",
     ":electron_app_config",
+    ":electron_power_and_storage",
+    ":electron_sandbox_policy",
+    ":electron_system_languages",
     ":filesystem_bridge",
     ":napi",
     ":network_request_bridge",
     ":os_bridge",
     ":sqlite_bridge",
+    ":udp_socket_bridge",
+    ":utility_process_pipe",
     ":zlib_bridge",
     "//base",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
+    "//build/config/linux/dbus:buildflags",
     "//chrome/common:constants",
     "//chrome/common:non_code_constants",
+    "//components/crash/core/app",
+    "//components/crash/core/app:test_support",
+    "//components/crash/core/common:crash_key",
+    "//components/os_crypt/async/browser:test_support",
     "//components/version_info",
     "//components/zucchini:zucchini_io",
     "//components/zucchini:zucchini_lib",
     "//crypto",
+    "//extensions/common",
     "//gin",
     "//gin:gin_test",
     "//mojo/core/embedder",
@@ -1127,18 +1519,28 @@ test("ipc_main_container_unittests") {
     "//net",
     "//services/network:test_support",
     "//services/network/public/cpp",
+    "//skia",
     "//testing/gtest",
     "//third_party/zlib/google:zip",
     "//ui/base",
     "//ui/base/clipboard",
     "//ui/base/clipboard:clipboard_test_support",
+    "//ui/gfx/codec",
+    "//ui/native_theme",
+    "//ui/native_theme:test_support",
     "//url",
     "//v8",
     "//xenon_overlay/buildflags",
     "//xenon_overlay/common/asar",
     "//xenon_overlay/common/asar:test_support",
     "//xenon_overlay/common/asar:unit_tests",
+    "//xenon_overlay/common/ipc:async_keyboard_event_queue",
+    "//xenon_overlay/common/ipc:crash_reporter_annotations",
+    "//xenon_overlay/common/ipc:crypto_primitives",
+    "//xenon_overlay/common/ipc:message_port_codec",
     "//xenon_overlay/common/ipc:privileged_schemes",
+    "//xenon_overlay/common/ipc:renderer_command_line",
+    "//xenon_overlay/common/ipc:v8_statistics",
     "//xenon_overlay/common/ipc:value_codec",
     "//xenon_overlay/public/mojom",
     "//xenon_overlay/resources:resources_grit",
@@ -1146,6 +1548,10 @@ test("ipc_main_container_unittests") {
   data_deps = [ ":test_addon" ]
   data = [
     "$root_gen_dir/xenon_overlay/resources/ipc/xenon_ipc_main_bootstrap.js",
+    "//net/data/ssl/certificates/ok_cert.pem",
+    "//net/data/ssl/certificates/root_ca_cert.pem",
+    "//net/data/ssl/certificates/self-signed-invalid-name.pem",
+    "//net/data/ssl/certificates/wildcard.pem",
   ]
   if (enable_xenon_updater) {
     # Standalone bridge tests must not start the macOS system updater service.
@@ -1154,7 +1560,10 @@ test("ipc_main_container_unittests") {
   }
   if (is_win) {
     sources += [ "ipc/xenon_electron_shell_win.cc" ]
-    libs = [ "shell32.lib" ]
+    libs = [
+      "dwmapi.lib",
+      "shell32.lib",
+    ]
     data += [
       "//base/test/data/file_version_info_unittest/FileVersionInfoTest1.dll",
     ]
@@ -1199,23 +1608,58 @@ test("xenon_session_unittests") {
   testonly = true
   sources = [
     "//content/test/run_all_unittests.cc",
-    "ipc/xenon_electron_session_bridge.cc",
+    "asar/xenon_asar_url_loader_factory.cc",
+    "asar/xenon_asar_url_loader_factory.h",
+    "asar/xenon_asar_url_loader_factory_unittest.cc",
+    "ipc/xenon_electron_app_storage_unittest.cc",
+    "ipc/xenon_electron_cookie_encryption_unittest.cc",
+    "ipc/xenon_electron_document_registration_unittest.cc",
+    "ipc/xenon_electron_navigation.cc",
+    "ipc/xenon_electron_navigation.h",
+    "ipc/xenon_electron_navigation_unittest.cc",
+    "ipc/xenon_electron_net_factory.cc",
+    "ipc/xenon_electron_net_factory.h",
+    "ipc/xenon_electron_net_factory_unittest.cc",
+    "ipc/xenon_electron_permission_delegate_unittest.cc",
     "ipc/xenon_electron_session_bridge_unittest.cc",
-    "ipc/xenon_file_system_bridge.cc",
+    "ipc/xenon_electron_visibility_unittest.cc",
+    "ipc/xenon_electron_web_request.cc",
+    "ipc/xenon_electron_web_request.h",
+    "ipc/xenon_electron_web_request_filter.cc",
+    "ipc/xenon_electron_web_request_filter.h",
+    "ipc/xenon_electron_web_request_unittest.cc",
+    "ipc/xenon_electron_zoom.cc",
+    "ipc/xenon_electron_zoom.h",
+    "ipc/xenon_electron_zoom_unittest.cc",
   ]
   deps = [
+    ":electron_app_config",
+    ":electron_cookie_encryption",
+    ":electron_document_registration",
+    ":electron_permissions",
     ":electron_session_shutdown_notifier",
     "//base",
     "//base/test:test_support",
     "//components/keyed_service/content",
     "//components/keyed_service/core",
+    "//components/os_crypt/async/browser",
+    "//components/os_crypt/async/common",
+    "//components/prefs",
     "//content/public/browser",
     "//content/test:test_support",
     "//crypto",
+    "//extensions/common",
+    "//net",
+    "//services/network:test_support",
+    "//services/network/public/cpp",
+    "//services/network/public/mojom",
+    "//sql",
     "//testing/gtest",
     "//xenon_overlay/common/asar",
     "//xenon_overlay/common/asar:test_support",
+    "//xenon_overlay/common/ipc:privileged_schemes",
     "//xenon_overlay/public/mojom",
+    "//xenon_overlay/third_party:libuv",
   ]
 }
 

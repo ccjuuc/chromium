@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 import("//testing/test.gni")
+import("//v8/gni/v8.gni")
 import("//xenon_overlay/buildflags/features.gni")
 
 source_set("context_bridge") {
@@ -19,14 +20,48 @@ source_set("context_bridge") {
 }
 
 test("context_bridge_unittests") {
-  sources = [ "ipc/xenon_context_bridge_unittest.cc" ]
+  # Match the CET policy of V8's standalone executables.
+  if (is_win && !v8_enable_cet_shadow_stack) {
+    configs -= [ "//build/config/compiler:cet_shadow_stack" ]
+  }
+  sources = [
+    "ipc/xenon_context_bridge_unittest.cc",
+    "ipc/xenon_process_sandbox_unittest.cc",
+    "ipc/xenon_script_executor_unittest.cc",
+  ]
   deps = [
     ":context_bridge",
+    ":process_sandbox",
+    ":script_executor",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
     "//gin:gin_test",
     "//testing/gtest",
     "//v8",
+  ]
+}
+
+source_set("script_executor") {
+  sources = [
+    "ipc/xenon_script_executor.cc",
+    "ipc/xenon_script_executor.h",
+  ]
+  public_deps = [
+    "//base",
+    "//gin",
+    "//v8",
+  ]
+  deps = [ "//xenon_overlay/common/ipc:value_codec" ]
+}
+
+source_set("process_sandbox") {
+  sources = [
+    "ipc/xenon_process_sandbox.cc",
+    "ipc/xenon_process_sandbox.h",
+  ]
+  public_deps = [
+    "//base",
+    "//sandbox/policy",
   ]
 }
 
@@ -46,6 +81,8 @@ source_set("renderer") {
 
   deps = [
     ":context_bridge",
+    ":process_sandbox",
+    ":script_executor",
     "//base",
     "//chrome/common",
     "//components/version_info",
@@ -61,6 +98,10 @@ source_set("renderer") {
     "//url",
     "//v8",
     "//xenon_overlay/buildflags",
+    "//xenon_overlay/common/ipc:crash_reporter_annotations",
+    "//xenon_overlay/common/ipc:crypto_primitives",
+    "//xenon_overlay/common/ipc:message_port_codec",
+    "//xenon_overlay/common/ipc:renderer_command_line",
     "//xenon_overlay/common/ipc:value_codec",
     "//xenon_overlay/public/mojom",
     "//xenon_overlay/resources:resources_grit",

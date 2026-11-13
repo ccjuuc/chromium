@@ -145,19 +145,8 @@ export function createSmartIpcObject(): object {
     },
     callRemoteClientFunction: async (_ctx: unknown, fnName: unknown, ...args: unknown[]) => {
       if (fnName === 'openElectronSelectFileDialog' || fnName === 'showOpenDialog') {
-        const opts = (args[0] || {}) as {title?: string; properties?: string[]};
-        const title = opts.title || '选择文件';
-        const multi = (opts.properties || []).includes('multiSelections');
-        console.log('[xenon-player net-ipc] openElectronSelectFileDialog -> openNativeFileDialog');
-        return openNativeFileDialog(title, [], multi).then((paths: string[]) => {
-          if (paths && paths.length > 0) {
-            return [paths];
-          }
-          return [[]];
-        }).catch((err: unknown) => {
-          console.error('[xenon-player net-ipc] openNativeFileDialog error:', err);
-          return [[]];
-        });
+        const opts = (args[0] ?? {}) as Record<string, unknown>;
+        return openNativeFileDialog(opts).then((paths: string[]) => [paths]);
       }
       if (typeof fnName === 'string' && registeredRpcFunctions[fnName]) {
         if (fnName.startsWith('AplayerStack') || fnName.startsWith('AplayerMedia')) {

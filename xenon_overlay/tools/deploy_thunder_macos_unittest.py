@@ -95,6 +95,7 @@ class DeployThunderMacTest(unittest.TestCase):
         self.assertNotIn('executable', descriptor)
         self.assertEqual(descriptor['application'], './Thunder.app')
         self.assertEqual(descriptor['main'], 'out.asar/main.js')
+        self.assertEqual(descriptor['userDataPolicy'], 'legacy-host')
         self.assertEqual((self.config.parent / descriptor['application']).resolve(),
                          self.destination)
         self.assertEqual(inventory(self.destination), source_before)

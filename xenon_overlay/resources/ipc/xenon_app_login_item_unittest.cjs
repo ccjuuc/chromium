@@ -8,12 +8,12 @@ const test = require('node:test');
 const vm = require('node:vm');
 const {readBootstrap} = require('./bootstrap_test_support.cjs');
 
-function load(nativeCall) {
+function load(nativeCall, platform = 'darwin') {
   const context = vm.createContext({
     TextEncoder, TextDecoder, URL, URLSearchParams, queueMicrotask,
     setTimeout, clearTimeout, setInterval, clearInterval, atob, btoa,
     console: {log() {}, warn() {}, error() {}},
-    __xenonPlatform: 'darwin', __xenonArch: 'arm64', __xenonEndianness: 'LE',
+    __xenonPlatform: platform, __xenonArch: 'arm64', __xenonEndianness: 'LE',
     __xenonOsRelease: 'fixture', __xenonAppPath: '/untrusted/embedded/Thunder.app',
     __xenonRendererBaseUrl: '', __xenonRendererUrlMappings: [],
     __xenonAppName: 'fixture', __xenonAppVersion: '1', __xenonUserAgent: '',
@@ -40,7 +40,34 @@ test('login item query returns fresh native state without sending application pa
   assert.equal(app.getLoginItemSettings().openAtLogin, false);
   assert.deepEqual(calls, [0, 1].map(() => ({windowId: 0, command: 'electron-api',
     request: {operation: 'app.getLoginItemSettings'}})));
-  assert.equal(typeof app.setLoginItemSettings, 'undefined');
+  assert.equal(typeof app.setLoginItemSettings, 'function');
+});
+
+test('Windows login items use the Browser-owned context without emulated executable paths', () => {
+  const calls = [];
+  const app = load((windowId, command, request) => {
+    calls.push({windowId, command, request: JSON.parse(JSON.stringify(request))});
+    return request.method === 'get' ? {openAtLogin: false, executableWillLaunchAtLogin: true,
+      launchItems: [{name: 'actual', args: ['--opened-at-login=1']}]} : null;
+  }, 'win32');
+  assert.equal(app.setLoginItemSettings({openAtLogin: false, args: []}), undefined);
+  assert.equal(app.getLoginItemSettings().executableWillLaunchAtLogin, true);
+  assert.deepEqual(calls, [
+    {windowId: 0, command: 'app-login-item-settings', request: {method: 'set', options: {openAtLogin: false, args: []}}},
+    {windowId: 0, command: 'app-login-item-settings', request: {method: 'get', options: {}}},
+  ]);
+});
+
+test('login item setters reject invalid options and preserve native error codes', () => {
+  let calls = 0;
+  const app = load(() => { ++calls; throw new Error('ERR_NOT_SUPPORTED: option is unsupported'); }, 'win32');
+  for (const value of [undefined, null, [], true, 'value']) {
+    assert.throws(() => app.setLoginItemSettings(value), {code: 'ERR_INVALID_ARG_TYPE'});
+  }
+  assert.equal(calls, 0);
+  assert.throws(() => app.setLoginItemSettings({path: 'C:/other.exe'}), {code: 'ERR_NOT_SUPPORTED'});
+  assert.equal(calls, 1);
+  assert.throws(() => load(undefined, 'win32').setLoginItemSettings({openAtLogin: false}), {code: 'ERR_NOT_SUPPORTED'});
 });
 
 test('login item query forwards options for native validation and propagates failures', () => {

@@ -17,6 +17,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/time/time.h"
 #include "content/public/browser/browser_thread.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_mac_player_adapter.h"
@@ -620,9 +621,33 @@ void XenonMacPlayerHost::Shutdown() {
       LOG(ERROR) << "Mac player shutdown: " << error;
     }
   }
-  // The SDK retains process-global N-API references and posts cleanup tasks.
-  // Keep their environment alive until process termination, as Electron does.
-  // The NoDestructor host owns exactly one executor for its entire lifetime.
+  // Shutdown is called only during Browser process exit. Begin on the next
+  // task, outside any native callback stack. The NoDestructor host keeps the
+  // runtime alive if the UI runner stops before native cleanup finishes.
+  if (executor_) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&XenonMacPlayerHost::PollNativeShutdown,
+                                  weak_factory_.GetWeakPtr()));
+  }
+}
+
+void XenonMacPlayerHost::PollNativeShutdown() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!executor_) {
+    return;
+  }
+  executor_->BeginNativeShutdown();
+  if (executor_->PollNativeShutdown()) {
+    pending_completions_.clear();
+    providers_.clear();
+    executor_.reset();
+    return;
+  }
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(&XenonMacPlayerHost::PollNativeShutdown,
+                     weak_factory_.GetWeakPtr()),
+      base::Milliseconds(10));
 }
 
 void XenonMacPlayerHost::QuarantineSession(const std::string& error) {

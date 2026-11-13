@@ -37,9 +37,12 @@
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "content/public/browser/web_contents_visibility_policy.h"
 #include "content/public/common/color_parser.h"
+#include "net/base/net_errors.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_zoom.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
@@ -47,6 +50,7 @@
 #include "ui/compositor/compositor.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
+#include "ui/events/event_constants.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
@@ -60,7 +64,10 @@
 #include "url/gurl.h"
 #include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_guest.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_document_registration.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_navigation.h"
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_session_bridge.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_electron_keyboard.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_menu_runner.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
@@ -71,14 +78,13 @@
 #endif
 
 #if BUILDFLAG(IS_WIN)
-#include <shobjidl.h>
 #include <windows.h>
 
 #include <commctrl.h>
 #include <dwmapi.h>
-#include <wrl/client.h>
 
 #include "base/win/windows_version.h"
+#include "ui/base/win/shell.h"
 #include "ui/display/win/screen_win.h"
 #include "ui/gfx/win/rendering_window_manager.h"
 #include "ui/views/win/hwnd_util.h"
@@ -372,17 +378,6 @@ void ResizeNativeHostChildren(views::Widget* widget) {
   }
 }
 
-void AppendShellItemPath(IShellItem* item, std::vector<std::string>* out) {
-  if (!item || !out) {
-    return;
-  }
-  PWSTR path_w = nullptr;
-  if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &path_w)) || !path_w) {
-    return;
-  }
-  out->push_back(base::WideToUTF8(path_w));
-  ::CoTaskMemFree(path_w);
-}
 #endif
 
 ui::ImageModel LoadMenuIcon(const base::DictValue& dict) {
@@ -415,8 +410,15 @@ class XenonElectronWindowHost::HostedWebContentsObserver
         owner_(owner),
         window_id_(window_id) {}
 
+  ~HostedWebContentsObserver() override {
+    ConfigureElectronKeyboardInput(web_contents(), "", 0, false);
+  }
+
   void ReadyToCommitNavigation(
       content::NavigationHandle* navigation_handle) override {
+    if (!navigation_handle->IsSameDocument()) {
+      owner_->ApplyKeyboardFilter(window_id_, true);
+    }
     if (web_contents()) {
       blink::web_pref::WebPreferences prefs =
           web_contents()->GetOrCreateWebPreferences();
@@ -432,8 +434,15 @@ class XenonElectronWindowHost::HostedWebContentsObserver
     // A speculative main frame or OOPIF must not be resumed until commit has
     // attached its local main frame and bound its browser host.
     if (navigation_handle && navigation_handle->HasCommitted()) {
+      const auto alive = weak_factory_.GetWeakPtr();
       owner_->ApplyBackgroundThrottling(window_id_);
+      if (!alive) {
+        return;
+      }
     }
+    // ReadyToCommitNavigation also runs before commits that can still fail.
+    // Restore the surviving page's filter without canceling its fresh input.
+    owner_->ApplyKeyboardFilter(window_id_, false, false);
     if (navigation_handle && navigation_handle->IsInPrimaryMainFrame() &&
         navigation_handle->HasCommitted() && web_contents()) {
       blink::web_pref::WebPreferences prefs =
@@ -444,6 +453,10 @@ class XenonElectronWindowHost::HostedWebContentsObserver
       }
     }
     if (navigation_handle && navigation_handle->IsInPrimaryMainFrame()) {
+      if (navigation_handle->GetNetErrorCode() != net::OK) {
+        NotifyLoadFailure(navigation_handle->GetURL(),
+                          navigation_handle->GetNetErrorCode());
+      }
       SchedulePendingUserAgent();
       if (navigation_handle->HasCommitted()) {
         auto entry = owner_->windows_.find(window_id_);
@@ -463,10 +476,21 @@ class XenonElectronWindowHost::HostedWebContentsObserver
   void RenderFrameCreated(content::RenderFrameHost* frame) override {
     auto entry = owner_->windows_.find(window_id_);
     if (entry != owner_->windows_.end() && frame->IsActive()) {
+      content::SetRenderWidgetHiddenSurfaceAllocationAllowed(
+          frame->GetRenderWidgetHost(),
+          !entry->second.close_prepared &&
+              (entry->second.initial_paint_pending ||
+               !entry->second.web_preferences.FindBool("backgroundThrottling")
+                    .value_or(true)));
       frame->GetRenderWidgetHost()->SetBackgroundThrottling(
           entry->second.close_prepared ||
+          (!entry->second.ever_shown &&
+           !entry->second.paint_when_initially_hidden) ||
           entry->second.web_preferences.FindBool("backgroundThrottling")
               .value_or(true));
+      // A new iframe can share an existing widget. Installing its filter must
+      // not cancel input already queued for another frame in that document.
+      owner_->ApplyKeyboardFilter(window_id_, false, false);
     }
   }
 
@@ -475,37 +499,24 @@ class XenonElectronWindowHost::HostedWebContentsObserver
       return;
     }
     owner_->NotifyEvent(window_id_, "web-contents-dom-ready", base::Value());
-    auto entry = owner_->windows_.find(window_id_);
-    if (entry != owner_->windows_.end() &&
-        !entry->second.ready_to_show_emitted) {
-      entry->second.ready_to_show_emitted = true;
-      owner_->NotifyEvent(window_id_, "ready-to-show", base::Value());
-    }
-  }
-
-  void DidFirstVisuallyNonEmptyPaint() override {
-    auto entry = owner_->windows_.find(window_id_);
-    if (entry != owner_->windows_.end() &&
-        !entry->second.ready_to_show_emitted &&
-        entry->second.has_loaded_url) {
-      entry->second.ready_to_show_emitted = true;
-      owner_->NotifyEvent(window_id_, "ready-to-show", base::Value());
-    }
   }
 
   void DidFinishLoad(content::RenderFrameHost* render_frame_host,
                      const GURL&) override {
-    if (!IsLoadedPrimaryMainFrame(render_frame_host)) {
+    if (!IsLoadedPrimaryMainFrame(render_frame_host) ||
+        render_frame_host->IsErrorDocument()) {
       return;
     }
 
     owner_->NotifyEvent(window_id_, "web-contents-did-finish-load",
                         base::Value());
-    auto entry = owner_->windows_.find(window_id_);
-    if (entry != owner_->windows_.end() &&
-        !entry->second.ready_to_show_emitted) {
-      entry->second.ready_to_show_emitted = true;
-      owner_->NotifyEvent(window_id_, "ready-to-show", base::Value());
+  }
+
+  void DidFailLoad(content::RenderFrameHost* frame,
+                   const GURL& url,
+                   int error) override {
+    if (IsLoadedPrimaryMainFrame(frame) && !frame->IsErrorDocument()) {
+      NotifyLoadFailure(url, error);
     }
   }
 
@@ -540,6 +551,16 @@ class XenonElectronWindowHost::HostedWebContentsObserver
   }
 
  private:
+  void NotifyLoadFailure(const GURL& url, int error) {
+    owner_->NotifyEvent(
+        window_id_, "web-contents-did-fail-load",
+        base::Value(base::DictValue()
+                        .Set("errorCode", error)
+                        .Set("errorDescription", net::ErrorToShortString(error))
+                        .Set("validatedURL", url.spec())
+                        .Set("isMainFrame", true)));
+  }
+
   void SchedulePendingUserAgent() {
     auto entry = owner_->windows_.find(window_id_);
     if (entry == owner_->windows_.end() ||
@@ -620,6 +641,10 @@ class XenonElectronWindowHost::PopupMenuSession
   void ExecuteCommand(int command_id, int event_flags) override {
     base::DictValue args;
     args.Set("commandId", command_id);
+    args.Set("shiftKey", (event_flags & ui::EF_SHIFT_DOWN) != 0);
+    args.Set("ctrlKey", (event_flags & ui::EF_CONTROL_DOWN) != 0);
+    args.Set("altKey", (event_flags & ui::EF_ALT_DOWN) != 0);
+    args.Set("metaKey", (event_flags & ui::EF_COMMAND_DOWN) != 0);
     host_->NotifyEvent(window_id_, "native-menu-command",
                        base::Value(std::move(args)));
   }
@@ -712,6 +737,11 @@ XenonElectronWindowHost::~XenonElectronWindowHost() {
 void XenonElectronWindowHost::ObserveWebContents(
     int32_t window_id,
     content::WebContents* contents) {
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+  // Electron keeps covered windows visible on these platforms. Only macOS
+  // additionally hides a page when its native window becomes occluded.
+  content::SetWebContentsOcclusionEnabled(contents, false);
+#endif
   windows_.at(window_id).web_contents_observer =
       std::make_unique<HostedWebContentsObserver>(this, window_id, contents);
 }
@@ -723,22 +753,110 @@ void XenonElectronWindowHost::ApplyBackgroundThrottling(int32_t window_id) {
   }
   const bool allowed =
       it->second.close_prepared ||
+      (!it->second.ever_shown && !it->second.paint_when_initially_hidden) ||
       it->second.web_preferences.FindBool("backgroundThrottling")
           .value_or(true);
   auto* contents = it->second.web_contents_observer->web_contents();
   if (contents && contents->GetPrimaryMainFrame()) {
+    std::vector<content::GlobalRenderFrameHostId> frames;
     contents->GetPrimaryMainFrame()->ForEachRenderFrameHost(
-        [allowed](content::RenderFrameHost* frame) {
+        [&frames](content::RenderFrameHost* frame) {
           if (frame->IsActive()) {
-            frame->GetRenderWidgetHost()->SetBackgroundThrottling(allowed);
+            frames.push_back(frame->GetGlobalId());
           }
         });
+    for (const auto& id : frames) {
+      if (auto* frame = content::RenderFrameHost::FromID(id)) {
+        frame->GetRenderWidgetHost()->SetBackgroundThrottling(allowed);
+      }
+    }
+  }
+  it = windows_.find(window_id);
+  if (it == windows_.end()) {
+    return;
   }
   if (it->second.widget) {
     if (auto* compositor = it->second.widget->GetCompositor()) {
       compositor->SetBackgroundThrottling(allowed);
     }
   }
+  UpdateContentsVisibility(window_id);
+}
+
+void XenonElectronWindowHost::UpdateContentsVisibility(
+    int32_t window_id,
+    std::optional<bool> widget_visible) {
+  const auto found = windows_.find(window_id);
+  if (found == windows_.end() || !found->second.web_contents_observer) {
+    return;
+  }
+  const auto& entry = found->second;
+  auto* contents = entry.web_contents_observer->web_contents();
+  if (!contents || contents->IsBeingDestroyed()) {
+    return;
+  }
+  const bool allocate_hidden_surface =
+      !entry.close_prepared &&
+      (entry.initial_paint_pending ||
+       !entry.web_preferences.FindBool("backgroundThrottling").value_or(true));
+  if (auto* main_frame = contents->GetPrimaryMainFrame()) {
+    main_frame->ForEachRenderFrameHost(
+        [allocate_hidden_surface](content::RenderFrameHost* frame) {
+          if (frame->IsActive()) {
+            content::SetRenderWidgetHiddenSurfaceAllocationAllowed(
+                frame->GetRenderWidgetHost(), allocate_hidden_surface);
+          }
+        });
+  }
+  if (entry.initial_paint_pending && !entry.close_prepared && entry.widget &&
+      !entry.widget->IsMinimized()) {
+    // Preserve Chromium's initial renderer visibility until an explicit
+    // hide/minimize or the first show ends this construction phase.
+    return;
+  }
+  // A WebDialog's native child can become visible without updating its
+  // WebContents (notably after an initially hidden about:blank host). Keep
+  // Electron's document lifecycle tied to the owning Widget on every platform.
+  // Background throttling is handled by RenderWidgetHost, so always preserve
+  // the true requested visibility here, including for unthrottled windows.
+  bool visible = entry.has_loaded_url && !entry.close_prepared &&
+                 entry.widget && !entry.widget->IsMinimized() &&
+                 widget_visible.value_or(entry.widget->IsVisible());
+  std::set<int32_t> visited{window_id};
+  for (int32_t parent_id = entry.parent_id;
+       visible && parent_id && visited.insert(parent_id).second;) {
+    const auto parent = windows_.find(parent_id);
+    if (parent == windows_.end() || !parent->second.widget) {
+      break;
+    }
+    visible =
+        !parent->second.close_prepared && !parent->second.widget->IsMinimized();
+    parent_id = parent->second.parent_id;
+  }
+  // Visibility callbacks may destroy the window. Do not use the Entry again.
+  if (visible) {
+    contents->WasShown();
+  } else {
+    contents->WasHidden();
+  }
+}
+
+void XenonElectronWindowHost::ApplyKeyboardFilter(int32_t window_id,
+                                                  bool cancel,
+                                                  bool cancel_pending) {
+  auto entry = windows_.find(window_id);
+  if (entry == windows_.end() || !entry->second.web_contents_observer) {
+    return;
+  }
+  auto* contents = entry->second.web_contents_observer->web_contents();
+  if (!contents) {
+    return;
+  }
+  ConfigureElectronKeyboardInput(
+      contents, entry->second.container_id, window_id,
+      !cancel && entry->second.observes_before_input &&
+          !entry->second.close_prepared,
+      cancel_pending);
 }
 
 void XenonElectronWindowHost::UpdateUserAgent(int32_t window_id,
@@ -911,7 +1029,8 @@ bool XenonElectronWindowHost::CreateHostedWindow(
     std::string* error,
     const std::string& partition,
     bool has_shadow,
-    const std::string& title_bar_style) {
+    const std::string& title_bar_style,
+    bool paint_when_initially_hidden) {
   if (shutting_down_ || browser_shutdown::IsTryingToQuit()) {
     *error = "Electron window host is shutting down";
     return false;
@@ -943,6 +1062,8 @@ bool XenonElectronWindowHost::CreateHostedWindow(
   entry.parent_id = parent_id;
   entry.container_id = container_id;
   entry.ever_shown = show;
+  entry.paint_when_initially_hidden = paint_when_initially_hidden;
+  entry.initial_paint_pending = !show && paint_when_initially_hidden;
   entry.legacy_parent_pairing = transparent && parent_id > 0;
   entry.sync_bounds_with_parent = entry.legacy_parent_pairing;
 
@@ -980,14 +1101,11 @@ bool XenonElectronWindowHost::CreateHostedWindow(
 
   ipc::ResolveElectronSessionPartition(context, container_id, partition);
   content::WebContents::CreateParams contents_params(context);
-  // The Widget is constructed hidden below. Preserve that requested state
-  // even when background rendering temporarily makes the page visible.
-  contents_params.initially_hidden = true;
-  contents_params.site_instance =
-      content::SiteInstance::CreateForFixedStoragePartition(
-          context, GURL("about:blank"),
-          ipc::GetElectronSessionPartitionConfig(context, container_id,
-                                                 partition));
+  // Electron permits the initially hidden window to paint by default. The
+  // renderer visibility is independent from its hidden native Widget.
+  contents_params.initially_hidden = !entry.initial_paint_pending;
+  contents_params.site_instance = ipc::CreateElectronSessionSiteInstance(
+      context, container_id, partition, GURL("about:blank"));
   auto contents = content::WebContents::Create(contents_params);
   XenonWebDialog::ShowWithOptions(context, GURL("about:blank"), options,
                                   &entry.widget, parent_view,
@@ -1101,6 +1219,10 @@ bool XenonElectronWindowHost::CreateHostedWindow(
   entry.normal_bounds = entry.bounds;
   entry.initializing_bounds = false;
 
+  if (auto app_id = app_user_model_ids_.find(container_id);
+      app_id != app_user_model_ids_.end()) {
+    SetAppUserModelIdForContainer(container_id, app_id->second);
+  }
   *window_id = id;
   *hwnd = entry.hwnd;
   *error = std::string();
@@ -1112,15 +1234,38 @@ bool XenonElectronWindowHost::CreateHostedWindow(
   return true;
 }
 
+void XenonElectronWindowHost::SetAppUserModelIdForContainer(
+    const std::string& container_id, const std::string& app_id) {
+  app_user_model_ids_[container_id] = app_id;
+#if BUILDFLAG(IS_WIN)
+  for (const auto& [id, entry] : windows_) {
+    if (entry.container_id == container_id && entry.widget) {
+      ui::win::SetAppIdForWindow(base::UTF8ToWide(app_id),
+                                views::HWNDForWidget(entry.widget));
+    }
+  }
+#endif
+}
+
 void XenonElectronWindowHost::LoadURL(int32_t window_id,
                                       const std::string& url) {
+  LoadURLAsync(window_id, url, {});
+}
+
+void XenonElectronWindowHost::LoadURLAsync(
+    int32_t window_id,
+    const std::string& url,
+    base::OnceCallback<void(base::Value, std::string)> reply) {
   if (auto* guest = ipc::XenonElectronGuest::FromId(window_id)) {
-    guest->LoadURL(url);
+    guest->LoadURL(url, std::move(reply));
     return;
   }
   auto it = windows_.find(window_id);
   if (it == windows_.end() || !it->second.widget) {
     LOG(ERROR) << "LoadURL unknown Electron window id=" << window_id;
+    if (reply) {
+      std::move(reply).Run(base::Value(), "BrowserWindow has been destroyed");
+    }
     return;
   }
   Entry& entry = it->second;
@@ -1131,9 +1276,13 @@ void XenonElectronWindowHost::LoadURL(int32_t window_id,
       dialog_view ? dialog_view->web_contents() : nullptr;
   if (!web_contents) {
     LOG(ERROR) << "LoadURL Electron window has no WebContents id=" << window_id;
+    if (reply) {
+      std::move(reply).Run(base::Value(), "BrowserWindow has no WebContents");
+    }
     return;
   }
   const bool is_initial_navigation = !entry.has_loaded_url;
+  const auto weak_contents = web_contents->GetWeakPtr();
   entry.has_loaded_url = true;
   XenonWebDialog::SetHostedContentVisible(widget, true);
   const GURL destination(url);
@@ -1157,8 +1306,7 @@ void XenonElectronWindowHost::LoadURL(int32_t window_id,
   // Electron WebContents::LoadURL always opts the navigation into the
   // WebContents user-agent override. This also lets a setUserAgent() call made
   // while the navigation is in flight update/reload it consistently.
-  params.override_user_agent =
-      content::NavigationController::UA_OVERRIDE_TRUE;
+  params.override_user_agent = content::NavigationController::UA_OVERRIDE_TRUE;
   if (is_initial_navigation) {
     // Replace the initial about:blank navigation entry so that the window's
     // session history length remains 1. Under WHATWG HTML specification
@@ -1166,8 +1314,8 @@ void XenonElectronWindowHost::LoadURL(int32_t window_id,
     // is natively script-closable by window.close().
     params.should_replace_current_entry = true;
   }
-  web_contents->GetController().LoadURLWithParams(params);
-
+  // Activating can synchronously dispatch native events. Finish using the
+  // Entry before starting a navigation that can destroy or replace it.
   if (entry.ever_shown &&
       (pending_activate_ ||
        pending_activate_containers_.contains(entry.container_id))) {
@@ -1175,35 +1323,108 @@ void XenonElectronWindowHost::LoadURL(int32_t window_id,
     pending_activate_containers_.erase(entry.container_id);
     ActivateEntryWindow(window_id);
   }
+  UpdateContentsVisibility(window_id);
+  if (!weak_contents || weak_contents->IsBeingDestroyed()) {
+    if (reply) {
+      std::move(reply).Run(
+          base::Value(), "ERR_ABORTED: window was destroyed before navigation");
+    }
+    return;
+  }
+  ipc::LoadElectronURL(weak_contents.get(), params, std::move(reply));
+}
+
+void XenonElectronWindowHost::WaitForMainFrameRuntime(
+    int32_t window_id,
+    base::OnceCallback<void(base::Value, std::string)> reply) {
+  content::WebContents* contents = nullptr;
+  if (auto* guest = ipc::XenonElectronGuest::FromId(window_id)) {
+    contents = guest->web_contents();
+  } else {
+    auto entry = windows_.find(window_id);
+    if (entry != windows_.end() && !entry->second.close_prepared &&
+        entry->second.web_contents_observer) {
+      contents = entry->second.web_contents_observer->web_contents();
+    }
+  }
+  if (!contents || contents->IsBeingDestroyed()) {
+    std::move(reply).Run(base::Value(),
+                         "ERR_CONTEXT_DESTROYED: WebContents is unavailable");
+    return;
+  }
+  ipc::WaitForElectronDocumentRegistration(
+      contents->GetPrimaryMainFrame(),
+      base::BindOnce(
+          [](base::OnceCallback<void(base::Value, std::string)> reply,
+             std::string endpoint) {
+            if (endpoint.empty()) {
+              std::move(reply).Run(
+                  base::Value(),
+                  "ERR_CONTEXT_DESTROYED: main-frame runtime is unavailable");
+            } else {
+              std::move(reply).Run(base::Value(std::move(endpoint)), "");
+            }
+          },
+          std::move(reply)));
+}
+
+void XenonElectronWindowHost::OnFirstNonEmptyLayout(
+    content::RenderFrameHost* frame) {
+  if (!frame || !frame->IsActive()) {
+    return;
+  }
+  auto* contents = content::WebContents::FromRenderFrameHost(frame);
+  if (!contents || contents->GetPrimaryMainFrame() != frame) {
+    return;
+  }
+  const auto entry = windows_.find(FindWindowIdForWebContents(contents));
+  if (entry == windows_.end() || entry->second.close_prepared ||
+      entry->second.ready_to_show_emitted || !entry->second.has_loaded_url ||
+      !entry->second.web_contents_observer ||
+      entry->second.web_contents_observer->web_contents() != contents) {
+    return;
+  }
+  entry->second.ready_to_show_emitted = true;
+  NotifyEvent(entry->first, "ready-to-show", base::Value());
 }
 
 void XenonElectronWindowHost::SetVisible(int32_t window_id, bool visible) {
   views::Widget* widget = FindWidget(window_id);
   LOG(INFO) << "Electron BrowserWindow SetVisible id=" << window_id
-            << " visible=" << visible
-            << (widget ? "" : " (unknown window)");
+            << " visible=" << visible << (widget ? "" : " (unknown window)");
   if (!widget) {
     return;
   }
   if (visible) {
     widget->Show();
+    widget = FindWidget(window_id);
+    if (!widget) {
+      return;
+    }
     widget->Activate();
 #if BUILDFLAG(IS_WIN)
     // Match BrowserWindow.show(): make the native window foreground-visible.
-    if (HWND hwnd = views::HWNDForWidget(widget)) {
-      ::ShowWindow(hwnd, SW_SHOW);
-      ::SetForegroundWindow(hwnd);
+    if (widget = FindWidget(window_id); widget) {
+      HWND hwnd = views::HWNDForWidget(widget);
+      if (hwnd) {
+        ::ShowWindow(hwnd, SW_SHOW);
+        ::SetForegroundWindow(hwnd);
+      }
     }
 #endif
   } else {
+    windows_.at(window_id).initial_paint_pending = false;
     widget->Hide();
 #if BUILDFLAG(IS_WIN)
     // Frameless / DWM / owned HWNDs can remain painted after Widget::Hide().
-    if (HWND hwnd = views::HWNDForWidget(widget)) {
-      ::ShowWindow(hwnd, SW_HIDE);
+    if (widget = FindWidget(window_id); widget) {
+      if (HWND hwnd = views::HWNDForWidget(widget)) {
+        ::ShowWindow(hwnd, SW_HIDE);
+      }
     }
 #endif
   }
+  UpdateContentsVisibility(window_id);
 }
 
 bool XenonElectronWindowHost::Call(int32_t window_id,
@@ -1270,7 +1491,11 @@ bool XenonElectronWindowHost::CallImpl(int32_t window_id,
 
   if (command == "set-user-agent" || command == "get-user-agent" ||
       command == "get-os-process-id" || command == "set-web-preferences" ||
+      command == "observe-before-input" ||
       command == "set-background-throttling" ||
+      command == "set-visual-zoom-limits" ||
+      command == "get-zoom-level" || command == "set-zoom-level" ||
+      command == "edit-command" || command == "reload" ||
       command == "get-background-throttling") {
     auto* dialog_view =
         static_cast<views::WebDialogView*>(widget->widget_delegate());
@@ -1279,6 +1504,66 @@ bool XenonElectronWindowHost::CallImpl(int32_t window_id,
     if (!web_contents) {
       *error = "BrowserWindow WebContents is unavailable";
       return false;
+    }
+    if (command == "observe-before-input") {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+      const auto enabled = options ? options->FindBool("enabled") : std::nullopt;
+      if (!enabled) {
+        *error = "observe-before-input expects a boolean enabled";
+        return false;
+      }
+      entry.observes_before_input = *enabled;
+      // Removing a once-listener while dispatching this very event must not
+      // discard its decision or let following key events overtake it.
+      ApplyKeyboardFilter(window_id, false, false);
+      return true;
+#else
+      *error = "before-input-event requires ENABLE_XENON_SERVICE";
+      return false;
+#endif
+    }
+    if (command == "reload") {
+      const bool ignore_cache =
+          options && options->FindBool("ignoreCache").value_or(false);
+      web_contents->GetController().Reload(
+          ignore_cache ? content::ReloadType::BYPASSING_CACHE
+                       : content::ReloadType::NORMAL,
+          true);
+      return true;
+    }
+    if (command == "edit-command") {
+      const std::string* action = options ? options->FindString("action") : nullptr;
+      if (!action) {
+        *error = "edit-command expects an action";
+        return false;
+      }
+      if (*action == "undo") {
+        web_contents->Undo();
+      } else if (*action == "redo") {
+        web_contents->Redo();
+      } else if (*action == "cut") {
+        web_contents->Cut();
+      } else if (*action == "copy") {
+        web_contents->Copy();
+      } else if (*action == "paste") {
+        web_contents->Paste();
+      } else if (*action == "pasteandmatchstyle") {
+        web_contents->PasteAndMatchStyle();
+      } else if (*action == "delete") {
+        web_contents->Delete();
+      } else if (*action == "selectall") {
+        web_contents->SelectAll();
+      } else {
+        *error = "Unsupported edit-command action: " + *action;
+        return false;
+      }
+      return true;
+    }
+    if (command == "set-visual-zoom-limits") {
+      return ipc::SetElectronVisualZoomLimits(web_contents, arguments, error);
+    }
+    if (command == "get-zoom-level" || command == "set-zoom-level") {
+      return ipc::CallElectronPageZoom(web_contents, command, arguments, result, error);
     }
     if (command == "get-background-throttling") {
       *result =
@@ -1311,7 +1596,14 @@ bool XenonElectronWindowHost::CallImpl(int32_t window_id,
           return false;
         }
       }
-      entry.web_preferences = options->Clone();
+      auto normalized =
+          xenon::XenonManager::GetInstance()->NormalizeElectronWebPreferences(
+              entry.container_id, *options);
+      if (!normalized.has_value()) {
+        *error = normalized.error();
+        return false;
+      }
+      entry.web_preferences = std::move(*normalized);
       web_contents->OnWebPreferencesChanged();
       ApplyBackgroundThrottling(window_id);
       return true;
@@ -1344,19 +1636,12 @@ bool XenonElectronWindowHost::CallImpl(int32_t window_id,
   }
 
   if (command == "execute-javascript") {
-    auto* dialog_view =
-        static_cast<views::WebDialogView*>(widget->widget_delegate());
-    content::WebContents* web_contents =
-        dialog_view ? dialog_view->web_contents() : nullptr;
-    if (web_contents && options) {
-      const std::string* code = options->FindString("code");
-      if (code && !code->empty()) {
-        web_contents->GetPrimaryMainFrame()->ExecuteJavaScript(
-            base::UTF8ToUTF16(*code), base::NullCallback());
-      }
-    }
-    *result = base::Value();
-    return true;
+    // RenderFrameHost::ExecuteJavaScript is restricted to privileged WebUI
+    // URLs and CHECKs on ordinary file/https application pages. Evaluation
+    // belongs to the owned document's asynchronous renderer endpoint.
+    *error = "ERR_NOT_SUPPORTED: executeJavaScript requires the asynchronous "
+             "document endpoint";
+    return false;
   }
 
   if (command == "close") {
@@ -1456,28 +1741,38 @@ bool XenonElectronWindowHost::CallImpl(int32_t window_id,
   if (command == "show") {
     widget->Show();
 #if BUILDFLAG(IS_WIN)
-    if (HWND hwnd = views::HWNDForWidget(widget)) {
-      ::ShowWindow(hwnd, SW_SHOW);
+    if (widget = FindWidget(window_id); widget) {
+      if (HWND hwnd = views::HWNDForWidget(widget)) {
+        ::ShowWindow(hwnd, SW_SHOW);
+      }
     }
 #endif
+    UpdateContentsVisibility(window_id);
     return true;
   }
   if (command == "show-inactive") {
     widget->ShowInactive();
 #if BUILDFLAG(IS_WIN)
-    if (HWND hwnd = views::HWNDForWidget(widget)) {
-      ::ShowWindow(hwnd, SW_SHOWNA);
+    if (widget = FindWidget(window_id); widget) {
+      if (HWND hwnd = views::HWNDForWidget(widget)) {
+        ::ShowWindow(hwnd, SW_SHOWNA);
+      }
     }
 #endif
+    UpdateContentsVisibility(window_id);
     return true;
   }
   if (command == "hide") {
+    entry.initial_paint_pending = false;
     widget->Hide();
 #if BUILDFLAG(IS_WIN)
-    if (HWND hwnd = views::HWNDForWidget(widget)) {
-      ::ShowWindow(hwnd, SW_HIDE);
+    if (widget = FindWidget(window_id); widget) {
+      if (HWND hwnd = views::HWNDForWidget(widget)) {
+        ::ShowWindow(hwnd, SW_HIDE);
+      }
     }
 #endif
+    UpdateContentsVisibility(window_id);
     return true;
   }
   if (command == "is-visible") {
@@ -1502,6 +1797,7 @@ bool XenonElectronWindowHost::CallImpl(int32_t window_id,
     return true;
   }
   if (command == "minimize") {
+    entry.initial_paint_pending = false;
     // An owned overlay is hidden automatically when its owner is minimized.
     // Minimizing both HWNDs independently can destroy or detach a layered
     // owned window on Windows; Electron treats the pair as one window here.
@@ -1908,6 +2204,15 @@ bool XenonElectronWindowHost::GetOwnedPlaybackTarget(
     views::Widget** widget,
     content::WebContents** web_contents,
     std::string* error) const {
+  return GetOwnedWindowTarget(container_id, window_id, widget, web_contents, error);
+}
+
+bool XenonElectronWindowHost::GetOwnedWindowTarget(
+    const std::string& container_id,
+    int32_t window_id,
+    views::Widget** widget,
+    content::WebContents** web_contents,
+    std::string* error) const {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (widget) {
     *widget = nullptr;
@@ -1922,23 +2227,23 @@ bool XenonElectronWindowHost::GetOwnedPlaybackTarget(
     return false;
   };
   if (!widget || !web_contents) {
-    return fail("Playback target output parameters are required");
+    return fail("Window target output parameters are required");
   }
   const auto it = windows_.find(window_id);
   if (container_id.empty() || it == windows_.end() ||
       it->second.container_id != container_id) {
-    return fail("Playback target is not owned by this container");
+    return fail("Window target is not owned by this container");
   }
   if (shutting_down_ || closing_containers_.contains(container_id) ||
       it->second.close_prepared) {
-    return fail("Playback target is closing");
+    return fail("Window target is closing");
   }
   if (!it->second.widget || !it->second.web_contents_observer) {
-    return fail("Playback target window is unavailable");
+    return fail("Window target is unavailable");
   }
   auto* contents = it->second.web_contents_observer->web_contents();
   if (!contents || contents->IsBeingDestroyed()) {
-    return fail("Playback target WebContents is unavailable");
+    return fail("Window target WebContents is unavailable");
   }
   *widget = it->second.widget;
   *web_contents = contents;
@@ -1992,6 +2297,11 @@ void XenonElectronWindowHost::PrepareForClose(int32_t window_id) {
       continue;
     }
     it->second.close_prepared = true;
+    ApplyKeyboardFilter(*id, true);
+    it = windows_.find(*id);
+    if (it == windows_.end()) {
+      continue;
+    }
 #if BUILDFLAG(IS_MAC)
     // Detach the SDK's local NSView before hiding or destroying its owner.
     XenonMacPlayerHost::GetInstance()->CloseWindow(*id);
@@ -2053,6 +2363,7 @@ void XenonElectronWindowHost::CloseForContainer(
     return;
   }
   pending_activate_containers_.erase(container_id);
+  app_user_model_ids_.erase(container_id);
 
   // An asynchronous Close() leaves the old entry available to a sidebar
   // retry. Destroy its WebContents and remove the entry before a fresh main
@@ -2417,21 +2728,44 @@ void XenonElectronWindowHost::OnWidgetShowStateChanged(views::Widget* widget) {
   }
   base::DictValue state;
   it->second.minimized = widget->IsMinimized();
+  if (it->second.minimized) {
+    it->second.initial_paint_pending = false;
+  }
   it->second.maximized = widget->IsMaximized();
   it->second.fullscreen = widget->IsFullscreen();
   state.Set("minimized", it->second.minimized);
   state.Set("maximized", it->second.maximized);
   state.Set("fullscreen", it->second.fullscreen);
-  NotifyEvent(it->first, "state-changed", base::Value(std::move(state)));
-  SynchronizeOverlayShowState(it->first);
+  const int32_t id = it->first;
+  NotifyEvent(id, "state-changed", base::Value(std::move(state)));
+  SynchronizeOverlayShowState(id);
+  // A minimized native owner may hide its children without changing each
+  // child's own show state. Refresh the ownership tree using stable IDs.
+  std::vector<int32_t> descendants{id};
+  std::set<int32_t> visited{id};
+  for (size_t index = 0; index < descendants.size(); ++index) {
+    for (const auto& [child_id, child] : windows_) {
+      if (child.parent_id == descendants[index] &&
+          visited.insert(child_id).second) {
+        descendants.push_back(child_id);
+      }
+    }
+  }
+  for (const int32_t child_id : descendants) {
+    UpdateContentsVisibility(child_id);
+  }
 }
 
 void XenonElectronWindowHost::OnWidgetVisibilityChanged(views::Widget* widget,
-                                                         bool visible) {
+                                                        bool visible) {
   auto it = FindEntry(widget);
   if (it != windows_.end()) {
+    const int32_t id = it->first;
+    const bool initially_suppressed =
+        !it->second.ever_shown && !it->second.paint_when_initially_hidden;
     if (visible) {
       it->second.ever_shown = true;
+      it->second.initial_paint_pending = false;
     }
     NotifyEvent(it->first, visible ? "show" : "hide", base::Value());
     if (visible && it->second.has_loaded_url &&
@@ -2441,13 +2775,18 @@ void XenonElectronWindowHost::OnWidgetVisibilityChanged(views::Widget* widget,
       pending_activate_containers_.erase(it->second.container_id);
       ActivateEntryWindow(it->first);
     }
+    if (visible && initially_suppressed) {
+      ApplyBackgroundThrottling(id);
+    }
+    // This notification can precede Widget::IsVisible() being updated.
+    UpdateContentsVisibility(id, visible);
   }
 }
 
 void XenonElectronWindowHost::OnNativeWindowMessage(uint64_t hwnd,
-                                                     uint32_t message,
-                                                     uint64_t w_param,
-                                                     int64_t l_param) {
+                                                    uint32_t message,
+                                                    uint64_t w_param,
+                                                    int64_t l_param) {
   for (const auto& [id, entry] : windows_) {
     if (entry.hwnd != hwnd) {
       continue;
@@ -2559,107 +2898,6 @@ bool XenonElectronWindowHost::ActivateForContainer(
   }
   pending_activate_containers_.erase(container_id);
   return ActivateEntryWindow(entry_window_id);
-}
-
-std::vector<std::string> XenonElectronWindowHost::ShowOpenDialog(
-    const std::string& title,
-    bool directory,
-    bool allow_multi,
-    const std::vector<std::string>& extensions) {
-  std::vector<std::string> results;
-#if BUILDFLAG(IS_WIN)
-  Microsoft::WRL::ComPtr<IFileOpenDialog> dialog;
-  HRESULT hr = ::CoCreateInstance(CLSID_FileOpenDialog, nullptr,
-                                  CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog));
-  if (FAILED(hr) || !dialog) {
-    LOG(ERROR) << "IFileOpenDialog CoCreate failed hr=" << hr;
-    return results;
-  }
-
-  FILEOPENDIALOGOPTIONS opts = FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST;
-  if (directory) {
-    opts |= FOS_PICKFOLDERS;
-  } else {
-    opts |= FOS_FILEMUSTEXIST;
-  }
-  if (allow_multi && !directory) {
-    opts |= FOS_ALLOWMULTISELECT;
-  }
-  dialog->SetOptions(opts);
-
-  const std::wstring title_w = base::UTF8ToWide(title);
-  if (!title_w.empty()) {
-    dialog->SetTitle(title_w.c_str());
-  }
-
-  std::wstring filter_name = L"媒体文件";
-  std::wstring filter_spec;
-  std::vector<COMDLG_FILTERSPEC> specs;
-  if (!directory && !extensions.empty()) {
-    for (size_t i = 0; i < extensions.size(); ++i) {
-      if (i) {
-        filter_spec += L";";
-      }
-      filter_spec += L"*.";
-      filter_spec += base::UTF8ToWide(extensions[i]);
-    }
-    specs.push_back({filter_name.c_str(), filter_spec.c_str()});
-    specs.push_back({L"所有文件", L"*.*"});
-    dialog->SetFileTypes(static_cast<UINT>(specs.size()), specs.data());
-  }
-
-  HWND owner = nullptr;
-  uint64_t overlay_hwnd = 0;
-  uint64_t any_hwnd = 0;
-  for (const auto& [id, entry] : windows_) {
-    if (!entry.hwnd) {
-      continue;
-    }
-    any_hwnd = entry.hwnd;
-    if (entry.has_loaded_url) {
-      overlay_hwnd = entry.hwnd;
-    }
-  }
-  const uint64_t owner_id = overlay_hwnd ? overlay_hwnd : any_hwnd;
-  if (owner_id) {
-    owner = reinterpret_cast<HWND>(static_cast<uintptr_t>(owner_id));
-  }
-
-  LOG(INFO) << "IFileOpenDialog Show owner=" << owner_id
-            << " directory=" << directory;
-  hr = dialog->Show(owner);
-  if (FAILED(hr) && hr != HRESULT_FROM_WIN32(ERROR_CANCELLED) && owner) {
-    LOG(WARNING) << "IFileOpenDialog Show owner failed hr=" << hr
-                 << "; retry without owner";
-    hr = dialog->Show(nullptr);
-  }
-  if (hr == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
-    LOG(INFO) << "IFileOpenDialog canceled";
-    return results;
-  }
-  if (FAILED(hr)) {
-    LOG(ERROR) << "IFileOpenDialog Show failed hr=" << hr;
-    return results;
-  }
-
-  Microsoft::WRL::ComPtr<IShellItemArray> items;
-  if (SUCCEEDED(dialog->GetResults(&items)) && items) {
-    DWORD count = 0;
-    items->GetCount(&count);
-    for (DWORD i = 0; i < count; ++i) {
-      Microsoft::WRL::ComPtr<IShellItem> item;
-      if (SUCCEEDED(items->GetItemAt(i, &item)) && item) {
-        AppendShellItemPath(item.Get(), &results);
-      }
-    }
-  } else {
-    Microsoft::WRL::ComPtr<IShellItem> item;
-    if (SUCCEEDED(dialog->GetResult(&item)) && item) {
-      AppendShellItemPath(item.Get(), &results);
-    }
-  }
-#endif
-  return results;
 }
 
 void XenonElectronWindowHost::OnWidgetDestroying(views::Widget* widget) {

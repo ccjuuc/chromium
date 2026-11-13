@@ -4,7 +4,9 @@
 
 #include "napi_loader.h"
 
+#include <algorithm>
 #include <optional>
+#include <thread>
 #include <vector>
 
 #include "base/base_paths.h"
@@ -14,8 +16,12 @@
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
+#include "base/synchronization/waitable_event.h"
+#include "base/task/execution_fence.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "js_native_api_v8.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -1191,7 +1197,7 @@ TEST_F(NapiLoaderTest, CreateReferenceRejectsForeignNapiValue) {
   EXPECT_EQ(reference, nullptr);
 }
 
-TEST_F(NapiLoaderTest, CreateReferenceEnforcesStableNodeApiValueTypes) {
+TEST_F(NapiLoaderTest, LegacyCreateReferenceRejectsPrimitiveValueTypes) {
   v8::Locker locker(isolate());
   v8::Isolate::Scope isolate_scope(isolate());
   v8::HandleScope handle_scope(isolate());
@@ -1242,6 +1248,86 @@ TEST_F(NapiLoaderTest, CreateReferenceEnforcesStableNodeApiValueTypes) {
     }
   }
   EXPECT_EQ(napi_delete_reference(env.get(), sentinel), napi_ok);
+}
+
+TEST_F(NapiLoaderTest, NodeApi10PrimitiveReferencesRetainAndReleaseValues) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  auto env = std::make_unique<napi_env__>(isolate(), context(), 10);
+  v8::Local<v8::Value> values[] = {
+      v8::Undefined(isolate()),
+      v8::Null(isolate()),
+      v8::True(isolate()),
+      v8::Number::New(isolate(), 42),
+      v8::BigInt::New(isolate(), 7),
+      v8::String::NewFromUtf8Literal(isolate(), "primitive")};
+  for (v8::Local<v8::Value> value : values) {
+    napi_ref reference = nullptr;
+    napi_handle_scope scope = nullptr;
+    ASSERT_EQ(napi_open_handle_scope(env.get(), &scope), napi_ok);
+    ASSERT_EQ(napi_create_reference(env.get(), env->CreateValue(value), 1,
+                                    &reference),
+              napi_ok);
+    ASSERT_EQ(napi_close_handle_scope(env.get(), scope), napi_ok);
+
+    napi_value result = nullptr;
+    ASSERT_EQ(napi_get_reference_value(env.get(), reference, &result), napi_ok);
+    ASSERT_NE(result, nullptr);
+    EXPECT_TRUE(result->Get()->StrictEquals(value));
+    uint32_t count = 0;
+    ASSERT_EQ(napi_reference_ref(env.get(), reference, &count), napi_ok);
+    EXPECT_EQ(count, 2u);
+    ASSERT_EQ(napi_reference_unref(env.get(), reference, &count), napi_ok);
+    EXPECT_EQ(count, 1u);
+    ASSERT_EQ(napi_get_reference_value(env.get(), reference, &result), napi_ok);
+    ASSERT_NE(result, nullptr);
+    EXPECT_TRUE(result->Get()->StrictEquals(value));
+    ASSERT_EQ(napi_reference_unref(env.get(), reference, &count), napi_ok);
+    EXPECT_EQ(count, 0u);
+    ASSERT_EQ(napi_get_reference_value(env.get(), reference, &result), napi_ok);
+    EXPECT_EQ(result, nullptr);
+    ASSERT_EQ(napi_reference_ref(env.get(), reference, &count), napi_ok);
+    EXPECT_EQ(count, 0u);
+    ASSERT_EQ(napi_get_reference_value(env.get(), reference, &result), napi_ok);
+    EXPECT_EQ(result, nullptr);
+    EXPECT_EQ(napi_delete_reference(env.get(), reference), napi_ok);
+
+    // An initially weak primitive is already released, without a GC cycle.
+    ASSERT_EQ(napi_create_reference(env.get(), env->CreateValue(value), 0,
+                                    &reference),
+              napi_ok);
+    ASSERT_EQ(napi_get_reference_value(env.get(), reference, &result), napi_ok);
+    EXPECT_EQ(result, nullptr);
+    ASSERT_EQ(napi_reference_ref(env.get(), reference, &count), napi_ok);
+    EXPECT_EQ(count, 0u);
+    EXPECT_EQ(napi_delete_reference(env.get(), reference), napi_ok);
+  }
+}
+
+TEST_F(NapiLoaderTest, NodeApi10WeakObjectAndSymbolReferencesCanBeRetained) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  auto env = std::make_unique<napi_env__>(isolate(), context(), 10);
+  v8::Local<v8::Value> values[] = {v8::Object::New(isolate()),
+                                   v8::Symbol::New(isolate())};
+  for (v8::Local<v8::Value> value : values) {
+    napi_ref reference = nullptr;
+    ASSERT_EQ(napi_create_reference(env.get(), env->CreateValue(value), 0,
+                                    &reference),
+              napi_ok);
+    uint32_t count = 0;
+    ASSERT_EQ(napi_reference_ref(env.get(), reference, &count), napi_ok);
+    EXPECT_EQ(count, 1u);
+    napi_value result = nullptr;
+    ASSERT_EQ(napi_get_reference_value(env.get(), reference, &result), napi_ok);
+    ASSERT_NE(result, nullptr);
+    EXPECT_TRUE(result->Get()->StrictEquals(value));
+    EXPECT_EQ(napi_delete_reference(env.get(), reference), napi_ok);
+  }
 }
 
 TEST_F(NapiLoaderTest, MissingOptionalCallbackDoesNotBecomeCallableReference) {
@@ -1435,6 +1521,144 @@ TEST_F(NapiLoaderTest, CleanupHookArgumentsAndRepeatedRemoval) {
   env.reset();
 }
 
+TEST_F(NapiLoaderTest, TypeTagsArePrivateOwnMetadataAcrossAddonEnvironments) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  napi_env__ first(isolate(), context());
+  napi_env__ second(isolate(), context());
+  for (const napi_type_tag tag : {napi_type_tag{0, 0}, napi_type_tag{42, 0},
+                                  napi_type_tag{UINT64_MAX, UINT64_MAX}}) {
+    napi_value object;
+    ASSERT_EQ(napi_create_object(&first, &object), napi_ok);
+    bool matches = true;
+    EXPECT_EQ(napi_check_object_type_tag(&first, object, &tag, &matches),
+              napi_ok);
+    EXPECT_FALSE(matches);
+    EXPECT_EQ(napi_type_tag_object(&first, object, &tag), napi_ok);
+    EXPECT_EQ(napi_type_tag_object(&first, object, &tag), napi_invalid_arg);
+    auto same_object = second.CreateValue(object->Get());
+    EXPECT_EQ(napi_check_object_type_tag(&second, same_object, &tag, &matches),
+              napi_ok);
+    EXPECT_TRUE(matches);
+    const napi_type_tag different{tag.lower ^ 1, tag.upper};
+    EXPECT_EQ(
+        napi_check_object_type_tag(&second, same_object, &different, &matches),
+        napi_ok);
+    EXPECT_FALSE(matches);
+    auto child = v8::Object::New(isolate());
+    ASSERT_TRUE(child->SetPrototype(context(), object->Get()).FromJust());
+    EXPECT_EQ(napi_check_object_type_tag(&first, first.CreateValue(child), &tag,
+                                         &matches),
+              napi_ok);
+    EXPECT_FALSE(matches);
+    EXPECT_EQ(0u, object->Get()
+                      .As<v8::Object>()
+                      ->GetOwnPropertyNames(context())
+                      .ToLocalChecked()
+                      ->Length());
+  }
+  napi_value primitive;
+  ASSERT_EQ(napi_create_int32(&first, 1, &primitive), napi_ok);
+  const napi_type_tag tag{1, 2};
+  bool matches = false;
+  EXPECT_EQ(napi_type_tag_object(&first, primitive, &tag),
+            napi_object_expected);
+  EXPECT_EQ(napi_type_tag_object(&second, primitive, &tag), napi_invalid_arg);
+  EXPECT_EQ(napi_check_object_type_tag(&first, primitive, &tag, &matches),
+            napi_object_expected);
+  EXPECT_EQ(napi_check_object_type_tag(&first, primitive, &tag, nullptr),
+            napi_invalid_arg);
+}
+
+TEST_F(NapiLoaderTest, ExternalTypeTagsPreservePointersAndFinalizerOwnership) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  napi_env__ reader(isolate(), context());
+  auto owner = std::make_unique<napi_env__>(isolate(), context());
+  bool finalized = false;
+  napi_value external;
+  ASSERT_EQ(napi_create_external(owner.get(), &finalized, MarkFinalized,
+                                 nullptr, &external),
+            napi_ok);
+  const napi_type_tag tag{0, UINT64_MAX};
+  bool matches = true;
+  EXPECT_EQ(napi_check_object_type_tag(owner.get(), external, &tag, &matches),
+            napi_ok);
+  EXPECT_FALSE(matches);
+  EXPECT_EQ(napi_type_tag_object(owner.get(), external, &tag), napi_ok);
+  auto same_external = reader.CreateValue(external->Get());
+  EXPECT_EQ(napi_check_object_type_tag(&reader, same_external, &tag, &matches),
+            napi_ok);
+  EXPECT_TRUE(matches);
+  EXPECT_EQ(napi_type_tag_object(&reader, same_external, &tag),
+            napi_invalid_arg);
+  void* data = nullptr;
+  EXPECT_EQ(napi_get_value_external(&reader, same_external, &data), napi_ok);
+  EXPECT_EQ(&finalized, data);
+  // Distinct Externals may carry the same native pointer without sharing tags.
+  napi_value untagged;
+  ASSERT_EQ(
+      napi_create_external(&reader, &finalized, nullptr, nullptr, &untagged),
+      napi_ok);
+  EXPECT_EQ(napi_check_object_type_tag(&reader, untagged, &tag, &matches),
+            napi_ok);
+  EXPECT_FALSE(matches);
+  owner.reset();
+  EXPECT_TRUE(finalized);
+  EXPECT_EQ(napi_get_value_external(&reader, same_external, &data),
+            napi_invalid_arg);
+  EXPECT_EQ(napi_check_object_type_tag(&reader, same_external, &tag, &matches),
+            napi_invalid_arg);
+}
+
+TEST_F(NapiLoaderTest, ExternalBufferRejectionDoesNotTransferOwnership) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  bool finalized = false;
+  {
+    napi_env__ env(isolate(), context());
+    napi_value buffer = nullptr;
+    EXPECT_EQ(napi_create_external_buffer(&env, sizeof(finalized), &finalized,
+                                          MarkFinalized, nullptr, &buffer),
+              napi_no_external_buffers_allowed);
+    EXPECT_EQ(nullptr, buffer);
+    const napi_extended_error_info* error = nullptr;
+    ASSERT_EQ(napi_get_last_error_info(&env, &error), napi_ok);
+    EXPECT_EQ(napi_no_external_buffers_allowed, error->error_code);
+    EXPECT_EQ(napi_create_external_buffer(&env, 1, nullptr, nullptr, nullptr,
+                                          &buffer),
+              napi_invalid_arg);
+    EXPECT_EQ(napi_create_external_buffer(&env, 0, nullptr, nullptr, nullptr,
+                                          &buffer),
+              napi_no_external_buffers_allowed);
+  }
+  EXPECT_FALSE(finalized);
+}
+
+TEST_F(NapiLoaderTest, ContextWithoutUvPumpCannotBorrowTheSharedEventLoop) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  napi_env__ env(isolate(), context());
+  env.allow_default_uv_loop = false;
+  uv_loop_t* loop = nullptr;
+  EXPECT_EQ(napi_get_uv_event_loop(&env, &loop), napi_generic_failure);
+  EXPECT_EQ(nullptr, loop);
+  EXPECT_EQ(nullptr, env.uv_loop);
+  const napi_extended_error_info* error = nullptr;
+  ASSERT_EQ(napi_get_last_error_info(&env, &error), napi_ok);
+  ASSERT_NE(nullptr, error->error_message);
+  EXPECT_NE(std::string::npos,
+            std::string(error->error_message).find("host-owned libuv"));
+}
+
 TEST_F(NapiLoaderTest, BufferUsesUint8ArraySemantics) {
   v8::Locker locker(isolate());
   v8::Isolate::Scope isolate_scope(isolate());
@@ -1595,6 +1819,319 @@ TEST_F(NapiLoaderTest, AsyncWorkExecution) {
   delete env;
 }
 
+TEST_F(NapiLoaderTest, ShutdownRetainsRunningWorkUntilCompletionReturns) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  struct Probe {
+    base::WaitableEvent entered;
+    base::WaitableEvent release;
+    napi_async_work work = nullptr;
+    int completed = 0;
+    bool finalized = false;
+  } probe;
+  ASSERT_EQ(napi_set_instance_data(
+                env.get(), &probe,
+                [](napi_env, void* data, void*) {
+                  auto* probe = static_cast<Probe*>(data);
+                  EXPECT_EQ(1, probe->completed);
+                  probe->finalized = true;
+                },
+                nullptr),
+            napi_ok);
+  ASSERT_EQ(napi_create_async_work(
+                env.get(), nullptr, nullptr,
+                [](napi_env, void* data) {
+                  auto* probe = static_cast<Probe*>(data);
+                  probe->entered.Signal();
+                  probe->release.Wait();
+                },
+                [](napi_env env, napi_status status, void* data) {
+                  auto* probe = static_cast<Probe*>(data);
+                  EXPECT_EQ(napi_ok, status);
+                  EXPECT_TRUE(env->IsClosing());
+                  EXPECT_FALSE(env->PollShutdown());
+                  ++probe->completed;
+                  EXPECT_EQ(napi_ok, napi_delete_async_work(env, probe->work));
+                },
+                &probe, &probe.work),
+            napi_ok);
+  ASSERT_EQ(napi_queue_async_work(env.get(), probe.work), napi_ok);
+  {
+    base::ScopedAllowBaseSyncPrimitivesForTesting allow_wait;
+    EXPECT_TRUE(probe.entered.TimedWait(base::Seconds(5)));
+  }
+  EXPECT_EQ(napi_generic_failure,
+            napi_delete_async_work(env.get(), probe.work));
+  EXPECT_EQ(napi_generic_failure, napi_queue_async_work(env.get(), probe.work));
+  env->BeginShutdown();
+  EXPECT_TRUE(env->HasPendingWork());
+  EXPECT_FALSE(env->PollShutdown());
+  EXPECT_FALSE(probe.finalized);
+  probe.release.Signal();
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(1, probe.completed);
+  EXPECT_TRUE(env->async_work.empty());
+  EXPECT_TRUE(env->PollShutdown());
+  EXPECT_TRUE(probe.finalized);
+}
+
+TEST_F(NapiLoaderTest, ShutdownCancelsQueuedWorkAndStillRunsCompletion) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  struct Probe {
+    bool executed = false;
+    int cancelled = 0;
+  } probe;
+  napi_async_work work;
+  ASSERT_EQ(napi_create_async_work(
+                env.get(), nullptr, nullptr,
+                [](napi_env, void* data) {
+                  static_cast<Probe*>(data)->executed = true;
+                },
+                [](napi_env, napi_status status, void* data) {
+                  EXPECT_EQ(napi_cancelled, status);
+                  ++static_cast<Probe*>(data)->cancelled;
+                },
+                &probe, &work),
+            napi_ok);
+  {
+    base::ScopedThreadPoolExecutionFence fence;
+    ASSERT_EQ(napi_queue_async_work(env.get(), work), napi_ok);
+    env->BeginShutdown();
+    EXPECT_FALSE(env->PollShutdown());
+    EXPECT_EQ(napi_closing, napi_queue_async_work(env.get(), work));
+  }
+  task_environment_.RunUntilIdle();
+  EXPECT_FALSE(probe.executed);
+  EXPECT_EQ(1, probe.cancelled);
+  EXPECT_TRUE(env->PollShutdown());
+  EXPECT_TRUE(env->async_work.empty());
+}
+
+TEST_F(NapiLoaderTest,
+       ShutdownFinalizesIdleThreadsafeFunctionWithoutOwnerRelease) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  struct Probe {
+    bool cleanup_ran = false;
+    int finalizations = 0;
+    base::OnceClosure on_finalized;
+  } probe;
+  base::test::TestFuture<void> finalized;
+  probe.on_finalized = finalized.GetCallback();
+  napi_threadsafe_function function;
+  ASSERT_EQ(napi_create_threadsafe_function(
+                env.get(), nullptr, nullptr, nullptr, 0, 1, &probe,
+                [](napi_env, void* data, void*) {
+                  auto* probe = static_cast<Probe*>(data);
+                  EXPECT_TRUE(probe->cleanup_ran);
+                  ++probe->finalizations;
+                  std::move(probe->on_finalized).Run();
+                },
+                nullptr, [](napi_env, napi_value, void*, void*) {}, &function),
+            napi_ok);
+  ASSERT_EQ(napi_add_env_cleanup_hook(
+                env.get(),
+                [](void* data) {
+                  static_cast<Probe*>(data)->cleanup_ran = true;
+                },
+                &probe),
+            napi_ok);
+
+  // An event source can retain its initial owner token for its entire
+  // lifetime. Its environment cleanup hook stops the source; neither that
+  // hook nor the TSFN finalizer is required to release a now-unused token.
+  // There are no producer threads or outstanding callbacks in this case.
+  env->BeginShutdown();
+  EXPECT_FALSE(env->PollShutdown());
+  ASSERT_TRUE(finalized.Wait());
+  const bool drained = env->PollShutdown();
+  EXPECT_TRUE(drained);
+  EXPECT_EQ(1, probe.finalizations);
+  if (!drained) {
+    // Clean up the known-broken implementation after recording the failure,
+    // so the red regression does not abort in napi_env__'s destructor.
+    ASSERT_EQ(napi_ok,
+              napi_release_threadsafe_function(function, napi_tsfn_release));
+    task_environment_.RunUntilIdle();
+    EXPECT_TRUE(env->PollShutdown());
+    EXPECT_EQ(1, probe.finalizations);
+  }
+}
+
+TEST_F(NapiLoaderTest, ShutdownWakesThreadsafeProducerAndJoinsInFinalizer) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  struct Probe {
+    base::WaitableEvent entered;
+    std::thread producer;
+    napi_status status = napi_ok;
+    int discarded = 0;
+    bool finalized = false;
+    base::OnceClosure on_finalized;
+  } probe;
+  base::test::TestFuture<void> finalized;
+  probe.on_finalized = finalized.GetCallback();
+  napi_threadsafe_function function;
+  ASSERT_EQ(napi_create_threadsafe_function(
+                env.get(), nullptr, nullptr, nullptr, 1, 2, &probe,
+                [](napi_env, void* data, void*) {
+                  auto* probe = static_cast<Probe*>(data);
+                  probe->producer.join();
+                  probe->finalized = true;
+                  std::move(probe->on_finalized).Run();
+                },
+                &probe,
+                [](napi_env env, napi_value callback, void* context, void*) {
+                  EXPECT_EQ(nullptr, env);
+                  EXPECT_EQ(nullptr, callback);
+                  ++static_cast<Probe*>(context)->discarded;
+                },
+                &function),
+            napi_ok);
+  ASSERT_EQ(
+      napi_call_threadsafe_function(function, nullptr, napi_tsfn_nonblocking),
+      napi_ok);
+  probe.producer = std::thread([&probe, function] {
+    probe.entered.Signal();
+    probe.status =
+        napi_call_threadsafe_function(function, nullptr, napi_tsfn_blocking);
+    // napi_closing consumed this producer's token; no extra release is valid.
+  });
+  {
+    base::ScopedAllowBaseSyncPrimitivesForTesting allow_wait;
+    EXPECT_TRUE(probe.entered.TimedWait(base::Seconds(5)));
+  }
+  EXPECT_EQ(napi_ok,
+            napi_release_threadsafe_function(function, napi_tsfn_release));
+  env->BeginShutdown();
+  EXPECT_FALSE(env->PollShutdown());
+  EXPECT_TRUE(finalized.Wait());
+  EXPECT_TRUE(probe.finalized);
+  EXPECT_EQ(napi_closing, probe.status);
+  EXPECT_EQ(1, probe.discarded);
+  EXPECT_TRUE(env->PollShutdown());
+}
+
+TEST_F(NapiLoaderTest,
+       ShutdownDrainsCleanupRegisteredByFinalizersAndLateCallbacks) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  auto env = std::make_unique<napi_env__>(isolate(), context());
+  int cleaned = 0;
+  auto add_cleanup = [](napi_env env, void* data, void*) {
+    EXPECT_EQ(napi_ok,
+              napi_add_env_cleanup_hook(
+                  env, [](void* data) { ++*static_cast<int*>(data); }, data));
+  };
+  ASSERT_EQ(napi_ok,
+            napi_set_instance_data(env.get(), &cleaned, add_cleanup, nullptr));
+  env->BeginShutdown();
+  EXPECT_TRUE(env->PollShutdown());
+  EXPECT_EQ(1, cleaned);
+  // A UV close callback can add a finalizer after an earlier successful poll.
+  napi_value external;
+  ASSERT_EQ(napi_ok, napi_create_external(env.get(), &cleaned, add_cleanup,
+                                          nullptr, &external));
+  EXPECT_TRUE(env->PollShutdown());
+  EXPECT_EQ(2, cleaned);
+  EXPECT_TRUE(env->PollShutdown());
+  EXPECT_EQ(2, cleaned);
+}
+
+TEST_F(NapiLoaderTest, FailedRegistrationRetainsEnvironmentAndLibraryForDrain) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  base::FilePath executable_directory;
+  ASSERT_TRUE(base::PathService::Get(base::DIR_EXE, &executable_directory));
+  base::NativeLibraryLoadError error;
+  auto library = LoadNodeAddonLibrary(
+      executable_directory.AppendASCII("test_addon.node"), &error);
+  ASSERT_TRUE(library.is_valid()) << error.ToString();
+  auto fail = reinterpret_cast<void (*)()>(
+      library.GetFunctionPointer("XenonTestFailNextInitialization"));
+  auto completions = reinterpret_cast<int (*)()>(library.GetFunctionPointer(
+      "XenonTestGetFailedInitializationCompletions"));
+  ASSERT_TRUE(fail);
+  ASSERT_TRUE(completions);
+  const int before = completions();
+  fail();
+  LoadedNodeAddon loaded;
+  EXPECT_TRUE(InitializeLoadedNodeAddon(isolate(), context(),
+                                        std::move(library), &loaded, false)
+                  .IsEmpty());
+  ASSERT_TRUE(loaded.env);
+  ASSERT_TRUE(loaded.library.is_valid());
+  loaded.env->BeginShutdown();
+  EXPECT_FALSE(loaded.env->PollShutdown());
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(before + 1, completions());
+  EXPECT_TRUE(loaded.env->PollShutdown());
+}
+
+TEST_F(NapiLoaderTest, ModuleApiVersionExportSelectsReferenceSemantics) {
+  v8::Locker locker(isolate());
+  v8::Isolate::Scope isolate_scope(isolate());
+  v8::HandleScope handle_scope(isolate());
+  v8::Context::Scope context_scope(context());
+  base::FilePath executable_directory;
+  ASSERT_TRUE(base::PathService::Get(base::DIR_EXE, &executable_directory));
+  base::NativeLibraryLoadError error;
+  auto library = LoadNodeAddonLibrary(
+      executable_directory.AppendASCII("test_addon.node"), &error);
+  ASSERT_TRUE(library.is_valid()) << error.ToString();
+  auto set_version = reinterpret_cast<void (*)(int32_t)>(
+      library.GetFunctionPointer("XenonTestSetModuleApiVersion"));
+  ASSERT_TRUE(set_version);
+  // Keep this library mapped until the test-only version override is reset.
+  base::ScopedClosureRunner reset_version(base::BindOnce(set_version, 8));
+  for (int32_t version : {1, 8, 9, 10}) {
+    set_version(version);
+    LoadedNodeAddon loaded;
+    ASSERT_FALSE(LoadAndInitializeNodeAddon(
+                     isolate(), context(),
+                     executable_directory.AppendASCII("test_addon.node"),
+                     &loaded)
+                     .IsEmpty());
+    ASSERT_TRUE(loaded.env);
+    EXPECT_EQ(loaded.env->module_api_version, std::max(version, 8));
+    napi_ref reference = nullptr;
+    const napi_status status = napi_create_reference(
+        loaded.env.get(),
+        loaded.env->CreateValue(
+            v8::String::NewFromUtf8Literal(isolate(), "persistent")),
+        1, &reference);
+    if (version >= 10) {
+      ASSERT_EQ(status, napi_ok);
+      napi_value value = nullptr;
+      ASSERT_EQ(napi_get_reference_value(loaded.env.get(), reference, &value),
+                napi_ok);
+      ASSERT_NE(value, nullptr);
+      EXPECT_TRUE(value->Get()->IsString());
+      EXPECT_EQ(napi_delete_reference(loaded.env.get(), reference), napi_ok);
+    } else {
+      EXPECT_EQ(status, napi_invalid_arg);
+      EXPECT_EQ(reference, nullptr);
+    }
+  }
+}
+
 #if BUILDFLAG(IS_MAC) && BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
 TEST_F(NapiLoaderTest, StaticRegistrationUsesRecordFromLoadedImage) {
   v8::Locker locker(isolate());
@@ -1656,7 +2193,7 @@ TEST_F(NapiLoaderTest, StaticRegistrationCanBeDisabled) {
 }
 
 TEST_F(NapiLoaderTest,
-       NativeCloseCallbackOutlivesEnvironmentAndImageReference) {
+       NativeCloseCallbackDrainsBeforeEnvironmentAndImageRelease) {
   v8::Locker locker(isolate());
   v8::Isolate::Scope isolate_scope(isolate());
   v8::HandleScope handle_scope(isolate());
@@ -1684,24 +2221,26 @@ TEST_F(NapiLoaderTest,
   int ticks = 0;
   ASSERT_EQ(start_timer(loaded_addon->env.get(), &loop, &closed, &ticks), 0);
 
-  loaded_addon.reset();
+  loaded_addon->env->BeginShutdown();
+  EXPECT_TRUE(loaded_addon->env->PollShutdown());
   EXPECT_EQ(closed, 0);
   Dl_info info = {};
   ASSERT_NE(dladdr(reinterpret_cast<void*>(close_callback), &info), 0);
-  // 仅测试驱动该独立 loop；宿主析构不运行共享 loop 或未知 JS 回调。
+  // Keep the environment and image alive through their native close callback.
   uv_run(&loop, UV_RUN_NOWAIT);
   EXPECT_EQ(closed, 1);
   EXPECT_EQ(ticks, 0);
   EXPECT_EQ(uv_loop_close(&loop), 0);
+  loaded_addon.reset();
 
-  // image 不再重跑 constructor，第二个 env 必须复用仍有效的静态注册记录。
+  // A second load resolves the new or still-mapped image's registration.
   LoadedNodeAddon second_environment;
   EXPECT_FALSE(LoadAndInitializeNodeAddon(isolate(), context(), path,
                                           &second_environment)
                    .IsEmpty());
 }
 
-TEST_F(NapiLoaderTest, NativeCloseCallbackOutlivesFailedInitialization) {
+TEST_F(NapiLoaderTest, NativeCloseCallbackDrainsAfterFailedInitialization) {
   v8::Locker locker(isolate());
   v8::Isolate::Scope isolate_scope(isolate());
   v8::HandleScope handle_scope(isolate());
@@ -1730,7 +2269,9 @@ TEST_F(NapiLoaderTest, NativeCloseCallbackOutlivesFailedInitialization) {
   EXPECT_TRUE(InitializeLoadedNodeAddon(isolate(), context(),
                                         std::move(library), &loaded_addon)
                   .IsEmpty());
-  EXPECT_EQ(loaded_addon.env, nullptr);
+  ASSERT_TRUE(loaded_addon.env);
+  loaded_addon.env->BeginShutdown();
+  EXPECT_TRUE(loaded_addon.env->PollShutdown());
   EXPECT_EQ(closed, 0);
   Dl_info info = {};
   ASSERT_NE(dladdr(reinterpret_cast<void*>(close_callback), &info), 0);

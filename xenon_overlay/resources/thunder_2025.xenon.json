@@ -2,6 +2,8 @@
   "application": "thunder_2025",
   "executable": "thunder_2025/Thunder.exe",
   "name": "Thunder",
+  "nativeAddonExecution": "shared",
+  "userDataPolicy": "legacy-host",
   "versionFromExecutable": true,
   "main": "out.asar/main.js",
   "archivePublicKey": "thunder_2025.asar-public-key.pem",

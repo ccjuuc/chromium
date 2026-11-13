@@ -78,6 +78,12 @@ class NotificationDisplayServiceImpl : public NotificationDisplayService {
   NotificationHandler* GetNotificationHandler(
       NotificationHandler::Type notification_type);
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE) && !BUILDFLAG(IS_ANDROID)
+  // This reports the initialized display backend, including Chrome's fallback.
+  // It does not register another platform readiness callback.
+  bool IsXenonNotificationSupported() const;
+#endif
+
   // NotificationDisplayService implementation:
   void Shutdown() override;
   void Display(NotificationHandler::Type notification_type,

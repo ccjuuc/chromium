@@ -381,6 +381,9 @@ source_set("browser") {
     "//ui/webui/resources",
     "//v8",
     "//v8:v8_version",
+    "//xenon_overlay/buildflags",
+    "//xenon_overlay/common/ipc:async_keyboard_event_queue",
+    "//xenon_overlay/public:utility_process_launch_options",
   ]
 
   public_deps = [
@@ -1218,6 +1221,9 @@ source_set("browser") {
     # TODO(crbug.com/202736352): This is built even if enable_screen_capture is
     # false. Consider better separation of the screen capture and the other
     # capture code so we can only build this if actually necessary.
+    "//xenon_overlay/content/browser/render_frame_host_xenon_data_mask.cc",
+    "//xenon_overlay/content/browser/video_sniffer_manager.cc",
+    "//xenon_overlay/content/browser/video_sniffer_observer.cc",
     "back_forward_cache/back_forward_cache_can_store_document_result.cc",
     "back_forward_cache/back_forward_cache_can_store_document_result.h",
     "back_forward_cache/back_forward_cache_commit_deferring_condition.cc",
@@ -1842,9 +1848,6 @@ source_set("browser") {
     "renderer_host/render_frame_host_impl.cc",
     "renderer_host/render_frame_host_impl.h",
     "renderer_host/render_frame_host_impl_interface_binders.cc",
-    "//xenon_overlay/content/browser/render_frame_host_xenon_data_mask.cc",
-    "//xenon_overlay/content/browser/video_sniffer_manager.cc",
-    "//xenon_overlay/content/browser/video_sniffer_observer.cc",
     "renderer_host/render_frame_host_manager.cc",
     "renderer_host/render_frame_host_manager.h",
     "renderer_host/render_frame_host_owner.h",

@@ -12,6 +12,7 @@
 #include "v8/include/v8.h"
 
 struct napi_env__;
+struct uv_loop_s;
 
 namespace xenon {
 
@@ -28,10 +29,8 @@ struct LoadedNodeAddon {
   std::unique_ptr<napi_env__> env;
 };
 
-// Loads a native addon. On macOS a loaded image remains mapped until process
-// exit, including when addon initialization subsequently fails. Environments
-// are still cleaned up normally; a queued native close callback must not use
-// the destroyed environment.
+// Loads a native addon. The owning runtime retains this library together with
+// its environment until all native callbacks and loop handles are drained.
 base::ScopedNativeLibrary LoadNodeAddonLibrary(
     const base::FilePath& addon_path,
     base::NativeLibraryLoadError* error);
@@ -39,12 +38,16 @@ base::ScopedNativeLibrary LoadNodeAddonLibrary(
 // Loads a Node-API native addon (.node) into the given V8 context.
 // Returns the exports object registered by the addon, or an empty handle on
 // failure. |loaded_addon| owns a library reference and the N-API environment on
-// success, with the macOS image lifetime described above.
+// success or after entry-point execution fails. A failed registration may
+// already own asynchronous work, so the caller must retain and drain the
+// output environment even when the returned exports handle is empty.
 v8::Local<v8::Value> LoadAndInitializeNodeAddon(
     v8::Isolate* isolate,
     v8::Local<v8::Context> context,
     const base::FilePath& addon_path,
-    LoadedNodeAddon* loaded_addon);
+    LoadedNodeAddon* loaded_addon,
+    bool allow_default_uv_loop = true,
+    uv_loop_s* runtime_loop = nullptr);
 
 // Initializes an addon loaded with LoadNodeAddonLibrary on a blocking-capable
 // sequence.
@@ -52,7 +55,9 @@ v8::Local<v8::Value> InitializeLoadedNodeAddon(
     v8::Isolate* isolate,
     v8::Local<v8::Context> context,
     base::ScopedNativeLibrary library,
-    LoadedNodeAddon* loaded_addon);
+    LoadedNodeAddon* loaded_addon,
+    bool allow_default_uv_loop = true,
+    uv_loop_s* runtime_loop = nullptr);
 
 #if BUILDFLAG(IS_WIN)
 void EnsureNodeHostLibraryLoaded();

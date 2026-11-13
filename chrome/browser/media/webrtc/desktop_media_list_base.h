@@ -12,6 +12,7 @@
 #include "chrome/browser/media/webrtc/desktop_media_list_observer.h"
 #include "content/public/browser/desktop_media_id.h"
 #include "ui/gfx/geometry/size.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 namespace gfx {
 class Image;
@@ -40,6 +41,11 @@ class DesktopMediaListBase : public DesktopMediaList {
   void SetViewDialogWindowId(content::DesktopMediaID dialog_id) override;
   void StartUpdating(DesktopMediaListObserver* observer) override;
   void Update(UpdateCallback callback) override;
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // One-shot enumeration that also waits for native thumbnail refresh.
+  // Ordinary picker Update() retains its existing enumeration-only behavior.
+  void UpdateWithThumbnails(UpdateCallback callback);
+#endif
   int GetSourceCount() const override;
   const Source& GetSource(int index) const override;
   DesktopMediaList::Type GetMediaListType() const override;

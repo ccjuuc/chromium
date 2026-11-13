@@ -5,19 +5,33 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-function createPreload() {
+function createPreload(sandboxed = true) {
   const calls = [];
+  const registrations = [];
   let dispatch;
   const bridge = Object.freeze({exposeInMainWorld() {}, executeInMainWorld() {}});
   const context = vm.createContext({__xenonWorker: {
+    sandboxed,
     send: (...args) => calls.push(['send', ...args]),
     invoke: (...args) => { calls.push(['invoke', ...args]); return Promise.resolve(42); },
     setDispatchHandler(handler) { dispatch = handler; },
+    registerIpcRenderer(value) { registrations.push(value); },
     contextBridge: bridge,
   }});
   vm.runInContext(fs.readFileSync(path.join(__dirname, 'xenon_ipc_worker_bootstrap.js'), 'utf8'), context);
-  return {context, calls, dispatch, electron: context.require('electron'), bridge};
+  return {context, calls, dispatch, electron: context.require('electron'), bridge, registrations};
 }
+
+test('worker context bridge receives the actual ipcRenderer identity once', () => {
+  const {electron, registrations} = createPreload();
+  assert.equal(registrations.length, 1);
+  assert.equal(registrations[0], electron.ipcRenderer);
+});
+
+test('worker preload reports the native OS sandbox state without inventing it', () => {
+  assert.equal(createPreload(false).context.process.sandboxed, false);
+  assert.equal(createPreload(null).context.process.sandboxed, false);
+});
 
 test('worker preload has restricted modules and hides the native transport', () => {
   const {context, electron, bridge} = createPreload();

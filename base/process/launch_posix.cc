@@ -316,8 +316,14 @@ Process LaunchProcess(const std::vector<std::string>& argv,
     // contract (see environment_internal.h) that each string it returns is
     // null-terminated, satisfying this requirement. See:
     // https://man7.org/linux/man-pages/man7/environ.7.html
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+    new_environ = UNSAFE_BUFFERS(internal::AlterEnvironment(
+        old_environ, options.environment,
+        options.preserve_empty_environment_values));
+#else
     new_environ = UNSAFE_BUFFERS(
         internal::AlterEnvironment(old_environ, options.environment));
+#endif
   }
 
   sigset_t full_sigset;

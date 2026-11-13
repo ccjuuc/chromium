@@ -73,6 +73,20 @@ v8::Local<v8::Object> XenonContextBridge::GetApi() {
   return api;
 }
 
+void XenonContextBridge::SetIpcRenderer(v8::Local<v8::Object> ipc_renderer) {
+  if (closed_) {
+    return;
+  }
+  if (!ipc_renderer_.IsEmpty()) {
+    if (!ipc_renderer_.Get(isolate_)->StrictEquals(ipc_renderer)) {
+      ThrowError("The contextBridge IPC identity is already registered");
+    }
+    return;
+  }
+  ipc_renderer_.Reset(isolate_, ipc_renderer);
+  ipc_renderer_.SetWeak();
+}
+
 void XenonContextBridge::Shutdown() {
   if (closed_) {
     return;
@@ -95,6 +109,7 @@ void XenonContextBridge::Shutdown() {
   }
   promises_.clear();
   functions_.clear();
+  ipc_renderer_.Reset();
   original_function_key_.Reset();
   preload_context_.Reset();
   main_context_.Reset();
@@ -154,6 +169,21 @@ v8::MaybeLocal<v8::Value> XenonContextBridge::CopyValue(
       return copy;
     }
   }
+  if (!ipc_renderer_.IsEmpty() &&
+      ipc_renderer_.Get(isolate_)->StrictEquals(value)) {
+    // Electron 29+ substitutes an empty object when ipcRenderer crosses the
+    // bridge, including the sender nested inside an IPC callback's event.
+    // Never inspect its own properties: they contain privileged methods and
+    // EventEmitter listener state, not application data.
+    v8::Context::Scope target_scope(target);
+    auto copy = v8::Object::New(isolate_);
+    copies->emplace_back(value.As<v8::Object>(), copy);
+    if (freeze && !copy->SetIntegrityLevel(target, v8::IntegrityLevel::kFrozen)
+                       .FromMaybe(false)) {
+      return {};
+    }
+    return copy;
+  }
   const bool source_is_main = source == main_context_.Get(isolate_);
   if (value->IsFunction()) {
     for (const auto& [id, function] : functions_) {
@@ -210,6 +240,11 @@ v8::MaybeLocal<v8::Value> XenonContextBridge::CopyValue(
     }
     return resolver->GetPromise();
   }
+  const auto object = value.As<v8::Object>();
+  if (object->IsApiWrapper() || object->InternalFieldCount() != 0) {
+    ThrowError("Host objects cannot cross contextBridge");
+    return {};
+  }
   if (value->IsArrayBuffer() || value->IsArrayBufferView() || value->IsDate() ||
       value->IsRegExp() || value->IsMap() || value->IsSet() ||
       value->IsNativeError()) {
@@ -227,7 +262,6 @@ v8::MaybeLocal<v8::Value> XenonContextBridge::CopyValue(
                         .As<v8::Object>()
                   : v8::Object::New(isolate_);
   v8::Local<v8::Array> keys;
-  auto object = value.As<v8::Object>();
   copies->emplace_back(object, copy);
   if (!object
            ->GetOwnPropertyNames(source,

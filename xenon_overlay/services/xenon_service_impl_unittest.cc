@@ -4,6 +4,8 @@
 
 #include "xenon_overlay/services/xenon_service_impl.h"
 
+#include <cstdlib>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <utility>
@@ -11,13 +13,16 @@
 
 #include "base/base64.h"
 #include "base/base_paths.h"
+#include "base/command_line.h"
 #include "base/environment.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
+#include "base/process/launch.h"
 #include "base/scoped_environment_variable_override.h"
 #include "base/test/run_until.h"
+#include "base/test/multiprocess_test.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/task_environment.h"
@@ -29,9 +34,16 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "testing/multiprocess_func_list.h"
+#include "third_party/blink/public/common/messaging/message_port_descriptor.h"
 #include "v8/include/v8.h"
+#include "xenon_overlay/chrome/browser/napi/napi_switches.h"
 #include "xenon_overlay/common/asar/archive.h"
 #include "xenon_overlay/common/asar/test_support.h"
+
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+#endif
 
 namespace xenon {
 
@@ -44,6 +56,29 @@ class XenonServiceImplTestPeer {
 
   static bool HasMainContainer(const XenonServiceImpl& service) {
     return !service.ipc_main_containers_.empty();
+  }
+
+  static void BindUtilityObserver(
+      XenonServiceImpl& service,
+      mojo::PendingRemote<ipc::mojom::UtilityProcessServiceObserver> observer) {
+    service.utility_observer_.Bind(std::move(observer));
+  }
+
+  static void CreateUtilityNetworkFactory(
+      XenonServiceImpl& service,
+      const std::string& partition,
+      mojo::PendingRemote<ipc::mojom::ElectronNetworkHeadersObserver> headers,
+      base::OnceCallback<
+          void(mojo::PendingRemote<network::mojom::URLLoaderFactory>,
+               std::string)> callback) {
+    service.CreateUtilityNetworkFactory(partition, std::move(headers),
+                                        std::move(callback));
+  }
+
+  static bool GetUtilityNetworkOnline(XenonServiceImpl& service,
+                                      bool* online,
+                                      std::string* error) {
+    return service.GetUtilityNetworkOnline(online, error);
   }
 
   static bool HasNodeExecutor(XenonServiceImpl& service,
@@ -145,8 +180,237 @@ TEST(XenonServiceArgumentTest,
   EXPECT_EQ(original_storage, moved_blob->data());
 }
 
+class XenonUtilityServiceTest
+    : public testing::Test,
+      public ipc::mojom::UtilityProcessServiceObserver {
+ protected:
+  static void SetUpTestSuite() { mojo::core::Init(); }
+
+  void SetUp() override {
+    service_ = std::make_unique<XenonServiceImpl>(
+        remote_.BindNewPipeAndPassReceiver());
+    service_->SetUtilityExitHandler(base::BindRepeating(
+        [](std::vector<int>* exits, int code) { exits->push_back(code); },
+        &exits_));
+  }
+
+  void TearDown() override {
+    service_.reset();
+    remote_.reset();
+    environment_.RunUntilIdle();
+  }
+
+  ipc::mojom::UtilityProcessBootstrapPtr Bootstrap() {
+    auto config = ipc::mojom::UtilityProcessBootstrap::New();
+    config->main = ipc::mojom::IpcMainConfig::New();
+    config->main->native_addon_execution =
+        ipc::mojom::NativeAddonExecution::kStandard;
+    blink::MessagePortDescriptorPair pair;
+    config->parent_port = pair.TakePort0();
+    peer_port_ = pair.TakePort1();
+    return config;
+  }
+
+  std::string Reject(ipc::mojom::UtilityProcessBootstrapPtr config) {
+    observer_.reset();
+    base::test::TestFuture<bool, std::string> result;
+    service_->Start(std::move(config), observer_.BindNewPipeAndPassRemote(),
+                    result.GetCallback<bool, const std::string&>());
+    EXPECT_FALSE(result.Get<0>());
+    EXPECT_FALSE(XenonServiceImplTestPeer::HasMainContainer(*service_));
+    return result.Get<1>();
+  }
+
+  void OnExitRequested(int32_t code) override {
+    requested_exits_.push_back(code);
+  }
+
+  void CreateNetworkFactory(
+      const std::string& partition,
+      mojo::PendingRemote<ipc::mojom::ElectronNetworkHeadersObserver> headers,
+      CreateNetworkFactoryCallback callback) override {
+    requested_partitions_.push_back(partition);
+    received_headers_ = std::move(headers);
+    if (hold_network_factory_) {
+      pending_network_callback_ = std::move(callback);
+      return;
+    }
+    std::move(callback).Run(std::move(network_factory_), network_error_);
+  }
+
+  void GetNetworkOnline(GetNetworkOnlineCallback callback) override {
+    std::move(callback).Run(true, "");
+  }
+
+  base::test::TaskEnvironment environment_;
+  mojo::Remote<ipc::mojom::UtilityProcessService> remote_;
+  mojo::Receiver<ipc::mojom::UtilityProcessServiceObserver> observer_{this};
+  blink::MessagePortDescriptor peer_port_;
+  std::unique_ptr<XenonServiceImpl> service_;
+  std::vector<int> exits_;
+  std::vector<int> requested_exits_;
+  std::vector<std::string> requested_partitions_;
+  mojo::PendingRemote<ipc::mojom::ElectronNetworkHeadersObserver>
+      received_headers_;
+  mojo::PendingRemote<network::mojom::URLLoaderFactory> network_factory_;
+  std::string network_error_;
+  bool hold_network_factory_ = false;
+  CreateNetworkFactoryCallback pending_network_callback_;
+};
+
+TEST_F(XenonUtilityServiceTest, NetworkFactoryForwardsPartitionAndOwnedPipes) {
+  XenonServiceImplTestPeer::BindUtilityObserver(
+      *service_, observer_.BindNewPipeAndPassRemote());
+  auto factory_receiver = network_factory_.InitWithNewPipeAndPassReceiver();
+  mojo::PendingRemote<ipc::mojom::ElectronNetworkHeadersObserver> headers;
+  auto headers_receiver = headers.InitWithNewPipeAndPassReceiver();
+  base::test::TestFuture<mojo::PendingRemote<network::mojom::URLLoaderFactory>,
+                         std::string>
+      result;
+  XenonServiceImplTestPeer::CreateUtilityNetworkFactory(
+      *service_, "persist:isolated-network", std::move(headers),
+      result.GetCallback());
+  ASSERT_TRUE(result.Wait());
+  auto [factory, error] = result.Take();
+  EXPECT_TRUE(factory.is_valid());
+  EXPECT_TRUE(error.empty());
+  EXPECT_EQ(requested_partitions_,
+            std::vector<std::string>({"persist:isolated-network"}));
+  EXPECT_TRUE(received_headers_.is_valid());
+}
+
+TEST_F(XenonUtilityServiceTest, NetworkFactoryPreservesBrowserErrors) {
+  XenonServiceImplTestPeer::BindUtilityObserver(
+      *service_, observer_.BindNewPipeAndPassRemote());
+  mojo::PendingRemote<ipc::mojom::ElectronNetworkHeadersObserver> headers;
+  auto headers_receiver = headers.InitWithNewPipeAndPassReceiver();
+  network_error_ = "ERR_ABORTED: Parent generation changed";
+  base::test::TestFuture<mojo::PendingRemote<network::mojom::URLLoaderFactory>,
+                         std::string>
+      result;
+  XenonServiceImplTestPeer::CreateUtilityNetworkFactory(
+      *service_, "", std::move(headers), result.GetCallback());
+  ASSERT_TRUE(result.Wait());
+  auto [factory, error] = result.Take();
+  EXPECT_FALSE(factory.is_valid());
+  EXPECT_EQ(network_error_, error);
+}
+
+TEST_F(XenonUtilityServiceTest,
+       NetworkFactoryDisconnectCompletesPendingRequest) {
+  XenonServiceImplTestPeer::BindUtilityObserver(
+      *service_, observer_.BindNewPipeAndPassRemote());
+  mojo::PendingRemote<ipc::mojom::ElectronNetworkHeadersObserver> headers;
+  auto headers_receiver = headers.InitWithNewPipeAndPassReceiver();
+  hold_network_factory_ = true;
+  base::test::TestFuture<mojo::PendingRemote<network::mojom::URLLoaderFactory>,
+                         std::string>
+      result;
+  XenonServiceImplTestPeer::CreateUtilityNetworkFactory(
+      *service_, "", std::move(headers), result.GetCallback());
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return !pending_network_callback_.is_null(); }));
+  EXPECT_FALSE(result.IsReady());
+  observer_.reset();
+  pending_network_callback_.Reset();
+  ASSERT_TRUE(result.Wait());
+  auto [factory, error] = result.Take();
+  EXPECT_FALSE(factory.is_valid());
+  EXPECT_TRUE(error.starts_with("ERR_ABORTED"));
+}
+
+TEST_F(XenonUtilityServiceTest, NetworkWithoutOwnerReportsUnavailable) {
+  base::test::TestFuture<mojo::PendingRemote<network::mojom::URLLoaderFactory>,
+                         std::string>
+      result;
+  XenonServiceImplTestPeer::CreateUtilityNetworkFactory(*service_, "", {},
+                                                        result.GetCallback());
+  ASSERT_TRUE(result.Wait());
+  auto [factory, error] = result.Take();
+  EXPECT_FALSE(factory.is_valid());
+  EXPECT_TRUE(error.starts_with("ERR_ABORTED"));
+  bool online = false;
+  error.clear();
+  EXPECT_FALSE(XenonServiceImplTestPeer::GetUtilityNetworkOnline(
+      *service_, &online, &error));
+  EXPECT_TRUE(error.starts_with("ERR_ABORTED"));
+}
+
+TEST_F(XenonUtilityServiceTest, RejectsInvalidBootstrapBeforeMutatingStdio) {
+  EXPECT_TRUE(Reject(nullptr).starts_with("ERR_INVALID_ARG_VALUE"));
+  auto config = Bootstrap();
+  config->parent_port = blink::MessagePortDescriptor();
+  EXPECT_TRUE(Reject(std::move(config)).starts_with("ERR_INVALID_ARG_VALUE"));
+  config = Bootstrap();
+  config->main->native_addon_execution =
+      ipc::mojom::NativeAddonExecution::kShared;
+  EXPECT_TRUE(Reject(std::move(config)).starts_with("ERR_INVALID_ARG_VALUE"));
+  config = Bootstrap();
+  config->exec_argv.push_back("--inspect=0");
+  EXPECT_TRUE(Reject(std::move(config)).starts_with("ERR_NOT_SUPPORTED"));
+  EXPECT_TRUE(exits_.empty());
+}
+
+TEST_F(XenonUtilityServiceTest, MainServiceCannotAcquireUtilityRole) {
+  mojo::Remote<mojom::XenonMainService> main;
+  XenonServiceImpl service(main.BindNewPipeAndPassReceiver());
+  base::test::TestFuture<bool, std::string> result;
+  service.Start(Bootstrap(), observer_.BindNewPipeAndPassRemote(),
+                result.GetCallback<bool, const std::string&>());
+  EXPECT_FALSE(result.Get<0>());
+  EXPECT_TRUE(result.Get<1>().starts_with("ERR_INVALID_STATE"));
+  EXPECT_FALSE(XenonServiceImplTestPeer::HasMainContainer(service));
+}
+
+TEST_F(XenonUtilityServiceTest, ShutdownIsOnceAndRejectsRestart) {
+  service_->Shutdown(17);
+  service_->Shutdown(3);
+  EXPECT_EQ(exits_, std::vector<int>({17}));
+  EXPECT_TRUE(Reject(Bootstrap()).starts_with("ERR_INVALID_STATE"));
+  remote_.reset();
+  environment_.RunUntilIdle();
+  EXPECT_EQ(exits_, std::vector<int>({17}));
+}
+
+TEST_F(XenonUtilityServiceTest, ParentDisconnectReleasesIdleProcess) {
+  remote_.reset();
+  ASSERT_TRUE(base::test::RunUntil([&] { return !exits_.empty(); }));
+  EXPECT_EQ(exits_, std::vector<int>({0}));
+}
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+TEST(XenonUtilityLaunchEnvironmentTest, EmptyValuesReachTheOperatingSystem) {
+  base::ScopedEnvironmentVariableOverride parent_only(
+      "XENON_UTILITY_PARENT_ONLY", "must-not-leak");
+  for (bool preserve_empty : {false, true}) {
+    auto command = base::GetMultiProcessTestChildBaseCommandLine();
+    if (preserve_empty) command.AppendSwitch("expect-empty-environment-value");
+    base::LaunchOptions options;
+    options.clear_environment = true;
+    options.preserve_empty_environment_values = preserve_empty;
+    options.environment.emplace(FILE_PATH_LITERAL("XENON_UTILITY_EMPTY"),
+                                FILE_PATH_LITERAL(""));
+    options.environment.emplace(FILE_PATH_LITERAL("XENON_UTILITY_KEPT"),
+                                FILE_PATH_LITERAL("kept"));
+#if BUILDFLAG(IS_WIN)
+    options.start_hidden = true;
+#endif
+    auto child = base::SpawnMultiProcessTestChild(
+        "XenonUtilityEnvironmentChild", command, options);
+    ASSERT_TRUE(child.IsValid());
+    int exit_code = -1;
+    ASSERT_TRUE(child.WaitForExitWithTimeout(base::Seconds(15), &exit_code));
+    EXPECT_EQ(0, exit_code) << "preserve_empty=" << preserve_empty;
+  }
+}
+#endif
+
 class NodeCallbackRecorder : public ipc::mojom::IpcRenderer {
  public:
+  void DispatchPostMessage(const std::string& channel,
+                           blink::TransferableMessage message) override {
+    ADD_FAILURE() << "Unexpected MessagePort IPC: " << channel;
+  }
   struct Call {
     int32_t id;
     std::vector<base::Value> arguments;
@@ -188,6 +452,14 @@ struct InstanceHandle {
 // current receiver context without blocking its own service dispatch.
 class XenonServiceOwnerTest : public testing::Test {
  protected:
+  using ThreadPoolExecutionMode =
+      base::test::TaskEnvironment::ThreadPoolExecutionMode;
+
+  explicit XenonServiceOwnerTest(ThreadPoolExecutionMode thread_pool_mode =
+                                     ThreadPoolExecutionMode::QUEUED)
+      : task_environment_(base::test::TaskEnvironment::MainThreadType::IO,
+                          thread_pool_mode) {}
+
   static void SetUpTestSuite() { mojo::core::Init(); }
 
   void SetUp() override {
@@ -217,10 +489,11 @@ class XenonServiceOwnerTest : public testing::Test {
     mojo::PendingRemote<ipc::mojom::IpcRenderer> remote;
     main_driver_receivers_.Add(&main_driver_,
                                remote.InitWithNewPipeAndPassReceiver());
+    base::test::TestFuture<bool> registered;
     browser_->RegisterElectronIpcRenderer(
         container_id, endpoint, std::move(remote), 1, 1, 0,
-        "file:///service-test-driver.html", true);
-    browser_.FlushForTesting();
+        "file:///service-test-driver.html", true, registered.GetCallback());
+    ASSERT_TRUE(registered.Get());
   }
 
   NodeRemote Bind(
@@ -358,9 +631,7 @@ class XenonServiceOwnerTest : public testing::Test {
         << result->error;
   }
 
-  base::test::TaskEnvironment task_environment_{
-      base::test::TaskEnvironment::MainThreadType::IO,
-      base::test::TaskEnvironment::ThreadPoolExecutionMode::QUEUED};
+  base::test::TaskEnvironment task_environment_;
   mojo::Remote<mojom::XenonMainService> browser_;
   std::unique_ptr<XenonServiceImpl> service_;
   NodeCallbackRecorder main_driver_;
@@ -370,6 +641,12 @@ class XenonServiceOwnerTest : public testing::Test {
 
 class XenonServiceArchiveTest : public XenonServiceOwnerTest {
  protected:
+  // Failed initialization destroys the V8 isolate inside Mojo dispatch. Its
+  // teardown may wait for worker tasks, so these workers must be allowed to
+  // run. Owner-lifecycle race tests retain the default QUEUED mode.
+  XenonServiceArchiveTest()
+      : XenonServiceOwnerTest(ThreadPoolExecutionMode::ASYNC) {}
+
   void SetUp() override {
     XenonServiceOwnerTest::SetUp();
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
@@ -466,6 +743,66 @@ TEST_F(XenonServiceArchiveTest, FailedEncryptedMainRevokesKeyAndAllowsRetry) {
   ASSERT_NO_FATAL_FAILURE(ExpectArchiveReply());
 }
 
+TEST_F(XenonServiceArchiveTest,
+       IsolatedAddonRuntimeOwnsApplicationScopeAndArchiveKeys) {
+  base::test::ScopedCommandLine command_line;
+  command_line.GetProcessCommandLine()->RemoveSwitch(
+      napi_switches::kAllowExternalNodeAddons);
+  const auto archive = app_path_.AppendASCII("native.asar");
+  std::string native_bytes;
+  ASSERT_TRUE(base::ReadFileToString(
+      base::FilePath::FromUTF8Unsafe(addon_path_), &native_bytes));
+  ASSERT_TRUE(
+      builder_.Write(archive, {{"bin/addon.node", native_bytes, false, true}}));
+  const auto module = archive.AppendASCII("bin").AppendASCII("addon.node");
+  auto configure = [&](bool with_key) {
+    std::vector<ipc::mojom::IpcArchivePublicKeyPtr> keys;
+    if (with_key) {
+      keys.push_back(ipc::mojom::IpcArchivePublicKey::New(
+          app_path_.AsUTF8Unsafe(), builder_.public_key_pem()));
+    }
+    browser_->InitializeNodeAddonRuntime(kContext, app_path_.AsUTF8Unsafe(),
+                                         archive.AsUTF8Unsafe(),
+                                         std::move(keys));
+    browser_.FlushForTesting();
+  };
+  configure(false);
+  EXPECT_FALSE(asar::GetOrCreateAsarArchive(archive));
+  NodeRemote node = Bind("native-page");
+  ResultFuture denied;
+  node->RequireNodeModuleSync(module.AsUTF8Unsafe(), denied.GetCallback());
+  auto result = Finish(denied);
+  ASSERT_TRUE(result);
+  EXPECT_FALSE(result->success);
+
+  configure(true);
+  ResultFuture loaded;
+  node->RequireNodeModuleSync(module.AsUTF8Unsafe(), loaded.GetCallback());
+  result = Finish(loaded);
+  ASSERT_TRUE(result);
+  ASSERT_TRUE(result->success) << result->error;
+  EXPECT_FALSE(XenonServiceImplTestPeer::HasMainContainer(*service_));
+  EXPECT_TRUE(asar::GetOrCreateAsarArchive(archive));
+
+  // Removing keys must revoke even the cached native-load path.
+  configure(false);
+  EXPECT_FALSE(asar::GetOrCreateAsarArchive(archive));
+  ResultFuture revoked;
+  node->RequireNodeModuleSync(module.AsUTF8Unsafe(), revoked.GetCallback());
+  result = Finish(revoked);
+  ASSERT_TRUE(result);
+  EXPECT_FALSE(result->success);
+  EXPECT_TRUE(result->error.starts_with("ERR_ACCESS_DENIED:")) << result->error;
+
+  configure(true);
+  EXPECT_TRUE(asar::GetOrCreateAsarArchive(archive));
+  node.reset();
+  service_.reset();
+  browser_.reset();
+  task_environment_.RunUntilIdle();
+  EXPECT_FALSE(asar::GetOrCreateAsarArchive(archive));
+}
+
 TEST_F(XenonServiceOwnerTest,
        DiskApplicationConfigOverridesCommandLineAndPreservesRuntimeMetadata) {
   base::ScopedEnvironmentVariableOverride hosted_directory(
@@ -491,7 +828,7 @@ const data = require('./value.json');
 ipcMain.handle('disk-app:metadata', () => ({
   answer: data.answer, appPath: app.getAppPath(), filename: __filename,
   name: app.getName(), version: app.getVersion(), packaged: app.isPackaged,
-  resources: process.resourcesPath, cwd: process.cwd()
+  resources: process.resourcesPath, cwd: process.cwd(), argv: process.argv
 }));
 )JS"));
   const auto decoy = root.AppendASCII("command-line-main.js");
@@ -507,6 +844,8 @@ ipcMain.handle('disk-app:metadata', () => ({
   config->runtime_directory = root.AsUTF8Unsafe();
   config->resources_directory = resources.AsUTF8Unsafe();
   config->working_directory = working_directory.AsUTF8Unsafe();
+  config->app_argv = {"trusted-browser-launcher", "--new-window",
+                      "文档 名称.md", "--user-data-dir=application-profile"};
   config->is_packaged = true;
   ASSERT_TRUE(config->embedded_main_source.empty());
   ASSERT_TRUE(config->renderer_url_mappings.empty());
@@ -538,6 +877,13 @@ ipcMain.handle('disk-app:metadata', () => ({
   EXPECT_EQ("4.3", *value.FindString("version"));
   EXPECT_EQ(resources.AsUTF8Unsafe(), *value.FindString("resources"));
   EXPECT_EQ(working_directory.AsUTF8Unsafe(), *value.FindString("cwd"));
+  ASSERT_TRUE(value.FindList("argv"));
+  EXPECT_EQ((base::ListValue()
+                 .Append("trusted-browser-launcher")
+                 .Append("--new-window")
+                 .Append("文档 名称.md")
+                 .Append("--user-data-dir=application-profile")),
+            *value.FindList("argv"));
 }
 
 TEST_F(XenonServiceOwnerTest, AddonRuntimeDoesNotInitializeElectronMain) {
@@ -552,7 +898,8 @@ TEST_F(XenonServiceOwnerTest, AddonRuntimeDoesNotInitializeElectronMain) {
       "require('fs').writeFileSync(__dirname + '/main-executed', 'yes');"));
 
   browser_->InitializeNodeAddonRuntime(kContext,
-                                       runtime.GetPath().AsUTF8Unsafe());
+                                       runtime.GetPath().AsUTF8Unsafe(),
+                                       runtime.GetPath().AsUTF8Unsafe(), {});
   browser_.FlushForTesting();
   EXPECT_EQ(runtime.GetPath().AsUTF8Unsafe(),
             base::Environment::Create()->GetVar("XENON_HOSTED_APP_DIR"));
@@ -574,7 +921,7 @@ TEST_F(XenonServiceOwnerTest, AddonRuntimeDoesNotInitializeElectronMain) {
   Load(node);
   ExpectReadable(Read(node, Construct(node)));
   EXPECT_FALSE(XenonServiceImplTestPeer::HasMainContainer(*service_));
-  browser_->InitializeNodeAddonRuntime(kContext, "");
+  browser_->InitializeNodeAddonRuntime(kContext, "", "", {});
   browser_.FlushForTesting();
   EXPECT_FALSE(base::Environment::Create()->GetVar("XENON_HOSTED_APP_DIR"));
 }
@@ -808,6 +1155,129 @@ TEST_F(XenonServiceOwnerTest,
 }
 
 TEST_F(XenonServiceOwnerTest,
+       StandardMainNativeModulesKeepSynchronousCallbacksAndObjectIdentity) {
+  base::ScopedTempDir temp;
+  ASSERT_TRUE(temp.CreateUniqueTempDir());
+  base::FilePath app;
+  ASSERT_TRUE(base::NormalizeFilePath(temp.GetPath(), &app));
+  ASSERT_TRUE(base::CopyFile(base::FilePath::FromUTF8Unsafe(addon_path_),
+                             app.AppendASCII("test_addon.node")));
+  auto config = ipc::mojom::IpcMainConfig::New();
+  config->container_id = kContext;
+  config->app_path = app.AsUTF8Unsafe();
+  config->virtual_main_path = app.AppendASCII("main.js").AsUTF8Unsafe();
+  config->embedded_main_source = R"JS(
+    const {ipcMain} = require('electron');
+    const native = require('./test_addon.node');
+    ipcMain.handle('native-contract', () => {
+      const object = {value: 42};
+      const events = [];
+      let returned;
+      native.InvokeCallbackWithFunction(fn => {
+        events.push('callback');
+        returned = fn(41);
+      });
+      events.push('returned');
+      let sameReceiver = false;
+      native.InvokeCallbackWithReceiver(function(value) {
+        sameReceiver = this === object && value === object;
+      }, object);
+      let caught = false;
+      const error = new Error('identity');
+      try { native.InvokeCallbackWithFunction(() => { throw error; }); }
+      catch (value) { caught = value === error; }
+      return {events, returned, sameReceiver, caught,
+              sameObject: native.EchoOwnedHandle(object) === object,
+              sameModule: native === require('./test_addon.node')};
+    });
+  )JS";
+  base::test::TestFuture<bool, const std::string&> initialized;
+  browser_->InitializeElectronIpc(std::move(config), initialized.GetCallback());
+  ASSERT_TRUE(initialized.Wait());
+  ASSERT_TRUE(initialized.Get<0>()) << initialized.Get<1>();
+  RegisterMainDriver(kContext, "main-driver");
+  ResultFuture future;
+  browser_->ElectronIpcInvoke(kContext, "main-driver", "native-contract",
+                              base::Value(base::ListValue()),
+                              future.GetCallback());
+  auto result = Finish(future);
+  ASSERT_TRUE(result && result->success)
+      << (result ? result->error : "no result");
+  const auto& values = result->value.GetDict();
+  EXPECT_EQ(42, values.FindInt("returned"));
+  EXPECT_EQ(true, values.FindBool("sameReceiver"));
+  EXPECT_EQ(true, values.FindBool("sameObject"));
+  EXPECT_EQ(true, values.FindBool("sameModule"));
+  EXPECT_EQ(true, values.FindBool("caught"));
+  const auto* events = values.FindList("events");
+  ASSERT_TRUE(events);
+  EXPECT_EQ(base::ListValue().Append("callback").Append("returned"), *events);
+}
+
+TEST_F(
+    XenonServiceOwnerTest,
+    NativeExecutionModeControlsEnvironmentSharingAndCannotChangeWhileRunning) {
+  base::ScopedTempDir temp;
+  ASSERT_TRUE(temp.CreateUniqueTempDir());
+  base::FilePath app;
+  ASSERT_TRUE(base::NormalizeFilePath(temp.GetPath(), &app));
+  ASSERT_TRUE(base::CopyFile(base::FilePath::FromUTF8Unsafe(addon_path_),
+                             app.AppendASCII("test_addon.node")));
+  addon_path_ = app.AppendASCII("test_addon.node").AsUTF8Unsafe();
+  for (const auto mode : {ipc::mojom::NativeAddonExecution::kStandard,
+                          ipc::mojom::NativeAddonExecution::kShared}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    StartService();
+    auto config = ipc::mojom::IpcMainConfig::New();
+    config->container_id = kContext;
+    config->app_path = app.AsUTF8Unsafe();
+    config->virtual_main_path = app.AppendASCII("main.js").AsUTF8Unsafe();
+    config->native_addon_execution = mode;
+    config->embedded_main_source = R"JS(
+      const native = require('./test_addon.node');
+      require('electron').ipcMain.handle('native-counter',
+        () => native.nextEnvironmentCounter());
+    )JS";
+    base::test::TestFuture<bool, const std::string&> initialized;
+    browser_->InitializeElectronIpc(config.Clone(), initialized.GetCallback());
+    ASSERT_TRUE(initialized.Wait());
+    ASSERT_TRUE(initialized.Get<0>()) << initialized.Get<1>();
+    RegisterMainDriver(kContext, "main-driver");
+    auto invoke_main = [&]() {
+      ResultFuture future;
+      browser_->ElectronIpcInvoke(kContext, "main-driver", "native-counter",
+                                  base::Value(base::ListValue()),
+                                  future.GetCallback());
+      return Finish(future);
+    };
+    auto first = invoke_main();
+    ASSERT_TRUE(first && first->success);
+    EXPECT_EQ(1, first->value.GetInt());
+    NodeRemote node = Bind("renderer-page");
+    Load(node);
+    auto [renderer, promise_id] = CallExport(node, "nextEnvironmentCounter");
+    ASSERT_TRUE(renderer && renderer->success);
+    EXPECT_EQ(0u, promise_id);
+    EXPECT_EQ(mode == ipc::mojom::NativeAddonExecution::kShared ? 2 : 1,
+              renderer->value.GetInt());
+    auto second = invoke_main();
+    ASSERT_TRUE(second && second->success);
+    EXPECT_EQ(mode == ipc::mojom::NativeAddonExecution::kShared ? 3 : 2,
+              second->value.GetInt());
+    config->native_addon_execution =
+        mode == ipc::mojom::NativeAddonExecution::kShared
+            ? ipc::mojom::NativeAddonExecution::kStandard
+            : ipc::mojom::NativeAddonExecution::kShared;
+    base::test::TestFuture<bool, const std::string&> changed;
+    browser_->InitializeElectronIpc(std::move(config), changed.GetCallback());
+    ASSERT_TRUE(changed.Wait());
+    EXPECT_FALSE(changed.Get<0>());
+    EXPECT_NE(std::string::npos,
+              changed.Get<1>().find("while the container is running"));
+  }
+}
+
+TEST_F(XenonServiceOwnerTest,
        MovedArgumentsKeepCallbacksAndConstructorReceivers) {
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
@@ -825,10 +1295,11 @@ TEST_F(XenonServiceOwnerTest,
   ASSERT_TRUE(initialized.Get<0>()) << initialized.Get<1>();
   NodeCallbackRecorder observer;
   mojo::Receiver<ipc::mojom::IpcRenderer> receiver(&observer);
+  base::test::TestFuture<bool> registered;
   browser_->RegisterElectronIpcRenderer(
       kContext, "callback-page", receiver.BindNewPipeAndPassRemote(), 1, 1, 1,
-      "file:///callback-page.html", true);
-  browser_.FlushForTesting();
+      "file:///callback-page.html", true, registered.GetCallback());
+  ASSERT_TRUE(registered.Get());
   NodeRemote node = Bind("callback-page");
   Load(node);
   base::Value payload(
@@ -1250,6 +1721,10 @@ TEST_F(XenonServiceAppEventTest,
 // broadcast fallback without sharing the bootstrap's routing implementation.
 class NetPipeRenderer : public ipc::mojom::IpcRenderer {
  public:
+  void DispatchPostMessage(const std::string& channel,
+                           blink::TransferableMessage message) override {
+    ADD_FAILURE() << "Unexpected MessagePort IPC: " << channel;
+  }
   mojo::PendingRemote<ipc::mojom::IpcRenderer> BindNewRemote() {
     return receiver_.BindNewPipeAndPassRemote();
   }
@@ -1378,10 +1853,12 @@ class XenonServiceMainNetTest : public XenonServiceOwnerTest {
 
   void RegisterRenderer(const std::string& endpoint,
                         NetPipeRenderer& renderer) {
+    base::test::TestFuture<bool> registered;
     browser_->RegisterElectronIpcRenderer(kContext, endpoint,
                                           renderer.BindNewRemote(), 1, 1, 1,
-                                          "file:///net-pipe.html", true);
-    browser_.FlushForTesting();
+                                          "file:///net-pipe.html", true,
+                                          registered.GetCallback());
+    ASSERT_TRUE(registered.Get());
     task_environment_.RunUntilIdle();
   }
 
@@ -1528,5 +2005,69 @@ TEST_F(XenonServiceMainNetTest,
   EXPECT_TRUE(second.messages.empty());
 }
 
+TEST_F(XenonServiceMainNetTest, TcpOptionsAndCancellationRequireTheSocketOwner) {
+  ASSERT_NO_FATAL_FAILURE(InitializeEmbeddedMain());
+  NetPipeRenderer owner;
+  NetPipeRenderer other;
+  RegisterRenderer("socket-owner", owner);
+  RegisterRenderer("other-page", other);
+  SendNet("socket-owner", "listen",
+          base::DictValue().Set("serverId", "listener").Set("port", 0)
+              .Set("host", "127.0.0.1"));
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return owner.Payload("__xenon:net:listening"); }));
+  const auto* address = owner.Payload("__xenon:net:listening")->FindDict("address");
+  ASSERT_TRUE(address);
+  const int port = address->FindInt("port").value_or(0);
+  ASSERT_GT(port, 0);
+  SendNet("socket-owner", "connect",
+          base::DictValue().Set("fromId", "client-js").Set("port", port)
+              .Set("host", "127.0.0.1"));
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return owner.Payload("__xenon:net:connected"); }));
+  const std::string socket =
+      *owner.Payload("__xenon:net:connected")->FindString("peerId");
+  // An invalid option would report EINVAL for the owner. Another renderer
+  // must not even reach option validation or cancellation on this socket.
+  SendNet("other-page", "no-delay", base::DictValue().Set("toId", socket));
+  SendNet("other-page", "cancel", base::DictValue().Set("fromId", "client-js"));
+  SendNet("socket-owner", "no-delay",
+          base::DictValue().Set("toId", socket).Set("fromId", "client-js")
+              .Set("noDelay", true));
+  SendBytes("socket-owner", socket, "owner still connected");
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return owner.ReceivedBytes() == "owner still connected"; }));
+  EXPECT_TRUE(other.messages.empty());
+  EXPECT_FALSE(owner.Payload("__xenon:net:error"));
+  EXPECT_FALSE(owner.Payload("__xenon:net:close"));
+  SendNet("socket-owner", "cancel", base::DictValue().Set("fromId", "client-js"));
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return owner.Payload("__xenon:net:close"); }));
+}
+
 }  // namespace
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+MULTIPROCESS_TEST_MAIN(XenonUtilityEnvironmentChild) {
+  bool empty_present = false;
+#if BUILDFLAG(IS_WIN)
+  wchar_t value[2] = {};
+  ::SetLastError(ERROR_SUCCESS);
+  const DWORD length = ::GetEnvironmentVariableW(
+      L"XENON_UTILITY_EMPTY", value, std::size(value));
+  empty_present = length == 0 && ::GetLastError() == ERROR_SUCCESS;
+#else
+  const char* value = std::getenv("XENON_UTILITY_EMPTY");
+  empty_present = value && *value == '\0';
+#endif
+  const bool expected = base::CommandLine::ForCurrentProcess()->HasSwitch(
+      "expect-empty-environment-value");
+  auto environment = base::Environment::Create();
+  if (empty_present != expected) return 1;
+  if (environment->HasVar("XENON_UTILITY_PARENT_ONLY")) return 2;
+  if (environment->GetVar("XENON_UTILITY_KEPT") != "kept") return 3;
+  return 0;
+}
+#endif
+
 }  // namespace xenon

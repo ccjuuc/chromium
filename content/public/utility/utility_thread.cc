@@ -4,6 +4,9 @@
 
 #include "content/public/utility/utility_thread.h"
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "base/functional/callback.h"
+#endif
 
 namespace content {
 
@@ -23,5 +26,11 @@ UtilityThread::UtilityThread() : resetter_(&utility_thread, this) {}
 
 UtilityThread::~UtilityThread() = default;
 
-}  // namespace content
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+base::OnceClosure UtilityThread::AcquireXenonProcessKeepAlive() {
+  // Test and in-process implementations do not acquire an OS-process lease.
+  return {};
+}
+#endif
 
+}  // namespace content

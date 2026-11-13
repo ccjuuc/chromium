@@ -38,6 +38,9 @@ class UtilityThreadImpl : public UtilityThread,
 
   // UtilityThread:
   void ReleaseProcess() override;
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  base::OnceClosure AcquireXenonProcessKeepAlive() override;
+#endif
   void EnsureBlinkInitialized() override;
 #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
   void EnsureBlinkInitializedWithSandboxSupport() override;

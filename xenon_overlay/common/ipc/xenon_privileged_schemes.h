@@ -33,6 +33,8 @@ using PrivilegedSchemes = std::vector<PrivilegedScheme>;
 // safe before Chromium has initialized its URL scheme registry. Output is
 // sorted and scheme names are canonical lowercase ASCII. Unsupported enabled
 // privileges, reserved names, and conflicting duplicates fail atomically.
+// codeCache is an optional optimization, accepted without enabling caching.
+// Unimplemented features such as allowServiceWorkers reject enabled declarations.
 bool ParsePrivilegedSchemes(const base::Value& value,
                             PrivilegedSchemes* schemes,
                             std::string* error);

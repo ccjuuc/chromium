@@ -9,13 +9,13 @@
 #include <string>
 #include <utility>
 
-#include "base/command_line.h"
+#include "base/environment.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/process/process_handle.h"
 #include "base/unguessable_token.h"
-#include "components/version_info/version_info.h"
 #include "chrome/common/chrome_isolated_world_ids.h"
+#include "components/version_info/version_info.h"
 #include "content/public/common/isolated_world_ids.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/v8_value_converter.h"
@@ -23,15 +23,20 @@
 #include "gin/function_template.h"
 #include "gin/try_catch.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
-#include "sandbox/policy/sandbox.h"
-#include "sandbox/policy/switches.h"
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/web_isolated_world_info.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_element.h"
+#include "third_party/blink/public/web/web_frame_widget_rendering_policy.h"
 #include "third_party/blink/public/web/web_local_frame.h"
+#include "third_party/blink/public/web/web_meaningful_layout.h"
 #include "third_party/blink/public/web/web_script_source.h"
 #include "third_party/blink/public/web/web_security_policy.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_message_port.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/messaging/message_port.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "v8/include/v8-container.h"
 #include "v8/include/v8-context.h"
@@ -42,10 +47,16 @@
 #include "v8/include/v8-object.h"
 #include "v8/include/v8-promise.h"
 #include "v8/include/v8-script.h"
+#include "v8/include/v8-typed-array.h"
 #include "xenon_overlay/buildflags/buildflags.h"
-#include "xenon_overlay/common/ipc/xenon_ipc_value_codec.h"
-#include "xenon_overlay/common/ipc/xenon_runtime_platform.h"
 #include "xenon_overlay/chrome/renderer/ipc/xenon_context_bridge.h"
+#include "xenon_overlay/chrome/renderer/ipc/xenon_process_sandbox.h"
+#include "xenon_overlay/chrome/renderer/ipc/xenon_script_executor.h"
+#include "xenon_overlay/common/ipc/xenon_crypto_primitives.h"
+#include "xenon_overlay/common/ipc/xenon_ipc_value_codec.h"
+#include "xenon_overlay/common/ipc/xenon_message_port_codec.h"
+#include "xenon_overlay/common/ipc/xenon_runtime_platform.h"
+#include "xenon_overlay/common/ipc/xenon_x509_certificate.h"
 #include "xenon_overlay/resources/grit/xenon_resources.h"
 
 namespace xenon::ipc {
@@ -174,17 +185,28 @@ void XenonIpcRenderer::Install(content::RenderFrame* render_frame,
   if (!binding->EnsureRuntimeConfig()) {
     return;
   }
-  const auto* preferences = binding->runtime_config_->web_preferences.GetIfDict();
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (binding->runtime_config_->is_main_frame) {
+    if (auto* widget = render_frame->GetWebFrame()->FrameWidget()) {
+      binding->undrawn_frame_throttling_scope_ =
+          blink::SuppressUndrawnFrameThrottling(widget);
+    }
+  }
+#endif
+  const auto* preferences =
+      binding->runtime_config_->web_preferences.GetIfDict();
   if (preferences && !preferences->empty() &&
       preferences->FindBool("contextIsolation").value_or(true)) {
     // Blink supplies the isolated DOM wrappers. The page never receives the
     // privileged preload realm's require, process, or transport objects.
     auto main_context = context;
     blink::WebIsolatedWorldInfo world_info;
-    world_info.security_origin = render_frame->GetWebFrame()->GetDocument().GetSecurityOrigin();
+    world_info.security_origin =
+        render_frame->GetWebFrame()->GetDocument().GetSecurityOrigin();
     world_info.content_security_policy = blink::WebString::FromUtf8(
         "script-src 'self' 'unsafe-eval'; object-src 'none'");
-    world_info.human_readable_name = blink::WebString::FromUtf8("Xenon preload");
+    world_info.human_readable_name =
+        blink::WebString::FromUtf8("Xenon preload");
     world_info.stable_id = blink::WebString::FromUtf8("xenon-preload");
     blink::SetIsolatedWorldInfo(ISOLATED_WORLD_ID_XENON_PRELOAD, world_info);
     render_frame->GetWebFrame()->ExecuteScriptInIsolatedWorld(
@@ -193,16 +215,21 @@ void XenonIpcRenderer::Install(content::RenderFrame* render_frame,
         blink::BackForwardCacheAware::kAllow);
     context = render_frame->GetWebFrame()->GetScriptContextFromWorldId(
         isolate, ISOLATED_WORLD_ID_XENON_PRELOAD);
-    if (context.IsEmpty()) return;
+    if (context.IsEmpty()) {
+      return;
+    }
     binding->context_.Reset(isolate, context);
     binding->context_isolated_ = true;
-    binding->context_bridge_ = XenonContextBridge::Create(context, main_context);
+    binding->context_bridge_ =
+        XenonContextBridge::Create(context, main_context);
   }
   v8::Context::Scope preload_context_scope(context);
   v8::Local<v8::Object> wrapper = v8::Object::New(isolate);
   if (binding->context_bridge_) {
-    wrapper->Set(context, gin::StringToV8(isolate, "contextBridge"),
-                 binding->context_bridge_->GetApi()).Check();
+    wrapper
+        ->Set(context, gin::StringToV8(isolate, "contextBridge"),
+              binding->context_bridge_->GetApi())
+        .Check();
   }
   VLOG(1) << "XenonIpcRenderer Install attaching methods";
   auto set_method = [&](const char* name, auto method) {
@@ -220,8 +247,17 @@ void XenonIpcRenderer::Install(content::RenderFrame* render_frame,
     }
   };
   set_method("getRuntimeConfig", &XenonIpcRenderer::GetRuntimeConfig);
+  set_method("isPromise", &XenonIpcRenderer::IsPromise);
+  set_method("isNativeError", &XenonIpcRenderer::IsNativeError);
+  set_method("crashReporterCall", &XenonIpcRenderer::CrashReporterCall);
+  set_method("executeJavaScript", &XenonIpcRenderer::ExecuteJavaScript);
+  set_method("cancelExecuteJavaScript",
+             &XenonIpcRenderer::CancelExecuteJavaScript);
   set_method("installAsyncContextHooks",
              &XenonIpcRenderer::InstallAsyncContextHooks);
+  set_method("registerIpcRenderer", &XenonIpcRenderer::RegisterIpcRenderer);
+  InstallTimingSafeEqual(isolate, context, wrapper, "timingSafeEqual");
+  InstallX509CertificateBridge(isolate, context, wrapper, "x509CertificateCall");
   set_method("attachGuest", &XenonIpcRenderer::AttachGuest);
   set_method("send", &XenonIpcRenderer::Send);
   VLOG(1) << "XenonIpcRenderer Install set send";
@@ -266,6 +302,13 @@ void XenonIpcRenderer::Install(content::RenderFrame* render_frame,
     LOG(ERROR) << "Failed to install Electron ipcRenderer bootstrap: "
                << try_catch.GetStackTrace();
   } else {
+    // Install every internal listener before advertising the document endpoint.
+    // Pages without a preload still need to receive webContents requests, while
+    // preloads that send IPC have already connected through the ordinary path.
+    if (!binding->context_.IsEmpty() && binding->render_frame() &&
+        !binding->EnsureConnected()) {
+      LOG(ERROR) << "Failed to register Electron ipcRenderer document";
+    }
     VLOG(1) << "XenonIpcRenderer Install done";
   }
 }
@@ -282,15 +325,24 @@ XenonIpcRenderer::~XenonIpcRenderer() {
 }
 
 void XenonIpcRenderer::Shutdown() {
+  undrawn_frame_throttling_scope_.RunAndReset();
+  crash_reporter_annotations_.Clear();
   // Resetting a remote destroys pending reply callbacks. Revoke their weak
   // pointers first so default replies cannot run in the released context.
   weak_factory_.InvalidateWeakPtrs();
   Dispose();
-  if (context_bridge_) context_bridge_->Shutdown();
+  if (script_executor_) {
+    script_executor_->Shutdown();
+  }
+  script_executor_.reset();
+  if (context_bridge_) {
+    context_bridge_->Shutdown();
+  }
   context_bridge_.reset();
   context_.Reset();
   dispatch_handler_.Reset();
   queued_events_.clear();
+  queued_port_message_bytes_ = 0;
   pending_invokes_.clear();
   receiver_.reset();
   node_addon_receiver_.reset();
@@ -302,7 +354,8 @@ void XenonIpcRenderer::Shutdown() {
 void XenonIpcRenderer::WillReleaseScriptContext(v8::Local<v8::Context> context,
                                                 int32_t world_id) {
   if (!context_.IsEmpty() &&
-      context == context_.Get(isolate_)) {
+      (context == context_.Get(isolate_) ||
+       (context_isolated_ && world_id == content::ISOLATED_WORLD_ID_GLOBAL))) {
     // Clearing V8 roots may release method wrappers which own the binding.
     scoped_refptr<XenonIpcRenderer> keep_alive(this);
     Shutdown();
@@ -312,6 +365,20 @@ void XenonIpcRenderer::WillReleaseScriptContext(v8::Local<v8::Context> context,
 void XenonIpcRenderer::OnDestruct() {
   scoped_refptr<XenonIpcRenderer> keep_alive(this);
   Shutdown();
+}
+
+void XenonIpcRenderer::DidMeaningfulLayout(
+    blink::WebMeaningfulLayout layout_type) {
+  if (layout_type != blink::WebMeaningfulLayout::kVisuallyNonEmpty ||
+      context_.IsEmpty() || !runtime_config_ ||
+      !runtime_config_->is_main_frame || !receiver_.is_bound() ||
+      !host_.is_bound() || !host_.is_connected()) {
+    return;
+  }
+  // Electron's ready-to-show follows real non-empty layout. Waiting for
+  // presentation would deadlock applications that show only from this event.
+  // Reuse the already registered Document pipe; never reconnect a stale one.
+  host_->DidFirstNonEmptyLayout();
 }
 
 bool XenonIpcRenderer::EnsureHostConnected() {
@@ -355,9 +422,24 @@ bool XenonIpcRenderer::EnsureConnected() {
   if (!receiver_.is_bound()) {
     mojo::PendingRemote<xenon::ipc::mojom::IpcRenderer> renderer;
     receiver_.Bind(renderer.InitWithNewPipeAndPassReceiver());
-    host_->BindRenderer(std::move(renderer));
+    bool registered = false;
+    if (!host_->BindRenderer(std::move(renderer), &registered) || !registered) {
+      receiver_.reset();
+      return false;
+    }
   }
   return true;
+}
+
+void XenonIpcRenderer::RegisterIpcRenderer(gin::Arguments* args) {
+  v8::Local<v8::Object> ipc_renderer;
+  if (!args->GetNext(&ipc_renderer)) {
+    args->ThrowTypeError("registerIpcRenderer expects an object");
+    return;
+  }
+  if (context_bridge_) {
+    context_bridge_->SetIpcRenderer(ipc_renderer);
+  }
 }
 
 void XenonIpcRenderer::InstallAsyncContextHooks(gin::Arguments* args) {
@@ -392,6 +474,16 @@ void XenonIpcRenderer::InstallAsyncContextHooks(gin::Arguments* args) {
 #endif
 }
 
+void XenonIpcRenderer::IsPromise(gin::Arguments* args) {
+  v8::Local<v8::Value> value;
+  args->Return(args->GetNext(&value) && value->IsPromise());
+}
+
+void XenonIpcRenderer::IsNativeError(gin::Arguments* args) {
+  v8::Local<v8::Value> value;
+  args->Return(args->GetNext(&value) && value->IsNativeError());
+}
+
 void XenonIpcRenderer::GetRuntimeConfig(gin::Arguments* args) {
   if (!EnsureRuntimeConfig()) {
     args->ThrowTypeError("Browser runtime config is unavailable");
@@ -415,19 +507,48 @@ void XenonIpcRenderer::GetRuntimeConfig(gin::Arguments* args) {
   set_string("cwd", runtime_config_->working_directory);
   set_string("resourcesPath", runtime_config_->resources_directory);
   set_string("contextId", context_id_);
-  value->Set(context, gin::StringToV8(isolate, "contextIsolated"),
-             v8::Boolean::New(isolate, context_isolated_)).Check();
-  value->Set(context, gin::StringToV8(isolate, "webPreferences"),
-             content::V8ValueConverter::Create()->ToV8Value(
-                 runtime_config_->web_preferences, context)).Check();
+  v8::Local<v8::Object> buffer_limits = v8::Object::New(isolate);
+  buffer_limits
+      ->Set(context, gin::StringToV8(isolate, "MAX_LENGTH"),
+            v8::Number::New(isolate,
+                            static_cast<double>(v8::Uint8Array::kMaxLength)))
+      .Check();
+  buffer_limits
+      ->Set(context, gin::StringToV8(isolate, "MAX_STRING_LENGTH"),
+            v8::Integer::New(isolate, v8::String::kMaxLength))
+      .Check();
+  value->Set(context, gin::StringToV8(isolate, "bufferLimits"), buffer_limits)
+      .Check();
+  if (auto debug = base::Environment().GetVar("NODE_DEBUG")) {
+    set_string("nodeDebug", *debug);
+  }
+  value
+      ->Set(context, gin::StringToV8(isolate, "contextIsolated"),
+            v8::Boolean::New(isolate, context_isolated_))
+      .Check();
+  value
+      ->Set(context, gin::StringToV8(isolate, "webPreferences"),
+            content::V8ValueConverter::Create()->ToV8Value(
+                runtime_config_->web_preferences, context))
+      .Check();
   base::ListValue session_preloads;
   for (const auto& preload : runtime_config_->session_preloads) {
-    session_preloads.Append(base::DictValue().Set("id", preload->id)
-        .Set("filePath", preload->file_path).Set("source", preload->source));
+    session_preloads.Append(base::DictValue()
+                                .Set("id", preload->id)
+                                .Set("filePath", preload->file_path)
+                                .Set("source", preload->source));
   }
-  value->Set(context, gin::StringToV8(isolate, "sessionPreloads"),
-             content::V8ValueConverter::Create()->ToV8Value(
-                 base::Value(std::move(session_preloads)), context)).Check();
+  value
+      ->Set(context, gin::StringToV8(isolate, "sessionPreloads"),
+            content::V8ValueConverter::Create()->ToV8Value(
+                base::Value(std::move(session_preloads)), context))
+      .Check();
+  if (runtime_config_->window_preload_source) {
+    set_string("windowPreloadSource", *runtime_config_->window_preload_source);
+  }
+  if (!runtime_config_->window_preload_error.empty()) {
+    set_string("windowPreloadError", runtime_config_->window_preload_error);
+  }
   v8::Local<v8::Object> versions = v8::Object::New(isolate);
   versions
       ->Set(context, gin::StringToV8(isolate, "chrome"),
@@ -439,12 +560,14 @@ void XenonIpcRenderer::GetRuntimeConfig(gin::Arguments* args) {
       .Check();
   // These are adapters, not embedded Node/Electron releases. Match the main
   // process's explicit compatibility identity instead of claiming a release.
-  for (const char* name : {"node", "electron"}) {
-    versions
-        ->Set(context, gin::StringToV8(isolate, name),
-              gin::StringToV8(isolate, "0.0.0-compat"))
-        .Check();
-  }
+  versions
+      ->Set(context, gin::StringToV8(isolate, "node"),
+            gin::StringToV8(isolate, "0.0.0-compat"))
+      .Check();
+  versions
+      ->Set(context, gin::StringToV8(isolate, "electron"),
+            gin::StringToV8(isolate, kElectronCompatibilityVersion))
+      .Check();
   value->Set(context, gin::StringToV8(isolate, "versions"), versions).Check();
   value
       ->Set(context, gin::StringToV8(isolate, "pid"),
@@ -453,9 +576,7 @@ void XenonIpcRenderer::GetRuntimeConfig(gin::Arguments* args) {
   value
       ->Set(context, gin::StringToV8(isolate, "sandboxed"),
             v8::Boolean::New(
-                isolate, !base::CommandLine::ForCurrentProcess()->HasSwitch(
-                             sandbox::policy::switches::kNoSandbox) &&
-                             sandbox::policy::Sandbox::IsProcessSandboxed()))
+                isolate, HasActiveProcessSandbox()))
       .Check();
   value
       ->Set(context, gin::StringToV8(isolate, "isPackaged"),
@@ -506,9 +627,8 @@ bool XenonIpcRenderer::EnsureNodeAddonConnected() {
   }
   // Native callbacks come from this document's addon process. Keep app IPC
   // on its original pipe so native state is never shared across documents.
-  host_->BindNodeAddonHost(
-      node_addon_host_.BindNewPipeAndPassReceiver(),
-      node_addon_receiver_.BindNewPipeAndPassRemote());
+  host_->BindNodeAddonHost(node_addon_host_.BindNewPipeAndPassReceiver(),
+                           node_addon_receiver_.BindNewPipeAndPassRemote());
   node_addon_host_.set_disconnect_handler(base::BindOnce(
       [](base::WeakPtr<XenonIpcRenderer> self) {
         if (self) {
@@ -535,7 +655,11 @@ bool XenonIpcRenderer::ReadChannelAndArguments(gin::Arguments* args,
   for (size_t i = 1; i < all.size(); ++i) {
     array->Set(context, static_cast<uint32_t>(i - 1), all[i]).Check();
   }
-  *serialized = !IsInternalIpcChannel(*channel);
+  // Script results are application values even though routing is private.
+  // Preserve undefined, Errors, cycles, BigInts and binary values end to end.
+  *serialized = !IsInternalIpcChannel(*channel) ||
+                *channel == "__xenon:execute-javascript-result" ||
+                *channel == "__xenon:guest-call";
   if (*serialized) {
     std::string error;
     if (!SerializeIpcValue(args->isolate(), context, array,
@@ -570,10 +694,91 @@ void XenonIpcRenderer::Send(gin::Arguments* args) {
 }
 
 void XenonIpcRenderer::PostMessage(gin::Arguments* args) {
-  // The JavaScript facade rejects non-empty transfer lists until MessagePort
-  // ownership can be represented by the transport. The message itself uses
-  // the same structured-clone wire format as send().
-  Send(args);
+  scoped_refptr<XenonIpcRenderer> keep_alive(this);
+  auto* isolate = args->isolate();
+  auto context = args->GetHolderCreationContext();
+  const auto values = args->GetAll();
+  std::string channel;
+  if (values.size() < 2 || !values[0]->IsString() ||
+      !gin::ConvertFromV8(isolate, values[0], &channel) ||
+      IsInternalIpcChannel(channel)) {
+    args->ThrowTypeError(
+        "postMessage requires an application channel and message");
+    return;
+  }
+  if (!EnsureConnected()) {
+    ThrowIpcError(args, "Browser ipcMain connection is unavailable");
+    return;
+  }
+  auto* script_state = blink::ScriptState::MaybeFrom(isolate, context);
+  if (!script_state || !script_state->ContextIsValid()) {
+    ThrowIpcError(args, "The IPC document has been released");
+    return;
+  }
+  blink::MessagePortArray ports;
+  std::vector<v8::Local<v8::Object>> wrappers;
+  if (values.size() >= 3 && !values[2]->IsUndefined()) {
+    if (!values[2]->IsArray()) {
+      args->ThrowTypeError("The transfer argument must be an array");
+      return;
+    }
+    const auto transfer = values[2].As<v8::Array>();
+    const uint32_t count = transfer->Length();
+    if (count > 1024) {
+      ThrowMessagePortCloneError(isolate, "Too many transferred MessagePorts");
+      return;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+      v8::Local<v8::Value> value;
+      if (!transfer->Get(context, i).ToLocal(&value)) {
+        return;
+      }
+      auto* port = blink::V8MessagePort::ToWrappable(isolate, value);
+      if (!port || port->IsNeutered() || ports.Contains(port)) {
+        ThrowMessagePortCloneError(
+            isolate,
+            "Transfer entries must be distinct, attached MessagePorts");
+        return;
+      }
+      ports.push_back(port);
+      wrappers.push_back(value.As<v8::Object>());
+    }
+  }
+  blink::TransferableMessage message;
+  if (!EncodeMessagePortValue(
+          context, values[1], wrappers,
+          base::BindRepeating([](v8::Local<v8::Object> value) {
+            return blink::V8MessagePort::ToWrappable(v8::Isolate::GetCurrent(),
+                                                     value) != nullptr;
+          }),
+          &message)) {
+    return;
+  }
+  // Serialization invokes application getters, which may navigate or transfer
+  // a port. Recheck the document and let Blink validate the entire port list
+  // again before detaching any of its entries.
+  if (context_.IsEmpty() || !host_.is_bound() || !host_.is_connected() ||
+      !script_state->ContextIsValid()) {
+    ThrowIpcError(args,
+                  "The IPC document was released while cloning the message");
+    return;
+  }
+  auto* execution_context = blink::ExecutionContext::From(script_state);
+  if (!execution_context || execution_context->IsContextDestroyed()) {
+    ThrowIpcError(args, "The IPC execution context has been destroyed");
+    return;
+  }
+  blink::ExceptionState exception_state(isolate);
+  auto channels = blink::MessagePort::DisentanglePorts(execution_context, ports,
+                                                       exception_state);
+  if (exception_state.HadException()) {
+    return;
+  }
+  message.ports.reserve(channels.size());
+  for (auto& port : channels) {
+    message.ports.push_back(std::move(port));
+  }
+  host_->PostMessage(channel, std::move(message));
 }
 
 void XenonIpcRenderer::AttachGuest(gin::Arguments* args) {
@@ -643,10 +848,11 @@ void XenonIpcRenderer::Invoke(gin::Arguments* args) {
        channel == "__xenon:node-addon:invoke-instance") &&
       !EnsureNodeAddonConnected()) {
     resolver
-        ->Reject(context, v8::Exception::Error(
-                              gin::StringToV8(isolate,
-                                              "Native addon connection is unavailable")
-                                  .As<v8::String>()))
+        ->Reject(context,
+                 v8::Exception::Error(
+                     gin::StringToV8(isolate,
+                                     "Native addon connection is unavailable")
+                         .As<v8::String>()))
         .Check();
     args->Return(resolver->GetPromise());
     return;
@@ -755,6 +961,77 @@ void XenonIpcRenderer::SendSync(gin::Arguments* args) {
   }
   args->GetFunctionCallbackInfo()->GetReturnValue().Set(
       content::V8ValueConverter::Create()->ToV8Value(result->value, context));
+}
+
+void XenonIpcRenderer::ExecuteJavaScript(gin::Arguments* args) {
+  uint64_t id = 0;
+  std::string source;
+  if (args->Length() != 2 || !args->GetNext(&id) || !id ||
+      !args->GetNext(&source)) {
+    args->ThrowTypeError(
+        "ERR_INVALID_ARG_TYPE: expected a request ID and script string");
+    return;
+  }
+  if (context_.IsEmpty() || !render_frame() || !runtime_config_ ||
+      !runtime_config_->is_main_frame) {
+    ThrowIpcError(args,
+                  "ERR_INVALID_STATE: main-frame document is unavailable");
+    return;
+  }
+  auto* frame = render_frame()->GetWebFrame();
+  auto main_context = frame->MainWorldScriptContext();
+  if (!script_executor_) {
+    script_executor_ = base::MakeRefCounted<XenonScriptExecutor>(isolate_);
+  }
+  // Script execution can navigate/destroy the document and reset our member.
+  // Keep the executor alive until this invocation has returned its Promise.
+  auto executor = script_executor_;
+  v8::Local<v8::Promise> result;
+  if (!executor->Execute(id, main_context, context_.Get(isolate_), source)
+           .ToLocal(&result)) {
+    ThrowIpcError(args,
+                  "ERR_INVALID_STATE: script execution context is unavailable");
+    return;
+  }
+  args->Return(result);
+}
+
+void XenonIpcRenderer::CancelExecuteJavaScript(gin::Arguments* args) {
+  uint64_t id = 0;
+  if (args->Length() != 1 || !args->GetNext(&id) || !id) {
+    args->ThrowTypeError("ERR_INVALID_ARG_TYPE: expected a script request ID");
+    return;
+  }
+  if (script_executor_) {
+    script_executor_->Cancel(id);
+  }
+}
+
+void XenonIpcRenderer::CrashReporterCall(gin::Arguments* args) {
+  if (context_.IsEmpty()) {
+    ThrowIpcError(args, "ERR_INVALID_STATE: renderer context was destroyed");
+    return;
+  }
+  v8::Local<v8::Value> value;
+  if (args->Length() != 1 || !args->GetNext(&value)) {
+    args->ThrowTypeError(
+        "ERR_INVALID_ARG_TYPE: crashReporter expects a request object");
+    return;
+  }
+  auto context = args->GetHolderCreationContext();
+  auto converter = content::V8ValueConverter::Create();
+  auto request = converter->FromV8Value(value, context);
+  if (!request) {
+    args->ThrowTypeError("ERR_INVALID_ARG_TYPE: invalid crashReporter request");
+    return;
+  }
+  auto result = crash_reporter_annotations_.Call(std::move(*request));
+  if (!result->success) {
+    ThrowIpcError(args, result->error);
+    return;
+  }
+  args->GetFunctionCallbackInfo()->GetReturnValue().Set(
+      converter->ToV8Value(result->value, context));
 }
 
 void XenonIpcRenderer::RequireNodeModuleSync(gin::Arguments* args) {
@@ -1077,10 +1354,16 @@ void XenonIpcRenderer::SetDispatchHandler(gin::Arguments* args) {
     return;
   }
   dispatch_handler_.Reset(args->isolate(), value.As<v8::Function>());
-  std::vector<std::pair<std::string, base::Value>> queued;
+  std::vector<std::pair<std::string, QueuedPayload>> queued;
   queued.swap(queued_events_);
-  for (const auto& [channel, arguments] : queued) {
-    DispatchNow(channel, arguments);
+  queued_port_message_bytes_ = 0;
+  for (auto& [channel, payload] : queued) {
+    if (auto* arguments = std::get_if<base::Value>(&payload)) {
+      DispatchNow(channel, *arguments);
+    } else {
+      DispatchPostMessageNow(
+          channel, std::move(std::get<blink::TransferableMessage>(payload)));
+    }
   }
 }
 
@@ -1094,6 +1377,85 @@ void XenonIpcRenderer::Dispatch(const std::string& channel,
     return;
   }
   DispatchNow(channel, arguments);
+}
+
+void XenonIpcRenderer::DispatchPostMessage(const std::string& channel,
+                                           blink::TransferableMessage message) {
+  if (context_.IsEmpty()) {
+    return;
+  }
+  if (IsInternalIpcChannel(channel) || !ValidateMessagePortMessage(message)) {
+    LOG(ERROR) << "Invalid ipcRenderer port message";
+    return;
+  }
+  if (dispatch_handler_.IsEmpty()) {
+    constexpr size_t kMaximumQueuedBytes = 64 * 1024 * 1024;
+    const size_t bytes = MessagePortMessageSize(message);
+    if (queued_events_.size() >= 1024 ||
+        bytes > kMaximumQueuedBytes - queued_port_message_bytes_) {
+      LOG(ERROR) << "ipcRenderer port message queue exceeded its limit";
+      return;
+    }
+    queued_port_message_bytes_ += bytes;
+    queued_events_.emplace_back(channel, std::move(message));
+    return;
+  }
+  DispatchPostMessageNow(channel, std::move(message));
+}
+
+void XenonIpcRenderer::DispatchPostMessageNow(
+    const std::string& channel,
+    blink::TransferableMessage message) {
+  scoped_refptr<XenonIpcRenderer> keep_alive(this);
+  if (dispatch_handler_.IsEmpty() || context_.IsEmpty() ||
+      !ValidateMessagePortMessage(message)) {
+    return;
+  }
+  v8::HandleScope handles(isolate_);
+  auto context = context_.Get(isolate_);
+  v8::Context::Scope scope(context);
+  v8::MicrotasksScope microtasks(isolate_, context->GetMicrotaskQueue(),
+                                 v8::MicrotasksScope::kDoNotRunMicrotasks);
+  auto* script_state = blink::ScriptState::MaybeFrom(isolate_, context);
+  if (!script_state || !script_state->ContextIsValid()) {
+    return;
+  }
+  auto* execution_context = blink::ExecutionContext::From(script_state);
+  if (!execution_context || execution_context->IsContextDestroyed()) {
+    return;
+  }
+  auto* ports = blink::MessagePort::EntanglePorts(*execution_context,
+                                                  std::move(message.ports));
+  message.ports.clear();
+  auto port_array = v8::Array::New(isolate_, static_cast<int>(ports->size()));
+  std::vector<v8::Local<v8::Object>> wrappers;
+  wrappers.reserve(ports->size());
+  for (blink::wtf_size_t i = 0; i < ports->size(); ++i) {
+    auto wrapper = (*ports)[i]->ToV8(script_state).As<v8::Object>();
+    wrappers.push_back(wrapper);
+    port_array->CreateDataProperty(context, static_cast<uint32_t>(i), wrapper)
+        .Check();
+  }
+  gin::TryCatch caught(isolate_);
+  v8::Local<v8::Value> decoded;
+  if (!DecodeMessagePortValue(context, message, wrappers).ToLocal(&decoded)) {
+    for (auto& port : *ports) {
+      port->close();
+    }
+    LOG(ERROR) << "Failed to decode ipcRenderer port message: "
+               << caught.GetStackTrace();
+    return;
+  }
+  auto arguments = v8::Array::New(isolate_, 1);
+  arguments->CreateDataProperty(context, 0, decoded).Check();
+  v8::Local<v8::Value> values[] = {gin::StringToV8(isolate_, channel),
+                                   arguments, port_array};
+  if (dispatch_handler_.Get(isolate_)
+          ->Call(context, context->Global(), std::size(values), values)
+          .IsEmpty()) {
+    LOG(ERROR) << "ipcRenderer listener failed for " << channel << ": "
+               << caught.GetStackTrace();
+  }
 }
 
 void XenonIpcRenderer::DispatchNow(const std::string& channel,

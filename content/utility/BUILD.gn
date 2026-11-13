@@ -79,6 +79,7 @@ source_set("utility") {
     "//services/video_capture/public/mojom:constants",
     "//third_party/blink/public:blink_headers",
     "//url",
+    "//xenon_overlay/buildflags",
   ]
 
   # When library CDMs are supported, we support running the CDM in the utility

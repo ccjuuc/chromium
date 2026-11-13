@@ -38,6 +38,10 @@ function createRuntime(onWindowCall = () => null, metadata = {}) {
     __xenonLoadBrowserWindowURL(id, url) {
       calls.push({id, command: 'load-url', url});
     },
+    __xenonBrowserWindowCallAsync(id, command, details) {
+      calls.push({id, command, url: details.url});
+      return Promise.resolve({ok: true});
+    },
     __xenonCloseBrowserWindow(id) {
       calls.push({id, command: 'close'});
     },
@@ -50,6 +54,374 @@ function createRuntime(onWindowCall = () => null, metadata = {}) {
   vm.runInContext(readBootstrap(filename), context, {filename});
   return {context, calls, BrowserWindow: context.__xenonElectron.BrowserWindow};
 }
+
+test('system theme getters and events use actual host state without overriding other apps', () => {
+  let state = {shouldUseDarkColors: true, shouldUseHighContrastColors: false,
+    shouldUseInvertedColorScheme: true, prefersReducedTransparency: true};
+  const {context, calls} = createRuntime((_id, command, details) => {
+    assert.equal(command, 'electron-api');
+    if (details.operation === 'nativeTheme.getState') return {...state};
+    if (details.operation === 'systemPreferences.getAccentColor') return '1234abff';
+    if (details.operation === 'systemPreferences.isAeroGlassEnabled') return true;
+    throw Error(details.operation);
+  });
+  const {systemPreferences, nativeTheme} = context.__xenonElectron;
+  assert.equal(systemPreferences.getAccentColor(), '1234abff');
+  assert.equal(systemPreferences.isAeroGlassEnabled(), true);
+  assert.equal(nativeTheme.themeSource, 'system');
+  assert.equal(nativeTheme.shouldUseDarkColors, true);
+  assert.equal(nativeTheme.shouldUseHighContrastColors, false);
+  assert.equal(nativeTheme.shouldUseInvertedColorScheme, true);
+  assert.equal(nativeTheme.prefersReducedTransparency, true);
+  let accent, updated = 0;
+  const changed = (event, color) => { accent = color; assert.equal(typeof event, 'object'); };
+  systemPreferences.on('accent-color-changed', changed);
+  nativeTheme.on('updated', () => { ++updated; });
+  state.shouldUseDarkColors = false;
+  context.__xenonDispatchBrowserWindowEvent(0, '__xenon-system-theme', {
+    state: {...state, accentColor: 'abcdefff'}, accentChanged: true, nativeThemeChanged: true,
+  });
+  assert.equal(accent, 'abcdefff');
+  assert.equal(updated, 1);
+  assert.equal(nativeTheme.shouldUseDarkColors, false);
+  systemPreferences.off('accent-color-changed', changed);
+  context.__xenonDispatchBrowserWindowEvent(0, '__xenon-system-theme', {
+    state: {accentColor: '000000ff'}, accentChanged: true, nativeThemeChanged: false,
+  });
+  assert.equal(accent, 'abcdefff');
+  assert.equal(updated, 1);
+  const before = calls.length;
+  nativeTheme.themeSource = 'system';
+  assert.throws(() => { nativeTheme.themeSource = 'dark'; }, {code: 'ERR_NOT_SUPPORTED'});
+  assert.throws(() => { nativeTheme.themeSource = 'unknown'; }, {code: 'ERR_INVALID_ARG_VALUE'});
+  assert.equal(calls.length, before);
+  assert.equal(nativeTheme.themeSource, 'system');
+});
+
+test('loadURL waits for its native completion and rejects structured navigation errors', async () => {
+  const pending = [];
+  const {context, BrowserWindow} = createRuntime(() => null, {
+    __xenonBrowserWindowCallAsync(id, command, details) {
+      assert.equal(command, 'load-url');
+      return new Promise(resolve => pending.push({id, details, resolve}));
+    },
+  });
+  const window = new BrowserWindow();
+  let done = false;
+  const first = window.loadURL('https://fixture.invalid/slow').then(() => { done = true; });
+  const rejected = assert.rejects(first, error => error.code === 'ERR_ABORTED' &&
+      error.errno === -3 && error.url.endsWith('/slow'));
+  await Promise.resolve();
+  assert.equal(done, false);
+  // Unrelated renderer load events cannot settle the requested navigation.
+  context.__xenonDispatchBrowserWindowEvent(window.id, 'web-contents-did-finish-load');
+  await Promise.resolve();
+  assert.equal(done, false);
+  const second = window.loadURL('https://fixture.invalid/next');
+  pending[0].resolve({ok: false, errorCode: -3,
+    errorDescription: 'ERR_ABORTED', url: pending[0].details.url});
+  await rejected;
+  pending[1].resolve({ok: true});
+  assert.equal(await second, undefined);
+  let failure;
+  window.webContents.on('did-fail-load', (...args) => { failure = args; });
+  context.__xenonDispatchBrowserWindowEvent(window.id, 'web-contents-did-fail-load', {
+    errorCode: -105, errorDescription: 'ERR_NAME_NOT_RESOLVED',
+    validatedURL: 'https://fixture.invalid/', isMainFrame: true,
+  });
+  assert.equal(failure[0].sender, window.webContents);
+  assert.deepEqual(failure.slice(1), [-105, 'ERR_NAME_NOT_RESOLVED',
+    'https://fixture.invalid/', true, -1, -1]);
+});
+
+test('loadFile resolves application paths and preserves literal path bytes and URL options', async () => {
+  for (const platform of ['win32', 'linux', 'darwin']) {
+    const appPath = platform === 'win32' ? 'C:\\Application' : '/opt/Application';
+    const {BrowserWindow, calls} = createRuntime(() => null, {
+      __xenonPlatform: platform, __xenonAppPath: appPath,
+      __xenonWorkingDirectory: platform === 'win32' ? 'D:\\different' : '/different',
+    });
+    const window = new BrowserWindow();
+    await window.loadFile('pages/a#b%20.html', {query: {value: ['a b', '中']}, hash: 'preview'});
+    const target = new URL(calls.at(-1).url);
+    assert.equal(target.protocol, 'file:');
+    assert.equal(target.pathname, (platform === 'win32' ? '/C:' : '/opt') +
+      '/Application/pages/a%23b%2520.html');
+    assert.equal(target.search, '?value=a%20b&value=%E4%B8%AD');
+    assert.equal(target.hash, '#preview');
+    await window.webContents.loadFile('pages/next.html', {query: {unused: 1}, search: '?actual=yes'});
+    assert.equal(new URL(calls.at(-1).url).search, '?actual=yes');
+    assert.throws(() => window.loadFile(null), /File path/);
+    assert.throws(() => window.loadFile('a', null), /options/);
+  }
+});
+
+test('before-input-event observes only live subscriptions and returns cancellation', () => {
+  const {context, BrowserWindow, calls} = createRuntime();
+  const window = new BrowserWindow();
+  const contents = window.webContents;
+  const observations = () => calls.filter(call => call.command === 'observe-before-input');
+  assert.equal(observations().length, 0);
+  const input = {type: 'keyDown', key: 's', code: 'KeyS', control: true,
+    shift: false, alt: false, meta: false, isAutoRepeat: false,
+    isComposing: false, location: 0, modifiers: ['control']};
+  let actual;
+  const cancel = (event, details) => {
+    actual = {event, details};
+    event.preventDefault();
+  };
+  const noop = () => {};
+  contents.on('before-input-event', cancel);
+  contents.on('before-input-event', noop);
+  assert.deepEqual(observations().map(call => call.details.enabled), [true]);
+  assert.equal(context.__xenonDispatchBrowserWindowEvent(window.id,
+    'web-contents-before-input-event', input), true);
+  assert.equal(actual.event.sender, contents);
+  assert.equal(actual.details, input);
+  contents.removeListener('before-input-event', cancel);
+  assert.equal(context.__xenonDispatchBrowserWindowEvent(window.id,
+    'web-contents-before-input-event', {...input, type: 'keyUp'}), false);
+  contents.removeAllListeners('before-input-event');
+  assert.deepEqual(observations().map(call => call.details.enabled), [true, false]);
+  contents.once('before-input-event', cancel);
+  assert.equal(context.__xenonDispatchBrowserWindowEvent(window.id,
+    'web-contents-before-input-event', input), true);
+  assert.deepEqual(observations().map(call => call.details.enabled),
+    [true, false, true, false]);
+  assert.equal(contents.listenerCount('before-input-event'), 0);
+  contents.removeAllListeners();
+  contents.prependOnceListener('before-input-event', noop);
+  assert.equal(context.__xenonDispatchBrowserWindowEvent(window.id,
+    'web-contents-before-input-event', input), false);
+  assert.deepEqual(observations().slice(-2).map(call => call.details.enabled),
+    [true, false]);
+  window.destroy();
+  assert.equal(context.__xenonDispatchBrowserWindowEvent(window.id,
+    'web-contents-before-input-event', input), true);
+});
+
+test('WebContentsView integrates session, IPC identity, keyboard and explicit close', async () => {
+  let nextView = 1;
+  const {context, BrowserWindow, calls} = createRuntime((id, command, details) => {
+    if (command !== 'electron-view') return null;
+    if (details.action === 'create') return {id: nextView++, webContentsId: -10};
+    if (details.action === 'root') return {id: nextView++};
+    if (details.action === 'contents-owner') return 1;
+    return null;
+  });
+  const electron = context.__xenonElectron;
+  assert.throws(() => new electron.WebContentsView(), /before app is ready/);
+  context.__xenonMarkAppReady();
+  await electron.app.whenReady();
+  const window = new BrowserWindow();
+  const session = electron.session.fromPartition('persist:view');
+  const view = new electron.WebContentsView({webPreferences: {session}});
+  assert.ok(view instanceof electron.View);
+  assert.equal(view.webContents.session, session);
+  const creation = calls.find(call => call.command === 'electron-view' && call.details.action === 'create');
+  assert.equal(creation.details.preferences.partition, 'persist:view');
+  assert.equal(creation.details.preferences.session, undefined);
+  window.contentView.addChildView(view);
+  assert.equal(window.contentView.children[0], view);
+  assert.equal(view.webContents.getOwnerBrowserWindow(), window);
+  assert.equal(BrowserWindow.fromWebContents(view.webContents), window);
+  assert.equal(view.webContents.getType(), 'window');
+  assert.equal(electron.webContents.fromId(view.webContents.id), view.webContents);
+  view.webContents.on('before-input-event', event => event.preventDefault());
+  assert.equal(calls.at(-1).id, -10);
+  assert.equal(context.__xenonDispatchBrowserWindowEvent(-10,
+      'web-contents-before-input-event', {type: 'keyDown', key: 'x'}), true);
+  view.webContents.close({waitForBeforeUnload: true});
+  assert.equal(calls.at(-1).details.action, 'close-contents');
+  assert.equal(calls.at(-1).details.webContentsId, -10);
+  assert.equal(calls.at(-1).details.waitForBeforeUnload, true);
+  // The native close may wait for beforeunload; don't pretend it is destroyed.
+  assert.equal(view.webContents.isDestroyed(), false);
+  const beforeCancel = calls.length;
+  context.__xenonDispatchBrowserWindowEvent(-10, 'guest-will-prevent-unload', {});
+  assert.equal(calls.length, beforeCancel);
+  view.webContents.once('will-prevent-unload', event => event.preventDefault());
+  context.__xenonDispatchBrowserWindowEvent(-10, 'guest-will-prevent-unload', {});
+  assert.equal(calls.at(-1).details.action, 'close-contents');
+  assert.equal(calls.at(-1).details.waitForBeforeUnload, false);
+  context.__xenonDispatchBrowserWindowEvent(-10, 'guest-destroyed', {});
+  assert.equal(view.webContents.isDestroyed(), true);
+  assert.equal(electron.webContents.fromId(view.webContents.id), undefined);
+});
+
+test('menu lookup traverses submenus and changes reach the native popup', () => {
+  const {context, BrowserWindow, calls} = createRuntime();
+  const {Menu, MenuItem} = context.__xenonElectron;
+  const item = new MenuItem({id: 'toggle-view', type: 'checkbox', label: 'View', checked: false});
+  const submenu = Menu.buildFromTemplate([item]);
+  const menu = Menu.buildFromTemplate([{label: 'Tools', submenu: [
+    {label: 'Nested', submenu},
+  ]}]);
+  assert.equal(menu.getMenuItemById('missing'), null);
+  assert.equal(menu.getMenuItemById('toggle-view'), item);
+  menu.getMenuItemById('toggle-view').checked = true;
+  menu.popup({window: new BrowserWindow()});
+  const popup = calls.find(call => call.command === 'popup-menu');
+  assert.equal(popup.details.items[0].submenu[0].submenu[0].checked, true);
+  assert.throws(() => menu.getMenuItemById(1), {name: 'TypeError'});
+  // Templates remain mutable; malformed cycles must not overflow lookup.
+  submenu.items.push({submenu: menu});
+  assert.equal(menu.getMenuItemById('still-missing'), null);
+});
+
+test('MenuItem normalizes submenus and selection updates the original item', () => {
+  const {context, BrowserWindow, calls} = createRuntime();
+  const {Menu, MenuItem} = context.__xenonElectron;
+  let selected;
+  const template = [{label: 'Tools', submenu: [{id: 'toggle', type: 'checkbox',
+    label: 'Show', click(item, window, event) { selected = {item, window, event}; }}]}];
+  const menu = Menu.buildFromTemplate(template);
+  assert.ok(menu.items[0] instanceof MenuItem);
+  assert.ok(menu.items[0].submenu instanceof Menu);
+  assert.ok(Array.isArray(template[0].submenu));
+  const item = menu.getMenuItemById('toggle');
+  assert.equal(item.menu, menu.items[0].submenu);
+  const win = new BrowserWindow();
+  menu.popup({window: win});
+  const commandId = calls.at(-1).details.items[0].submenu[0].id;
+  context.__xenonDispatchBrowserWindowEvent(win.id, 'native-menu-command', {commandId, shiftKey: true});
+  assert.equal(selected.item, item);
+  assert.equal(selected.window, win);
+  assert.equal(selected.event.shiftKey, true);
+  assert.equal(item.checked, true);
+  menu.popup({window: win});
+  assert.equal(calls.at(-1).details.items[0].submenu[0].checked, true);
+});
+
+test('menu insertion, radio selection and edit roles retain their contracts', () => {
+  const {context, BrowserWindow, calls} = createRuntime();
+  const {Menu, MenuItem} = context.__xenonElectron;
+  const menu = new Menu();
+  const first = new MenuItem({type: 'radio', label: 'First', checked: true});
+  const second = new MenuItem({type: 'radio', label: 'Second'});
+  menu.append(first);
+  menu.insert(1, second);
+  second.click({}, null, null);
+  assert.equal(first.checked, false);
+  assert.equal(second.checked, true);
+  second.click({}, null, null);
+  assert.equal(second.checked, true);
+  assert.throws(() => menu.append(first), /already belongs/);
+  assert.throws(() => menu.append({label: 'plain'}), {name: 'TypeError'});
+  assert.throws(() => menu.insert(-1, new MenuItem()), {name: 'RangeError'});
+  const win = new BrowserWindow();
+  const select = new MenuItem({role: 'selectAll'});
+  assert.equal(select.role, 'selectall');
+  assert.equal(select.label, 'Select All');
+  select.click({}, win, win.webContents);
+  assert.deepEqual(calls.at(-1), {id: win.id, command: 'edit-command', details: {action: 'selectall'}});
+});
+
+test('sheet offsets are a non-macOS no-op and do not fake Cocoa support', () => {
+  const {BrowserWindow, calls} = createRuntime();
+  const win = new BrowserWindow();
+  const before = calls.length;
+  assert.equal(win.setSheetOffset(38), undefined);
+  assert.equal(calls.length, before);
+  assert.throws(() => win.setSheetOffset(NaN), {name: 'TypeError'});
+  const mac = createRuntime(() => null, {__xenonPlatform: 'darwin'});
+  assert.throws(() => new mac.BrowserWindow().setSheetOffset(38), {code: 'ERR_NOT_SUPPORTED'});
+});
+
+test('radio groups span normal items and are separated only by separators', () => {
+  const {context, BrowserWindow, calls} = createRuntime();
+  const {Menu} = context.__xenonElectron;
+  const menu = Menu.buildFromTemplate([
+    {id: 'a', type: 'radio', label: 'A'}, {label: 'Normal'},
+    {id: 'b', type: 'radio', label: 'B'}, {type: 'separator'},
+    {id: 'c', type: 'radio', label: 'C'},
+  ]);
+  menu.popup({window: new BrowserWindow()});
+  const [a, , b, , c] = calls.at(-1).details.items;
+  assert.equal(a.checked, true);
+  assert.equal(b.checked, false);
+  assert.equal(c.checked, true);
+  assert.equal(a.groupId, b.groupId);
+  assert.notEqual(a.groupId, c.groupId);
+  menu.getMenuItemById('b').checked = true;
+  assert.equal(menu.getMenuItemById('a').checked, false);
+  assert.equal(menu.getMenuItemById('c').checked, true);
+  menu.getMenuItemById('a').checked = false;
+  assert.equal(menu.getMenuItemById('a').checked, true);
+  assert.equal(menu.getMenuItemById('b').checked, false);
+});
+
+test('ignoring menu shortcuts suppresses only accelerator dispatch', () => {
+  const {context, BrowserWindow, calls} = createRuntime();
+  const {Menu} = context.__xenonElectron;
+  const win = new BrowserWindow();
+  let clicked = 0;
+  const menu = Menu.buildFromTemplate([{label: 'Action', click() { clicked++; }}]);
+  menu.popup({window: win});
+  const commandId = calls.at(-1).details.items[0].id;
+  win.webContents.setIgnoreMenuShortcuts(true);
+  context.__xenonDispatchBrowserWindowEvent(win.id, 'native-menu-command', {commandId, triggeredByAccelerator:true});
+  assert.equal(clicked, 0);
+  context.__xenonDispatchBrowserWindowEvent(win.id, 'native-menu-command', {commandId});
+  assert.equal(clicked, 1);
+  win.webContents.setIgnoreMenuShortcuts(false);
+  context.__xenonDispatchBrowserWindowEvent(win.id, 'native-menu-command', {commandId, triggeredByAccelerator:true});
+  assert.equal(clicked, 2);
+  assert.throws(() => win.webContents.setIgnoreMenuShortcuts(1), {name: 'TypeError'});
+});
+
+test('visual zoom limits use the owned host and reject invalid ranges', async () => {
+  const {BrowserWindow, calls} = createRuntime();
+  const contents = new BrowserWindow().webContents;
+  await contents.setVisualZoomLevelLimits(1, 2.5);
+  assert.deepEqual(calls.at(-1), {id: 1, command: 'set-visual-zoom-limits',
+    details: {minimum: 1, maximum: 2.5}});
+  const before = calls.length;
+  for (const args of [[0, 1], [2, 1], [1, Infinity], [NaN, 2]])
+    await assert.rejects(contents.setVisualZoomLevelLimits(...args), {code: 'ERR_INVALID_ARG_VALUE'});
+  await assert.rejects(contents.setVisualZoomLevelLimits('1', 2), {code: 'ERR_INVALID_ARG_TYPE'});
+  assert.equal(calls.length, before);
+});
+
+test('page zoom properties and methods read the actual host value', () => {
+  let level = 0;
+  const {BrowserWindow, calls} = createRuntime((_id, command, args) => {
+    if (command === 'set-zoom-level') level = args.level;
+    if (command === 'get-zoom-level') return level;
+  });
+  const contents = new BrowserWindow().webContents;
+  contents.zoomFactor = 1.44;
+  assert.ok(Math.abs(level - 2) < 1e-9);
+  assert.ok(Math.abs(contents.getZoomFactor() - 1.44) < 1e-9);
+  level = 3;
+  assert.equal(contents.zoomLevel, 3);
+  assert.ok(Math.abs(contents.zoomFactor - 1.728) < 1e-9);
+  const before = calls.length;
+  for (const value of [0, -1, NaN, Infinity, '2'])
+    assert.throws(() => contents.setZoomFactor(value), {code: 'ERR_INVALID_ARG_VALUE'});
+  assert.equal(calls.length, before);
+});
+
+test('app locale is read from the host without a hardcoded fallback', () => {
+  const {context, calls} = createRuntime(() => 'zh-CN');
+  assert.equal(context.__xenonElectron.app.getLocale(), 'zh-CN');
+  assert.deepEqual(calls, [{id: 0, command: 'app-get-locale', details: {}}]);
+  assert.throws(() => createRuntime(() => '').context.__xenonElectron.app.getLocale(),
+    {code: 'ERR_IPC_INVALID_RESPONSE'});
+});
+
+test('error dialog sends real text to the host and preserves failures', () => {
+  const {context, calls} = createRuntime();
+  const {dialog} = context.__xenonElectron;
+  assert.equal(dialog.showErrorBox('启动错误', 'original error\nstack'), undefined);
+  assert.deepEqual(calls, [{id: 0, command: 'electron-error-box',
+    details: {title: '启动错误', content: 'original error\nstack'}}]);
+  assert.throws(() => dialog.showErrorBox(1, 'text'), {code: 'ERR_INVALID_ARG_TYPE'});
+  assert.equal(calls.length, 1);
+  const broken = createRuntime(() => { throw new Error('ERR_ACCESS_DENIED: stale owner'); });
+  assert.throws(() => broken.context.__xenonElectron.dialog.showErrorBox('title', 'text'),
+                {code: 'ERR_ACCESS_DENIED'});
+});
 
 test('Mac BrowserWindow forwards shadow, transparency and frame constructor options', () => {
   const {BrowserWindow, calls} = createRuntime((id, command) => {
@@ -469,18 +841,24 @@ test('WebContents queries the OS process through its native owner', () => {
 test('IPC frame identity uses the registered document and survives URL refresh', () => {
   const {BrowserWindow, context} = createRuntime();
   const window = new BrowserWindow();
+  assert.equal(window.webContents.getURL(), '');
   window.loadURL('file:///requested-but-not-committed.html');
+  assert.equal(window.webContents.getURL(), 'file:///requested-but-not-committed.html');
   const sender = {endpointId: 'document-1', windowId: window.id,
     processId: 17, frameId: 23, isMainFrame: true,
     url: 'file:///committed-client.html'};
   const observed = [];
   context.__xenonElectron.ipcMain.on('frame:identity', event => {
     observed.push(event);
+    assert.equal(event.sender, window.webContents);
+    assert.equal(BrowserWindow.fromWebContents(event.sender), window);
     assert.equal(event.senderFrame, event.sender.mainFrame);
+    assert.equal(event.sender.getURL(), event.senderFrame.url);
     assert.ok(BrowserWindow.getAllWindows().some(
       owner => owner.webContents === event.sender));
   });
   context.__xenonDispatchRendererEvent(sender, true);
+  assert.equal(window.webContents.getURL(), sender.url);
   context.__xenonDispatchSend(sender, 'frame:identity', []);
   context.__xenonDispatchSync(sender, '__xenon:renderer-web-preferences', [false]);
   context.__xenonDispatchSend(sender, 'frame:identity', []);
@@ -495,9 +873,34 @@ test('IPC frame identity uses the registered document and survives URL refresh',
 
   const navigated = {...sender, url: 'file:///committed-client.html#updated'};
   context.__xenonDispatchRendererEvent(navigated, true);
+  // The browser update must be visible before another IPC message arrives.
+  assert.equal(window.webContents.getURL(), navigated.url);
   context.__xenonDispatchSend(navigated, 'frame:identity', []);
   assert.equal(window.webContents.mainFrame, frame);
   assert.equal(frame.url, navigated.url);
+});
+
+test('WebContents URL stays with the current main document across pending loads and stale updates', async () => {
+  const {BrowserWindow, context} = createRuntime();
+  const window = new BrowserWindow();
+  const old = {endpointId: 'main-old', windowId: window.id,
+    processId: 17, frameId: 23, isMainFrame: true, url: 'file:///old.html'};
+  const current = {...old, endpointId: 'main-current', frameId: 24,
+    url: 'file:///current.html?route=one#first'};
+  context.__xenonDispatchRendererEvent(old, true);
+  context.__xenonDispatchRendererEvent(current, true);
+  const frame = window.webContents.mainFrame;
+  await window.loadURL('file:///pending.html');
+  assert.equal(window.webContents.getURL(), current.url);
+  context.__xenonDispatchRendererEvent({...old, url: 'file:///old.html#late'}, true);
+  context.__xenonDispatchRendererEvent({...current, endpointId: 'child',
+    frameId: 25, isMainFrame: false, url: 'https://child.test/changed'}, true);
+  assert.equal(window.webContents.mainFrame, frame);
+  assert.equal(window.webContents.getURL(), current.url);
+  context.__xenonDispatchRendererEvent(old, false);
+  context.__xenonDispatchRendererEvent(current, false);
+  // A document disconnect does not restore an earlier requested URL.
+  assert.equal(window.webContents.getURL(), current.url);
 });
 
 test('subframes and replaced documents cannot claim the active main frame', () => {
@@ -608,21 +1011,64 @@ test('unimplemented Electron APIs report errors instead of fabricated success or
     () => session.cookies.flushStore(), () => session.setProxy({}),
     () => session.resolveProxy('https://fixture.invalid'), () => session.clearCache(),
     () => session.clearStorageData(), () => session.getBlobData('missing'),
-    () => electron.dialog.showOpenDialog({}), () => electron.dialog.showSaveDialog({}),
-    () => electron.dialog.showMessageBox({}),
   ]) await assert.rejects(operation(), {code: 'ERR_NOT_SUPPORTED'});
   for (const operation of [
-    () => session.webRequest.onBeforeRequest({}, () => {}),
-    () => session.setPermissionRequestHandler(() => {}),
-    () => session.protocol.registerFileProtocol('fixture', () => {}),
+    () => session.webRequest.onSendHeaders({}, () => {}),
     () => electron.globalShortcut.register('Ctrl+F10', () => {}),
-    () => electron.dialog.showOpenDialogSync({}),
-    () => electron.app.requestSingleInstanceLock(),
-    () => electron.app.releaseSingleInstanceLock(),
-    () => electron.app.setAsDefaultProtocolClient('fixture'),
-    () => electron.app.removeAsDefaultProtocolClient('fixture'),
   ]) assert.throws(operation, {code: 'ERR_NOT_SUPPORTED'});
+  assert.equal(electron.app.setAsDefaultProtocolClient('fixture'), false);
+  assert.equal(electron.app.removeAsDefaultProtocolClient('fixture'), false);
   assert.equal(electron.globalShortcut.isRegistered('Ctrl+F10'), false);
+});
+
+test('bootstrap dialog APIs dispatch through the synchronous and asynchronous native bridges', async () => {
+  const selected = {canceled: false, filePath: 'C:\\fixture\\selected.drawio'};
+  const opened = {canceled: false, filePaths: ['C:\\fixture\\selected.drawio']};
+  const choices = {response: 1, checkboxChecked: false};
+  const received = [];
+  const dispatch = (mode, id, command, details) => {
+    received.push({mode, id, command, details});
+    return command === 'electron-save-dialog' ? selected :
+      command === 'electron-open-dialog' ? opened : choices;
+  };
+  const {context, BrowserWindow} = createRuntime(
+      (...args) => dispatch('sync', ...args),
+      {__xenonBrowserWindowCallAsync: (...args) => Promise.resolve(dispatch('async', ...args))});
+  context.__xenonMarkAppReady();
+  const window = new BrowserWindow();
+  received.length = 0;
+  const dialog = context.__xenonElectron.dialog;
+  assert.equal(dialog.showMessageBoxSync(window, {buttons: ['Save', 'Cancel']}), 1);
+  assert.equal(await dialog.showMessageBox({buttons: ['Save', 'Cancel']}), choices);
+  assert.equal(dialog.showSaveDialogSync(window, {defaultPath: 'draft.drawio'}), selected.filePath);
+  assert.equal(await dialog.showSaveDialog({defaultPath: 'draft.drawio'}), selected);
+  assert.equal(dialog.showOpenDialogSync(window, {properties: ['openFile']}), opened.filePaths);
+  assert.equal(await dialog.showOpenDialog({defaultPath: 'media'}), opened);
+  assert.deepEqual(received.map(({mode, id, command}) => ({mode, id, command})), [
+    {mode: 'sync', id: window.id, command: 'electron-message-box'},
+    {mode: 'async', id: 0, command: 'electron-message-box'},
+    {mode: 'sync', id: window.id, command: 'electron-save-dialog'},
+    {mode: 'async', id: 0, command: 'electron-save-dialog'},
+    {mode: 'sync', id: window.id, command: 'electron-open-dialog'},
+    {mode: 'async', id: 0, command: 'electron-open-dialog'},
+  ]);
+});
+
+test('file protocol registration propagates native rejection without publishing a handler', () => {
+  const rejection = new Error('Native protocol registration rejected');
+  const {context} = createRuntime(() => { throw rejection; });
+  const protocol = context.__xenonElectron.session.defaultSession.protocol;
+  assert.throws(() => protocol.registerFileProtocol('fixture', () => {}), err => err === rejection);
+  assert.equal(protocol.isProtocolRegistered('fixture'), false);
+});
+
+test('single-instance APIs require an available native host bridge', () => {
+  const {context} = createRuntime(undefined, {__xenonBrowserWindowCall: undefined});
+  const app = context.__xenonElectron.app;
+  for (const operation of [() => app.requestSingleInstanceLock(),
+    () => app.hasSingleInstanceLock(), () => app.releaseSingleInstanceLock()]) {
+    assert.throws(operation, {code: 'ERR_NOT_SUPPORTED'});
+  }
 });
 
 test('main clipboard and shell use host results and preserve errors', async () => {
@@ -737,12 +1183,46 @@ test('BrowserWindow applies web preferences to its native owner before navigatio
       ['create', 'set-web-preferences', 'load-url']);
   assert.equal(relevant.every(call => call.id === window.id), true);
   assert.deepEqual(relevant[1].details,
-      {contextIsolation: true, nodeIntegration: false, webSecurity: false});
+      {contextIsolation: true, nodeIntegration: false, nodeIntegrationInWorker: false,
+        sandbox: true, webSecurity: false});
 
   const defaultWindow = new BrowserWindow();
   const defaults = calls.find(call =>
     call.id === defaultWindow.id && call.command === 'set-web-preferences');
   assert.equal(defaults.details.webSecurity, undefined);
+});
+
+test('app.enableSandbox applies acknowledged policy to BrowserWindow and WebContentsView', async () => {
+  const {context, BrowserWindow, calls} = createRuntime((id, command, details) => {
+    if (command === 'electron-sandbox') {
+      assert.equal(id, 0);
+      assert.equal(details.action, 'enable');
+      return true;
+    }
+    if (command === 'electron-view' && details.action === 'create')
+      return {id: 901, webContentsId: -901};
+  });
+  const {app, WebContentsView} = context.__xenonElectron;
+  app.enableSandbox();
+  const window = new BrowserWindow({webPreferences: {sandbox: false,
+    nodeIntegration: true, contextIsolation: false, nodeIntegrationInSubFrames: true}});
+  const request = calls.find(call => call.id === window.id && call.command === 'set-web-preferences');
+  assert.equal(request.details.sandbox, true);
+  assert.equal(request.details.nodeIntegration, false);
+  assert.equal(request.details.contextIsolation, false);
+  assert.equal(request.details.nodeIntegrationInSubFrames, true);
+  // WebContentsView requires app readiness; the same acknowledged policy
+  // remains in force when its preference snapshot is prepared after ready.
+  context.__xenonMarkAppReady();
+  await app.whenReady();
+  const view = new WebContentsView({webPreferences: {sandbox: false,
+    nodeIntegration: true}});
+  const creation = calls.find(call => call.command === 'electron-view' &&
+      call.details.action === 'create');
+  assert.equal(creation.details.preferences.sandbox, true);
+  assert.equal(creation.details.preferences.nodeIntegration, false);
+  assert.equal(view.webContents.getLastWebPreferences().sandbox, true);
+  assert.throws(() => app.enableSandbox(), {code: 'ERR_INVALID_STATE'});
 });
 
 test('BrowserWindow establishes constructor minimum dimensions before navigation', async () => {

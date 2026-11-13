@@ -161,6 +161,11 @@ TEST_F(XenonNetTcpTest, PipePermissionsSupportReadWriteAndCombinedModes) {
         [&] { return Bytes(server) == "permission fixture"; }));
     EXPECT_FALSE(bridge_.CloseServer("listener", "container", "other-owner"));
     ASSERT_TRUE(bridge_.CloseServer("listener", "container", "server"));
+    // Closing the listener no longer destroys established pipe connections.
+    EXPECT_TRUE(bridge_.HasSocket(client));
+    EXPECT_TRUE(bridge_.HasSocket(server));
+    ASSERT_TRUE(bridge_.CloseSocket(client));
+    ASSERT_TRUE(bridge_.CloseSocket(server));
     ASSERT_TRUE(base::test::RunUntil([&] {
       return !bridge_.HasServer("listener") && !bridge_.HasSocket(client);
     }));
@@ -283,6 +288,88 @@ TEST_F(XenonNetTcpTest, WriteCompletionCanRemoveItsEndpoint) {
   EXPECT_FALSE(bridge_.HasSocket(client));
   EXPECT_FALSE(Find("error"));
   EXPECT_FALSE(Find("close", "client-js"));
+}
+
+TEST_F(XenonNetTcpTest, TcpNoDelayCanBeToggledWithoutLosingTheConnection) {
+  const int port = Listen();
+  ASSERT_GT(port, 0);
+  std::string error;
+  ASSERT_TRUE(bridge_.ConnectTcp("container", "client", "client-js",
+                                 "127.0.0.1", port, &error));
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return Find("connected", "client-js") && Find("connection"); }));
+  const std::string client = *Find("connected")->FindString("peerId");
+  const std::string server = *Find("connection")->FindString("socketId");
+  for (bool enabled : {true, false, true}) {
+    ASSERT_TRUE(bridge_.SetSocketNoDelay(client, enabled, &error));
+    ASSERT_TRUE(error.empty()) << error;
+  }
+  EXPECT_FALSE(bridge_.SetSocketNoDelay("missing", true, &error));
+  ASSERT_TRUE(bridge_.Write(
+      client, base::DictValue().Set("t", "s").Set("d", "still connected"),
+      &error, 17));
+  ASSERT_TRUE(base::test::RunUntil([&] { return Find("written", "client-js"); }));
+  ASSERT_TRUE(base::test::RunUntil([&] { return Bytes(server) == "still connected"; }));
+  EXPECT_FALSE(Find("error"));
+}
+
+TEST_F(XenonNetTcpTest, PendingConnectCancellationIsScopedToItsOwner) {
+  const int port = Listen();
+  ASSERT_GT(port, 0);
+  event_hook_ = base::BindLambdaForTesting(
+      [&](const std::string& channel, const base::DictValue& payload) {
+        if (channel == "__xenon:net:end") {
+          bridge_.EndSocket(*payload.FindString("toId"));
+        }
+      });
+  std::string error;
+  ASSERT_TRUE(bridge_.ConnectTcp("container", "client", "client-js",
+                                 "127.0.0.1", port, &error));
+  // Cancel before pumping the connected reply. A guessed JS id from another
+  // page/container is not sufficient to release this socket.
+  EXPECT_FALSE(bridge_.CancelConnect("client-js", "other", "client"));
+  EXPECT_FALSE(bridge_.CancelConnect("client-js", "container", "other"));
+  ASSERT_TRUE(bridge_.CancelConnect("client-js", "container", "client"));
+  EXPECT_FALSE(bridge_.CancelConnect("client-js", "container", "client"));
+  task_environment_.RunUntilIdle();
+  ASSERT_TRUE(bridge_.CloseServer("listener"));
+  ASSERT_TRUE(base::test::RunUntil([&] { return Find("server-closed"); }));
+  EXPECT_TRUE(Find("close", "client-js"));
+  EXPECT_FALSE(Find("connected", "client-js"));
+  EXPECT_FALSE(Find("error", "client-js"));
+}
+
+TEST_F(XenonNetTcpTest, PipeHalfCloseCanReceiveAReplyAfterServerStopsAccepting) {
+  const std::string path = PipePath("half-open");
+  std::string error;
+  ASSERT_TRUE(bridge_.Listen("container", "server", "listener", path, &error));
+  ASSERT_TRUE(bridge_.Connect("container", "client", "client-js", path, &error));
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return Find("connected", "client-js") && Find("connection"); }));
+  const std::string client = *Find("connected")->FindString("peerId");
+  const std::string server = *Find("connection")->FindString("socketId");
+  ASSERT_TRUE(bridge_.SetSocketNoDelay(client, true, &error));
+  ASSERT_TRUE(error.empty()) << error;
+  ASSERT_TRUE(bridge_.CloseServer("listener"));
+  EXPECT_FALSE(Find("server-closed"));
+  ASSERT_TRUE(bridge_.Write(
+      client, base::DictValue().Set("t", "s").Set("d", "request"), &error, 1));
+  ASSERT_TRUE(bridge_.EndSocket(client));
+  ASSERT_TRUE(base::test::RunUntil([&] { return Bytes(server) == "request"; }));
+#if !BUILDFLAG(IS_WIN)
+  // Unix domain sockets support a real write-half shutdown. Windows named
+  // pipes use libuv's EOF timer instead, just as Node does; reply while the
+  // pipe is still readable rather than assuming TCP half-close on Windows.
+  ASSERT_TRUE(base::test::RunUntil([&] { return Find("end", server); }));
+#endif
+  EXPECT_FALSE(Find("close", "client-js"));
+  ASSERT_TRUE(bridge_.Write(
+      server, base::DictValue().Set("t", "s").Set("d", "reply"), &error, 2));
+  ASSERT_TRUE(bridge_.EndSocket(server));
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return Find("close", "client-js") && Find("server-closed"); }));
+  EXPECT_EQ(Bytes("client-js"), "reply");
+  EXPECT_FALSE(Find("error"));
 }
 
 TEST_F(XenonNetTcpTest, PausedSocketDefersBytesAndEofUntilResume) {

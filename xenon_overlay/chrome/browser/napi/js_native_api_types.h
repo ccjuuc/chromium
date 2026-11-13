@@ -106,6 +106,11 @@ typedef napi_value (*napi_addon_register_func)(napi_env env, napi_value exports)
 typedef void (*napi_finalize)(napi_env env, void* finalize_data, void* finalize_hint);
 
 typedef struct {
+  uint64_t lower;
+  uint64_t upper;
+} napi_type_tag;
+
+typedef struct {
   const char* utf8name;
   napi_value name;
   napi_callback method;

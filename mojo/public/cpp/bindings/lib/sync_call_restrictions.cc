@@ -20,6 +20,13 @@ namespace {
 // Sync call interrupts are enabled by default.
 bool g_enable_sync_call_interrupts = true;
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+size_t& GetSequenceLocalScopedInterruptCount() {
+  static base::SequenceLocalStorageSlot<size_t> count;
+  return count.GetOrCreateValue();
+}
+#endif
+
 #if ENABLE_SYNC_CALL_RESTRICTIONS
 
 class GlobalSyncCallSettings {
@@ -126,7 +133,27 @@ void SyncCallRestrictions::EnableSyncCallInterruptsForTesting() {
 
 // static
 bool SyncCallRestrictions::AreSyncCallInterruptsEnabled() {
-  return g_enable_sync_call_interrupts;
+  if (g_enable_sync_call_interrupts) {
+    return true;
+  }
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (base::internal::SequenceLocalStorageMap::IsSetForCurrentThread() &&
+      GetSequenceLocalScopedInterruptCount() > 0) {
+    return true;
+  }
+#endif
+  return false;
 }
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+void SyncCallRestrictions::IncreaseScopedInterruptCount() {
+  ++GetSequenceLocalScopedInterruptCount();
+}
+
+void SyncCallRestrictions::DecreaseScopedInterruptCount() {
+  DCHECK_GT(GetSequenceLocalScopedInterruptCount(), 0u);
+  --GetSequenceLocalScopedInterruptCount();
+}
+#endif
 
 }  // namespace mojo

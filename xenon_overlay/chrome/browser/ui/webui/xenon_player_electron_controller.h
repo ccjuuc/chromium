@@ -16,6 +16,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
+#include "base/unguessable_token.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/webui_config.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -72,11 +73,8 @@ class XenonPlayerElectronController
   void ControlPlayerWindow(const std::string& action,
                            bool flag,
                            ControlPlayerWindowCallback callback) override;
-  void OpenNativeFileDialog(
-      const std::string& title,
-      const std::vector<std::string>& filter_extensions,
-      bool allow_multi,
-      OpenNativeFileDialogCallback callback) override;
+  void OpenNativeFileDialog(base::Value options,
+                            OpenNativeFileDialogCallback callback) override;
   void ScanDirectoryVideos(const std::string& dir_path,
                            ScanDirectoryVideosCallback callback) override;
   void RequireNodeModule(const std::string& path) override;
@@ -176,6 +174,8 @@ class XenonPlayerElectronController
                              bool success,
                              const std::string& error_msg);
 
+  std::string dialog_owner_token_ =
+      "webui-dialog:" + base::UnguessableToken::Create().ToString();
   const int32_t client_id_;
   const std::string node_context_id_;
   base::FilePath player_frontend_dir_;

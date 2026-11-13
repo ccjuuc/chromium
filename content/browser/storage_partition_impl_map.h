@@ -18,6 +18,7 @@
 #include "content/common/content_export.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition_config.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 namespace base {
 class FilePath;
@@ -65,6 +66,10 @@ class CONTENT_EXPORT StoragePartitionImplMap
   size_t size() const { return partitions_.size(); }
 
  private:
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  friend base::FilePath GetStoragePartitionPath(
+      const BrowserContext*, const StoragePartitionConfig&);
+#endif
   FRIEND_TEST_ALL_PREFIXES(StoragePartitionConfigTest, OperatorLess);
   FRIEND_TEST_ALL_PREFIXES(StoragePartitionImplMapTest, GarbageCollect);
 

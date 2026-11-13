@@ -61,6 +61,7 @@ struct SidebarShortcut {
   const char* token;
   const char* title;
   const char* url;
+  const char* electron_app = nullptr;
 };
 
 constexpr SidebarShortcut kShortcuts[] = {
@@ -77,6 +78,9 @@ constexpr SidebarShortcut kShortcuts[] = {
     {"XPE", "Electron Container Test", "chrome://xenon-player-by-elec/"},
     {"PLE", "Player via Electron Container", "chrome://xenon-player-electron/"},
     {"TH", "Thunder 2025", "chrome://thunder-2025/"},
+    {"DIO", "draw.io", nullptr, "drawio"},
+    {"MT", "MarkText", nullptr, "marktext"},
+    {"MX", "Motrix", nullptr, "motrix"},
     {"CT", "跨端传输测试", "chrome://cross-transfer-test/"},
     {"UPD", "检查更新", "chrome://xenon-update/"},
     {"VT", "Local Video Test", "chrome://local-video-test/"},
@@ -174,7 +178,8 @@ std::unique_ptr<XenonSidebarButton> CreateShortcutButton(
     views::Button::PressedCallback callback) {
   return std::make_unique<XenonSidebarButton>(
       std::move(callback), base::UTF8ToUTF16(shortcut.token),
-      base::UTF8ToUTF16(shortcut.title), base::UTF8ToUTF16(shortcut.url));
+      base::UTF8ToUTF16(shortcut.title),
+      shortcut.url ? base::UTF8ToUTF16(shortcut.url) : std::u16string());
 }
 
 std::unique_ptr<XenonSidebarButton> CreateSideOptionButton(
@@ -241,10 +246,16 @@ XenonSidebarView::XenonSidebarView(Browser* browser)
   shortcut_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
   for (const SidebarShortcut& shortcut : kShortcuts) {
-    shortcut_contents->AddChildView(CreateShortcutButton(
-        shortcut, base::BindRepeating(&XenonSidebarView::OpenShortcut,
-                                      weak_ptr_factory_.GetWeakPtr(),
-                                      GURL(shortcut.url))));
+    auto callback =
+        shortcut.electron_app
+            ? base::BindRepeating(&XenonSidebarView::OpenElectronApp,
+                                  weak_ptr_factory_.GetWeakPtr(),
+                                  std::string(shortcut.electron_app))
+            : base::BindRepeating(&XenonSidebarView::OpenShortcut,
+                                  weak_ptr_factory_.GetWeakPtr(),
+                                  GURL(shortcut.url));
+    shortcut_contents->AddChildView(
+        CreateShortcutButton(shortcut, std::move(callback)));
   }
 
   auto* shortcuts = AddChildView(std::make_unique<views::ScrollView>());
@@ -481,6 +492,13 @@ void XenonSidebarView::OnSidebarAlignmentChanged(bool /*right_aligned*/) {
   }
 
   PreferredSizeChanged();
+}
+
+void XenonSidebarView::OpenElectronApp(const std::string& application) {
+  if (browser_) {
+    XenonWebDialog::ShowElectronApp(browser_->GetProfile(),
+                                    application + ".xenon.json", application);
+  }
 }
 
 void XenonSidebarView::OpenShortcut(const GURL& url) {

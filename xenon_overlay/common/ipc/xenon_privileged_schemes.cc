@@ -113,9 +113,15 @@ bool ParseList(const base::ListValue& list,
           result.support_fetch_api = enabled;
         } else if (key == "corsEnabled") {
           result.cors_enabled = enabled;
+        } else if (key == "codeCache") {
+          // Code caching is an optional optimization. Accept its declaration
+          // without changing the effective startup policy or child snapshot.
+          continue;
         } else if (key == "allowServiceWorkers" || key == "stream") {
           if (enabled) {
-            return Fail(error, "Unsupported scheme privilege: " + key);
+            return Fail(
+                error,
+                "ERR_NOT_SUPPORTED: unsupported scheme privilege: " + key);
           }
         } else {
           return Fail(error, "Unknown scheme privilege: " + key);

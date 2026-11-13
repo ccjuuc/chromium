@@ -6,6 +6,7 @@ module xenon.ipc.mojom;
 
 import "mojo/public/mojom/base/values.mojom";
 import "mojo/public/mojom/base/unguessable_token.mojom";
+import "third_party/blink/public/mojom/messaging/transferable_message.mojom";
 
 // Result of an Electron-compatible IPC request. Exceptions raised by a main
 // process handler are transported as |error| rather than closing the pipe.
@@ -31,6 +32,22 @@ struct IpcArchivePublicKey {
   string public_key_pem;
 };
 
+enum NativeAddonExecution {
+  // Main modules retain synchronous JavaScript callbacks and object identity.
+  kStandard,
+  // Legacy integrations explicitly share one native environment with renderers.
+  kShared,
+};
+
+enum UserDataPolicy {
+  // Application-owned files are isolated; Chromium session partitions retain
+  // their existing identity until app.setPath explicitly redirects them.
+  kIsolated,
+  // Explicit compatibility policy for installations that already wrote their
+  // application files directly into the host's User Data directory.
+  kLegacyHost,
+};
+
 // Applications load their package.json from |app_path|. Embedded modules are
 // reserved for diagnostic surfaces. Only an empty app_path and source fall
 // back to the process command line.
@@ -41,11 +58,21 @@ struct IpcMainConfig {
   string embedded_main_source;
   string virtual_main_path;
   string app_path;
+  // Original absolute release directory or host descriptor selected by the
+  // Browser config loader. Used to relaunch this application with its complete
+  // configuration; never populated from application JavaScript or JSON fields.
+  // Empty for embedded or programmatically configured applications.
+  string launch_path;
   // Optional absolute disk entry overriding package.main. It must stay inside
   // app_path; use only when the supplied package manifest needs an override.
   string main_script_path;
   string app_name;
   string app_version;
+  NativeAddonExecution native_addon_execution = kStandard;
+  // Optional stable, opaque storage identity supplied by the embedder. Display
+  // names and versions never determine persistent application directories.
+  string storage_id;
+  UserDataPolicy user_data_policy = kIsolated;
   // Original packaged executable identity (not launched by the container).
   // Must be an existing absolute file; empty uses the actual host executable.
   string executable_path;
@@ -56,6 +83,17 @@ struct IpcMainConfig {
   string runtime_directory;
   string resources_directory;
   string working_directory;
+  // Complete main-process argv supplied by the Browser for this application.
+  // Empty keeps the legacy [executable_path] value. Utility process switches
+  // must never be used as application arguments.
+  array<string> app_argv;
+  // Browser-owned runtime paths. Utilities must not infer these from their
+  // own command line or platform defaults.
+  string host_user_data_directory;
+  // Browser-resolved application userData, distinct from the host directory
+  // used by relaunch/login-item switches. Created before the Utility starts.
+  string app_user_data_directory;
+  string host_crash_dumps_directory;
   // Independent of renderer URL rewriting. Null lets the main loader infer
   // the value from the application layout.
   bool? is_packaged;
@@ -88,6 +126,11 @@ struct IpcRendererConfig {
   bool is_main_frame;
   // Browser-owned registry snapshot for this document's real partition.
   array<IpcPreloadScript> session_preloads;
+  // A sandboxed renderer receives only the source at the Browser-approved
+  // window preload path. It cannot use the general filesystem broker to
+  // resolve or read additional modules. Null is distinct from an empty file.
+  string? window_preload_source;
+  string window_preload_error;
   mojo_base.mojom.Value web_preferences;
   // Browser-only authorization for this final Document URL. A hosted app's
   // declared file-to-WebUI mapping preserves local subresource display without
@@ -113,6 +156,7 @@ struct IpcRendererConfig {
 // renderer Document and is replaced when that Document navigates.
 interface IpcRenderer {
   Dispatch(string channel, mojo_base.mojom.Value arguments);
+  DispatchPostMessage(string channel, blink.mojom.TransferableMessage message);
 };
 
 // This identity is supplied by Browser's service-worker binder, never by the
@@ -217,14 +261,24 @@ interface IpcHost {
   [Sync]
   GetRuntimeConfig() => (IpcRendererConfig? config);
 
-  BindRenderer(pending_remote<IpcRenderer> renderer);
+  // Register the authorized document before its page scripts/load completion.
+  // The reply acknowledges Browser registration, never an application callback.
+  [Sync]
+  BindRenderer(pending_remote<IpcRenderer> renderer) => (bool registered);
 
   // Transfers a fresh endpoint to the Utility service. Calls made on the
   // resulting remote bypass Browser after this one-time broker operation.
   BindNodeAddonHost(pending_receiver<NodeAddonHost> receiver,
                     pending_remote<IpcRenderer> callback_renderer);
 
+  // Renderer lifecycle notification, not an application IPC channel. The
+  // document-scoped Browser endpoint validates the current primary frame.
+  DidFirstNonEmptyLayout();
+
   Send(string channel, mojo_base.mojom.Value arguments);
+  // Uses Blink's structured-clone payload and moves actual MessagePort pipes.
+  // The Browser supplies the sender's current document identity separately.
+  PostMessage(string channel, blink.mojom.TransferableMessage message);
 
   Invoke(string channel, mojo_base.mojom.Value arguments)
       => (IpcResult result);
@@ -233,4 +287,11 @@ interface IpcHost {
   SendSync(string channel, mojo_base.mojom.Value arguments)
       => (IpcResult result);
 
+};
+
+// Trusted application main-process response metadata. Chromium's ordinary
+// URLResponseHead Mojo serialization strips Set-Cookie; this channel carries
+// final headers after Session interception. Ack precedes response delivery.
+interface ElectronNetworkHeadersObserver {
+  OnResponseHeaders(string raw_headers) => ();
 };

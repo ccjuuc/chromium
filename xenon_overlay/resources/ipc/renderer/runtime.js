@@ -162,6 +162,7 @@
 
   // --- 2. ipcRenderer ---
   const ipcRenderer = new EventEmitter();
+  transport.registerIpcRenderer?.(ipcRenderer);
   let dispatchXenonNet = null;
   let dispatchNodeAddon = null;
 
@@ -173,16 +174,15 @@
     if (transfer !== undefined && !Array.isArray(transfer)) {
       throw new TypeError('The "transfer" argument must be an array');
     }
-    if (transfer && transfer.length) {
-      throw new TypeError('MessagePort transfer is not supported by this transport');
-    }
-    transport.postMessage(channel, message);
+    // Native Blink validates the complete list and detaches ports only after
+    // structured cloning succeeds. JS cannot authenticate DOM wrappers.
+    transport.postMessage(channel, message, transfer);
   };
   ipcRenderer.sendToHost = (channel, ...args) => {
     return transport.send('__xenon:send-to-host', channel, args);
   };
 
-  const dispatchRendererMessage = (channel, args) => {
+  const dispatchRendererMessage = (channel, args, ports = []) => {
     const values = Array.isArray(args) ? args : [args];
     if (typeof channel === 'string' && channel.startsWith('__xenon:net:') &&
         dispatchXenonNet && dispatchXenonNet(channel, values[0])) {
@@ -193,7 +193,7 @@
         dispatchNodeAddon && dispatchNodeAddon(channel, values)) {
       return;
     }
-    ipcRenderer.emit(channel, {sender: ipcRenderer, ports: []}, ...values);
+    ipcRenderer.emit(channel, {sender: ipcRenderer, ports}, ...values);
   };
   transport.setDispatchHandler((...args) =>
       runWithAsyncContext(undefined, dispatchRendererMessage, undefined, args));
@@ -283,8 +283,18 @@
     showMessageBox: async () => unsupportedElectronApi('dialog.showMessageBox'),
   };
 
+  const clipboardApi = createClipboardApi({
+    callSync: callHostElectronApi,
+    callAsync: invokeHostElectronApi,
+    Blob: globalThis.Blob,
+  });
   const electron = {
     ipcRenderer,
+    crashReporter: createCrashReporter({
+      callLocal: typeof transport.crashReporterCall === 'function'
+        ? (operation, details) => transport.crashReporterCall({operation, ...details})
+        : undefined,
+    }),
     contextBridge: transport.contextBridge,
     app: appApi,
     dialog: dialogApi,
@@ -293,17 +303,12 @@
       app: appApi,
       getCurrentWindow: () => unsupportedElectronApi('remote.getCurrentWindow'),
     },
-    clipboard: {
-      readText: (type = 'clipboard') => callHostElectronApi('clipboard.readText', {type}),
-      writeText(text, type = 'clipboard') {
-        callHostElectronApi('clipboard.writeText', {text, type});
-      },
-      readHTML: (type = 'clipboard') => callHostElectronApi('clipboard.readHTML', {type}),
-      writeHTML(markup, type = 'clipboard') {
-        callHostElectronApi('clipboard.writeHTML', {markup, type});
-      },
-      clear(type = 'clipboard') { callHostElectronApi('clipboard.clear', {type}); },
-    },
+    clipboard: clipboardApi.clipboard,
+    ClipboardItem: clipboardApi.ClipboardItem,
+    nativeImage: createNativeImageApi({
+      callSync: callHostElectronApi,
+      readFileSync: path => fsModule.readFileSync(path),
+    }),
     shell: {
       openExternal: (url, options = {}) =>
           invokeHostElectronApi('shell.openExternal', {url, options}),

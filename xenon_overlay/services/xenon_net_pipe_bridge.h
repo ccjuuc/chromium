@@ -67,6 +67,12 @@ class XenonNetPipeBridge {
                   const std::string& endpoint_id) const;
   bool EndSocket(const std::string& socket_id);
   bool SetSocketReadPaused(const std::string& socket_id, bool paused);
+  bool SetSocketNoDelay(const std::string& socket_id,
+                        bool no_delay,
+                        std::string* error);
+  bool CancelConnect(const std::string& client_socket_id,
+                     const std::string& container_id,
+                     const std::string& endpoint_id);
   bool Write(const std::string& socket_id,
              const base::DictValue& wire,
              std::string* error,

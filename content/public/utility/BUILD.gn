@@ -24,6 +24,9 @@ source_set("utility_sources") {
 
   configs += [ "//content:content_implementation" ]
 
+  # UtilityThread's optional native-runtime lifetime API is macro guarded.
+  public_deps = [ "//xenon_overlay/buildflags" ]
+
   deps = [
     "//base",
     "//content:export",

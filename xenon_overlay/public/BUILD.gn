@@ -1,0 +1,8 @@
+# Copyright 2026 The Xenon Overlay Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+source_set("utility_process_launch_options") {
+  sources = [ "utility_process_launch_options.h" ]
+  public_deps = [ "//base" ]
+}

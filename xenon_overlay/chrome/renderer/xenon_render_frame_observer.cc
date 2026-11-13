@@ -29,7 +29,8 @@ constexpr char kXenonLoginWebUIHost[] = "xenon-login";
 
 XenonRenderFrameObserver::XenonRenderFrameObserver(
     content::RenderFrame* render_frame)
-    : content::RenderFrameObserver(render_frame) {}
+    : content::RenderFrameObserver(render_frame),
+      ipc_hint_(*base::CommandLine::ForCurrentProcess()) {}
 
 XenonRenderFrameObserver::~XenonRenderFrameObserver() = default;
 
@@ -43,8 +44,7 @@ void XenonRenderFrameObserver::DidStartNavigation(
   last_navigation_url_ = url;
 }
 
-bool XenonRenderFrameObserver::IsPageUrlEligibleForApi(
-    const GURL& url) const {
+bool XenonRenderFrameObserver::IsPageUrlEligibleForApi(const GURL& url) const {
   if (url.is_empty() || !url.is_valid() || url.spec() == "about:blank") {
     return false;
   }
@@ -83,29 +83,22 @@ bool XenonRenderFrameObserver::ShouldExposeXenonApi() const {
 }
 
 bool XenonRenderFrameObserver::ShouldAttemptElectronIpcInstall() const {
-  const base::CommandLine* command_line =
-      base::CommandLine::ForCurrentProcess();
-  if (!command_line->HasSwitch(ipc::switches::kEnable) || !render_frame()) {
+  if (!render_frame()) {
     return false;
   }
   blink::WebLocalFrame* web_frame = render_frame()->GetWebFrame();
-  if (!web_frame || web_frame->IsProvisional() ||
-       !web_frame->GetDocument().IsSecureContext()) {
+  if (!web_frame || web_frame->IsProvisional()) {
     return false;
   }
-  // Do not copy origin policy into the renderer command line. Install() asks
-  // the document-scoped Browser interface for runtime configuration before it
-  // exposes any globals. XenonIpcDocumentHost remains the sole authority for
-  // hosted-window identity, exact origins, and the development allow-all mode.
-  return true;
+  // This is only a negative fast path. An application partition, including
+  // its HTTP/file/custom-scheme documents, still asks the document-scoped
+  // Browser host for authorization before installing any globals.
+  return ipc_hint_.MayRequestConfig(
+      url::Origin(web_frame->GetDocument().GetSecurityOrigin()),
+      render_frame()->IsMainFrame());
 }
 
 void XenonRenderFrameObserver::DidClearWindowObject() {
-  const bool attempt_ipc_install = ShouldAttemptElectronIpcInstall();
-  if (last_navigation_url_.host() == "xenon-player-electron") {
-    VLOG(1) << "Xenon DidClearWindowObject url=" << last_navigation_url_
-            << " attempt_ipc_install=" << attempt_ipc_install;
-  }
   if (ShouldExposeXenonApi()) {
     JSXenonApi::Install(render_frame());
   }

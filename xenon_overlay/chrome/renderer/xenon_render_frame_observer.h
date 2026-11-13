@@ -11,6 +11,7 @@
 #include "content/public/renderer/render_frame_observer.h"
 #include "third_party/blink/public/web/web_navigation_type.h"
 #include "url/gurl.h"
+#include "xenon_overlay/common/ipc/xenon_renderer_command_line.h"
 
 namespace xenon {
 
@@ -41,6 +42,7 @@ class XenonRenderFrameObserver : public content::RenderFrameObserver {
   bool ShouldAttemptElectronIpcInstall() const;
 
   GURL last_navigation_url_;
+  const ipc::ElectronRendererIpcHint ipc_hint_;
 };
 
 }  // namespace xenon

@@ -5,12 +5,20 @@ mojom("mojom") {
     "xenon_ipc.mojom",
     "xenon_page_api.mojom",
     "xenon_service.mojom",
+    "xenon_utility_process.mojom",
   ]
   public_deps = [
+    ":permission_check",
     "//mojo/public/mojom/base",
+    "//third_party/blink/public/mojom:mojom_core",
   ]
   deps = [
-    "//services/network/public/mojom",
     "//sandbox/policy/mojom",
+    "//services/network/public/mojom",
   ]
+}
+
+mojom("permission_check") {
+  sources = [ "xenon_permission_check.mojom" ]
+  public_deps = [ "//mojo/public/mojom/base" ]
 }

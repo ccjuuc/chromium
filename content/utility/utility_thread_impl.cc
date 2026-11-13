@@ -30,6 +30,10 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/service_factory.h"
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "base/task/bind_post_task.h"
+#endif
+
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "content/child/sandboxed_process_thread_type_handler.h"
 #endif
@@ -180,6 +184,18 @@ UtilityThreadImpl::~UtilityThreadImpl() = default;
 void UtilityThreadImpl::Shutdown() {
   ChildThreadImpl::Shutdown();
 }
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+base::OnceClosure UtilityThreadImpl::AcquireXenonProcessKeepAlive() {
+  CHECK_EQ(this, UtilityThread::Get());
+  if (IsInBrowserProcess()) {
+    return {};
+  }
+  ChildProcess::current()->AddRefProcess();
+  return base::BindPostTaskToCurrentDefault(
+      base::BindOnce([] { ChildProcess::current()->ReleaseProcess(); }));
+}
+#endif
 
 void UtilityThreadImpl::ReleaseProcess() {
   // Ensure all main-thread services are destroyed before releasing the process.

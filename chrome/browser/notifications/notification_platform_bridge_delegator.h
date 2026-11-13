@@ -49,6 +49,12 @@ class NotificationPlatformBridgeDelegator {
 
   virtual void DisplayServiceShutDown();
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // Call after the existing ready callback has completed. A system bridge that
+  // failed initialization has already been cleared by that callback.
+  bool CanDisplayType(NotificationHandler::Type notification_type) const;
+#endif
+
  private:
   // Returns the NotificationPlatformBridge to use for |type|. This method is
   // expected to return a valid bridge, either the system or message center one.

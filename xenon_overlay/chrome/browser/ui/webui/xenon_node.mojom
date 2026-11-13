@@ -100,10 +100,8 @@ interface PageHandler {
   ControlPlayerWindow(string action, bool flag)
       => (bool state, string error_msg);
 
-  OpenNativeFileDialog(string title,
-                       array<string> filter_extensions,
-                       bool allow_multi)
-      => (array<string> file_paths);
+  OpenNativeFileDialog(mojo_base.mojom.Value options)
+      => (mojo_base.mojom.Value result, string error);
 
   ScanDirectoryVideos(string dir_path) => (array<string> video_paths);
 

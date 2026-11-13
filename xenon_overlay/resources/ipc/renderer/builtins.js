@@ -1,121 +1,3 @@
-  function streamUnsupportedError(method) {
-    const error = new Error(`stream.${method} is not supported by this runtime`);
-    error.code = 'ERR_NOT_SUPPORTED';
-    return error;
-  }
-  function streamValidateCallback(callback) {
-    if (typeof callback !== 'function') {
-      const error = new TypeError('The callback argument must be a function');
-      error.code = 'ERR_INVALID_ARG_TYPE';
-      throw error;
-    }
-  }
-  function streamFailOperation(method, callback) {
-    const error = streamUnsupportedError(method);
-    if (callback === undefined) throw error;
-    streamValidateCallback(callback);
-    queueMicrotask(() => callback(error));
-  }
-
-  // Keep the callable constructors and EventEmitter inheritance used by
-  // userland stream implementations. These base classes do not implement an
-  // I/O queue: operations must fail explicitly until a subclass supplies one.
-  function Stream() {
-    if (!(this instanceof Stream)) return new Stream();
-    EventEmitter.call(this);
-  }
-  Object.setPrototypeOf(Stream.prototype, EventEmitter.prototype);
-  Object.setPrototypeOf(Stream, EventEmitter);
-  Stream.prototype.pipe = function() { throw streamUnsupportedError('pipe'); };
-
-  function Readable(options) {
-    if (!(this instanceof Readable)) return new Readable(options);
-    Stream.call(this);
-    if (options) {
-      if (typeof options.read === 'function') this._read = options.read;
-      if (typeof options.destroy === 'function') this._destroy = options.destroy;
-    }
-  }
-  Object.setPrototypeOf(Readable.prototype, Stream.prototype);
-  Object.setPrototypeOf(Readable, Stream);
-  Readable.prototype.read = function() { throw streamUnsupportedError('Readable.read'); };
-  Readable.prototype.push = function() { throw streamUnsupportedError('Readable.push'); };
-
-  function Writable(options) {
-    if (!(this instanceof Writable)) return new Writable(options);
-    Stream.call(this);
-    if (options && typeof options.write === 'function') this._write = options.write;
-  }
-  Object.setPrototypeOf(Writable.prototype, Stream.prototype);
-  Object.setPrototypeOf(Writable, Stream);
-  Writable.prototype.write = function(chunk, encoding, callback) {
-    if (typeof encoding === 'function') callback = encoding;
-    streamFailOperation('Writable.write', callback);
-    return false;
-  };
-  Writable.prototype.end = function(chunk, encoding, callback) {
-    if (typeof chunk === 'function') callback = chunk;
-    else if (typeof encoding === 'function') callback = encoding;
-    streamFailOperation('Writable.end', callback);
-    return this;
-  };
-
-  function Duplex(options) {
-    if (!(this instanceof Duplex)) return new Duplex(options);
-    Readable.call(this, options);
-    if (options && typeof options.write === 'function') this._write = options.write;
-  }
-  Object.setPrototypeOf(Duplex.prototype, Readable.prototype);
-  Object.setPrototypeOf(Duplex, Readable);
-  Duplex.prototype.write = Writable.prototype.write;
-  Duplex.prototype.end = Writable.prototype.end;
-
-  function Transform(options) {
-    if (!(this instanceof Transform)) return new Transform(options);
-    Duplex.call(this, options);
-    if (options && typeof options.transform === 'function') {
-      this._transform = options.transform;
-    }
-  }
-  Object.setPrototypeOf(Transform.prototype, Duplex.prototype);
-  Object.setPrototypeOf(Transform, Duplex);
-  Transform.prototype._transform = function(chunk, encoding, callback) {
-    streamFailOperation('Transform._transform', callback);
-  };
-
-  function PassThrough(options) {
-    if (!(this instanceof PassThrough)) return new PassThrough(options);
-    Transform.call(this, options);
-  }
-  Object.setPrototypeOf(PassThrough.prototype, Transform.prototype);
-  Object.setPrototypeOf(PassThrough, Transform);
-
-  Stream.Stream = Stream;
-  Stream.Readable = Readable;
-  Stream.Writable = Writable;
-  Stream.Duplex = Duplex;
-  Stream.Transform = Transform;
-  Stream.PassThrough = PassThrough;
-  Stream.EventEmitter = EventEmitter;
-  Stream.pipeline = (...args) => {
-    const callback = args.pop();
-    streamValidateCallback(callback);
-    streamFailOperation('pipeline', callback);
-    const streams = Array.isArray(args[0]) ? args[0] : args;
-    return streams[streams.length - 1];
-  };
-  Stream.finished = (stream, options, callback) => {
-    if (typeof options === 'function') callback = options;
-    streamValidateCallback(callback);
-    let active = true;
-    queueMicrotask(() => {
-      if (active) callback(streamUnsupportedError('finished'));
-    });
-    return () => { active = false; };
-  };
-  Stream.default = Stream;
-  const streamModule = Stream;
-
   function rotl32(v, n) {
     return (v << n) | (v >>> (32 - n));
   }
@@ -296,11 +178,16 @@
     return out;
   }
 
+  // Capability discovery comes from the actual synchronous implementations in
+  // this realm. Blink's asynchronous WebCrypto does not imply Node hash support.
+  const digestImplementations = Object.freeze({
+    md5: md5Bytes, sha1: sha1Bytes, sha256: sha256Bytes,
+  });
   function hashBytes(algorithm, bytes) {
     const algo = String(algorithm || '').toLowerCase().replace(/-/g, '');
-    if (algo === 'md5') return md5Bytes(bytes);
-    if (algo === 'sha1') return sha1Bytes(bytes);
-    if (algo === 'sha256') return sha256Bytes(bytes);
+    if (Object.hasOwn(digestImplementations, algo)) {
+      return digestImplementations[algo](bytes);
+    }
     throw new Error('Unsupported digest algorithm: ' + algorithm);
   }
 
@@ -398,36 +285,6 @@
     };
   }
 
-  function randomArgumentError(name, value, range) {
-    const error = typeof value === 'number' ?
-        new RangeError(`${name} is outside ${range}`) :
-        new TypeError(`${name} must be a number`);
-    error.code = typeof value === 'number' ? 'ERR_OUT_OF_RANGE' : 'ERR_INVALID_ARG_TYPE';
-    return error;
-  }
-  function randomByteCount(value, name, elementSize, maximum) {
-    const bytes = typeof value === 'number' ? value * elementSize : NaN;
-    if (typeof value !== 'number' || !Number.isFinite(bytes) || bytes < 0 ||
-        bytes > Math.min(maximum, 0x7fffffff)) {
-      throw randomArgumentError(name, value, `0..${Math.min(maximum, 0x7fffffff)}`);
-    }
-    return Math.floor(bytes);
-  }
-  function randomTargetBytes(buf, offset = 0, size) {
-    const view = ArrayBuffer.isView(buf);
-    const buffer = view ? buf.buffer : buf;
-    if (!view && !(buffer instanceof ArrayBuffer) &&
-        !(typeof SharedArrayBuffer === 'function' && buffer instanceof SharedArrayBuffer)) {
-      const error = new TypeError('buf must be an ArrayBuffer or an ArrayBuffer view');
-      error.code = 'ERR_INVALID_ARG_TYPE';
-      throw error;
-    }
-    const elementSize = buf.BYTES_PER_ELEMENT || 1;
-    const byteOffset = randomByteCount(offset, 'offset', elementSize, buf.byteLength);
-    const byteLength = size === undefined ? buf.byteLength - byteOffset :
-        randomByteCount(size, 'size', elementSize, buf.byteLength - byteOffset);
-    return new Uint8Array(buffer, (view ? buf.byteOffset : 0) + byteOffset, byteLength);
-  }
   function fillSecureRandom(bytes) {
     const source = globalThis.crypto;
     if (!source || typeof source.getRandomValues !== 'function') {
@@ -453,6 +310,13 @@
   }
 
   const cryptoModule = {
+    timingSafeEqual(a, b) {
+      if (typeof transport.timingSafeEqual !== 'function') {
+        throw Object.assign(new Error('Native constant-time comparison is unavailable'),
+                            {code: 'ERR_NOT_SUPPORTED'});
+      }
+      return transport.timingSafeEqual(a, b);
+    },
     randomBytes(size, callback) {
       if (callback !== undefined) fsValidateCallback(callback);
       const length = randomByteCount(size, 'size', 1, 0x7fffffff);
@@ -481,6 +345,7 @@
       createCipherObject(algorithm, key, iv, true),
     createDecipheriv: (algorithm, key, iv) =>
       createCipherObject(algorithm, key, iv, false),
+    getHashes: () => Object.keys(digestImplementations),
     createHash: (algorithm) => createHashObject(algorithm),
     createHmac: (algorithm, key) => {
       const keySnapshot = snapshotDigestInput(key);

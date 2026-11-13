@@ -1,0 +1,78 @@
+// Copyright 2026 The Xenon Overlay Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+module xenon.ipc.mojom;
+
+import "mojo/public/mojom/base/file.mojom";
+import "sandbox/policy/mojom/sandbox.mojom";
+import "services/network/public/mojom/url_loader_factory.mojom";
+import "third_party/blink/public/mojom/messaging/message_port_descriptor.mojom";
+import "xenon_overlay/public/mojom/xenon_ipc.mojom";
+
+// This request comes from the authenticated main service. Application identity
+// and launch generation are supplied by Browser, never by this payload.
+struct UtilityProcessOptions {
+  string module_path;
+  array<string> args;
+  map<string, string> environment;
+  string working_directory;
+  array<string> exec_argv;
+  string service_name;
+  string stdout_mode;
+  string stderr_mode;
+  bool allow_loading_unsigned_libraries;
+  bool respond_to_auth_requests_from_main_process;
+};
+
+struct UtilityProcessBootstrap {
+  IpcMainConfig main;
+  map<string, string> environment;
+  array<string> argv;
+  array<string> exec_argv;
+  string working_directory;
+  // Environment, cwd and OS handles are configured during process launch.
+  // These optional files also initialize the Windows CRT's fd table before
+  // application code runs; POSIX already receives fds through launch remapping.
+  mojo_base.mojom.File? stdin_file;
+  mojo_base.mojom.File? stdout_file;
+  mojo_base.mojom.File? stderr_file;
+  pending_remote<network.mojom.URLLoaderFactory>? network_factory;
+  blink.mojom.MessagePortDescriptor parent_port;
+};
+
+// Child -> Browser, scoped to one authenticated parent generation. Browser
+// reports observed OS exit only after cleanup and actual termination.
+interface UtilityProcessServiceObserver {
+  OnExitRequested(int32 exit_code);
+  CreateNetworkFactory(string partition,
+      pending_remote<ElectronNetworkHeadersObserver> headers)
+      => (pending_remote<network.mojom.URLLoaderFactory>? factory, string error);
+  [Sync]
+  GetNetworkOnline() => (bool online, string error);
+};
+
+[ServiceSandbox=sandbox.mojom.Sandbox.kNoSandbox]
+interface UtilityProcessService {
+  Start(UtilityProcessBootstrap config,
+      pending_remote<UtilityProcessServiceObserver> observer)
+      => (bool success, string error);
+  Shutdown(int32 exit_code);
+};
+
+interface UtilityProcessClient {
+  OnSpawn(int32 pid);
+  OnExit(int32 exit_code, string reason);
+  OnError(string error);
+};
+
+// Owned by Browser for exactly one fork and invalidated with its parent
+// generation. MessagePort traffic itself travels directly between endpoints.
+interface UtilityProcessControl {
+  [Sync]
+  Kill() => (bool killed);
+  // One bounded pending read per stream provides natural OS-pipe backpressure.
+  ReadOutput(int32 fd, uint32 maximum_bytes)
+      => (array<uint8> data, bool eof, string error);
+  CloseOutput(int32 fd);
+};

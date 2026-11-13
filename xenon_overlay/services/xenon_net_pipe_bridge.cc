@@ -230,6 +230,9 @@ void XenonNetPipeBridge::OnPipeRead(uv_stream_t* stream,
   if (!socket || !socket->owner) {
     return;
   }
+  if (uv_is_closing(reinterpret_cast<uv_handle_t*>(socket->stream()))) {
+    return;
+  }
   if (count > 0) {
     base::DictValue wire;
     wire.Set("t", "b64");
@@ -243,7 +246,7 @@ void XenonNetPipeBridge::OnPipeRead(uv_stream_t* stream,
                             "__xenon:net:data", std::move(payload));
     return;
   }
-  if (count == UV_EOF && socket->tcp) {
+  if (count == UV_EOF) {
     uv_read_stop(stream);
     socket->read_ended = true;
     base::DictValue payload;
@@ -337,6 +340,9 @@ void XenonNetPipeBridge::OnPipeConnect(uv_connect_t* request, int status) {
                      ? static_cast<PipeSocket*>(request->handle->data)
                      : nullptr;
   if (!socket || !socket->owner) {
+    return;
+  }
+  if (uv_is_closing(reinterpret_cast<uv_handle_t*>(socket->stream()))) {
     return;
   }
   XenonNetPipeBridge* owner = socket->owner;
@@ -676,6 +682,40 @@ bool XenonNetPipeBridge::SetSocketReadPaused(const std::string& socket_id,
   return true;
 }
 
+bool XenonNetPipeBridge::SetSocketNoDelay(const std::string& socket_id,
+                                         bool no_delay,
+                                         std::string* error) {
+  const auto found = sockets_.find(socket_id);
+  if (found == sockets_.end()) {
+    return false;
+  }
+  // Node accepts this option on a pipe without applying a TCP setting.
+  if (!found->second->tcp) {
+    return true;
+  }
+  const int status = uv_tcp_nodelay(&found->second->tcp_handle, no_delay);
+  if (status < 0) {
+    *error = UvError(status);
+  }
+  return true;
+}
+
+bool XenonNetPipeBridge::CancelConnect(const std::string& client_socket_id,
+                                      const std::string& container_id,
+                                      const std::string& endpoint_id) {
+  // The native handle is allocated before its connected reply can reach JS.
+  // Scope the JS id to its owner so cancellation cannot target another page.
+  for (const auto& [id, socket] : sockets_) {
+    if (socket->js_socket_id == client_socket_id &&
+        socket->container_id == container_id &&
+        socket->endpoint_id == endpoint_id) {
+      CloseSocket(socket, true);
+      return true;
+    }
+  }
+  return false;
+}
+
 bool XenonNetPipeBridge::EndSocket(const std::string& socket_id) {
   auto found = sockets_.find(socket_id);
   if (found == sockets_.end()) {
@@ -709,7 +749,7 @@ void XenonNetPipeBridge::OnSocketShutdown(uv_shutdown_t* request, int status) {
                                                    : socket->js_socket_id);
   socket->owner->Dispatch(socket->container_id, socket->endpoint_id,
                           "__xenon:net:finish", std::move(payload));
-  if (socket->read_ended || !socket->tcp) {
+  if (socket->read_ended) {
     socket->owner->CloseSocket(socket, true);
   }
 }
@@ -848,9 +888,9 @@ void XenonNetPipeBridge::CloseServer(PipeServer* server, bool notify_renderer) {
   }
   server->closing = true;
   server->notify_close = notify_renderer;
-  // TCP stops accepting while established sockets drain; preserve pipe
-  // behavior.
-  if (!server->tcp || !notify_renderer) {
+  // A user-requested server.close() stops accepting while its established
+  // sockets drain. Endpoint teardown still closes every owned connection.
+  if (!notify_renderer) {
     std::vector<PipeSocket*> sockets;
     for (const auto& [id, socket] : sockets_) {
       if (socket->server == server) {
