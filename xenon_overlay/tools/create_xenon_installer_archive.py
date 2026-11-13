@@ -29,7 +29,7 @@ from copy_runtime_tree import sync_tree
 
 from import_electron_app import (ImportFailure, absolute_path, check_ancestors,
                                  contains, detect_layout, import_application,
-                                 inventory)
+                                 inventory, filesystem_path)
 
 
 class StagingComplete(Exception):
@@ -74,6 +74,7 @@ def relative_path(value: str) -> Path:
 
 def digest_file(path: Path) -> dict:
     check_ancestors(path)
+    path = filesystem_path(path)
     if not path.is_file():
         raise ImportFailure(f'required installer file is missing: {path}')
     digest = hashlib.sha256()
@@ -113,7 +114,7 @@ def prepare_payloads(archive, options, wrapper_options) -> tuple[list, list]:
         from_source = hosted and wrapper_options.xenon_stage_hosted_sources
         canonical = canonical_sources.pop(relative, None)
         input_source = canonical if from_source else source
-        if input_source is None or not input_source.is_dir():
+        if input_source is None or not filesystem_path(input_source).is_dir():
             raise ImportFailure(f'required application directory is missing: {source}')
         if any(contains(previous['path'], relative) or
                contains(relative, previous['path']) for previous in directories):
@@ -129,7 +130,8 @@ def prepare_payloads(archive, options, wrapper_options) -> tuple[list, list]:
                 canonical_expected, profile)
             if from_source:
                 expected = windows_electron_runtime.project_inventory(expected, profile)
-            windows_electron_runtime.validate_projection(input_source, expected, profile)
+            windows_electron_runtime.validate_projection(
+                filesystem_path(input_source), expected, profile)
             del projected_sources[relative]
         if canonical is not None and canonical_expected != expected:
             raise ImportFailure(
@@ -213,7 +215,7 @@ def verify_payloads(archive, options, staging: Path, directories: list,
                     files: list) -> dict:
     build = absolute_path(Path(options.build_dir))
     destination = staging / archive.CHROME_DIR
-    summary = {'staging_directory': destination.as_posix(),
+    summary = {'staging_directory': absolute_path(destination).as_posix(),
                'applications': [], 'external_files': []}
     for payload in directories:
         relative, expected = payload['path'], payload['inventory']
@@ -222,7 +224,7 @@ def verify_payloads(archive, options, staging: Path, directories: list,
         if payload['windows_hosted']:
             canonical_record = windows_electron_runtime.project_inventory(
                 canonical_record, payload['windows_profile'])
-            windows_electron_runtime.validate_projection(destination / relative,
+            windows_electron_runtime.validate_projection(filesystem_path(destination / relative),
                                                          inventory(destination / relative),
                                                          payload['windows_profile'])
         if ((not payload['from_canonical_source'] and
@@ -283,7 +285,8 @@ def main(argv: list[str] | None = None) -> int:
         check_ancestors(staging)
         # Upstream recreates exactly this directory. Verify the final resolved
         # target before allowing its recursive deletion to run.
-        if staging.resolve() != staging or contains(staging, build):
+        if (absolute_path(filesystem_path(staging).resolve()) != staging or
+                contains(staging, build)):
             raise ImportFailure('unsafe installer staging directory')
         directories, files = prepare_payloads(archive, options, wrapper_options)
         manifest_path = None
@@ -317,6 +320,13 @@ def main(argv: list[str] | None = None) -> int:
         original_create = archive.CreateArchiveFiles
 
         def copy_with_payloads(config, distribution, staged, *arguments):
+            if os.name == 'nt':
+                # Extended Windows paths require backslash separators. Release
+                # files may use either spelling for staging destinations.
+                for section in config.sections():
+                    for option in config.options(section):
+                        config.set(section, option,
+                                   os.path.normpath(config.get(section, option)))
             original_copy(config, distribution, staged, *arguments)
             stage_payloads(archive, options, Path(staged), directories, files)
             if options.build_time:
@@ -333,6 +343,10 @@ def main(argv: list[str] | None = None) -> int:
 
         archive.CopyAllFilesToStagingDir = copy_with_payloads
         archive.CreateArchiveFiles = create_after_verification
+        # Upstream owns staging deletion, timestamp traversal and archive
+        # enumeration. Give that entire IO boundary a long-path spelling;
+        # payload records and dependency paths remain ordinary paths.
+        options.staging_dir = str(filesystem_path(staging_parent))
         archive.main(options)
         if manifest_path:
             write_manifest(manifest_path, staging, directories)

@@ -9,6 +9,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -18,6 +19,47 @@ import import_electron_app as importer
 
 
 class ImportApplicationTest(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'nt', 'Windows extended path spelling')
+    def test_long_path_spelling_roundtrips_drives_and_unc_without_resolving(self):
+        for value in ('C:/release/../application',
+                      '//server/share/releases/application',
+                      r'\\?\unc\Server\Share\releases\application',
+                      r'\\?\uNc\Server\Share\releases\application'):
+            ordinary = importer.absolute_path(Path(value))
+            extended = importer.filesystem_path(ordinary)
+            self.assertTrue(str(extended).startswith('\\\\?\\'))
+            self.assertEqual(importer.absolute_path(extended), ordinary)
+            self.assertEqual(importer.filesystem_path(extended), extended)
+        self.assertEqual(
+            importer.absolute_path(Path(r'\\?\unc\Server\Share\application')),
+            Path(r'\\Server\Share\application'))
+        for value in (r'\\?\Volume{00000000-0000-0000-0000-000000000000}\app',
+                      r'\\?\GLOBALROOT\Device\HarddiskVolume1\app',
+                      r'\\?\C:relative'):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                    importer.ImportFailure, 'unsupported Windows extended path namespace'):
+                importer.absolute_path(Path(value))
+
+    def test_long_paths_survive_import_replacement_and_manifest(self):
+        self.release()
+        relative = '/'.join('nested-' + str(i) + '-' + 'x' * 48
+                            for i in range(5)) + '/opaque.node'
+        original = importer.filesystem_path(self.source / relative)
+        original.parent.mkdir(parents=True)
+        original.write_bytes(b'long native payload')
+        self.addCleanup(shutil.rmtree, importer.filesystem_path(self.root))
+        self.assertGreater(len(str(self.source / relative)), 260)
+        for contents in (b'long native payload', b'replaced native payload'):
+            original.write_bytes(contents)
+            result = importer.import_application(self.source, self.target, self.manifest)
+            self.assertTrue(importer.check_application(self.source, self.target)['equal'])
+            self.assertEqual(importer.filesystem_path(self.target / relative).read_bytes(),
+                             contents)
+            self.assertEqual(result['target'], self.target.as_posix())
+            self.assertEqual(json.loads(self.manifest.read_text())['source'],
+                             self.source.as_posix())
+        self.assertFalse(list(self.target.parent.glob('.sample.backup-*')))
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix='electron-import-test-')
         self.addCleanup(temporary.cleanup)
@@ -174,7 +216,7 @@ class ImportApplicationTest(unittest.TestCase):
         original_replace = importer.os.replace
 
         def fail_install(source, target):
-            if '.stage-' in source.name and target == self.target:
+            if '.stage-' in source.name and importer.absolute_path(target) == self.target:
                 raise OSError('locked installation')
             return original_replace(source, target)
 
@@ -190,7 +232,7 @@ class ImportApplicationTest(unittest.TestCase):
         original_replace = importer.os.replace
 
         def fail_manifest(source, target):
-            if target == self.manifest:
+            if importer.absolute_path(target) == self.manifest:
                 raise OSError('locked manifest')
             return original_replace(source, target)
 
@@ -206,7 +248,7 @@ class ImportApplicationTest(unittest.TestCase):
         original_replace = importer.os.replace
 
         def locked_destination(source, target):
-            if target == self.target:
+            if importer.absolute_path(target) == self.target:
                 raise OSError('destination remains locked')
             return original_replace(source, target)
 
@@ -223,7 +265,7 @@ class ImportApplicationTest(unittest.TestCase):
         original_replace = importer.os.replace
 
         def fail_manifest(source, target):
-            if target == self.manifest:
+            if importer.absolute_path(target) == self.manifest:
                 raise OSError('manifest cannot be installed')
             return original_replace(source, target)
 

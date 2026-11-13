@@ -6,13 +6,14 @@
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import struct
 import subprocess
 import tempfile
 import unittest
 from unittest import mock
 
-from import_electron_app import inventory
+from import_electron_app import filesystem_path, inventory
 import package_windows as package
 import verify_windows_installer as verifier
 from windows_electron_runtime_unittest import pe_image
@@ -164,13 +165,20 @@ class PackagingTest(unittest.TestCase):
         source = self.root / 'staging/Chrome-bin'
         source.mkdir(parents=True)
         (source / 'fixture.bin').write_bytes(b'product file\0\xff')
+        relative = '/'.join('nested-' + str(i) + '-' + 'x' * 48
+                            for i in range(5)) + '/native.node'
+        deep_file = filesystem_path(source / relative)
+        deep_file.parent.mkdir(parents=True)
+        deep_file.write_bytes(b'long native payload')
+        self.addCleanup(shutil.rmtree, filesystem_path(self.root))
         manifest = {'schema_version': 1, 'archive_root': 'Chrome-bin',
                     'applications': [], 'tree': inventory(source)}
         manifest_path = self.build / 'xenon_installer_manifest.json'
         manifest_path.write_text(json.dumps(manifest))
         for archive, input_path in ((self.build / 'chrome.7z', source),
                                     (self.build / 'chrome.packed.7z', self.build / 'chrome.7z')):
-            subprocess.run([str(tool), 'a', '-t7z', str(archive), str(input_path), '-mx0'],
+            subprocess.run([str(tool), 'a', '-t7z', str(archive),
+                            str(filesystem_path(input_path)), '-mx0'],
                            check=True, capture_output=True)
         installer = self.build / 'fixture.exe'
         installer.write_bytes(resource_image((self.build / 'chrome.packed.7z').read_bytes()))

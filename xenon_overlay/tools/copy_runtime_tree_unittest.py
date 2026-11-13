@@ -5,6 +5,7 @@
 
 import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest import mock
@@ -14,6 +15,28 @@ from windows_electron_runtime_unittest import pe_image
 
 
 class CopyRuntimeTreeTest(unittest.TestCase):
+    def test_long_paths_sync_remove_stale_files_and_keep_plain_dependencies(self):
+        relative = '/'.join('nested-' + str(i) + '-' + 'x' * 48
+                            for i in range(5)) + '/native.node'
+        original = copy_runtime.filesystem_path(self.source / relative)
+        original.parent.mkdir(parents=True)
+        original.write_bytes(b'original native payload')
+        self.addCleanup(shutil.rmtree, copy_runtime.filesystem_path(self.target))
+        self.addCleanup(shutil.rmtree, copy_runtime.filesystem_path(self.source))
+        self.assertGreater(len(str(self.source / relative)), 260)
+        _, _, inputs = copy_runtime.sync_tree(self.source, self.target)
+        target = copy_runtime.filesystem_path(self.target / relative)
+        self.assertEqual(target.read_bytes(), b'original native payload')
+        self.assertIn('source/' + relative, inputs)
+        self.assertFalse(any('?' in path for path in inputs))
+        original.write_bytes(b'replaced native payload')
+        copy_runtime.sync_tree(self.source, self.target)
+        self.assertEqual(target.read_bytes(), b'replaced native payload')
+        original.unlink()
+        original.parent.rmdir()
+        copy_runtime.sync_tree(self.source, self.target)
+        self.assertFalse(target.parent.exists())
+
     def test_ple_sync_keeps_root_vulkan_dependency_and_removes_engine(self):
         self.write(self.source, 'resources/app/out.asar', b'opaque PLE')
         self.write(self.source, 'libplacebo-274.dll', pe_image('vulkan-1.dll'))

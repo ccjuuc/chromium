@@ -16,10 +16,50 @@ import unittest
 from unittest import mock
 
 import create_xenon_installer_archive as wrapper
-from import_electron_app import inventory
+from import_electron_app import filesystem_path, inventory
 
 
 class InstallerPayloadTest(unittest.TestCase):
+    def test_long_path_archive_rebuild_timestamp_and_dependencies(self):
+        tool = (Path(__file__).resolve().parents[2] /
+                'third_party/lzma_sdk/bin/host_platform' /
+                ('7za.exe' if os.name == 'nt' else '7za'))
+        if not tool.is_file():
+            self.skipTest('bundled 7za is unavailable')
+        relative = '/'.join('nested-' + str(i) + '-' + 'x' * 48
+                            for i in range(5)) + '/native.node'
+        original = filesystem_path(self.first / relative)
+        original.parent.mkdir(parents=True)
+        original.write_bytes(b'long native payload')
+        self.addCleanup(shutil.rmtree, filesystem_path(self.root))
+        self.assertGreater(len(str(self.staged_root() / self.first.name / relative)), 260)
+        depfile = self.build / 'archive.d'
+        # A second real run covers upstream rmtree of an existing long tree.
+        for contents in (b'long native payload', b'updated native payload'):
+            original.write_bytes(contents)
+            archive = wrapper.load_archive_module()
+            archive.GetLZMAExec = mock.Mock(return_value=str(tool))
+            archive.PrepareSetupExec = mock.Mock(return_value='setup.ex_')
+            archive.CreateResourceInputFile = mock.Mock()
+            with mock.patch.object(wrapper, 'load_archive_module', return_value=archive), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(wrapper.main(self.base_args + self.payload_args + [
+                    '--build_time=1700000000', '--fast_archive_compression',
+                    '--depfile=' + str(depfile)]), 0)
+            staged = filesystem_path(self.staged_root() / self.first.name / relative)
+            self.assertEqual(staged.read_bytes(), contents)
+            self.assertEqual(int(staged.stat().st_mtime), 1700000000)
+            dependencies = depfile.read_text()
+            self.assertIn(self.first.name + '/' + relative, dependencies)
+            self.assertNotIn('//?/', dependencies)
+        extracted = self.root / 'long-extracted'
+        flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+        subprocess.run([str(tool), 'x', str(self.build / 'chrome.7z'),
+                        '-o' + str(filesystem_path(extracted)), '-y'], check=True,
+                       capture_output=True, creationflags=flags)
+        self.assertEqual(inventory(extracted / 'Chrome-bin' / self.first.name),
+                         inventory(self.first))
+
     def test_manifest_records_actual_staged_hashes_without_test_claims(self):
         manifest = self.build / 'xenon_installer_manifest.json'
         self.assertEqual(self.run_staging(

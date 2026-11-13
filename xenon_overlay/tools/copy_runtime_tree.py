@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 import windows_electron_runtime
+from import_electron_app import absolute_path, filesystem_path
 
 # Add src root to sys.path so we can import build.action_helpers if needed
 _SRC_ROOT = Path(__file__).resolve().parents[2]
@@ -40,7 +41,7 @@ def fallback_write_depfile(depfile_path: str, first_gn_output: str, inputs: list
 
 def _metadata_without_links(path: Path) -> os.stat_result | None:
     try:
-        metadata = path.lstat()
+        metadata = filesystem_path(path).lstat()
     except FileNotFoundError:
         return None
     if (stat.S_ISLNK(metadata.st_mode) or
@@ -51,6 +52,7 @@ def _metadata_without_links(path: Path) -> os.stat_result | None:
 
 
 def _check_ancestors(path: Path) -> None:
+    path = absolute_path(path)
     for candidate in (*reversed(path.parents), path):
         _metadata_without_links(candidate)
 
@@ -61,15 +63,16 @@ def _contains(parent: Path, child: Path) -> bool:
 
 def _validate_roots(source: Path, target: Path) -> tuple[Path, Path]:
     # Resolve relative spelling, but do not follow links before checking them.
-    source, target = Path(os.path.abspath(source)), Path(os.path.abspath(target))
+    source, target = absolute_path(source), absolute_path(target)
     _check_ancestors(source)
     _check_ancestors(target)
-    if not source.is_dir():
+    if not filesystem_path(source).is_dir():
         raise ValueError(f'source is not a directory: {source}')
-    source, target = source.resolve(), target.resolve()
+    source, target = (absolute_path(filesystem_path(path).resolve())
+                      for path in (source, target))
     if _contains(source, target) or _contains(target, source):
         raise ValueError('source and destination directories must not overlap')
-    if target.exists() and not target.is_dir():
+    if filesystem_path(target).exists() and not filesystem_path(target).is_dir():
         raise ValueError(f'destination is not a directory: {target}')
     return source, target
 
@@ -77,6 +80,7 @@ def _validate_roots(source: Path, target: Path) -> tuple[Path, Path]:
 def _inventory(root: Path) -> tuple[set[str], set[str]]:
     # String keys retain filename casing even on case-insensitive hosts.
     directories, files = {'.'}, set()
+    root = filesystem_path(root)
 
     def visit(directory: Path) -> None:
         _check_ancestors(directory)
@@ -102,14 +106,16 @@ def _inventory(root: Path) -> tuple[set[str], set[str]]:
 
 def _checked_destination(root: Path, path: Path, *, allow_root: bool = False) -> Path:
     _check_ancestors(path)
-    resolved_root, resolved_path = root.resolve(), path.resolve()
+    resolved_root, resolved_path = (filesystem_path(item).resolve()
+                                    for item in (root, path))
     if (not _contains(resolved_root, resolved_path) or
             (resolved_path == resolved_root and not allow_root)):
         raise ValueError(f'refusing to modify a path outside destination: {path}')
-    return path
+    return filesystem_path(path)
 
 
 def _same_contents(source: Path, target: Path) -> bool:
+    source, target = filesystem_path(source), filesystem_path(target)
     if source.stat().st_size != target.stat().st_size:
         return False
     # Timestamp equality alone cannot establish byte equality: release tools
@@ -135,12 +141,12 @@ def sync_tree(src_dir: Path, dst_dir: Path,
         projected = windows_electron_runtime.project_inventory(
             inventory(src_dir), windows_electron_profile)
         windows_electron_runtime.validate_projection(
-            src_dir, projected, windows_electron_profile)
+            filesystem_path(src_dir), projected, windows_electron_profile)
         source_dirs = {path for path in source_dirs
                        if not windows_electron_runtime.excluded(path, windows_electron_profile)}
         source_files = {path for path in source_files
                         if not windows_electron_runtime.excluded(path, windows_electron_profile)}
-    target_dirs, target_files = (_inventory(dst_dir) if dst_dir.exists()
+    target_dirs, target_files = (_inventory(dst_dir) if filesystem_path(dst_dir).exists()
                                  else (set(), set()))
     # Validate both complete trees before deleting stale output or copying.
     _checked_destination(dst_dir, dst_dir, allow_root=True).mkdir(
@@ -161,10 +167,10 @@ def sync_tree(src_dir: Path, dst_dir: Path,
         source, target = src_dir / relative, dst_dir / relative
         _check_ancestors(source)
         _checked_destination(dst_dir, target)
-        if target.exists() and _same_contents(source, target):
+        if filesystem_path(target).exists() and _same_contents(source, target):
             skipped += 1
         else:
-            shutil.copy2(source, target)
+            shutil.copy2(filesystem_path(source), filesystem_path(target))
             copied += 1
 
     # Directories are dependencies too: otherwise creating or removing an

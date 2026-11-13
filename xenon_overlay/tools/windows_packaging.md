@@ -61,7 +61,27 @@ link logs are retained for failures as well as successful runs.
 | `verify_windows_installer.py` | Fresh extraction, hashes, hosted policies and archive roundtrip |
 | `windows_installer_resources.py` | Read/hash the installer's PE archive resource without executing it |
 
-TH and PLE are explicitly selected through `xenon_electron_apps` in GN args.
+All bundled applications are explicitly selected through `xenon_electron_apps`
+in GN args. Prepare payloads in `xenon_overlay/resources/<name>` first. TH/PLE
+remain locally imported and ignored by Git. The three public applications now
+have audited hosted payloads eligible for Git tracking, with adjacent release
+manifests and byte-preserving attributes. To include the existing five
+applications, keep the other build arguments and set:
+
+```gn
+xenon_electron_apps = [ "thunder_2025", "xenon_player", "drawio", "marktext", "motrix" ]
+```
+
+Use `[ "drawio", "marktext", "motrix" ]` for only the three public applications,
+or `[]` for none. There is no application-specific installer branch for these
+three releases. Their source trees have already had redundant Electron runtimes
+removed; the copy/archive pipeline preserves every remaining file, including
+unchanged ASARs, native modules, helpers and licenses. Matching external
+`<name>.xenon.json` and `<name>.asar-public-key.pem` files are included when
+present. The archive places the application directories and descriptors next
+to the host executable; internal release-relative paths stay unchanged.
+
+TH and PLE additionally use explicit hosted runtime profiles.
 Their original imported releases remain intact. Hosted installer staging reads
 those originals directly, so runtime logs/caches in a running build output do not
 enter the installer. See [runtime policy](windows_electron_runtime.md) for the
@@ -77,6 +97,13 @@ runtime boundaries, verifies `chrome.packed.7z` decompresses to `chrome.7z`, and
 hashes the installer's embedded `B7/CHROME.PACKED.7Z` resource against the packed
 archive. A missing manifest requires a new package; old historical reports are
 not substituted for it.
+
+On Windows, file operations use extended-length paths so that a deep upstream
+release still works below the installer staging directory. This applies to
+copying, replacement/cleanup, staging traversal and verification extraction;
+it does not require changing the system long-path policy. Manifests and Ninja
+dependencies retain ordinary paths, and symlink/junction and containment checks
+remain in place. Other platforms keep their native path handling.
 
 This verifies packaging and file integrity. It does not install the product,
 sign it, launch applications, or claim that startup/media tests ran. Validate

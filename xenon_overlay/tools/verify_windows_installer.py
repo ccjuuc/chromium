@@ -10,7 +10,7 @@ import json
 from pathlib import Path, PureWindowsPath
 import subprocess
 
-from import_electron_app import check_ancestors, inventory
+from import_electron_app import check_ancestors, filesystem_path, inventory
 from windows_electron_runtime import validate_projection
 from windows_installer_resources import packed_resources
 
@@ -67,7 +67,8 @@ def verify_tree(product, manifest):
             if (path.is_absolute() or path.drive or '..' in path.parts or
                     app['path'] not in manifest['tree']['directories']):
                 raise ValueError('Invalid application path in packaging manifest')
-            validate_projection(product / path, inventory(product / path), app['profile'])
+            validate_projection(filesystem_path(product / path),
+                                inventory(product / path), app['profile'])
 
 
 def verify(build, installer, output, sevenzip=None):
@@ -98,7 +99,8 @@ def verify(build, installer, output, sevenzip=None):
         packed = build / 'chrome.packed.7z'
         listing = command('list-archive', ['l', '-slt', '-ba', '-sccUTF-8', archive])
         archive_members(listing.decode('utf-8').replace('\r\n', '\n'))
-        command('extract-archive', ['x', archive, '-o' + str(output / 'extracted'), '-y'])
+        command('extract-archive', [
+            'x', archive, '-o' + str(filesystem_path(output / 'extracted')), '-y'])
         verify_tree(output / 'extracted/Chrome-bin', manifest)
         check('all_staged_file_hashes_match', True, files=len(manifest['tree']['files']))
         with (output / 'packed-stream.log').open('wb') as errors:

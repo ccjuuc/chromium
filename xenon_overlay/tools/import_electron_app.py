@@ -28,19 +28,44 @@ class ImportFailure(ValueError):
 
 def absolute_path(path: Path) -> Path:
     # Do not resolve links before checking them: that would hide the redirect.
-    return Path(os.path.abspath(path))
+    value = os.fspath(path)
+    if os.name == 'nt':
+        if value.casefold().startswith('\\\\?\\unc\\'):
+            value = '\\\\' + value[8:]
+        elif value.startswith('\\\\?\\'):
+            value = value[4:]
+            if (len(value) < 3 or value[0] not in
+                    'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ' or
+                    value[1] != ':' or value[2] not in '\\/'):
+                raise ImportFailure('unsupported Windows extended path namespace')
+    return Path(os.path.abspath(value))
+
+
+def filesystem_path(path: Path) -> Path:
+    """Use Windows long-path IO without changing public paths or system policy.
+
+    Callers retain ordinary paths for manifests, containment checks and build
+    dependencies. This conversion does not resolve or bypass link validation.
+    """
+    if os.name != 'nt':
+        return Path(path)
+    value = str(absolute_path(path))
+    if value.startswith('\\\\'):
+        return Path('\\\\?\\UNC\\' + value[2:])
+    return Path('\\\\?\\' + value)
 
 
 def reject_link(path: Path) -> None:
-    metadata = path.lstat()
+    metadata = filesystem_path(path).lstat()
     if (stat.S_ISLNK(metadata.st_mode) or
             getattr(metadata, 'st_file_attributes', 0) & 0x400):
         raise ImportFailure(f'links and reparse points are unsupported: {path}')
 
 
 def check_ancestors(path: Path) -> None:
+    path = absolute_path(path)
     for item in (*reversed(path.parents), path):
-        if os.path.lexists(item):
+        if os.path.lexists(filesystem_path(item)):
             reject_link(item)
 
 
@@ -53,18 +78,18 @@ def validate_paths(source: Path, target: Path,
     source, target = absolute_path(source), absolute_path(target)
     check_ancestors(source)
     check_ancestors(target)
-    if not source.is_dir():
+    if not filesystem_path(source).is_dir():
         raise ImportFailure(f'source is not a directory: {source}')
     if contains(source, target) or contains(target, source):
         raise ImportFailure('source and target directories must not overlap')
-    if target.exists() and not target.is_dir():
+    if filesystem_path(target).exists() and not filesystem_path(target).is_dir():
         raise ImportFailure(f'target is not a directory: {target}')
     if manifest is not None:
         manifest = absolute_path(manifest)
         check_ancestors(manifest)
         if contains(source, manifest) or contains(target, manifest):
             raise ImportFailure('manifest must be outside source and target')
-        if manifest.exists() and not manifest.is_file():
+        if filesystem_path(manifest).exists() and not filesystem_path(manifest).is_file():
             raise ImportFailure(f'manifest is not a file: {manifest}')
     return source, target, manifest
 
@@ -72,6 +97,7 @@ def validate_paths(source: Path, target: Path,
 def inventory(root: Path) -> dict:
     """Record every regular file and directory without following links."""
     check_ancestors(root)
+    root = filesystem_path(root)
     directories = []
     files = []
 
@@ -105,6 +131,7 @@ def inventory(root: Path) -> dict:
 
 def detect_layout(source: Path) -> dict:
     """Describe common layouts, without interpreting or opening an ASAR."""
+    source = filesystem_path(source)
     candidates = []
     for relative in ('Contents/Resources/app.asar',
                      'Contents/Resources/app/package.json',
@@ -156,7 +183,7 @@ def check_application(source: Path, target: Path) -> dict:
     source, target, _ = validate_paths(source, target)
     expected = inventory(source)
     detect_layout(source)
-    if not target.is_dir():
+    if not filesystem_path(target).is_dir():
         raise ImportFailure(f'target directory does not exist: {target}')
     differences = compare_inventories(expected, inventory(target))
     return {'equal': not any(differences.values()), **differences}
@@ -169,7 +196,7 @@ def remove_owned_tree(path: Path, parent: Path) -> None:
     check_ancestors(path)
     if path.parent != parent or path == parent:
         raise ImportFailure(f'refusing to remove an unexpected directory: {path}')
-    shutil.rmtree(path)
+    shutil.rmtree(filesystem_path(path))
 
 
 def import_application(source: Path, target: Path,
@@ -177,51 +204,53 @@ def import_application(source: Path, target: Path,
     source, target, manifest = validate_paths(source, target, manifest)
     expected = inventory(source)
     layout = detect_layout(source)
-    if target.exists():
+    if filesystem_path(target).exists():
         inventory(target)  # Reject redirects in the old tree before replacing it.
     record = {'schema_version': 1, 'source': source.as_posix(),
               'target': target.as_posix(), 'layout': layout, **expected}
-    target.parent.mkdir(parents=True, exist_ok=True)
-    stage = Path(tempfile.mkdtemp(prefix=f'.{target.name}.stage-', dir=target.parent))
+    filesystem_path(target.parent).mkdir(parents=True, exist_ok=True)
+    stage = absolute_path(Path(tempfile.mkdtemp(
+        prefix=f'.{target.name}.stage-', dir=filesystem_path(target.parent))))
     backup = target.parent / f'.{target.name}.backup-{uuid.uuid4().hex}'
     staged_manifest = None
     old_moved = False
     installed = False
     try:
         for relative in expected['directories']:
-            (stage / relative).mkdir(parents=True, exist_ok=True)
+            filesystem_path(stage / relative).mkdir(parents=True, exist_ok=True)
         for entry in expected['files']:
             original = source / entry['path']
             check_ancestors(original)
-            shutil.copy2(original, stage / entry['path'], follow_symlinks=False)
+            shutil.copy2(filesystem_path(original),
+                         filesystem_path(stage / entry['path']), follow_symlinks=False)
         # Recheck both sides: the source must remain a stable release throughout
         # import, and copying must not silently change a file or directory.
         if inventory(source) != expected or inventory(stage) != expected:
             raise ImportFailure('release changed during import or copied contents differ')
         if manifest is not None:
-            manifest.parent.mkdir(parents=True, exist_ok=True)
+            filesystem_path(manifest.parent).mkdir(parents=True, exist_ok=True)
             descriptor, filename = tempfile.mkstemp(
-                prefix=f'.{manifest.name}.stage-', dir=manifest.parent)
-            staged_manifest = Path(filename)
+                prefix=f'.{manifest.name}.stage-', dir=filesystem_path(manifest.parent))
+            staged_manifest = absolute_path(Path(filename))
             with os.fdopen(descriptor, 'w', encoding='utf-8', newline='\n') as stream:
                 json.dump(record, stream, ensure_ascii=False, indent=2)
                 stream.write('\n')
         check_ancestors(target)
-        if target.exists():
-            os.replace(target, backup)
+        if filesystem_path(target).exists():
+            os.replace(filesystem_path(target), filesystem_path(backup))
             old_moved = True
         try:
-            os.replace(stage, target)
+            os.replace(filesystem_path(stage), filesystem_path(target))
             installed = True
             if staged_manifest is not None:
                 check_ancestors(manifest)
-                os.replace(staged_manifest, manifest)
+                os.replace(filesystem_path(staged_manifest), filesystem_path(manifest))
         except (OSError, ImportFailure) as error:
             try:
                 if installed:
-                    os.replace(target, stage)
+                    os.replace(filesystem_path(target), filesystem_path(stage))
                 if old_moved:
-                    os.replace(backup, target)
+                    os.replace(filesystem_path(backup), filesystem_path(target))
             except OSError as rollback_error:
                 raise ImportFailure(
                     f'import failed and rollback could not finish; '
@@ -237,15 +266,15 @@ def import_application(source: Path, target: Path,
                       file=sys.stderr)
         return record
     finally:
-        if stage.exists():
+        if filesystem_path(stage).exists():
             try:
                 remove_owned_tree(stage, target.parent)
             except (OSError, ImportFailure) as error:
                 print(f'warning: staging directory retained at {stage}: {error}',
                       file=sys.stderr)
-        if staged_manifest is not None and staged_manifest.exists():
+        if staged_manifest is not None and filesystem_path(staged_manifest).exists():
             try:
-                staged_manifest.unlink()
+                filesystem_path(staged_manifest).unlink()
             except OSError as error:
                 print(f'warning: temporary manifest retained at '
                       f'{staged_manifest}: {error}', file=sys.stderr)
