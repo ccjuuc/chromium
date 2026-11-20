@@ -8,14 +8,25 @@
 #include <optional>
 #include <utility>
 
+#include "base/allocator/partition_alloc_support.h"
+#include "base/base_switches.h"
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
+#include "base/process/process.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/bind.h"
 #include "base/test/multiprocess_test.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
+#include "base/test/test_simple_task_runner.h"
+#include "base/test/test_suite_helper.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
@@ -25,8 +36,11 @@
 #include "content/public/browser/storage_partition_path.h"
 #include "content/public/browser/storage_service_context.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_client.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_browser_context.h"
+#include "content/public/test/test_content_browser_client.h"
+#include "content/public/test/test_content_client.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -678,6 +692,156 @@ MULTIPROCESS_TEST_MAIN(ElectronStorageLeaseChild) {
   const bool locked =
       file.Lock(base::File::LockMode::kExclusive) == base::File::FILE_OK;
   return locked == !command->HasSwitch("expect-storage-locked") ? 0 : 3;
+}
+
+int ProbeStorageLeaseFromChild(const base::FilePath& lock_file,
+                               bool expect_locked) {
+  auto command = base::GetMultiProcessTestChildBaseCommandLine();
+  // The shutdown subprocess is itself a multiprocess-test child. Replace its
+  // entry point so the lock probe does not recursively run the shutdown test.
+  command.RemoveSwitch(switches::kTestChildProcess);
+  command.AppendSwitchPath("storage-lock-file", lock_file);
+  if (expect_locked) {
+    command.AppendSwitch("expect-storage-locked");
+  }
+  base::LaunchOptions options;
+#if BUILDFLAG(IS_WIN)
+  options.start_hidden = true;
+#endif
+  auto child = base::SpawnMultiProcessTestChild("ElectronStorageLeaseChild",
+                                                command, options);
+  if (!child.IsValid()) {
+    return -1;
+  }
+  int exit_code = -1;
+  if (!base::WaitForMultiprocessTestChildExit(child, base::Seconds(10),
+                                              &exit_code)) {
+    base::TerminateMultiProcessTestChild(child, 1, true);
+    return -1;
+  }
+  return exit_code;
+}
+
+MULTIPROCESS_TEST_MAIN(ElectronStorageShutdownChild) {
+  // Multiprocess entry points bypass gtest's OnTestStart listeners. Perform
+  // the same feature and allocator setup before running browser tasks, keeping
+  // scheduler-loop quarantine and dangling-pointer checks enabled.
+  base::test::ScopedFeatureList feature_list;
+  base::test::InitScopedFeatureListForTesting(feature_list);
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC) && !defined(ADDRESS_SANITIZER)
+  base::allocator::PartitionAllocSupport::Get()
+      ->ReconfigureAfterFeatureListInit(
+          "", {.configure_dangling_pointer_detector = true});
+#endif
+  content::TestContentClient content_client;
+  content::TestContentBrowserClient browser_client;
+  content::SetContentClient(&content_client);
+  content::SetBrowserClientForTesting(&browser_client);
+  content::BrowserTaskEnvironment environment;
+  ElectronSessionShutdownNotifierFactory::GetInstance();
+  const auto* command = base::CommandLine::ForCurrentProcess();
+  const auto root = command->GetSwitchValuePath("storage-shutdown-root");
+  auto host = std::make_unique<StorageTestContext>(root.AppendASCII("host"));
+  CHECK(RegisterElectronAppStorage(
+            host.get(), "shutdown-container", "shutdown-owner",
+            root.AppendASCII("legacy"),
+            base::BindRepeating([](const base::FilePath& path,
+                                   ElectronAppStorageContextCreated callback) {
+              std::move(callback).Run(
+                  std::make_unique<StorageTestContext>(path), "");
+            }),
+            base::BindRepeating(
+                [](std::unique_ptr<content::BrowserContext> context) {
+                  context.reset();
+                }))
+            .has_value());
+  const auto storage_path = root.AppendASCII("leased");
+  PathReply path_reply;
+  CallElectronAppStoragePath(
+      "shutdown-owner",
+      base::Value(base::DictValue()
+                      .Set("method", "set")
+                      .Set("name", "userData")
+                      .Set("path", storage_path.AsUTF8Unsafe())),
+      path_reply.GetCallback());
+  CHECK(path_reply.Get<1>().empty());
+  Ready ready;
+  EnsureElectronAppStorageContext("shutdown-owner", ready.GetCallback());
+  CHECK(ready.Get<0>());
+  CHECK(ready.Get<1>().empty());
+  environment.RunUntilIdle();
+
+  // Capture the real context-destruction task while leaving the rest of the
+  // browser queues operational. No production callback or lease is replaced.
+  auto shutdown_tasks = base::MakeRefCounted<base::TestSimpleTaskRunner>();
+  {
+    base::SingleThreadTaskRunner::CurrentHandleOverrideForTesting override(
+        shutdown_tasks);
+    RetireElectronAppStorage("shutdown-owner");
+  }
+  host.reset();
+  environment.RunUntilIdle();
+  CHECK(shutdown_tasks->HasPendingTask());
+  if (command->HasSwitch("discard-storage-io-reply")) {
+    {
+      base::SingleThreadTaskRunner::CurrentHandleOverrideForTesting override(
+          shutdown_tasks);
+      shutdown_tasks->RunPendingTasks();
+    }
+    // The IO barrier runs, but its reply remains queued on the stopped UI.
+    environment.RunUntilIdle();
+    CHECK(shutdown_tasks->HasPendingTask());
+  }
+  const auto lock_file = storage_path.AppendASCII(".xenon-storage.lock");
+  CHECK_EQ(0, ProbeStorageLeaseFromChild(lock_file, true));
+  base::ThreadPoolInstance::Get()->Shutdown();
+  {
+    // BrowserMainLoop permits blocking during this final teardown stage, but
+    // BLOCK_SHUTDOWN work can no longer be posted after ThreadPool::Shutdown.
+    base::ScopedAllowBlockingForTesting allow_shutdown_cleanup;
+    shutdown_tasks->ClearPendingTasks();
+  }
+  // Probe before this process exits: exit itself would also release OS locks
+  // and could make a leaked lease appear to have been closed correctly.
+  const int exit_code = ProbeStorageLeaseFromChild(lock_file, false);
+  // This subprocess owns the explicit ThreadPool shutdown. Do not let the
+  // TaskEnvironment destructor shut it down a second time.
+  base::Process::TerminateCurrentProcessImmediately(exit_code);
+}
+
+void CheckDiscardedStorageShutdownTask(bool discard_io_reply) {
+  base::ScopedTempDir root;
+  ASSERT_TRUE(root.CreateUniqueTempDir());
+  auto command = base::GetMultiProcessTestChildBaseCommandLine();
+  command.AppendSwitchPath("storage-shutdown-root", root.GetPath());
+  if (discard_io_reply) {
+    command.AppendSwitch("discard-storage-io-reply");
+  }
+  base::LaunchOptions options;
+#if BUILDFLAG(IS_WIN)
+  options.start_hidden = true;
+#endif
+  auto child = base::SpawnMultiProcessTestChild("ElectronStorageShutdownChild",
+                                                command, options);
+  ASSERT_TRUE(child.IsValid());
+  int exit_code = -1;
+  const bool exited = base::WaitForMultiprocessTestChildExit(
+      child, base::Seconds(20), &exit_code);
+  if (!exited) {
+    EXPECT_TRUE(base::TerminateMultiProcessTestChild(child, 1, true));
+  }
+  ASSERT_TRUE(exited);
+  EXPECT_EQ(exit_code, 0);
+}
+
+TEST(ElectronAppStorageShutdownTest,
+     DiscardedUiShutdownTaskReleasesLeaseAfterThreadPoolShutdown) {
+  CheckDiscardedStorageShutdownTask(/*discard_io_reply=*/false);
+}
+
+TEST(ElectronAppStorageShutdownTest,
+     DiscardedIoBarrierReplyReleasesLeaseAfterThreadPoolShutdown) {
+  CheckDiscardedStorageShutdownTask(/*discard_io_reply=*/true);
 }
 
 TEST_F(ElectronAppStorageTest,

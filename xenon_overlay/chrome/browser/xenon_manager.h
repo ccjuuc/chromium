@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -13,7 +14,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/singleton.h"
 #include "base/memory/weak_ptr.h"
-#include "base/scoped_observation.h"
+#include "base/scoped_multi_source_observation.h"
 #include "base/threading/sequence_bound.h"
 #include "base/types/expected.h"
 #include "base/values.h"
@@ -374,6 +375,7 @@ class XenonManager : public ProfileObserver {
 
   // ProfileObserver:
   void OnProfileWillBeDestroyed(Profile* profile) override;
+  void StopObservingUnusedProfile(Profile* profile);
 
   void OnDisconnected();
   void OnContainerServiceDisconnected(const std::string& container_id,
@@ -422,8 +424,9 @@ class XenonManager : public ProfileObserver {
     ~ContainerServiceConnection();
     ServiceRemote remote;
     uint64_t generation = 0;
-    // Keep Session requests in the Profile that launched this Utility, even
-    // after another Profile becomes the manager's current browser context.
+    // The original launching Profile owns the container's lifetime even after
+    // Session requests move to an independent application storage Profile.
+    base::WeakPtr<Profile> host_profile;
     base::WeakPtr<content::BrowserContext> browser_context;
     bool storage_ready = false;
     // Window-scoped on Windows; never changes the browser process App ID.
@@ -484,7 +487,8 @@ class XenonManager : public ProfileObserver {
 #endif
   raw_ptr<XenonNodeObserver> node_observer_ = nullptr;
   raw_ptr<content::BrowserContext> last_browser_context_ = nullptr;
-  base::ScopedObservation<Profile, ProfileObserver> profile_observation_{this};
+  base::ScopedMultiSourceObservation<Profile, ProfileObserver>
+      profile_observations_{this};
   bool runtime_metadata_initialized_ = false;
   bool shutting_down_for_process_exit_ = false;
   std::string startup_working_directory_;
@@ -492,6 +496,9 @@ class XenonManager : public ProfileObserver {
   std::map<std::string, std::string> electron_ipc_origin_containers_;
   std::map<std::string, std::unique_ptr<ContainerServiceConnection>>
       container_services_;
+  // Native window teardown can run a nested event loop. Do not let an explicit
+  // restart create a new owner while the old owner's ID-based cleanup runs.
+  std::set<std::string> closing_container_ids_;
   std::map<std::string, uint64_t> container_service_generations_;
   std::map<RendererAddonKey, std::unique_ptr<RendererAddonServiceConnection>>
       renderer_addon_services_;

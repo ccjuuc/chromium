@@ -315,24 +315,60 @@ void XenonManager::InitializeRuntimeMetadata() {
 }
 
 void XenonManager::SetBrowserContext(content::BrowserContext* context) {
-  if (!context || context == last_browser_context_) {
+  if (shutting_down_for_process_exit_ || !context ||
+      context->ShutdownStarted() || context == last_browser_context_) {
     return;
   }
-  profile_observation_.Reset();
+  auto* previous = last_browser_context_
+                       ? Profile::FromBrowserContext(last_browser_context_)
+                       : nullptr;
   last_browser_context_ = context;
-  profile_observation_.Observe(Profile::FromBrowserContext(context));
+  auto* profile = Profile::FromBrowserContext(context);
+  if (!profile_observations_.IsObservingSource(profile)) {
+    profile_observations_.AddObservation(profile);
+  }
+  StopObservingUnusedProfile(previous);
+}
+
+void XenonManager::StopObservingUnusedProfile(Profile* profile) {
+  if (!profile || profile == last_browser_context_ ||
+      !profile_observations_.IsObservingSource(profile)) {
+    return;
+  }
+  for (const auto& [id, connection] : container_services_) {
+    if (connection->host_profile.get() == profile) {
+      return;
+    }
+  }
+  profile_observations_.RemoveObservation(profile);
 }
 
 void XenonManager::OnProfileWillBeDestroyed(Profile* profile) {
-  DCHECK_EQ(last_browser_context_, profile);
-  // The manager outlives ProfileManager during browser shutdown. Drop the
-  // context before Profile destruction, including when an update quits Chrome.
-  last_browser_context_ = nullptr;
-  profile_observation_.Reset();
+  if (last_browser_context_ == profile) {
+    last_browser_context_ = nullptr;
+  }
+  profile_observations_.RemoveObservation(profile);
+  // This notification precedes KeyedService shutdown. Close the hosted
+  // WebContents before StorageOwner retires its independent Profile; waiting
+  // until PostMainMessageLoopRun is too late when a Profile closes first.
+  std::vector<std::pair<std::string, uint64_t>> owned_containers;
+  for (const auto& [id, connection] : container_services_) {
+    if (connection->host_profile.get() == profile) {
+      owned_containers.emplace_back(id, connection->generation);
+    }
+  }
+  for (const auto& [id, generation] : owned_containers) {
+    auto* connection = FindContainerService(id);
+    if (connection && connection->generation == generation &&
+        connection->host_profile.get() == profile) {
+      CloseContainerService(id);
+    }
+  }
 }
 
 void XenonManager::EnsureServiceStarted(content::BrowserContext* context) {
-  if (shutting_down_for_process_exit_) {
+  if (shutting_down_for_process_exit_ ||
+      (context && context->ShutdownStarted())) {
     return;
   }
   SetBrowserContext(context);
@@ -461,11 +497,15 @@ void XenonManager::InitializeServiceConnection(
 XenonManager::ContainerServiceConnection*
 XenonManager::EnsureContainerServiceStarted(const std::string& container_id,
                                             bool explicit_restart) {
-  if (shutting_down_for_process_exit_) {
+  if (shutting_down_for_process_exit_ ||
+      (last_browser_context_ && last_browser_context_->ShutdownStarted())) {
     return nullptr;
   }
   const std::string normalized_id =
       container_id.empty() ? "default" : container_id;
+  if (closing_container_ids_.contains(normalized_id)) {
+    return nullptr;
+  }
   if (ContainerServiceConnection* existing =
           FindContainerService(normalized_id)) {
     if (existing->remote.is_bound()) {
@@ -491,6 +531,8 @@ XenonManager::EnsureContainerServiceStarted(const std::string& container_id,
   const uint64_t generation = ++container_service_generations_[normalized_id];
   connection->generation = generation;
   if (last_browser_context_) {
+    connection->host_profile =
+        Profile::FromBrowserContext(last_browser_context_)->GetWeakPtr();
     connection->browser_context = last_browser_context_->GetWeakPtr();
     const auto config = last_ipc_configs_.find(normalized_id);
     const auto initial_path =
@@ -1476,13 +1518,32 @@ void XenonManager::OnContainerServiceDisconnected(
 }
 
 void XenonManager::CloseContainerService(const std::string& container_id) {
-  ipc::CloseElectronPermissionOwner(
-      SingleInstanceOwner(container_id, service_generation(container_id)));
+  auto it = container_services_.find(container_id);
+  if (it == container_services_.end()) {
+    return;
+  }
+  auto connection = std::move(it->second);
+  container_services_.erase(it);
+  closing_container_ids_.insert(container_id);
+  const std::string owner =
+      SingleInstanceOwner(container_id, connection->generation);
+  // Revoke routing before any cleanup that can reenter through native window
+  // callbacks. Retained SharedRemote copies must lose the underlying pipe.
+#if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
+  browser_observer_receivers_.Remove(connection->observer_receiver_id);
+#endif
+  if (connection->remote.is_bound()) {
+#if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
+    connection->remote.Disconnect();
+#else
+    connection->remote.reset();
+#endif
+  }
+  ipc::CloseElectronPermissionOwner(owner);
   if (single_instance_broker_) {
     single_instance_broker_
         .AsyncCall(&ipc::XenonAppSingleInstanceBroker::Release)
-        .WithArgs(SingleInstanceOwner(container_id,
-                                      service_generation(container_id)));
+        .WithArgs(owner);
   }
 #if BUILDFLAG(IS_MAC)
   XenonMacPlayerHost::GetInstance()->CloseContainer(container_id);
@@ -1491,50 +1552,26 @@ void XenonManager::CloseContainerService(const std::string& container_id) {
   ipc::RemoveElectronWebRequestHandlers(container_id);
   ipc::RemoveElectronSessionsForContainer(container_id);
   CloseRendererAddonServicesForContainer(container_id);
-  auto it = container_services_.find(container_id);
-  if (it == container_services_.end()) {
-    return;
-  }
-  auto connection = std::move(it->second);
-  container_services_.erase(it);
-  CancelElectronDialogs(
-      SingleInstanceOwner(container_id, connection->generation));
+  CancelElectronDialogs(owner);
   ReleaseElectronPowerAndStorageOwner(container_id, connection->generation);
-  ipc::CloseElectronTracing(
-      SingleInstanceOwner(container_id, connection->generation));
-  ipc::CloseElectronAppCommandLine(
-      SingleInstanceOwner(container_id, connection->generation));
-  ipc::CloseElectronDesktopSources(
-      SingleInstanceOwner(container_id, connection->generation));
-  XenonElectronViewHost::GetInstance()->ReleaseOwner(
-      SingleInstanceOwner(container_id, connection->generation));
+  ipc::CloseElectronTracing(owner);
+  ipc::CloseElectronAppCommandLine(owner);
+  ipc::CloseElectronDesktopSources(owner);
+  XenonElectronViewHost::GetInstance()->ReleaseOwner(owner);
   if (connection->browser_context) {
     ipc::CloseElectronNotifications(
-        Profile::FromBrowserContext(connection->browser_context.get()),
-        SingleInstanceOwner(container_id, connection->generation));
+        Profile::FromBrowserContext(connection->browser_context.get()), owner);
   }
   // Keep configuration and generation: old documents cannot implicitly start
-  // the app while their windows are being torn down. The next explicit open
-  // creates a fresh service with the saved configuration.
-#if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
-  browser_observer_receivers_.Remove(connection->observer_receiver_id);
-#endif
-  if (connection->remote.is_bound()) {
-#if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
-    // reset() only releases this reference; native controllers may retain
-    // copies. Disconnect the underlying pipe so ServiceFactory tears down the
-    // Utility and its native addons even while those copies remain alive.
-    connection->remote.Disconnect();
-#else
-    connection->remote.reset();
-#endif
-  }
+  // the app while its WebContents are synchronously destroyed. Only afterwards
+  // may the application storage Profile begin its own destruction sequence.
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
   XenonElectronWindowHost::GetInstance()->CloseForContainer(container_id);
 #endif
   connection->utilities.clear();
-  ipc::RetireElectronAppStorage(
-      SingleInstanceOwner(container_id, connection->generation));
+  ipc::RetireElectronAppStorage(owner);
+  StopObservingUnusedProfile(connection->host_profile.get());
+  closing_container_ids_.erase(container_id);
 }
 
 void XenonManager::ShutdownForProcessExit() {
@@ -1542,6 +1579,8 @@ void XenonManager::ShutdownForProcessExit() {
     return;
   }
   shutting_down_for_process_exit_ = true;
+  last_browser_context_ = nullptr;
+  profile_observations_.RemoveAllObservations();
   single_instance_broker_.Reset();
 #if BUILDFLAG(IS_MAC)
   XenonMacPlayerHost::GetInstance()->Shutdown();

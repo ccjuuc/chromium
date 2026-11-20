@@ -4,15 +4,20 @@
 
 #include "xenon_overlay/chrome/browser/ui/views/sidebar/xenon_sidebar_view.h"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "base/base_paths.h"
 #include "base/command_line.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/weak_ptr.h"
 #include "base/task/execution_fence.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/scoped_path_override.h"
 #include "base/test/test_future.h"
@@ -24,6 +29,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -38,6 +44,7 @@
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 #include "xenon_overlay/buildflags/buildflags.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
 #include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
@@ -50,6 +57,21 @@ namespace xenon {
 namespace {
 
 constexpr char kElectronAppDescriptor[] = "sidebar-async-fixture.xenon.json";
+constexpr char kDedicatedElectronAppDescriptor[] =
+    "sidebar-dedicated-fixture.xenon.json";
+
+struct ElectronWindowState {
+  std::string container;
+  uint64_t generation = 0;
+  base::WeakPtr<content::BrowserContext> context;
+  std::vector<base::WeakPtr<content::WebContents>> contents;
+  std::vector<std::unique_ptr<content::WebContentsDestroyedWatcher>> destroyed;
+
+  bool AllContentsDestroyed() const {
+    return std::ranges::all_of(
+        destroyed, [](const auto& watcher) { return watcher->IsDestroyed(); });
+  }
+};
 
 template <typename T>
 T* FindView(views::View* root) {
@@ -168,6 +190,91 @@ class XenonSidebarBrowserTest : public InProcessBrowserTest,
     ASSERT_TRUE(reply.Get());
     EXPECT_FALSE(reply.Get()->success);
     EXPECT_EQ("Renderer IPC endpoint is unavailable", reply.Get()->error);
+  }
+
+  void CreateElectronWindowFixtures() {
+    ASSERT_NO_FATAL_FAILURE(CreateElectronAppFixture());
+    base::ScopedAllowBlockingForTesting allow_fixture_setup;
+    for (bool dedicated : {false, true}) {
+      const auto app = electron_app_directory_.GetPath().AppendASCII(
+          dedicated ? "dedicated-app" : "app");
+      ASSERT_TRUE(base::CreateDirectory(app));
+      ASSERT_TRUE(base::WriteFile(
+          app.AppendASCII("package.json"),
+          dedicated
+              ? R"({"name":"sidebar-dedicated-fixture","version":"1.0.0","main":"main.cjs"})"
+              : R"({"name":"sidebar-fixture","version":"1.0.0","main":"main.cjs"})"));
+      ASSERT_TRUE(base::WriteFile(app.AppendASCII("main.cjs"), R"JS(
+        const {app, BrowserWindow} = require('electron');
+        const path = require('node:path');
+        // Default sessions use the host Profile. Redirecting userData before
+        // the first BrowserWindow creates a real independent storage Profile.
+        if (app.getName() === 'sidebar-dedicated-fixture') {
+          app.setPath('userData', path.join(app.getPath('userData'), 'dedicated'));
+        }
+        const windows = [];
+        app.whenReady().then(async () => {
+          for (let index = 0; index < 2; ++index) {
+            const window = new BrowserWindow({
+              show: false,
+              webPreferences: {
+                contextIsolation: true,
+                nodeIntegration: false,
+                sandbox: false,
+                backgroundThrottling: false,
+              },
+            });
+            windows.push(window);
+            await window.loadFile(path.join(__dirname, 'index.html'));
+          }
+        }).catch(error => console.error('Window fixture failed', error));
+      )JS"));
+      ASSERT_TRUE(base::WriteFile(
+          app.AppendASCII("index.html"),
+          "<!doctype html><title>Profile lifecycle fixture</title>"
+          "<p>Electron BrowserWindow</p>"));
+    }
+    ASSERT_TRUE(base::WriteFile(electron_app_directory_.GetPath().AppendASCII(
+                                    kDedicatedElectronAppDescriptor),
+                                R"({"application":"dedicated-app"})"));
+  }
+
+  void StartElectronWindows(Profile* profile,
+                            const char* descriptor,
+                            const char* container,
+                            ElectronWindowState* state) {
+    XenonWebDialog::ShowElectronApp(profile, descriptor, container);
+    auto* host = XenonElectronWindowHost::GetInstance();
+    std::vector<content::WebContents*> contents;
+    ASSERT_TRUE(base::test::RunUntil([&] {
+      contents.clear();
+      for (auto* candidate : content::GetAllWebContents()) {
+        if (host->GetContainerIdForWebContents(candidate) == container) {
+          contents.push_back(candidate);
+        }
+      }
+      return contents.size() == 2 &&
+             std::ranges::all_of(contents, [](auto* candidate) {
+               return !candidate->IsLoading() &&
+                      candidate->GetLastCommittedURL().SchemeIsFile() &&
+                      candidate->GetLastCommittedURL().ExtractFileName() ==
+                          "index.html";
+             });
+    })) << container;
+    state->container = container;
+    state->generation =
+        XenonManager::GetInstance()->service_generation(container);
+    ASSERT_TRUE(XenonManager::GetInstance()->IsElectronIpcGenerationCurrent(
+        container, state->generation));
+    state->context = contents.front()->GetBrowserContext()->GetWeakPtr();
+    for (auto* window : contents) {
+      ASSERT_EQ(state->context.get(), window->GetBrowserContext());
+      EXPECT_EQ("Profile lifecycle fixture",
+                content::EvalJs(window, "document.title"));
+      state->contents.push_back(window->GetWeakPtr());
+      state->destroyed.push_back(
+          std::make_unique<content::WebContentsDestroyedWatcher>(window));
+    }
   }
 
   std::string ReadElectronLaunches() {
@@ -340,6 +447,82 @@ IN_PROC_BROWSER_TEST_P(XenonSidebarBrowserTest,
   }
   EXPECT_EQ(0u, manager->service_generation(kContainer));
   EXPECT_FALSE(manager->GetElectronIpcRendererConfigForContainer(kContainer));
+}
+
+IN_PROC_BROWSER_TEST_P(XenonSidebarBrowserTest,
+                       ProfileShutdownClosesOnlyItsElectronWindows) {
+  ASSERT_NO_FATAL_FAILURE(CreateElectronWindowFixtures());
+  base::ScopedPathOverride descriptor_directory(
+      base::DIR_EXE, electron_app_directory_.GetPath(), /*is_absolute=*/true,
+      /*create=*/false);
+  std::unique_ptr<TestingProfile> first;
+  std::unique_ptr<TestingProfile> second;
+  {
+    base::ScopedAllowBlockingForTesting allow_fixture_setup;
+    first = std::make_unique<TestingProfile>();
+    second = std::make_unique<TestingProfile>();
+  }
+  // Preserve safe teardown even when the old implementation fails the
+  // lifecycle assertions: close app windows before destroying either host.
+  base::ScopedClosureRunner cleanup(base::BindOnce([] {
+    XenonManager::GetInstance()->ShutdownForProcessExit();
+    content::RunAllTasksUntilIdle();
+  }));
+  base::ScopedDisallowBlocking disallow_blocking;
+  ElectronWindowState legacy;
+  ElectronWindowState dedicated;
+  ElectronWindowState other;
+  ASSERT_NO_FATAL_FAILURE(StartElectronWindows(
+      first.get(), kElectronAppDescriptor, "profile-close-legacy", &legacy));
+  ASSERT_NO_FATAL_FAILURE(
+      StartElectronWindows(first.get(), kDedicatedElectronAppDescriptor,
+                           "profile-close-dedicated", &dedicated));
+  ASSERT_NO_FATAL_FAILURE(StartElectronWindows(second.get(),
+                                               kDedicatedElectronAppDescriptor,
+                                               "profile-close-other", &other));
+  ASSERT_EQ(first.get(), legacy.context.get());
+  ASSERT_NE(first.get(), dedicated.context.get());
+  ASSERT_NE(second.get(), other.context.get());
+  ASSERT_NE(dedicated.context.get(), other.context.get());
+
+  auto* manager = XenonManager::GetInstance();
+  auto* host = XenonElectronWindowHost::GetInstance();
+  manager->SetBrowserContext(second.get());
+  first->MaybeSendDestroyedNotification();
+  // The manager must still observe the old host after another becomes current,
+  // and must close every window before retiring its independent Profile.
+  for (auto* app : {&legacy, &dedicated}) {
+    EXPECT_FALSE(manager->IsElectronIpcGenerationCurrent(app->container,
+                                                         app->generation));
+    EXPECT_FALSE(host->HasWindowsForContainer(app->container));
+    EXPECT_TRUE(app->AllContentsDestroyed());
+  }
+  EXPECT_TRUE(manager->IsElectronIpcGenerationCurrent(other.container,
+                                                      other.generation));
+  EXPECT_TRUE(host->HasWindowsForContainer(other.container));
+  for (size_t index = 0; index < other.contents.size(); ++index) {
+    EXPECT_FALSE(other.destroyed[index]->IsDestroyed());
+    if (other.contents[index]) {
+      EXPECT_EQ(42, content::EvalJs(other.contents[index].get(), "21 * 2"));
+    }
+  }
+  if (dedicated.AllContentsDestroyed()) {
+    EXPECT_TRUE(base::test::RunUntil([&] { return !dedicated.context; }));
+  }
+
+  second->MaybeSendDestroyedNotification();
+  EXPECT_FALSE(manager->IsElectronIpcGenerationCurrent(other.container,
+                                                       other.generation));
+  EXPECT_FALSE(host->HasWindowsForContainer(other.container));
+  EXPECT_TRUE(other.AllContentsDestroyed());
+  if (other.AllContentsDestroyed()) {
+    EXPECT_TRUE(base::test::RunUntil([&] { return !other.context; }));
+  }
+
+  cleanup.RunAndReset();
+  first.reset();
+  second.reset();
+  content::RunAllTasksUntilIdle();
 }
 
 INSTANTIATE_TEST_SUITE_P(ScrollModes, XenonSidebarBrowserTest, testing::Bool());

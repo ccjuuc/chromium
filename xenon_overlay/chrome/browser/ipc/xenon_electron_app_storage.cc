@@ -396,15 +396,12 @@ class StorageOwner final
   friend class base::DeleteHelper<StorageOwner>;
   ~StorageOwner() {
     DCHECK(!context_);
-    // Shutdown can drop a posted IO barrier reply. Even then close the file on
-    // a blocking sequence; Profile destruction has already removed its marker.
-    if (lease_) {
-      base::ThreadPool::PostTask(
-          FROM_HERE,
-          {base::MayBlock(), base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
-          base::BindOnce([](std::unique_ptr<StorageLease>) {},
-                         std::move(lease_)));
-    }
+    // Normal teardown releases the lease on a worker after the storage and IO
+    // barriers. Browser shutdown can instead discard that continuation while
+    // destroying UI task queues, after ThreadPool shutdown has completed.
+    // BrowserMainLoop already allows blocking during this teardown, so use
+    // ordinary RAII for the remaining lease rather than posting new pool work.
+    lease_.reset();
     ReleaseReservation();
   }
 

@@ -4,9 +4,14 @@
 
 #include "xenon_overlay/chrome/browser/ipc/xenon_electron_app_storage_profile.h"
 
+#include <map>
 #include <utility>
 
+#include "base/auto_reset.h"
+#include "base/check.h"
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/no_destructor.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_destroyer.h"
@@ -16,10 +21,42 @@
 
 namespace xenon::ipc {
 namespace {
-// A self-owned builder keeps Profile's raw delegate alive throughout async
-// initialization. Delivery is posted so a synchronous failure cannot delete the
-// delegate while Profile::CreateProfile still uses its stack.
-class ProfileBuilder final : public Profile::Delegate {
+class ProfileBuilder;
+
+// ProfileImpl retains its delegate pointer until destruction, after creation
+// has completed. Give all application Profiles a stable delegate and retain
+// only their unfinished creation requests in the routing table.
+class ProfileDelegateDispatcher final : public Profile::Delegate {
+ public:
+  static ProfileDelegateDispatcher* GetInstance() {
+    static base::NoDestructor<ProfileDelegateDispatcher> dispatcher;
+    return dispatcher.get();
+  }
+
+  std::unique_ptr<Profile> CreateProfile(const base::FilePath& path,
+                                         ProfileBuilder* builder);
+  void ForgetProfile(Profile* profile);
+
+  void OnProfileCreationStarted(Profile* profile,
+                                Profile::CreateMode create_mode) override;
+  void OnProfileCreationFinished(Profile* profile,
+                                 Profile::CreateMode create_mode,
+                                 bool success,
+                                 bool is_new_profile) override;
+
+ private:
+  friend class base::NoDestructor<ProfileDelegateDispatcher>;
+  ProfileDelegateDispatcher() = default;
+  ~ProfileDelegateDispatcher() override = default;
+
+  raw_ptr<ProfileBuilder> creating_builder_ = nullptr;
+  std::map<Profile*, raw_ptr<ProfileBuilder>> pending_profiles_;
+};
+
+// A self-owned builder lasts only through async initialization. Delivery is
+// posted so a synchronous completion cannot delete the builder while
+// Profile::CreateProfile still uses its stack.
+class ProfileBuilder final {
  public:
   static void Create(const base::FilePath& path,
                      ElectronAppStorageContextCreated callback) {
@@ -28,15 +65,14 @@ class ProfileBuilder final : public Profile::Delegate {
         path, base::BindOnce(&ProfileBuilder::OnEncryptionReady,
                              base::Unretained(builder)));
   }
-  void OnProfileCreationStarted(Profile* profile,
-                                Profile::CreateMode) override {
+  void OnProfileCreationStarted(Profile* profile, Profile::CreateMode) {
     ElectronCookieEncryption::Install(profile, std::move(encryption_));
     content::EnableDedicatedStorageServiceForBrowserContext(profile);
   }
   void OnProfileCreationFinished(Profile*,
                                  Profile::CreateMode,
                                  bool success,
-                                 bool) override {
+                                 bool) {
     Finish(success);
   }
 
@@ -53,7 +89,7 @@ class ProfileBuilder final : public Profile::Delegate {
     }
     encryption_ = std::move(encryption);
     profile_ =
-        Profile::CreateProfile(path_, this, Profile::CreateMode::kAsynchronous);
+        ProfileDelegateDispatcher::GetInstance()->CreateProfile(path_, this);
     if (!profile_) {
       Finish(false);
     }
@@ -63,12 +99,15 @@ class ProfileBuilder final : public Profile::Delegate {
       return;
     }
     posted_ = true;
-    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+    base::SequencedTaskRunner::GetCurrentDefault()->PostNonNestableTask(
         FROM_HERE, base::BindOnce(&ProfileBuilder::Deliver,
                                   base::Unretained(this), success));
   }
   void Deliver(bool success) {
     std::unique_ptr<ProfileBuilder> self(this);
+    if (profile_) {
+      ProfileDelegateDispatcher::GetInstance()->ForgetProfile(profile_.get());
+    }
     auto callback = std::move(callback_);
     if (!success) {
       // Keep the directory lease until a partially initialized Profile has
@@ -89,6 +128,40 @@ class ProfileBuilder final : public Profile::Delegate {
   std::string error_;
   bool posted_ = false;
 };
+
+std::unique_ptr<Profile> ProfileDelegateDispatcher::CreateProfile(
+    const base::FilePath& path,
+    ProfileBuilder* builder) {
+  // OnProfileCreationStarted runs inside CreateProfile. Restore the previous
+  // request if initialization synchronously starts another application Profile.
+  base::AutoReset<raw_ptr<ProfileBuilder>> creating_builder(&creating_builder_,
+                                                            builder);
+  return Profile::CreateProfile(path, this, Profile::CreateMode::kAsynchronous);
+}
+
+void ProfileDelegateDispatcher::ForgetProfile(Profile* profile) {
+  pending_profiles_.erase(profile);
+}
+
+void ProfileDelegateDispatcher::OnProfileCreationStarted(
+    Profile* profile,
+    Profile::CreateMode create_mode) {
+  CHECK(creating_builder_);
+  CHECK(pending_profiles_.emplace(profile, creating_builder_).second);
+  creating_builder_->OnProfileCreationStarted(profile, create_mode);
+}
+
+void ProfileDelegateDispatcher::OnProfileCreationFinished(
+    Profile* profile,
+    Profile::CreateMode create_mode,
+    bool success,
+    bool is_new_profile) {
+  auto found = pending_profiles_.find(profile);
+  if (found != pending_profiles_.end()) {
+    found->second->OnProfileCreationFinished(profile, create_mode, success,
+                                             is_new_profile);
+  }
+}
 
 }  // namespace
 

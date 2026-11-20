@@ -42,12 +42,12 @@ TEST(XenonManagerTest, ClearsContextBeforeProfileDestruction) {
   auto profile = std::make_unique<TestingProfile>();
   manager.SetBrowserContext(profile.get());
   EXPECT_EQ(manager.last_browser_context_, profile.get());
-  EXPECT_TRUE(manager.profile_observation_.IsObservingSource(profile.get()));
+  EXPECT_TRUE(manager.profile_observations_.IsObservingSource(profile.get()));
 
   profile.reset();
 
   EXPECT_EQ(manager.last_browser_context_, nullptr);
-  EXPECT_FALSE(manager.profile_observation_.IsObserving());
+  EXPECT_FALSE(manager.profile_observations_.IsObservingAnySource());
 }
 
 TEST(XenonManagerTest, SwitchingContextObservesOnlyCurrentProfile) {
@@ -61,11 +61,11 @@ TEST(XenonManagerTest, SwitchingContextObservesOnlyCurrentProfile) {
 
   first.reset();
   EXPECT_EQ(manager.last_browser_context_, second.get());
-  EXPECT_TRUE(manager.profile_observation_.IsObservingSource(second.get()));
+  EXPECT_TRUE(manager.profile_observations_.IsObservingSource(second.get()));
 
   second.reset();
   EXPECT_EQ(manager.last_browser_context_, nullptr);
-  EXPECT_FALSE(manager.profile_observation_.IsObserving());
+  EXPECT_FALSE(manager.profile_observations_.IsObservingAnySource());
 }
 
 TEST(XenonManagerTest, DestructionUnregistersProfileObserver) {
