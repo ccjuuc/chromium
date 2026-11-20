@@ -1,0 +1,44 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//xenon_overlay/buildflags/features.gni")
+
+xenon_mac_electron_apps = [
+  {
+    id = "drawio"
+    bundle = "draw.io.app"
+  },
+  {
+    id = "marktext"
+    bundle = "MarkText.app"
+  },
+  {
+    id = "motrix"
+    bundle = "Motrix.app"
+  },
+]
+
+declare_args() {
+  # These tracked application payloads contain macOS ARM64 native components.
+  # Standard ARM64 Chrome builds include them without any local import step.
+  xenon_bundle_mac_electron_apps =
+      is_mac && enable_xenon_service && current_cpu == "arm64"
+}
+
+assert(
+    !xenon_bundle_mac_electron_apps ||
+        (is_mac && enable_xenon_service && current_cpu == "arm64"),
+    "Bundling the Mac Electron applications requires macOS ARM64 and enable_xenon_service.")
+
+if (xenon_bundle_mac_electron_apps) {
+  foreach(_app, xenon_mac_electron_apps) {
+    _id = _app.id
+    _source = "//xenon_overlay/resources/mac_electron_apps/$_id"
+    assert(
+        path_exists("$_source/payload.tar.xz") &&
+            path_exists("$_source/payload.sha256") &&
+            path_exists("$_source/$_id.xenon.json"),
+        "Missing tracked Mac Electron resources for $_id. Restore xenon_overlay/resources/mac_electron_apps/$_id or set xenon_bundle_mac_electron_apps=false.")
+  }
+}

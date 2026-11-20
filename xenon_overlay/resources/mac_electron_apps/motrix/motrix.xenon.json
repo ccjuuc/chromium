@@ -1,0 +1,5 @@
+{
+  "application": "./Motrix.app",
+  "name": "Motrix",
+  "userDataPolicy": "legacy-host"
+}

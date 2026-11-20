@@ -1,0 +1,795 @@
+{
+  "format_version": 1,
+  "app_id": "marktext",
+  "version": "0.23.0",
+  "architecture": "arm64",
+  "release_url": "https://github.com/marktext/marktext/releases/tag/v0.23.0",
+  "download_url": "https://github.com/marktext/marktext/releases/download/v0.23.0/marktext-mac-arm64-0.23.0.dmg",
+  "dmg_filename": "marktext-mac-arm64-0.23.0.dmg",
+  "dmg_size": 157789853,
+  "dmg_sha256": "d7e9ef4fc7c7f353003fc3f34d3a56514a8b05e19298a74ed6ce13c26fe2679f",
+  "digest_source": "https://api.github.com/repos/marktext/marktext/releases/tags/v0.23.0",
+  "digest_source_field": "assets[].digest",
+  "bundle": "MarkText.app",
+  "upstream_info_plist_sha256": "2832ffa949aed4667fc2bd124a14359ab9059f350942defe736b52932f5c475c",
+  "transformations": [
+    "Set outer Contents/Info.plist CFBundlePackageType to BNDL",
+    "Remove outer Contents/Info.plist CFBundleExecutable",
+    "Serialize outer Info.plist as sorted XML",
+    "Normalize archive timestamps, uid and gid to zero",
+    "Omit filesystem extended attributes from archive"
+  ],
+  "retained": [
+    "Contents/Info.plist (transformed as listed above)",
+    "Contents/Resources (all original bytes and permissions)",
+    "Contents/MacOS directory and helpers other than the Electron launcher"
+  ],
+  "omitted_upstream": [
+    "Contents/Frameworks",
+    "Contents/PkgInfo",
+    "Contents/_CodeSignature",
+    "Contents/MacOS/MarkText"
+  ],
+  "archive": {
+    "file": "payload.tar.xz",
+    "size": 35540064,
+    "sha256": "be226e83187600dbf54addc125f2c27c3273e224444c0230ce68f82705be619e",
+    "format": "PAX tar, XZ preset 6"
+  },
+  "entries": [
+    {
+      "path": "MarkText.app",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Info.plist",
+      "mode": "0644",
+      "type": "file",
+      "size": 5962,
+      "sha256": "63f0260cdf27716c30bfbef234a3f832eaf9fe84ecf6c655319bfd6ab301de0a"
+    },
+    {
+      "path": "MarkText.app/Contents/MacOS",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app-update.yml",
+      "mode": "0644",
+      "type": "file",
+      "size": 86,
+      "sha256": "6c8f6dccaed63b44eadc4374f52438c613196928209bba1f345aaed984ff4eee"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar",
+      "mode": "0644",
+      "type": "file",
+      "size": 177579663,
+      "sha256": "883fed3db2ff46b13258f5badee84a894d16827def3d516742b7726961b567af"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/@vscode",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/@vscode/ripgrep-darwin-arm64",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/@vscode/ripgrep-darwin-arm64/LICENSE",
+      "mode": "0644",
+      "type": "file",
+      "size": 1113,
+      "sha256": "ccf06b70760761ae1437395117bcf911501e3dc85385d84c7eba20d5dfab55dd"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/@vscode/ripgrep-darwin-arm64/bin",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/@vscode/ripgrep-darwin-arm64/bin/rg",
+      "mode": "0755",
+      "type": "file",
+      "size": 4528512,
+      "sha256": "6ef40346bf31fcce79d9614c7745c198542925a0c7d4911e1ffe794c53392ac1"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/@vscode/ripgrep-darwin-arm64/package.json",
+      "mode": "0644",
+      "type": "file",
+      "size": 350,
+      "sha256": "bc015e2f2531af12c8fbafaff39634628cbfb5d771a0cef6901ede3d62bb97fe"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/ced",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/ced/LICENSE",
+      "mode": "0644",
+      "type": "file",
+      "size": 12257,
+      "sha256": "7530fb623e13c2572893fa69ca0891239d7308e3be68e14cfec23629c6640d42"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/ced/bin",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/ced/bin/darwin-arm64-146",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/ced/bin/darwin-arm64-146/ced.node",
+      "mode": "0755",
+      "type": "file",
+      "size": 313176,
+      "sha256": "1075dab0f5b7377d0bfa11e300d3133539ac3baccdf453628f72d924704fce26"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/ced/build",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/ced/build/Release",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/ced/build/Release/ced.node",
+      "mode": "0755",
+      "type": "file",
+      "size": 313176,
+      "sha256": "1075dab0f5b7377d0bfa11e300d3133539ac3baccdf453628f72d924704fce26"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/ced/build/vendor",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/ced/build/vendor/compact_enc_det",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/ced/build/vendor/compact_enc_det/binding.Makefile",
+      "mode": "0644",
+      "type": "file",
+      "size": 155,
+      "sha256": "ff97b26a9315bd5f063f4658275292bc52b855ea2581cb3c2631e9c3af4411d4"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/ced/ced.cpp",
+      "mode": "0644",
+      "type": "file",
+      "size": 1832,
+      "sha256": "6a81ac4a167cf40fe68991a0a86f9eeafe7ca203de4a42bf986ac12709491c8a"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/ced/index.js",
+      "mode": "0644",
+      "type": "file",
+      "size": 211,
+      "sha256": "5baf03699892bc162d18b86c00a0eadbfff54c675f4e14b899dcf44c26f43e24"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/ced/package.json",
+      "mode": "0644",
+      "type": "file",
+      "size": 546,
+      "sha256": "aabe391301b14da8ccdb26328248861ccf23a01b1a393bc2a5830ee0ebf0de19"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/LICENSE",
+      "mode": "0644",
+      "type": "file",
+      "size": 1061,
+      "sha256": "dc30c81d5b085c711e1f97f47c8446da285b67b1415bbd1f4d3231a1a96ea29d"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/index.d.cts",
+      "mode": "0644",
+      "type": "file",
+      "size": 561,
+      "sha256": "049c93ee049e4c5bd54d3d3c097abc621419bb6793a311a86c331f0f1590c30b"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/index.d.mts",
+      "mode": "0644",
+      "type": "file",
+      "size": 591,
+      "sha256": "3899f9a15102c4031059dbd4860a6681b4c4730554ae267677fb946fd415c3a6"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/index.js",
+      "mode": "0644",
+      "type": "file",
+      "size": 202,
+      "sha256": "fdbc4daf79e02182aff068ebf90fd7b6ce79ac1aa79f1827fa183b648438c5e6"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/index.mjs",
+      "mode": "0644",
+      "type": "file",
+      "size": 376,
+      "sha256": "7bb3e7a34fa54d815ba5f5c5f9d82077255036a91edc41809e94518a4c5f6885"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/libs",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/libs/core.js",
+      "mode": "0644",
+      "type": "file",
+      "size": 2422,
+      "sha256": "c098c3559c1dc0d872ec7092692ead9f788ac0fa1412306799e230f14d049b6f"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/libs/darwin",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/libs/darwin/fontlist",
+      "mode": "0755",
+      "type": "file",
+      "size": 85544,
+      "sha256": "15cb6f99034a81b347aa821945c1d15e311bbfc807907ba9a27bd797bd3cb8e9"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/libs/darwin/fontlist.m",
+      "mode": "0644",
+      "type": "file",
+      "size": 5904,
+      "sha256": "bb9e96876265cb9b84d4efb68e98ccd5e2853abb85b0877489cc5c707531e6a8"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/libs/darwin/index.js",
+      "mode": "0644",
+      "type": "file",
+      "size": 3302,
+      "sha256": "3da31ea29b1d3fe3c3ea4044edf5e17e5d190415bbbfac5ca760a68c0dc32a50"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/libs/linux",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/libs/linux/index.js",
+      "mode": "0644",
+      "type": "file",
+      "size": 4089,
+      "sha256": "586848496f193ead7fb5a6bc7c587d0a0f052e96f35c59ab854118bb98da3979"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/libs/standardize.js",
+      "mode": "0644",
+      "type": "file",
+      "size": 671,
+      "sha256": "d882ba2f54459bd15373857fc5f4af38fb17604feae5f4d7635f86881337a119"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/libs/win32",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/libs/win32/fonts.vbs",
+      "mode": "0644",
+      "type": "file",
+      "size": 663,
+      "sha256": "a292b00efd2ad22a57900886065eb2dba008f526c3b3b161d44f7c620667241d"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/libs/win32/getByPowerShell.js",
+      "mode": "0644",
+      "type": "file",
+      "size": 1317,
+      "sha256": "dd40e6272b46cfd1d538ea6110e2aae8678e42193418de2266fd749edde0f4d9"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/libs/win32/getByVBS.js",
+      "mode": "0644",
+      "type": "file",
+      "size": 1740,
+      "sha256": "6921d2d58ec908c4bafda5b256c4faf0e90124a716fd53eb36b4480a86665036"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/libs/win32/getDetailedFontsByPowerShell.js",
+      "mode": "0644",
+      "type": "file",
+      "size": 5583,
+      "sha256": "70924b1ecfe454da17e7928bd3aa726967ce7b4911a6c8571d72a246fe6bcb83"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/libs/win32/index.js",
+      "mode": "0644",
+      "type": "file",
+      "size": 1825,
+      "sha256": "6cd6219684e8f25a817847e303b52ca59b68bb911fef25fc757386c829f3d984"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/font-list/package.json",
+      "mode": "0644",
+      "type": "file",
+      "size": 670,
+      "sha256": "d1b5eb872d9928f2ba4c07f394f4174b5847bdb3114ca9a9279f9f1bd11e915f"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/keytar",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/keytar/LICENSE.md",
+      "mode": "0644",
+      "type": "file",
+      "size": 1055,
+      "sha256": "224fcc506ef97afd088b487edab374abcad7e3d4de55fb8cce4f04328397213f"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/keytar/build",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/keytar/build/Release",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/keytar/build/Release/keytar.node",
+      "mode": "0755",
+      "type": "file",
+      "size": 99528,
+      "sha256": "6c32c41c0e5a9e546616607b0383eada5bb646d0164324f20baab59d5b7963fa"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/keytar/lib",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/keytar/lib/keytar.js",
+      "mode": "0644",
+      "type": "file",
+      "size": 1038,
+      "sha256": "e858194902d632e217b60b913829865749568fd43aee2d65bf7ffcefd7b1d6ae"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/keytar/package.json",
+      "mode": "0644",
+      "type": "file",
+      "size": 891,
+      "sha256": "01669e30d6ab8090eec8461ebbce8d65828e0e9b182021b603ad42e87820027c"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/License.txt",
+      "mode": "0644",
+      "type": "file",
+      "size": 1094,
+      "sha256": "31bec773a6a3d56327cdc6149027250e6730014ba46a0ad432e8e11914baae52"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/PoliCheckExclusions.xml",
+      "mode": "0644",
+      "type": "file",
+      "size": 733,
+      "sha256": "7f42c163d03659b5c8b2a7a571c35759520e9db090215e893328c2a0be8a6478"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/SECURITY.md",
+      "mode": "0644",
+      "type": "file",
+      "size": 2780,
+      "sha256": "81ed58e26769508df9a2f761dad55b52c6c9de62fff06195b2702fcb7a97e883"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/ThirdPartyNotices.txt",
+      "mode": "0644",
+      "type": "file",
+      "size": 2514,
+      "sha256": "fd50d26182cc2badb20bfe6a7a4f3b522efe440ea7b67aeacd51e762bc5fd71b"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/bin",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/bin/darwin-arm64-146",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/bin/darwin-arm64-146/native-keymap.node",
+      "mode": "0755",
+      "type": "file",
+      "size": 59936,
+      "sha256": "88d9e5dcb5858f3461d8afc165896845615e32020d06bb3780678918db7c8025"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/build",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/build/Release",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/build/Release/keymapping.node",
+      "mode": "0755",
+      "type": "file",
+      "size": 59936,
+      "sha256": "88d9e5dcb5858f3461d8afc165896845615e32020d06bb3780678918db7c8025"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/deps",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/deps/chromium",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/deps/chromium/dom_code_data.inc",
+      "mode": "0644",
+      "type": "file",
+      "size": 36298,
+      "sha256": "c5d1825155d67badfd3f344e81988f323a656e2acc78dde237faeb830b707660"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/deps/chromium/keyboard_codes.h",
+      "mode": "0644",
+      "type": "file",
+      "size": 823,
+      "sha256": "73639ef2274cf7145c7c3b81a55b105d0fd6095e81b23192cf75157ef46f5fb7"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/deps/chromium/macros.h",
+      "mode": "0644",
+      "type": "file",
+      "size": 895,
+      "sha256": "260555d803979aa1d2e1d1213cb790ec34e0c560055c45403c7a9e6e6858e3a3"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/deps/chromium/x",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/deps/chromium/x/keysym_to_unicode.h",
+      "mode": "0644",
+      "type": "file",
+      "size": 1034,
+      "sha256": "c06c0e3b6a850d5e5df6590c182c2212d291289ec59c5e8c03342a8279e44c40"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/index.js",
+      "mode": "0644",
+      "type": "file",
+      "size": 1896,
+      "sha256": "4e5aaf2b1661850fb01e90a72720c99ff8976c9c9304ee7cd84755ac43ed9299"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/package.json",
+      "mode": "0644",
+      "type": "file",
+      "size": 379,
+      "sha256": "4598e0dcfef60364cad4f3694f71de625c77b5d11223714db3d99e93649c1437"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/src",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/src/common.h",
+      "mode": "0644",
+      "type": "file",
+      "size": 5109,
+      "sha256": "2b6039af9b0e0574bf19f1c0d1f372d360cffb02046617416487cddb8c3dacb2"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/src/keyboard_mac.mm",
+      "mode": "0644",
+      "type": "file",
+      "size": 7970,
+      "sha256": "f814e7555fb0c16ad8aec37914e6eb4e6e32dce899fd9cdb601b4a699845f0a8"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/src/keymapping.h",
+      "mode": "0644",
+      "type": "file",
+      "size": 2240,
+      "sha256": "e942e42200819d1854aaace7e01b376315dcbbe70d6b0167224ece3c43cc11bf"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/app.asar.unpacked/node_modules/native-keymap/src/string_conversion.h",
+      "mode": "0644",
+      "type": "file",
+      "size": 625,
+      "sha256": "8d80b4e386777a6baf6de79e5936ace45623183221273285fdbfb0361db87c5d"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/de.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/en.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/es.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/fr.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/icon.icns",
+      "mode": "0644",
+      "type": "file",
+      "size": 4768,
+      "sha256": "a4f7dffc685de4d3e2791cd50fc4d6fc8c5b885719ed0b86e6d3b5a0712c0577"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/icons",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/icons/icon.ico",
+      "mode": "0644",
+      "type": "file",
+      "size": 47321,
+      "sha256": "66fbf4986a6f06ff17b0206a5e9f3eeb620bc5d5c4b831a6fb86cb8df5d714b0"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/icons/md.ico",
+      "mode": "0644",
+      "type": "file",
+      "size": 104936,
+      "sha256": "afdb3e0adb95c8c256ce49dbb7d4b01818fa00cd7464cec8ccecf0a7cc6b5d4d"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/ja.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/ko.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/md.icns",
+      "mode": "0644",
+      "type": "file",
+      "size": 77902,
+      "sha256": "61936158531d90968321b843d4e519131c12117599e4b62e15dcf6ded3d9832a"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/nl.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/pt_BR.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/pt_PT.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/ru.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/icon.icns",
+      "mode": "0644",
+      "type": "file",
+      "size": 4768,
+      "sha256": "a4f7dffc685de4d3e2791cd50fc4d6fc8c5b885719ed0b86e6d3b5a0712c0577"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/icon.ico",
+      "mode": "0644",
+      "type": "file",
+      "size": 31435,
+      "sha256": "1977e101236ba5ac4a8c8a08cbd13c31247a3f6dc89c491ec130e71c5e72eb4e"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/icon.png",
+      "mode": "0644",
+      "type": "file",
+      "size": 30688,
+      "sha256": "5e58c5e8409df05888a0ecdd4cc9f1487f49eb7adb85bc8d63177cfd7c53732e"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/locales",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/locales/de.min.json",
+      "mode": "0644",
+      "type": "file",
+      "size": 35200,
+      "sha256": "769094b81d074ecd4af22fca2d98c79d9dcfebdafcac6df6cf3979cabb2e9127"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/locales/en.min.json",
+      "mode": "0644",
+      "type": "file",
+      "size": 31306,
+      "sha256": "d8c400323a8bb3a948fee07b68be23215340e6178f8c7b0f65a16ef7387997f7"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/locales/es.min.json",
+      "mode": "0644",
+      "type": "file",
+      "size": 35399,
+      "sha256": "d81d2dd3facfb43d002a675c418cb5dd786e437bf21c82587ac1483c8c9bacd2"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/locales/fr.min.json",
+      "mode": "0644",
+      "type": "file",
+      "size": 36554,
+      "sha256": "299652b4f5034c6dd7f5c3bfbbdbd6e7f349deb2c9c0d5ee7432e19e7d6fcb14"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/locales/ja.min.json",
+      "mode": "0644",
+      "type": "file",
+      "size": 38573,
+      "sha256": "3bee45cf914146033c1624ce3ff235a015e196f26d2da31ece50cd30517f271d"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/locales/ko.min.json",
+      "mode": "0644",
+      "type": "file",
+      "size": 34368,
+      "sha256": "fc8f0f0e0508aca2a2f47b172a94321066ca51ac127c463c988294b7c3c51e61"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/locales/nl.min.json",
+      "mode": "0644",
+      "type": "file",
+      "size": 33223,
+      "sha256": "e076549269fd74d2e43989c22bc715455bfd6b7e4fd720eab2cffdf098f08aa7"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/locales/pt.min.json",
+      "mode": "0644",
+      "type": "file",
+      "size": 34724,
+      "sha256": "30245d711460ccaf36e14f8a55af9788b8bc9063c7c6ea1519271bd998baf343"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/locales/ru.min.json",
+      "mode": "0644",
+      "type": "file",
+      "size": 48590,
+      "sha256": "797d7fb18032287355871c9aff0f64f0b7438556d0f937b55b0236a96f44a761"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/locales/tr.min.json",
+      "mode": "0644",
+      "type": "file",
+      "size": 34908,
+      "sha256": "7a4c93b39f0f31edfd307b5bf28203978baddeaea122148c9c8def5ca1da2eaa"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/locales/zh-CN.min.json",
+      "mode": "0644",
+      "type": "file",
+      "size": 30841,
+      "sha256": "0eecf913f51cb6f8dc7d20f54ef5af36f0dade1a17f636d1dc7b402639e1e88b"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/locales/zh-TW.min.json",
+      "mode": "0644",
+      "type": "file",
+      "size": 30963,
+      "sha256": "08629907409391ec58d8cc5cf4ee8a797cd44ddd70b3579a9b2150d29ae85f29"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/logo-96px.png",
+      "mode": "0644",
+      "type": "file",
+      "size": 4768,
+      "sha256": "a4f7dffc685de4d3e2791cd50fc4d6fc8c5b885719ed0b86e6d3b5a0712c0577"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/logo-small.png",
+      "mode": "0644",
+      "type": "file",
+      "size": 23629,
+      "sha256": "53e9fb3cfe5efb2ca0e77ad7dcbf56835373ae797d36a87479f207ed8a8d90d4"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/static/preference.json",
+      "mode": "0644",
+      "type": "file",
+      "size": 2491,
+      "sha256": "09f13534ddece48db8533536c21f89c814e39c12c6aa2e8695b7fcb733dce716"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/tr.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/zh_CN.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "MarkText.app/Contents/Resources/zh_TW.lproj",
+      "mode": "0755",
+      "type": "directory"
+    }
+  ]
+}

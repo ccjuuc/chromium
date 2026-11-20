@@ -1,0 +1,5 @@
+{
+  "application": "./MarkText.app",
+  "name": "MarkText",
+  "userDataPolicy": "legacy-host"
+}

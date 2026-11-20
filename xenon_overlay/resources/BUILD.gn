@@ -5,6 +5,10 @@ import("electron_apps.gni")
 import("ipc/bootstrap_sources.gni")
 import("thunder_macos.gni")
 
+if (is_mac) {
+  import("mac_electron_apps.gni")
+}
+
 node("ipc_bootstrap") {
   script = "//third_party/node/node.py"
   inputs = ipc_bootstrap_sources +
@@ -71,6 +75,53 @@ copy("copy_video_controls_extension") {
 }
 
 if (is_mac) {
+  if (xenon_bundle_mac_electron_apps) {
+    foreach(_app, xenon_mac_electron_apps) {
+      _id = _app.id
+      _bundle = _app.bundle
+      _source = "//xenon_overlay/resources/mac_electron_apps/$_id"
+      _stage = "$target_gen_dir/mac_electron_apps/$_id/$_bundle"
+      action("stage_mac_electron_app_$_id") {
+        script = "//xenon_overlay/tools/stage_macos_electron_app.py"
+        inputs = [
+          "//xenon_overlay/tools/mac_resource_archive.py",
+          "$_source/payload.tar.xz",
+          "$_source/payload.sha256",
+        ]
+        outputs = [ _stage ]
+        args = [
+          "--archive",
+          rebase_path("$_source/payload.tar.xz", root_build_dir),
+          "--checksum",
+          rebase_path("$_source/payload.sha256", root_build_dir),
+          "--output",
+          rebase_path(_stage, root_build_dir),
+        ]
+      }
+
+      bundle_data("mac_electron_app_$_id") {
+        sources = [
+          "$_source/$_id.xenon.json",
+          _stage,
+        ]
+        outputs = [ "{{bundle_resources_dir}}/xenon-apps/{{source_file_part}}" ]
+        public_deps = [ ":stage_mac_electron_app_$_id" ]
+      }
+    }
+  }
+
+  # The hosted apps belong only in the outer application bundle, not in the
+  # framework which also depends on the generic resources group below.
+  group("mac_electron_apps_bundle_data") {
+    public_deps = []
+    if (xenon_bundle_mac_electron_apps) {
+      foreach(_app, xenon_mac_electron_apps) {
+        _id = _app.id
+        public_deps += [ ":mac_electron_app_$_id" ]
+      }
+    }
+  }
+
   if (xenon_bundle_thunder_macos) {
     _thunder_archive = "//xenon_overlay/resources/thunder-2025-mac.tar.xz"
     _thunder_checksum = "//xenon_overlay/resources/thunder-2025-mac.sha256"
@@ -80,6 +131,7 @@ if (is_mac) {
       inputs = [
         "//build/action_helpers.py",
         "//build/gn_helpers.py",
+        "//xenon_overlay/tools/mac_resource_archive.py",
         _thunder_archive,
         _thunder_checksum,
       ]

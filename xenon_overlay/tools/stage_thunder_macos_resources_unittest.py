@@ -19,6 +19,7 @@ from unittest import mock
 
 import archive_thunder_macos as archiving
 import configure_thunder_macos_resources as configuration
+import mac_resource_archive
 import stage_thunder_macos_resources as staging
 
 
@@ -414,7 +415,7 @@ class StageThunderMacResourcesTest(unittest.TestCase):
         for constant, maximum in (('MAX_ARCHIVE_BYTES', 1), ('MAX_FILE_BYTES', 1),
                                   ('MAX_MEMBERS', 1), ('MAX_EXPANDED_BYTES', 100)):
             with self.subTest(limit=constant):
-                with mock.patch.object(staging, constant, maximum):
+                with mock.patch.object(mac_resource_archive, constant, maximum):
                     with self.assertRaisesRegex(ValueError, 'limit'):
                         self.stage_archive()
         self.assertFalse(self.destination.exists())
@@ -424,7 +425,7 @@ class StageThunderMacResourcesTest(unittest.TestCase):
             with self.subTest(kind=kind):
                 member = tarfile.TarInfo('metadata')
                 member.type = kind
-                member.size = staging.MAX_METADATA_BYTES + 1
+                member.size = mac_resource_archive.MAX_METADATA_BYTES + 1
                 # No metadata body follows: its header must be rejected before
                 # tarfile allocates or attempts to read the declared payload.
                 self.archive.write_bytes(lzma.compress(

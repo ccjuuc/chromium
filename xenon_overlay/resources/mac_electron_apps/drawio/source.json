@@ -1,0 +1,380 @@
+{
+  "format_version": 1,
+  "app_id": "drawio",
+  "version": "32.6.10",
+  "architecture": "arm64",
+  "release_url": "https://github.com/jgraph/drawio-desktop/releases/tag/v32.6.10",
+  "download_url": "https://github.com/jgraph/drawio-desktop/releases/download/v32.6.10/draw.io-arm64-32.6.10.dmg",
+  "dmg_filename": "draw.io-arm64-32.6.10.dmg",
+  "dmg_size": 157367951,
+  "dmg_sha256": "83e4027837f89bfba9dafbcc5c0e4befa76e2ac7f4e37f7a7b40c817141a6727",
+  "digest_source": "https://api.github.com/repos/jgraph/drawio-desktop/releases/tags/v32.6.10",
+  "digest_source_field": "assets[].digest",
+  "bundle": "draw.io.app",
+  "upstream_info_plist_sha256": "9476ab39b9bf8bafbda6da224de9f880f153eb865a4eba40165e07ea1001d5a3",
+  "transformations": [
+    "Set outer Contents/Info.plist CFBundlePackageType to BNDL",
+    "Remove outer Contents/Info.plist CFBundleExecutable",
+    "Serialize outer Info.plist as sorted XML",
+    "Normalize archive timestamps, uid and gid to zero",
+    "Omit filesystem extended attributes from archive"
+  ],
+  "retained": [
+    "Contents/Info.plist (transformed as listed above)",
+    "Contents/Resources (all original bytes and permissions)",
+    "Contents/MacOS directory and helpers other than the Electron launcher"
+  ],
+  "omitted_upstream": [
+    "Contents/CodeResources",
+    "Contents/Frameworks",
+    "Contents/PkgInfo",
+    "Contents/PlugIns",
+    "Contents/_CodeSignature",
+    "Contents/MacOS/draw.io"
+  ],
+  "archive": {
+    "file": "payload.tar.xz",
+    "size": 22077752,
+    "sha256": "7cc05e13d75447ac15ca985f23fe6a20414012f1d4b071d7769f87a264229f92",
+    "format": "PAX tar, XZ preset 6"
+  },
+  "entries": [
+    {
+      "path": "draw.io.app",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Info.plist",
+      "mode": "0644",
+      "type": "file",
+      "size": 6266,
+      "sha256": "d544fece52996728a5404c61b8f3a42688702c3a0cb2595f609f6fc52058e64f"
+    },
+    {
+      "path": "draw.io.app/Contents/MacOS",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/LICENSE.electron.txt",
+      "mode": "0644",
+      "type": "file",
+      "size": 1096,
+      "sha256": "5154e165bd6c2cc0cfbcd8916498c7abab0497923bafcd5cb07673fe8480087d"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/LICENSES.chromium.html",
+      "mode": "0644",
+      "type": "file",
+      "size": 20115518,
+      "sha256": "3375e2a9bd7bc631738fde10be6548a76efe8cf5e4b8826b8140ba8b0c4d6353"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/af.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/am.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/app-update.yml",
+      "mode": "0644",
+      "type": "file",
+      "size": 89,
+      "sha256": "073638829e14cace16e89809f47bca5146244d511cac9329092ea722afa38fd0"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/app.asar",
+      "mode": "0644",
+      "type": "file",
+      "size": 64324191,
+      "sha256": "3cf8e711b818d539b3dd4a8f33203419743c7aec784368bd2d512ad69cc49c25"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/ar.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/bg.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/bn.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/ca.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/cs.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/da.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/de.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/el.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/en.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/en_GB.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/es.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/es_419.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/et.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/fa.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/fi.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/fil.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/fr.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/gu.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/he.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/hi.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/hr.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/hu.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/icon.icns",
+      "mode": "0644",
+      "type": "file",
+      "size": 176780,
+      "sha256": "e7c89eb4cf163a511678f826d8630de2a0ddefc29e2251903c1a92cd10f9d15d"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/id.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/it.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/ja.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/kn.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/ko.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/lt.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/lv.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/ml.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/mr.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/ms.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/nb.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/nl.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/pl.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/pt_BR.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/pt_PT.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/ro.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/ru.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/sk.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/sl.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/sr.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/sv.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/sw.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/ta.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/te.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/th.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/tr.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/uk.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/ur.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/vi.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/zh_CN.lproj",
+      "mode": "0755",
+      "type": "directory"
+    },
+    {
+      "path": "draw.io.app/Contents/Resources/zh_TW.lproj",
+      "mode": "0755",
+      "type": "directory"
+    }
+  ]
+}

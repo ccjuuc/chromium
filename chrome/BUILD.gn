@@ -62,6 +62,7 @@ if (is_android) {
   import("//media/cdm/library_cdm/cdm_paths.gni")
   import("//services/on_device_model/on_device_model.gni")
   import("//third_party/icu/config.gni")
+  import("//xenon_overlay/resources/mac_electron_apps.gni")
   import("//xenon_overlay/resources/thunder_macos.gni")
 }
 
@@ -567,6 +568,22 @@ if (is_win) {
     }
   }
 
+  action("configure_mac_electron_apps") {
+    script = "//xenon_overlay/tools/configure_thunder_macos_resources.py"
+    outputs = [ "$target_gen_dir/mac_electron_apps_configuration.stamp" ]
+    args = [
+      "--resource-group",
+      "mac-electron-apps",
+      "--bundle",
+      rebase_path("$root_out_dir/${chrome_product_full_name}.app",
+                  root_build_dir),
+      "--enabled",
+      "$xenon_bundle_mac_electron_apps",
+      "--stamp",
+      rebase_path(outputs[0], root_build_dir),
+    ]
+  }
+
   action("configure_thunder_macos_resources") {
     script = "//xenon_overlay/tools/configure_thunder_macos_resources.py"
     outputs = [ "$target_gen_dir/thunder_macos_configuration.stamp" ]
@@ -604,6 +621,7 @@ if (is_win) {
       ":chrome_app_strings_bundle_data",
       ":chrome_resources",
       ":chrome_versioned_bundle_data",
+      ":configure_mac_electron_apps",
       ":configure_thunder_macos_resources",
       "//base:compiler_specific",
       "//base/allocator:early_zone_registration_apple",
@@ -614,6 +632,7 @@ if (is_win) {
       "//xenon_overlay/chrome/browser:xenon_privileged_update_helper_bundle_data",
       "//xenon_overlay/chrome/browser:xenon_privileged_update_launchd_bundle_data",
       "//xenon_overlay/chrome/browser:xenon_update_helper_bundle_data",
+      "//xenon_overlay/resources:mac_electron_apps_bundle_data",
       "//xenon_overlay/resources:thunder_macos_bundle_data",
     ]
 
