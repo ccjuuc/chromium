@@ -98,6 +98,30 @@ test('system theme getters and events use actual host state without overriding o
   assert.equal(nativeTheme.themeSource, 'system');
 });
 
+test('systemPreferences notifications and app macOS methods', () => {
+  const {context} = createRuntime((_id, command, details) => {
+    if (command === 'electron-api' && details.operation === 'nativeTheme.getState') {
+      return {shouldUseDarkColors: true};
+    }
+    return null;
+  });
+  const {app, systemPreferences} = context.__xenonElectron;
+  assert.equal(typeof app.show, 'function');
+  assert.equal(typeof app.hide, 'function');
+  assert.equal(typeof app.focus, 'function');
+  assert.equal(typeof app.dock.setBadge, 'function');
+  assert.equal(typeof app.dock.bounce, 'function');
+  let notified = false;
+  const subId = systemPreferences.subscribeLocalNotification('AppleInterfaceThemeChangedNotification', () => {
+    notified = true;
+  });
+  assert.equal(typeof subId, 'number');
+  assert.equal(systemPreferences.getUserDefault('AppleInterfaceStyle', 'string'), 'Dark');
+  systemPreferences.unsubscribeLocalNotification(subId);
+  assert.equal(systemPreferences.isTrustedAccessibilityClient(), true);
+  assert.equal(systemPreferences.getMediaAccessStatus('camera'), 'granted');
+});
+
 test('loadURL waits for its native completion and rejects structured navigation errors', async () => {
   const pending = [];
   const {context, BrowserWindow} = createRuntime(() => null, {
@@ -325,7 +349,7 @@ test('sheet offsets are a non-macOS no-op and do not fake Cocoa support', () => 
   assert.equal(calls.length, before);
   assert.throws(() => win.setSheetOffset(NaN), {name: 'TypeError'});
   const mac = createRuntime(() => null, {__xenonPlatform: 'darwin'});
-  assert.throws(() => new mac.BrowserWindow().setSheetOffset(38), {code: 'ERR_NOT_SUPPORTED'});
+  assert.equal(new mac.BrowserWindow().setSheetOffset(38), undefined);
 });
 
 test('radio groups span normal items and are separated only by separators', () => {

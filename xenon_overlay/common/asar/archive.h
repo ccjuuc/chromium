@@ -15,8 +15,13 @@
 #include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/synchronization/lock.h"
 #include "base/values.h"
+
+namespace base {
+class SequencedTaskRunner;
+}
 
 namespace xenon::asar {
 
@@ -29,6 +34,42 @@ struct ArchiveKeyConfig {
   std::string public_key_pem;
 };
 
+// Validated, canonical configuration produced by PrepareArchivePublicKeys().
+// Its construction is restricted so committing it never needs filesystem I/O.
+class PreparedArchivePublicKeys {
+ public:
+  PreparedArchivePublicKeys(PreparedArchivePublicKeys&&);
+  PreparedArchivePublicKeys& operator=(PreparedArchivePublicKeys&&);
+  ~PreparedArchivePublicKeys();
+
+  PreparedArchivePublicKeys(const PreparedArchivePublicKeys&) = delete;
+  PreparedArchivePublicKeys& operator=(const PreparedArchivePublicKeys&) =
+      delete;
+
+  const std::vector<ArchiveKeyConfig>& configs() const { return configs_; }
+
+ private:
+  friend std::optional<PreparedArchivePublicKeys> PrepareArchivePublicKeys(
+      const std::vector<ArchiveKeyConfig>& configs);
+  explicit PreparedArchivePublicKeys(std::vector<ArchiveKeyConfig> configs);
+
+  std::vector<ArchiveKeyConfig> configs_;
+};
+
+// Parses public keys and resolves their roots. Must run on a blocking sequence.
+// Preparation does not change the registry or authorize reading an archive.
+std::optional<PreparedArchivePublicKeys> PrepareArchivePublicKeys(
+    const std::vector<ArchiveKeyConfig>& configs);
+
+// Atomically rechecks owner conflicts and commits a prepared configuration.
+// Does not perform filesystem I/O; evicted archives (and their open files) are
+// released on the supplied MayBlock runner. A null runner is rejected.
+bool CommitPreparedArchivePublicKeys(
+    const std::string& owner_id,
+    const PreparedArchivePublicKeys& prepared,
+    scoped_refptr<base::SequencedTaskRunner> cleanup_runner);
+
+// Synchronous preparation, registration, and cache retirement.
 bool SetArchivePublicKeys(const std::string& owner_id,
                           const std::vector<ArchiveKeyConfig>& configs);
 void RemoveArchivePublicKeys(const std::string& owner_id);

@@ -634,55 +634,18 @@ bool XenonManager::RegisterElectronIpc(ipc::mojom::IpcMainConfigPtr config) {
     return false;
   }
   config->executable_path = executable_path.AsUTF8Unsafe();
-  const std::string container_id =
-      config->container_id.empty() ? "default" : config->container_id;
-  auto user_data = ipc::ResolveElectronAppStorageUserDataPath(*config);
-  if (!user_data.has_value()) {
-    LOG(ERROR) << "Cannot register Electron application storage: "
-               << user_data.error();
+  if (config->container_id.empty() || config->container_id == "default") {
+    if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+            ipc::switches::kElectronApp)) {
+      InitializeRuntimeMetadata();
+    }
+  }
+  if (!PrepareElectronIpcRegistration(config.get())) {
     return false;
   }
-  config->app_user_data_directory = user_data->AsUTF8Unsafe();
-  const auto* launch = base::CommandLine::ForCurrentProcess();
-  if (container_id == "default" &&
-      launch->HasSwitch(ipc::switches::kElectronApp)) {
-    config->app_argv =
-        ipc::BuildElectronAppLaunchArgv(*launch, executable_path);
-    InitializeRuntimeMetadata();
-    if (config->working_directory.empty()) {
-      config->working_directory = startup_working_directory_;
-    }
-  } else if (config->app_argv.empty()) {
-    config->app_argv.push_back(config->executable_path);
-  }
+  const std::string container_id =
+      config->container_id.empty() ? "default" : config->container_id;
   const auto previous = last_ipc_configs_.find(container_id);
-  if (FindContainerService(container_id)) {
-    if (previous != last_ipc_configs_.end()) {
-      if (previous->second->app_user_data_directory !=
-          config->app_user_data_directory) {
-        LOG(ERROR) << "Cannot change the default userData policy or identity "
-                      "while the container is running";
-        return false;
-      }
-      if (previous->second->native_addon_execution !=
-          config->native_addon_execution) {
-        LOG(ERROR) << "Cannot change native addon execution while the "
-                      "container is running";
-        return false;
-      }
-      const auto& old_keys = previous->second->archive_public_keys;
-      const auto& new_keys = config->archive_public_keys;
-      bool equal = old_keys.size() == new_keys.size();
-      for (size_t i = 0; equal && i < old_keys.size(); ++i) {
-        equal = old_keys[i]->root_path == new_keys[i]->root_path &&
-                old_keys[i]->public_key_pem == new_keys[i]->public_key_pem;
-      }
-      if (!equal) {
-        LOG(ERROR) << "Cannot replace ASAR keys while the container is running";
-        return false;
-      }
-    }
-  }
   std::vector<asar::ArchiveKeyConfig> previous_archive_keys;
   if (previous != last_ipc_configs_.end()) {
     for (const auto& key : previous->second->archive_public_keys) {
@@ -751,6 +714,93 @@ bool XenonManager::RegisterElectronIpc(ipc::mojom::IpcMainConfigPtr config) {
       config->app_version = "0.0.0";
     }
   }
+  StoreElectronIpcConfig(std::move(config));
+  return true;
+}
+
+bool XenonManager::RegisterPreparedElectronIpc(
+    std::unique_ptr<ipc::PreparedElectronAppConfig> prepared) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (shutting_down_for_process_exit_ || !prepared) {
+    return false;
+  }
+  auto config = std::move(prepared->config_);
+  if (!PrepareElectronIpcRegistration(config.get())) {
+    return false;
+  }
+  const std::string container_id =
+      config->container_id.empty() ? "default" : config->container_id;
+  // Preparation resolved the executable, application metadata, and key roots.
+  // Commit still checks for conflicts with owners added during that work, but
+  // retires any cached archive handles on a blocking sequence.
+  if (!asar::CommitPreparedArchivePublicKeys(
+          "electron:" + container_id, *prepared->archive_keys_,
+          base::ThreadPool::CreateSequencedTaskRunner(
+              {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
+               base::TaskShutdownBehavior::BLOCK_SHUTDOWN}))) {
+    LOG(ERROR) << "Invalid or conflicting ASAR public key configuration";
+    return false;
+  }
+  StoreElectronIpcConfig(std::move(config));
+  return true;
+}
+
+bool XenonManager::PrepareElectronIpcRegistration(
+    ipc::mojom::IpcMainConfig* config) {
+  const std::string container_id =
+      config->container_id.empty() ? "default" : config->container_id;
+  auto user_data = ipc::ResolveElectronAppStorageUserDataPath(*config);
+  if (!user_data.has_value()) {
+    LOG(ERROR) << "Cannot register Electron application storage: "
+               << user_data.error();
+    return false;
+  }
+  config->app_user_data_directory = user_data->AsUTF8Unsafe();
+  const auto* launch = base::CommandLine::ForCurrentProcess();
+  if (container_id == "default" &&
+      launch->HasSwitch(ipc::switches::kElectronApp)) {
+    config->app_argv = ipc::BuildElectronAppLaunchArgv(
+        *launch, base::FilePath::FromUTF8Unsafe(config->executable_path));
+    if (config->working_directory.empty()) {
+      config->working_directory = startup_working_directory_;
+    }
+  } else if (config->app_argv.empty()) {
+    config->app_argv.push_back(config->executable_path);
+  }
+  const auto previous = last_ipc_configs_.find(container_id);
+  if (FindContainerService(container_id)) {
+    if (previous != last_ipc_configs_.end()) {
+      if (previous->second->app_user_data_directory !=
+          config->app_user_data_directory) {
+        LOG(ERROR) << "Cannot change the default userData policy or identity "
+                      "while the container is running";
+        return false;
+      }
+      if (previous->second->native_addon_execution !=
+          config->native_addon_execution) {
+        LOG(ERROR) << "Cannot change native addon execution while the "
+                      "container is running";
+        return false;
+      }
+      const auto& old_keys = previous->second->archive_public_keys;
+      const auto& new_keys = config->archive_public_keys;
+      bool equal = old_keys.size() == new_keys.size();
+      for (size_t i = 0; equal && i < old_keys.size(); ++i) {
+        equal = old_keys[i]->root_path == new_keys[i]->root_path &&
+                old_keys[i]->public_key_pem == new_keys[i]->public_key_pem;
+      }
+      if (!equal) {
+        LOG(ERROR) << "Cannot replace ASAR keys while the container is running";
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+void XenonManager::StoreElectronIpcConfig(ipc::mojom::IpcMainConfigPtr config) {
+  const std::string container_id =
+      config->container_id.empty() ? "default" : config->container_id;
   if (config->default_user_agent.empty()) {
     const auto custom_ua = embedder_support::GetUserAgentFromCommandLine();
     config->default_user_agent =
@@ -761,7 +811,6 @@ bool XenonManager::RegisterElectronIpc(ipc::mojom::IpcMainConfigPtr config) {
   }
   last_ipc_configs_.insert_or_assign(container_id, std::move(config));
   LOG(INFO) << "Registered Electron container configuration: " << container_id;
-  return true;
 }
 
 bool XenonManager::IsDeclaredFileRendererURL(const std::string& container_id,
@@ -2412,7 +2461,8 @@ void XenonManager::ElectronWindowCall(int32_t window_id,
     if (!single_instance_broker_) {
       single_instance_broker_.emplace(
           base::ThreadPool::CreateSequencedTaskRunner(
-              {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
+              {base::MayBlock(), base::WithBaseSyncPrimitives(),
+               base::TaskPriority::USER_VISIBLE,
                base::TaskShutdownBehavior::BLOCK_SHUTDOWN}),
           base::BindPostTaskToCurrentDefault(base::BindRepeating(
               [](base::WeakPtr<XenonManager> manager, const std::string& owner,

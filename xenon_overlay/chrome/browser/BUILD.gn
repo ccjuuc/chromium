@@ -292,6 +292,8 @@ source_set("electron_app_config") {
   deps = [
     ":app_runtime",
     "//base",
+    "//chrome/common:constants",
+    "//components/crash/core/app",
     "//crypto",
     "//net",
     "//url",

@@ -12,8 +12,15 @@
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
+#include "base/task/thread_pool.h"
+#include "base/test/scoped_path_override.h"
+#include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "base/values.h"
+#include "chrome/common/chrome_paths.h"
+#include "components/crash/core/app/crashpad.h"
 #include "net/base/filename_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -100,6 +107,73 @@ TEST_F(ElectronAppConfigTest,
   EXPECT_TRUE(
       base::FilePath::FromUTF8Unsafe(config->executable_path).IsAbsolute());
   EXPECT_EQ(before, Snapshot(app));
+}
+
+TEST_F(ElectronAppConfigTest,
+       BackgroundPreparationResolvesMetadataAndHostPathsWithoutChangingLoad) {
+  base::test::TaskEnvironment task_environment;
+  const auto app = root_.AppendASCII("source");
+  ASSERT_TRUE(WriteApplication(app));
+  ASSERT_TRUE(base::WriteFile(app.AppendASCII("package.json"),
+                              R"({"main":"dist/entry.js"})"));
+  const auto executable = root_.AppendASCII("unversioned.bin");
+  ASSERT_TRUE(base::WriteFile(executable, "no executable version resource"));
+  ASSERT_TRUE(WriteDescriptor(base::DictValue()
+                                  .Set("application", "../source")
+                                  .Set("executable", "../unversioned.bin")));
+  const auto host = root_.AppendASCII("host-user-data");
+  base::ScopedPathOverride host_override(chrome::DIR_USER_DATA, host);
+  const auto before = Snapshot(app);
+
+  // Loading metadata alone retains its existing contract. Only the preparation
+  // API supplies the registration defaults and browser-owned path snapshot.
+  mojom::IpcMainConfigPtr loaded;
+  std::string error;
+  ASSERT_TRUE(LoadElectronAppConfig(descriptor_, "loaded", &loaded, &error))
+      << error;
+  EXPECT_TRUE(loaded->app_name.empty());
+  EXPECT_TRUE(loaded->app_version.empty());
+  EXPECT_TRUE(loaded->host_user_data_directory.empty());
+  EXPECT_TRUE(loaded->host_crash_dumps_directory.empty());
+
+  base::test::TestFuture<
+      base::expected<std::unique_ptr<PreparedElectronAppConfig>, std::string>>
+      future;
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock()},
+      base::BindOnce(&PrepareElectronAppConfig, descriptor_, "prepared"),
+      future.GetCallback());
+  auto prepared = future.Take();
+  ASSERT_TRUE(prepared.has_value()) << prepared.error();
+  const auto config = (*prepared)->CloneConfig();
+  EXPECT_EQ("prepared", config->container_id);
+  EXPECT_EQ("Application", config->app_name);
+  EXPECT_EQ("0.0.0", config->app_version);
+  EXPECT_EQ(app.AsUTF8Unsafe(), config->app_path);
+  EXPECT_EQ(executable.AsUTF8Unsafe(), config->executable_path);
+  EXPECT_EQ(host.AsUTF8Unsafe(), config->host_user_data_directory);
+  const auto crash_dumps = crash_reporter::GetCrashpadDatabasePath();
+  EXPECT_EQ(crash_dumps ? crash_dumps->AsUTF8Unsafe() : std::string(),
+            config->host_crash_dumps_directory);
+  EXPECT_EQ(before, Snapshot(app));
+}
+
+TEST_F(ElectronAppConfigTest,
+       PreparationRejectsInvalidDescriptorAndInvalidHostPath) {
+  ASSERT_TRUE(base::WriteFile(descriptor_, "{invalid}"));
+  auto invalid_descriptor = PrepareElectronAppConfig(descriptor_, "invalid");
+  ASSERT_FALSE(invalid_descriptor.has_value());
+  EXPECT_NE(std::string::npos, invalid_descriptor.error().find("JSON"));
+
+  ASSERT_TRUE(WriteApplication(root_.AppendASCII("source")));
+  ASSERT_TRUE(
+      WriteDescriptor(base::DictValue().Set("application", "../source")));
+  base::ScopedPathOverride invalid_host(
+      chrome::DIR_USER_DATA, base::FilePath(FILE_PATH_LITERAL("relative")),
+      true);
+  auto invalid_path = PrepareElectronAppConfig(descriptor_, "invalid");
+  ASSERT_FALSE(invalid_path.has_value());
+  EXPECT_NE(std::string::npos, invalid_path.error().find("host user data"));
 }
 
 TEST_F(ElectronAppConfigTest,
@@ -314,6 +388,24 @@ TEST_F(ElectronAppConfigTest,
             config->archive_public_keys[0]->public_key_pem);
   // Inspecting a descriptor is not permanent registration. This also checks
   // that the successful metadata read cannot leak a decrypted cache entry.
+  EXPECT_FALSE(asar::GetOrCreateAsarArchive(archive));
+  EXPECT_EQ(before, Snapshot(release));
+
+  // A successful background preparation also leaves no temporary owner or
+  // decrypted archive cached while awaiting the UI registration step.
+  base::ScopedPathOverride host_override(chrome::DIR_USER_DATA,
+                                         root_.AppendASCII("host-user-data"));
+  auto prepared = PrepareElectronAppConfig(descriptor_, "prepared-sealed-app");
+  ASSERT_TRUE(prepared.has_value()) << prepared.error();
+  auto prepared_config = (*prepared)->CloneConfig();
+  EXPECT_EQ("sealed", prepared_config->app_name);
+  EXPECT_EQ("4.2", prepared_config->app_version);
+  ASSERT_EQ(1u, prepared_config->archive_public_keys.size());
+  EXPECT_EQ(builder.public_key_pem(),
+            prepared_config->archive_public_keys[0]->public_key_pem);
+  prepared_config->archive_public_keys[0]->public_key_pem = "changed snapshot";
+  EXPECT_EQ(builder.public_key_pem(),
+            (*prepared)->CloneConfig()->archive_public_keys[0]->public_key_pem);
   EXPECT_FALSE(asar::GetOrCreateAsarArchive(archive));
   EXPECT_EQ(before, Snapshot(release));
 

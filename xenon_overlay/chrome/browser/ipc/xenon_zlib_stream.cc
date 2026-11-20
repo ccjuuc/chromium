@@ -8,6 +8,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
+#include "base/memory/raw_ref.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "third_party/brotli/include/brotli/decode.h"
@@ -333,9 +334,9 @@ mojom::IpcResultPtr ZlibStream::Process(base::Value::BlobStorage input,
                                         int flush,
                                         int output_size) {
   struct ReleaseBusy {
-    std::atomic<bool>& busy;
-    ~ReleaseBusy() { busy.store(false); }
-  } release{busy_};
+    const raw_ref<std::atomic<bool>> busy;
+    ~ReleaseBusy() { busy->store(false); }
+  } release{raw_ref(busy_)};
   if (cancelled_.load()) {
     return Failure("ERR_STREAM_DESTROYED: Codec was closed");
   }

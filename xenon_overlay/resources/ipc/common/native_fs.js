@@ -213,6 +213,57 @@
       fsRequest(nativeFsWriteOperation(options, defaultFlag), path);
     const fsStatResult = createFsStats;
 
+    class Dirent {
+      constructor(name, parentPath, stats) {
+        this.name = name;
+        this.parentPath = parentPath;
+        this.path = parentPath;
+        this._isFile = Boolean(stats?.isFile?.());
+        this._isDirectory = Boolean(stats?.isDirectory?.());
+        this._isSymbolicLink = Boolean(stats?.isSymbolicLink?.());
+        this._isBlockDevice = Boolean(stats?.isBlockDevice?.());
+        this._isCharacterDevice = Boolean(stats?.isCharacterDevice?.());
+        this._isFIFO = Boolean(stats?.isFIFO?.());
+        this._isSocket = Boolean(stats?.isSocket?.());
+      }
+      isFile() { return this._isFile; }
+      isDirectory() { return this._isDirectory; }
+      isSymbolicLink() { return this._isSymbolicLink; }
+      isBlockDevice() { return this._isBlockDevice; }
+      isCharacterDevice() { return this._isCharacterDevice; }
+      isFIFO() { return this._isFIFO; }
+      isSocket() { return this._isSocket; }
+    }
+    const fsJoinChildPath = (dirPath, name) => {
+      if (!dirPath) return name;
+      if (dirPath.endsWith('/') || dirPath.endsWith('\\')) return dirPath + name;
+      return dirPath + (dirPath.includes('\\') && !dirPath.includes('/') ? '\\' : '/') + name;
+    };
+    const fsReaddirWithTypesSync = (dirPath, entries) => {
+      const parent = fsPathArgument(dirPath, 'path');
+      return entries.map(name => {
+        let stats = null;
+        try {
+          stats = fsStatResult(
+              fsCallSync(fsRequest('lstat', fsJoinChildPath(parent, name), {bigint: false})),
+              false);
+        } catch {}
+        return new Dirent(name, parent, stats);
+      });
+    };
+    const fsReaddirWithTypesAsync = async (dirPath, entries) => {
+      const parent = fsPathArgument(dirPath, 'path');
+      return Promise.all(entries.map(async name => {
+        let stats = null;
+        try {
+          stats = fsStatResult(
+              await fsCallAsync(fsRequest('lstat', fsJoinChildPath(parent, name), {bigint: false})),
+              false);
+        } catch {}
+        return new Dirent(name, parent, stats);
+      }));
+    };
+
     const fsPromises = {
       async readFile(path, options) {
         return fsReadResult(await fsCallAsync(
@@ -232,7 +283,13 @@
         const bigint = options?.bigint === true;
         return fsStatResult(await fsCallAsync(fsRequest('lstat', path, {bigint})), bigint);
       },
-      async readdir(path) { return fsCallAsync(fsRequest('readdir', path)); },
+      async readdir(path, options) {
+        const entries = await fsCallAsync(fsRequest('readdir', path));
+        if (options && typeof options === 'object' && options.withFileTypes) {
+          return fsReaddirWithTypesAsync(path, entries);
+        }
+        return entries;
+      },
       async mkdir(path, options) {
         return fsCallAsync(fsRequest('mkdir', path, {recursive: Boolean(options?.recursive)}));
       },
@@ -267,6 +324,7 @@
 
     const fsModule = {
       Stats,
+      Dirent,
       constants: fsConstants,
       promises: fsPromises,
       existsSync(path) {
@@ -291,7 +349,13 @@
         const bigint = options?.bigint === true;
         return fsStatResult(fsCallSync(fsRequest('lstat', path, {bigint})), bigint);
       },
-      readdirSync(path) { return fsCallSync(fsRequest('readdir', path)); },
+      readdirSync(path, options) {
+        const entries = fsCallSync(fsRequest('readdir', path));
+        if (options && typeof options === 'object' && options.withFileTypes) {
+          return fsReaddirWithTypesSync(path, entries);
+        }
+        return entries;
+      },
       mkdirSync(path, options) {
         return fsCallSync(fsRequest('mkdir', path, {recursive: Boolean(options?.recursive)}));
       },
@@ -334,7 +398,10 @@
         if (typeof options === 'function') { callback = options; options = undefined; }
         fsCallback(callback, () => fsPromises.lstat(path, options));
       },
-      readdir(path, callback) { fsCallback(callback, () => fsPromises.readdir(path)); },
+      readdir(path, options, callback) {
+        if (typeof options === 'function') { callback = options; options = undefined; }
+        fsCallback(callback, () => fsPromises.readdir(path, options));
+      },
       mkdir(path, options, callback) {
         if (typeof options === 'function') { callback = options; options = undefined; }
         fsCallback(callback, () => fsPromises.mkdir(path, options));

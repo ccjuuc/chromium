@@ -7,6 +7,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/numerics/safe_conversions.h"
 #include "third_party/blink/public/common/messaging/web_message_port.h"
 #include "v8/include/v8.h"
@@ -103,7 +104,7 @@ class Writer final : public v8::ValueSerializer::Delegate {
 
  private:
   v8::Local<v8::Context> context_;
-  base::span<const v8::Local<v8::Object>> ports_;
+  RAW_PTR_EXCLUSION base::span<const v8::Local<v8::Object>> ports_;
   base::RepeatingCallback<bool(v8::Local<v8::Object>)> is_port_;
 
  public:
@@ -127,7 +128,7 @@ class Reader final : public v8::ValueDeserializer::Delegate {
   raw_ptr<v8::ValueDeserializer> deserializer = nullptr;
 
  private:
-  base::span<const v8::Local<v8::Object>> ports_;
+  RAW_PTR_EXCLUSION base::span<const v8::Local<v8::Object>> ports_;
 };
 
 std::optional<base::span<const uint8_t>> V8Payload(

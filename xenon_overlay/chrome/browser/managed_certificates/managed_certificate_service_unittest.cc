@@ -126,13 +126,17 @@ class ManagedCertificateServiceTest : public testing::Test {
                std::string etag = "\"snapshot-1\"",
                std::string content_type = "application/json",
                std::string retry_after = "") {
+    std::string status = base::NumberToString(code);
+    net::HttpResponseHeaders::Builder builder({1, 1}, status);
+    builder.AddHeader("Content-Type", content_type);
+    if (!etag.empty()) {
+      builder.AddHeader("ETag", etag);
+    }
+    if (!retry_after.empty()) {
+      builder.AddHeader("Retry-After", retry_after);
+    }
     auto head = network::mojom::URLResponseHead::New();
-    head->headers =
-        net::HttpResponseHeaders::Builder({1, 1}, base::NumberToString(code))
-            .AddHeader("Content-Type", content_type)
-            .AddHeader("ETag", etag)
-            .AddHeader("Retry-After", retry_after)
-            .Build();
+    head->headers = builder.Build();
     ASSERT_TRUE(factory_.SimulateResponseForPendingRequest(
         GURL(kEndpoint), network::URLLoaderCompletionStatus(net::OK),
         std::move(head), body));

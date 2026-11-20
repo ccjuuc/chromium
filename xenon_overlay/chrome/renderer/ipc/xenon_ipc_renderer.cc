@@ -1414,8 +1414,10 @@ void XenonIpcRenderer::DispatchPostMessageNow(
   v8::HandleScope handles(isolate_);
   auto context = context_.Get(isolate_);
   v8::Context::Scope scope(context);
+  // Keep nested DOM checkpoints from running promises before the listener
+  // returns, just as for ordinary IPC events in DispatchNow().
   v8::MicrotasksScope microtasks(isolate_, context->GetMicrotaskQueue(),
-                                 v8::MicrotasksScope::kDoNotRunMicrotasks);
+                                 v8::MicrotasksScope::kRunMicrotasks);
   auto* script_state = blink::ScriptState::MaybeFrom(isolate_, context);
   if (!script_state || !script_state->ContextIsValid()) {
     return;
@@ -1468,8 +1470,11 @@ void XenonIpcRenderer::DispatchNow(const std::string& channel,
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Context> context = context_.Get(isolate);
   v8::Context::Scope context_scope(context);
+  // This is a JavaScript entry point. A running scope defers nested DOM
+  // checkpoints until the entire listener returns; kDoNotRunMicrotasks only
+  // skips the checkpoint on scope exit and does not protect the listener.
   v8::MicrotasksScope microtasks(isolate, context->GetMicrotaskQueue(),
-                                 v8::MicrotasksScope::kDoNotRunMicrotasks);
+                                 v8::MicrotasksScope::kRunMicrotasks);
   v8::Local<v8::Value> decoded_arguments;
   if (IsSerializedIpcValue(arguments)) {
     std::string error;

@@ -12,6 +12,7 @@
 
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "v8/include/v8-forward.h"
 #include "v8/include/v8-local-handle.h"
 #include "v8/include/v8-persistent-handle.h"
@@ -130,7 +131,7 @@ class XenonEsmModuleLoader {
       std::string* error);
   void ThrowFailure(const std::string& error);
 
-  v8::Isolate* const isolate_;
+  const raw_ptr<v8::Isolate> isolate_;
   v8::Global<v8::Context> context_;
   ResolveCallback resolve_;
   ReadSourceCallback read_source_;

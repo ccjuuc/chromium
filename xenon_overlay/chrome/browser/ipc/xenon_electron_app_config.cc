@@ -7,13 +7,18 @@
 #include <algorithm>
 #include <array>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
+#include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/unguessable_token.h"
+#include "chrome/common/chrome_paths.h"
+#include "components/crash/core/app/crashpad.h"
 #include "crypto/hash.h"
 #include "net/base/filename_util.h"
 #include "url/gurl.h"
@@ -38,6 +43,60 @@ bool AppRelativePath(const base::FilePath& root,
 }
 
 }  // namespace
+
+PreparedElectronAppConfig::PreparedElectronAppConfig(
+    mojom::IpcMainConfigPtr config,
+    std::unique_ptr<asar::PreparedArchivePublicKeys> archive_keys)
+    : config_(std::move(config)), archive_keys_(std::move(archive_keys)) {}
+
+PreparedElectronAppConfig::~PreparedElectronAppConfig() = default;
+
+base::expected<std::unique_ptr<PreparedElectronAppConfig>, std::string>
+PrepareElectronAppConfig(const base::FilePath& path,
+                         const std::string& container_id) {
+  mojom::IpcMainConfigPtr config;
+  std::string error;
+  if (!LoadElectronAppConfig(path, container_id, &config, &error)) {
+    return base::unexpected(std::move(error));
+  }
+  if (config->app_name.empty()) {
+    config->app_name = "Application";
+  }
+  if (config->app_version.empty()) {
+    config->app_version = GetAppExecutableVersion(
+        base::FilePath::FromUTF8Unsafe(config->executable_path));
+    if (config->app_version.empty()) {
+      config->app_version = "0.0.0";
+    }
+  }
+  base::FilePath host_user_data;
+  if (!base::PathService::Get(chrome::DIR_USER_DATA, &host_user_data) ||
+      !host_user_data.IsAbsolute()) {
+    return base::unexpected(
+        "Cannot prepare Electron app without host user data path");
+  }
+  config->host_user_data_directory = host_user_data.AsUTF8Unsafe();
+  // Crashpad initializes this immutable path before application launches. The
+  // getter only copies that startup state and does not require the UI sequence.
+  const auto crash_dumps = crash_reporter::GetCrashpadDatabasePath();
+  config->host_crash_dumps_directory =
+      crash_dumps ? crash_dumps->AsUTF8Unsafe() : std::string();
+
+  std::vector<asar::ArchiveKeyConfig> keys;
+  keys.reserve(config->archive_public_keys.size());
+  for (const auto& key : config->archive_public_keys) {
+    keys.push_back(
+        {base::FilePath::FromUTF8Unsafe(key->root_path), key->public_key_pem});
+  }
+  auto archive_keys = asar::PrepareArchivePublicKeys(keys);
+  if (!archive_keys) {
+    return base::unexpected("Invalid ASAR public key configuration");
+  }
+  return std::unique_ptr<PreparedElectronAppConfig>(
+      new PreparedElectronAppConfig(
+          std::move(config), std::make_unique<asar::PreparedArchivePublicKeys>(
+                                 std::move(*archive_keys))));
+}
 
 bool LoadElectronAppConfig(const base::FilePath& path,
                            const std::string& container_id,

@@ -100,8 +100,8 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   // Activates thunder_2025 BrowserWindows from the IPC container (sidebar TH).
   static void ShowThunder2025(Profile* profile);
 
-  // Loads an external host descriptor from the platform's application resource
-  // directory and activates its container without reexecuting a running main.
+  // Loads an external host descriptor off UI, then activates its container
+  // without reexecuting a running main. Pending loads require a live profile.
   static void ShowElectronApp(Profile* profile,
                               const std::string& descriptor_name,
                               const std::string& container_id);

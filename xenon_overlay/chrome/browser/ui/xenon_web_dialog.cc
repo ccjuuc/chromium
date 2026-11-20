@@ -1,25 +1,39 @@
-#include "xenon_overlay/chrome/browser/ipc/xenon_electron_app_config.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
-#include "xenon_overlay/chrome/browser/ipc/xenon_electron_media_permission.h"
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <memory>
 
+#include "base/base_paths.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
+#include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "base/unguessable_token.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/webui/chrome_web_contents_handler.h"
+#include "chrome/common/chrome_render_frame.mojom.h"
+#include "components/constrained_window/constrained_window_views.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/context_menu_params.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "mojo/public/cpp/bindings/associated_remote.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/mojom/page/draggable_region.mojom.h"
 #include "third_party/skia/include/core/SkRegion.h"
 #include "ui/base/cursor/cursor.h"
@@ -41,24 +55,14 @@
 #include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/frame_view.h"
-#include "base/base_paths.h"
-#include "base/files/file_util.h"
-#include "base/path_service.h"
 #include "xenon_overlay/buildflags/buildflags.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_app_config.h"
+#include "xenon_overlay/chrome/browser/ipc/xenon_electron_media_permission.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_electron_window_host.h"
 #include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
 #include "xenon_overlay/common/ipc/xenon_app_descriptor_paths.h"
 #include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
-#include "components/constrained_window/constrained_window_views.h"
-#include "chrome/common/chrome_render_frame.mojom.h"
-#include "content/public/browser/render_frame_host.h"
-#include "content/public/browser/render_widget_host_view.h"
-#include "mojo/public/cpp/bindings/associated_remote.h"
-#include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
@@ -1547,32 +1551,62 @@ void XenonWebDialog::ShowThunder2025(Profile* profile) {
   }
 }
 
-void XenonWebDialog::ShowElectronApp(Profile* profile,
-                                     const std::string& descriptor_name,
-                                     const std::string& container_id) {
-  if (!profile || container_id.empty()) {
-    LOG(ERROR) << "ShowElectronApp requires a profile and container identity";
-    return;
-  }
+namespace {
+
+using ElectronAppConfigResult =
+    base::expected<std::unique_ptr<ipc::PreparedElectronAppConfig>,
+                   std::string>;
+
+struct PendingElectronAppLoad {
+  base::WeakPtr<Profile> profile;
+  std::string descriptor_name;
+  base::UnguessableToken request_id;
+};
+
+// Accessed only on UI. Coalesce repeated clicks while loading; a request from
+// another profile or descriptor supersedes the old reply for this container.
+auto& PendingElectronAppLoads() {
+  static base::NoDestructor<std::map<std::string, PendingElectronAppLoad>>
+      loads;
+  return *loads;
+}
+
+ElectronAppConfigResult LoadElectronAppForLaunch(
+    const std::string& descriptor_name,
+    const std::string& container_id) {
   const auto descriptor = ipc::FindElectronAppDescriptor(descriptor_name);
   if (descriptor.empty()) {
-    LOG(ERROR) << "Electron application descriptor not found: "
-               << descriptor_name;
+    return base::unexpected("Electron application descriptor not found: " +
+                            descriptor_name);
+  }
+  return ipc::PrepareElectronAppConfig(descriptor, container_id);
+}
+
+void OnElectronAppPrepared(const std::string& container_id,
+                           const base::UnguessableToken& request_id,
+                           ElectronAppConfigResult result) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  auto& loads = PendingElectronAppLoads();
+  const auto pending = loads.find(container_id);
+  if (pending == loads.end() || pending->second.request_id != request_id) {
     return;
   }
-  ipc::mojom::IpcMainConfigPtr config;
-  std::string error;
-  if (!ipc::LoadElectronAppConfig(descriptor, container_id, &config, &error)) {
+  auto profile = pending->second.profile;
+  loads.erase(pending);
+  if (!profile || profile->ShutdownStarted()) {
+    return;
+  }
+  if (!result.has_value()) {
     LOG(ERROR) << "Unable to configure Electron application '" << container_id
-               << "': " << error;
+               << "': " << result.error();
     return;
   }
   XenonManager* manager = XenonManager::GetInstance();
-  manager->SetBrowserContext(profile);
+  manager->SetBrowserContext(profile.get());
   // Register updates the saved configuration only. Ensure is idempotent while
   // the Utility is alive and uses the existing restart path after app exit.
   // InitializeElectronIpc would reexecute main on an already running Utility.
-  if (!manager->RegisterElectronIpc(std::move(config)) ||
+  if (!manager->RegisterPreparedElectronIpc(std::move(result).value()) ||
       !manager->EnsureElectronIpcStarted(container_id)) {
     LOG(ERROR) << "Unable to start Electron application: " << container_id;
     return;
@@ -1580,6 +1614,38 @@ void XenonWebDialog::ShowElectronApp(Profile* profile,
   if (!XenonElectronWindowHost::GetInstance()->ActivateForContainer(
           container_id)) {
     LOG(INFO) << "Waiting for Electron application window: " << container_id;
+  }
+}
+
+}  // namespace
+
+void XenonWebDialog::ShowElectronApp(Profile* profile,
+                                     const std::string& descriptor_name,
+                                     const std::string& container_id) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!profile || profile->ShutdownStarted() || container_id.empty()) {
+    LOG(ERROR)
+        << "ShowElectronApp requires a live profile and container identity";
+    return;
+  }
+  auto& loads = PendingElectronAppLoads();
+  const auto pending = loads.find(container_id);
+  if (pending != loads.end() && pending->second.profile.get() == profile &&
+      pending->second.descriptor_name == descriptor_name) {
+    return;
+  }
+  const auto request_id = base::UnguessableToken::Create();
+  loads.insert_or_assign(container_id,
+                         PendingElectronAppLoad{profile->GetWeakPtr(),
+                                                descriptor_name, request_id});
+  if (!base::ThreadPool::PostTaskAndReplyWithResult(
+          FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+          base::BindOnce(&LoadElectronAppForLaunch, descriptor_name,
+                         container_id),
+          base::BindOnce(&OnElectronAppPrepared, container_id, request_id))) {
+    loads.erase(container_id);
+    LOG(ERROR) << "Unable to schedule Electron application load: "
+               << container_id;
   }
 }
 

@@ -26,6 +26,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/synchronization/lock.h"
+#include "base/task/sequenced_task_runner.h"
 #include "third_party/boringssl/src/include/openssl/aes.h"
 #include "third_party/boringssl/src/include/openssl/bio.h"
 #include "third_party/boringssl/src/include/openssl/md5.h"
@@ -90,6 +91,20 @@ bool PathContains(const base::FilePath& root, const base::FilePath& path) {
                       return a == b;
 #endif
                     });
+}
+
+bool SameArchiveKeyConfig(const ArchiveKeyConfig& first,
+                          const ArchiveKeyConfig& second) {
+  return !PathLess()(first.root_path, second.root_path) &&
+         !PathLess()(second.root_path, first.root_path) &&
+         first.public_key_pem == second.public_key_pem;
+}
+
+bool ArchiveKeysConflict(const ArchiveKeyConfig& first,
+                         const ArchiveKeyConfig& second) {
+  return first.public_key_pem != second.public_key_pem &&
+         (PathContains(first.root_path, second.root_path) ||
+          PathContains(second.root_path, first.root_path));
 }
 
 bssl::UniquePtr<RSA> ReadPublicKey(const std::string& pem) {
@@ -781,38 +796,89 @@ std::shared_ptr<Archive> GetOrCreateAsarArchive(const base::FilePath& path) {
   }
 }
 
-bool SetArchivePublicKeys(const std::string& owner_id,
-                          const std::vector<ArchiveKeyConfig>& configs) {
+namespace {
+
+bool ApplyArchivePublicKeys(const std::string& owner_id,
+                            std::vector<ArchiveKeyConfig> normalized,
+                            ArchiveMap* retired) {
   if (owner_id.empty()) {
     return false;
   }
+  CHECK(retired->empty());
+  base::AutoLock lock(GetArchiveCacheLock());
+  auto& registry = GetArchiveRegistry();
+  const auto previous_owner = registry.owners.find(owner_id);
+  if (previous_owner == registry.owners.end() && normalized.empty()) {
+    return true;
+  }
+  if (previous_owner != registry.owners.end() &&
+      std::equal(normalized.begin(), normalized.end(),
+                 previous_owner->second.begin(), previous_owner->second.end(),
+                 SameArchiveKeyConfig)) {
+    return true;
+  }
+  // Other owners can change after preparation. Check against the current
+  // registry under the same lock as the replacement and cache invalidation.
+  for (const auto& candidate : normalized) {
+    for (const auto& [owner, previous] : registry.owners) {
+      if (owner == owner_id) {
+        continue;
+      }
+      for (const auto& other : previous) {
+        if (ArchiveKeysConflict(candidate, other)) {
+          return false;
+        }
+      }
+    }
+  }
+  if (normalized.empty()) {
+    registry.owners.erase(owner_id);
+  } else {
+    registry.owners.insert_or_assign(owner_id, std::move(normalized));
+  }
+  // Dropping the last Archive reference closes its file. Transfer ownership so
+  // callers can release it outside the registry lock and off the UI sequence.
+  retired->swap(registry.cache);
+  ++registry.generation;
+  return true;
+}
+
+}  // namespace
+
+PreparedArchivePublicKeys::PreparedArchivePublicKeys(
+    std::vector<ArchiveKeyConfig> configs)
+    : configs_(std::move(configs)) {}
+
+PreparedArchivePublicKeys::PreparedArchivePublicKeys(
+    PreparedArchivePublicKeys&&) = default;
+PreparedArchivePublicKeys& PreparedArchivePublicKeys::operator=(
+    PreparedArchivePublicKeys&&) = default;
+PreparedArchivePublicKeys::~PreparedArchivePublicKeys() = default;
+
+std::optional<PreparedArchivePublicKeys> PrepareArchivePublicKeys(
+    const std::vector<ArchiveKeyConfig>& configs) {
   std::vector<ArchiveKeyConfig> normalized;
   for (const auto& config : configs) {
     auto key = ReadPublicKey(config.public_key_pem);
     if (!config.root_path.IsAbsolute() || config.root_path.ReferencesParent() ||
         !key) {
-      return false;
+      return std::nullopt;
     }
     auto absolute = base::MakeAbsoluteFilePath(config.root_path);
     if (absolute.empty()) {
-      return false;
+      return std::nullopt;
     }
     bssl::UniquePtr<BIO> canonical(BIO_new(BIO_s_mem()));
     const uint8_t* bytes = nullptr;
     size_t size = 0;
     if (!PEM_write_bio_RSA_PUBKEY(canonical.get(), key.get()) ||
         !BIO_mem_contents(canonical.get(), &bytes, &size)) {
-      return false;
+      return std::nullopt;
     }
     normalized.push_back(
         {absolute.NormalizePathSeparators().StripTrailingSeparators(),
          std::string(reinterpret_cast<const char*>(bytes), size)});
   }
-  auto same_config = [](const auto& first, const auto& second) {
-    return !PathLess()(first.root_path, second.root_path) &&
-           !PathLess()(second.root_path, first.root_path) &&
-           first.public_key_pem == second.public_key_pem;
-  };
   std::sort(normalized.begin(), normalized.end(),
             [](const auto& first, const auto& second) {
               if (PathLess()(first.root_path, second.root_path)) {
@@ -824,50 +890,41 @@ bool SetArchivePublicKeys(const std::string& owner_id,
               return first.public_key_pem < second.public_key_pem;
             });
   normalized.erase(
-      std::unique(normalized.begin(), normalized.end(), same_config),
+      std::unique(normalized.begin(), normalized.end(), SameArchiveKeyConfig),
       normalized.end());
-  base::AutoLock lock(GetArchiveCacheLock());
-  auto& registry = GetArchiveRegistry();
-  const auto previous_owner = registry.owners.find(owner_id);
-  if (previous_owner == registry.owners.end() && normalized.empty()) {
-    return true;
-  }
-  if (previous_owner != registry.owners.end() &&
-      std::equal(normalized.begin(), normalized.end(),
-                 previous_owner->second.begin(), previous_owner->second.end(),
-                 same_config)) {
-    return true;
-  }
-  auto conflicts = [](const auto& first, const auto& second) {
-    return first.public_key_pem != second.public_key_pem &&
-           (PathContains(first.root_path, second.root_path) ||
-            PathContains(second.root_path, first.root_path));
-  };
   for (const auto& candidate : normalized) {
     for (const auto& other : normalized) {
-      if (conflicts(candidate, other)) {
-        return false;
-      }
-    }
-    for (const auto& [owner, previous] : registry.owners) {
-      if (owner == owner_id) {
-        continue;
-      }
-      for (const auto& other : previous) {
-        if (conflicts(candidate, other)) {
-          return false;
-        }
+      if (ArchiveKeysConflict(candidate, other)) {
+        return std::nullopt;
       }
     }
   }
-  if (normalized.empty()) {
-    registry.owners.erase(owner_id);
-  } else {
-    registry.owners.insert_or_assign(owner_id, std::move(normalized));
+  return PreparedArchivePublicKeys(std::move(normalized));
+}
+
+bool CommitPreparedArchivePublicKeys(
+    const std::string& owner_id,
+    const PreparedArchivePublicKeys& prepared,
+    scoped_refptr<base::SequencedTaskRunner> cleanup_runner) {
+  if (!cleanup_runner) {
+    return false;
   }
-  registry.cache.clear();
-  ++registry.generation;
-  return true;
+  std::unique_ptr<ArchiveMap, base::OnTaskRunnerDeleter> retired(
+      new ArchiveMap, base::OnTaskRunnerDeleter(std::move(cleanup_runner)));
+  return ApplyArchivePublicKeys(owner_id, prepared.configs(), retired.get());
+}
+
+bool SetArchivePublicKeys(const std::string& owner_id,
+                          const std::vector<ArchiveKeyConfig>& configs) {
+  if (owner_id.empty()) {
+    return false;
+  }
+  auto prepared = PrepareArchivePublicKeys(configs);
+  if (!prepared) {
+    return false;
+  }
+  ArchiveMap retired;
+  return ApplyArchivePublicKeys(owner_id, prepared->configs(), &retired);
 }
 
 void RemoveArchivePublicKeys(const std::string& owner_id) {

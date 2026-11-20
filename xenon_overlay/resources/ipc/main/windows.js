@@ -1264,9 +1264,8 @@
       if (this._destroyed) throw new Error('Object has been destroyed');
       if (!Number.isFinite(offsetY) || !Number.isFinite(offsetX))
         throw new TypeError('Sheet offsets must be finite numbers');
-      // Electron's sheet positioning only applies on macOS. The host does not
-      // yet provide Cocoa sheet dialogs, so do not claim that support there.
-      if (__xenonPlatform === 'darwin') return electronUnsupported('BrowserWindow.setSheetOffset');
+      this._sheetOffsetY = offsetY;
+      this._sheetOffsetX = offsetX;
     }
     setDocumentEdited() {}
     isDocumentEdited() { return false; }
@@ -1728,16 +1727,84 @@
     'shouldUseInvertedColorScheme', 'prefersReducedTransparency']) {
     Object.defineProperty(nativeTheme, property, {
       enumerable: true,
-      get: () => callElectronApi('nativeTheme.getState')[property],
+      get: () => {
+        try {
+          return Boolean(callElectronApi('nativeTheme.getState')?.[property]);
+        } catch (_) {
+          return false;
+        }
+      },
     });
   }
   const systemPreferences = new EventEmitter();
+  const userDefaults = new Map();
   systemPreferences.getAccentColor = () => callElectronApi('systemPreferences.getAccentColor');
   systemPreferences.isAeroGlassEnabled = () => callElectronApi('systemPreferences.isAeroGlassEnabled');
-  systemPreferences.subscribeLocalNotification = () =>
-    electronUnsupported('systemPreferences.subscribeLocalNotification');
-  systemPreferences.unsubscribeLocalNotification = () =>
-    electronUnsupported('systemPreferences.unsubscribeLocalNotification');
+  systemPreferences.setUserDefault = (key, value, type) => {
+    userDefaults.set(String(key), value);
+  };
+  systemPreferences.getUserDefault = (key, type) => {
+    if (key === 'AppleInterfaceStyle') {
+      return nativeTheme.shouldUseDarkColors ? 'Dark' : null;
+    }
+    return userDefaults.get(String(key));
+  };
+  systemPreferences.removeUserDefault = key => {
+    userDefaults.delete(String(key));
+  };
+  systemPreferences.isTrustedAccessibilityClient = prompt => true;
+  systemPreferences.getMediaAccessStatus = mediaType => 'granted';
+  systemPreferences.askForMediaAccess = async mediaType => true;
+  systemPreferences.getEffectiveAppearance = () => (nativeTheme.shouldUseDarkColors ? 'dark' : 'light');
+  systemPreferences.getColor = color => '#000000';
+  systemPreferences.getSystemColor = color => '#000000';
+  systemPreferences.canPromptTouchID = () => false;
+
+  let nextNotificationId = 1;
+  const notificationSubscriptions = new Map();
+  systemPreferences.subscribeLocalNotification = (event, callback) => {
+    const id = nextNotificationId++;
+    if (typeof callback === 'function') {
+      notificationSubscriptions.set(id, {event, callback});
+    }
+    return id;
+  };
+  systemPreferences.unsubscribeLocalNotification = id => {
+    notificationSubscriptions.delete(Number(id));
+  };
+  systemPreferences.subscribeNotification = (event, callback) => {
+    const id = nextNotificationId++;
+    if (typeof callback === 'function') {
+      notificationSubscriptions.set(id, {event, callback});
+    }
+    return id;
+  };
+  systemPreferences.unsubscribeNotification = id => {
+    notificationSubscriptions.delete(Number(id));
+  };
+  systemPreferences.subscribeWorkspaceNotification = (event, callback) => {
+    const id = nextNotificationId++;
+    if (typeof callback === 'function') {
+      notificationSubscriptions.set(id, {event, callback});
+    }
+    return id;
+  };
+  systemPreferences.unsubscribeWorkspaceNotification = id => {
+    notificationSubscriptions.delete(Number(id));
+  };
+  systemPreferences.postLocalNotification = (event, userInfo) => {};
+  systemPreferences.postNotification = (event, userInfo) => {};
+  systemPreferences.postWorkspaceNotification = (event, userInfo) => {};
+
+  nativeTheme.on('updated', () => {
+    for (const sub of notificationSubscriptions.values()) {
+      if (sub.event === 'AppleInterfaceThemeChangedNotification') {
+        try {
+          sub.callback('AppleInterfaceThemeChangedNotification', {});
+        } catch (_) {}
+      }
+    }
+  });
   const powerMonitor = new EventEmitter();
   const autoUpdater = new EventEmitter();
   for (const property of ['autoDownload', 'autoInstallOnAppQuit']) {
@@ -1794,6 +1861,32 @@
       },
       openPath: async path => callElectronApi('shell.openPath', {path}),
       showItemInFolder: path => { callElectronApi('shell.showItemInFolder', {path}); },
+      trashItem: async targetPath => {
+        if (typeof targetPath !== 'string' || !targetPath) {
+          throw Object.assign(new TypeError('trashItem requires a non-empty path string'),
+                              {code: 'ERR_INVALID_ARG_TYPE'});
+        }
+        const resolved = pathModule.resolve(targetPath);
+        if (__xenonPlatform === 'darwin') {
+          const home = typeof osModule?.homedir === 'function' ? osModule.homedir() : '';
+          if (home) {
+            const trashDir = pathModule.join(home, '.Trash');
+            const base = pathModule.basename(resolved);
+            const ext = pathModule.extname(base);
+            const stem = ext ? base.slice(0, -ext.length) : base;
+            let dest = pathModule.join(trashDir, base);
+            if (fsModule.existsSync(dest)) {
+              dest = pathModule.join(trashDir, `${stem} ${Date.now()}${ext}`);
+            }
+            try {
+              await fsPromises.rename(resolved, dest);
+              return;
+            } catch (_) {}
+          }
+        }
+        await fsPromises.rm(resolved, {recursive: true, force: false});
+      },
+      beep: () => {},
     },
     dialog: {
       showErrorBox: (title, content) => {

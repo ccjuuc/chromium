@@ -50,6 +50,7 @@ class WebContents;
 namespace xenon {
 
 namespace ipc {
+class PreparedElectronAppConfig;
 class ElectronPowerSaveBlocker;
 class ElectronSafeStorage;
 class ElectronSandboxPolicy;
@@ -151,6 +152,10 @@ class XenonManager : public ProfileObserver {
   // Validates and stores a container configuration without launching its
   // Utility process or executing the Electron main module.
   bool RegisterElectronIpc(ipc::mojom::IpcMainConfigPtr config);
+  // Commits a configuration prepared on a blocking sequence. Does not resolve
+  // paths, reopen application resources, or close cached archive files on UI.
+  bool RegisterPreparedElectronIpc(
+      std::unique_ptr<ipc::PreparedElectronAppConfig> prepared);
   // Starts a previously registered container. Repeated calls are idempotent.
   bool EnsureElectronIpcStarted(const std::string& container_id);
   // Delivers an explicit host activation to the already started application.
@@ -363,6 +368,9 @@ class XenonManager : public ProfileObserver {
 
   XenonManager();
   ~XenonManager() override;
+
+  bool PrepareElectronIpcRegistration(ipc::mojom::IpcMainConfig* config);
+  void StoreElectronIpcConfig(ipc::mojom::IpcMainConfigPtr config);
 
   // ProfileObserver:
   void OnProfileWillBeDestroyed(Profile* profile) override;

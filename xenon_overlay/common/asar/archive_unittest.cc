@@ -12,6 +12,9 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/pickle.h"
+#include "base/task/thread_pool.h"
+#include "base/test/task_environment.h"
+#include "base/threading/thread_restrictions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "xenon_overlay/common/asar/test_support.h"
 
@@ -280,6 +283,102 @@ TEST_F(ArchiveTest, ConfigurationRejectsPrivateOrMultiplePemBlocks) {
   }
 }
 
+TEST_F(ArchiveTest, PreparedKeysValidateWithoutAuthorizingArchiveReads) {
+  TestArchiveBuilder first;
+  TestArchiveBuilder second;
+  ASSERT_TRUE(first.Write(Path(), {{"data", "x", true}}));
+  auto prepared =
+      PrepareArchivePublicKeys({{temp_.GetPath().AsEndingWithSeparator(),
+                                 " \n" + first.public_key_pem() + "\n "},
+                                {temp_.GetPath(), first.public_key_pem()}});
+  ASSERT_TRUE(prepared);
+  ASSERT_EQ(1u, prepared->configs().size());
+  EXPECT_EQ(base::MakeAbsoluteFilePath(temp_.GetPath()),
+            prepared->configs()[0].root_path);
+  EXPECT_EQ(first.public_key_pem(), prepared->configs()[0].public_key_pem);
+  EXPECT_FALSE(GetOrCreateAsarArchive(Path()));
+  EXPECT_FALSE(PrepareArchivePublicKeys({{temp_.GetPath(), "bad"}}));
+  EXPECT_FALSE(
+      PrepareArchivePublicKeys({{Path("missing"), first.public_key_pem()}}));
+  EXPECT_FALSE(
+      PrepareArchivePublicKeys({{temp_.GetPath(), first.public_key_pem()},
+                                {Path(), second.public_key_pem()}}));
+  EXPECT_FALSE(GetOrCreateAsarArchive(Path()));
+}
+
+TEST_F(ArchiveTest, PreparedCommitDefersCachedFileClosureOffCallingSequence) {
+  base::test::TaskEnvironment task_environment(
+      base::test::TaskEnvironment::ThreadPoolExecutionMode::QUEUED);
+  auto cleanup_runner = base::ThreadPool::CreateSequencedTaskRunner(
+      {base::MayBlock(), base::TaskShutdownBehavior::BLOCK_SHUTDOWN});
+  TestArchiveBuilder builder;
+  ASSERT_TRUE(builder.Write(Path(), {{"data", "x", true}}));
+  auto prepared =
+      PrepareArchivePublicKeys({{temp_.GetPath(), builder.public_key_pem()}});
+  ASSERT_TRUE(prepared);
+  {
+    base::ScopedDisallowBlocking no_blocking;
+    ASSERT_TRUE(CommitPreparedArchivePublicKeys("archive-test", *prepared,
+                                                cleanup_runner));
+  }
+  auto archive = GetOrCreateAsarArchive(Path());
+  ASSERT_TRUE(archive);
+  std::weak_ptr<Archive> retired = archive;
+  archive.reset();
+  auto empty = PrepareArchivePublicKeys({});
+  ASSERT_TRUE(empty);
+  {
+    base::ScopedDisallowBlocking no_blocking;
+    ASSERT_TRUE(CommitPreparedArchivePublicKeys("archive-test", *empty,
+                                                cleanup_runner));
+    // The cache was its last owner. Closing its file here would violate the
+    // caller's blocking restriction; retirement must wait for the worker.
+    EXPECT_FALSE(retired.expired());
+  }
+  EXPECT_FALSE(GetOrCreateAsarArchive(Path()));
+  task_environment.RunUntilIdle();
+  EXPECT_TRUE(retired.expired());
+}
+
+TEST_F(ArchiveTest, PreparedCommitRechecksConflictsAndPreservesPreviousKeys) {
+  base::test::TaskEnvironment task_environment;
+  auto cleanup_runner = base::ThreadPool::CreateSequencedTaskRunner(
+      {base::MayBlock(), base::TaskShutdownBehavior::BLOCK_SHUTDOWN});
+  TestArchiveBuilder first;
+  TestArchiveBuilder second;
+  ASSERT_TRUE(first.Write(Path(), {{"data", "x", true}}));
+  ASSERT_TRUE(Configure(first));
+  auto replacement =
+      PrepareArchivePublicKeys({{temp_.GetPath(), second.public_key_pem()}});
+  ASSERT_TRUE(replacement);
+  // This owner appears after preparation and must prevent the replacement.
+  ASSERT_TRUE(SetArchivePublicKeys(
+      "archive-test-second", {{temp_.GetPath(), first.public_key_pem()}}));
+  auto archive = GetOrCreateAsarArchive(Path());
+  ASSERT_TRUE(archive);
+  {
+    base::ScopedDisallowBlocking no_blocking;
+    EXPECT_FALSE(CommitPreparedArchivePublicKeys("archive-test", *replacement,
+                                                 cleanup_runner));
+    EXPECT_FALSE(
+        CommitPreparedArchivePublicKeys("archive-test", *replacement, nullptr));
+    EXPECT_FALSE(
+        CommitPreparedArchivePublicKeys("", *replacement, cleanup_runner));
+  }
+  EXPECT_EQ(archive, GetOrCreateAsarArchive(Path()));
+  RemoveArchivePublicKeys("archive-test-second");
+  {
+    base::ScopedDisallowBlocking no_blocking;
+    // Replacing the same owner's keys remains supported after the conflict
+    // disappears; old readers still own their original decryption context.
+    ASSERT_TRUE(CommitPreparedArchivePublicKeys("archive-test", *replacement,
+                                                cleanup_runner));
+  }
+  EXPECT_FALSE(GetOrCreateAsarArchive(Path()));
+  ExpectContents(archive, "data", "x               ");
+  task_environment.RunUntilIdle();
+}
+
 TEST_F(ArchiveTest, ReadersKeepTheOriginalFileWhenPathIsReplaced) {
   TestArchiveBuilder builder;
   ASSERT_TRUE(builder.Write(Path(), {{"data", "original", true}}));
@@ -357,7 +456,8 @@ TEST_F(ArchiveTest, UnpackedFileAndDirectoryLinksResolveToTheirActualPath) {
   ASSERT_TRUE(
       archive->GetUnpackedPath(base::FilePath::FromASCII("alias"), &actual));
   EXPECT_EQ(actual.NormalizePathSeparators(),
-            directory.AppendASCII("data").NormalizePathSeparators());
+            base::MakeAbsoluteFilePath(directory.AppendASCII("data"))
+                .NormalizePathSeparators());
 }
 
 TEST_F(ArchiveTest, ResolvePathCanonicalizesLinksAndRejectsInvalidTargets) {

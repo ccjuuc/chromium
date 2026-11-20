@@ -390,10 +390,10 @@ void XenonManagedCertificateService::OnDownloaded(
     identity =
         !encoding || base::EqualsCaseInsensitiveASCII(*encoding, "identity");
     if (code == 429 || code == 503) {
-      auto header = info->headers->GetNormalizedHeader("retry-after");
+      auto header = info->headers->EnumerateHeader(nullptr, "retry-after");
       base::TimeDelta delay;
       if (header && net::HttpUtil::ParseRetryAfterHeader(
-                        *header, base::Time::Now(), &delay)) {
+                        std::string(*header), base::Time::Now(), &delay)) {
         retry_after = std::clamp(delay, base::Seconds(1), base::Hours(1));
       }
     }

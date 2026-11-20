@@ -183,8 +183,16 @@
     if (path === undefined) __xenonSetAppLogsPath();
     else __xenonSetAppLogsPath(path);
   };
+  let appCustomName;
   app.getVersion = () => __xenonAppVersion;
-  app.getName = () => __xenonAppName;
+  app.getName = () => (appCustomName !== undefined ? appCustomName : __xenonAppName);
+  app.setName = name => { appCustomName = String(name); };
+  Object.defineProperty(app, 'name', {
+    enumerable: true,
+    configurable: true,
+    get: () => app.getName(),
+    set: value => { app.setName(value); },
+  });
   function callLoginItemSettings(method, options) {
     if (options === undefined && method === 'get') options = {};
     if (!options || typeof options !== 'object' || Array.isArray(options)) {
@@ -206,6 +214,13 @@
       ? callElectronApi('app.getLoginItemSettings', {options})
       : callLoginItemSettings('get', options);
   app.setLoginItemSettings = options => {
+    if (!options || typeof options !== 'object' || Array.isArray(options)) {
+      throw Object.assign(new TypeError('Login item options must be an object'),
+          {code: 'ERR_INVALID_ARG_TYPE'});
+    }
+    if (globalThis.__xenonPlatform === 'darwin') {
+      return;
+    }
     callLoginItemSettings('set', options);
   };
   app.whenReady = () => appReadyPromise;
@@ -309,12 +324,76 @@
   // changed, allowing applications to continue without deep-link integration.
   app.setAsDefaultProtocolClient = () => false;
   app.removeAsDefaultProtocolClient = () => false;
+  app.isDefaultProtocolClient = () => false;
+  app.getApplicationNameForProtocol = () => '';
   // Keep the asynchronous API contract. A rejected operation does not claim
   // that the process-wide proxy configuration was applied.
   app.setProxy = async () => electronUnsupported('app.setProxy');
   app.addRecentDocument = () => {};
   app.clearRecentDocuments = () => {};
-  app.focus = () => {};
+  app.focus = (options) => {
+    const wins = typeof BrowserWindow !== 'undefined' ? BrowserWindow.getAllWindows() : [];
+    for (const win of wins) {
+      if (!win.isDestroyed() && win.isVisible()) {
+        try {
+          win.focus();
+        } catch (_) {}
+        return;
+      }
+    }
+    if (wins.length > 0 && !wins[0].isDestroyed()) {
+      try {
+        wins[0].focus();
+      } catch (_) {}
+    }
+  };
+  app.show = () => {
+    if (typeof BrowserWindow !== 'undefined') {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          try {
+            win.show();
+          } catch (_) {}
+        }
+      }
+    }
+  };
+  app.hide = () => {
+    if (typeof BrowserWindow !== 'undefined') {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          try {
+            win.hide();
+          } catch (_) {}
+        }
+      }
+    }
+  };
+
+  let dockBadge = '';
+  let dockVisible = true;
+  let dockMenu = null;
+  app.dock = {
+    bounce: (type = 'informational') => 1,
+    cancelBounce: id => {},
+    setBadge: (text = '') => {
+      dockBadge = String(text || '');
+    },
+    getBadge: () => dockBadge,
+    hide: () => {
+      dockVisible = false;
+    },
+    show: () => {
+      dockVisible = true;
+    },
+    isVisible: () => dockVisible,
+    setMenu: menu => {
+      dockMenu = menu;
+    },
+    getMenu: () => dockMenu,
+    setIcon: image => {},
+    downloadFinished: filePath => {},
+  };
   app.quit = () => {
     if (appExitState !== 'running') return;
     // Check capability before any cleanup, so an unavailable host cannot leave

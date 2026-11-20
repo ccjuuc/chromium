@@ -232,6 +232,121 @@
       chmod(value) { return this.#run(fd => asynchronous(request('fchmod', fd, {mode: mode(value)}))); }
       readFile(options) { return this.#run(fd => readFileDescriptor(fd, options)); }
       writeFile(data, options) { return this.#run(fd => writeFileDescriptor(fd, data, options)); }
+      createReadStream(options = {}) {
+        if (typeof options === 'string') options = {encoding: options};
+        if (!options || typeof options !== 'object') {
+          throw invalid('Invalid FileHandle.createReadStream options');
+        }
+        const autoClose = options.autoClose !== false;
+        const start = options.start === undefined ? null : options.start;
+        const end = options.end === undefined ? Infinity : options.end;
+        const highWaterMark = options.highWaterMark === undefined ? 65536 : options.highWaterMark;
+        if ((start !== null && (!Number.isSafeInteger(start) || start < 0)) ||
+            (end !== Infinity && (!Number.isSafeInteger(end) || end < (start ?? 0))) ||
+            !Number.isSafeInteger(highWaterMark) || highWaterMark <= 0) {
+          throw invalid('Invalid FileHandle.createReadStream range or highWaterMark', 'ERR_OUT_OF_RANGE');
+        }
+        const handle = this;
+        let position = start;
+        let bytesRead = 0;
+        const stream = new Readable({
+          highWaterMark,
+          encoding: options.encoding,
+          signal: options.signal,
+          emitClose: options.emitClose !== false,
+          autoDestroy: true,
+          read(size) {
+            if (handle.#closing || handle.#fd < 0) {
+              this.destroy(Object.assign(new Error('File is closed'), {code: 'EBADF'}));
+              return;
+            }
+            let toRead = Math.max(1, Math.min(size || highWaterMark, 1024 * 1024));
+            if (end !== Infinity) {
+              const currentPos = position ?? bytesRead;
+              const remaining = end - currentPos + 1;
+              if (remaining <= 0) {
+                this.push(null);
+                return;
+              }
+              toRead = Math.min(toRead, remaining);
+            }
+            const buffer = Buffer.allocUnsafe(toRead);
+            handle.read(buffer, 0, toRead, position).then(result => {
+              if (this.destroyed) return;
+              if (!result || result.bytesRead <= 0) {
+                this.push(null);
+                return;
+              }
+              bytesRead += result.bytesRead;
+              if (position !== null) position += result.bytesRead;
+              this.push(result.bytesRead === buffer.length ?
+                buffer : buffer.subarray(0, result.bytesRead));
+            }, error => {
+              if (!this.destroyed) this.destroy(error);
+            });
+          },
+          destroy(error, done) {
+            if (autoClose && !handle.#closing && handle.#fd >= 0) {
+              handle.close().then(() => done(error), closeError => done(error || closeError));
+            } else {
+              done(error);
+            }
+          },
+        });
+        Object.defineProperty(stream, 'bytesRead', {
+          enumerable: true,
+          configurable: true,
+          get: () => bytesRead,
+        });
+        return stream;
+      }
+      createWriteStream(options = {}) {
+        if (typeof options === 'string') options = {encoding: options};
+        if (!options || typeof options !== 'object') {
+          throw invalid('Invalid FileHandle.createWriteStream options');
+        }
+        const autoClose = options.autoClose !== false;
+        const start = options.start === undefined ? null : options.start;
+        const highWaterMark = options.highWaterMark === undefined ? 16384 : options.highWaterMark;
+        if ((start !== null && (!Number.isSafeInteger(start) || start < 0)) ||
+            !Number.isSafeInteger(highWaterMark) || highWaterMark < 0) {
+          throw invalid('Invalid FileHandle.createWriteStream options', 'ERR_OUT_OF_RANGE');
+        }
+        const handle = this;
+        let position = start;
+        let bytesWritten = 0;
+        const stream = new Writable({
+          highWaterMark,
+          defaultEncoding: options.encoding || 'utf8',
+          signal: options.signal,
+          emitClose: options.emitClose !== false,
+          autoDestroy: true,
+          write(chunk, encoding, done) {
+            const buffer = Buffer.isBuffer(chunk) ? chunk :
+              ArrayBuffer.isView(chunk) ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength) :
+              Buffer.from(String(chunk), encoding);
+            handle.write(buffer, 0, buffer.length, position).then(result => {
+              const written = result?.bytesWritten ?? buffer.length;
+              bytesWritten += written;
+              if (position !== null) position += written;
+              done();
+            }, done);
+          },
+          destroy(error, done) {
+            if (autoClose && !handle.#closing && handle.#fd >= 0) {
+              handle.close().then(() => done(error), closeError => done(error || closeError));
+            } else {
+              done(error);
+            }
+          },
+        });
+        Object.defineProperty(stream, 'bytesWritten', {
+          enumerable: true,
+          configurable: true,
+          get: () => bytesWritten,
+        });
+        return stream;
+      }
       close() {
         if (!this.#closing) {
           const fd = this.#fd;

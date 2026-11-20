@@ -4,20 +4,30 @@
 
 #include "xenon_overlay/chrome/browser/ui/views/sidebar/xenon_sidebar_view.h"
 
+#include <memory>
+#include <string>
 #include <string_view>
 
+#include "base/base_paths.h"
 #include "base/command_line.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/task/execution_fence.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/scoped_path_override.h"
 #include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
+#include "base/values.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/views/controls/button/label_button.h"
@@ -28,6 +38,9 @@
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 #include "xenon_overlay/buildflags/buildflags.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
+#include "xenon_overlay/chrome/browser/xenon_manager.h"
+#include "xenon_overlay/public/mojom/xenon_ipc.mojom.h"
 
 #if BUILDFLAG(ENABLE_XENON_SERVICE)
 #include "xenon_overlay/chrome/browser/updater/xenon_update_manager.h"
@@ -35,6 +48,8 @@
 
 namespace xenon {
 namespace {
+
+constexpr char kElectronAppDescriptor[] = "sidebar-async-fixture.xenon.json";
 
 template <typename T>
 T* FindView(views::View* root) {
@@ -120,6 +135,53 @@ class XenonSidebarBrowserTest : public InProcessBrowserTest,
     }
   }
 
+  void CreateElectronAppFixture() {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    ASSERT_TRUE(electron_app_directory_.CreateUniqueTempDir());
+    const auto app = electron_app_directory_.GetPath().AppendASCII("app");
+    ASSERT_TRUE(base::CreateDirectory(app));
+    ASSERT_TRUE(base::WriteFile(
+        app.AppendASCII("package.json"),
+        R"({"name":"sidebar-fixture","version":"1.0.0","main":"main.cjs"})"));
+    ASSERT_TRUE(base::WriteFile(app.AppendASCII("main.cjs"), R"JS(
+      const fs = require('node:fs');
+      const path = require('node:path');
+      fs.appendFileSync(path.join(__dirname, 'launches.txt'), 'launch\n');
+    )JS"));
+    ASSERT_TRUE(base::WriteFile(
+        electron_app_directory_.GetPath().AppendASCII(kElectronAppDescriptor),
+        R"({"application":"app"})"));
+  }
+
+  void WaitForElectronMain(const std::string& container_id) {
+    auto* manager = XenonManager::GetInstance();
+    // An ordinary request shares the initialization pipe and is queued until
+    // main has loaded. Its expected missing-endpoint error gives us a real
+    // Utility reply after all preceding initialization messages, without a
+    // test-only launcher or timing-based wait.
+    base::test::TestFuture<ipc::mojom::IpcResultPtr> reply;
+    manager->ElectronIpcInvoke(
+        container_id, "unregistered-sidebar-test", "startup-barrier",
+        base::Value(base::ListValue()), reply.GetCallback(),
+        manager->service_generation(container_id));
+    ASSERT_TRUE(reply.Wait());
+    ASSERT_TRUE(reply.Get());
+    EXPECT_FALSE(reply.Get()->success);
+    EXPECT_EQ("Renderer IPC endpoint is unavailable", reply.Get()->error);
+  }
+
+  std::string ReadElectronLaunches() {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    std::string contents;
+    EXPECT_TRUE(base::ReadFileToString(
+        electron_app_directory_.GetPath().AppendASCII("app").AppendASCII(
+            "launches.txt"),
+        &contents));
+    return contents;
+  }
+
+  base::ScopedTempDir electron_app_directory_;
+
  private:
   base::test::ScopedFeatureList features_;
 #if BUILDFLAG(ENABLE_XENON_SERVICE)
@@ -202,6 +264,82 @@ IN_PROC_BROWSER_TEST_P(XenonSidebarBrowserTest,
           .every(url => urls.includes(url));
     })()
   )JS"));
+}
+
+IN_PROC_BROWSER_TEST_P(XenonSidebarBrowserTest,
+                       ElectronAppLoadingIsDeferredAndRepeatedClicksReuseMain) {
+  ASSERT_NO_FATAL_FAILURE(CreateElectronAppFixture());
+  base::ScopedPathOverride descriptor_directory(
+      base::DIR_EXE, electron_app_directory_.GetPath(), /*is_absolute=*/true,
+      /*create=*/false);
+  constexpr char kContainer[] = "sidebar-deferred-launch";
+  auto* manager = XenonManager::GetInstance();
+  ASSERT_EQ(0u, manager->service_generation(kContainer));
+  {
+    base::ScopedThreadPoolExecutionFence block_background_work;
+    base::ScopedDisallowBlocking disallow_blocking;
+    XenonWebDialog::ShowElectronApp(browser()->GetProfile(),
+                                    kElectronAppDescriptor, kContainer);
+    XenonWebDialog::ShowElectronApp(browser()->GetProfile(),
+                                    kElectronAppDescriptor, kContainer);
+    // Even a synchronous implementation which hides its I/O with an allowance
+    // must fail this assertion: no background preparation has run yet.
+    EXPECT_EQ(0u, manager->service_generation(kContainer));
+    EXPECT_FALSE(manager->GetElectronIpcRendererConfigForContainer(kContainer));
+  }
+  {
+    base::ScopedDisallowBlocking disallow_blocking;
+    content::RunAllTasksUntilIdle();
+    ASSERT_EQ(1u, manager->service_generation(kContainer));
+    ASSERT_NO_FATAL_FAILURE(WaitForElectronMain(kContainer));
+  }
+  EXPECT_EQ("launch\n", ReadElectronLaunches());
+
+  // A later click must also preserve the running main module and avoid UI I/O.
+  {
+    base::ScopedDisallowBlocking disallow_blocking;
+    XenonWebDialog::ShowElectronApp(browser()->GetProfile(),
+                                    kElectronAppDescriptor, kContainer);
+    content::RunAllTasksUntilIdle();
+    ASSERT_EQ(1u, manager->service_generation(kContainer));
+    ASSERT_NO_FATAL_FAILURE(WaitForElectronMain(kContainer));
+  }
+  EXPECT_EQ("launch\n", ReadElectronLaunches());
+}
+
+IN_PROC_BROWSER_TEST_P(XenonSidebarBrowserTest,
+                       ElectronAppLoadingStopsWhenProfileIsDestroyed) {
+  ASSERT_NO_FATAL_FAILURE(CreateElectronAppFixture());
+  base::ScopedPathOverride descriptor_directory(
+      base::DIR_EXE, electron_app_directory_.GetPath(), /*is_absolute=*/true,
+      /*create=*/false);
+  constexpr char kContainer[] = "sidebar-destroyed-profile";
+  auto* manager = XenonManager::GetInstance();
+  std::unique_ptr<TestingProfile> profile;
+  {
+    base::ScopedAllowBlockingForTesting allow_fixture_setup;
+    profile = std::make_unique<TestingProfile>();
+  }
+  {
+    base::ScopedThreadPoolExecutionFence block_background_work;
+    {
+      base::ScopedDisallowBlocking disallow_blocking;
+      XenonWebDialog::ShowElectronApp(profile.get(), kElectronAppDescriptor,
+                                      kContainer);
+      EXPECT_EQ(0u, manager->service_generation(kContainer));
+      EXPECT_FALSE(
+          manager->GetElectronIpcRendererConfigForContainer(kContainer));
+    }
+    profile.reset();
+  }
+  {
+    base::ScopedDisallowBlocking disallow_blocking;
+    // Drain the real preparation task and its UI reply after releasing the
+    // fence. Checking before that reply would miss a stale-profile launch.
+    content::RunAllTasksUntilIdle();
+  }
+  EXPECT_EQ(0u, manager->service_generation(kContainer));
+  EXPECT_FALSE(manager->GetElectronIpcRendererConfigForContainer(kContainer));
 }
 
 INSTANTIATE_TEST_SUITE_P(ScrollModes, XenonSidebarBrowserTest, testing::Bool());
